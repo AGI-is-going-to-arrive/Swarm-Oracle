@@ -1,0 +1,248 @@
+/**
+ * SwarmOracle — Zustand simulationStore tests
+ *
+ * Covers: initial state, handleWSEvent dispatch (status, agent_speak,
+ * round_summary, branch_*, intervention_applied), reset, dedup guard,
+ * and MAX_MESSAGES cap.
+ */
+
+import { describe, it, expect, beforeEach } from "vitest";
+import { useSimulationStore } from "./simulationStore";
+import type { WSEvent } from "../types";
+
+// Helper: reset store before each test
+beforeEach(() => {
+  useSimulationStore.getState().reset();
+});
+
+describe("simulationStore — initial state", () => {
+  it("starts with idle status and empty collections", () => {
+    const s = useSimulationStore.getState();
+    expect(s.status).toBe("idle");
+    expect(s.scenario).toBeNull();
+    expect(s.agents).toEqual([]);
+    expect(s.branches).toEqual([]);
+    expect(s.messages).toEqual([]);
+    expect(s.groups).toEqual([]);
+    expect(s.hierarchical).toBe(false);
+    expect(s.error).toBeNull();
+    expect(s.thinkingAgents).toEqual([]);
+    expect(s.currentRound).toBe(0);
+    expect(s.isSimulationComplete).toBe(false);
+  });
+});
+
+describe("simulationStore — handleWSEvent", () => {
+  it("handles 'status' event → updates status", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating", hierarchical: false },
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("simulating");
+    expect(store.getState().isSimulationComplete).toBe(false);
+  });
+
+  it("handles 'status' done → marks simulation complete", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "done" },
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("done");
+    expect(store.getState().isSimulationComplete).toBe(true);
+  });
+
+  it("handles 'agent_speak_start' → adds to thinkingAgents", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "agent_speak_start",
+      data: { agent: "曹操", agent_id: "a1", branch: "b1", round: 1 },
+    } as WSEvent);
+
+    expect(store.getState().thinkingAgents).toHaveLength(1);
+    expect(store.getState().thinkingAgents[0].agent).toBe("曹操");
+  });
+
+  it("handles 'agent_speak' → adds message, removes from thinkingAgents", () => {
+    const store = useSimulationStore;
+
+    // First, agent starts thinking
+    store.getState().handleWSEvent({
+      type: "agent_speak_start",
+      data: { agent: "曹操", agent_id: "a1", branch: "b1", round: 1 },
+    } as WSEvent);
+    expect(store.getState().thinkingAgents).toHaveLength(1);
+
+    // Then, agent finishes speaking
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "曹操",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "吾当南下取荆州！",
+        emotion: "confident",
+      },
+    } as WSEvent);
+
+    expect(store.getState().messages).toHaveLength(1);
+    expect(store.getState().messages[0].message).toBe("吾当南下取荆州！");
+    expect(store.getState().thinkingAgents).toHaveLength(0);
+  });
+
+  it("deduplicates identical agent_speak events", () => {
+    const store = useSimulationStore;
+    const event = {
+      type: "agent_speak",
+      data: {
+        agent: "曹操",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "吾当南下取荆州！",
+        emotion: "confident",
+      },
+    } as WSEvent;
+
+    store.getState().handleWSEvent(event);
+    store.getState().handleWSEvent(event); // duplicate
+
+    expect(store.getState().messages).toHaveLength(1);
+  });
+
+  it("handles 'round_summary' → advances currentRound", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "round_summary",
+      data: { round: 3, branch_id: "b1", summary: "Round 3 complete" },
+    } as WSEvent);
+
+    expect(store.getState().currentRound).toBe(3);
+  });
+
+  it("refreshes an existing branch when duplicate branch_init arrives", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "parsing",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [{
+        id: "b1",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "历史拐点",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "ACTIVE",
+      }],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    store.getState().handleWSEvent({
+      type: "branch_init",
+      data: { id: "b1", title: "永世帝国", probability: 1, status: "ACTIVE", parent_branch_id: null },
+    } as WSEvent);
+
+    expect(store.getState().branches).toHaveLength(1);
+    expect(store.getState().branches[0].title).toBe("永世帝国");
+  });
+
+  it("handles 'intervention_applied' → adds to interventionLog", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "intervention_applied",
+      data: {
+        branch_id: "b1",
+        text: "突发地震",
+        round: 2,
+        intervention_id: "int1",
+      },
+    } as WSEvent);
+
+    expect(store.getState().interventionLog).toHaveLength(1);
+    expect(store.getState().interventionLog[0].text).toBe("突发地震");
+  });
+
+  it("handles 'simulation_error' → sets error state", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "simulation_error",
+      data: { error: "LLM timeout" },
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("error");
+    expect(store.getState().error).toBe("LLM timeout");
+  });
+});
+
+describe("simulationStore — reset", () => {
+  it("resets all state back to initial", () => {
+    const store = useSimulationStore;
+
+    // Dirty the state
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating" },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "X",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "hello",
+        emotion: "neutral",
+      },
+    } as WSEvent);
+
+    expect(store.getState().status).not.toBe("idle");
+    expect(store.getState().messages.length).toBeGreaterThan(0);
+
+    // Reset
+    store.getState().reset();
+
+    expect(store.getState().status).toBe("idle");
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().scenario).toBeNull();
+  });
+});
+
+describe("simulationStore — scenario hydration", () => {
+  it("restores theater mode when scenario visualization is enabled", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "done",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      visualization_enabled: true,
+      scene_theme: "ancient_empire",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    expect(store.getState().visualizationEnabled).toBe(true);
+    expect(store.getState().viewMode).toBe("theater");
+  });
+});

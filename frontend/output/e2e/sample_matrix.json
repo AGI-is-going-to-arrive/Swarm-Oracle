@@ -1,0 +1,202 @@
+{
+  "generated_at": "2026-03-15",
+  "base_url": "http://127.0.0.1:18928",
+  "samples": [
+    {
+      "theme": "governance",
+      "scenario_id": "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+      "scene_theme": "scifi_base",
+      "profile_label_zh": "治理博弈",
+      "completed_branch_count": 13,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "law",
+      "scenario_id": "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+      "scene_theme": "modern_city",
+      "profile_label_zh": "法律红线",
+      "completed_branch_count": 15,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "trade",
+      "scenario_id": "5be95c28-b726-4ba8-a74f-482f637d128c",
+      "scene_theme": "desert_outpost",
+      "profile_label_zh": "贸易绞盘",
+      "completed_branch_count": 15,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "ecology",
+      "scenario_id": "fda52830-e300-4a4b-840f-75e4fa003f4c",
+      "scene_theme": "desert_outpost",
+      "profile_label_zh": "生态阈值",
+      "completed_branch_count": 15,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "war",
+      "scenario_id": "f867f9e0-f4ca-4cdb-976e-493614ae2248",
+      "scene_theme": "space_station",
+      "profile_label_zh": "战争抉择",
+      "completed_branch_count": 13,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "faith",
+      "scenario_id": "b87e3668-3189-4e80-8f2a-03ca016f659d",
+      "scene_theme": "fantasy_kingdom",
+      "profile_label_zh": "神权号角",
+      "completed_branch_count": 15,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "industry",
+      "scenario_id": "66d3571a-4785-4f56-8f50-5f7a4c3383f5",
+      "scene_theme": "factory_foundry",
+      "profile_label_zh": "工业与资源",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "frontier",
+      "scenario_id": "e9767982-9430-433f-aac7-fe6fb4fb17d9",
+      "scene_theme": "frontier_colony",
+      "profile_label_zh": "边疆探索",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "mythic",
+      "scenario_id": "7aea6995-2e73-4ef2-839c-cbf3e21db8b1",
+      "scene_theme": "arcane_sanctum",
+      "profile_label_zh": "神话秩序",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "survival",
+      "scenario_id": "1cceba2c-0344-4ec1-a826-e3792aca5853",
+      "scene_theme": "refuge_compound",
+      "profile_label_zh": "生存极限",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "governance_surveillance",
+      "scenario_id": "58bd6c9f-fb36-4e5a-970c-08c4868f8ace",
+      "scene_theme": "surveillance_megacity",
+      "profile_label_zh": "治理博弈",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "empire_palace",
+      "scenario_id": "f06bfe4b-20b2-4ad4-9491-b4d649f03efb",
+      "scene_theme": "dynastic_palace",
+      "profile_label_zh": "帝国统合",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "industry_grid",
+      "scenario_id": "cc47d7ce-5e74-4903-b00f-8346d5ed6ffe",
+      "scene_theme": "power_grid_nexus",
+      "profile_label_zh": "工业与资源",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "war_logistics",
+      "scenario_id": "0c21f4c1-3a70-4594-90af-4a135bb0f58f",
+      "scene_theme": "logistics_hub",
+      "profile_label_zh": "战争抉择",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-result-headed/share-generated.png"
+      }
+    }
+  ]
+}

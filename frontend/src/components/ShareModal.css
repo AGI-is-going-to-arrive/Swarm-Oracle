@@ -1,0 +1,244 @@
+/* ═══════════════════════════════════════════════════════════
+   ShareModal — Social media copy generator
+   ═══════════════════════════════════════════════════════════ */
+
+.share-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: oklch(10% 0 0 / 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: share-fade-in 0.2s ease;
+}
+
+@keyframes share-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.share-modal {
+  background: var(--bg-primary, #fff);
+  border-radius: 16px;
+  width: min(640px, 92vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 64px oklch(10% 0 0 / 0.25);
+  animation: share-slide-up 0.25s ease;
+  overflow: hidden;
+}
+
+@keyframes share-slide-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.share-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid oklch(80% 0 0 / 0.3);
+}
+
+.share-modal__header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.share-modal__close {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: oklch(50% 0 0);
+  transition: background 0.15s;
+}
+
+.share-modal__close:hover {
+  background: oklch(90% 0 0);
+}
+
+/* ── Platform Buttons ─────────────────────────────── */
+
+.share-modal__platforms {
+  display: flex;
+  gap: 8px;
+  padding: 16px 24px;
+  flex-wrap: wrap;
+}
+
+.share-platform-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1.5px solid oklch(85% 0 0);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  color: oklch(30% 0 0);
+}
+
+.share-platform-btn:hover:not(:disabled) {
+  border-color: oklch(60% 0.18 25);
+  background: oklch(96% 0.04 25);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px oklch(60% 0.18 25 / 0.15);
+}
+
+.share-platform-btn.active {
+  border-color: oklch(55% 0.2 25);
+  background: oklch(95% 0.06 25);
+  color: oklch(40% 0.2 25);
+  font-weight: 600;
+}
+
+.share-platform-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.share-platform-icon {
+  font-size: 1.1rem;
+}
+
+/* ── Content Area ─────────────────────────────── */
+
+.share-modal__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+  min-height: 200px;
+}
+
+.share-modal__hint {
+  text-align: center;
+  color: oklch(55% 0 0);
+  font-size: 0.95rem;
+  padding: 48px 0;
+}
+
+/* Loading */
+.share-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 0;
+  color: oklch(50% 0 0);
+}
+
+.share-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid oklch(90% 0 0);
+  border-top-color: oklch(55% 0.2 25);
+  border-radius: 50%;
+  animation: share-spin 0.8s linear infinite;
+}
+
+@keyframes share-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Error */
+.share-modal__error {
+  text-align: center;
+  padding: 32px 0;
+  color: oklch(55% 0.2 30);
+}
+
+/* Result */
+.share-modal__result {
+  animation: share-fade-in 0.3s ease;
+}
+
+.share-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.share-context__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: oklch(96% 0.02 25);
+  border: 1px solid oklch(85% 0.03 25);
+  color: oklch(40% 0.06 25);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.share-context__chip--primary {
+  background: oklch(95% 0.06 25);
+  border-color: oklch(78% 0.08 25);
+  color: oklch(38% 0.16 25);
+}
+
+.share-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.share-result-platform {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: oklch(45% 0.15 25);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.share-copy-btn {
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.share-copy-btn.copied {
+  background: oklch(55% 0.18 145);
+  color: #fff;
+  border-color: oklch(55% 0.18 145);
+}
+
+.share-result-text {
+  background: oklch(97% 0 0);
+  border: 1px solid oklch(90% 0 0);
+  border-radius: 12px;
+  padding: 20px;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: oklch(25% 0 0);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.share-result-text::-webkit-scrollbar {
+  width: 6px;
+}
+
+.share-result-text::-webkit-scrollbar-thumb {
+  background: oklch(80% 0 0);
+  border-radius: 3px;
+}

@@ -1,0 +1,85 @@
+# SwarmOracle — 实现文档索引
+
+> 汇总自多个开发对话的所有项目文档  
+> 最后更新: 2026-03-16
+
+---
+
+## 📁 文档目录
+
+| # | 文件 | 内容 | 来源会话 |
+|---|------|------|----------|
+| 01 | [架构设计](01_architecture_design.md) | 系统架构、数据模型、API 设计、前端组件、技术栈、MVP 计划、关键决策 | 后端测试 |
+| 02 | [后端测试结果](02_backend_test_results.md) | 135 个测试通过、3 个 Critical Bug 修复、Deprecation 修复、全面 Review 修复 | 后端测试 + 全面 Review |
+| 03 | [Week 1-3 代码审查](03_week1_3_code_review.md) | 108 个测试通过、10 个 Bug 修复（前后端）、新测试覆盖 | 代码审查与测试 |
+| 04 | [Week 4 代码审查](04_week4_code_review.md) | 142 个测试通过、8 个 Bug 修复、Live E2E 测试 | 代码审查与修复 |
+| 05 | [Week 4 实现计划](05_week4_implementation_plan.md) | Intervention API、ResultView、InterventionModal、Docker、文档 | 代码审查与修复 |
+| 06 | [前端代码审查](06_frontend_code_review.md) | 17 个 Bug 修复（CSS、动画、路由、颜色）、构建验证 | 前端 Bug 修复 |
+| 07 | [实时流式 + UX 改进](07_realtime_streaming_ux.md) | 修复 JSON 乱码、轮数滑块(3-40)、分支描述 | 当前会话 |
+| 09 | [多 Agent 上下文分析](09_multi_agent_context_analysis.md) | 前沿技术全景、五种范式对比、SwarmOracle 接入方案 | 上下文研究 |
+| 10 | [上下文优化可行性](10_context_optimization_feasibility.md) | 三阶段可行性评估、代码逐行分析、Phase 1-3 改动量评估 | 优化分析 |
+| 11 | [**后续优化路线图**](11_optimization_roadmap.md) | P0-P9 优化计划、开发/Review/测试方案、598 次 E2E 实测数据、Sprint 排期 | Benchmark 矩阵 |
+| 12 | — | **Phase 1 像素化可视化**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件 + 225 tests | 可视化 Review |
+| 13 | — | **Phase 2 推理可视化**: 天气/昼夜 + 阵营标记 + 气泡变体 + 粒子特效 + 11场景全覆盖 | Phase 2 实现 |
+| 14 | — | **Phase 3 游戏化 UI**: 标题画面 + 6种结局 + MiniMap/BetPanel/Leaderboard HUD + 截图/GIF导出 | Phase 3 实现 |
+| 15 | — | **Phase 1-3 Code Review 修复**: P0 内存泄漏 + P1 事件监听器 + P2 关键词优先级/卡牌概率 + P3 防御性守卫, 7 修复 5 文件 | Code Review |
+| 16 | — | **Phase 4 开源准备**: Weather 对象池(120) + 视口裁剪(40px) + ASSET_CREDITS 58 张 + WorldScene/EndingScene 32 新测试 | Phase 4 实现 |
+| 17 | — | **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布无遮挡 | HUD 迁移 |
+| 18 | [下一轮玩法/美术/回放执行文档](18_next_session_gameplay_art_replay_plan.md) | 下一次对话可直接复用的执行 briefing：玩法系统、Vertex 生图、Theater 回放、验收标准；已同步本轮真实落地状态 | 当前会话 |
+
+---
+
+## 📊 开发进度总览
+
+### 已完成
+- ✅ 后端核心（解析 → 模拟 → 叙事三阶段）
+- ✅ REST API + WebSocket 实时推送
+- ✅ 前端核心（InputView → SimulationView → BranchTree）
+- ✅ 蝴蝶效应干预功能（回溯 + 多点 + 模板）
+- ✅ ResultView 多结局对比
+- ✅ 后端主回归现为 **708 passed**
+- ✅ 前端主回归现为 **128 passed**（Vitest）
+- ✅ 中英双语 i18n
+- ✅ 实时 Agent 消息推送（per-agent 即时推送）
+- ✅ 用户可选推演轮数（滑块 3-40）
+- ✅ Blackboard 共享空间 + L2 向量记忆
+- ✅ 分层代理架构（P3-A，千人规模）
+- ✅ 排行榜 / 竞猜社交层（P3-B）
+- ✅ 场景管理 + 导出 + BYOK（P4）
+- ✅ Fork 抑制 + 叙事改进（P5）
+- ✅ 社交媒体文案生成（P6）
+- ✅ 可收起侧边栏 + 分支讨论卡片 + Agent 消息过滤（P7）
+- ✅ 代码审查加固 + CSS 兼容性（P8）
+- ✅ 语言检测 + 全局语言切换器（P9）
+- ✅ API 层拆分重构（scenarios → 5 模块）(P0-1)
+- ✅ N+1 查询优化（LEFT JOIN）(P0-2)
+- ✅ LLM 重试 + 指数退避 (P1-3)
+- ✅ Alembic 数据库迁移框架 (P1-4)
+- ✅ Prometheus 可观测性 (`/metrics`) (P3-9)
+- ✅ 前端测试框架 (Vitest) (P2-6) — 23 tests (simulationStore + EventBridge)
+- ✅ 批量 SQL 删除优化 (P2-7)
+- ✅ **Phase 2 推理可视化**: 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效 + 11场景
+- ✅ **Phase 3 游戏化打磨**: 标题画面 + 6种结局 + MiniMap + 竞猜面板 + 排行榜 + 截图/GIF导出
+- ✅ **Phase 4 开源准备**: Weather 粒子对象池 + 视口裁剪 + ASSET_CREDITS 58 张素材清单 + 32 项新测试 + tsc 零错误
+- ✅ **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布场景无遮挡
+
+### 待完成
+- ⬜ Docker Compose 一键部署（基础设施 90% 就绪）
+- ✅ 完整 E2E 测试（matrix / corners / full 黑盒套件）
+- ✅ 前端代码分割优化（SimulationView 业务块已拆小）
+
+### 已完成 Sprint
+- ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试
+- ✅ **Sprint 11.1 — Phase 1 Code Review 修复**: viz_push 死代码消除 + ending_type 3级映射 + Worker viz 事件 + EventBridge 单测, 4 问题修复, 22 新测试
+- ✅ **Sprint 11.2 — Phase 2 推理可视化 + Phase 3 游戏化打磨**: 天气/昼夜 + 阵营 + 气泡变体 + 粒子 + 标题画面 + 6种结局 + Mini Map + 竞猜面板 + 排行榜 + 截图/GIF导出, 22 i18n keys × 2
+- ✅ **Sprint 11.3 — Phase 1-3 Code Review 修复**: P0 WorldScene 内存泄漏 + P1 事件监听器泄漏 + P2 scene_selector 关键词优先级/卡牌概率偏差 + P3 stance clamp/zero guard, 7 修复 5 文件, 212 tests 回归通过
+- ✅ **Sprint 11.4 — Phase 4 开源准备**: Weather 对象池(120) + 视口裁剪(40px) + ASSET_CREDITS(58张) + WorldScene.test.ts(18) + EndingScene.test.ts(14), tsc 零错误
+- ✅ **Sprint 11.5 — Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas → React HudOverlay.tsx, WorldScene.ts HUD 代码全删除, game.css 新增 hud-bar 样式
+
+### 累计修复的 Bug
+- 🔴 Critical: 13 个（+3 可视化）
+- 🟡 High: 9 个（+1 Review: Worker viz 缺失）
+- 🟠 Medium: 24 个（+2 可视化 +2 Review: ending_type + viz_push 死代码）
+- 🟢 Low: 18 个（+2 可视化 +1 Review: EventBridge 无测试）
+- 🔧 测试修复: 8 个
+- **总计: 83 个问题全部已修复**（含 P0-P3 Code Review 5 个 + Phase 1 可视化 7 个 + Phase 1 Review 4 个 + Phase 1-3 Review 7 个）

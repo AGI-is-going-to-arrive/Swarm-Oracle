@@ -1,0 +1,35 @@
+# OS / editor
+.DS_Store
+.claude/
+.trae/
+.agent/*.png
+
+# Python
+**/__pycache__/
+**/*.pyc
+backend/.venv/
+backend/.pytest_cache/
+backend/swarmoracle_backend.egg-info/
+backend/.env
+backend/swarmoracle.db
+backend/chroma_data/
+chroma_data/
+
+# Node / build
+frontend/node_modules/
+frontend/dist/
+frontend/.tmp-playwright/
+
+# Generated runtime artifacts
+.tmp/
+.tmp-playwright/
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+
+# Frontend test outputs: keep only the checked-in sample matrix
+frontend/output/*
+!frontend/output/e2e/
+frontend/output/e2e/*
+!frontend/output/e2e/sample_matrix.json

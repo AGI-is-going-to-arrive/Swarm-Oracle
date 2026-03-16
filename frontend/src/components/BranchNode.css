@@ -1,0 +1,269 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — BranchNode Styles
+   ═══════════════════════════════════════════════════════════ */
+
+.branch-node {
+  min-width: 300px;
+  max-width: 380px;
+  padding: 20px 24px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  transition: all var(--transition-base);
+  cursor: pointer;
+}
+
+.branch-node:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-elevated, 0 8px 32px rgba(0,0,0,0.15));
+}
+
+/* ── Status variants ─────────────────────────────────────── */
+.branch-node--active {
+  border-color: hsla(347, 67%, 42%, 0.2);
+  border-color: oklch(55% 0.22 350 / 0.2);
+  box-shadow: var(--glow-primary);
+}
+.branch-node--completed {
+  border-color: hsla(74, 62%, 55%, 0.25);
+  border-color: oklch(75% 0.16 80 / 0.25);
+  box-shadow: 0 0 20px hsla(74, 62%, 55%, 0.1);
+  box-shadow: 0 0 20px oklch(75% 0.16 80 / 0.1);
+}
+.branch-node--pruned {
+  opacity: 0.5;
+  filter: grayscale(0.5);
+  border-color: var(--border-subtle);
+}
+
+/* ── Status row ──────────────────────────────────────────── */
+.branch-node__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-dot--active {
+  background: var(--color-primary);
+  animation: glowPulse 2s ease-in-out infinite;
+}
+.status-dot--completed {
+  background: var(--color-warning);
+}
+.status-dot--pruned {
+  background: var(--text-muted);
+}
+
+.status-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+/* ── Title ───────────────────────────────────────────────── */
+.branch-node__title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 8px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* ── Description ─────────────────────────────────────────── */
+.branch-node__desc {
+  font-size: 0.75rem;
+  color: #777;
+  margin-bottom: 8px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Fork reason ─────────────────────────────────────────── */
+.branch-node__reason {
+  font-size: 0.75rem;
+  color: var(--color-accent);
+  margin-bottom: 10px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Probability bar ─────────────────────────────────────── */
+.branch-node__prob {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.prob-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-deep);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.prob-bar__fill {
+  height: 100%;
+  border-radius: 2px;
+  width: var(--prob-width, 0%);
+  background: var(--prob-color, var(--color-primary));
+  transition: width 0.5s ease-out;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.prob-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-width: 36px;
+  text-align: right;
+  color: var(--prob-color, var(--text-primary));
+}
+
+/* ── Agent mini avatars ──────────────────────────────────── */
+.branch-node__agents {
+  display: flex;
+  gap: 4px;
+}
+
+.agent-mini {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.agent-mini--more {
+  background: var(--color-primary-glow);
+  color: var(--color-primary);
+  border-color: var(--color-primary-dim);
+  font-size: 0.55rem;
+}
+
+/* ── Handles ─────────────────────────────────────────────── */
+.branch-handle {
+  width: 8px !important;
+  height: 8px !important;
+  background: var(--color-primary-dim) !important;
+  border: 2px solid var(--bg-deep) !important;
+  border-radius: 50% !important;
+}
+
+/* ── Intervene button ────────────────────────────────────── */
+.branch-node__intervene {
+  width: 100%;
+  margin-top: 10px;
+  padding: 5px 0;
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.05em;
+}
+
+.branch-node__intervene:hover {
+  background: var(--color-primary);
+  color: var(--bg-surface);
+}
+
+/* ── Talking state — pulsing glow border ─────────────────── */
+.branch-node--talking {
+  border-color: hsla(347, 67%, 42%, 0.4);
+  border-color: oklch(55% 0.22 350 / 0.4);
+  animation: talkingGlow 2s ease-in-out infinite;
+}
+
+.branch-node--talking .agent-mini {
+  animation: agentMiniPulse 1.5s ease-in-out infinite;
+}
+
+/* ── Activity indicator ──────────────────────────────────── */
+.branch-node__activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  background: oklch(55% 0.22 350 / 0.06);
+  border-radius: var(--radius-full, 20px);
+  animation: activitySlideIn 0.4s ease-out;
+}
+
+.activity-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e91e63;
+  animation: activityDot 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.activity-text {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--color-primary);
+  white-space: nowrap;
+}
+
+/* ═══ Extra Animations ═══ */
+
+@keyframes talkingGlow {
+  0%, 100% {
+    box-shadow: 0 0 12px oklch(55% 0.22 350 / 0.15),
+                0 0 0 0 oklch(55% 0.22 350 / 0.08);
+  }
+  50% {
+    box-shadow: 0 0 24px oklch(55% 0.22 350 / 0.3),
+                0 0 0 6px oklch(55% 0.22 350 / 0.05);
+  }
+}
+
+@keyframes agentMiniPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+@keyframes activityDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+@keyframes activitySlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

@@ -1,0 +1,1049 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — SimulationView (Main Simulation Page)
+   ═══════════════════════════════════════════════════════════ */
+
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+
+import { useSimulationStore } from '../stores/simulationStore';
+import { useSimulationWS } from '../hooks/useSimulationWS';
+import {
+  captureCompositeElementDataUrl,
+  captureElementDataUrl,
+  type CaptureMode,
+  useScreenCapture,
+} from '../hooks/useScreenCapture';
+import { loadScenarioMeta } from '../lib/scenarioMeta';
+import { getGameplayCardDefinition } from '../components/gameplayCards';
+const LazyClassicBranchTree = lazy(() =>
+  import('../components/ClassicBranchTree').then((mod) => ({ default: mod.ClassicBranchTree }))
+);
+const LazyAgentPanel = lazy(() =>
+  import('../components/AgentPanel').then((mod) => ({ default: mod.AgentPanel }))
+);
+const LazyTimelineBar = lazy(() =>
+  import('../components/TimelineBar').then((mod) => ({ default: mod.TimelineBar }))
+);
+const LazyInterventionModal = lazy(() => import('../components/InterventionModal'));
+const LazyBranchDetailModal = lazy(() => import('../components/BranchDetailModal'));
+const LazyPredictionModal = lazy(() => import('../components/PredictionModal'));
+const LazyGameplayCardsModal = lazy(() => import('../components/GameplayCardsModal'));
+import { PhaserGameLoader } from '../game';
+import {
+  buildReplayBranchOptions,
+  filterReplayMessages,
+  getLatestReplayRound,
+  getReplayRounds,
+} from '../game/replaySelection';
+import {
+  stringifyAutomationPayload,
+  type AutomationSceneState,
+  type AutomationWindow,
+} from '../game/automation';
+import { HudOverlay } from '../game/HudOverlay';
+import { getTheaterThemeLabel } from '../lib/themeLabels';
+import type { BranchInfo } from '../types';
+import './SimulationView.css';
+
+const THEATER_SCENE_LABELS = {
+  BootScene: { zh: '启动场景', en: 'Boot Scene' },
+  TitleScene: { zh: '标题场景', en: 'Title Scene' },
+  WorldScene: { zh: '世界场景', en: 'World Scene' },
+  EndingScene: { zh: '结局演出', en: 'Ending Scene' },
+} as const;
+
+const THEATER_WEATHER_LABELS: Record<string, { zh: string; en: string }> = {
+  clear: { zh: '晴朗', en: 'Clear' },
+  rain: { zh: '降雨', en: 'Rain' },
+  snow: { zh: '降雪', en: 'Snow' },
+  storm: { zh: '雷暴', en: 'Storm' },
+  sandstorm: { zh: '沙尘', en: 'Sandstorm' },
+};
+
+const THEATER_TIME_LABELS: Record<string, { zh: string; en: string }> = {
+  dawn: { zh: '黎明', en: 'Dawn' },
+  noon: { zh: '正午', en: 'Noon' },
+  dusk: { zh: '黄昏', en: 'Dusk' },
+  night: { zh: '夜晚', en: 'Night' },
+};
+
+const MODAL_CAPTURE_SELECTORS = [
+  '.gameplay-modal',
+  '.share-modal',
+  '.modal-content',
+  '.share-overlay',
+  '.modal-overlay',
+];
+
+function formatTheaterLabel(
+  key: string | null | undefined,
+  labels: Record<string, { zh: string; en: string }>,
+  isZh: boolean,
+): string | null {
+  if (!key) return null;
+  const match = labels[key];
+  if (match) return isZh ? match.zh : match.en;
+  return key.replace(/_/g, ' ');
+}
+
+function SimulationSlotFallback({ label }: { label: string }) {
+  return <div className="sim-slot-fallback">{label}</div>;
+}
+
+export function SimulationView() {
+  const { t, i18n } = useTranslation();
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const isZh = i18n.language.startsWith('zh');
+  const scenario = useSimulationStore((s) => s.scenario);
+  const agents = useSimulationStore((s) => s.agents);
+  const branches = useSimulationStore((s) => s.branches);
+  const messages = useSimulationStore((s) => s.messages);
+  const status = useSimulationStore((s) => s.status);
+  const error = useSimulationStore((s) => s.error);
+  const loadScenario = useSimulationStore((s) => s.loadScenario);
+  const isSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
+  const viewMode = useSimulationStore((s) => s.viewMode);
+  const currentRound = useSimulationStore((s) => s.currentRound);
+  // visualizationEnabled is managed internally by the store; no longer needed in the view
+  const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
+
+  // Intervention modal state
+  const [interventionTarget, setInterventionTarget] = useState<{
+    branchId: string;
+    branchTitle: string;
+  } | null>(null);
+
+  // Detail modal state
+  const [detailBranch, setDetailBranch] = useState<BranchInfo | null>(null);
+
+  // Prediction modal state (P5-B)
+  const [showPrediction, setShowPrediction] = useState(false);
+  const [predictionAutomation, setPredictionAutomation] = useState<Record<string, unknown> | null>(null);
+  const [showGameplayCards, setShowGameplayCards] = useState(false);
+  const [gameplayAutomation, setGameplayAutomation] = useState<Record<string, unknown> | null>(null);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>('panel');
+  const [theaterSceneState, setTheaterSceneState] = useState<AutomationSceneState | null>(null);
+  const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 4>(1);
+  const [playbackMode, setPlaybackMode] = useState<'replay' | 'skip'>('replay');
+  const [theaterMountKey, setTheaterMountKey] = useState(0);
+  const [selectedReplayBranchId, setSelectedReplayBranchId] = useState<string | null>(null);
+  const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
+
+  // Sidebar collapse state (default: open in classic, collapsed in theater)
+  const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
+
+  // Phase 3 Batch 3: Screen capture
+  const { status: captureStatus, captureScreenshot, captureGIF } = useScreenCapture({
+    selector: '.phaser-game-container',
+  });
+  const lastTheaterSceneSignature = useRef<string | null>(null);
+  const recoveryLogEmitted = useRef(false);
+  const activeBranches = useMemo(
+    () => branches.filter((branch) => branch.status === 'ACTIVE'),
+    [branches],
+  );
+  const canPreviewGameplayCards = viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
+  const canUseGameplayCards = !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const isWarmupPhase =
+    viewMode === 'theater'
+    && !isSimulationComplete
+    && status === 'simulating'
+    && currentRound === 0;
+  const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
+  const replayBranchOptions = useMemo(
+    () => buildReplayBranchOptions(branches, messages),
+    [branches, messages],
+  );
+  const replayRounds = useMemo(
+    () => getReplayRounds(messages, branches, selectedReplayBranchId),
+    [branches, messages, selectedReplayBranchId],
+  );
+  const timelineRoundMarkers = useMemo(() => {
+    if (!scenario?.total_rounds) return [];
+
+    const meta = id ? loadScenarioMeta(id) : null;
+    const cardUsage = meta?.cards.usageLog ?? [];
+    const bets = meta?.betting.bets ?? [];
+    const completedEndings = branches.filter((branch) => branch.status === 'COMPLETED');
+
+    return Array.from({ length: scenario.total_rounds }, (_, index) => {
+      const round = index + 1;
+      const forkedBranches = branches.filter(
+        (branch) => Boolean(branch.parent_branch_id) && (branch.fork_round ?? 0) === round,
+      );
+      const cardEntries = cardUsage.filter((entry) => entry.round === round);
+      const betEntries = bets.filter((bet) => bet.placedAtRound === round);
+      return {
+        round,
+        isAvailable: replayRounds.includes(round),
+        isSelected: selectedReplayRound === round,
+        forkCount: forkedBranches.length,
+        forkTitles: forkedBranches.slice(0, 3).map((branch) => branch.title),
+        cardCount: cardEntries.length,
+        cardSummaries: cardEntries.slice(0, 3).map((entry) => (
+          isZh
+            ? getGameplayCardDefinition(entry.cardId).labelZh
+            : getGameplayCardDefinition(entry.cardId).labelEn
+        )),
+        betCount: betEntries.length,
+        betSummaries: betEntries.slice(0, 3).map((bet) => bet.targetLabel),
+        resultCount:
+          isSimulationComplete && round === scenario.total_rounds && completedEndings.length > 0
+            ? completedEndings.length
+            : 0,
+        resultSummaries:
+          isSimulationComplete && round === scenario.total_rounds
+            ? completedEndings.slice(0, 3).map((branch) => branch.title)
+            : [],
+      };
+    });
+  }, [branches, id, isSimulationComplete, isZh, replayRounds, scenario?.total_rounds, selectedReplayRound]);
+
+  // Load scenario data if navigated directly
+  useEffect(() => {
+    if (id && !scenario) {
+      loadScenario(id);
+    }
+  }, [id, scenario, loadScenario]);
+
+  // Connect WebSocket only after scenario data is loaded
+  useSimulationWS(id, !!scenario);
+
+  // ── Warmup recovery: hydrate missing agents / branches while live WS catches up ──
+  const hydrationInFlight = useRef(false);
+  useEffect(() => {
+    if (!id || status === 'idle' || status === 'error' || status === 'parsing') return;
+    if (branches.length > 0 && agents.length > 0) return;
+
+    let cancelled = false;
+    const hydrateMissingScenarioData = async () => {
+      if (cancelled || hydrationInFlight.current) return;
+
+      const state = useSimulationStore.getState();
+      if (state.branches.length > 0 && state.agents.length > 0) return;
+
+      hydrationInFlight.current = true;
+      try {
+        if (!recoveryLogEmitted.current) {
+          console.info('[Recovery] Warmup missing agents/branches — hydrating from API...');
+          recoveryLogEmitted.current = true;
+        }
+        await loadScenario(id);
+      } finally {
+        hydrationInFlight.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void hydrateMissingScenarioData();
+    }, 1500);
+
+    void hydrateMissingScenarioData();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [id, status, branches.length, agents.length, loadScenario]);
+
+  useEffect(() => {
+    if (branches.length > 0 && agents.length > 0) {
+      recoveryLogEmitted.current = false;
+    }
+  }, [agents.length, branches.length]);
+
+  const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
+    setInterventionTarget({ branchId, branchTitle });
+  }, []);
+
+  const handleDetail = useCallback((branchId: string) => {
+    const branch = branches.find((b) => b.id === branchId);
+    if (branch) setDetailBranch(branch);
+  }, [branches]);
+
+  useEffect(() => {
+    const win = window as AutomationWindow;
+    const canOpenGameplayCards = !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+    const canPreviewGameplayCardsNow = viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
+    const render = () => stringifyAutomationPayload(
+      {
+        question: scenario?.question ?? null,
+        status,
+        currentRound,
+        totalRounds: scenario?.total_rounds ?? null,
+        viewMode,
+        visualizationEnabled: viewMode === 'theater',
+        isSimulationComplete,
+        messageCount: messages.length,
+        agentCount: agents.length,
+        branchCount: branches.length,
+      },
+      win.__swarmGetSceneAutomation?.() ?? null,
+      {
+        route: window.location.pathname,
+        kind: 'simulation',
+        error: error || null,
+        controls: {
+          can_go_back: true,
+          can_toggle_view_mode: true,
+          can_open_gameplay_cards: canOpenGameplayCards,
+          can_preview_gameplay_cards: canPreviewGameplayCardsNow,
+          can_open_prediction: !isSimulationComplete,
+          can_view_results: isSimulationComplete,
+          can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
+          can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
+          capture_mode: captureMode,
+          can_capture_modal: hasActiveModal,
+          can_toggle_sidebar: true,
+          panel_collapsed: panelCollapsed,
+          capture_status: captureStatus,
+          active_modal:
+            showPrediction ? 'prediction'
+            : showGameplayCards ? 'gameplay_cards'
+            : interventionTarget ? 'intervention'
+            : detailBranch ? 'branch_detail'
+            : null,
+          modal_state: showPrediction
+            ? predictionAutomation
+            : showGameplayCards
+              ? gameplayAutomation
+              : null,
+        },
+        replay_state: null,
+        warmup: isWarmupPhase
+          ? {
+              active: true,
+              worldline_ready: branches.length > 0,
+              agents_ready: agents.length > 0,
+              director_ready: canOpenGameplayCards,
+              preview_enabled: canPreviewGameplayCardsNow,
+            }
+          : null,
+        branches: branches.slice(0, 8).map((branch) => ({
+          id: branch.id,
+          title: branch.title,
+          status: branch.status,
+          probability: branch.probability,
+          can_view_detail: true,
+          can_intervene: !isSimulationComplete && branch.status === 'ACTIVE',
+        })),
+      },
+    );
+
+    win.render_game_to_text = render;
+    return () => {
+      if (win.render_game_to_text === render) {
+        delete win.render_game_to_text;
+      }
+    };
+  }, [
+    branches,
+    captureStatus,
+    captureMode,
+    currentRound,
+    detailBranch,
+    error,
+    interventionTarget,
+    isSimulationComplete,
+    agents.length,
+    messages.length,
+    panelCollapsed,
+    gameplayAutomation,
+    predictionAutomation,
+    playbackMode,
+    replayBranchOptions,
+    replayRounds,
+    replaySpeed,
+    selectedReplayBranchId,
+    selectedReplayRound,
+    theaterSceneState,
+    scenario,
+    showGameplayCards,
+    showPrediction,
+    status,
+    hasActiveModal,
+    isWarmupPhase,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    const win = window as AutomationWindow;
+    const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
+      if (mode === 'canvas') {
+        return captureElementDataUrl('.phaser-game-container', 'canvas');
+      }
+      if (mode === 'modal') {
+        if (!hasActiveModal) return null;
+        for (const selector of MODAL_CAPTURE_SELECTORS) {
+          const shot = await captureElementDataUrl(selector, 'element');
+          if (shot) return shot;
+        }
+        return null;
+      }
+
+      return (
+        await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
+      ) ?? (
+        await captureElementDataUrl('.theater-panel', 'element')
+      ) ?? captureElementDataUrl('.phaser-game-container', 'canvas');
+    };
+
+    win.capture_game_screenshot = capture;
+    return () => {
+      if (win.capture_game_screenshot === capture) {
+        delete win.capture_game_screenshot;
+      }
+    };
+  }, [hasActiveModal]);
+
+  const resolveCaptureOptions = useCallback((mode: CaptureMode = captureMode) => {
+    if (mode === 'canvas') {
+      return {
+        selector: '.phaser-game-container',
+        captureTarget: 'canvas' as const,
+      };
+    }
+    if (mode === 'modal') {
+      if (!hasActiveModal) return null;
+      return {
+        selectors: MODAL_CAPTURE_SELECTORS,
+        captureTarget: 'element' as const,
+      };
+    }
+    return {
+      selector: '.theater-panel',
+      captureTarget: 'element' as const,
+      captureBlob: async () => {
+        const dataUrl = await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container');
+        if (!dataUrl) return null;
+        const response = await fetch(dataUrl);
+        return await response.blob();
+      },
+    };
+  }, [captureMode, hasActiveModal]);
+
+  const handleScreenshotCapture = useCallback(() => {
+    const options = resolveCaptureOptions();
+    if (!options) return;
+    void captureScreenshot(options);
+  }, [captureScreenshot, resolveCaptureOptions]);
+
+  const handleGifCapture = useCallback(() => {
+    const gifMode = captureMode === 'canvas' ? 'canvas' : 'panel';
+    const options = resolveCaptureOptions(gifMode);
+    if (!options) return;
+    void captureGIF(options);
+  }, [captureGIF, captureMode, resolveCaptureOptions]);
+
+  useEffect(() => {
+    if (!isSimulationComplete) {
+      setSelectedReplayBranchId(null);
+      setSelectedReplayRound(null);
+      return;
+    }
+
+    const defaultBranchId = replayBranchOptions[0]?.id ?? null;
+    if (!selectedReplayBranchId || !replayBranchOptions.some((branch) => branch.id === selectedReplayBranchId)) {
+      setSelectedReplayBranchId(defaultBranchId);
+      setSelectedReplayRound(getLatestReplayRound(messages, branches, defaultBranchId));
+      return;
+    }
+
+    const latestRound = getLatestReplayRound(messages, branches, selectedReplayBranchId);
+    if (selectedReplayRound == null || (latestRound != null && selectedReplayRound > latestRound)) {
+      setSelectedReplayRound(latestRound);
+    }
+  }, [branches, isSimulationComplete, messages, replayBranchOptions, selectedReplayBranchId, selectedReplayRound]);
+
+  const theaterSceneLabel = theaterSceneState?.scene
+    ? formatTheaterLabel(theaterSceneState.scene, THEATER_SCENE_LABELS, isZh)
+    : null;
+  const theaterThemeLabel = getTheaterThemeLabel(
+    typeof theaterSceneState?.theme === 'string' ? theaterSceneState.theme : scenario?.scene_theme,
+    isZh,
+  );
+  const theaterWeatherLabel = formatTheaterLabel(
+    typeof theaterSceneState?.weather === 'string' ? theaterSceneState.weather : null,
+    THEATER_WEATHER_LABELS,
+    isZh,
+  );
+  const theaterTimeLabel = formatTheaterLabel(
+    typeof theaterSceneState?.time_of_day === 'string' ? theaterSceneState.time_of_day : null,
+    THEATER_TIME_LABELS,
+    isZh,
+  );
+  const theaterAgentCount =
+    typeof theaterSceneState?.agent_count === 'number'
+      ? theaterSceneState.agent_count
+      : agents.length;
+  const theaterBubbleCount = Array.isArray(theaterSceneState?.bubbles)
+    ? theaterSceneState.bubbles.filter((bubble) => bubble && typeof bubble === 'object').length
+    : 0;
+  const canUseReplayControls = viewMode === 'theater' && isSimulationComplete && messages.length > 0;
+  const displayedReplayRound = canUseReplayControls
+    ? (selectedReplayRound ?? currentRound)
+    : currentRound;
+  const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
+  const captureModeDescription = captureMode === 'panel'
+    ? t('game.capture_mode_panel_desc')
+    : captureMode === 'canvas'
+      ? t('game.capture_mode_canvas_desc')
+      : hasActiveModal
+        ? t('game.capture_mode_modal_desc')
+        : t('game.capture_mode_modal_unavailable');
+  const filteredReplayMessages = useMemo(
+    () => (
+      canUseReplayControls
+        ? filterReplayMessages(messages, branches, selectedReplayBranchId, selectedReplayRound)
+        : []
+    ),
+    [branches, canUseReplayControls, messages, selectedReplayBranchId, selectedReplayRound],
+  );
+  const replayAutomationState = useMemo(() => {
+    if (!canUseReplayControls) return null;
+
+    const win = window as AutomationWindow;
+    const runtimeReplayState = win.__swarmGetReplayAutomation?.() ?? null;
+    return {
+      available: true,
+      phase: runtimeReplayState?.phase ?? (playbackMode === 'skip' ? 'settled' : 'idle'),
+      enabled: canUseReplayControls,
+      playback_mode: playbackMode,
+      replay_speed: replaySpeed,
+      selected_branch_id: selectedReplayBranchId,
+      selected_branch_title:
+        replayBranchOptions.find((branch) => branch.id === selectedReplayBranchId)?.title ?? null,
+      selected_round: selectedReplayRound,
+      available_rounds: replayRounds,
+      filtered_message_count: filteredReplayMessages.length,
+      batch_count: runtimeReplayState?.batch_count ?? Math.ceil(filteredReplayMessages.length / 3),
+      displayed_bubble_count:
+        typeof theaterSceneState?.displayed_bubble_count === 'number'
+          ? theaterSceneState.displayed_bubble_count
+          : theaterBubbleCount,
+    };
+  }, [
+    canUseReplayControls,
+    filteredReplayMessages.length,
+    playbackMode,
+    replayBranchOptions,
+    replayRounds,
+    replaySpeed,
+    selectedReplayBranchId,
+    selectedReplayRound,
+    theaterBubbleCount,
+    theaterSceneState,
+  ]);
+
+  useEffect(() => {
+    if (!replayAutomationState) return;
+
+    const win = window as AutomationWindow;
+    const render = () => stringifyAutomationPayload(
+      {
+        question: scenario?.question ?? null,
+        status,
+        currentRound,
+        totalRounds: scenario?.total_rounds ?? null,
+        viewMode,
+        visualizationEnabled: viewMode === 'theater',
+        isSimulationComplete,
+        messageCount: messages.length,
+        agentCount: agents.length,
+        branchCount: branches.length,
+      },
+      win.__swarmGetSceneAutomation?.() ?? null,
+      {
+        route: window.location.pathname,
+        kind: 'simulation',
+        error: error || null,
+        controls: {
+          can_go_back: true,
+          can_toggle_view_mode: true,
+          can_open_gameplay_cards: canUseGameplayCards,
+          can_preview_gameplay_cards: canPreviewGameplayCards,
+          can_open_prediction: !isSimulationComplete,
+          can_view_results: isSimulationComplete,
+          can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
+          can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
+          capture_mode: captureMode,
+          can_capture_modal: hasActiveModal,
+          can_toggle_sidebar: true,
+          panel_collapsed: panelCollapsed,
+          capture_status: captureStatus,
+          active_modal:
+            showPrediction ? 'prediction'
+            : showGameplayCards ? 'gameplay_cards'
+            : interventionTarget ? 'intervention'
+            : detailBranch ? 'branch_detail'
+            : null,
+          modal_state: showPrediction
+            ? predictionAutomation
+            : showGameplayCards
+              ? gameplayAutomation
+              : null,
+        },
+        replay_state: replayAutomationState,
+        branches: branches.slice(0, 8).map((branch) => ({
+          id: branch.id,
+          title: branch.title,
+          status: branch.status,
+          probability: branch.probability,
+          can_view_detail: true,
+          can_intervene: !isSimulationComplete && branch.status === 'ACTIVE',
+        })),
+      },
+    );
+
+    win.render_game_to_text = render;
+    return () => {
+      if (win.render_game_to_text === render) {
+        delete win.render_game_to_text;
+      }
+    };
+  }, [
+    branches,
+    captureStatus,
+    captureMode,
+    currentRound,
+    detailBranch,
+    error,
+    hasActiveModal,
+    interventionTarget,
+    isSimulationComplete,
+    agents.length,
+    messages.length,
+    panelCollapsed,
+    canPreviewGameplayCards,
+    canUseGameplayCards,
+    gameplayAutomation,
+    predictionAutomation,
+    replayAutomationState,
+    scenario,
+    showGameplayCards,
+    showPrediction,
+    status,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    if (viewMode !== 'theater') {
+      lastTheaterSceneSignature.current = null;
+      setTheaterSceneState(null);
+      return;
+    }
+
+    const readSceneState = () => {
+      const next = (window as AutomationWindow).__swarmGetSceneAutomation?.() ?? null;
+      const signature = JSON.stringify(next);
+      if (signature === lastTheaterSceneSignature.current) return;
+      lastTheaterSceneSignature.current = signature;
+      setTheaterSceneState(next);
+    };
+
+    readSceneState();
+    const timer = window.setInterval(readSceneState, 250);
+    return () => window.clearInterval(timer);
+  }, [id, viewMode]);
+
+  const cycleReplaySpeed = () => {
+    setReplaySpeed((current) => {
+      if (current === 1) return 2;
+      if (current === 2) return 4;
+      return 1;
+    });
+  };
+
+  const restartTheaterPlayback = (mode: 'replay' | 'skip') => {
+    setPlaybackMode(mode);
+    setTheaterMountKey((value) => value + 1);
+  };
+
+  const handleReplayBranchChange = (branchId: string) => {
+    setSelectedReplayBranchId(branchId);
+    setSelectedReplayRound(getLatestReplayRound(messages, branches, branchId));
+    setPlaybackMode('replay');
+    setTheaterMountKey((value) => value + 1);
+  };
+
+  const handleReplayRoundChange = (round: number) => {
+    setSelectedReplayRound(round);
+    setPlaybackMode('replay');
+    setTheaterMountKey((value) => value + 1);
+  };
+
+  return (
+    <div className={`simulation-view ${viewMode === 'theater' ? 'simulation-view--theater' : ''} ${canUseReplayControls ? 'simulation-view--replay-ready' : ''}`}>
+      {/* Header */}
+      <header className="sim-header">
+        <button className="btn btn-ghost btn--back" onClick={() => navigate('/')}>
+          {t('sim.status.back')}
+        </button>
+        <div className="sim-header__info">
+          <h2 className="sim-header__question">
+            {scenario?.question || t('sim.status.loading')}
+          </h2>
+          <span className={`badge badge-${status === 'error' ? 'pruned' : 'active'}`}>
+            {status === 'error'
+              ? t('sim.status.error')
+              : status === 'done'
+                ? t('sim.status.completed')
+                : t('sim.status.running')}
+          </span>
+        </div>
+        <div className="sim-header__actions">
+          {canPreviewGameplayCards && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowGameplayCards(true)}
+              title={!canUseGameplayCards ? t('sim.warmup.cards_preview') : undefined}
+            >
+              {t('gameplay.open_btn')}
+            </button>
+          )}
+          {!isSimulationComplete && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowPrediction(true)}
+            >
+              {t('sim.predict_btn')}
+            </button>
+          )}
+          {isSimulationComplete && (
+            <button
+              className="btn btn-primary btn--results"
+              onClick={() => navigate(`/result/${id}`)}
+            >
+              {t('sim.status.view_results')}
+            </button>
+          )}
+          {/* V2: Theater mode toggle — always visible so users can switch anytime */}
+          <button
+            className={`view-mode-toggle ${viewMode === 'theater' ? 'view-mode-toggle--active' : ''}`}
+            onClick={toggleViewMode}
+            aria-label={viewMode === 'classic' ? 'Switch to Pixel Theater' : 'Switch to Classic View'}
+          >
+            <span className="view-mode-toggle__icon">
+              {viewMode === 'classic' ? '🎮' : '📊'}
+            </span>
+            <span className="view-mode-toggle__label">
+              {viewMode === 'classic' ? 'Pixel Theater' : 'Classic View'}
+            </span>
+          </button>
+          <span className="sim-header__logo">{t('app_title')}</span>
+        </div>
+      </header>
+
+      {/* Error state */}
+      {error && (
+        <div className="sim-error">
+          <p>⚠️ {error}</p>
+          <button className="btn btn-ghost" onClick={() => navigate('/')}>
+            {t('sim.status.back')}
+          </button>
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="sim-content">
+        {/* V2: Pixel Theater — takes over tree area when active */}
+        {viewMode === 'theater' ? (
+          <div className="sim-content__tree">
+            <div className="theater-panel">
+              <div className="theater-panel__header">
+                <div className="theater-panel__capture">
+                  {canUseReplayControls && (
+                    <>
+                      <button
+                        className="btn btn-ghost btn--capture"
+                        onClick={() => restartTheaterPlayback('replay')}
+                        title={t('game.replay_btn')}
+                      >
+                        🔁 {t('game.replay_btn')}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn--capture"
+                        onClick={() => restartTheaterPlayback('skip')}
+                        title={t('game.skip_btn')}
+                      >
+                        ⏭ {t('game.skip_btn')}
+                      </button>
+                      <button
+                        className="btn btn-ghost btn--capture"
+                        onClick={cycleReplaySpeed}
+                        title={t('game.speed_btn')}
+                      >
+                        ⚡ {replaySpeed}x
+                      </button>
+                    </>
+                  )}
+                  <div className="capture-mode-toggle" aria-label={t('game.capture_mode_label')}>
+                    <button
+                      type="button"
+                      className={`capture-mode-toggle__btn ${captureMode === 'panel' ? 'capture-mode-toggle__btn--active' : ''}`}
+                      onClick={() => setCaptureMode('panel')}
+                      title={t('game.capture_mode_panel_desc')}
+                    >
+                      {t('game.capture_mode_panel')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`capture-mode-toggle__btn ${captureMode === 'canvas' ? 'capture-mode-toggle__btn--active' : ''}`}
+                      onClick={() => setCaptureMode('canvas')}
+                      title={t('game.capture_mode_canvas_desc')}
+                    >
+                      {t('game.capture_mode_canvas')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`capture-mode-toggle__btn ${captureMode === 'modal' ? 'capture-mode-toggle__btn--active' : ''}`}
+                      onClick={() => setCaptureMode('modal')}
+                      title={hasActiveModal ? t('game.capture_mode_modal_desc') : t('game.capture_mode_modal_unavailable')}
+                      disabled={!hasActiveModal}
+                    >
+                      {t('game.capture_mode_modal')}
+                    </button>
+                  </div>
+                  <span className="capture-mode-feedback" aria-live="polite">
+                    {t('game.capture_mode_current')}
+                    {' '}
+                    {captureModeDescription}
+                  </span>
+                  <button
+                    className="btn btn-ghost btn--capture"
+                    onClick={handleScreenshotCapture}
+                    disabled={captureStatus !== 'idle' || !isModalCaptureAvailable}
+                    title={isModalCaptureAvailable ? t('game.screenshot_btn') : t('game.capture_mode_modal_unavailable')}
+                  >
+                    📸 {captureStatus === 'capturing' ? '...' : t('game.screenshot_btn')}
+                  </button>
+                  <button
+                    className="btn btn-ghost btn--capture"
+                    onClick={handleGifCapture}
+                    disabled={captureStatus !== 'idle' || captureMode === 'modal'}
+                    title={captureMode === 'modal' ? t('game.capture_mode_gif_canvas_only') : t('game.gif_btn')}
+                  >
+                    🎬 {captureStatus === 'recording' ? t('game.gif_recording') : t('game.gif_btn')}
+                  </button>
+                  {captureStatus === 'done' && (
+                    <span className="capture-status capture-status--done">
+                      ✅ {t('game.screenshot_saved')}
+                    </span>
+                  )}
+                </div>
+                <span className="theater-panel__power-led" />
+              </div>
+              <div className="theater-panel__status" aria-label="Theater live status">
+                {theaterSceneLabel && (
+                  <span className="theater-chip theater-chip--primary">
+                    🎬 {theaterSceneLabel}
+                  </span>
+                )}
+                {theaterThemeLabel && (
+                  <span className="theater-chip">
+                    🗺 {theaterThemeLabel}
+                  </span>
+                )}
+                <span className="theater-chip">
+                  🔁 R{displayedReplayRound}/{scenario?.total_rounds ?? '--'}
+                </span>
+                <span className="theater-chip">
+                  👥 {theaterAgentCount}
+                </span>
+                <span className="theater-chip">
+                  💬 {theaterBubbleCount}
+                </span>
+                {theaterWeatherLabel && (
+                  <span className="theater-chip">
+                    🌦 {theaterWeatherLabel}
+                  </span>
+                )}
+                {theaterTimeLabel && (
+                  <span className="theater-chip">
+                    🕒 {theaterTimeLabel}
+                  </span>
+                )}
+                <span className="theater-chip">
+                  ✉ {messages.length}
+                </span>
+              </div>
+              {isWarmupPhase && (
+                <div className="theater-panel__warmup" aria-label={t('sim.warmup.title')}>
+                  <div className="theater-panel__warmup-copy">
+                    <strong>{t('sim.warmup.title')}</strong>
+                    <span>{t(canUseGameplayCards ? 'sim.warmup.cards_ready' : 'sim.warmup.cards_preview')}</span>
+                  </div>
+                  <div className="theater-panel__warmup-checks">
+                    <span className={`theater-warmup-pill ${branches.length > 0 ? 'theater-warmup-pill--ready' : ''}`}>
+                      🧭 {t(branches.length > 0 ? 'sim.warmup.worldline_ready' : 'sim.warmup.worldline_syncing')}
+                    </span>
+                    <span className={`theater-warmup-pill ${agents.length > 0 ? 'theater-warmup-pill--ready' : ''}`}>
+                      👥 {t(agents.length > 0 ? 'sim.warmup.agents_ready' : 'sim.warmup.agents_syncing')}
+                    </span>
+                    <span className={`theater-warmup-pill ${canUseGameplayCards ? 'theater-warmup-pill--ready' : ''}`}>
+                      🃏 {t(canUseGameplayCards ? 'sim.warmup.director_ready' : 'sim.warmup.director_locked')}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {canUseReplayControls && replayBranchOptions.length > 0 && (
+                <div className="theater-panel__filters">
+                  <label className="theater-select">
+                    <span>{t('game.worldline_label')}</span>
+                    <select
+                      value={selectedReplayBranchId ?? ''}
+                      onChange={(event) => handleReplayBranchChange(event.target.value)}
+                    >
+                      {replayBranchOptions.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="theater-select">
+                    <span>{t('game.round_label')}</span>
+                    <select
+                      value={selectedReplayRound ?? ''}
+                      onChange={(event) => handleReplayRoundChange(Number(event.target.value))}
+                    >
+                      {replayRounds.map((round) => (
+                        <option key={round} value={round}>
+                          R{round}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              {canUseReplayControls && (
+                <div className="theater-panel__timeline">
+                  <Suspense fallback={<SimulationSlotFallback label={t('sim.timeline.preparing')} />}>
+                    <LazyTimelineBar
+                      interactive
+                      compact
+                      selectedRound={selectedReplayRound}
+                      roundMarkers={timelineRoundMarkers}
+                      onRoundSelect={handleReplayRoundChange}
+                    />
+                  </Suspense>
+                </div>
+              )}
+              <div className="theater-panel__game-wrapper">
+                <HudOverlay
+                  canPredict={!isSimulationComplete}
+                  onOpenPrediction={!isSimulationComplete ? () => setShowPrediction(true) : undefined}
+                >
+                  <PhaserGameLoader
+                    key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
+                    replaySpeed={replaySpeed}
+                    playbackMode={playbackMode}
+                    playbackBranchId={selectedReplayBranchId}
+                    playbackRound={selectedReplayRound}
+                  />
+                </HudOverlay>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Classic BranchTree view */
+          <div className="sim-content__tree">
+            <Suspense fallback={<SimulationSlotFallback label={t('sim.tree.waiting')} />}>
+              <LazyClassicBranchTree onIntervene={handleIntervene} onDetail={handleDetail} />
+            </Suspense>
+          </div>
+        )}
+
+        {/* Sidebar toggle pill — always points outward */}
+        <button
+          className={`sim-sidebar-toggle ${panelCollapsed ? 'sim-sidebar-toggle--collapsed' : ''}`}
+          onClick={() => setPanelCollapsed((prev) => !prev)}
+          title={panelCollapsed ? t('sim.panel_expand') : t('sim.panel_collapse')}
+          aria-label={panelCollapsed ? t('sim.panel_expand') : t('sim.panel_collapse')}
+        >
+          <svg width="7" height="12" viewBox="0 0 7 12" fill="none">
+            {panelCollapsed
+              ? <path d="M1 1L6 6L1 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+              : <path d="M6 1L1 6L6 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+            }
+          </svg>
+        </button>
+
+        {/* Agent Panel */}
+        <div className={`sim-content__panel ${panelCollapsed ? 'sim-content__panel--collapsed' : ''}`}>
+          <Suspense fallback={<SimulationSlotFallback label={t('sim.panel.waiting')} />}>
+            <LazyAgentPanel onBranchDetail={handleDetail} />
+          </Suspense>
+        </div>
+      </div>
+
+      {/* Timeline Bar */}
+      {!(viewMode === 'theater' && canUseReplayControls) && (
+      <Suspense fallback={<SimulationSlotFallback label={t('sim.timeline.preparing')} />}>
+        <LazyTimelineBar
+          interactive={canUseReplayControls}
+          compact={canUseReplayControls}
+          selectedRound={selectedReplayRound}
+          roundMarkers={timelineRoundMarkers}
+          onRoundSelect={handleReplayRoundChange}
+        />
+      </Suspense>
+      )}
+
+      {/* Intervention Modal */}
+      {interventionTarget && id && (
+        <Suspense fallback={null}>
+          <LazyInterventionModal
+            scenarioId={id}
+            branchId={interventionTarget.branchId}
+            branchTitle={interventionTarget.branchTitle}
+            onClose={() => setInterventionTarget(null)}
+          />
+        </Suspense>
+      )}
+
+      {/* Branch Detail Modal */}
+      {detailBranch && (
+        <Suspense fallback={null}>
+          <LazyBranchDetailModal
+            branch={detailBranch}
+            onClose={() => setDetailBranch(null)}
+          />
+        </Suspense>
+      )}
+
+      {/* Prediction Modal (P5-B) */}
+      {showPrediction && id && (
+        <Suspense fallback={null}>
+          <LazyPredictionModal
+            scenarioId={id}
+            branches={branches}
+            question={scenario?.question}
+            sceneTheme={scenario?.scene_theme}
+            currentRound={Math.max(currentRound, 1)}
+            onAutomationStateChange={setPredictionAutomation}
+            onClose={() => setShowPrediction(false)}
+          />
+        </Suspense>
+      )}
+
+      {showGameplayCards && id && (
+        <Suspense fallback={null}>
+          <LazyGameplayCardsModal
+            scenarioId={id}
+            branches={branches}
+            agents={agents}
+            question={scenario?.question ?? ''}
+            sceneTheme={scenario?.scene_theme}
+            currentRound={Math.max(currentRound, 1)}
+            readOnly={!canUseGameplayCards}
+            disabledReason={!canUseGameplayCards ? t('sim.warmup.cards_preview') : null}
+            onAutomationStateChange={setGameplayAutomation}
+            onClose={() => setShowGameplayCards(false)}
+          />
+        </Suspense>
+      )}
+    </div>
+  );
+}

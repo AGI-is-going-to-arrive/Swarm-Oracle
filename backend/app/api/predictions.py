@@ -1,0 +1,181 @@
+"""Predictions & Leaderboard API — P3-B Social prediction layer.
+
+Endpoints:
+- POST /api/scenario/{id}/predict — submit a prediction
+- GET  /api/scenario/{id}/predictions — list predictions for a scenario
+- POST /api/scenario/{id}/score-predictions — trigger scoring for completed scenario
+- GET  /api/leaderboard — global leaderboard
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, field_validator
+from sqlmodel import Session, select
+
+from app.models import Prediction, Leaderboard, Scenario, ScenarioStatus
+from app.models.database import get_engine
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api", tags=["predictions"])
+
+
+# ── Request / Response Schemas ─────────────────────────
+
+class PredictRequest(BaseModel):
+    prediction_text: str
+    confidence: float = 0.5
+    user_id: str = ""
+    user_name: str = "匿名预言家"
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        # M-8 fix: Reject out-of-range values instead of silently clamping
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"Confidence must be between 0.0 and 1.0, got {v}")
+        return v
+
+    @field_validator("prediction_text")
+    @classmethod
+    def validate_text(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Prediction text cannot be empty")
+        if len(v) > 500:
+            raise ValueError("Prediction text too long (max 500 chars)")
+        return v.strip()
+
+
+class PredictionResponse(BaseModel):
+    id: str
+    scenario_id: str
+    user_name: str
+    prediction_text: str
+    confidence: float
+    score: float | None = None
+    score_reason: str | None = None
+    created_at: str
+
+
+class LeaderboardEntry(BaseModel):
+    user_id: str
+    user_name: str
+    total_predictions: int
+    avg_score: float
+    best_score: float
+    win_streak: int
+
+
+# ── Endpoints ─────────────────────────────────────────
+
+@router.post("/scenario/{scenario_id}/predict")
+async def submit_prediction(scenario_id: str, req: PredictRequest) -> PredictionResponse:
+    """Submit a prediction for a scenario (before or during simulation)."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if not scenario:
+            raise HTTPException(404, "Scenario not found")
+
+        # Don't allow predictions after simulation is done 
+        if scenario.status == ScenarioStatus.DONE:
+            raise HTTPException(400, "Scenario already completed — predictions are closed")
+
+        pred = Prediction(
+            scenario_id=scenario_id,
+            user_id=req.user_id or "anonymous",
+            user_name=req.user_name,
+            prediction_text=req.prediction_text,
+            confidence=req.confidence,
+        )
+        session.add(pred)
+        session.commit()
+        session.refresh(pred)
+
+        return PredictionResponse(
+            id=pred.id,
+            scenario_id=pred.scenario_id,
+            user_name=pred.user_name,
+            prediction_text=pred.prediction_text,
+            confidence=pred.confidence,
+            score=pred.score,
+            score_reason=pred.score_reason,
+            created_at=pred.created_at.isoformat(),
+        )
+
+
+@router.get("/scenario/{scenario_id}/predictions")
+async def list_predictions(scenario_id: str) -> list[PredictionResponse]:
+    """List all predictions for a scenario."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if not scenario:
+            raise HTTPException(404, "Scenario not found")
+
+        preds = list(session.exec(
+            select(Prediction)
+            .where(Prediction.scenario_id == scenario_id)
+            .order_by(Prediction.created_at.desc())
+        ).all())
+
+        return [
+            PredictionResponse(
+                id=p.id,
+                scenario_id=p.scenario_id,
+                user_name=p.user_name,
+                prediction_text=p.prediction_text,
+                confidence=p.confidence,
+                score=p.score,
+                score_reason=p.score_reason,
+                created_at=p.created_at.isoformat(),
+            )
+            for p in preds
+        ]
+
+
+@router.post("/scenario/{scenario_id}/score-predictions")
+async def trigger_scoring(scenario_id: str) -> dict:
+    """Score all unscored predictions for a completed scenario."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if not scenario:
+            raise HTTPException(404, "Scenario not found")
+        if scenario.status != ScenarioStatus.DONE:
+            raise HTTPException(400, "Scenario not yet completed — cannot score predictions")
+
+    from app.services.scoring import score_all_for_scenario
+    results = await score_all_for_scenario(scenario_id)
+
+    return {
+        "scored": len(results),
+        "results": results,
+    }
+
+
+@router.get("/leaderboard")
+async def get_leaderboard(limit: int = 20) -> list[LeaderboardEntry]:
+    """Get the global prediction leaderboard (top N by avg score)."""
+    engine = get_engine()
+    with Session(engine) as session:
+        entries = list(session.exec(
+            select(Leaderboard)
+            .where(Leaderboard.total_predictions >= 1)
+            .order_by(Leaderboard.avg_score.desc())
+            .limit(min(limit, 100))
+        ).all())
+
+        return [
+            LeaderboardEntry(
+                user_id=e.user_id,
+                user_name=e.user_name,
+                total_predictions=e.total_predictions,
+                avg_score=round(e.avg_score, 1),
+                best_score=round(e.best_score, 1),
+                win_streak=e.win_streak,
+            )
+            for e in entries
+        ]

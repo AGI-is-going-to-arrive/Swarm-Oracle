@@ -1,0 +1,210 @@
+import type { GameplayProfileId } from '../components/gameplayCards';
+
+const CHALLENGE_STORAGE_KEY = 'swarmoracle:daily-challenge:v1';
+
+export interface DailyChallenge {
+  id: string;
+  question: string;
+  subtitleZh: string;
+  subtitleEn: string;
+  profileId: GameplayProfileId;
+  rounds: number;
+  numAgents: number;
+  mode: 'blackboard' | 'raw';
+  visualizationEnabled: boolean;
+}
+
+export interface ChallengeProgressEntry {
+  challengeId?: string;
+  scenarioId?: string;
+  startedAt: string;
+  completed: boolean;
+  resultBranchId?: string;
+  usedCards: string[];
+  betPlaced: boolean;
+  bettingHit?: boolean | null;
+  profileResonance?: 'signature' | 'aligned' | 'offbeat' | null;
+}
+
+const DAILY_CHALLENGES: DailyChallenge[] = [
+  {
+    id: 'daily-ai-governance',
+    question: '如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？',
+    subtitleZh: '治理博弈 · 中央算法与地方民意',
+    subtitleEn: 'Governance Conflict · Algorithmic Rule vs Local Voice',
+    profileId: 'governance',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-roman-empire',
+    question: '如果罗马帝国从未衰落？',
+    subtitleZh: '帝国统合 · 中央铁军与地方自治',
+    subtitleEn: 'Imperial Balance · Central Order vs Provincial Autonomy',
+    profileId: 'empire',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-war-front',
+    question: '如果世界大战在高度自动化军备时代再次爆发？',
+    subtitleZh: '战争抉择 · 补给线与停火窗口',
+    subtitleEn: 'War Doctrine · Supply Lines and Ceasefire Windows',
+    profileId: 'war',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-industry',
+    question: '如果工业革命提前一百年到来？',
+    subtitleZh: '工业与资源 · 产能扩张与社会缓冲',
+    subtitleEn: 'Industry and Resources · Throughput vs Social Buffering',
+    profileId: 'industry',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-frontier',
+    question: '如果人类在 2000 年就建立了火星殖民地？',
+    subtitleZh: '边疆探索 · 远征速度与生存规则',
+    subtitleEn: 'Frontier Expansion · Expedition Pace vs Survival Rules',
+    profileId: 'frontier',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-trade-chokepoint',
+    question: '如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？',
+    subtitleZh: '贸易绞盘 · 关税杠杆与港口封锁',
+    subtitleEn: 'Trade Leverage · Tariff Pressure and Port Choke Points',
+    profileId: 'trade',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-legal-veto',
+    question: '如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？',
+    subtitleZh: '法律红线 · 紧急否决与程序补丁',
+    subtitleEn: 'Legal Red Lines · Emergency Vetoes and Procedural Patches',
+    profileId: 'law',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-faith-order',
+    question: '如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？',
+    subtitleZh: '神权号角 · 圣谕改写与异端审判',
+    subtitleEn: 'Sacred Order · Rewritten Prophecy and Heresy Trials',
+    profileId: 'faith',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+  {
+    id: 'daily-ecology-threshold',
+    question: '如果跨大陆淡水供应在十年内枯竭，会发生什么？',
+    subtitleZh: '生态阈值 · 迁徙窗口与系统韧性',
+    subtitleEn: 'Ecology Thresholds · Migration Windows and System Resilience',
+    profileId: 'ecology',
+    rounds: 3,
+    numAgents: 3,
+    mode: 'blackboard',
+    visualizationEnabled: true,
+  },
+];
+
+function challengeDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function loadProgressStore(): Record<string, Record<string, ChallengeProgressEntry>> {
+  try {
+    return JSON.parse(window.localStorage.getItem(CHALLENGE_STORAGE_KEY) || '{}') as Record<string, Record<string, ChallengeProgressEntry>>;
+  } catch {
+    return {};
+  }
+}
+
+function saveProgressStore(store: Record<string, Record<string, ChallengeProgressEntry>>) {
+  window.localStorage.setItem(CHALLENGE_STORAGE_KEY, JSON.stringify(store));
+}
+
+export function getTodayChallenge(date = new Date()): DailyChallenge {
+  const localMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayIndex = Math.floor(localMidnight.getTime() / 86400000);
+  return DAILY_CHALLENGES[dayIndex % DAILY_CHALLENGES.length];
+}
+
+export function getChallengeProgress(challengeId: string, date = new Date()) {
+  const store = loadProgressStore();
+  const dayStore = store[challengeDateKey(date)] ?? {};
+  return (
+    dayStore[challengeId]
+    ?? Object.values(dayStore).find((entry) => entry.challengeId === challengeId)
+    ?? null
+  );
+}
+
+export function isChallengeScenario(
+  challengeId: string,
+  scenarioId: string,
+  date = new Date(),
+) {
+  return getChallengeProgress(challengeId, date)?.scenarioId === scenarioId;
+}
+
+export function markChallengeStarted(challengeId: string, scenarioId: string, date = new Date()) {
+  const key = challengeDateKey(date);
+  const store = loadProgressStore();
+  store[key] ??= {};
+  store[key][challengeId] = {
+    challengeId,
+    scenarioId,
+    startedAt: new Date().toISOString(),
+    completed: false,
+    usedCards: [],
+    betPlaced: false,
+  };
+  saveProgressStore(store);
+}
+
+export function markChallengeCompleted(
+  challengeId: string,
+  scenarioId: string,
+  result: Partial<ChallengeProgressEntry>,
+  date = new Date(),
+) {
+  const key = challengeDateKey(date);
+  const store = loadProgressStore();
+  store[key] ??= {};
+  store[key][challengeId] = {
+    challengeId,
+    scenarioId,
+    startedAt: store[key][challengeId]?.startedAt ?? new Date().toISOString(),
+    completed: true,
+    usedCards: result.usedCards ?? store[key][challengeId]?.usedCards ?? [],
+    betPlaced: result.betPlaced ?? store[key][challengeId]?.betPlaced ?? false,
+    bettingHit: result.bettingHit ?? store[key][challengeId]?.bettingHit ?? null,
+    profileResonance: result.profileResonance ?? store[key][challengeId]?.profileResonance ?? null,
+    resultBranchId: result.resultBranchId,
+  };
+  saveProgressStore(store);
+}

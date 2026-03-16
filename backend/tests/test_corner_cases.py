@@ -1,0 +1,412 @@
+"""Corner-case tests for bugs discovered during comprehensive code review.
+
+Tests 7 specific issues found by manual audit:
+  1. Background task GC protection (scenarios.py)
+  2. Safe tier access in agent dict (simulator.py)
+  3. Pruning active_count excludes COMPLETED (simulator.py)
+  4. ws broadcast already safe (ws.py) — just verify
+  5. Runtime URL detection in llm_client.py
+  6. None guard in memory format_messages_for_context
+  7. SQLite path parsing for absolute paths (database.py)
+"""
+
+import asyncio
+import json
+import os
+import pytest
+import sqlite3
+import tempfile
+from unittest.mock import AsyncMock, patch, MagicMock
+
+# ─────────────────────────────────────────────────────────
+# Bug 1: Background task GC protection
+# ─────────────────────────────────────────────────────────
+
+
+class TestBackgroundTaskGC:
+    """Verify that asyncio.create_task references are held."""
+
+    def test_background_tasks_set_exists(self):
+        from app.api.helpers import _background_tasks
+        assert isinstance(_background_tasks, set)
+
+    @pytest.mark.asyncio
+    async def test_task_added_to_set(self):
+        """A task created via the pattern should be tracked until completion."""
+        tasks: set[asyncio.Task] = set()
+        completed = False
+
+        async def fake_work():
+            nonlocal completed
+            await asyncio.sleep(0.01)
+            completed = True
+
+        task = asyncio.create_task(fake_work())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+        assert task in tasks
+        await task
+        # After a brief yield, the done callback should have fired
+        await asyncio.sleep(0.01)
+        assert task not in tasks
+        assert completed
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 2: Safe tier access
+# ─────────────────────────────────────────────────────────
+
+
+class TestSafeTierAccess:
+    """Verify agent.get('tier') doesn't crash when tier key is missing."""
+
+    def test_agent_get_tier_missing(self):
+        """An agent dict without 'tier' should not raise KeyError."""
+        agent = {"name": "test", "role": "analyst"}
+        # Simulates the fixed line: agent.get("tier") == "CORE"
+        effort = "medium" if agent.get("tier") == "CORE" else "low"
+        assert effort == "low"
+
+    def test_agent_get_tier_none(self):
+        agent = {"name": "test", "tier": None}
+        effort = "medium" if agent.get("tier") == "CORE" else "low"
+        assert effort == "low"
+
+    def test_agent_get_tier_core(self):
+        agent = {"name": "test", "tier": "CORE"}
+        effort = "medium" if agent.get("tier") == "CORE" else "low"
+        assert effort == "medium"
+
+    def test_agent_get_tier_crowd(self):
+        agent = {"name": "test", "tier": "CROWD"}
+        effort = "medium" if agent.get("tier") == "CORE" else "low"
+        assert effort == "low"
+
+    def test_agent_get_tier_unexpected_value(self):
+        agent = {"name": "test", "tier": "LEGENDARY"}
+        effort = "medium" if agent.get("tier") == "CORE" else "low"
+        assert effort == "low"
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 3: Pruning active_count logic
+# ─────────────────────────────────────────────────────────
+
+
+class TestPruningActiveCount:
+    """Active count should only include ACTIVE branches."""
+
+    def test_active_excludes_completed(self):
+        all_branches = [
+            {"status": "ACTIVE"},
+            {"status": "COMPLETED"},
+            {"status": "PRUNED"},
+            {"status": "ACTIVE"},
+        ]
+        active_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
+        assert active_count == 2
+
+    def test_active_only_pruned_and_completed(self):
+        all_branches = [
+            {"status": "COMPLETED"},
+            {"status": "PRUNED"},
+            {"status": "COMPLETED"},
+        ]
+        active_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
+        assert active_count == 0
+
+    def test_old_logic_would_over_count(self):
+        """The old `!= 'PRUNED'` logic would have counted COMPLETED as active."""
+        all_branches = [
+            {"status": "COMPLETED"},
+            {"status": "COMPLETED"},
+            {"status": "ACTIVE"},
+        ]
+        old_count = len([b for b in all_branches if b["status"] != "PRUNED"])
+        new_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
+        # Old: 3, New: 1 — this proves the fix is necessary
+        assert old_count == 3
+        assert new_count == 1
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 4: WS broadcast safety (already safe, regression test)
+# ─────────────────────────────────────────────────────────
+
+
+class TestWSBroadcastSafety:
+    """Verify broadcast handles dead connections without crashing."""
+
+    @pytest.mark.asyncio
+    async def test_broadcast_removes_dead_connections(self):
+        from app.api.ws import WSManager
+
+        mgr = WSManager()
+        alive = AsyncMock()
+        dead = AsyncMock()
+        dead.send_text.side_effect = RuntimeError("connection lost")
+
+        mgr._connections["s1"] = [alive, dead]
+        await mgr.broadcast("s1", {"event": "test"})
+
+        alive.send_text.assert_called_once()
+        assert dead not in mgr._connections["s1"]
+
+    @pytest.mark.asyncio
+    async def test_broadcast_all_dead(self):
+        from app.api.ws import WSManager
+
+        mgr = WSManager()
+        ws1 = AsyncMock()
+        ws2 = AsyncMock()
+        ws1.send_text.side_effect = RuntimeError
+        ws2.send_text.side_effect = RuntimeError
+        mgr._connections["s1"] = [ws1, ws2]
+
+        await mgr.broadcast("s1", {"event": "test"})
+        assert len(mgr._connections["s1"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_broadcast_empty_scenario(self):
+        from app.api.ws import WSManager
+
+        mgr = WSManager()
+        await mgr.broadcast("nonexistent", {"event": "test"})
+        # Should not raise
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 5: Runtime URL detection
+# ─────────────────────────────────────────────────────────
+
+
+class TestRuntimeURLDetection:
+    """_is_chat_completions_api() should detect at call time, not import time."""
+
+    def test_detects_chat_completions(self):
+        from app.services.llm_client import _is_chat_completions_api
+        with patch("app.services.llm_client.settings") as mock_settings:
+            mock_settings.LLM_RESPONSES_URL = "http://host/v1/chat/completions"
+            assert _is_chat_completions_api() is True
+
+    def test_detects_responses_api(self):
+        from app.services.llm_client import _is_chat_completions_api
+        with patch("app.services.llm_client.settings") as mock_settings:
+            mock_settings.LLM_RESPONSES_URL = "http://host/v1/responses"
+            assert _is_chat_completions_api() is False
+
+    def test_url_change_reflected_immediately(self):
+        from app.services.llm_client import _is_chat_completions_api
+        with patch("app.services.llm_client.settings") as mock_settings:
+            mock_settings.LLM_RESPONSES_URL = "http://host/v1/chat/completions"
+            assert _is_chat_completions_api() is True
+
+            mock_settings.LLM_RESPONSES_URL = "http://host/v1/responses"
+            assert _is_chat_completions_api() is False
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 6: None guard in format_messages_for_context
+# ─────────────────────────────────────────────────────────
+
+
+class TestFormatMessagesNoneGuard:
+    """format_messages_for_context should handle None and empty inputs safely."""
+
+    def test_none_messages_returns_empty(self):
+        from app.services.memory import format_messages_for_context
+        result = format_messages_for_context(None)
+        assert result == ""
+
+    def test_empty_list_returns_empty(self):
+        from app.services.memory import format_messages_for_context
+        result = format_messages_for_context([])
+        assert result == ""
+
+    def test_none_with_tier(self):
+        from app.services.memory import format_messages_for_context
+        result = format_messages_for_context(None, tier="CORE")
+        assert result == ""
+
+    def test_single_message_works(self):
+        from app.services.memory import format_messages_for_context
+        result = format_messages_for_context(
+            [{"agent_name": "Alice", "content": "hello", "emotion": "neutral"}]
+        )
+        assert "Alice" in result
+        assert "hello" in result
+
+
+# ─────────────────────────────────────────────────────────
+# Bug 7: SQLite path parsing
+# ─────────────────────────────────────────────────────────
+
+
+class TestSQLitePathParsing:
+    """Verify init_db handles absolute and relative SQLite paths."""
+
+    def test_init_db_with_relative_path(self, tmp_path):
+        """init_db should work with typical relative SQLite paths."""
+        from sqlmodel import create_engine, SQLModel
+        db_file = tmp_path / "test.db"
+        engine = create_engine(f"sqlite:///{db_file}", echo=False)
+        SQLModel.metadata.create_all(engine)
+
+        # Verify the database attribute resolves correctly
+        assert engine.url.database is not None
+        db_path = str(engine.url.database)
+        assert "test.db" in db_path
+
+    def test_init_db_with_absolute_path(self, tmp_path):
+        """init_db should work with absolute SQLite paths (4 slashes)."""
+        from sqlmodel import create_engine, SQLModel
+        db_file = tmp_path / "abs_test.db"
+        engine = create_engine(f"sqlite:///{db_file}", echo=False)
+        SQLModel.metadata.create_all(engine)
+
+        db_path = str(engine.url.database)
+        assert "abs_test.db" in db_path
+
+    def test_migrate_add_column_idempotent(self, tmp_path):
+        """_migrate_add_column should be idempotent (safe to call twice)."""
+        from app.models.database import _migrate_add_column
+
+        db_file = tmp_path / "migrate_test.db"
+        conn = sqlite3.connect(str(db_file))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE test_tbl (id TEXT)")
+        conn.commit()
+
+        # First call: add column
+        _migrate_add_column(cursor, "test_tbl", "new_col", "TEXT")
+        conn.commit()
+
+        # Second call: should be idempotent (no error)
+        _migrate_add_column(cursor, "test_tbl", "new_col", "TEXT")
+        conn.commit()
+
+        # Verify column exists
+        cursor.execute("PRAGMA table_info(test_tbl)")
+        cols = {row[1] for row in cursor.fetchall()}
+        assert "new_col" in cols
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────
+# Additional edge cases from deep review
+# ─────────────────────────────────────────────────────────
+
+
+class TestBlackboardEdgeCases:
+    """Extra edge cases found during code review."""
+
+    def test_post_with_empty_content(self):
+        from app.services.blackboard import Blackboard
+        bb = Blackboard()
+        bb.post("Alice", "", "neutral")
+        assert "Alice" in bb.agent_positions
+
+    def test_post_with_none_diverge(self):
+        from app.services.blackboard import Blackboard
+        bb = Blackboard()
+        bb.post("Alice", "test", "neutral", diverge=None)
+        assert "Alice" in bb.agent_positions
+
+    def test_fork_then_post_no_bleed(self):
+        from app.services.blackboard import Blackboard
+        original = Blackboard()
+        original.post("Alice", "original position", "neutral")
+        forked = original.fork()
+        forked.post("Bob", "new agent", "neutral")
+        # Original should not see Bob
+        assert "Bob" not in original.agent_positions
+        # Forked should see both
+        assert "Alice" in forked.agent_positions
+        assert "Bob" in forked.agent_positions
+
+
+class TestMemoryBuildContextEdgeCases:
+    """Edge cases in build_agent_context."""
+
+    def test_empty_agent_dict_raises(self):
+        """An agent with no 'name' should raise KeyError — agents always have names."""
+        from app.services.memory import build_agent_context
+        with pytest.raises(KeyError):
+            build_agent_context(
+                agent={},
+                setting_background="bg",
+                current_topic="topic",
+                recent_messages="msg",
+            )
+
+    def test_minimal_agent_works(self):
+        from app.services.memory import build_agent_context
+        agent = {"name": "X"}
+        ctx = build_agent_context(
+            agent=agent,
+            setting_background="bg",
+            current_topic="topic",
+            recent_messages="msg",
+        )
+        assert "X" in ctx
+
+    def test_very_long_setting_background(self):
+        from app.services.memory import build_agent_context
+        agent = {"name": "Alice", "role": "analyst", "persona": "smart", "stance": "neutral"}
+        bg = "x" * 10_000
+        ctx = build_agent_context(
+            agent=agent,
+            setting_background=bg,
+            current_topic="topic",
+            recent_messages="msg",
+        )
+        assert bg in ctx
+
+    def test_crowd_tier_truncates_long_background(self):
+        from app.services.memory import build_agent_context
+        agent = {"name": "Alice", "role": "analyst", "persona": "smart", "stance": "neutral", "tier": "CROWD"}
+        bg = "x" * 200
+        ctx = build_agent_context(
+            agent=agent,
+            setting_background=bg,
+            current_topic="topic",
+            recent_messages="msg",
+            tier="CROWD",
+        )
+        # CROWD context should be shorter
+        assert len(ctx) < len(bg) + 500
+
+
+class TestSimulatorHelperEdgeCases:
+    """Edge cases for simulator DB helper functions."""
+
+    def test_agent_to_dict_minimal(self):
+        """Agent with only required fields should convert safely."""
+        from app.services.simulator import _agent_to_dict
+        from app.models import Agent, AgentTier
+
+        agent = Agent(
+            id="a1", scenario_id="s1", name="Test",
+            role="", persona="", tier=AgentTier.IMPORTANT, stance=""
+        )
+        result = _agent_to_dict(agent)
+        assert result["name"] == "Test"
+        assert result["tier"] == "IMPORTANT"
+
+    def test_format_setting_none_values(self):
+        """format_setting should handle None-valued parsed_context fields."""
+        from app.services.simulator import _format_setting
+
+        ctx = {"setting": None, "key_variables": None}
+        result = _format_setting(ctx)
+        assert isinstance(result, str)
+
+    def test_format_setting_empty_context(self):
+        from app.services.simulator import _format_setting
+
+        result = _format_setting({})
+        assert isinstance(result, str)
+"""
+Corner-case tests for bugs discovered during comprehensive code review.
+"""

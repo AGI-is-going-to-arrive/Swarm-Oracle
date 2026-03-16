@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.venv
+.git
+.pytest_cache
+*.egg-info
+chroma_data
+*.db
+test_*.py
+tests/

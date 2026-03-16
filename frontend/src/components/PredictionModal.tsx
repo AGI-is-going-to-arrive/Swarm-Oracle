@@ -1,0 +1,350 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — PredictionModal (P5-B)
+   ═══════════════════════════════════════════════════════════ */
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { submitPrediction } from '../api/client';
+import {
+  buildStructuredPredictionText,
+  ENDING_TONE_OPTIONS,
+  PROFILE_RESONANCE_OPTIONS,
+  getEndingToneLabel,
+  getStructuredBetKindLabel,
+  getStructuredBetOptions,
+  type EndingToneId,
+  type ProfileResonanceId,
+  type StructuredBetKind,
+} from '../lib/predictionBetting';
+import { placeBet } from '../lib/scenarioMeta';
+import type { BranchInfo } from '../types';
+import './PredictionModal.css';
+
+interface Props {
+  scenarioId: string;
+  onClose: () => void;
+  branches?: BranchInfo[];
+  question?: string;
+  sceneTheme?: string | null;
+  currentRound?: number;
+  onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+}
+
+export default function PredictionModal({
+  scenarioId,
+  onClose,
+  branches = [],
+  question,
+  sceneTheme,
+  currentRound = 1,
+  onAutomationStateChange,
+}: Props) {
+  const { t } = useTranslation();
+  const [text, setText] = useState('');
+  const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
+  const branchOptions = getStructuredBetOptions(branches);
+  const [targetBranchId, setTargetBranchId] = useState(branchOptions[0]?.id ?? '');
+  const [endingTone, setEndingTone] = useState<EndingToneId>('order');
+  const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
+  const [confidence, setConfidence] = useState(0.5);
+  const [userName, setUserName] = useState('');
+  const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Cleanup auto-close timer on unmount
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  // Stable close handler that guards against closing during submission
+  const handleClose = useCallback(() => {
+    if (status === 'submitting') return; // Don't close while submitting
+    onClose();
+  }, [status, onClose]);
+
+  // Close on Escape key (guarded)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [handleClose]);
+
+  const confidenceLabel =
+    confidence <= 0.3
+      ? t('prediction.confidence_low')
+      : confidence <= 0.7
+        ? t('prediction.confidence_mid')
+        : t('prediction.confidence_high');
+  const isDisabled = status === 'submitting' || status === 'success';
+  const hasBranchTargets = branchOptions.length > 0;
+  const hasValidBranchTarget = branchOptions.some((branch) => branch.id === targetBranchId);
+  const canSubmit =
+    Boolean(text.trim())
+    && !isDisabled
+    && (betKind !== 'branch_winner' || hasValidBranchTarget);
+
+  useEffect(() => {
+    if (!hasBranchTargets && betKind === 'branch_winner') {
+      setBetKind('ending_tone');
+    }
+  }, [betKind, hasBranchTargets]);
+
+  const handleSubmit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || status === 'submitting' || status === 'success') return;
+    if (betKind === 'branch_winner' && !hasValidBranchTarget) {
+      setStatus('error');
+      setErrorMsg(t('prediction.error'));
+      return;
+    }
+
+    setStatus('submitting');
+    setErrorMsg('');
+
+    const targetLabel =
+      betKind === 'branch_winner'
+        ? branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? targetBranchId
+        : betKind === 'ending_tone'
+          ? getEndingToneLabel(endingTone, true)
+          : PROFILE_RESONANCE_OPTIONS[profileResonance].zh;
+    const predictionText = buildStructuredPredictionText({
+      kind: betKind,
+      targetId:
+        betKind === 'branch_winner'
+          ? targetBranchId
+          : betKind === 'ending_tone'
+            ? endingTone
+            : profileResonance,
+      targetLabel,
+      rationale: trimmed,
+      confidence,
+      userName,
+      placedAtRound: currentRound,
+      sceneTheme,
+      question,
+    });
+
+    try {
+      await submitPrediction(scenarioId, predictionText, confidence, userName.trim() || undefined);
+      placeBet(scenarioId, {
+        betId: crypto.randomUUID(),
+      kind: betKind,
+        targetId:
+          betKind === 'branch_winner'
+            ? targetBranchId
+            : betKind === 'ending_tone'
+              ? endingTone
+              : profileResonance,
+        targetLabel,
+        confidence,
+        userName: userName.trim() || undefined,
+        placedAtRound: currentRound,
+        placedAt: new Date().toISOString(),
+        resolved: false,
+      });
+      setStatus('success');
+      closeTimerRef.current = setTimeout(() => onClose(), 1200);
+    } catch (err) {
+      setStatus('error');
+      setErrorMsg(err instanceof Error ? err.message : t('prediction.error'));
+    }
+  };
+
+  useEffect(() => {
+    onAutomationStateChange?.({
+      kind: 'prediction_modal',
+      bet_kind: betKind,
+      target_branch_id: targetBranchId || null,
+      ending_tone: endingTone,
+      profile_resonance: profileResonance,
+      text_length: text.length,
+      confidence,
+      confidence_label: confidenceLabel,
+      user_name_length: userName.length,
+      status,
+      error: errorMsg || null,
+      can_submit: canSubmit,
+      submit_disabled: !canSubmit,
+    });
+
+    return () => {
+      onAutomationStateChange?.(null);
+    };
+  }, [betKind, canSubmit, confidence, confidenceLabel, endingTone, errorMsg, onAutomationStateChange, status, targetBranchId, text, userName.length]);
+
+  useEffect(() => {
+    if (!targetBranchId && branchOptions.length > 0) {
+      setTargetBranchId(branchOptions[0].id);
+    }
+  }, [branchOptions, targetBranchId]);
+
+  return (
+    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
+      <div className="modal-content prediction-modal">
+        <header className="modal-header">
+          <h2>{t('prediction.title')}</h2>
+          <p className="modal-subtitle">{t('prediction.subtitle')}</p>
+        </header>
+
+        <div className="modal-body">
+          <div className="pred-field">
+            <label className="pred-label" htmlFor="pred-kind">{t('prediction.bet_kind_label')}</label>
+            <select
+              id="pred-kind"
+              className="pred-input"
+              value={betKind}
+              onChange={(e) => setBetKind(e.target.value as StructuredBetKind)}
+              disabled={isDisabled}
+            >
+              <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', true)}</option>
+              <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', true)}</option>
+              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', true)}</option>
+            </select>
+          </div>
+
+          {betKind === 'branch_winner' && branchOptions.length > 0 && (
+            <div className="pred-field">
+              <label className="pred-label" htmlFor="pred-branch">{t('prediction.bet_target_label')}</label>
+              <select
+                id="pred-branch"
+                className="pred-input"
+                value={targetBranchId}
+                onChange={(e) => setTargetBranchId(e.target.value)}
+                disabled={isDisabled}
+              >
+                {branchOptions.map((branch) => (
+                  <option key={branch.id} value={branch.id}>{branch.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {betKind === 'ending_tone' && (
+            <div className="pred-field">
+              <label className="pred-label" htmlFor="pred-tone">{t('prediction.bet_target_label')}</label>
+              <select
+                id="pred-tone"
+                className="pred-input"
+                value={endingTone}
+                onChange={(e) => setEndingTone(e.target.value as EndingToneId)}
+                disabled={isDisabled}
+              >
+                {Object.entries(ENDING_TONE_OPTIONS).map(([tone, labels]) => (
+                  <option key={tone} value={tone}>{labels.zh}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {betKind === 'profile_resonance' && (
+            <div className="pred-field">
+              <label className="pred-label" htmlFor="pred-resonance">{t('prediction.bet_target_label')}</label>
+              <select
+                id="pred-resonance"
+                className="pred-input"
+                value={profileResonance}
+                onChange={(e) => setProfileResonance(e.target.value as ProfileResonanceId)}
+                disabled={isDisabled}
+              >
+                {Object.entries(PROFILE_RESONANCE_OPTIONS).map(([resonance, labels]) => (
+                  <option key={resonance} value={resonance}>{labels.zh}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Prediction Text */}
+          <div className="pred-field">
+            <label className="pred-label" htmlFor="pred-text">{t('prediction.text_label')}</label>
+            <textarea
+              id="pred-text"
+              ref={inputRef}
+              className="pred-textarea"
+              placeholder={t('prediction.text_placeholder')}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              disabled={isDisabled}
+              rows={4}
+              maxLength={500}
+            />
+            <span className="pred-char-count">{text.length}/500</span>
+            <span className="pred-char-count pred-char-count--hint">
+              {t('prediction.bet_preview_prefix')}
+              {' '}
+              {betKind === 'branch_winner'
+                ? (branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? '—')
+                : betKind === 'ending_tone'
+                  ? ENDING_TONE_OPTIONS[endingTone].zh
+                  : PROFILE_RESONANCE_OPTIONS[profileResonance].zh}
+            </span>
+          </div>
+
+          {/* Confidence Slider */}
+          <div className="pred-field">
+            <label className="pred-label" htmlFor="pred-confidence">
+              {t('prediction.confidence_label')}
+              <span className="pred-confidence-badge">{confidenceLabel} — {Math.round(confidence * 100)}%</span>
+            </label>
+            <input
+              id="pred-confidence"
+              type="range"
+              className="pred-slider"
+              min={0}
+              max={1}
+              step={0.05}
+              value={confidence}
+              onChange={(e) => setConfidence(Number(e.target.value))}
+              disabled={isDisabled}
+              aria-label={t('prediction.confidence_label')}
+            />
+          </div>
+
+          {/* User Name */}
+          <div className="pred-field">
+            <label className="pred-label" htmlFor="pred-name">{t('prediction.name_label')}</label>
+            <input
+              id="pred-name"
+              type="text"
+              className="pred-input"
+              placeholder={t('prediction.name_placeholder')}
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              disabled={isDisabled}
+              maxLength={30}
+            />
+          </div>
+
+          {errorMsg && <p className="modal-error">{errorMsg}</p>}
+          {status === 'success' && <p className="modal-success">{t('prediction.success')}</p>}
+        </div>
+
+        <footer className="modal-footer">
+          <button
+            className="btn btn-ghost"
+            onClick={handleClose}
+            disabled={status === 'submitting'}
+          >
+            {t('prediction.cancel')}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+          >
+            {status === 'submitting' ? '...' : t('prediction.submit')}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}

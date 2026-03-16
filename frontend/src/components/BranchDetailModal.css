@@ -1,0 +1,312 @@
+/* ═══════════════════════════════════════════════════════════
+   BranchDetailModal — Streaming Edition
+   ═══════════════════════════════════════════════════════════ */
+
+.bdm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: bdm-fadeIn 0.2s ease-out;
+}
+
+.bdm-modal-streaming {
+  background: #faf8f6;
+  border-radius: 18px;
+  width: min(680px, 92vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.bdm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px 0;
+}
+
+.bdm-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bdm-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e91e63;
+  animation: bdm-pulse 1.5s infinite;
+}
+
+.bdm-status-text {
+  font-size: 13px;
+  color: #888;
+  font-weight: 500;
+}
+
+.bdm-probability {
+  font-size: 20px;
+  font-weight: 700;
+  color: #c2185b;
+}
+
+.bdm-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #999;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.bdm-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #333;
+}
+
+.bdm-title {
+  margin: 8px 24px 16px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+/* ── Sections ── */
+.bdm-section {
+  padding: 0 24px 16px;
+}
+
+.bdm-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bdm-stream-badge {
+  background: #e91e63;
+  color: white;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  animation: bdm-pulse 1.5s infinite;
+}
+
+/* ── Agent chips ── */
+.bdm-agents-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bdm-agent-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 6px;
+  background: white;
+  border-radius: 20px;
+  border: 1px solid #eee;
+  font-size: 13px;
+  transition: all 0.3s;
+}
+
+.bdm-agent-chip.bdm-agent-active {
+  border-color: #e91e63;
+  box-shadow: 0 0 0 2px rgba(233, 30, 99, 0.15);
+}
+
+.bdm-agent-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bdm-agent-name {
+  font-weight: 500;
+  color: #333;
+}
+
+/* ── Typing indicator (3 bouncing dots) ── */
+.bdm-typing-indicator {
+  display: inline-flex;
+  gap: 3px;
+  padding-left: 4px;
+}
+
+.bdm-typing-indicator span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #e91e63;
+  animation: bdm-bounce 1.2s infinite;
+}
+
+.bdm-typing-indicator span:nth-child(2) { animation-delay: 0.15s; }
+.bdm-typing-indicator span:nth-child(3) { animation-delay: 0.3s; }
+
+.bdm-typing-lg span {
+  width: 6px;
+  height: 6px;
+}
+
+/* ── Story / Insight ── */
+.bdm-story,
+.bdm-insight {
+  font-size: 14px;
+  color: #444;
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* ── Messages ── */
+.bdm-messages-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.bdm-messages-scroll {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 400px;
+  padding-right: 8px;
+}
+
+.bdm-empty {
+  text-align: center;
+  color: #aaa;
+  padding: 32px;
+  font-size: 14px;
+}
+
+.bdm-message {
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: white;
+  border: 1px solid #f0eded;
+  animation: bdm-slideIn 0.3s ease-out;
+}
+
+.bdm-message-thinking {
+  border-color: rgba(233, 30, 99, 0.2);
+  background: linear-gradient(135deg, #fff5f8, #fff);
+}
+
+.bdm-msg-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bdm-msg-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.bdm-avatar-pulse {
+  animation: bdm-pulse 1.5s infinite;
+}
+
+.bdm-msg-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.bdm-msg-round {
+  font-size: 11px;
+  color: #aaa;
+  background: #f5f5f5;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.bdm-msg-emotion {
+  font-size: 11px;
+  color: #c2185b;
+  font-style: italic;
+}
+
+.bdm-thinking-label {
+  font-size: 11px;
+  color: #e91e63;
+  font-weight: 500;
+  animation: bdm-pulse 1.5s infinite;
+}
+
+.bdm-msg-content {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bdm-msg-thinking-text {
+  padding: 8px 0;
+}
+
+/* ═══ Animations ═══ */
+
+@keyframes bdm-fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bdm-slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bdm-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes bdm-bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1); }
+}

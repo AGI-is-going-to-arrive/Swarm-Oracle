@@ -1,0 +1,139 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — PredictionModal Styles
+   ═══════════════════════════════════════════════════════════ */
+
+.prediction-modal {
+  max-width: 480px;
+  width: 90vw;
+}
+
+.pred-field {
+  margin-bottom: 20px;
+}
+
+.pred-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.pred-textarea {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.pred-textarea:focus {
+  border-color: var(--text-primary);
+}
+
+.pred-char-count {
+  display: block;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.pred-char-count--hint {
+  text-align: left;
+  font-family: var(--font-body);
+  color: var(--color-primary);
+}
+
+.pred-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--bg-hover);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.pred-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.pred-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.pred-confidence-badge {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  color: var(--color-primary);
+}
+
+.pred-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.pred-input:focus {
+  border-color: var(--text-primary);
+}
+
+/* Shared modal status messages */
+.modal-error {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+  margin: 8px 0;
+}
+
+.modal-success {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-success);
+  margin: 8px 0;
+}
+
+.modal-header h2 {
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.modal-subtitle {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.modal-body {
+  margin: 24px 0;
+}

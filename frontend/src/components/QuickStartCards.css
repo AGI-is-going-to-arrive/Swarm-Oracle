@@ -1,0 +1,62 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — QuickStartCards Styles
+   ═══════════════════════════════════════════════════════════ */
+
+.quickstart-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  max-width: 800px;
+  width: 100%;
+  margin-top: 48px;
+}
+
+.quickstart-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  animation: slideUp 0.5s ease-out both;
+  position: relative;
+  overflow: hidden;
+}
+
+.quickstart-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    oklch(55% 0.22 350 / 0.03) 0%,
+    transparent 50%,
+    oklch(55% 0.22 350 / 0.02) 100%
+  );
+  opacity: 0;
+  transition: opacity var(--transition-base);
+}
+.quickstart-card:hover::before {
+  opacity: 1;
+}
+
+.quickstart-card__emoji {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.quickstart-card__question {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.quickstart-card__subtitle {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

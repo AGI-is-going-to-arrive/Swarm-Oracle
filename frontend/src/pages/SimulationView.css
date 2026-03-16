@@ -1,0 +1,622 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — SimulationView Styles
+   ═══════════════════════════════════════════════════════════ */
+
+.simulation-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+.sim-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.btn--back {
+  padding: 8px 16px;
+  font-size: 0.82rem;
+}
+
+.sim-header__info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sim-header__question {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.sim-header__logo {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+
+.btn--results {
+  animation: subtlePulse 2s ease-in-out infinite;
+}
+
+@keyframes subtlePulse {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(55% 0.22 350 / 0.3); }
+  50% { box-shadow: 0 0 0 6px oklch(55% 0.22 350 / 0); }
+}
+
+/* ── Error ────────────────────────────────────────────────── */
+.sim-error {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: hsla(15, 62%, 48%, 0.08);
+  background: oklch(60% 0.18 25 / 0.08);
+  border-bottom: 1px solid hsla(15, 62%, 48%, 0.15);
+  border-bottom: 1px solid oklch(60% 0.18 25 / 0.15);
+}
+.sim-error p {
+  flex: 1;
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+
+/* ── Main Content ────────────────────────────────────────── */
+.sim-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+.sim-content__tree {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+/* ── Sidebar Toggle Pill ────────────────────────────────── */
+.sim-sidebar-toggle {
+  flex-shrink: 0;
+  align-self: center;
+  z-index: 20;
+  width: 20px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 30, 36, 0.65);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  margin: 0 -1px;
+}
+
+.sim-sidebar-toggle:hover {
+  background: rgba(45, 45, 55, 0.85);
+  color: rgba(255, 255, 255, 0.8);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  width: 24px;
+}
+
+.sim-sidebar-toggle:active {
+  transform: scale(0.94);
+}
+
+/* ── Agent Panel ────────────────────────────────────────── */
+.sim-content__panel {
+  width: 340px;
+  min-width: 280px;
+  max-width: 400px;
+  overflow: hidden;
+  border-left: 1px solid var(--border-subtle);
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+              min-width 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+              max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.25s ease,
+              border-color 0.2s ease;
+}
+
+.sim-content__panel--collapsed {
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  border-left-color: transparent;
+  padding: 0;
+}
+
+@media (max-width: 900px) {
+  .sim-content {
+    flex-direction: column;
+  }
+  .sim-content__tree {
+    flex: 1;
+    min-height: 50vh;
+  }
+  .sim-sidebar-toggle {
+    width: 44px;
+    height: 20px;
+    margin: -1px 0;
+    border-radius: 10px;
+  }
+  .sim-sidebar-toggle:hover {
+    width: 44px;
+    height: 24px;
+  }
+  .sim-content__panel {
+    width: auto;
+    max-width: none;
+    max-height: 40vh;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .sim-content__panel--collapsed {
+    max-height: 0;
+    width: auto;
+  }
+}
+
+/* ── Phase 3: Theater capture buttons ───────────────────── */
+.theater-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.theater-panel__capture {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.capture-mode-feedback {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(245, 243, 255, 0.82);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.capture-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 38, 0.72);
+}
+
+.capture-mode-toggle__btn {
+  border: none;
+  background: transparent;
+  color: rgba(245, 243, 255, 0.72);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.capture-mode-toggle__btn--active {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 247, 252, 0.98);
+}
+
+.capture-mode-toggle__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sim-slot-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--bg-surface) 84%, transparent);
+}
+
+.theater-panel__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.theater-panel__warmup {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, rgba(18, 16, 38, 0.9), rgba(30, 21, 58, 0.82));
+}
+
+.theater-panel__warmup-copy {
+  display: grid;
+  gap: 4px;
+  color: rgba(245, 243, 255, 0.94);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.theater-panel__warmup-copy strong {
+  font-size: 0.84rem;
+  letter-spacing: 0.02em;
+}
+
+.theater-panel__warmup-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theater-warmup-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(245, 243, 255, 0.72);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.theater-warmup-pill--ready {
+  border-color: rgba(159, 209, 255, 0.26);
+  color: rgba(235, 247, 255, 0.94);
+  background: rgba(76, 175, 255, 0.12);
+}
+
+.theater-panel__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.theater-panel__timeline {
+  width: 100%;
+  margin: 0 0 12px;
+  z-index: 1;
+}
+
+.theater-panel__timeline .timeline-bar {
+  padding: 8px 12px 10px;
+  border: 1px solid rgba(108, 92, 231, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(20, 18, 43, 0.96), rgba(12, 10, 29, 0.96));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
+.theater-panel__timeline .timeline-rounds {
+  padding-top: 0;
+}
+
+.theater-panel__timeline .timeline-round {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.theater-panel__timeline .timeline-round--selected {
+  border-color: rgba(255, 77, 163, 0.45);
+  background: linear-gradient(135deg, rgba(255, 77, 163, 0.18), rgba(108, 92, 231, 0.2));
+  color: #ffe7f3;
+}
+
+.theater-panel__timeline .timeline-round__tooltip {
+  background: rgba(8, 7, 22, 0.96);
+}
+
+.theater-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 38, 0.72);
+  color: rgba(245, 243, 255, 0.9);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.theater-select select {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+  min-width: 110px;
+}
+
+.theater-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 16, 38, 0.72);
+  color: rgba(245, 243, 255, 0.9);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.theater-chip--primary {
+  border-color: rgba(255, 77, 163, 0.28);
+  background: linear-gradient(135deg, rgba(255, 77, 163, 0.18), rgba(109, 40, 217, 0.18));
+  color: rgba(255, 247, 252, 0.98);
+}
+
+.btn--capture {
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  gap: 4px;
+  opacity: 0.85;
+  transition: opacity 0.2s ease, transform 0.15s ease;
+}
+.btn--capture:hover {
+  opacity: 1;
+  transform: scale(1.05);
+}
+.btn--capture:disabled {
+  opacity: 0.4;
+  cursor: wait;
+}
+
+.capture-status {
+  font-size: 0.7rem;
+  animation: fadeInOut 2s ease forwards;
+}
+.capture-status--done {
+  color: #4caf50;
+}
+
+@media (max-width: 900px) {
+  .theater-panel__status {
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .theater-panel__warmup {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .capture-mode-feedback {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .theater-panel__timeline {
+    margin-bottom: 10px;
+  }
+
+  .theater-chip {
+    font-size: 0.68rem;
+    padding: 4px 8px;
+  }
+}
+
+@keyframes fadeInOut {
+  0%   { opacity: 0; }
+  20%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── Phase 3: Dual-screen branch comparison ─────────────── */
+.branch-compare {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-deep);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.branch-compare__panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-base);
+}
+.branch-compare__title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: center;
+}
+.branch-compare__snapshot {
+  border-radius: 4px;
+  overflow: hidden;
+  background: #1a1a2e;
+  aspect-ratio: 16 / 9;
+}
+.branch-compare__snapshot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Theater Dark Mode Overrides (GBC-themed)
+   ═══════════════════════════════════════════════════════════ */
+
+/* Root modifier when Theater mode is active */
+.simulation-view--theater {
+  background: var(--gbc-deep, #06061a);
+}
+
+.simulation-view--theater .sim-content {
+  min-height: 0;
+}
+
+/* ── Header → GBC dark ──────────────────────────────────── */
+.simulation-view--theater .sim-header {
+  background: var(--gbc-dark, #0d0d2b);
+  border-bottom-color: rgba(108, 92, 231, 0.2);
+}
+
+.simulation-view--theater .sim-header__question {
+  color: var(--gbc-text, #e8e4f0);
+}
+
+.simulation-view--theater .sim-header__logo {
+  color: var(--gbc-text-dim, #6a6a9a);
+}
+
+.simulation-view--theater .btn--back {
+  color: var(--gbc-text-dim, #6a6a9a);
+}
+.simulation-view--theater .btn--back:hover {
+  color: var(--gbc-text, #e8e4f0);
+  background: rgba(108, 92, 231, 0.12);
+}
+
+/* ── Error bar → GBC dark ────────────────────────────────── */
+.simulation-view--theater .sim-error {
+  background: rgba(244, 67, 54, 0.08);
+  border-bottom-color: rgba(244, 67, 54, 0.15);
+}
+.simulation-view--theater .sim-error p {
+  color: var(--gbc-danger, #F44336);
+}
+
+/* ── Sidebar toggle → GBC accent ─────────────────────────── */
+.simulation-view--theater .sim-sidebar-toggle {
+  background: rgba(108, 92, 231, 0.15);
+  border-color: rgba(108, 92, 231, 0.25);
+  color: var(--gbc-text-dim, #6a6a9a);
+}
+.simulation-view--theater .sim-sidebar-toggle:hover {
+  background: rgba(108, 92, 231, 0.3);
+  border-color: rgba(108, 92, 231, 0.5);
+  color: var(--gbc-text, #e8e4f0);
+  box-shadow: 0 0 12px rgba(108, 92, 231, 0.2);
+}
+
+/* ── Agent panel → GBC dark ──────────────────────────────── */
+.simulation-view--theater .sim-content__panel {
+  border-left-color: rgba(108, 92, 231, 0.2);
+  background: var(--gbc-dark, #0d0d2b);
+}
+
+/* ── Theater layout ratio: 65% canvas / 35% panel ─────── */
+.simulation-view--theater .sim-content__tree {
+  flex: 0 0 65%;
+  min-width: 0;
+  min-height: 0;
+}
+.simulation-view--theater .sim-content__panel {
+  flex: 0 0 35%;
+  width: auto;
+  min-width: 220px;
+  min-height: 0;
+  max-width: none;
+}
+.simulation-view--theater .sim-content__panel--collapsed {
+  flex: 0 0 0;
+  min-width: 0;
+}
+
+.simulation-view--theater.simulation-view--replay-ready {
+  overflow: hidden;
+}
+
+.simulation-view--theater.simulation-view--replay-ready .sim-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.simulation-view--theater.simulation-view--replay-ready .sim-content__tree,
+.simulation-view--theater.simulation-view--replay-ready .sim-content__panel {
+  min-height: 0;
+}
+
+/* ── Scrollbar in dark theme ─────────────────────────────── */
+.simulation-view--theater ::-webkit-scrollbar-track {
+  background: var(--gbc-deep, #06061a);
+}
+.simulation-view--theater ::-webkit-scrollbar-thumb {
+  background: rgba(108, 92, 231, 0.3);
+}
+.simulation-view--theater ::-webkit-scrollbar-thumb:hover {
+  background: rgba(108, 92, 231, 0.5);
+}
+
+/* ── Theater responsive ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .simulation-view--theater .sim-content__tree,
+  .simulation-view--theater .sim-content__panel {
+    flex: none;
+    width: auto;
+  }
+  .simulation-view--theater .sim-content__tree {
+    min-height: 55vh;
+  }
+  .simulation-view--theater .sim-content__panel {
+    max-height: 40vh;
+    border-left: none;
+    border-top: 1px solid rgba(108, 92, 231, 0.2);
+  }
+}

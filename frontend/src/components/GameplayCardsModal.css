@@ -1,0 +1,281 @@
+.gameplay-modal {
+  max-width: 720px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.gameplay-modal__body {
+  gap: 18px;
+}
+
+.gameplay-modal__art {
+  width: 100%;
+  max-height: 140px;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 16px;
+  border: 1px solid var(--border-default);
+  margin-bottom: 12px;
+}
+
+.gameplay-modal__profile {
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.gameplay-modal__hooks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.gameplay-modal__hook {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent);
+  background: color-mix(in oklab, var(--color-primary-glow) 52%, var(--bg-surface) 48%);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gameplay-modal__resource {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.gameplay-modal__preview-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 28%, transparent);
+  background: color-mix(in oklab, var(--color-primary-glow) 68%, var(--bg-surface) 32%);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.gameplay-modal__preview-note strong {
+  color: var(--text-primary);
+}
+
+.gameplay-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.gameplay-card {
+  --gameplay-card-overlay: linear-gradient(140deg, oklch(100% 0 0 / 0.08), oklch(0% 0 0 / 0));
+  --gameplay-card-shadow: transparent;
+  --gameplay-card-frame-filter: none;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.gameplay-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--gameplay-card-overlay);
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.gameplay-card__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.2;
+  pointer-events: none;
+  filter: var(--gameplay-card-frame-filter);
+}
+
+.gameplay-card__content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.gameplay-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-primary);
+  box-shadow:
+    0 10px 24px oklch(0% 0 0 / 0.08),
+    0 0 0 1px color-mix(in oklab, var(--gameplay-card-shadow) 42%, transparent);
+}
+
+.gameplay-card--active {
+  border-color: var(--color-primary);
+  background: oklch(96% 0.02 340 / 0.7);
+}
+
+.gameplay-card__icon {
+  font-size: 1.2rem;
+}
+
+.gameplay-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.gameplay-card__label {
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.gameplay-card__badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 999px;
+  background: oklch(92% 0.07 320);
+  color: oklch(48% 0.18 340);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gameplay-card__badge img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.gameplay-card__desc {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.gameplay-card__flavor {
+  font-size: 10px;
+  color: color-mix(in oklab, var(--text-primary) 72%, var(--text-secondary) 28%);
+  line-height: 1.45;
+}
+
+.gameplay-card__meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.gameplay-card--profile-trade {
+  --gameplay-card-overlay:
+    radial-gradient(circle at 18% 18%, oklch(92% 0.12 225 / 0.22), transparent 32%),
+    linear-gradient(135deg, oklch(78% 0.12 75 / 0.18), transparent 58%);
+  --gameplay-card-shadow: oklch(72% 0.18 60);
+  --gameplay-card-frame-filter: hue-rotate(-12deg) saturate(1.1) brightness(1.03);
+}
+
+.gameplay-card--profile-law {
+  --gameplay-card-overlay:
+    linear-gradient(145deg, oklch(84% 0.07 255 / 0.18), transparent 46%),
+    repeating-linear-gradient(90deg, oklch(88% 0.05 255 / 0.08) 0 6px, transparent 6px 18px);
+  --gameplay-card-shadow: oklch(66% 0.14 255);
+  --gameplay-card-frame-filter: hue-rotate(148deg) saturate(0.88) brightness(1.08);
+}
+
+.gameplay-card--profile-faith {
+  --gameplay-card-overlay:
+    radial-gradient(circle at 22% 14%, oklch(88% 0.12 70 / 0.24), transparent 28%),
+    linear-gradient(160deg, oklch(76% 0.16 330 / 0.18), transparent 58%);
+  --gameplay-card-shadow: oklch(74% 0.16 320);
+  --gameplay-card-frame-filter: hue-rotate(10deg) saturate(1.18) brightness(1.02);
+}
+
+.gameplay-card--profile-ecology {
+  --gameplay-card-overlay:
+    radial-gradient(circle at 82% 18%, oklch(86% 0.12 165 / 0.2), transparent 30%),
+    linear-gradient(145deg, oklch(74% 0.12 145 / 0.18), transparent 54%);
+  --gameplay-card-shadow: oklch(70% 0.15 160);
+  --gameplay-card-frame-filter: hue-rotate(-46deg) saturate(1.08) brightness(1.04);
+}
+
+.gameplay-modal__field {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gameplay-select {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.gameplay-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.gameplay-modal__textarea {
+  min-height: 96px;
+  max-height: min(220px, 32vh);
+}
+
+.gameplay-modal__hint {
+  margin-top: -4px;
+}
+
+.gameplay-modal .modal-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: 18px;
+  padding-top: 16px;
+  background:
+    linear-gradient(
+      to top,
+      var(--bg-elevated) 72%,
+      oklch(100% 0 0 / 0)
+    );
+}
+
+@media (max-width: 640px) {
+  .gameplay-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gameplay-modal {
+    max-height: calc(100vh - 20px);
+    padding: 22px;
+  }
+}

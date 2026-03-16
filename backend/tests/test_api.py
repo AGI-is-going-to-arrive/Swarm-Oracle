@@ -1,0 +1,972 @@
+"""Tests for app.api — REST API endpoints via FastAPI TestClient."""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session, select
+
+import app.api.scenarios as scenarios_api
+from app.main import app
+from app.models import (
+    Agent, AgentTier, Branch, BranchStatus, InterventionLog, Leaderboard,
+    Round, Scenario, ScenarioStatus,
+)
+from app.models.database import get_engine
+
+
+@pytest.fixture
+def client():
+    """FastAPI test client."""
+    return TestClient(app)
+
+
+# ── Helpers ──────────────────────────────────────────────
+
+
+def _seed_scenario(engine, *, status=ScenarioStatus.SIMULATING, question="测试问题"):
+    """Create a scenario and return its ID."""
+    s = Scenario(question=question, status=status)
+    with Session(engine) as session:
+        session.add(s)
+        session.commit()
+        return s.id
+
+
+def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
+                 status=BranchStatus.ACTIVE, story="", insight="",
+                 key_moments="", parent_branch_id=None, fork_reason=""):
+    """Create a branch and return its ID."""
+    b = Branch(
+        scenario_id=scenario_id, title=title, probability=probability,
+        status=status, story=story, insight=insight,
+        key_moments=key_moments, parent_branch_id=parent_branch_id,
+        fork_reason=fork_reason,
+    )
+    with Session(engine) as session:
+        session.add(b)
+        session.commit()
+        return b.id
+
+
+def _seed_agent(engine, scenario_id, *, name="TestAgent", role="tester",
+                persona="", tier=AgentTier.IMPORTANT, stance="", emotion="neutral"):
+    """Create an agent and return its ID."""
+    a = Agent(
+        scenario_id=scenario_id, name=name, role=role, persona=persona,
+        tier=tier, stance=stance, emotion=emotion,
+    )
+    with Session(engine) as session:
+        session.add(a)
+        session.commit()
+        return a.id
+
+
+def _seed_round(engine, branch_id, round_number):
+    """Create a round and return its ID."""
+    r = Round(branch_id=branch_id, round_number=round_number)
+    with Session(engine) as session:
+        session.add(r)
+        session.commit()
+        return r.id
+
+
+# ── Root / Health ────────────────────────────────────────
+
+
+class TestRootEndpoint:
+    def test_root(self, client):
+        """GET / should return app info."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "SwarmOracle"
+        assert data["version"] == "0.1.0"
+
+
+class TestHealthEndpoint:
+    def test_health(self, client):
+        """POST /api/health should check server + LLM."""
+        resp = client.post("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["server"] == "ok"
+        assert "llm" in data
+        assert data["llm"]["model"] == "gpt-5.2"
+
+
+# ── Scenario CRUD ────────────────────────────────────────
+
+
+class TestScenarioEndpoints:
+    def test_create_scenario_empty_question(self, client):
+        """Should reject empty questions."""
+        resp = client.post("/api/scenario", json={"question": ""})
+        assert resp.status_code == 400
+
+    def test_create_scenario_whitespace_only(self, client):
+        """Should reject whitespace-only questions."""
+        resp = client.post("/api/scenario", json={"question": "   \n\t  "})
+        assert resp.status_code == 400
+
+    def test_create_scenario_missing_question(self, client):
+        """Should reject missing question field."""
+        resp = client.post("/api/scenario", json={})
+        assert resp.status_code == 422  # validation error
+
+    def test_create_scenario_wrong_type(self, client):
+        """Should reject non-string question."""
+        resp = client.post("/api/scenario", json={"question": 12345})
+        assert resp.status_code == 422
+
+    def test_create_scenario_extra_fields_ignored(self, client):
+        """Extra fields should be silently ignored."""
+        resp = client.post("/api/scenario", json={"question": "test?", "extra": "field"})
+        # 200 if LLM reachable, 500 if not — either acceptable
+        assert resp.status_code in (200, 500)
+
+    # ── num_agents validation ────────────────────────
+
+    def test_create_scenario_num_agents_min_boundary(self, client):
+        """num_agents=3 (minimum) should be accepted."""
+        resp = client.post("/api/scenario", json={"question": "test?", "num_agents": 3})
+        assert resp.status_code in (200, 500)  # 500 if LLM unreachable
+
+    def test_create_scenario_num_agents_max_boundary(self, client):
+        """num_agents=100 (maximum) should be accepted."""
+        resp = client.post("/api/scenario", json={"question": "test?", "num_agents": 100})
+        assert resp.status_code in (200, 500)
+
+    def test_create_scenario_num_agents_below_min(self, client):
+        """num_agents=2 should be rejected (below minimum 3)."""
+        resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": 2})
+        assert resp.status_code == 422
+
+    def test_create_scenario_num_agents_above_max(self, client):
+        """num_agents=101 should be rejected (above maximum)."""
+        resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": 101})
+        assert resp.status_code == 422
+
+    def test_create_scenario_num_agents_zero(self, client):
+        """num_agents=0 should be rejected."""
+        resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": 0})
+        assert resp.status_code == 422
+
+    def test_create_scenario_num_agents_negative(self, client):
+        """num_agents=-1 should be rejected."""
+        resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": -1})
+        assert resp.status_code == 422
+
+    def test_create_scenario_num_agents_default(self, client):
+        """Omitting num_agents should use default (accepted)."""
+        resp = client.post("/api/scenario", json={"question": "test?"})
+        assert resp.status_code in (200, 500)
+
+    # ── mode validation ──────────────────────────────
+
+    def test_create_scenario_mode_blackboard(self, client):
+        """mode='blackboard' should be accepted."""
+        resp = client.post("/api/scenario", json={"question": "test?", "mode": "blackboard"})
+        assert resp.status_code in (200, 500)
+
+    def test_create_scenario_mode_raw(self, client):
+        """mode='raw' should be accepted."""
+        resp = client.post("/api/scenario", json={"question": "test?", "mode": "raw"})
+        assert resp.status_code in (200, 500)
+
+    def test_create_scenario_mode_invalid(self, client):
+        """Invalid mode should be rejected."""
+        resp = client.post("/api/scenario", json={"question": "ok?", "mode": "invalid"})
+        assert resp.status_code == 422
+
+    def test_create_scenario_mode_default(self, client):
+        """Omitting mode should default to blackboard."""
+        resp = client.post("/api/scenario", json={"question": "test?"})
+        assert resp.status_code in (200, 500)
+
+    # ── Combined parameter tests ─────────────────────
+
+    def test_create_scenario_all_params(self, client):
+        """All new params together should work."""
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "num_agents": 50,
+            "rounds": 10,
+            "mode": "blackboard",
+        })
+        assert resp.status_code in (200, 500)
+
+    def test_create_scenario_returns_immediately_and_schedules_background_parse(self, client, monkeypatch):
+        """POST /api/scenario should not await the expensive parse step inline."""
+        scheduled = {"count": 0}
+
+        async def _fake_background(*args, **kwargs):
+            raise AssertionError("background worker should not run inline during request handling")
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "rounds": 7,
+            "mode": "blackboard",
+            "visualization_enabled": True,
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "simulating"
+        assert data["agents"] == []
+        assert len(data["branches"]) == 1
+        assert data["branches"][0]["title"] == "Initial Branch"
+        assert data["branches"][0]["status"] == "ACTIVE"
+        assert data["mode"] == "blackboard"
+        assert data["visualization_enabled"] is True
+        assert data["scene_theme"]
+        assert data["total_rounds"] == 7
+        assert scheduled["count"] == 1
+
+    def test_get_nonexistent_scenario(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.get("/api/scenario/nonexistent-id")
+        assert resp.status_code == 404
+
+    def test_get_scenario_includes_visualization_fields(self, client):
+        """GET /api/scenario should preserve visualization flags for replay/reload."""
+        engine = get_engine()
+        scenario = Scenario(
+            question="像素剧场测试",
+            status=ScenarioStatus.SIMULATING,
+            visualization_enabled=True,
+            scene_theme="ancient_empire",
+            parsed_context={"mode": "blackboard", "hierarchical": False, "simulation_rounds": 6},
+        )
+        with Session(engine) as session:
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+
+        resp = client.get(f"/api/scenario/{scenario_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["visualization_enabled"] is True
+        assert data["scene_theme"] == "ancient_empire"
+        assert data["mode"] == "blackboard"
+        assert data["total_rounds"] == 6
+
+    def test_get_scenario_empty_id(self, client):
+        """Should handle empty-looking scenario IDs."""
+        resp = client.get("/api/scenario/00000000-0000-0000-0000-000000000000")
+        assert resp.status_code == 404
+
+    def test_get_branches_empty(self, client):
+        """Branches for nonexistent scenario should return empty list."""
+        resp = client.get("/api/scenario/nonexistent-id/branches")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+class TestPredictionLeaderboardEndpoints:
+    def test_get_leaderboard_includes_display_fields(self, client):
+        """Leaderboard response should match the frontend's expected shape."""
+        engine = get_engine()
+        with Session(engine) as session:
+            session.add(
+                Leaderboard(
+                    user_id="leader-test-user",
+                    user_name="DisplayName",
+                    total_predictions=2,
+                    total_score=150.0,
+                    avg_score=75.0,
+                    best_score=90.0,
+                    win_streak=2,
+                )
+            )
+            session.commit()
+
+        resp = client.get("/api/leaderboard?limit=5")
+        assert resp.status_code == 200
+        data = resp.json()
+        row = next(item for item in data if item["user_id"] == "leader-test-user")
+        assert row["user_name"] == "DisplayName"
+        assert row["total_predictions"] == 2
+        assert row["avg_score"] == 75.0
+        assert row["best_score"] == 90.0
+        assert row["win_streak"] == 2
+
+    def test_special_characters_in_scenario_id(self, client):
+        """Special characters in scenario ID should be handled gracefully."""
+        resp = client.get("/api/scenario/test%20space")
+        assert resp.status_code == 404
+
+    def test_very_long_scenario_id(self, client):
+        """Very long scenario ID should not crash the server."""
+        long_id = "a" * 1000
+        resp = client.get(f"/api/scenario/{long_id}")
+        assert resp.status_code == 404
+
+
+# ── Intervene Endpoint ───────────────────────────────────
+
+
+class TestInterveneEndpoint:
+    def test_intervene_success(self, client):
+        """POST /api/scenario/{id}/intervene should apply intervention."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 2)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "突然下大雨",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "applied"
+        assert data["branch_id"] == bid
+        assert data["round"] == 2  # max round number
+        assert "intervention_id" in data
+
+        # Verify the log was persisted
+        with Session(engine) as session:
+            logs = session.exec(
+                __import__("sqlmodel").select(InterventionLog).where(
+                    InterventionLog.scenario_id == sid
+                )
+            ).all()
+            assert len(logs) == 1
+            assert logs[0].user_input == "突然下大雨"
+
+    def test_intervene_nonexistent_scenario(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.post("/api/scenario/nonexistent/intervene", json={
+            "branch_id": "any", "text": "test",
+        })
+        assert resp.status_code == 404
+
+    def test_intervene_finished_scenario(self, client):
+        """Should reject intervention on DONE scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "test",
+        })
+        assert resp.status_code == 400
+        assert "Cannot intervene" in resp.json()["detail"]
+
+    def test_intervene_error_scenario(self, client):
+        """Should reject intervention on ERROR scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.ERROR)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "test",
+        })
+        assert resp.status_code == 400
+
+    def test_intervene_wrong_branch(self, client):
+        """Should reject branch not belonging to the scenario."""
+        engine = get_engine()
+        sid1 = _seed_scenario(engine)
+        sid2 = _seed_scenario(engine, question="另一个问题")
+        bid_other = _seed_branch(engine, sid2)
+
+        resp = client.post(f"/api/scenario/{sid1}/intervene", json={
+            "branch_id": bid_other, "text": "test",
+        })
+        assert resp.status_code == 400
+        assert "Branch not found" in resp.json()["detail"]
+
+    def test_intervene_completed_branch(self, client):
+        """Should reject intervention on a COMPLETED branch."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "test",
+        })
+        assert resp.status_code == 400
+        assert "Cannot intervene" in resp.json()["detail"]
+
+    def test_intervene_pruned_branch(self, client):
+        """Should reject intervention on a PRUNED branch."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid, status=BranchStatus.PRUNED)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "test",
+        })
+        assert resp.status_code == 400
+
+    def test_intervene_empty_text(self, client):
+        """Should reject empty intervention text."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "",
+        })
+        assert resp.status_code == 400
+
+    def test_intervene_whitespace_text(self, client):
+        """Should reject whitespace-only intervention text."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "   \n\t  ",
+        })
+        assert resp.status_code == 400
+
+    def test_intervene_missing_fields(self, client):
+        """Should reject missing required fields."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+
+        # Missing text
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": "some-id",
+        })
+        assert resp.status_code == 422
+
+        # Missing branch_id
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "text": "test",
+        })
+        assert resp.status_code == 422
+
+        # Empty body
+        resp = client.post(f"/api/scenario/{sid}/intervene")
+        assert resp.status_code == 422
+
+    def test_intervene_no_rounds(self, client):
+        """Intervention with no rounds should use round=0."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "干预",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["round"] == 0
+
+    def test_intervene_narrating_scenario(self, client):
+        """Intervention should be allowed during NARRATING status."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.NARRATING)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "干预",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "applied"
+
+    def test_intervene_unicode_emoji(self, client):
+        """Should handle unicode and emoji in intervention text."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "🦋 蝴蝶效应！「转折」来了",
+        })
+        assert resp.status_code == 200
+
+    def test_intervene_strips_whitespace(self, client):
+        """Should strip leading/trailing whitespace from text."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "  有效内容  ",
+        })
+        assert resp.status_code == 200
+
+        # Verify stripped text was saved
+        with Session(engine) as session:
+            logs = session.exec(
+                __import__("sqlmodel").select(InterventionLog).where(
+                    InterventionLog.branch_id == bid
+                )
+            ).all()
+            assert logs[0].user_input == "有效内容"
+
+
+# ── Story Endpoint ───────────────────────────────────────
+
+
+class TestStoryEndpoint:
+    def test_get_story_success(self, client):
+        """GET /api/scenario/{id}/story should return completed branch stories."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine, sid,
+            title="好结局", probability=0.6, status=BranchStatus.COMPLETED,
+            story="王国恢复和平", insight="合作很重要",
+            key_moments=json.dumps(["团结", "胜利"]),
+        )
+        _seed_branch(
+            engine, sid,
+            title="坏结局", probability=0.4, status=BranchStatus.COMPLETED,
+            story="分裂加剧", insight="内斗会导致毁灭",
+            key_moments=json.dumps(["背叛"]),
+        )
+        # Active branch should NOT appear
+        _seed_branch(engine, sid, title="进行中", status=BranchStatus.ACTIVE)
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["scenario_id"] == sid
+        assert data["question"] == "测试问题"
+        assert len(data["branches"]) == 2  # only completed branches
+
+        titles = {b["title"] for b in data["branches"]}
+        assert titles == {"好结局", "坏结局"}
+
+        # Verify key_moments are parsed
+        good = next(b for b in data["branches"] if b["title"] == "好结局")
+        assert good["key_moments"] == ["团结", "胜利"]
+        assert good["story"] == "王国恢复和平"
+        assert good["insight"] == "合作很重要"
+
+    def test_get_story_nonexistent(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.get("/api/scenario/nonexistent/story")
+        assert resp.status_code == 404
+
+    def test_get_story_no_completed_branches(self, client):
+        """Should return empty branches list if none completed."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["branches"]) == 1
+        assert data["branches"][0]["title"] in ("Initial Branch", "初始世界线")
+        assert data["branches"][0]["status"] == "ACTIVE"
+
+    def test_get_story_key_moments_malformed_json(self, client):
+        """Should handle malformed key_moments JSON gracefully."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine, sid,
+            status=BranchStatus.COMPLETED,
+            key_moments="this is not json",
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["branches"][0]["key_moments"] == []
+
+    def test_get_story_key_moments_empty(self, client):
+        """Should handle empty key_moments string."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine, sid,
+            status=BranchStatus.COMPLETED,
+            key_moments="",
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        assert resp.status_code == 200
+        assert resp.json()["branches"][0]["key_moments"] == []
+
+    def test_get_story_key_moments_non_array(self, client):
+        """Should handle non-array JSON in key_moments."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine, sid,
+            status=BranchStatus.COMPLETED,
+            key_moments='{"not": "an array"}',
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        assert resp.status_code == 200
+        assert resp.json()["branches"][0]["key_moments"] == []
+
+    def test_get_story_branch_with_parent(self, client):
+        """Story should include parent_branch_id and fork_reason."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        root = _seed_branch(
+            engine, sid,
+            title="根", probability=1.0, status=BranchStatus.COMPLETED,
+        )
+        _seed_branch(
+            engine, sid,
+            title="分支", probability=0.5, status=BranchStatus.COMPLETED,
+            parent_branch_id=root, fork_reason="意见分歧",
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/story")
+        data = resp.json()
+        child = next(b for b in data["branches"] if b["title"] == "分支")
+        assert child["parent_branch_id"] == root
+        assert child["fork_reason"] == "意见分歧"
+
+
+# ── Agents Endpoint ──────────────────────────────────────
+
+
+class TestAgentsEndpoint:
+    def test_get_agents_success(self, client):
+        """GET /api/scenario/{id}/agents should return all agents."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        _seed_agent(engine, sid, name="诸葛亮", role="丞相", tier=AgentTier.CORE,
+                    persona="足智多谋", stance="北伐", emotion="thoughtful")
+        _seed_agent(engine, sid, name="刘备", role="皇帝", tier=AgentTier.CORE,
+                    persona="仁义", stance="统一", emotion="hopeful")
+        _seed_agent(engine, sid, name="百姓", role="平民", tier=AgentTier.CROWD)
+
+        resp = client.get(f"/api/scenario/{sid}/agents")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 3
+
+        names = {a["name"] for a in data}
+        assert names == {"诸葛亮", "刘备", "百姓"}
+
+        zgl = next(a for a in data if a["name"] == "诸葛亮")
+        assert zgl["role"] == "丞相"
+        assert zgl["tier"] == "CORE"
+        assert zgl["persona"] == "足智多谋"
+        assert zgl["stance"] == "北伐"
+        assert zgl["emotion"] == "thoughtful"
+
+    def test_get_agents_nonexistent_scenario(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.get("/api/scenario/nonexistent/agents")
+        assert resp.status_code == 404
+
+    def test_get_agents_empty(self, client):
+        """Should return empty list if no agents."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+
+        resp = client.get(f"/api/scenario/{sid}/agents")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_get_agents_includes_all_fields(self, client):
+        """Each agent should include id, name, role, persona, tier, stance, emotion."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        _seed_agent(engine, sid, name="角色A")
+
+        resp = client.get(f"/api/scenario/{sid}/agents")
+        agent = resp.json()[0]
+        required_fields = {"id", "name", "role", "persona", "tier", "stance", "emotion"}
+        assert required_fields.issubset(set(agent.keys()))
+
+    def test_get_agents_default_values(self, client):
+        """Agent with minimal fields should have correct defaults."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        _seed_agent(engine, sid, name="最小", role="", persona="")
+
+        resp = client.get(f"/api/scenario/{sid}/agents")
+        agent = resp.json()[0]
+        assert agent["name"] == "最小"
+        assert agent["tier"] == "IMPORTANT"
+        assert agent["emotion"] == "neutral"
+
+
+# ── Branches Endpoint (extended) ─────────────────────────
+
+
+class TestBranchesEndpoint:
+    def test_get_branches_with_data(self, client):
+        """GET /api/scenario/{id}/branches should return all branches."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        root = _seed_branch(engine, sid, title="主线", probability=1.0)
+        _seed_branch(
+            engine, sid, title="分支A", probability=0.6,
+            parent_branch_id=root, fork_reason="争论",
+            key_moments=json.dumps(["时刻1"]),
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/branches")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+
+        child = next(b for b in data if b["title"] == "分支A")
+        assert child["parent_branch_id"] == root
+        assert child["fork_reason"] == "争论"
+        assert child["probability"] == 0.6
+        assert child["key_moments"] == ["时刻1"]
+
+    def test_get_branches_includes_status(self, client):
+        """Each branch should include status field."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        _seed_branch(engine, sid, status=BranchStatus.PRUNED)
+        _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.get(f"/api/scenario/{sid}/branches")
+        data = resp.json()
+        statuses = {b["status"] for b in data}
+        assert statuses == {"COMPLETED", "PRUNED", "ACTIVE"}
+
+
+# ── P4-A: List Scenarios ─────────────────────────────────
+
+
+class TestListScenarios:
+    def test_list_empty(self, client):
+        """Should return empty list when no scenarios exist."""
+        resp = client.get("/api/scenarios")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["scenarios"] == []
+        assert data["limit"] == 20
+        assert data["offset"] == 0
+
+    def test_list_returns_scenarios(self, client):
+        """Should return all created scenarios."""
+        engine = get_engine()
+        _seed_scenario(engine, question="问题一", status=ScenarioStatus.DONE)
+        _seed_scenario(engine, question="问题二", status=ScenarioStatus.DONE)
+
+        resp = client.get("/api/scenarios")
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["scenarios"]) == 2
+
+    def test_list_filter_by_status(self, client):
+        """Should filter by status parameter."""
+        engine = get_engine()
+        _seed_scenario(engine, question="进行中", status=ScenarioStatus.SIMULATING)
+        _seed_scenario(engine, question="完成", status=ScenarioStatus.DONE)
+        _seed_scenario(engine, question="错误", status=ScenarioStatus.ERROR)
+
+        resp = client.get("/api/scenarios?status=done")
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["scenarios"][0]["question"] == "完成"
+
+    def test_list_invalid_status(self, client):
+        """Should reject invalid status param."""
+        resp = client.get("/api/scenarios?status=invalid")
+        assert resp.status_code == 422
+
+    def test_list_pagination(self, client):
+        """Should support limit and offset."""
+        engine = get_engine()
+        for i in range(5):
+            _seed_scenario(engine, question=f"问题{i}", status=ScenarioStatus.DONE)
+
+        resp = client.get("/api/scenarios?limit=2&offset=0")
+        data = resp.json()
+        assert len(data["scenarios"]) == 2
+        assert data["total"] == 5
+
+        resp2 = client.get("/api/scenarios?limit=2&offset=2")
+        data2 = resp2.json()
+        assert len(data2["scenarios"]) == 2
+
+    def test_list_includes_agent_count(self, client):
+        """Each scenario should include agent_count."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_agent(engine, sid, name="A")
+        _seed_agent(engine, sid, name="B")
+
+        resp = client.get("/api/scenarios")
+        data = resp.json()
+        assert data["scenarios"][0]["agent_count"] == 2
+
+    def test_list_limit_clamped(self, client):
+        """Limit should be clamped to 1-100."""
+        resp = client.get("/api/scenarios?limit=0")
+        data = resp.json()
+        assert data["limit"] == 1
+
+        resp2 = client.get("/api/scenarios?limit=999")
+        data2 = resp2.json()
+        assert data2["limit"] == 100
+
+
+# ── P4-A: Delete Scenario ────────────────────────────────
+
+
+class TestDeleteScenario:
+    def test_delete_success(self, client):
+        """Should delete scenario and all related data."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        _seed_agent(engine, sid, name="Agent1")
+        rid = _seed_round(engine, bid, 1)
+
+        resp = client.delete(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deleted"
+
+        # Verify scenario is gone
+        resp2 = client.get(f"/api/scenario/{sid}")
+        assert resp2.status_code == 404
+
+    def test_delete_nonexistent(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.delete("/api/scenario/nonexistent")
+        assert resp.status_code == 404
+
+    def test_delete_running_scenario(self, client):
+        """Should reject deletion of actively simulating scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        resp = client.delete(f"/api/scenario/{sid}")
+        assert resp.status_code == 400
+        assert "simulating" in resp.json()["detail"].lower()
+
+    def test_delete_error_scenario(self, client):
+        """Should allow deletion of errored scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.ERROR)
+
+        resp = client.delete(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+
+    def test_delete_cascade_data(self, client):
+        """Should cascade delete all related entities."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        _seed_agent(engine, sid, name="Agent1")
+        rid = _seed_round(engine, bid, 1)
+
+        resp = client.delete(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+
+        # Verify all related data is gone
+        with Session(engine) as session:
+            assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is None
+            assert session.exec(select(Agent).where(Agent.scenario_id == sid)).first() is None
+
+
+# ── P4-C: Export Scenario ────────────────────────────────
+
+
+class TestExportScenario:
+    def test_export_with_branches(self, client):
+        """Should export markdown with question, agents, and stories."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="如果诸葛亮多活10年？", status=ScenarioStatus.DONE)
+        _seed_agent(engine, sid, name="诸葛亮", role="丞相", tier=AgentTier.CORE)
+        _seed_branch(
+            engine, sid, title="北伐成功", probability=0.6,
+            status=BranchStatus.COMPLETED, story="北伐大军一统天下",
+            insight="坚持就是胜利",
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/export")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+
+        text = resp.text
+        assert "如果诸葛亮多活10年？" in text
+        assert "诸葛亮" in text
+        assert "北伐成功" in text
+        assert "北伐大军一统天下" in text
+        assert "坚持就是胜利" in text
+
+    def test_export_no_branches(self, client):
+        """Should handle scenario with no completed branches."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        resp = client.get(f"/api/scenario/{sid}/export")
+        assert resp.status_code == 200
+        assert "尚无已完成的分支" in resp.text
+
+    def test_export_nonexistent(self, client):
+        """Should return 404 for unknown scenario."""
+        resp = client.get("/api/scenario/nonexistent/export")
+        assert resp.status_code == 404
+
+    def test_export_includes_table(self, client):
+        """Markdown should include agent table."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_agent(engine, sid, name="曹操", role="枭雄", tier=AgentTier.CORE)
+
+        resp = client.get(f"/api/scenario/{sid}/export")
+        text = resp.text
+        assert "| 角色 | 名称 | 定位 | 层级 |" in text
+        assert "曹操" in text
+
+    def test_export_with_key_moments(self, client):
+        """Export should include key moments list."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine, sid, title="支线", probability=0.5,
+            status=BranchStatus.COMPLETED,
+            key_moments=json.dumps(["决战时刻", "转折点"]),
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/export")
+        assert "决战时刻" in resp.text
+        assert "转折点" in resp.text
+
+
+# ── P4-D: Intervention Templates ─────────────────────────
+
+
+class TestInterventionTemplates:
+    def test_get_templates(self, client):
+        """Should return all intervention templates."""
+        resp = client.get("/api/intervention-templates")
+        assert resp.status_code == 200
+        templates = resp.json()
+        assert isinstance(templates, list)
+        assert len(templates) >= 5
+
+    def test_template_structure(self, client):
+        """Each template should have id, name, template, variables."""
+        resp = client.get("/api/intervention-templates")
+        templates = resp.json()
+        for t in templates:
+            assert "id" in t
+            assert "name" in t
+            assert "template" in t
+            assert "variables" in t
+            assert isinstance(t["variables"], list)
+
+    def test_template_ids_unique(self, client):
+        """Template IDs should be unique."""
+        resp = client.get("/api/intervention-templates")
+        templates = resp.json()
+        ids = [t["id"] for t in templates]
+        assert len(ids) == len(set(ids))
