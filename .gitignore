@@ -27,6 +27,7 @@ frontend/.tmp-playwright/
 /*.jpg
 /*.jpeg
 /*.gif
+/后续开发命令
 
 # Frontend test outputs: keep only the checked-in sample matrix
 frontend/output/*
