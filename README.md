@@ -14,7 +14,7 @@
 | **Hierarchical Agents** | Leader-Worker 分层架构，支持千人规模模拟 |
 | **Prediction Leaderboard** | 用户竞猜 + LLM 评分 + 排行榜 |
 | **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响，结果页可逐条查看命中状态 |
-| **Gameplay Cards** | 5 张玩法卡以导演级事件注入当前世界线，并要求后续轮次持续响应 |
+| **Gameplay Cards** | 8 张玩法卡以导演级事件注入当前世界线，并要求后续轮次持续响应；当前包含 `公开听证`、`资源分诊` 与 `禁术仪式` 这三张新增卡 |
 | **Semantic Scene Pool** | Pixel Theater 现有 26 个语义场景背景，按题面关键词选景，不做粗暴轮换 |
 | **Responsive Scenario Startup** | 创建场景后立即返回 `parsing` 状态，后台继续解析并填充 Agent / 分支 |
 | **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
@@ -105,10 +105,11 @@ cd frontend && npm run e2e:corners
 cd frontend && npm run e2e:full
 ```
 
-- 本轮已验证的后端场景/可视化定向回归：**201 passed**
-- 当前前端主回归：**139 passed**
+- 本轮已验证的后端全量回归：**777 passed, 2 warnings**
+- 当前前端主回归：**142 passed**
 - 固定回归样本矩阵：**14 条**
 - 最新完整黑盒结果：`frontend/output/e2e/full-regression-final/result.json`
+- `scripts/e2e-suite.mjs` 现在会在输出目录写入 `browser-launch.json`，记录本次实际采用的浏览器启动 profile；当字体加载拖慢截图时，会自动回退到 Chromium CDP 截图
 
 ## License
 

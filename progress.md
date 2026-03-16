@@ -2956,3 +2956,334 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 残余说明：
   - `modal` capture 里的 crest 仍显示成 alt 文本，疑似 html2canvas/DOM capture 对该 `<img>` 的渲染链路还有问题；真实页面状态与 automation state 正常，但 modal 导出视觉仍需继续 hardening。
   - 后端全量 `pytest tests/ -q` 在当前机器跑到 `703 passed, 4 failed, 1 error`，失败栈主要是 SQLite fixture 的 `disk I/O error / no such table: branch`，更像本机测试环境不稳定，不像本轮改动直接引入的功能回归。
+
+## 2026-03-16 Runtime Re-Verification + LLM Retry Fix
+
+- 重新做了本轮“从零启动”的基线验证，不再沿用历史记录：
+  - 本轮开始时前后端都没有运行。
+  - 重新拉起：
+    - backend `uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - frontend `npm run dev -- --host 127.0.0.1 --port 18928`
+  - 前端构建通过：
+    - `cd frontend && npm run build`
+  - 前端主回归通过：
+    - `cd frontend && npm test`
+    - 结果：`139 passed`
+
+- 新发现并已修复的后端稳定性问题：
+  - `backend/app/services/llm_client.py`
+    - LLM 5xx / 502 重试路径里因为 `except httpx.RequestError` 分支的局部 `import asyncio`，导致整个函数把 `asyncio` 视为局部变量。
+    - 一旦在前面的 `HTTPStatusError` 重试分支里执行 `await asyncio.sleep(...)`，就会抛：
+      - `UnboundLocalError: cannot access local variable 'asyncio'`
+    - 这会连带打爆：
+      - `POST /api/health`
+      - `llm_call`
+      - `llm_call_json`
+      - `parse_question`
+  - 修复：
+    - 删除局部 `import asyncio`，统一复用文件顶部导入。
+  - 同时修正测试环境 LLM 端点：
+    - `backend/tests/conftest.py`
+    - 从不可用的 `http://127.0.0.1:8317/v1/responses` 切到当前本机可用的
+      `http://127.0.0.1:8318/v1/chat/completions`
+
+- 修复后的验证结果：
+  - `cd backend && .venv/bin/python -m pytest tests/test_llm_client.py -q`
+    - `9 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_api.py -k test_health -q`
+    - `1 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_parser.py -q`
+    - `5 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/ -q`
+    - `777 passed, 2 warnings`
+
+- 本轮真实浏览器 QA（不是只读审查）：
+  - 使用 `playwright-interactive` 持久会话做桌面 + 移动端检查。
+  - 首页桌面截图：
+    - `/Users/yangjunjie/Desktop/upgrade-test/.tmp/qa-20260316/home-desktop.png`
+  - 首页移动端截图：
+    - `/Users/yangjunjie/Desktop/upgrade-test/.tmp/qa-20260316/home-mobile.png`
+  - 发现：
+    - 移动端首页首屏能打开，但信息密度仍偏高，右下角语言切换器与底部参数区距离很近。
+    - 桌面端 Theater 主画面、完成态 replay、结果页主视图整体可读性正常。
+
+- 本轮确认真正走通的玩法闭环：
+  - 新建 live Theater 场景：
+    - `ec859160-64d1-4658-bfc2-9ce382c975ec`
+  - 在同一浏览器会话里完成：
+    - warmup 预览玩法卡
+    - 打开 `GameplayCardsModal`
+    - 成功注入一张玩法卡
+    - `director_points_remaining` 从 `3 -> 2`
+    - `cooldown_remaining` 正常写入
+    - `scenarioMeta.cards.usageLog` 正常写入 localStorage
+    - 打开 Prediction modal
+    - 切换到第三种下注 `profile_resonance`
+    - 成功提交 `命中题材核心`
+    - `scenarioMeta.betting.bets` 正常写入 localStorage
+  - 这说明文档里写的：
+    - `导演点数 + 卡冷却`
+    - `玩法卡注入`
+    - `第三种下注`
+    - `本地玩法记录`
+    - 不是只停留在代码层，而是在真实运行态里能完成闭环
+
+- 本轮新增自动化证据：
+  - `develop-web-game` 客户端重新取证成功：
+    - panel proof:
+      - `/tmp/swarmoracle-panel-proof/shot-0.png`
+      - `/tmp/swarmoracle-panel-proof/state-0.json`
+    - canvas proof:
+      - `/tmp/swarmoracle-canvas-proof/shot-0.png`
+      - `/tmp/swarmoracle-canvas-proof/state-0.json`
+    - modal proof:
+      - `/tmp/swarmoracle-modal-proof-4/shot-0.png`
+      - `/tmp/swarmoracle-modal-proof-4/state-0.json`
+  - `modal` 取证里，玩法卡 modal 已能被自动化状态正确识别：
+    - `active_modal = gameplay_cards`
+    - `modal_state.profile_id = trade`
+    - `recommended_cards` / `director_points_remaining` / `current_round` 都有值
+
+- 本轮对自动化脚本做了一个最小 hardening：
+  - `frontend/.tmp-playwright/web_game_playwright_client.mjs`
+    - `--click-selector` 现在在常规 `page.click()` 失败后，会继续尝试：
+      - `locator.first().click({ force: true })`
+      - DOM `element.click()` fallback
+    - 目的：降低 live Theater header 按钮在动画/重渲染期间“看得到但点不下去”的概率
+  - 说明：
+    - 当前日志里仍可能打印最初那次 click timeout，但 fallback 之后 modal 证据已能实际落盘。
+
+- 使用项目自带 CLI 的结果页/健康页链路也重新跑通：
+  - `cd frontend && node scripts/e2e-automation.mjs health --url http://127.0.0.1:18928`
+    - 通过，输出：
+      - `/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/2026-03-16T15-25-41-296Z-health`
+  - `cd frontend && node scripts/e2e-automation.mjs result --url http://127.0.0.1:18928 --scenario-id ec859160-64d1-4658-bfc2-9ce382c975ec`
+    - 通过，输出：
+      - `/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/2026-03-16T15-26-23-002Z-result`
+    - 已确认：
+      - `导出 Markdown`
+      - `生成文案`
+      - `share_context.profileLabel / profileHooks / resonanceLabel`
+      - `result-final.json` 中 `available_platforms`
+
+- 本轮额外注意到的限制 / 待办：
+  - `npm run e2e:full -- --headless` 这次没有执行到业务断言，浏览器启动就被当前机器的 Chromium/权限环境拦住：
+    - `mach_port_rendezvous_mac ... Permission denied (1100)`
+  - 这更像本机 Playwright/Chrome 环境问题，不像前端业务回归。
+  - 如果下一轮要继续补自动化，优先级：
+    1. 给 `e2e-suite.mjs` 增加本机环境下的 headed / browser-launch fallback
+    2. 继续压 `modal` capture 里的图片渲染（crest alt 文本问题）
+    3. 做一份“平台 × 功能”风险矩阵，特别是：
+       - iOS / Android 的截图、复制、GIF、下载能力
+       - 小屏 Theater 顶部控制区密度
+
+## 2026-03-17 Minimal New Gameplay Card
+
+- 基于本轮验证，`18_next_session_gameplay_art_replay_plan.md` 里的核心闭环已经成立，所以没有去重做现有玩法系统。
+- 额外补了一张“最小实现”的新玩法卡：
+  - `public_hearing`
+  - 中文名：`公开听证`
+  - 设计目标：
+    - 不新增后端协议
+    - 不依赖新美术素材
+    - 直接复用当前 `GameplayCardsModal -> intervene() -> director override prompt` 链路
+    - 增加“证据 / 条款 / 代价必须被摊开”的玩法张力，强化 law / governance / trade 这类题面
+
+- 已修改：
+  - `frontend/src/components/gameplayCards.ts`
+    - `GameplayCardId` 新增 `public_hearing`
+    - 新增卡定义、prompt 构造、推荐卡序列和 12 个画像下的默认 directive
+    - 中英文 prompt 都要求：
+      - 当前世界线进入公开听证
+      - 至少三个不同阵营拿出证据 / 条款 / 账本 / 风险
+      - 后续轮次继续引用听证暴露出的事实与责任链
+  - `frontend/src/components/GameplayCardsModal.tsx`
+    - 新增 `public_hearing` 的 placeholder 文案
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 新增 `public_hearing` 的导演点数/冷却规则
+  - `frontend/src/components/gameplayCards.test.ts`
+    - 新增 prompt 构造断言
+    - 新增 recommended rotation 断言
+
+- 验证：
+  - `cd frontend && npm test`
+    - `140 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 当前判断：
+  - 这张新卡已经进入产品体系，但还没做单独的真实浏览器“成功注入”截图取证。
+  - 如果下一轮继续做玩法扩展，建议优先顺序：
+    1. 用真实 live scenario 再跑一遍 `public_hearing` 注入 smoke
+    2. 再补第二张偏 `survival / ecology` 的新卡，避免新增内容继续集中在 law / trade
+
+## 2026-03-17 E2E Fallback + Survival/Ecology Card
+
+- 已完成用户点名的两项：
+  1. `frontend/scripts/e2e-suite.mjs` 浏览器启动 fallback
+  2. 再补一张偏 `survival / ecology` 的新玩法卡
+
+- E2E suite fallback 已改为“多候选启动 + 自动降级 + 结果落盘”：
+  - 原来只有：
+    - `chrome channel`
+    - `default chromium`
+  - 现在会按顺序尝试：
+    - `chrome-channel`
+    - `chromium-default`
+    - `chromium-swiftshader`
+    - 如果请求的是 `--headless` 且未显式关闭降级：
+      - `chrome-channel-headed-fallback`
+      - `chromium-headed-fallback`
+      - `chromium-swiftshader-headed-fallback`
+  - 每次 suite 运行都会把实际采用的 profile 落盘到：
+    - `browser-launch.json`
+  - 同时 `result.json` 也会带：
+    - `launchProfile`
+    - 包含 `requestedHeadless / actualHeadless / channel / usedSwiftShader / attempts`
+
+- 新增验证：
+  - 烟测命令：
+    - `cd frontend && node scripts/e2e-suite.mjs matrix --themes governance --headless --output-dir /tmp/swarmoracle-e2e-fallback-smoke`
+  - 结果：
+    - 通过
+    - 输出目录：
+      - `/tmp/swarmoracle-e2e-fallback-smoke`
+    - 本机这次实际命中：
+      - `launchProfile.id = chrome-channel`
+      - `requestedHeadless = true`
+      - `actualHeadless = true`
+    - 说明：
+      - fallback 链路已接入，即使这次首选路径成功，也已经能在失败时给出可追溯的降级信息，而不再整套直接黑盒中止。
+
+- 新增第二张偏 `survival / ecology` 的玩法卡：
+  - `resource_triage`
+  - 中文名：`资源分诊`
+  - 设计目的：
+    - 强制世界线明确“谁先保命、谁被限供、哪些线路必须让路”
+    - 比 `public_hearing` 更偏：
+      - 淡水 / 余粮 / 药品 / 氧气 / 运力 / 撤离
+      - 生存阈值、生态阈值、边疆生命维持
+
+- 已接入：
+  - `frontend/src/components/gameplayCards.ts`
+    - 新增卡定义
+    - 新增中英文 prompt
+    - 新增各 profile 默认 directive
+    - `ecology / survival / frontier / industry` 的推荐序列已把它前置
+  - `frontend/src/components/GameplayCardsModal.tsx`
+    - 新增 placeholder
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 新增 cost / cooldown 规则
+  - `frontend/src/components/gameplayCards.test.ts`
+    - 新增 prompt 与推荐序列断言
+
+- 验证：
+  - `cd frontend && npm test`
+    - `141 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 当前玩法分布判断：
+  - 新增内容不再只堆在 `law / trade`
+  - 现在至少有一张更明显偏：
+    - `ecology`
+    - `survival`
+    - `frontier`
+    - `industry`
+  - 下一轮如果继续补玩法，更建议做：
+    - 一张偏 `faith / mythic`
+    - 或一张偏 `war / logistics`
+
+- 额外复验：
+  - 全量套件：
+    - `cd frontend && node scripts/e2e-suite.mjs full --headless --output-dir /tmp/swarmoracle-e2e-full-fallback-2`
+    - 已通过
+    - 输出目录：
+      - `/tmp/swarmoracle-e2e-full-fallback-2`
+    - 结果摘要：
+      - `matrix.sampleCount = 14`
+      - `corners` 全部通过
+      - `browser-launch.json` / `result.json` 都包含 `launchProfile`
+      - 本次命中：
+        - `launchProfile.id = chrome-channel`
+        - `requestedHeadless = true`
+        - `actualHeadless = true`
+  - 说明：
+    - 上一轮 full 失败点是 `page.screenshot()` 卡在 `waiting for fonts to load`
+    - 已在 `saveScreenshot()` 里加了 Chromium CDP fallback
+    - 本次 full 已跨过该阻塞点并完整结束
+
+- `resource_triage / 资源分诊` 的真实浏览器 smoke：
+  - 新建生态 live 场景：
+    - `dde50abd-b476-4f94-8e9b-997f97606de8`
+  - Playwright 快照确认：
+    - 当前玩法画像 = `生态阈值`
+    - 玩法卡列表里真实出现：
+      - `🧰 资源分诊`
+    - 且文案已按生态题面定制为：
+      - `立即执行生态资源分诊，决定水源、余粮、迁徙通道与防疫能力谁先保住，哪些区域必须退让。`
+  - 这说明它不只是测试数据存在，而是已经被：
+    - 画像推断
+    - 推荐列表
+    - modal placeholder / directive
+    - live Theater UI
+    同时接通
+
+## 2026-03-17 Resource Triage Injection + Forbidden Ritual
+
+- `resource_triage / 资源分诊` 已补齐真实注入证据，不再只是“卡面存在”：
+  - live 场景：
+    - `8ca03ce8-9c0b-4c76-bc79-aabc57476483`
+  - 题面：
+    - `如果跨大陆淡水系统在十二轮协商中持续崩坏，各地必须决定谁先保住水源、药品、迁徙通道与防疫能力，会发生什么？`
+  - 在真实浏览器里完成：
+    - 打开 Theater
+    - 打开玩法卡 modal
+    - 选择 `🧰 资源分诊`
+    - 点击 `注入玩法卡`
+  - 注入后的可验证结果：
+    - `director.remainingPoints: 3 -> 2`
+    - `cooldowns.resource_triage.lastUsedRound = 5`
+    - `cards.usageLog[0].cardId = resource_triage`
+    - `cards.usageLog[0].profileId = ecology`
+    - `archive.keyMoments` 新增：
+      - `R5 使用了 resource_triage`
+    - live automation 中：
+      - `status = simulating`
+      - `currentRound = 5`
+      - `messageCount = 100`
+      - `branchCount = 15`
+      - 说明注入发生在 live 中，而不是完成态假回写
+
+- 本轮又新增了一张偏 `faith / mythic` 的最小玩法卡：
+  - `forbidden_ritual`
+  - 中文名：`禁术仪式`
+  - 设计目标：
+    - 强制当前世界线动用高代价、可能不可逆的禁术 / 圣物 / 王权秘仪 / 例外条款
+    - 让 `faith / mythic` 题面拥有区别于 `public_hearing` 与 `resource_triage` 的玩法张力
+  - 已接入：
+    - `frontend/src/components/gameplayCards.ts`
+      - 卡定义
+      - 中英文 prompt
+      - 各 profile 默认 directive
+      - faith / mythic 推荐序列前置
+    - `frontend/src/components/GameplayCardsModal.tsx`
+      - placeholder
+    - `frontend/src/lib/scenarioMeta.ts`
+      - 点数/冷却规则
+    - `frontend/src/components/gameplayCards.test.ts`
+      - prompt 与推荐序列断言
+
+- 本轮回归结果：
+  - `cd frontend && npm test`
+    - `142 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 当前玩法结构判断：
+  - 现在新增的最小玩法卡已经覆盖：
+    - `law/trade`：`public_hearing`
+    - `ecology/survival/frontier`：`resource_triage`
+    - `faith/mythic`：`forbidden_ritual`
+  - 继续扩展时，最自然的下一张会是：
+    - 偏 `war/logistics` 的高风险后勤或强制调度卡

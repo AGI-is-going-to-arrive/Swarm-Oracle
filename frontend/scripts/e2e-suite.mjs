@@ -59,12 +59,82 @@ function parseArgs(argv) {
   return args;
 }
 
-async function launchBrowser(headless) {
-  try {
-    return await chromium.launch({ channel: "chrome", headless });
-  } catch {
-    return await chromium.launch({ headless });
+function summarizeLaunchError(error) {
+  if (!(error instanceof Error)) return String(error);
+  return error.message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" | ");
+}
+
+function buildLaunchCandidates(headless) {
+  const softwareArgs = ["--use-gl=angle", "--use-angle=swiftshader"];
+  const candidates = [
+    {
+      id: "chrome-channel",
+      options: { channel: "chrome", headless },
+    },
+    {
+      id: "chromium-default",
+      options: { headless },
+    },
+    {
+      id: "chromium-swiftshader",
+      options: { headless, args: softwareArgs },
+    },
+  ];
+
+  if (headless && process.env.SWARM_E2E_DISABLE_HEADED_FALLBACK !== "1") {
+    candidates.push(
+      {
+        id: "chrome-channel-headed-fallback",
+        options: { channel: "chrome", headless: false },
+      },
+      {
+        id: "chromium-headed-fallback",
+        options: { headless: false },
+      },
+      {
+        id: "chromium-swiftshader-headed-fallback",
+        options: { headless: false, args: softwareArgs },
+      },
+    );
   }
+
+  return candidates;
+}
+
+async function launchBrowser(headless) {
+  const attempts = [];
+  for (const candidate of buildLaunchCandidates(headless)) {
+    try {
+      const browser = await chromium.launch(candidate.options);
+      return {
+        browser,
+        launchProfile: {
+          id: candidate.id,
+          requestedHeadless: headless,
+          actualHeadless: candidate.options.headless !== false,
+          channel: candidate.options.channel ?? null,
+          usedSwiftShader: Boolean(candidate.options.args?.includes("--use-angle=swiftshader")),
+          attempts,
+        },
+      };
+    } catch (error) {
+      attempts.push({
+        id: candidate.id,
+        actualHeadless: candidate.options.headless !== false,
+        channel: candidate.options.channel ?? null,
+        usedSwiftShader: Boolean(candidate.options.args?.includes("--use-angle=swiftshader")),
+        error: summarizeLaunchError(error),
+      });
+    }
+  }
+
+  const detail = attempts.map((attempt) => `${attempt.id}: ${attempt.error}`).join("\n");
+  throw new Error(`Failed to launch Playwright browser after fallbacks.\n${detail}`);
 }
 
 async function readAutomation(page) {
@@ -93,7 +163,21 @@ async function advanceAutomationTime(page, ms) {
 }
 
 async function saveScreenshot(page, filePath) {
-  await page.screenshot({ path: filePath, type: "png", scale: "css" });
+  try {
+    await page.screenshot({ path: filePath, type: "png", scale: "css" });
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("waiting for fonts to load")) {
+      throw error;
+    }
+
+    const cdpSession = await page.context().newCDPSession(page);
+    const { data } = await cdpSession.send("Page.captureScreenshot", {
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    fs.writeFileSync(filePath, Buffer.from(data, "base64"));
+  }
 }
 
 async function setRangeValue(page, selector, value) {
@@ -756,7 +840,8 @@ async function runMatrixSuite(args) {
   const samples = (matrix.samples ?? []).filter((sample) => (
     args.themes.length === 0 || args.themes.includes(sample.theme)
   ));
-  const browser = await launchBrowser(args.headless);
+  const { browser, launchProfile } = await launchBrowser(args.headless);
+  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
   try {
     const summaries = [];
     for (const sample of samples) {
@@ -788,6 +873,7 @@ async function runMatrixSuite(args) {
     }
     return {
       mode: "matrix",
+      launchProfile,
       sampleCount: summaries.length,
       themes: summaries.map((entry) => entry.theme),
       samples: summaries,
@@ -798,7 +884,8 @@ async function runMatrixSuite(args) {
 }
 
 async function runCornersSuite(args) {
-  const browser = await launchBrowser(args.headless);
+  const { browser, launchProfile } = await launchBrowser(args.headless);
+  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   try {
     const outputDir = args.outputDir;
@@ -876,6 +963,7 @@ async function runCornersSuite(args) {
 
     return {
       mode: "corners",
+      launchProfile,
       cases,
     };
   } finally {

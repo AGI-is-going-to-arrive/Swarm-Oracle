@@ -71,6 +71,9 @@ export const CARD_RULES: Record<GameplayCardId, { cost: number; cooldownRounds: 
   human_takeover: { cost: 1, cooldownRounds: 2 },
   spacetime_rift: { cost: 1, cooldownRounds: 2 },
   mandate_surge: { cost: 1, cooldownRounds: 1 },
+  public_hearing: { cost: 1, cooldownRounds: 1 },
+  resource_triage: { cost: 1, cooldownRounds: 1 },
+  forbidden_ritual: { cost: 1, cooldownRounds: 2 },
 };
 
 function createDefaultScenarioMeta(): ScenarioMeta {

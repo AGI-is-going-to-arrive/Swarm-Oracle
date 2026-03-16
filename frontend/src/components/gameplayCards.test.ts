@@ -133,6 +133,60 @@ describe('gameplayCards helpers', () => {
     expect(prompt).toContain('所有 agent 都必须明确表态');
   });
 
+  it('builds public hearing prompt as an evidence-forcing event', () => {
+    const prompt = buildGameplayCardPrompt({
+      cardId: 'public_hearing',
+      question: '如果港口议会要求立刻冻结关税，会发生什么？',
+      sceneTheme: 'trade_harbor',
+      profileId: 'trade',
+      targetBranchTitle: '港口僵局',
+      agentsById: buildAgentsById(agents),
+      customDirective: '要求商团、工会与税务方各自公开一条账本或补贴证据。',
+      isZh: true,
+    });
+
+    expect(prompt).toContain('公开听证');
+    expect(prompt).toContain('港口僵局');
+    expect(prompt).toContain('账本或补贴证据');
+    expect(prompt).toContain('至少让三个不同立场');
+  });
+
+  it('builds resource triage prompt as a survival-pressure event', () => {
+    const prompt = buildGameplayCardPrompt({
+      cardId: 'resource_triage',
+      question: '如果跨大陆淡水供应在十年内枯竭，会发生什么？',
+      sceneTheme: 'ecology_wasteland',
+      profileId: 'ecology',
+      targetBranchTitle: '干旱阈值',
+      agentsById: buildAgentsById(agents),
+      customDirective: '优先保住淡水、迁徙走廊与防疫配给，其余工业扩张全部后撤。',
+      isZh: true,
+    });
+
+    expect(prompt).toContain('资源分诊');
+    expect(prompt).toContain('干旱阈值');
+    expect(prompt).toContain('淡水、迁徙走廊与防疫配给');
+    expect(prompt).toContain('谁先获得水、粮、药品');
+  });
+
+  it('builds forbidden ritual prompt as a high-cost mythic pivot', () => {
+    const prompt = buildGameplayCardPrompt({
+      cardId: 'forbidden_ritual',
+      question: '如果一群法师在秘法圣所中试图改写巨龙契约，会发生什么？',
+      sceneTheme: 'arcane_sanctum',
+      profileId: 'mythic',
+      targetBranchTitle: '龙契裂解',
+      agentsById: buildAgentsById(agents),
+      customDirective: '以禁术仪式重写龙契约，但必须公开献祭代价与王权后果。',
+      isZh: true,
+    });
+
+    expect(prompt).toContain('禁术仪式');
+    expect(prompt).toContain('龙契裂解');
+    expect(prompt).toContain('献祭代价与王权后果');
+    expect(prompt).toContain('可能不可逆');
+  });
+
   it('infers gameplay profiles from theme and question', () => {
     expect(inferGameplayProfile('如果人工智能统治世界？', 'scifi_base').id).toBe('governance');
     expect(inferGameplayProfile('citizens assembly after election crisis', 'civic_chamber').id).toBe('governance');
@@ -171,6 +225,11 @@ describe('gameplayCards helpers', () => {
   it('provides recommended cards and profile label', () => {
     expect(getRecommendedGameplayCards('governance')[0]).toBe('civilization_debate');
     expect(getRecommendedGameplayCards('law')).toContain('mandate_surge');
+    expect(getRecommendedGameplayCards('law')).toContain('public_hearing');
+    expect(getRecommendedGameplayCards('ecology')[0]).toBe('resource_triage');
+    expect(getRecommendedGameplayCards('survival')[0]).toBe('resource_triage');
+    expect(getRecommendedGameplayCards('faith')[0]).toBe('forbidden_ritual');
+    expect(getRecommendedGameplayCards('mythic')[0]).toBe('forbidden_ritual');
     expect(getGameplayProfileLabel('war', true)).toBe('战争抉择');
     expect(getGameplayProfileFrameSrc('empire')).toContain('gameplay_card_frame_empire');
     expect(getGameplayProfileFrameSrc('trade')).toContain('gameplay_card_frame_trade');
@@ -215,6 +274,9 @@ describe('gameplayCards helpers', () => {
   it('keeps mandate surge in the recommended rotation for thematic profiles', () => {
     expect(getRecommendedGameplayCards('governance')).toContain('mandate_surge');
     expect(getRecommendedGameplayCards('frontier')).toContain('mandate_surge');
+    expect(getRecommendedGameplayCards('trade')).toContain('public_hearing');
+    expect(getRecommendedGameplayCards('frontier')).toContain('resource_triage');
+    expect(getRecommendedGameplayCards('faith')).toContain('forbidden_ritual');
   });
 
   it('builds mandate surge prompts as branch-wide legitimacy shocks', () => {

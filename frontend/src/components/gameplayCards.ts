@@ -5,7 +5,10 @@ export type GameplayCardId =
   | 'spy_infiltrate'
   | 'human_takeover'
   | 'spacetime_rift'
-  | 'mandate_surge';
+  | 'mandate_surge'
+  | 'public_hearing'
+  | 'resource_triage'
+  | 'forbidden_ritual';
 
 export interface GameplayCardDefinition {
   id: GameplayCardId;
@@ -137,6 +140,33 @@ export const GAMEPLAY_CARD_DEFS: GameplayCardDefinition[] = [
     descriptionEn: 'Inject a sudden legitimacy shock that forces the whole branch to reposition.',
     animation: 'mandate_surge',
   },
+  {
+    id: 'public_hearing',
+    icon: '🏛️',
+    labelZh: '公开听证',
+    labelEn: 'Public Hearing',
+    descriptionZh: '强制当前世界线召开公开听证，所有阵营都必须拿出证据、条款或代价。',
+    descriptionEn: 'Force the branch into a public hearing where every side must surface evidence, terms, or trade-offs.',
+    animation: 'hearing_bell',
+  },
+  {
+    id: 'resource_triage',
+    icon: '🧰',
+    labelZh: '资源分诊',
+    labelEn: 'Resource Triage',
+    descriptionZh: '强制世界线进入资源分诊，公开谁先保命、谁被限供、哪些线路必须让路。',
+    descriptionEn: 'Force the branch into resource triage and openly decide who gets protected, cut back, or rerouted first.',
+    animation: 'generic_flash',
+  },
+  {
+    id: 'forbidden_ritual',
+    icon: '🕯️',
+    labelZh: '禁术仪式',
+    labelEn: 'Forbidden Ritual',
+    descriptionZh: '强制世界线动用一项代价高昂的禁术、圣物或禁令，换取一次危险转向。',
+    descriptionEn: 'Force the branch to invoke a costly forbidden rite, relic, or taboo exception for a dangerous pivot.',
+    animation: 'generic_flash',
+  },
 ];
 
 const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = {
@@ -148,7 +178,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits AI governance, democracy, institutions, and power allocation.',
     signatureHooksZh: ['主权边界', '算法否决', '地方复核'],
     signatureHooksEn: ['Sovereignty lines', 'Algorithmic vetoes', 'Local review'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'spacetime_rift'],
+    recommendedCards: ['civilization_debate', 'public_hearing', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'spacetime_rift', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '算法是否应拥有最终否决权，还是必须接受地方人类审议。',
@@ -170,6 +200,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '各地城市同步爆发要求人工复核与地方问责的民意浪潮。',
         en: 'Cities erupt in a synchronized mandate demanding human review and local accountability.',
       },
+      public_hearing: {
+        zh: '立刻召开公开听证，要求中央、地方与技术方各自提交一条可核验的数据、责任链或否决依据。',
+        en: 'Call an immediate public hearing and force central, local, and technical actors to surface one verifiable metric, accountability chain, or veto basis.',
+      },
+      resource_triage: {
+        zh: '立刻进入资源分诊，公开哪些城市、系统或群体先获得算力、供给与人工复核保护。',
+        en: 'Enter immediate resource triage and expose which cities, systems, or groups receive compute, supplies, and human review first.',
+      },
+      forbidden_ritual: {
+        zh: '动用一条程序外、代价高昂的黑箱紧急授权，以短期稳定换取长期信任裂缝。',
+        en: 'Invoke an out-of-band emergency override with a steep cost, trading short-term stability for long-term trust damage.',
+      },
     },
   },
   war: {
@@ -180,7 +222,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits war, invasion, border conflict, and military escalation.',
     signatureHooksZh: ['停火窗口', '后勤断点', '误判升级'],
     signatureHooksEn: ['Ceasefire windows', 'Logistics breaks', 'Escalation by mistake'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'spy_infiltrate', 'spacetime_rift', 'human_takeover'],
+    recommendedCards: ['civilization_debate', 'public_hearing', 'mandate_surge', 'spy_infiltrate', 'spacetime_rift', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '应当继续全面进攻，还是转向补给稳固与防线收缩。',
@@ -202,6 +244,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '后方城镇与退役军团突然要求停火、清算误判并公开补给真相。',
         en: 'Home-front cities and veteran legions surge with demands for ceasefire, accountability, and supply transparency.',
       },
+      public_hearing: {
+        zh: '立刻召开战时公开听证，要求前线、后勤与平民代表各自交代一条损耗、误判或补给证据。',
+        en: 'Open a wartime public hearing and make the front line, logistics staff, and civilian representatives each disclose one loss, miscalculation, or supply fact.',
+      },
+      resource_triage: {
+        zh: '立即执行战时资源分诊，明确哪些战线、伤员与补给节点必须优先保住，哪些行动必须让路。',
+        en: 'Run wartime resource triage and make explicit which fronts, casualties, and supply nodes must be saved first and which operations must yield.',
+      },
+      forbidden_ritual: {
+        zh: '动用一项危险且可能越线的焦土/禁武方案，换取短期战场逆转。',
+        en: 'Invoke a dangerous scorched-earth or taboo-weapons measure to force a short-term battlefield reversal.',
+      },
     },
   },
   empire: {
@@ -212,7 +266,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits empires, dynasties, monarchies, and historical order maintenance.',
     signatureHooksZh: ['中央与行省', '宫廷裂缝', '军团忠诚'],
     signatureHooksEn: ['Center vs provinces', 'Court fractures', 'Legion loyalty'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'human_takeover'],
+    recommendedCards: ['civilization_debate', 'public_hearing', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '帝国应继续中央集权，还是把更多空间让给地方自治与商贸网络。',
@@ -234,6 +288,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '都城与行省同时掀起要求减税、分权与重审军团忠诚的民意浪潮。',
         en: 'The capital and provinces surge with demands for tax relief, shared authority, and a review of legion loyalty.',
       },
+      public_hearing: {
+        zh: '召集帝国公开听证，要求皇权、军团与行省各自摊开一条忠诚、税赋或调兵证据。',
+        en: 'Convene an imperial hearing and force the throne, legions, and provinces to lay out one concrete loyalty, taxation, or mobilization fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行帝国资源分诊，明确粮税、军团与行省保障中哪些必须优先，哪些扩张计划必须暂停。',
+        en: 'Enter imperial resource triage and decide which grain, tax, legion, and provincial guarantees stay protected while expansion plans are paused.',
+      },
+      forbidden_ritual: {
+        zh: '启用一项血统诏令、禁军誓约或秘仪惩戒，强行改写帝国忠诚结构。',
+        en: 'Invoke a bloodline decree, praetorian oath, or secret rite to forcibly rewrite the empire’s loyalty structure.',
+      },
     },
   },
   industry: {
@@ -244,7 +310,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits industrialization, energy, resource allocation, markets, and production.',
     signatureHooksZh: ['产能瓶颈', '关键资源', '调度委员会'],
     signatureHooksEn: ['Throughput bottlenecks', 'Strategic resources', 'Dispatch committees'],
-    recommendedCards: ['human_takeover', 'mandate_surge', 'civilization_debate', 'spy_infiltrate', 'spacetime_rift'],
+    recommendedCards: ['human_takeover', 'resource_triage', 'public_hearing', 'mandate_surge', 'civilization_debate', 'spy_infiltrate', 'spacetime_rift', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '资源应优先用于产能扩张，还是用于社会缓冲与安全冗余。',
@@ -266,6 +332,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '工人城市与配给社区突然要求停机审计、公开库存并保留安全冗余。',
         en: 'Worker cities and rationing districts demand a stop-work audit, public inventories, and safety redundancy.',
       },
+      public_hearing: {
+        zh: '立即召开产能听证，要求工厂、调度委员会与社区代表各自公开一条库存、停机或安全冗余证据。',
+        en: 'Launch a production hearing and require factories, dispatch committees, and community delegates to surface one stock, shutdown, or safety-redundancy fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行工业资源分诊，决定哪些产线、能源节点与社区配给先保住，哪些订单必须砍掉。',
+        en: 'Run industrial resource triage and decide which lines, energy nodes, and community rations stay protected first and which orders get cut.',
+      },
+      forbidden_ritual: {
+        zh: '启动一项高污染、高透支且不可持续的极限增产方案，换取短期产能冲刺。',
+        en: 'Trigger a highly polluting, unsustainable surge-production scheme to buy a short-term throughput spike.',
+      },
     },
   },
   trade: {
@@ -276,7 +354,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits ports, tariffs, trade routes, supply chains, and merchant coalitions.',
     signatureHooksZh: ['关税杠杆', '港口封锁', '商团倒戈'],
     signatureHooksEn: ['Tariff leverage', 'Port choke points', 'Merchant defections'],
-    recommendedCards: ['spy_infiltrate', 'mandate_surge', 'spacetime_rift', 'civilization_debate', 'human_takeover'],
+    recommendedCards: ['spy_infiltrate', 'public_hearing', 'mandate_surge', 'spacetime_rift', 'civilization_debate', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '应优先保住关税与商路控制，还是用让利来换取更大的同盟网络。',
@@ -298,6 +376,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '港口工人与商团客户同时发起抵制浪潮，要求立刻重谈关税与封锁规则。',
         en: 'Port workers and merchant clients launch a boycott wave demanding an immediate rewrite of tariffs and blockade rules.',
       },
+      public_hearing: {
+        zh: '立刻召开港口公开听证，要求商团、工会与税务方各自拿出一条账本、运力或补贴证据。',
+        en: 'Call an immediate port hearing and require merchant blocs, labor, and tax officials to reveal one ledger, throughput, or subsidy fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行港口资源分诊，明确哪些货轮、仓位与补给线优先保住，哪些贸易承诺必须延后。',
+        en: 'Run port resource triage and make clear which convoys, berths, and supply routes stay protected first and which trade promises get delayed.',
+      },
+      forbidden_ritual: {
+        zh: '强行动用一项撕毁旧约、扣押船队或祭出黑箱担保的危险交易手段，换取短期筹码。',
+        en: 'Invoke a dangerous taboo trade move such as voiding old covenants, seizing fleets, or using opaque guarantees to buy leverage.',
+      },
     },
   },
   law: {
@@ -308,7 +398,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits constitutions, courts, due process, compliance, and veto powers.',
     signatureHooksZh: ['紧急否决', '审计证据', '程序补丁'],
     signatureHooksEn: ['Emergency vetoes', 'Audit evidence', 'Procedural patches'],
-    recommendedCards: ['human_takeover', 'mandate_surge', 'civilization_debate', 'spacetime_rift', 'spy_infiltrate'],
+    recommendedCards: ['public_hearing', 'human_takeover', 'mandate_surge', 'civilization_debate', 'spacetime_rift', 'spy_infiltrate', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '是否应把最终否决权交给法院式复核机制，而不是继续依赖单一执行中心。',
@@ -330,6 +420,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '街头、公民团体与法律社群同时要求公开证据并立即冻结争议政策。',
         en: 'Streets, civic groups, and legal networks surge with demands to publish the evidence and freeze the disputed policy.',
       },
+      public_hearing: {
+        zh: '立刻进入公开听证，要求法院、执行方与公民团体各自提交一份证据包、程序依据或风险备忘。',
+        en: 'Move straight into a public hearing and require the court, implementers, and civic groups to submit one evidence pack, procedural basis, or risk memo each.',
+      },
+      resource_triage: {
+        zh: '立即执行程序与资源分诊，明确哪些案件、证据包与复核窗口先保住，哪些执行动作必须冻结。',
+        en: 'Run legal-resource triage and decide which cases, evidence packs, and review windows stay protected first and which enforcement moves freeze.',
+      },
+      forbidden_ritual: {
+        zh: '启用一项程序外的紧急例外或密室授权，以牺牲正当性换取一次危险裁断。',
+        en: 'Invoke an extra-procedural emergency exception or closed-door mandate, sacrificing legitimacy for a dangerous ruling.',
+      },
     },
   },
   faith: {
@@ -340,7 +442,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits religion, churches, prophecies, heresy, and symbolic legitimacy.',
     signatureHooksZh: ['异端审判', '圣谕改写', '祭司联盟'],
     signatureHooksEn: ['Heresy trials', 'Rewritten prophecy', 'Clerical alliances'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'spy_infiltrate', 'human_takeover', 'spacetime_rift'],
+    recommendedCards: ['forbidden_ritual', 'civilization_debate', 'public_hearing', 'mandate_surge', 'spy_infiltrate', 'human_takeover', 'spacetime_rift', 'resource_triage'],
     defaultDirectives: {
       civilization_debate: {
         zh: '神权秩序应继续垄断解释权，还是允许世俗共同体重新定义神谕。',
@@ -362,6 +464,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '信众与地方神殿突然要求重审圣谕、公开祭司联盟的真实代价。',
         en: 'Believers and local temples surge with demands to reopen the prophecy and expose the clerical alliance’s true cost.',
       },
+      public_hearing: {
+        zh: '立刻召开圣殿听证，要求祭司、君主与信众各自公开一条神谕解释、祭品代价或秩序风险。',
+        en: 'Open a temple hearing and force clergy, rulers, and believers to surface one prophecy reading, sacrificial cost, or order-risk fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行圣殿资源分诊，明确粮仓、避难所与祭司庇护中谁先被保住，哪些仪式必须停下。',
+        en: 'Enter sacred resource triage and decide which granaries, shelters, and protections get preserved first and which rituals must stop.',
+      },
+      forbidden_ritual: {
+        zh: '立刻动用禁术、圣物或献祭仪式，以高昂神权代价换取一次神谕偏转。',
+        en: 'Invoke a forbidden rite, relic, or sacrificial act to bend the prophecy at a steep sacred cost.',
+      },
     },
   },
   ecology: {
@@ -372,7 +486,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits climate, water, plague, environmental carrying capacity, and long-run resilience.',
     signatureHooksZh: ['生态红线', '迁徙窗口', '系统韧性'],
     signatureHooksEn: ['Ecological red lines', 'Migration windows', 'System resilience'],
-    recommendedCards: ['human_takeover', 'mandate_surge', 'spacetime_rift', 'civilization_debate', 'spy_infiltrate'],
+    recommendedCards: ['resource_triage', 'human_takeover', 'public_hearing', 'mandate_surge', 'spacetime_rift', 'civilization_debate', 'spy_infiltrate', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '应优先守住生态红线与撤离窗口，还是继续押注短期增长与征服速度。',
@@ -394,6 +508,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '受灾社区突然要求立刻限水、公开迁徙路线，并暂停一切高消耗扩张。',
         en: 'Affected communities surge with demands for water limits, open migration corridors, and an immediate halt to high-consumption expansion.',
       },
+      public_hearing: {
+        zh: '立刻召开生态听证，要求科学家、行政方与受灾社区各自拿出一条阈值、迁徙或余粮证据。',
+        en: 'Convene an ecological hearing and require scientists, administrators, and affected communities to disclose one threshold, migration, or reserve fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行生态资源分诊，决定水源、余粮、迁徙通道与防疫能力谁先保住，哪些区域必须退让。',
+        en: 'Run ecological resource triage and decide which water, reserves, migration corridors, and outbreak controls stay protected first and which zones retreat.',
+      },
+      forbidden_ritual: {
+        zh: '动用一项高代价的气候工程、抽水禁令或保育区豁免，冒险换取短期生存缓冲。',
+        en: 'Invoke a costly climate intervention, emergency extraction ban, or sanctuary exemption to buy a short-lived survival buffer.',
+      },
     },
   },
   frontier: {
@@ -404,7 +530,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits space, oceanic, frontier exploration, and colony governance.',
     signatureHooksZh: ['远征风险', '生命维持', '撤离路线'],
     signatureHooksEn: ['Expedition risk', 'Life support', 'Evac routes'],
-    recommendedCards: ['spacetime_rift', 'mandate_surge', 'human_takeover', 'civilization_debate', 'spy_infiltrate'],
+    recommendedCards: ['resource_triage', 'spacetime_rift', 'public_hearing', 'mandate_surge', 'human_takeover', 'civilization_debate', 'spy_infiltrate', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '应当继续激进拓展边疆，还是先建立更稳固的生命维持与治理规则。',
@@ -426,6 +552,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '前线殖民地居民突然要求暂停外扩，优先保障生命维持、返航权与家属名额。',
         en: 'Frontier settlers surge with demands to pause expansion and prioritize life support, return rights, and family slots.',
       },
+      public_hearing: {
+        zh: '立刻召开边疆听证，要求舰队、殖民地与生命维持团队各自公开一条风险、余量或撤离条件。',
+        en: 'Open a frontier hearing and make the fleet, colony council, and life-support teams each reveal one risk, reserve, or evacuation condition.',
+      },
+      resource_triage: {
+        zh: '立即执行边疆资源分诊，明确氧气、席位、维修窗口与返航资格谁先保住，哪些扩张计划必须让路。',
+        en: 'Run frontier resource triage and decide which oxygen, seats, repair windows, and return rights stay protected first and which expansion plans yield.',
+      },
+      forbidden_ritual: {
+        zh: '启动一项高风险生命维持实验、封存协议或返航禁令，强行换取边疆窗口。',
+        en: 'Invoke a high-risk life-support experiment, sealing protocol, or return-ban to force open a frontier window.',
+      },
     },
   },
   mythic: {
@@ -436,7 +574,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits fantasy, magic, sacred order, and legendary politics.',
     signatureHooksZh: ['神谕偏转', '禁术代价', '王权传说'],
     signatureHooksEn: ['Bent prophecy', 'Forbidden arts', 'Royal myth'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'spacetime_rift', 'human_takeover', 'spy_infiltrate'],
+    recommendedCards: ['forbidden_ritual', 'civilization_debate', 'public_hearing', 'mandate_surge', 'spacetime_rift', 'human_takeover', 'spy_infiltrate', 'resource_triage'],
     defaultDirectives: {
       civilization_debate: {
         zh: '魔法秩序应继续由少数守护者垄断，还是向更多人开放。',
@@ -458,6 +596,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '王国民众与边境守望者突然要求公开禁术代价，并重写旧神谕的解释权。',
         en: 'The kingdom’s crowds and frontier wardens surge with demands to expose forbidden costs and rewrite who interprets prophecy.',
       },
+      public_hearing: {
+        zh: '立刻召开王国听证，要求法师、祭司与守望者各自公开一条禁术代价、预言偏差或边境代偿。',
+        en: 'Call a kingdom hearing and require mages, priests, and wardens to reveal one forbidden cost, prophecy deviation, or frontier trade-off each.',
+      },
+      resource_triage: {
+        zh: '立即执行王国资源分诊，明确庇护、粮仓、法阵与边境守备中哪些必须优先，哪些献祭必须停下。',
+        en: 'Run kingdom resource triage and decide which shelter, granaries, warding circles, and frontier defenses stay protected first and which sacrifices stop.',
+      },
+      forbidden_ritual: {
+        zh: '立刻施放一项禁术、龙契约或王权秘仪，以巨大代价换取一次神话级转向。',
+        en: 'Invoke a forbidden spell, dragon pact, or royal rite to force a mythic pivot at great cost.',
+      },
     },
   },
   survival: {
@@ -468,7 +618,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Fits apocalypse, collapse, disaster, scarcity, and survival crises.',
     signatureHooksZh: ['最后冗余', '撤退路线', '极限配给'],
     signatureHooksEn: ['Last reserves', 'Retreat routes', 'Scarcity rationing'],
-    recommendedCards: ['human_takeover', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'civilization_debate'],
+    recommendedCards: ['resource_triage', 'human_takeover', 'public_hearing', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'civilization_debate', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '应该集中最后资源赌一次豪赌，还是保留冗余来换取更长生存时间。',
@@ -490,6 +640,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
         zh: '避难居民突然要求公开余粮库存、改写配给顺序，并优先保护撤离路线。',
         en: 'Shelter residents surge with demands to publish food reserves, rewrite rationing order, and secure evacuation routes first.',
       },
+      public_hearing: {
+        zh: '立刻召开生存听证，要求避难负责人、医护与后勤方各自公开一条余粮、风险或撤离证据。',
+        en: 'Open a survival hearing and require shelter leads, medics, and logistics crews to disclose one reserve, risk, or evacuation fact each.',
+      },
+      resource_triage: {
+        zh: '立即执行生存资源分诊，明确余粮、药品、床位与撤离载具谁先使用，哪些群体必须转移或限供。',
+        en: 'Run survival resource triage and decide who gets food, medicine, beds, and evacuation transport first while others are moved or rationed.',
+      },
+      forbidden_ritual: {
+        zh: '动用最后储备、封门令或极端牺牲协议，换取一次高代价的生存喘息。',
+        en: 'Invoke last-reserve burn, a hard shelter seal, or an extreme sacrifice protocol to buy one costly breath of survival.',
+      },
     },
   },
   generic: {
@@ -500,7 +662,7 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
     descriptionEn: 'Use general conflict tools when the scenario does not map cleanly to a domain.',
     signatureHooksZh: ['关键分歧', '隐藏议程', '世界线证据'],
     signatureHooksEn: ['Core tensions', 'Hidden agendas', 'Branch evidence'],
-    recommendedCards: ['civilization_debate', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'spacetime_rift'],
+    recommendedCards: ['civilization_debate', 'public_hearing', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'spacetime_rift', 'resource_triage', 'forbidden_ritual'],
     defaultDirectives: {
       civilization_debate: {
         zh: '让两名角色围绕当前世界线最核心的分歧展开公开辩论。',
@@ -521,6 +683,18 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
       mandate_surge: {
         zh: '让一股突发的群众压力席卷当前世界线，逼所有角色重新表态与站队。',
         en: 'Trigger a sudden wave of public pressure that forces every actor in the branch to restate their position.',
+      },
+      public_hearing: {
+        zh: '立刻召开公开听证，要求当前世界线里最关键的阵营各自拿出一条事实、代价或底线。',
+        en: 'Call a public hearing and force the branch’s key factions to surface one fact, trade-off, or non-negotiable line each.',
+      },
+      resource_triage: {
+        zh: '立即执行资源分诊，明确当前世界线里哪些人、区域或系统先被保住，哪些必须降级或撤离。',
+        en: 'Enter resource triage and decide which people, zones, or systems get protected first while others are degraded or evacuated.',
+      },
+      forbidden_ritual: {
+        zh: '动用一项代价极高且可能不可逆的非常规手段，强行换取局势转折。',
+        en: 'Invoke a costly and potentially irreversible extraordinary measure to force a sharp turn in the branch.',
       },
     },
   },
@@ -841,6 +1015,15 @@ export function getSuggestedGameplayAgents(
     };
   }
 
+  if (cardId === 'public_hearing') {
+    return {
+      primaryAgentId:
+        roleSortedPrimary[0]?.id
+        ?? neutrals[0]?.id
+        ?? defaultPrimary,
+    };
+  }
+
   return {
     primaryAgentId: roleSortedPrimary[0]?.id ?? defaultPrimary,
   };
@@ -977,6 +1160,39 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           '要求：把它写成街头浪潮、请愿、罢工、神殿号召、殖民地集体请命或其他群众性信号，让所有 agent 都必须明确表态。',
           '持续效果：后续轮次要继续体现这波冲击对联盟关系、政策优先级、执行正当性或风险感知的持续影响。',
         ].join('\n');
+      case 'public_hearing':
+        return [
+          ...buildDirectorOverridePrefix(true),
+          '[Special Card: Public Hearing / 公开听证]',
+          `当前 What-If：${question}`,
+          `场景主题：${sceneTheme || '当前世界线'}`,
+          `目标分支：${targetBranchTitle}`,
+          `请让当前世界线立即进入一场无法跳过的公开听证：${fallbackDirective(customDirective, directive)}`,
+          '要求：至少让三个不同立场/阵营拿出证据、条款、账本、代价或红线，不能只重复立场口号。',
+          '持续效果：后续轮次要继续引用这场听证暴露出的事实与责任链，并让联盟、优先级或信任结构发生变化。',
+        ].join('\n');
+      case 'resource_triage':
+        return [
+          ...buildDirectorOverridePrefix(true),
+          '[Special Card: Resource Triage / 资源分诊]',
+          `当前 What-If：${question}`,
+          `场景主题：${sceneTheme || '当前世界线'}`,
+          `目标分支：${targetBranchTitle}`,
+          `请让当前世界线立刻进入一轮公开且残酷的资源分诊：${fallbackDirective(customDirective, directive)}`,
+          '要求：明确谁先获得水、粮、药品、运力、氧气、算力或撤离资格，谁被限供、延后或牺牲，不能只给抽象口号。',
+          '持续效果：后续轮次要继续体现这次分诊造成的秩序压力、群体反应、联盟变化或生存代价。',
+        ].join('\n');
+      case 'forbidden_ritual':
+        return [
+          ...buildDirectorOverridePrefix(true),
+          '[Special Card: Forbidden Ritual / 禁术仪式]',
+          `当前 What-If：${question}`,
+          `场景主题：${sceneTheme || '当前世界线'}`,
+          `目标分支：${targetBranchTitle}`,
+          `请让当前世界线立刻动用一项代价巨大、可能不可逆的禁术/秘仪/例外条款：${fallbackDirective(customDirective, directive)}`,
+          '要求：明确这次举动要牺牲什么、冒犯哪条旧秩序、以及为什么各方仍被迫接受它，不能只写成抽象奇观。',
+          '持续效果：后续轮次必须持续体现禁术带来的代价、裂痕、反噬或新的依赖关系。',
+        ].join('\n');
       default:
         return unreachableGameplayCard(cardId);
     }
@@ -1041,6 +1257,39 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `Hit the branch with a public legitimacy shock that no actor can ignore: ${fallbackDirective(customDirective, directive)}`,
         'Frame it as a strike wave, petition, sacred uprising, colony-wide demand, or any mass signal that forces every agent to answer in public.',
         'Persistent effect: later rounds should keep reflecting how this mandate reshapes alliances, priorities, and perceived legitimacy.',
+      ].join('\n');
+    case 'public_hearing':
+      return [
+        ...buildDirectorOverridePrefix(false),
+        '[Special Card: Public Hearing]',
+        `What-if premise: ${question}`,
+        `Scene theme: ${sceneTheme || 'current timeline'}`,
+        `Target branch: ${targetBranchTitle}`,
+        `Force the branch into an immediate public hearing: ${fallbackDirective(customDirective, directive)}`,
+        'At least three distinct factions must surface evidence, terms, ledgers, costs, or non-negotiable lines instead of repeating slogans.',
+        'Persistent effect: later rounds should keep citing the facts and accountability links exposed by the hearing, with visible shifts in trust, priorities, or alliances.',
+      ].join('\n');
+    case 'resource_triage':
+      return [
+        ...buildDirectorOverridePrefix(false),
+        '[Special Card: Resource Triage]',
+        `What-if premise: ${question}`,
+        `Scene theme: ${sceneTheme || 'current timeline'}`,
+        `Target branch: ${targetBranchTitle}`,
+        `Force the branch into a visible round of resource triage: ${fallbackDirective(customDirective, directive)}`,
+        'Make the branch spell out who gets water, food, medicine, transport, oxygen, compute, or evacuation priority first and who gets rationed, delayed, or cut off.',
+        'Persistent effect: later rounds should keep reflecting the survival pressure, political backlash, and alliance shifts created by that triage.',
+      ].join('\n');
+    case 'forbidden_ritual':
+      return [
+        ...buildDirectorOverridePrefix(false),
+        '[Special Card: Forbidden Ritual]',
+        `What-if premise: ${question}`,
+        `Scene theme: ${sceneTheme || 'current timeline'}`,
+        `Target branch: ${targetBranchTitle}`,
+        `Force the branch to invoke a costly and possibly irreversible taboo measure: ${fallbackDirective(customDirective, directive)}`,
+        'Spell out what gets sacrificed, which old order gets violated, and why the actors still accept the move instead of treating it as flavor.',
+        'Persistent effect: later rounds must keep reflecting the backlash, new dependency, or fractures caused by the ritual.',
       ].join('\n');
     default:
       return unreachableGameplayCard(cardId);

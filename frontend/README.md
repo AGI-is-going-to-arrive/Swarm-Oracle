@@ -43,7 +43,7 @@ npm run dev     # → http://localhost:18928
 - **BranchNode** — Custom node with probability bar + intervene button
 - **AgentPanel** — Agent roster with pixel avatars, emotion dots, speech bubbles
 - **InterventionModal** — Butterfly Effect user intervention input
-- **GameplayCardsModal** — 5 domain-driven “director cards” that inject high-priority branch events
+- **GameplayCardsModal** — 8 domain-driven “director cards” that inject high-priority branch events, now including `Public Hearing`, `Resource Triage`, and `Forbidden Ritual`
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
@@ -64,9 +64,11 @@ npm run e2e:corners
 npm run e2e:full
 ```
 
-- Current frontend test suite: **139 tests**
+- Current frontend test suite: **142 tests**
 - Fixed matrix sample set: **14 scenarios** (main themes + lightweight semantic variants)
 - Latest full black-box regression artifact: `frontend/output/e2e/full-regression-final/result.json`
+- `scripts/e2e-suite.mjs` now writes `browser-launch.json` into the chosen output directory so you can see which browser launch profile actually ran
+- If Playwright screenshot capture stalls on font loading, the suite falls back to Chromium CDP capture instead of aborting the whole run
 - Language behavior:
   - UI labels follow the EN/ZH switcher
   - agent replies and narration follow detected input language

@@ -72,6 +72,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
 .venv/bin/python -m pytest tests/ -x -q
 ```
 
+Latest verified backend full regression: **777 passed, 2 warnings**
+Command: `.venv/bin/python -m pytest tests/ -q`
+
 Latest verified backend scene/theme regression: **201 passed**
 Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
 

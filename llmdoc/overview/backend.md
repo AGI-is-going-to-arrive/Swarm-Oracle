@@ -105,7 +105,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `llm_call_json_stream(...)` — 流式 + JSON 解析
   - `health_check()` — 连通性检查
 - **特性**: 支持 Chat Completions 和 Responses API 两种格式
-- **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s
+- **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s；当前实现直接复用模块级 `asyncio`，5xx 重试路径不会再触发本地 `UnboundLocalError`
 - **JSON 容错**:
   - `_clean_json_text` 会先剥掉 markdown code fence、前后缀和非法控制字符
   - `llm_call_json()` 在常规 `json.loads()` 失败后，会依次尝试：
@@ -224,7 +224,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-本轮已验证的场景/可视化定向回归为 **201 passed**。
+本轮已验证的后端全量回归为 **777 passed, 2 warnings**；其中场景/可视化定向回归为 **201 passed**。
 
 覆盖重心：
 

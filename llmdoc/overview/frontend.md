@@ -22,7 +22,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `BranchEdge` | 分支树边（自定义样式） |
 | `BranchDetailModal` | 分支详情弹窗（故事、洞察、关键时刻） |
 | `InterventionModal` | 蝴蝶效应干预弹窗 |
-| `GameplayCardsModal` | 玩法卡弹窗：5 张玩法卡按题目画像动态推荐，支持目标分支/角色/来源分支选择、导演点数与冷却提示；题材包已扩到 12 类，modal 会显示题材 hooks、题材导向文案，并在 warmup 时支持只读预览；生成的 prompt 现显式标注为“导演级 override”，要求 LLM 把玩法卡当成已经发生且持续生效的世界线事件 |
+| `GameplayCardsModal` | 玩法卡弹窗：8 张玩法卡按题目画像动态推荐，支持目标分支/角色/来源分支选择、导演点数与冷却提示；当前额外补进 `公开听证 / 资源分诊 / 禁术仪式`，分别强化 law/trade、ecology/survival/frontier 与 faith/mythic 的题材张力；题材包已扩到 12 类，modal 会显示题材 hooks、题材导向文案，并在 warmup 时支持只读预览；生成的 prompt 现显式标注为“导演级 override”，要求 LLM 把玩法卡当成已经发生且持续生效的世界线事件 |
 | `TimelineBar` | 时间线进度条（轮次追踪）；完成态 replay 会接入 round marker 图标（`fork/card/bet/result`）并支持直接跳轮次回放；hover tooltip 会显示本轮分支标题、玩法卡、下注与结局摘要；compact 版会直接嵌入完成态 Theater 面板内 |
 | `QuickStartCards` | 首页快速开始示例卡片 |
 | `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀 |
@@ -133,6 +133,8 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
   - `npm run e2e:matrix`
   - `npm run e2e:corners`
   - `npm run e2e:full`
+  - `scripts/e2e-suite.mjs` 现在会在输出目录附带 `browser-launch.json`，记录 `requestedHeadless / actualHeadless / channel / usedSwiftShader / attempts`
+  - 如果 Playwright 在 `page.screenshot()` 阶段卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套回归直接中断
   - 最新完整黑盒结果位于 `frontend/output/e2e/full-regression-final/result.json`
 
 ## 像素化可视化游戏引擎 (`src/game/`) — Phase 1+2+3+4
@@ -194,7 +196,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | Leaderboard HUD | 排行榜（React HudOverlay，画布上方）— Top-3 玩家 + 称号徽章 |
 | 截图/GIF 导出 | useScreenCapture hook — 支持 `Panel/Canvas/Modal` 三种截图模式；GIF 保持 `Panel/Canvas` 可用（modal 模式禁用） |
 | Structured Betting 2.x | `PredictionModal` 支持押世界线 / 押结局倾向 / 押题材回响，Theater HUD 可直接打开下注；分支尚未 hydrate 时会自动回退到 `ending_tone`，避免空目标下注 |
-| Gameplay Cards | `GameplayCardsModal` 提供 5 张玩法卡，支持题目画像驱动推荐、导演点数与冷却；题材包已扩到 12 类，并会影响卡面导向文案、选角建议与来源分支建议；注入 prompt 会显式要求 agent 把玩法卡当成高优先级、持续生效的世界线事件 |
+| Gameplay Cards | `GameplayCardsModal` 提供 8 张玩法卡，支持题目画像驱动推荐、导演点数与冷却；其中 `公开听证` 会强制摊开证据/账本/代价，`资源分诊` 会明确谁先保命、谁被限供，`禁术仪式` 会引入高代价、可能不可逆的禁术或例外条款；题材包已扩到 12 类，并会影响卡面导向文案、选角建议与来源分支建议；注入 prompt 会显式要求 agent 把玩法卡当成高优先级、持续生效的世界线事件 |
 | Semantic Scene Pool | Theater 背景已扩到 26 个主题，包含主场景和轻量语义变体；同一 profile 可按题面落到不同场景，例如 `governance -> scifi_base/civic_chamber/surveillance_megacity` |
 | Causal Archive | `ResultView` 展示玩法记录、下注记录、关键记录、导演点数、每日挑战标记；新增 `profileResonance`，并把题材档案前缀接进导出/分享结果 |
 | Daily Challenge | `InputView` 每日挑战卡 + `dailyChallenge.ts` 题库/完成状态；挑战池现为 9 条，并会显示题材 hooks 与完成后的题材回响 |
@@ -248,6 +250,6 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 ## 构建与部署
 
 - **开发**: `npm run dev` → Vite dev server (localhost:18928)
-- **测试**: `npm test` → Vitest + Testing Library — 139 tests（覆盖状态管理、场景推断、回放、截图、玩法卡、分享和页面自动化摘要）
+- **测试**: `npm test` → Vitest + Testing Library — 142 tests（覆盖状态管理、场景推断、回放、截图、玩法卡、分享和页面自动化摘要）
 - **构建**: `npm run build` → `tsc -b && vite build` → `dist/`
 - **Docker**: Nginx静态文件服务，代理 `/api` 和 `/ws` 到后端

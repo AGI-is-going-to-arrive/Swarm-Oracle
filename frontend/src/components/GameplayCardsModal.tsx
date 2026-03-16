@@ -225,6 +225,12 @@ export default function GameplayCardsModal({
         return isZh ? '输入另一条时间线泄漏的信号…' : 'Describe the leaked signal from another timeline…';
       case 'mandate_surge':
         return isZh ? '输入这波民意浪潮要求立刻发生什么…' : 'Describe what the sudden mandate wave is demanding…';
+      case 'public_hearing':
+        return isZh ? '输入这场公开听证必须摊开的证据、条款或代价…' : 'Describe the evidence, terms, or trade-offs the hearing must expose…';
+      case 'resource_triage':
+        return isZh ? '输入这轮资源分诊必须明确保住或限供的对象…' : 'Describe who must be protected first and who gets rationed in this triage…';
+      case 'forbidden_ritual':
+        return isZh ? '输入这次禁术、秘仪或例外条款要付出的代价…' : 'Describe the taboo act and the price the branch must pay for it…';
     }
   })();
 

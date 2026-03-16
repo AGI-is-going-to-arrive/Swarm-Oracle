@@ -126,7 +126,6 @@ async def llm_call(
                         "LLM connection error (attempt %d/%d), retrying in %.1fs: %s",
                         attempt + 1, max_retries + 1, wait, exc,
                     )
-                    import asyncio
                     await asyncio.sleep(wait)
                     continue
                 logger.error("LLM connection error: %s", _sanitize_error(str(exc)))

@@ -8,12 +8,15 @@
 
 ## 1. 当前已完成状态
 
-> 2026-03-16 状态同步：
-> - 六题材 `sample_matrix` 已补齐 headed replay / result / share 证据。
+> 2026-03-17 状态同步：
+> - `sample_matrix` 固定样本库现为 14 条；其中治理 / 法律 / 贸易 / 生态 / 战争 / 信仰这 6 个核心题材已经补齐 headed replay / result / share 证据。
 > - Theater 完成态不再整页纵向滚动，compact TimelineBar 已嵌回剧场面板，marker 升级为 `fork/card/bet/result` 图标。
 > - Prediction modal 现支持第三种下注：`押题材回响`。
 > - 结果页会先等待 narration 完成，不再展示“故事 = —”的半成品卡片。
 > - 玩法卡 prompt 已升级为“高优先级、持续生效”的导演事件，不再只是普通 intervention 文本。
+> - 玩法卡已扩到 8 张，新增：`公开听证 / 资源分诊 / 禁术仪式`。
+> - `resource_triage / 资源分诊` 已做过一轮真实 live 注入取证，不只是卡面存在。
+> - `e2e-suite.mjs` 现在支持浏览器启动 fallback；若截图卡在字体加载，还会回退到 Chromium CDP 截图，并在输出目录落盘 `browser-launch.json`。
 
 ### 1.1 核心玩法层
 
@@ -50,6 +53,15 @@
     - 角色推荐逻辑
     - 来源分支推荐逻辑
     - signature hooks
+  - 当前玩法卡共 8 张：
+    - `文明辩论`
+    - `间谍渗透`
+    - `人类潜入`
+    - `时空裂缝`
+    - `民意浪潮`
+    - `公开听证`
+    - `资源分诊`
+    - `禁术仪式`
 
 - 已完成 `因果档案`：
   - 结果页会显示：
@@ -131,10 +143,10 @@
 
 ### 1.4 已通过验证
 
-- `cd frontend && npm test` → `128 passed`
+- `cd frontend && npm test` → `142 passed`
 - `cd frontend && npm run build` → 通过
-- 后端此前全量通过：
-  - `cd backend && .venv/bin/python -m pytest tests/ -q` → `708 passed, 2 warnings`
+- 后端当前全量通过：
+  - `cd backend && .venv/bin/python -m pytest tests/ -q` → `777 passed, 2 warnings`
 
 ### 1.5 当前稳定样本库
 
@@ -198,6 +210,8 @@
   - `--capture-mode modal`
 - `panel` / `canvas` 在当前机器的 headless 下已能稳定导出真实像素剧场画面。
 - `modal` 也已经跑通过一轮黑盒 smoke，能截到真实弹窗而不是整页。
+- `full --headless` 现在也已跑通过一轮完整回归；suite 会把本次采用的浏览器启动 profile 写进 `browser-launch.json`。
+- 若 `page.screenshot()` 卡在字体加载，suite 会自动回退到 Chromium CDP 截图，不再因为单次截图超时把整套回归中断。
 
 剩余更像 polish，而不是阻断项：
 

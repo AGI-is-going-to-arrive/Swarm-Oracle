@@ -53,6 +53,8 @@ cd backend
 .venv/bin/python -m pytest tests/test_memory.py::TestCompressRounds -v
 ```
 
+- 当前后端全量回归为 **777 passed, 2 warnings**。
+
 ### Frontend 测试
 
 ```bash
@@ -61,7 +63,7 @@ npm install
 npm test
 ```
 
-- 当前前端回归套件为 **139 tests**。
+- 当前前端回归套件为 **142 tests**。
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -81,7 +83,10 @@ npm test
     - `npm run e2e:matrix`
     - `npm run e2e:corners`
     - `npm run e2e:full`
-    - 最新完整结果：`frontend/output/e2e/full-regression-final/result.json`
+    - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
+  - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
+  - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
+  - 最新完整结果：`frontend/output/e2e/full-regression-final/result.json`
 
 ### 前端本地玩法状态
 

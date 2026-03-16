@@ -16,7 +16,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Hierarchical Agents (P3-A) | Leader-Worker分层架构，支持千人规模模拟 |
 | Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜 |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
-| Gameplay Cards | 5 张玩法卡（文明辩论/间谍渗透/人类潜入/时空裂缝/民意浪潮）按题目画像动态推荐；题材包已扩到 12 类，玩法卡弹窗会显示题材 hooks、题材导向文案，并在 warmup 阶段支持只读预览；玩法卡注入现会被 LLM 当成高优先级、持续生效的导演事件 |
+| Gameplay Cards | 8 张玩法卡（文明辩论/间谍渗透/人类潜入/时空裂缝/民意浪潮/公开听证/资源分诊/禁术仪式）按题目画像动态推荐；题材包已扩到 12 类，玩法卡弹窗会显示题材 hooks、题材导向文案，并在 warmup 阶段支持只读预览；玩法卡注入现会被 LLM 当成高优先级、持续生效的导演事件 |
 | Director Points & Cooldowns | 单局 3 点导演点数 + 卡牌冷却，前端本地持久化 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案 |
 | Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 9 条，覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态；首页会显示完成态、已用卡数、下注态与题材回响反馈 |
@@ -44,7 +44,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Visual Upgrade (3.0 Phase C) | UI/UX布局优化 + Theater模式完善 — SimulationView布局重构 + GBC暗色主题 + HUD像素风 + 8个Theater Bug修复（精灵/气泡/漫游/多轮回放） |
 | Theater Bubble Bugfix (3.0-D) | 剧场气泡冻结修复 — `visualization_enabled` 参数透传后端 + 增量气泡分发竞态条件修复（fallback synth init）+ Scenario hydration 恢复 Theater 模式 + completed replay 自动跳过 `TitleScene` 回到 `WorldScene` |
 | Theater Stability Hardening (3.0-E) | 剧场稳定性加固 — simulator 将数值/文本 stance 统一归一化到可视化坐标，避免中文立场词在 Theater 链路中触发类型错误 |
-| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；Simulation 页面新增 `page.replay_state`、`page.warmup`、`page.controls.capture_mode/can_capture_modal`，并通过 `capture_game_screenshot(panel|canvas|modal)` 提供显式截图模式；前端同时提供 `e2e:matrix / e2e:corners / e2e:full` 一键回归入口 |
+| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；Simulation 页面新增 `page.replay_state`、`page.warmup`、`page.controls.capture_mode/can_capture_modal`，并通过 `capture_game_screenshot(panel|canvas|modal)` 提供显式截图模式；前端同时提供 `e2e:matrix / e2e:corners / e2e:full` 一键回归入口，`e2e-suite.mjs` 会在输出目录落盘 `browser-launch.json`，记录本次实际采用的浏览器启动 profile |
 | Semantic Scene Pool | Pixel Theater 现有 26 个语义场景背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换 |
 | Theater Replay Director | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 直接嵌回 Theater 面板内，显示 `fork/card/bet/result` marker |
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
@@ -98,8 +98,8 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 ### Testing
 | 工具 | 覆盖 |
 |------|------|
-| pytest + pytest-asyncio | 本轮已验证场景/可视化定向回归 201 passed（`test_scene_selector.py` + `test_simulator_viz_integration.py`）；仓库中还包含更大范围后端套件 |
-| Vitest + jsdom | 139 tests，前端覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要 |
+| pytest + pytest-asyncio | 本轮已验证后端全量回归 777 passed, 2 warnings；其中场景/可视化定向回归为 201 passed（`test_scene_selector.py` + `test_simulator_viz_integration.py`） |
+| Vitest + jsdom | 142 tests，前端覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要 |
 | conftest.py | SQLite in-memory fixtures |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 
