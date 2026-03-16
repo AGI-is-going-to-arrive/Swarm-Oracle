@@ -14,8 +14,9 @@
 | **Hierarchical Agents** | Leader-Worker 分层架构，支持千人规模模拟 |
 | **Prediction Leaderboard** | 用户竞猜 + LLM 评分 + 排行榜 |
 | **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响，结果页可逐条查看命中状态 |
-| **Gameplay Cards** | 8 张玩法卡以导演级事件注入当前世界线，并要求后续轮次持续响应；当前包含 `公开听证`、`资源分诊` 与 `禁术仪式` 这三张新增卡 |
-| **Semantic Scene Pool** | Pixel Theater 现有 26 个语义场景背景，按题面关键词选景，不做粗暴轮换 |
+| **Gameplay Cards** | 10 张玩法卡以导演级事件注入当前世界线，并要求后续轮次持续响应；现已包含 `密约交易`、`撤离令`、`公开听证`、`资源分诊` 与 `禁术仪式` |
+| **Semantic Scene Pool** | Pixel Theater 现有 27 个语义场景背景，按题面关键词选景；`generic` 题材现有独立场景 `switchboard_forum / 轮值议堂` |
+| **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Responsive Scenario Startup** | 创建场景后立即返回 `parsing` 状态，后台继续解析并填充 Agent / 分支 |
 | **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
 | **Intervention Templates** | 预设干预模板（自然灾害、技术突破等） |
@@ -106,10 +107,11 @@ cd frontend && npm run e2e:full
 ```
 
 - 本轮已验证的后端全量回归：**777 passed, 2 warnings**
-- 当前前端主回归：**142 passed**
-- 固定回归样本矩阵：**14 条**
-- 最新完整黑盒结果：`frontend/output/e2e/full-regression-final/result.json`
-- `scripts/e2e-suite.mjs` 现在会在输出目录写入 `browser-launch.json`，记录本次实际采用的浏览器启动 profile；当字体加载拖慢截图时，会自动回退到 Chromium CDP 截图
+- 后端定向回归：`test_scene_selector.py = 139 passed`，`test_simulator_viz_integration.py = 70 passed`
+- 当前前端主回归：**150 passed**
+- 固定回归样本矩阵：**15 条**
+- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失时会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若卡在字体加载，会自动回退到 Chromium CDP 截图
+- 最近一次 clean full 黑盒结果：`frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`
 
 ## License
 

@@ -107,10 +107,13 @@ describe('VizSynthesizer — inferSceneTheme', () => {
     expect(inferSceneTheme('如果诸葛亮多活10年？')).toBe('ancient_empire');
   });
 
-  it('detects trade, faith, and ecology themed prompts', () => {
+  it('detects trade, faith, ecology, and generic themed prompts', () => {
     expect(inferSceneTheme('如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？')).toBe('trade_harbor');
     expect(inferSceneTheme('如果跨大陆淡水供应在十年内枯竭，会发生什么？')).toBe('ecology_wasteland');
     expect(inferSceneTheme('如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？')).toBe('faith_temple');
+    expect(inferSceneTheme('如果所有大型组织都必须每周随机交换一次负责人，会发生什么？')).toBe('switchboard_forum');
+    expect(inferSceneTheme('如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？')).toBe('switchboard_forum');
+    expect(inferSceneTheme('What if every high-stakes decision had to be re-approved by a rotating external review board?')).toBe('switchboard_forum');
   });
 
   it('prefers frontier-specific phrases over generic sci-fi keywords', () => {

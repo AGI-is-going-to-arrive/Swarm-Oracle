@@ -3,6 +3,7 @@ const THEATER_THEME_LABELS: Record<string, { zh: string; en: string }> = {
   ancient_empire: { zh: '古代帝国', en: 'Ancient Empire' },
   industrial_city: { zh: '工业都市', en: 'Industrial City' },
   modern_city: { zh: '现代都市', en: 'Modern City' },
+  switchboard_forum: { zh: '轮值议堂', en: 'Switchboard Forum' },
   surveillance_megacity: { zh: '监控巨城', en: 'Surveillance Megacity' },
   civic_chamber: { zh: '公民议会', en: 'Civic Chamber' },
   law_court: { zh: '宪政法庭', en: 'Constitutional Court' },

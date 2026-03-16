@@ -20,7 +20,7 @@ api/scenarios.py ──► api/schemas.py (Pydantic 模型)
     │       ├── events.py (事件类型枚举 + 工厂，含 WEATHER_CHANGE)
     │       ├── mapper.py (VisualizationMapper — 8 个 map_* 方法)
     │       ├── persona_mapper.py (Agent → Sprite 分配 + 坐标计算)
-    │       ├── scene_selector.py (双签名 → 26 场景语义池；原始题面优先)
+    │       ├── scene_selector.py (双签名 → 27 场景语义池；原始题面优先，含 generic 专属 `switchboard_forum`)
     │       └── card_events.py (卡牌事件触发 + 可视化映射)
     │
 api/predictions.py ──► services/scoring.py (P3-B)
@@ -137,7 +137,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `events.py` (≈60行) — `VizEventType` 枚举 (9 种事件类型，含 `WEATHER_CHANGE`) + `make_viz_event()` 工厂函数
   - `mapper.py` (≈300行) — `VisualizationMapper` 类，8 个 `map_*` 方法（agent_speak、stance_move、branch_split、intervention、emotion_change、scene_change、ending、**weather_change**）；stance 参数统一 clamp [-1, 1]
   - `persona_mapper.py` (≈130行) — `assign_sprite()`/`assign_sprites_batch()`/`assign_position()` — 角色→精灵分配 + 坐标计算；total_agents ≤ 0 守卫 + stance clamp [-1, 1]
-  - `scene_selector.py` — `select_scene(question)` / `select_scene(era=, setting=)` 双签名；当前已扩到 26 个语义场景主题，优先扫描原始 `question`，再回退到 parser 的 `era/setting`，避免泛化词压过更贴题的场景语义
+  - `scene_selector.py` — `select_scene(question)` / `select_scene(era=, setting=)` 双签名；当前已扩到 27 个语义场景主题，优先扫描原始 `question`，再回退到 parser 的 `era/setting`，避免泛化词压过更贴题的场景语义；`switchboard_forum` 现同时覆盖“随机换帅 / 负责人轮换 / leader shuffle / lottery committee / rotating external review board”这类 generic 组织博弈题面
   - `card_events.py` (≈120行) — `check_card_trigger()`/`get_card_viz_event()` — 卡牌事件触发 + 冷却 + 加权随机（单候选安全回退）
 - **集成点**: `simulator.py` (调用 `assign_sprites_batch`/`assign_position`) → WebSocket (`viz:*` 事件) → 前端 `EventBridge.ts` → Phaser `WorldScene.ts`
 - **测试覆盖**: `test_simulator_viz_integration.py` 覆盖 scene reachability、ending type 3级映射、Worker viz 事件和全流程 smoke
@@ -224,7 +224,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-本轮已验证的后端全量回归为 **777 passed, 2 warnings**；其中场景/可视化定向回归为 **201 passed**。
+最近一次已验证的后端全量回归为 **777 passed, 2 warnings**；本轮额外跑过 `test_scene_selector.py` 与 `test_simulator_viz_integration.py`，结果分别为 **139 passed** 与 **70 passed**。
 
 覆盖重心：
 
@@ -237,6 +237,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - `test_visualization_mapper.py`
   - `test_visualization_events.py`
   - `test_scene_selector.py`
+- 测试夹具：
+  - `tests/conftest.py`
+  - 每个 pytest case 使用独立临时 SQLite 文件，并在前后显式 `dispose_engine()`，避免共享 `test_swarmoracle.db` 带来的 `readonly database / disk I/O / table already exists`
 - 记忆 / 黑板 / 向量存储：
   - `test_memory.py`
   - `test_blackboard.py`

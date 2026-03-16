@@ -1,6 +1,7 @@
 .gameplay-modal {
   max-width: 720px;
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -276,6 +277,7 @@
 
   .gameplay-modal {
     max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
     padding: 22px;
   }
 }

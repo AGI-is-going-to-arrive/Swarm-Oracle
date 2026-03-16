@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.services.llm_client import llm_call_json
 from app.services.lang_detect import get_language_directive
 
 logger = logging.getLogger(__name__)
+_NARRATION_TIMEOUT_SECONDS = 35.0
 
 NARRATE_PROMPT = """你是一位出色的故事讲述者。请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
 
@@ -59,6 +61,29 @@ def _normalize_narration_result(raw: object) -> dict:
     return {}
 
 
+def _build_fallback_narration(
+    branch_title: str,
+    probability: float,
+    raw_rounds: str,
+) -> dict:
+    lines = [line.strip() for line in raw_rounds.splitlines() if line.strip()]
+    key_moments = lines[:2]
+    story_lines = [
+        f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",
+    ]
+    if key_moments:
+        story_lines.append("关键交互包括：")
+        story_lines.extend(key_moments)
+    else:
+        story_lines.append("当前轮次没有留下足够的原始交互，系统仅保留了分支标题与概率。")
+
+    return {
+        "story": " ".join(story_lines),
+        "insight": "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。",
+        "key_moments": key_moments,
+    }
+
+
 async def narrate_branch(
     branch_title: str,
     probability: float,
@@ -80,7 +105,15 @@ async def narrate_branch(
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
-    result = _normalize_narration_result(await llm_call_json(prompt, reasoning_effort="medium"))
+    try:
+        raw_result = await asyncio.wait_for(
+            llm_call_json(prompt, reasoning_effort="low"),
+            timeout=_NARRATION_TIMEOUT_SECONDS,
+        )
+        result = _normalize_narration_result(raw_result)
+    except Exception as exc:
+        logger.warning("Narration fallback for %s: %s", branch_title, exc)
+        result = _build_fallback_narration(branch_title, probability, raw_rounds)
     key_moments_raw = result.get("key_moments", [])
     if isinstance(key_moments_raw, str):
         key_moments = [key_moments_raw]

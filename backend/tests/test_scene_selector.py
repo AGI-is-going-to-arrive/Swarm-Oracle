@@ -42,6 +42,7 @@ class TestSelectScene:
             ("futuristic", "scifi_base"),
             ("cyberpunk", "scifi_base"),
             ("sci-fi era", "scifi_base"),
+            ("rotating leadership", "switchboard_forum"),
         ],
     )
     def test_era_keywords(self, era, expected):
@@ -62,6 +63,7 @@ class TestSelectScene:
             ("foundry floor", "factory_foundry"),
             ("surface settlement", "frontier_colony"),
             ("arcane rune chamber", "arcane_sanctum"),
+            ("temporary lottery committee", "switchboard_forum"),
             ("quarantine zone", "refuge_compound"),
             ("deep sea exploration", "underwater_kingdom"),
             ("desert oasis", "desert_outpost"),
@@ -101,6 +103,7 @@ class TestSelectScene:
             ("避难所", "refuge_compound"),
             ("元老院", "imperial_forum"),
             ("限电", "power_grid_nexus"),
+            ("随机交换负责人", "switchboard_forum"),
         ],
     )
     def test_chinese_era_keywords(self, era, expected):
@@ -179,6 +182,11 @@ class TestSelectScene:
             ("algorithmic government", "scifi_base"),
             ("如果火星殖民地在补给断裂后必须决定是否强制撤离，会发生什么？", "space_station"),
             ("What if a Mars colony lost life support and had to choose an evacuation route?", "space_station"),
+            ("如果所有大型组织都必须每周随机交换一次负责人，会发生什么？", "switchboard_forum"),
+            ("What if every major institution had to swap leaders at random every week?", "switchboard_forum"),
+            ("如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？", "switchboard_forum"),
+            ("What if every high-stakes decision had to be re-approved by a rotating external review board?", "switchboard_forum"),
+            ("如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？", "switchboard_forum"),
         ],
     )
     def test_scene_keywords(self, keyword, expected):
@@ -268,5 +276,5 @@ class TestAvailableScenes:
     def test_available_scenes_not_empty(self):
         assert len(AVAILABLE_SCENES) > 0
 
-    def test_exactly_26_scenes(self):
-        assert len(AVAILABLE_SCENES) == 26
+    def test_exactly_27_scenes(self):
+        assert len(AVAILABLE_SCENES) == 27

@@ -17,23 +17,20 @@ os.environ.setdefault("LLM_REASONING_EFFORT", "low")
 
 
 @pytest.fixture(autouse=True)
-def setup_test_db():
-    """Create a fresh test database for each test."""
-    from app.models.database import get_engine, init_db
-    from sqlmodel import SQLModel
+def setup_test_db(tmp_path, monkeypatch):
+    """Create an isolated SQLite database for each test."""
+    from app.config import settings
+    from app.models.database import dispose_engine, init_db
 
-    # Force a fresh engine for tests
-    import app.models.database as db_mod
-    db_mod._engine = None
-    os.environ["DATABASE_URL"] = "sqlite:///./test_swarmoracle.db"
+    db_path = tmp_path / "test_swarmoracle.db"
+    db_url = f"sqlite:///{db_path}"
 
-    # Drop existing tables first, then create fresh ones
-    engine = get_engine()
-    SQLModel.metadata.drop_all(engine)
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+
+    # Reset the singleton engine so each test points at a fresh temp DB.
+    dispose_engine()
+
     init_db()
     yield
-    # Cleanup
-    try:
-        os.remove("./test_swarmoracle.db")
-    except OSError:
-        pass
+    dispose_engine()

@@ -148,11 +148,28 @@ class TestNarrateBranch:
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
-    async def test_reasoning_effort_medium(self, mock_llm):
-        """Narration should use medium reasoning effort."""
+    async def test_reasoning_effort_low(self, mock_llm):
+        """Narration should use low reasoning effort for lower latency."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
 
         await narrate_branch("t", 0.5, "", "")
 
         _, kwargs = mock_llm.call_args
-        assert kwargs.get("reasoning_effort") == "medium"
+        assert kwargs.get("reasoning_effort") == "low"
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    async def test_llm_failure_falls_back_to_compact_summary(self, mock_llm):
+        """Narration should degrade to a compact summary if the LLM call fails."""
+        mock_llm.side_effect = RuntimeError("llm unavailable")
+
+        result = await narrate_branch(
+            branch_title="轮换序章",
+            probability=1.0,
+            agents_summary="",
+            raw_rounds="[R1 A]: 第一条记录\n[R1 B]: 第二条记录\n[R1 C]: 第三条记录",
+        )
+
+        assert "轮换序章" in result["story"]
+        assert "简化摘要" in result["insight"]
+        assert result["key_moments"] == ["[R1 A]: 第一条记录", "[R1 B]: 第二条记录"]

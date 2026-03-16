@@ -5,6 +5,7 @@
 .input-view {
   position: relative;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -603,7 +604,7 @@
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 640px) {
   .input-view__content {
-    padding: 32px 20px 88px;
+    padding: 32px 20px calc(136px + env(safe-area-inset-bottom, 0px));
   }
 
   .input-view__header {

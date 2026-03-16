@@ -53,7 +53,8 @@ const mockStore = {
   error: null,
   loadScenario: vi.fn(),
   isSimulationComplete: true,
-  viewMode: 'theater' as const,
+  visualizationEnabled: true,
+  viewMode: 'theater' as 'classic' | 'theater',
   currentRound: 0,
   toggleViewMode: vi.fn(),
 };
@@ -161,6 +162,7 @@ describe('SimulationView replay automation output', () => {
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     mockStore.status = 'done';
     mockStore.isSimulationComplete = true;
+    mockStore.visualizationEnabled = true;
     mockStore.currentRound = 0;
     mockStore.agents = [
       { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -529,5 +531,32 @@ describe('SimulationView replay automation output', () => {
     });
 
     expect(screen.getByText('🔁 R2/3')).toBeInTheDocument();
+  });
+
+  it("disables theater toggle when the scenario was started without visualization", async () => {
+    mockStore.viewMode = 'classic';
+    mockStore.visualizationEnabled = false;
+    mockStore.scenario = {
+      ...mockStore.scenario,
+      visualization_enabled: false,
+    };
+
+    render(
+      <MemoryRouter initialEntries={["/sim/scenario-1"]}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Switch to Pixel Theater" });
+    expect(toggle).toBeDisabled();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.can_toggle_view_mode).toBe(false);
+      expect(payload?.simulation?.visualizationEnabled).toBe(false);
+    });
   });
 });

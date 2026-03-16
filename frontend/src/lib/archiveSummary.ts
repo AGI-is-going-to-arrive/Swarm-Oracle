@@ -189,9 +189,11 @@ function resolveDirectorStyleTag(
 ): DirectorStyleTag {
   if (mostUsedCard === 'civilization_debate') return 'debate_conductor';
   if (mostUsedCard === 'spy_infiltrate') return 'shadow_operator';
+  if (mostUsedCard === 'backchannel_pact') return 'shadow_operator';
   if (mostUsedCard === 'human_takeover') return 'direct_command';
   if (mostUsedCard === 'spacetime_rift') return 'timeline_smuggler';
   if (mostUsedCard === 'mandate_surge') return 'crowd_choreographer';
+  if (mostUsedCard === 'evacuation_order') return 'direct_command';
   if (betCount > 0) return 'cold_reader';
   return 'quiet_observer';
 }

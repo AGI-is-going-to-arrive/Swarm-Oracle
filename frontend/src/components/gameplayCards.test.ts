@@ -98,6 +98,27 @@ describe('gameplayCards helpers', () => {
     expect(prompt).toContain('Persistent effect');
   });
 
+  it('builds backchannel pact prompt with two agents and a secret bargain', () => {
+    const prompt = buildGameplayCardPrompt({
+      cardId: 'backchannel_pact',
+      question: '如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？',
+      sceneTheme: 'trade_harbor',
+      profileId: 'trade',
+      targetBranchTitle: '港口密议',
+      agentsById: buildAgentsById(agents),
+      primaryAgentId: 'a1',
+      secondaryAgentId: 'a2',
+      customDirective: '以通行税减免换取关键港区在 48 小时内配合静默封锁。',
+      isZh: true,
+    });
+
+    expect(prompt).toContain('密约交易');
+    expect(prompt).toContain('顾星河');
+    expect(prompt).toContain('周凌云');
+    expect(prompt).toContain('通行税减免');
+    expect(prompt).toContain('私下达成一份暂不曝光的密约');
+  });
+
   it('builds spacetime rift prompt with source branch', () => {
     const prompt = buildGameplayCardPrompt({
       cardId: 'spacetime_rift',
@@ -131,6 +152,26 @@ describe('gameplayCards helpers', () => {
     expect(prompt).toContain('法律急刹');
     expect(prompt).toContain('公开证据并冻结争议政策');
     expect(prompt).toContain('所有 agent 都必须明确表态');
+  });
+
+  it('builds evacuation order prompt as a branch-wide emergency order', () => {
+    const prompt = buildGameplayCardPrompt({
+      cardId: 'evacuation_order',
+      question: '如果跨大陆淡水供应在十年内枯竭，会发生什么？',
+      sceneTheme: 'ecology_wasteland',
+      profileId: 'ecology',
+      targetBranchTitle: '阈值撤离',
+      agentsById: buildAgentsById(agents),
+      primaryAgentId: 'a1',
+      customDirective: '优先撤离饮水断供区与儿童病患，并封锁即将失守的净化站。',
+      isZh: true,
+    });
+
+    expect(prompt).toContain('撤离令');
+    expect(prompt).toContain('顾星河');
+    expect(prompt).toContain('阈值撤离');
+    expect(prompt).toContain('优先撤离饮水断供区与儿童病患');
+    expect(prompt).toContain('谁先撤');
   });
 
   it('builds public hearing prompt as an evidence-forcing event', () => {
@@ -218,16 +259,30 @@ describe('gameplayCards helpers', () => {
     expect(inferGameplayProfile('如果一群法师在秘法圣所中试图改写巨龙契约，会发生什么？', 'arcane_sanctum').id).toBe('mythic');
     expect(inferGameplayProfile('fortified quarantine refuge after famine', 'refuge_compound').id).toBe('survival');
     expect(
+      inferGameplayProfile('如果所有大型组织都必须每周随机交换一次负责人，会发生什么？', 'modern_city').id,
+    ).toBe('generic');
+    expect(
+      inferGameplayProfile('如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？', 'modern_city').id,
+    ).toBe('generic');
+    expect(
+      inferGameplayProfile('What if every high-stakes decision had to be re-approved by a rotating external review board?', 'modern_city').id,
+    ).toBe('generic');
+    expect(inferGameplayProfile('', 'switchboard_forum').id).toBe('generic');
+    expect(
       inferGameplayProfile('如果一支远征舰队在荒芜边疆建立流动自治城邦，会发生什么？', 'space_station').id,
     ).toBe('frontier');
   });
 
   it('provides recommended cards and profile label', () => {
     expect(getRecommendedGameplayCards('governance')[0]).toBe('civilization_debate');
+    expect(getRecommendedGameplayCards('governance')).toContain('backchannel_pact');
     expect(getRecommendedGameplayCards('law')).toContain('mandate_surge');
     expect(getRecommendedGameplayCards('law')).toContain('public_hearing');
+    expect(getRecommendedGameplayCards('trade')).toContain('backchannel_pact');
     expect(getRecommendedGameplayCards('ecology')[0]).toBe('resource_triage');
+    expect(getRecommendedGameplayCards('ecology')).toContain('evacuation_order');
     expect(getRecommendedGameplayCards('survival')[0]).toBe('resource_triage');
+    expect(getRecommendedGameplayCards('survival')).toContain('evacuation_order');
     expect(getRecommendedGameplayCards('faith')[0]).toBe('forbidden_ritual');
     expect(getRecommendedGameplayCards('mythic')[0]).toBe('forbidden_ritual');
     expect(getGameplayProfileLabel('war', true)).toBe('战争抉择');
@@ -240,6 +295,8 @@ describe('gameplayCards helpers', () => {
     expect(getGameplayProfileSignatureHooks('trade', true)).toContain('关税杠杆');
     expect(getGameplayCardDirectivePreview('law', 'human_takeover', true)).toContain('暂停执行');
     expect(getGameplayCardDirectivePreview('trade', 'mandate_surge', true)).toContain('抵制浪潮');
+    expect(getGameplayCardDirectivePreview('trade', 'backchannel_pact', true)).toContain('密约');
+    expect(getGameplayCardDirectivePreview('ecology', 'evacuation_order', true)).toContain('撤离');
   });
 
   it('suggests agents based on stance for debate', () => {
@@ -249,6 +306,13 @@ describe('gameplayCards helpers', () => {
       { id: 'a5', name: '支持派', role: '支持派', tier: 'CORE', emotion: 'neutral', stance: '支持' },
     ]);
 
+    expect(primaryAgentId).toBeTruthy();
+    expect(secondaryAgentId).toBeTruthy();
+    expect(primaryAgentId).not.toBe(secondaryAgentId);
+  });
+
+  it('suggests different agents for backchannel pact', () => {
+    const { primaryAgentId, secondaryAgentId } = getSuggestedGameplayAgents('backchannel_pact', agents, 'trade');
     expect(primaryAgentId).toBeTruthy();
     expect(secondaryAgentId).toBeTruthy();
     expect(primaryAgentId).not.toBe(secondaryAgentId);
@@ -277,6 +341,8 @@ describe('gameplayCards helpers', () => {
     expect(getRecommendedGameplayCards('trade')).toContain('public_hearing');
     expect(getRecommendedGameplayCards('frontier')).toContain('resource_triage');
     expect(getRecommendedGameplayCards('faith')).toContain('forbidden_ritual');
+    expect(getRecommendedGameplayCards('frontier')).toContain('evacuation_order');
+    expect(getRecommendedGameplayCards('law')).toContain('backchannel_pact');
   });
 
   it('builds mandate surge prompts as branch-wide legitimacy shocks', () => {

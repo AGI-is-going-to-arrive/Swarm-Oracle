@@ -16,6 +16,33 @@ from __future__ import annotations
 # ──────────────────────────────────────────────────────────
 
 SCENE_MAP: dict[str, str] = {
+    # ── switchboard_forum (generic institutional shuffle / rotating leadership) ──
+    "weekly leadership shuffle": "switchboard_forum",
+    "rotating leadership": "switchboard_forum",
+    "leader rotation": "switchboard_forum",
+    "leader shuffle": "switchboard_forum",
+    "swap leaders": "switchboard_forum",
+    "random leadership": "switchboard_forum",
+    "randomly swap leaders": "switchboard_forum",
+    "organizational roulette": "switchboard_forum",
+    "temporary lottery committee": "switchboard_forum",
+    "lottery committee": "switchboard_forum",
+    "rotating external review board": "switchboard_forum",
+    "负责人轮换": "switchboard_forum",
+    "随机换帅": "switchboard_forum",
+    "随机交换负责人": "switchboard_forum",
+    "每周随机交换一次负责人": "switchboard_forum",
+    "组织轮值": "switchboard_forum",
+    "抽签换帅": "switchboard_forum",
+    "临时抽签委员会": "switchboard_forum",
+    "抽签委员会": "switchboard_forum",
+    "抽签产生的临时委员会": "switchboard_forum",
+    "轮值外部评审团重新裁决": "switchboard_forum",
+    "轮值外部评审团": "switchboard_forum",
+    "lottery-picked emergency committee": "switchboard_forum",
+    "every high-stakes decision had to be re-approved by a rotating external review board": "switchboard_forum",
+    "所有关键城市都必须每三十天由抽签产生的临时委员会接管": "switchboard_forum",
+
     # ── surveillance_megacity (platform governance / monitoring city) ──
     "platform state": "surveillance_megacity",
     "social credit": "surveillance_megacity",
@@ -445,6 +472,7 @@ AVAILABLE_SCENES = frozenset({
     "ancient_empire",
     "industrial_city",
     "modern_city",
+    "switchboard_forum",
     "surveillance_megacity",
     "civic_chamber",
     "law_court",

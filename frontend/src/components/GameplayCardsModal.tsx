@@ -209,7 +209,8 @@ export default function GameplayCardsModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
-  const requiresSecondAgent = cardId === 'civilization_debate';
+  const requiresPrimaryAgent = ['civilization_debate', 'spy_infiltrate', 'backchannel_pact', 'human_takeover', 'evacuation_order'].includes(cardId);
+  const requiresSecondAgent = cardId === 'civilization_debate' || cardId === 'backchannel_pact';
   const requiresSourceBranch = cardId === 'spacetime_rift';
   const isDisabled = readOnly || status === 'submitting' || status === 'success';
 
@@ -219,12 +220,16 @@ export default function GameplayCardsModal({
         return isZh ? '输入辩题，例如：算法应否拥有最终否决权？' : 'Enter the debate topic…';
       case 'spy_infiltrate':
         return isZh ? '输入隐藏议程，例如：暗中瓦解地方议会联盟。' : 'Enter the hidden agenda…';
+      case 'backchannel_pact':
+        return isZh ? '输入密约筹码，例如：以港口豁免换取暂时停火。' : 'Describe the off-book bargain or leverage being traded…';
       case 'human_takeover':
         return isZh ? '输入你要让该角色说的话…' : 'Write the line the user wants to inject…';
       case 'spacetime_rift':
         return isZh ? '输入另一条时间线泄漏的信号…' : 'Describe the leaked signal from another timeline…';
       case 'mandate_surge':
         return isZh ? '输入这波民意浪潮要求立刻发生什么…' : 'Describe what the sudden mandate wave is demanding…';
+      case 'evacuation_order':
+        return isZh ? '输入这道撤离、封锁或转运命令的优先级与代价…' : 'Describe the evacuation, lockdown, or transfer order and who gets prioritized…';
       case 'public_hearing':
         return isZh ? '输入这场公开听证必须摊开的证据、条款或代价…' : 'Describe the evidence, terms, or trade-offs the hearing must expose…';
       case 'resource_triage':
@@ -244,13 +249,17 @@ export default function GameplayCardsModal({
       return;
     }
 
-    if ((cardId === 'spy_infiltrate' || cardId === 'human_takeover') && !primaryAgentId) {
+    if (requiresPrimaryAgent && !primaryAgentId) {
       setErrorMsg(isZh ? '请选择目标角色。' : 'Select a target agent.');
       return;
     }
 
     if (requiresSecondAgent && (!secondaryAgentId || primaryAgentId === secondaryAgentId)) {
-      setErrorMsg(isZh ? '文明辩论需要两名不同角色。' : 'Civilization Debate needs two different agents.');
+      setErrorMsg(
+        cardId === 'backchannel_pact'
+          ? (isZh ? '密约交易需要两名不同角色。' : 'Backchannel Pact needs two different agents.')
+          : (isZh ? '文明辩论需要两名不同角色。' : 'Civilization Debate needs two different agents.'),
+      );
       return;
     }
 
@@ -423,7 +432,7 @@ export default function GameplayCardsModal({
             </select>
           </div>
 
-          {(cardId === 'civilization_debate' || cardId === 'spy_infiltrate' || cardId === 'human_takeover') && (
+          {requiresPrimaryAgent && (
             <div className="modal-field gameplay-modal__field">
               <label>{t('gameplay.primary_agent')}</label>
               <select

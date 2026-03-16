@@ -364,11 +364,13 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
   toggleViewMode: () =>
     set((state) => {
+      if (state.viewMode === 'classic' && !state.visualizationEnabled) {
+        return state;
+      }
+
       const newMode = state.viewMode === 'classic' ? 'theater' : 'classic';
       return {
         viewMode: newMode,
-        // Enable visualization when switching to theater so Phaser game initializes
-        visualizationEnabled: newMode === 'theater' ? true : state.visualizationEnabled,
       };
     }),
 

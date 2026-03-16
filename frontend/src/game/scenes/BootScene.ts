@@ -20,6 +20,7 @@ const SPRITE_KEYS = [
 /** Scene background keys matching THEME_PALETTES in WorldScene. */
 const SCENE_KEYS = [
   'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
+  'switchboard_forum',
   'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
   'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
   'frontier_colony', 'post_apocalypse', 'fantasy_kingdom', 'arcane_sanctum',

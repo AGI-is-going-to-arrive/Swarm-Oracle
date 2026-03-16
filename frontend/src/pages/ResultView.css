@@ -7,6 +7,7 @@
   margin: 0 auto;
   padding: 48px 32px 80px;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .result-loading,
@@ -646,4 +647,10 @@
   padding-left: 18px;
   color: var(--text-secondary);
   line-height: 1.8;
+}
+
+@media (max-width: 640px) {
+  .result-view {
+    padding: 40px 20px calc(136px + env(safe-area-inset-bottom, 0px));
+  }
 }

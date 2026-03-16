@@ -37,6 +37,7 @@ const THEME_PALETTES: Record<string, { sky1: number; sky2: number; ground: numbe
   ancient_empire:      { sky1: 0xffe4b5, sky2: 0xdaa520, ground: 0xc2b280, accent: 0x8b4513, icon: '🏛️' },
   industrial_city:     { sky1: 0x778899, sky2: 0x2f4f4f, ground: 0x696969, accent: 0xb22222, icon: '🏭' },
   modern_city:         { sky1: 0x6495ed, sky2: 0x4169e1, ground: 0x808080, accent: 0x00bfff, icon: '🌃' },
+  switchboard_forum:   { sky1: 0x2b2441, sky2: 0x120f24, ground: 0x4f3f35, accent: 0xff66d9, icon: '🎛️' },
   surveillance_megacity:{ sky1: 0x1a2140, sky2: 0x10172f, ground: 0x28304d, accent: 0xff4fd8, icon: '📡' },
   civic_chamber:       { sky1: 0xd8d1c3, sky2: 0x5d5a63, ground: 0x8e7358, accent: 0x8bc34a, icon: '🏛️' },
   law_court:           { sky1: 0xe8dcc3, sky2: 0x7c6a52, ground: 0xbba88f, accent: 0x2d4f7a, icon: '⚖️' },
@@ -83,9 +84,11 @@ const EVENT_ANIM_CONFIGS: Record<string, { color: number; shake?: number; flash?
   generic_flash:     { color: 0xffffff,  flash: [255, 255, 255], label_en: '⚡ Event',     label_zh: '⚡ 事件' },
   debate_spotlight:  { color: 0xff8c00,  label_en: '🗣️ Debate',              label_zh: '🗣️ 辩论' },
   shadow_reveal:     { color: 0x4b0082,  flash: [75, 0, 130],    label_en: '🕵️ Spy',      label_zh: '🕵️ 间谍' },
+  backchannel_signal:{ color: 0x00d4ff,  flash: [0, 212, 255],   label_en: '🤝 Backchannel Pact', label_zh: '🤝 密约交易' },
   player_swap:       { color: 0x00bfff,  label_en: '🧑 Takeover',            label_zh: '🧑 接管' },
   portal_open:       { color: 0x9400d3,  shake: 0.005, label_en: '🌀 Space-Time Rift',    label_zh: '🌀 时空裂缝' },
   mandate_surge:     { color: 0xff4fb3,  flash: [255, 79, 179], label_en: '📣 Mandate Surge', label_zh: '📣 民意浪潮' },
+  evacuation_alarm:  { color: 0xff7043,  flash: [255, 112, 67], label_en: '🚨 Evacuation Order', label_zh: '🚨 撤离令' },
 };
 
 // ── Faction Colors ──────────────────────────────────────

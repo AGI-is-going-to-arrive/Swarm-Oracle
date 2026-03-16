@@ -15,7 +15,7 @@ import {
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
 } from '../components/gameplayCards';
-import { QuickStartCards } from '../components/QuickStartCards';
+import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import './InputView.css';
 
 /* ── Loading Step Component ───────────────────────────────── */
@@ -234,6 +234,17 @@ export function InputView() {
       nextAgents: numAgents,
       nextMode: mode,
       nextVisualization: vizEnabled,
+    });
+  };
+
+  const handleQuickStartSelect = async (preset: QuickStartPreset) => {
+    setQuestion(preset.question);
+    await launchSimulation({
+      nextQuestion: preset.question,
+      nextRounds: preset.rounds ?? rounds,
+      nextAgents: preset.numAgents ?? numAgents,
+      nextMode: preset.mode ?? mode,
+      nextVisualization: preset.visualizationEnabled ?? vizEnabled,
     });
   };
 
@@ -666,7 +677,7 @@ export function InputView() {
         {/* Quick Start */}
         <div className="quick-start-section">
           <h3 className="section-title">{t('home.quick_starts')}</h3>
-          <QuickStartCards onSelect={(q) => handleSubmit(q)} />
+          <QuickStartCards onSelect={handleQuickStartSelect} />
         </div>
       </div>
     </div>

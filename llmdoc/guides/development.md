@@ -17,6 +17,14 @@ pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 18927
 ```
 
+- 如果本机有多个同级工作区都带 `app/` 包，优先显式指定：
+
+```bash
+uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --reload --port 18927
+```
+
+- 这样可以避免因为 cwd / `PYTHONPATH` 污染，误导入别的工作区后端。
+
 ### Frontend
 
 ```bash
@@ -63,7 +71,7 @@ npm install
 npm test
 ```
 
-- 当前前端回归套件为 **142 tests**。
+- 当前前端回归套件为 **150 tests**。
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -75,10 +83,10 @@ npm test
   - `SimulationView` 额外暴露 `window.capture_game_screenshot(mode)`，黑盒客户端可显式请求 `panel|canvas|modal`。
   - 下载前会按文件扩展名归一化成标准 `image/png` / `image/gif`，减少“文件下好了但系统不认”的情况。
   - 分享文案现在会在前端补一层题材档案前缀；如需复测分享链路，优先从结果页的 `📱 生成文案` 入口进入。
-  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池为 26 个主题，支持主场景和轻量语义变体。
+  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池为 27 个主题，支持主场景和轻量语义变体；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`。
   - 固定回归输入集已落盘：
     - `frontend/output/e2e/sample_matrix.json`
-  - 当前固定样本为 14 条，可直接作为后续 replay / result / share 取证的样本清单
+  - 当前固定样本为 15 条，可直接作为后续 replay / result / share 取证的样本清单
   - 一键黑盒回归入口：
     - `npm run e2e:matrix`
     - `npm run e2e:corners`
@@ -86,13 +94,16 @@ npm test
     - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
   - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
-  - 最新完整结果：`frontend/output/e2e/full-regression-final/result.json`
+  - 若 `sample_matrix.json` 里的历史 `scenario_id` 缺失，suite 会按 theme/runtime fallback 题面自动重建场景，而不是直接失败
+  - `generic` matrix smoke 已可在无旧 DB 快照时依赖 runtime fallback 重跑
+  - 最近一次 clean full 黑盒结果：`frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`
+  - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
 
 ### 前端本地玩法状态
 
 - 新增本地持久化 helper：
   - `src/lib/scenarioMeta.ts` — 导演点数、卡冷却、玩法记录、下注记录、因果档案摘要
-  - `src/lib/dailyChallenge.ts` — 每日挑战题库与完成状态（现为 9 条 challenge，按本地日期切换）
+  - `src/lib/dailyChallenge.ts` — 每日挑战题库与完成状态（现为 12 条 challenge，按本地日期切换）
   - `src/lib/predictionBetting.ts` — 结构化下注编码/反解析；现支持 `branch_winner / ending_tone / profile_resonance`
 
 ### 语言行为
@@ -119,8 +130,9 @@ frontend/public/assets/scenes/
 
 - 新增素材包括：
   - 11 张玩法卡题材 frame
-  - 26 张 Theater 场景背景
+  - 27 张 Theater 场景背景
   - 4 个 UI badge（recommended / daily challenge / archive / bet winner）
+  - 当前玩法卡总数为 10（含 `密约交易 / Backchannel Pact`、`撤离令 / Evacuation Order`）
 
 - 已验证可用图像模型调用路径：
 
@@ -139,7 +151,7 @@ export GOOGLE_API_KEY="..."
 ```
 
 **测试约定**:
-- `conftest.py` 提供 SQLite in-memory 数据库 fixture
+- `conftest.py` 现为每个 pytest case 创建独立临时 SQLite 数据库，并在前后显式释放 engine
 - `asyncio_mode = "auto"` — 自动检测async测试
 - LLM调用全部通过 `unittest.mock.AsyncMock` 模拟
 

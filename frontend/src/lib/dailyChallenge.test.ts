@@ -100,4 +100,22 @@ describe('dailyChallenge progress storage', () => {
     expect(isChallengeScenario(challenge.id, 'scenario-3', fixedDate)).toBe(true);
     expect(isChallengeScenario(challenge.id, 'another-scenario', fixedDate)).toBe(false);
   });
+
+  it('rotates through all 12 challenge profiles including mythic, survival, and generic', () => {
+    const ids = new Set<string>();
+    const profiles = new Set<string>();
+
+    for (let dayOffset = 0; dayOffset < 12; dayOffset += 1) {
+      const date = new Date(fixedDate);
+      date.setDate(date.getDate() + dayOffset);
+      const challenge = getTodayChallenge(date);
+      ids.add(challenge.id);
+      profiles.add(challenge.profileId);
+    }
+
+    expect(ids.size).toBe(12);
+    expect(profiles.has('mythic')).toBe(true);
+    expect(profiles.has('survival')).toBe(true);
+    expect(profiles.has('generic')).toBe(true);
+  });
 });

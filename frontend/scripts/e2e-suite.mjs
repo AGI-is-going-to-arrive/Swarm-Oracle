@@ -9,6 +9,23 @@ const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json");
+const MATRIX_SCENARIO_FALLBACKS = {
+  governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
+  law: { question: "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？", rounds: 1, numAgents: 3 },
+  trade: { question: "如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？", rounds: 1, numAgents: 3 },
+  ecology: { question: "如果跨大陆淡水供应在十年内枯竭，会发生什么？", rounds: 1, numAgents: 3 },
+  war: { question: "如果世界大战在高度自动化军备时代再次爆发，会发生什么？", rounds: 1, numAgents: 3 },
+  faith: { question: "如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？", rounds: 1, numAgents: 3 },
+  industry: { question: "如果一座跨大陆熔炉联合体遭遇产能瓶颈，会发生什么？", rounds: 1, numAgents: 3 },
+  frontier: { question: "如果一座前哨殖民地被迫以自治城邦的形式自救，会发生什么？", rounds: 1, numAgents: 3 },
+  mythic: { question: "如果一群法师在秘法圣所中试图改写巨龙契约，会发生什么？", rounds: 1, numAgents: 3 },
+  survival: { question: "如果最后一座避难城只能再维持三十天供电，会发生什么？", rounds: 1, numAgents: 3 },
+  generic: { question: "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？", rounds: 1, numAgents: 3 },
+  governance_surveillance: { question: "如果一个平台国家依靠社会信用哨卡治理整座城市，会发生什么？", rounds: 1, numAgents: 3 },
+  empire_palace: { question: "如果一场继承危机在王朝宫廷内部突然爆发，会发生什么？", rounds: 1, numAgents: 3 },
+  industry_grid: { question: "如果大陆级电网枢纽发生连锁停电，会发生什么？", rounds: 1, numAgents: 3 },
+  war_logistics: { question: "如果坚固补给枢纽的补给线突然崩塌，会发生什么？", rounds: 1, numAgents: 3 },
+};
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -193,6 +210,7 @@ async function createScenarioViaApi(baseUrl, {
   rounds = 3,
   numAgents = 3,
   visualizationEnabled = false,
+  mode = "blackboard",
 }) {
   const response = await fetch(`${baseUrl}/api/scenario`, {
     method: "POST",
@@ -201,6 +219,7 @@ async function createScenarioViaApi(baseUrl, {
       question,
       rounds,
       num_agents: numAgents,
+      mode,
       visualization_enabled: visualizationEnabled,
     }),
   });
@@ -218,6 +237,16 @@ async function getScenarioViaApi(baseUrl, scenarioId) {
   return response.json();
 }
 
+async function findScenarioViaApi(baseUrl, scenarioId) {
+  if (!scenarioId) return null;
+  const response = await fetch(`${baseUrl}/api/scenario/${scenarioId}`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to get scenario ${scenarioId}: ${response.status} ${await response.text()}`);
+  }
+  return response.json();
+}
+
 async function deleteScenarioViaApi(baseUrl, scenarioId) {
   const response = await fetch(`${baseUrl}/api/scenario/${scenarioId}`, { method: "DELETE" });
   if (!response.ok) {
@@ -228,12 +257,81 @@ async function deleteScenarioViaApi(baseUrl, scenarioId) {
 
 async function waitForScenarioStatus(baseUrl, scenarioId, predicate, timeout = 60000, label = "scenario status") {
   const start = Date.now();
+  let lastError = null;
   while (Date.now() - start < timeout) {
-    const scenario = await getScenarioViaApi(baseUrl, scenarioId);
-    if (predicate(scenario)) return scenario;
+    try {
+      const scenario = await getScenarioViaApi(baseUrl, scenarioId);
+      lastError = null;
+      if (predicate(scenario)) return scenario;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = message;
+      if (!message.includes(" 500 ")) {
+        throw error;
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+  if (lastError) {
+    throw new Error(`Timed out waiting for ${label} on scenario ${scenarioId}; last error: ${lastError}`);
+  }
   throw new Error(`Timed out waiting for ${label} on scenario ${scenarioId}`);
+}
+
+async function resolveMatrixScenario(baseUrl, sample) {
+  const requestedScenarioId = sample.scenario_id ?? null;
+  const fallbackConfig = MATRIX_SCENARIO_FALLBACKS[sample.theme] ?? null;
+  const fallbackQuestion = sample.question ?? fallbackConfig?.question ?? null;
+  let scenario = null;
+  try {
+    scenario = await findScenarioViaApi(baseUrl, requestedScenarioId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!requestedScenarioId || !message.includes(requestedScenarioId)) {
+      throw error;
+    }
+  }
+  let scenarioId = requestedScenarioId;
+  let createdAtRuntime = false;
+
+  if (!scenario) {
+    if (!fallbackQuestion) {
+      throw new Error(
+        `Matrix sample ${sample.theme} is missing scenario ${requestedScenarioId ?? "(none)"} and has no fallback question.`,
+      );
+    }
+    const created = await createScenarioViaApi(baseUrl, {
+      question: fallbackQuestion,
+      rounds: sample.rounds ?? fallbackConfig?.rounds ?? 1,
+      numAgents: sample.num_agents ?? fallbackConfig?.numAgents ?? 3,
+      mode: sample.mode ?? "blackboard",
+      visualizationEnabled: sample.visualization_enabled ?? true,
+    });
+    scenarioId = created.id;
+    createdAtRuntime = true;
+  }
+
+  scenario = await waitForScenarioStatus(
+    baseUrl,
+    scenarioId,
+    (candidate) => candidate.status === "done" || candidate.status === "error",
+    createdAtRuntime ? 180000 : 60000,
+    createdAtRuntime ? "runtime-created matrix scenario" : "matrix scenario readiness",
+  );
+
+  if (scenario.status !== "done") {
+    throw new Error(
+      `Matrix sample ${sample.theme} resolved to scenario ${scenarioId} but finished with status=${scenario.status}.`,
+    );
+  }
+
+  return {
+    requestedScenarioId,
+    scenarioId,
+    createdAtRuntime,
+    sceneTheme: scenario.scene_theme ?? sample.scene_theme ?? null,
+    question: scenario.question ?? fallbackQuestion,
+  };
 }
 
 async function runReplayFlow(page, {
@@ -473,15 +571,24 @@ async function runReplayCornerCase(page, {
 
   const branchSelect = page.locator('.theater-panel__filters select').nth(0);
   const branchOptions = await branchSelect.locator('option').count();
+  let replayModeTriggered = false;
   if (branchOptions > 1) {
     const targetBranch = await branchSelect.locator('option').nth(1).getAttribute('value');
-    if (targetBranch) await branchSelect.selectOption(targetBranch);
+    if (targetBranch) {
+      await branchSelect.selectOption(targetBranch);
+      replayModeTriggered = true;
+    }
   }
 
   const roundButtons = page.locator('button[aria-label^=\"Jump to replay round\"]');
   const roundButtonCount = await roundButtons.count();
   if (roundButtonCount > 1) {
     await roundButtons.nth(roundButtonCount - 1).click();
+    replayModeTriggered = true;
+  }
+
+  if (!replayModeTriggered) {
+    await page.getByRole("button", { name: /重播|Replay/ }).click();
   }
 
   const replayed = await waitForAutomation(
@@ -845,6 +952,7 @@ async function runMatrixSuite(args) {
   try {
     const summaries = [];
     for (const sample of samples) {
+      const resolvedScenario = await resolveMatrixScenario(args.baseUrl, sample);
       const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
       const replayDir = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-proof`);
       const replayShot = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-headed.png`);
@@ -852,18 +960,22 @@ async function runMatrixSuite(args) {
       try {
         const replay = await runReplayFlow(page, {
           baseUrl: args.baseUrl,
-          scenarioId: sample.scenario_id,
+          scenarioId: resolvedScenario.scenarioId,
           outputDir: replayDir,
           replayScreenshotPath: replayShot,
         });
         const result = await runResultFlow(page, {
           baseUrl: args.baseUrl,
-          scenarioId: sample.scenario_id,
+          scenarioId: resolvedScenario.scenarioId,
           outputDir: resultDir,
         });
         summaries.push({
           theme: sample.theme,
-          scenarioId: sample.scenario_id,
+          scenarioId: resolvedScenario.scenarioId,
+          requestedScenarioId: resolvedScenario.requestedScenarioId,
+          createdAtRuntime: resolvedScenario.createdAtRuntime,
+          question: resolvedScenario.question,
+          expectedSceneTheme: sample.scene_theme ?? null,
           replay,
           result,
         });
@@ -890,6 +1002,14 @@ async function runCornersSuite(args) {
   try {
     const outputDir = args.outputDir;
     const cases = {};
+    const governanceReplaySample = await resolveMatrixScenario(args.baseUrl, {
+      theme: "governance",
+      scenario_id: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+    });
+    const lawShareSample = await resolveMatrixScenario(args.baseUrl, {
+      theme: "law",
+      scenario_id: "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+    });
 
     cases.branch_prediction = await runPredictionVariant(page, {
       baseUrl: args.baseUrl,
@@ -935,19 +1055,19 @@ async function runCornersSuite(args) {
 
     cases.replay_skip_switch = await runReplayCornerCase(page, {
       baseUrl: args.baseUrl,
-      scenarioId: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+      scenarioId: governanceReplaySample.scenarioId,
       outputDir: path.join(outputDir, "replay-skip-switch"),
     });
 
     cases.share_context = await runShareContextCase(page, {
       baseUrl: args.baseUrl,
-      scenarioId: "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+      scenarioId: lawShareSample.scenarioId,
       outputDir: path.join(outputDir, "share-context"),
     });
 
     cases.share_retry = await runShareRetryCase(page, {
       baseUrl: args.baseUrl,
-      scenarioId: "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+      scenarioId: lawShareSample.scenarioId,
       outputDir: path.join(outputDir, "share-retry"),
     });
 

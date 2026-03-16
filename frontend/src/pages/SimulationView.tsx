@@ -104,9 +104,9 @@ export function SimulationView() {
   const error = useSimulationStore((s) => s.error);
   const loadScenario = useSimulationStore((s) => s.loadScenario);
   const isSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
+  const visualizationEnabled = useSimulationStore((s) => s.visualizationEnabled);
   const viewMode = useSimulationStore((s) => s.viewMode);
   const currentRound = useSimulationStore((s) => s.currentRound);
-  // visualizationEnabled is managed internally by the store; no longer needed in the view
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
 
   // Intervention modal state
@@ -151,6 +151,12 @@ export function SimulationView() {
     && !isSimulationComplete
     && status === 'simulating'
     && currentRound === 0;
+  const canToggleViewMode = viewMode === 'theater' || visualizationEnabled;
+  const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
+    ? (isZh
+      ? '该场景未启用像素剧场，请返回首页开启像素剧场后重新开始推演。'
+      : 'Pixel Theater was not enabled for this scenario. Go back and start it with Pixel Theater enabled.')
+    : undefined;
   const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
   const replayBranchOptions = useMemo(
     () => buildReplayBranchOptions(branches, messages),
@@ -273,7 +279,7 @@ export function SimulationView() {
         currentRound,
         totalRounds: scenario?.total_rounds ?? null,
         viewMode,
-        visualizationEnabled: viewMode === 'theater',
+        visualizationEnabled,
         isSimulationComplete,
         messageCount: messages.length,
         agentCount: agents.length,
@@ -286,7 +292,7 @@ export function SimulationView() {
         error: error || null,
         controls: {
           can_go_back: true,
-          can_toggle_view_mode: true,
+          can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canOpenGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCardsNow,
           can_open_prediction: !isSimulationComplete,
@@ -364,7 +370,9 @@ export function SimulationView() {
     status,
     hasActiveModal,
     isWarmupPhase,
+    canToggleViewMode,
     viewMode,
+    visualizationEnabled,
   ]);
 
   useEffect(() => {
@@ -547,7 +555,7 @@ export function SimulationView() {
         currentRound,
         totalRounds: scenario?.total_rounds ?? null,
         viewMode,
-        visualizationEnabled: viewMode === 'theater',
+        visualizationEnabled,
         isSimulationComplete,
         messageCount: messages.length,
         agentCount: agents.length,
@@ -560,7 +568,7 @@ export function SimulationView() {
         error: error || null,
         controls: {
           can_go_back: true,
-          can_toggle_view_mode: true,
+          can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canUseGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCards,
           can_open_prediction: !isSimulationComplete,
@@ -624,7 +632,9 @@ export function SimulationView() {
     showGameplayCards,
     showPrediction,
     status,
+    canToggleViewMode,
     viewMode,
+    visualizationEnabled,
   ]);
 
   useEffect(() => {
@@ -718,11 +728,13 @@ export function SimulationView() {
               {t('sim.status.view_results')}
             </button>
           )}
-          {/* V2: Theater mode toggle — always visible so users can switch anytime */}
+          {/* V2: Theater mode toggle — only enabled when the scenario has visualization data */}
           <button
             className={`view-mode-toggle ${viewMode === 'theater' ? 'view-mode-toggle--active' : ''}`}
             onClick={toggleViewMode}
             aria-label={viewMode === 'classic' ? 'Switch to Pixel Theater' : 'Switch to Classic View'}
+            disabled={!canToggleViewMode}
+            title={theaterToggleHint}
           >
             <span className="view-mode-toggle__icon">
               {viewMode === 'classic' ? '🎮' : '📊'}

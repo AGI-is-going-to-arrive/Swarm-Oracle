@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 
 const THEME_PALETTES_KEYS = [
   'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
+  'switchboard_forum',
   'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
   'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
   'frontier_colony', 'post_apocalypse', 'fantasy_kingdom',
@@ -25,7 +26,8 @@ const THEME_PALETTES_KEYS = [
 const EVENT_ANIM_KEYS = [
   'earthquake_shake', 'fire_spread', 'dark_fog_spread', 'tech_glow',
   'lightbulb_flash', 'treasure_sparkle', 'handshake_glow', 'generic_flash',
-  'debate_spotlight', 'shadow_reveal', 'player_swap', 'portal_open', 'mandate_surge',
+  'debate_spotlight', 'shadow_reveal', 'backchannel_signal', 'player_swap',
+  'portal_open', 'mandate_surge', 'evacuation_alarm',
 ];
 
 const FACTION_COLORS_KEYS = ['left', 'right', 'center', 'unknown'];
@@ -39,6 +41,7 @@ const TIME_TINT_KEYS = ['dawn', 'noon', 'dusk', 'night'];
 
 const SCENE_KEYS = [
   'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
+  'switchboard_forum',
   'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
   'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
   'frontier_colony', 'post_apocalypse', 'fantasy_kingdom',
@@ -48,8 +51,8 @@ const SCENE_KEYS = [
 ];
 
 describe('WorldScene — THEME_PALETTES coverage', () => {
-  it('covers all 26 scene themes', () => {
-    expect(THEME_PALETTES_KEYS).toHaveLength(26);
+  it('covers all 27 scene themes', () => {
+    expect(THEME_PALETTES_KEYS).toHaveLength(27);
   });
 
   it('includes all scene key names matching SCENE_KEYS', () => {
@@ -60,8 +63,8 @@ describe('WorldScene — THEME_PALETTES coverage', () => {
 });
 
 describe('WorldScene — EVENT_ANIM_CONFIGS', () => {
-  it('covers 13 event animation types', () => {
-    expect(EVENT_ANIM_KEYS).toHaveLength(13);
+  it('covers 15 event animation types', () => {
+    expect(EVENT_ANIM_KEYS).toHaveLength(15);
   });
 
   it('includes key events: earthquake, fire, fog, tech, handshake', () => {
@@ -78,6 +81,11 @@ describe('WorldScene — EVENT_ANIM_CONFIGS', () => {
 
   it('includes gameplay mandate animation', () => {
     expect(EVENT_ANIM_KEYS).toContain('mandate_surge');
+  });
+
+  it('includes backchannel and evacuation gameplay animations', () => {
+    expect(EVENT_ANIM_KEYS).toContain('backchannel_signal');
+    expect(EVENT_ANIM_KEYS).toContain('evacuation_alarm');
   });
 });
 

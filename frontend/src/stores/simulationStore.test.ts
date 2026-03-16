@@ -245,4 +245,29 @@ describe("simulationStore — scenario hydration", () => {
     expect(store.getState().visualizationEnabled).toBe(true);
     expect(store.getState().viewMode).toBe("theater");
   });
+
+  it("does not fake theater mode when the scenario was not created with visualization", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario({
+      id: "s2",
+      question: "如果互联网从未被发明？",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      visualization_enabled: false,
+      scene_theme: null,
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    store.getState().toggleViewMode();
+
+    expect(store.getState().visualizationEnabled).toBe(false);
+    expect(store.getState().viewMode).toBe("classic");
+  });
 });

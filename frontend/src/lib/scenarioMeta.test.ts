@@ -65,4 +65,41 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(canUseCard(next, 'mandate_surge', 3)).toEqual({ ok: true });
     expect(getCardCooldownRemaining(next, 'mandate_surge', 3)).toBe(0);
   });
+
+  it('persists backchannel pact usage and keeps its longer cooldown', () => {
+    const scenarioId = 'scenario-backchannel-pact';
+    const next = applyCardUsage(scenarioId, {
+      cardId: 'backchannel_pact',
+      profileId: 'trade',
+      branchId: 'branch-3',
+      branchTitle: '港区密议',
+      round: 2,
+      cost: 1,
+      directive: '以通行税减免换取关键港区在 48 小时内配合静默封锁。',
+      usedAt: '2026-03-17T03:00:00.000Z',
+    });
+
+    expect(next.cards.usageLog.at(-1)?.cardId).toBe('backchannel_pact');
+    expect(next.cooldowns.backchannel_pact?.cooldownRounds).toBe(2);
+    expect(canUseCard(next, 'backchannel_pact', 3)).toEqual({ ok: false, reason: 'cooldown' });
+    expect(canUseCard(next, 'backchannel_pact', 4)).toEqual({ ok: true });
+  });
+
+  it('allows evacuation order again on the next round', () => {
+    const scenarioId = 'scenario-evacuation-order';
+    const next = applyCardUsage(scenarioId, {
+      cardId: 'evacuation_order',
+      profileId: 'ecology',
+      branchId: 'branch-4',
+      branchTitle: '阈值撤离',
+      round: 1,
+      cost: 1,
+      directive: '优先撤离饮水断供区与儿童病患，并封锁即将失守的净化站。',
+      usedAt: '2026-03-17T03:05:00.000Z',
+    });
+
+    expect(next.cards.usageLog.at(-1)?.cardId).toBe('evacuation_order');
+    expect(getCardCooldownRemaining(next, 'evacuation_order', 1)).toBe(1);
+    expect(canUseCard(next, 'evacuation_order', 2)).toEqual({ ok: true });
+  });
 });

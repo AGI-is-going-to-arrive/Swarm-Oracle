@@ -4,7 +4,7 @@ Most visual assets in this project are **AI-generated** pixel art, created speci
 SwarmOracle 2.0. A small set of in-repo timeline marker SVG icons is handcrafted for UI readability.
 They are original works and may be freely used under the project license.
 
-## Asset Inventory (98 total)
+## Asset Inventory (99 total)
 
 ### Characters (18)
 
@@ -29,7 +29,7 @@ They are original works and may be freely used under the project license.
 | `sprite_healer.png` | Medical role |
 | `sprite_default.png` | Fallback sprite |
 
-### Scenes (26)
+### Scenes (27)
 
 | File | Description |
 |------|-------------|
@@ -37,6 +37,7 @@ They are original works and may be freely used under the project license.
 | `ancient_empire.png` | Ancient civilisation |
 | `industrial_city.png` | Industrial revolution |
 | `modern_city.png` | Contemporary era |
+| `switchboard_forum.png` | Rotating leadership and institutional switchboard chamber |
 | `surveillance_megacity.png` | Platform-governed surveillance metropolis |
 | `civic_chamber.png` | Democratic assembly chamber |
 | `law_court.png` | Constitutional court chamber |

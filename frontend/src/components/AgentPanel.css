@@ -322,3 +322,13 @@
   margin: 0;
   word-break: break-word;
 }
+
+@media (max-width: 640px) {
+  .agent-panel {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .message-list {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+}

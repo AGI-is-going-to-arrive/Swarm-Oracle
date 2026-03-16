@@ -1,9 +1,10 @@
 {
-  "generated_at": "2026-03-15",
+  "generated_at": "2026-03-17",
   "base_url": "http://127.0.0.1:18928",
   "samples": [
     {
       "theme": "governance",
+      "question": "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？",
       "scenario_id": "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
       "scene_theme": "scifi_base",
       "profile_label_zh": "治理博弈",
@@ -18,6 +19,7 @@
     },
     {
       "theme": "law",
+      "question": "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？",
       "scenario_id": "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
       "scene_theme": "modern_city",
       "profile_label_zh": "法律红线",
@@ -32,6 +34,7 @@
     },
     {
       "theme": "trade",
+      "question": "如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？",
       "scenario_id": "5be95c28-b726-4ba8-a74f-482f637d128c",
       "scene_theme": "desert_outpost",
       "profile_label_zh": "贸易绞盘",
@@ -46,6 +49,7 @@
     },
     {
       "theme": "ecology",
+      "question": "如果跨大陆淡水供应在十年内枯竭，会发生什么？",
       "scenario_id": "fda52830-e300-4a4b-840f-75e4fa003f4c",
       "scene_theme": "desert_outpost",
       "profile_label_zh": "生态阈值",
@@ -60,6 +64,7 @@
     },
     {
       "theme": "war",
+      "question": "如果世界大战在高度自动化军备时代再次爆发？",
       "scenario_id": "f867f9e0-f4ca-4cdb-976e-493614ae2248",
       "scene_theme": "space_station",
       "profile_label_zh": "战争抉择",
@@ -74,6 +79,7 @@
     },
     {
       "theme": "faith",
+      "question": "如果一则神谕成为整个奇幻王国唯一合法的统治依据，并引发异端审判、祭司联盟分裂与圣谕改写，会发生什么？",
       "scenario_id": "b87e3668-3189-4e80-8f2a-03ca016f659d",
       "scene_theme": "fantasy_kingdom",
       "profile_label_zh": "神权号角",
@@ -88,6 +94,7 @@
     },
     {
       "theme": "industry",
+      "question": "如果全球电网与工厂调度在资源瓶颈下同时失衡，会发生什么？",
       "scenario_id": "66d3571a-4785-4f56-8f50-5f7a4c3383f5",
       "scene_theme": "factory_foundry",
       "profile_label_zh": "工业与资源",
@@ -102,6 +109,7 @@
     },
     {
       "theme": "frontier",
+      "question": "如果一支远征舰队在边疆建立自治城邦并争论殖民章程，会发生什么？",
       "scenario_id": "e9767982-9430-433f-aac7-fe6fb4fb17d9",
       "scene_theme": "frontier_colony",
       "profile_label_zh": "边疆探索",
@@ -116,6 +124,7 @@
     },
     {
       "theme": "mythic",
+      "question": "如果一群法师在秘法圣所中试图改写巨龙契约，会发生什么？",
       "scenario_id": "7aea6995-2e73-4ef2-839c-cbf3e21db8b1",
       "scene_theme": "arcane_sanctum",
       "profile_label_zh": "神话秩序",
@@ -130,6 +139,7 @@
     },
     {
       "theme": "survival",
+      "question": "如果饥荒后大型避难营地与隔离区被迫合并，会发生什么？",
       "scenario_id": "1cceba2c-0344-4ec1-a826-e3792aca5853",
       "scene_theme": "refuge_compound",
       "profile_label_zh": "生存极限",
@@ -143,7 +153,23 @@
       }
     },
     {
+      "theme": "generic",
+      "question": "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？",
+      "scenario_id": "80973179-d26c-4af9-8ba0-3a68a740690f",
+      "scene_theme": "switchboard_forum",
+      "profile_label_zh": "通用博弈",
+      "completed_branch_count": 7,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-result-headed/share-generated.png"
+      }
+    },
+    {
       "theme": "governance_surveillance",
+      "question": "如果一个平台国家通过社会信用与全域监控接管城市治理，会发生什么？",
       "scenario_id": "58bd6c9f-fb36-4e5a-970c-08c4868f8ace",
       "scene_theme": "surveillance_megacity",
       "profile_label_zh": "治理博弈",
@@ -158,6 +184,7 @@
     },
     {
       "theme": "empire_palace",
+      "question": "如果一个王朝因继承危机和宫廷派系斗争而濒临内战，会发生什么？",
       "scenario_id": "f06bfe4b-20b2-4ad4-9491-b4d649f03efb",
       "scene_theme": "dynastic_palace",
       "profile_label_zh": "帝国统合",
@@ -172,6 +199,7 @@
     },
     {
       "theme": "industry_grid",
+      "question": "如果大陆级电网中枢在大停电前夜被迫实行限电，会发生什么？",
       "scenario_id": "cc47d7ce-5e74-4903-b00f-8346d5ed6ffe",
       "scene_theme": "power_grid_nexus",
       "profile_label_zh": "工业与资源",
@@ -186,6 +214,7 @@
     },
     {
       "theme": "war_logistics",
+      "question": "如果一场大战因补给线崩溃和后勤车队失序而拖入消耗战，会发生什么？",
       "scenario_id": "0c21f4c1-3a70-4594-90af-4a135bb0f58f",
       "scene_theme": "logistics_hub",
       "profile_label_zh": "战争抉择",
