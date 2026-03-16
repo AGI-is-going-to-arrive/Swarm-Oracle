@@ -334,6 +334,44 @@ async function resolveMatrixScenario(baseUrl, sample) {
   };
 }
 
+async function createRuntimeMatrixScenario(baseUrl, sample) {
+  const fallbackConfig = MATRIX_SCENARIO_FALLBACKS[sample.theme] ?? null;
+  const fallbackQuestion = sample.question ?? fallbackConfig?.question ?? null;
+  if (!fallbackQuestion) {
+    throw new Error(`Matrix sample ${sample.theme} has no fallback question for runtime creation.`);
+  }
+
+  const created = await createScenarioViaApi(baseUrl, {
+    question: fallbackQuestion,
+    rounds: sample.rounds ?? fallbackConfig?.rounds ?? 1,
+    numAgents: sample.num_agents ?? fallbackConfig?.numAgents ?? 3,
+    mode: sample.mode ?? "blackboard",
+    visualizationEnabled: sample.visualization_enabled ?? true,
+  });
+
+  const scenario = await waitForScenarioStatus(
+    baseUrl,
+    created.id,
+    (candidate) => candidate.status === "done" || candidate.status === "error",
+    180000,
+    "runtime fallback matrix scenario",
+  );
+
+  if (scenario.status !== "done") {
+    throw new Error(
+      `Runtime fallback scenario ${created.id} for ${sample.theme} finished with status=${scenario.status}.`,
+    );
+  }
+
+  return {
+    requestedScenarioId: sample.scenario_id ?? null,
+    scenarioId: scenario.id,
+    createdAtRuntime: true,
+    sceneTheme: scenario.scene_theme ?? sample.scene_theme ?? null,
+    question: scenario.question ?? fallbackQuestion,
+  };
+}
+
 async function runReplayFlow(page, {
   baseUrl,
   scenarioId,
@@ -341,38 +379,54 @@ async function runReplayFlow(page, {
   replayScreenshotPath,
 }) {
   ensureDir(outputDir);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
-  const replayStart = Date.now();
-  let payload = null;
-  while (Date.now() - replayStart < 40000) {
-    await advanceAutomationTime(page, 500);
-    payload = await readAutomation(page);
+  let settledPayload = null;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    const replayStart = Date.now();
+    let payload = null;
+    while (Date.now() - replayStart < 40000) {
+      await advanceAutomationTime(page, 500);
+      payload = await readAutomation(page);
+      if (
+        payload?.page?.kind === "simulation"
+        && payload.page?.replay_state?.available
+        && payload.scene?.scene
+        && payload.scene.scene !== "BootScene"
+        && payload.scene.scene !== "TitleScene"
+      ) {
+        break;
+      }
+      await page.waitForTimeout(250);
+    }
+
     if (
-      payload?.page?.kind === "simulation"
+      payload?.page?.kind
       && payload.page?.replay_state?.available
       && payload.scene?.scene
       && payload.scene.scene !== "BootScene"
       && payload.scene.scene !== "TitleScene"
     ) {
+      await advanceAutomationTime(page, 600);
+      await page.waitForTimeout(1200);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      settledPayload = await readAutomation(page) ?? payload;
       break;
     }
-    await page.waitForTimeout(250);
-  }
-  if (
-    !payload?.page?.kind
-    || !payload.page?.replay_state?.available
-    || !payload.scene?.scene
-    || payload.scene.scene === "BootScene"
-    || payload.scene.scene === "TitleScene"
-  ) {
-    throw new Error(
-      `Timed out waiting for completed replay state for ${scenarioId}; last scene=${payload?.scene?.scene ?? "unknown"}`,
+
+    lastError = new Error(
+      `Timed out waiting for completed replay state for ${scenarioId}; last scene=${payload?.scene?.scene ?? "unknown"} (attempt ${attempt}/2)`,
     );
+    if (attempt < 2) {
+      console.warn(`[replay] ${lastError.message} — retrying with a fresh page load`);
+    }
   }
-  await advanceAutomationTime(page, 600);
-  await page.waitForTimeout(1200);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const settledPayload = await readAutomation(page) ?? payload;
+
+  if (!settledPayload) {
+    throw lastError ?? new Error(`Replay flow failed for ${scenarioId}`);
+  }
+
   writeJson(path.join(outputDir, "state-0.json"), settledPayload);
   await saveScreenshot(page, path.join(outputDir, "shot-0.png"));
   if (replayScreenshotPath) {
@@ -952,23 +1006,56 @@ async function runMatrixSuite(args) {
   try {
     const summaries = [];
     for (const sample of samples) {
-      const resolvedScenario = await resolveMatrixScenario(args.baseUrl, sample);
       const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
       const replayDir = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-proof`);
       const replayShot = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-headed.png`);
       const resultDir = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-result-headed`);
       try {
-        const replay = await runReplayFlow(page, {
-          baseUrl: args.baseUrl,
-          scenarioId: resolvedScenario.scenarioId,
-          outputDir: replayDir,
-          replayScreenshotPath: replayShot,
-        });
-        const result = await runResultFlow(page, {
-          baseUrl: args.baseUrl,
-          scenarioId: resolvedScenario.scenarioId,
-          outputDir: resultDir,
-        });
+        let resolvedScenario = await resolveMatrixScenario(args.baseUrl, sample);
+        let replay;
+        let result;
+        let recovery = null;
+        try {
+          replay = await runReplayFlow(page, {
+            baseUrl: args.baseUrl,
+            scenarioId: resolvedScenario.scenarioId,
+            outputDir: replayDir,
+            replayScreenshotPath: replayShot,
+          });
+          result = await runResultFlow(page, {
+            baseUrl: args.baseUrl,
+            scenarioId: resolvedScenario.scenarioId,
+            outputDir: resultDir,
+          });
+        } catch (error) {
+          if (resolvedScenario.createdAtRuntime) {
+            throw error;
+          }
+
+          const originalMessage = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[matrix] ${sample.theme} sample ${resolvedScenario.scenarioId} failed (${originalMessage}); retrying with a runtime-created fallback scenario.`,
+          );
+          resolvedScenario = await createRuntimeMatrixScenario(args.baseUrl, sample);
+          recovery = {
+            fromScenarioId: sample.scenario_id ?? null,
+            reason: originalMessage,
+            strategy: "runtime_created_fallback",
+          };
+
+          replay = await runReplayFlow(page, {
+            baseUrl: args.baseUrl,
+            scenarioId: resolvedScenario.scenarioId,
+            outputDir: replayDir,
+            replayScreenshotPath: replayShot,
+          });
+          result = await runResultFlow(page, {
+            baseUrl: args.baseUrl,
+            scenarioId: resolvedScenario.scenarioId,
+            outputDir: resultDir,
+          });
+        }
+
         summaries.push({
           theme: sample.theme,
           scenarioId: resolvedScenario.scenarioId,
@@ -976,6 +1063,7 @@ async function runMatrixSuite(args) {
           createdAtRuntime: resolvedScenario.createdAtRuntime,
           question: resolvedScenario.question,
           expectedSceneTheme: sample.scene_theme ?? null,
+          recovery,
           replay,
           result,
         });

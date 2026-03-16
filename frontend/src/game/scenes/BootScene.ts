@@ -7,37 +7,20 @@
  * 3. Transitioning to TitleScene once assets are ready
  */
 import Phaser from 'phaser';
+import {
+  CHARACTER_SPRITE_KEYS,
+  ENDING_ASSET_KEYS,
+  getSceneTextureKey,
+  getThemeAssetPath,
+  SCENE_THEME_IDS,
+  UI_ASSET_KEYS,
+} from '../../lib/themeRegistry';
 
 /** All sprite keys that the game expects to be registered as textures. */
-const SPRITE_KEYS = [
-  'sprite_king', 'sprite_warrior', 'sprite_scholar', 'sprite_merchant',
-  'sprite_farmer', 'sprite_priest', 'sprite_rebel', 'sprite_diplomat',
-  'sprite_villager', 'sprite_spy', 'sprite_explorer', 'sprite_scientist',
-  'sprite_general', 'sprite_artist', 'sprite_engineer', 'sprite_noble',
-  'sprite_healer', 'sprite_default',
-] as const;
-
-/** Scene background keys matching THEME_PALETTES in WorldScene. */
-const SCENE_KEYS = [
-  'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
-  'switchboard_forum',
-  'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
-  'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
-  'frontier_colony', 'post_apocalypse', 'fantasy_kingdom', 'arcane_sanctum',
-  'faith_temple', 'refuge_compound', 'war_command', 'logistics_hub',
-  'war_battlefield', 'space_station', 'underwater_kingdom', 'desert_outpost',
-  'trade_harbor', 'ecology_wasteland',
-] as const;
-
-/** Phase 3: Ending scene keys. */
-const ENDING_KEYS = [
-  'prosperity', 'peace', 'war', 'ruin', 'tyranny', 'revolution',
-] as const;
-
-/** Phase 3: UI asset keys. */
-const UI_KEYS = [
-  'title_screen', 'minimap_frame', 'bet_panel', 'leaderboard',
-] as const;
+const SPRITE_KEYS = CHARACTER_SPRITE_KEYS;
+const SCENE_KEYS = SCENE_THEME_IDS;
+const ENDING_KEYS = ENDING_ASSET_KEYS;
+const UI_KEYS = UI_ASSET_KEYS;
 
 /** Fallback color per sprite role (used when PNG fails to load). */
 const SPRITE_FALLBACK: Record<string, { body: number; accent: number }> = {
@@ -90,8 +73,11 @@ export class BootScene extends Phaser.Scene {
       const key = file.key;
       if (SPRITE_KEYS.includes(key as typeof SPRITE_KEYS[number])) {
         this.failedSprites.add(key);
-      } else if (SCENE_KEYS.includes(key as typeof SCENE_KEYS[number])) {
-        this.failedScenes.add(key);
+      } else {
+        const failedTheme = SCENE_KEYS.find((themeId) => getSceneTextureKey(themeId) === key);
+        if (failedTheme) {
+          this.failedScenes.add(failedTheme);
+        }
       }
       // Endings and UI assets silently degrade — no fallback needed
     });
@@ -103,7 +89,7 @@ export class BootScene extends Phaser.Scene {
 
     // ── Load scene background PNGs ───────────────────────
     for (const key of SCENE_KEYS) {
-      this.load.image(`scene_${key}`, `/assets/scenes/${key}.png`);
+      this.load.image(getSceneTextureKey(key), getThemeAssetPath(key));
     }
 
     // ── Phase 3: Load ending scene backgrounds ──────────

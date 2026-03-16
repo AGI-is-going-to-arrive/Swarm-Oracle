@@ -30,6 +30,7 @@ import {
   getGameplayCardDefinition,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
 import type { StoryData, AgentInfo, PredictionInfo, Scenario } from '../types';
@@ -289,6 +290,11 @@ export default function ResultView() {
         isZh,
       )
     : null;
+  const signatureArcState = useMemo(() => (
+    scenarioMeta?.archive.profileId
+      ? getGameplaySignatureArcState(scenarioMeta.archive.profileId, scenarioMeta.cards.usageLog, isZh)
+      : null
+  ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog]);
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
     profileLabel: gameplayProfileLabel,
@@ -634,6 +640,24 @@ export default function ResultView() {
               <span className="archive-summary-card__label">{t('result.archive_resonance')}</span>
               <strong>{profileResonanceLabel}</strong>
             </div>
+            {signatureArcState && (
+              <div className="archive-summary-card">
+                <span className="archive-summary-card__label">{isZh ? '题材连锁' : 'Signature Arc'}</span>
+                <strong>{signatureArcState.label}</strong>
+                <small>
+                  {signatureArcState.sequenceLabels.join(' → ')}
+                  {' · '}
+                  {signatureArcState.completedSteps}/{signatureArcState.totalSteps}
+                </small>
+              </div>
+            )}
+            {signatureArcState && (
+              <div className="archive-summary-card">
+                <span className="archive-summary-card__label">{isZh ? '情势轨道' : 'System Tracks'}</span>
+                <strong>{signatureArcState.riskLabel} {signatureArcState.riskValue}/6</strong>
+                <small>{signatureArcState.resourceLabel} {signatureArcState.resourceValue}/6</small>
+              </div>
+            )}
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_challenge_feedback')}</span>
               <strong>

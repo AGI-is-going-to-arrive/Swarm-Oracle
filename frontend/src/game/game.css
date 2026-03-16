@@ -183,6 +183,19 @@
   letter-spacing: 0.5px;
 }
 
+@media (max-width: 600px) {
+  .view-mode-toggle {
+    gap: 0;
+    padding: 6px 10px;
+    min-width: 42px;
+    justify-content: center;
+  }
+
+  .view-mode-toggle__label {
+    display: none;
+  }
+}
+
 /* ── Theater mode panel ────────────────────────────────── */
 
 .theater-panel {

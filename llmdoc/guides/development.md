@@ -71,7 +71,7 @@ npm install
 npm test
 ```
 
-- 当前前端回归套件为 **150 tests**。
+- 当前前端回归套件为 **151 tests**。
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -132,7 +132,11 @@ frontend/public/assets/scenes/
   - 11 张玩法卡题材 frame
   - 27 张 Theater 场景背景
   - 4 个 UI badge（recommended / daily challenge / archive / bet winner）
-  - 当前玩法卡总数为 10（含 `密约交易 / Backchannel Pact`、`撤离令 / Evacuation Order`）
+- 当前玩法卡总数为 10（含 `密约交易 / Backchannel Pact`、`撤离令 / Evacuation Order`）
+- 玩法卡 modal 现在还会显示：
+  - 题材专属三段式连锁事件
+  - 下一步推荐卡
+  - `风险时钟 / 资源轨道`
 
 - 已验证可用图像模型调用路径：
 
@@ -163,6 +167,21 @@ docker compose up --build
 # Frontend: http://localhost:18928
 # Backend:  http://localhost:18927
 ```
+
+- 如果后端跑在 Docker 容器里、LLM 服务跑在宿主机本地，容器内的 `LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。
+- 本轮真实验证使用的配置是：
+
+```bash
+LLM_RESPONSES_URL=http://host.docker.internal:8318/v1/chat/completions
+```
+
+- Linux 环境请改成实际可达宿主机的地址，而不是直接照抄 `host.docker.internal`。
+- `docker-compose.yml` 的 backend healthcheck 现只检查 `GET /`，不再调用会同步探测外部 LLM 的 `POST /api/health`。
+- 本轮已完成一次真实容器 smoke：
+  - `docker compose up --build -d` 成功
+  - backend 变为 `healthy`
+  - frontend 监听 `18928`
+  - 通过前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 
 ## 代码规范
 

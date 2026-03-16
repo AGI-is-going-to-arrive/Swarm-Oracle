@@ -15,7 +15,7 @@ React + TypeScript frontend for the SwarmOracle "What-If" prediction engine.
 ## 3.0 Phase B: Visual Upgrade
 
 - **GBC Palette** — 16 CSS custom properties (`--gbc-*`) for unified retro color scheme
-- **Asset Regeneration** — 18 sprites + 26 semantic scene backgrounds + 6 ending images (GBC pixel art)
+- **Asset Regeneration** — 18 runtime sprites + 27 semantic scene backgrounds + 6 ending images (GBC pixel art)
 - **TitleScene** — Typewriter subtitle, click-to-skip, shimmer scanline animation
 - **WorldScene** — Mouse parallax, typewriter bubbles, vertical wipe transitions
 
@@ -43,7 +43,8 @@ npm run dev     # → http://localhost:18928
 - **BranchNode** — Custom node with probability bar + intervene button
 - **AgentPanel** — Agent roster with pixel avatars, emotion dots, speech bubbles
 - **InterventionModal** — Butterfly Effect user intervention input
-- **GameplayCardsModal** — 8 domain-driven “director cards” that inject high-priority branch events, now including `Public Hearing`, `Resource Triage`, and `Forbidden Ritual`
+- **GameplayCardsModal** — 10 domain-driven “director cards” that inject high-priority branch events; the modal now also shows a profile-specific three-step signature arc plus lightweight `risk / resource` tracks
+- **themeRegistry.ts** — single source of truth for the 27 Theater themes, their keyword routing, profile mapping, and gameplay frame / badge asset paths
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
@@ -64,11 +65,12 @@ npm run e2e:corners
 npm run e2e:full
 ```
 
-- Current frontend test suite: **142 tests**
-- Fixed matrix sample set: **14 scenarios** (main themes + lightweight semantic variants)
-- Latest full black-box regression artifact: `frontend/output/e2e/full-regression-final/result.json`
+- Current frontend test suite: **151 tests**
+- Fixed matrix sample set: **15 scenarios** (main themes + lightweight semantic variants)
+- Latest full black-box regression artifact: `frontend/output/e2e/full-headless-20260317/result.json`
 - `scripts/e2e-suite.mjs` now writes `browser-launch.json` into the chosen output directory so you can see which browser launch profile actually ran
 - If Playwright screenshot capture stalls on font loading, the suite falls back to Chromium CDP capture instead of aborting the whole run
+- Latest Docker runtime smoke: `docker compose up --build -d` succeeded, and a proxied `POST /api/scenario` request created a Theater scenario that reached `status = done`
 - Language behavior:
   - UI labels follow the EN/ZH switcher
   - agent replies and narration follow detected input language

@@ -13,6 +13,8 @@
 
 > **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API。
 
+> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。本轮真实容器验证使用的是 `http://host.docker.internal:8318/v1/chat/completions`；Linux 请替换成实际可达宿主机的地址。
+
 ## 模拟参数
 
 | 变量 | 类型 | 默认值 | 描述 |
@@ -46,4 +48,4 @@
 |------|------|--------|------|
 | `HOST` | str | `0.0.0.0` | 监听地址 |
 | `PORT` | int | 18927 | 监听端口 |
-| `CORS_ORIGINS` | list[str] | `["http://localhost:5173", "http://localhost:9528", "http://localhost:18928"]` | CORS允许的源 |
+| `CORS_ORIGINS` | list[str] | `["http://localhost:5173", "http://localhost:9528", "http://localhost:18928"]` | CORS允许的源；Docker compose 运行时通常会额外补 `http://127.0.0.1` 与 `http://127.0.0.1:18928` |

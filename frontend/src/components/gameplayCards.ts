@@ -1,4 +1,12 @@
 import type { AgentInfo, BranchInfo } from '../types';
+import {
+  GAMEPLAY_BADGE_ASSETS,
+  GAMEPLAY_PROFILE_FRAME_ASSETS,
+  getThemeProfileId,
+  type GameplayProfileId,
+} from '../lib/themeRegistry';
+
+export type { GameplayProfileId } from '../lib/themeRegistry';
 
 export type GameplayCardId =
   | 'civilization_debate'
@@ -33,44 +41,11 @@ export interface GameplayCardPromptInput {
   secondaryAgentId?: string;
   sourceBranchTitle?: string;
   customDirective?: string;
+  signatureArcLabel?: string;
+  signatureArcProgress?: string;
+  systemTrackSummary?: string;
   isZh: boolean;
 }
-
-export type GameplayProfileId =
-  | 'governance'
-  | 'war'
-  | 'empire'
-  | 'industry'
-  | 'trade'
-  | 'law'
-  | 'faith'
-  | 'ecology'
-  | 'frontier'
-  | 'mythic'
-  | 'survival'
-  | 'generic';
-
-export const GAMEPLAY_PROFILE_FRAME_ASSETS: Record<GameplayProfileId, string> = {
-  governance: '/assets/ui/generated/gameplay_card_frame_governance.png',
-  war: '/assets/ui/generated/gameplay_card_frame_war.png',
-  empire: '/assets/ui/generated/gameplay_card_frame_empire.png',
-  industry: '/assets/ui/generated/gameplay_card_frame_industry.png',
-  trade: '/assets/ui/generated/gameplay_card_frame_trade.png',
-  law: '/assets/ui/generated/gameplay_card_frame_law.png',
-  faith: '/assets/ui/generated/gameplay_card_frame_faith.png',
-  ecology: '/assets/ui/generated/gameplay_card_frame_ecology.png',
-  frontier: '/assets/ui/generated/gameplay_card_frame_frontier.png',
-  mythic: '/assets/ui/generated/gameplay_card_frame_mythic.png',
-  survival: '/assets/ui/generated/gameplay_card_frame_survival.png',
-  generic: '/assets/ui/generated/gameplay_panel.png',
-};
-
-export const GAMEPLAY_BADGE_ASSETS = {
-  recommended: '/assets/ui/generated/badge_recommended.png',
-  dailyChallenge: '/assets/ui/generated/badge_daily_challenge.png',
-  archiveRecord: '/assets/ui/generated/badge_archive_record.png',
-  betWinner: '/assets/ui/generated/badge_bet_winner.png',
-} as const;
 
 export type GameplayBadgeId =
   | 'recommended'
@@ -94,6 +69,22 @@ interface GameplayProfileHeuristics {
   primaryRoleKeywords?: string[];
   secondaryRoleKeywords?: string[];
   sourceBranchKeywords?: string[];
+}
+
+interface GameplayUsageLike {
+  cardId: GameplayCardId;
+  profileId: GameplayProfileId;
+  round: number;
+}
+
+interface GameplaySignatureArcDefinition {
+  labelZh: string;
+  labelEn: string;
+  sequence: GameplayCardId[];
+  riskLabelZh: string;
+  riskLabelEn: string;
+  resourceLabelZh: string;
+  resourceLabelEn: string;
 }
 
 export const GAMEPLAY_CARD_DEFS: GameplayCardDefinition[] = [
@@ -816,28 +807,6 @@ const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = 
   },
 };
 
-const GAMEPLAY_PROFILE_FRAME_SRC: Record<GameplayProfileId, string> = {
-  governance: '/assets/ui/generated/gameplay_card_frame_governance.png',
-  war: '/assets/ui/generated/gameplay_card_frame_war.png',
-  empire: '/assets/ui/generated/gameplay_card_frame_empire.png',
-  industry: '/assets/ui/generated/gameplay_card_frame_industry.png',
-  trade: '/assets/ui/generated/gameplay_card_frame_trade.png',
-  law: '/assets/ui/generated/gameplay_card_frame_law.png',
-  faith: '/assets/ui/generated/gameplay_card_frame_faith.png',
-  ecology: '/assets/ui/generated/gameplay_card_frame_ecology.png',
-  frontier: '/assets/ui/generated/gameplay_card_frame_frontier.png',
-  mythic: '/assets/ui/generated/gameplay_card_frame_mythic.png',
-  survival: '/assets/ui/generated/gameplay_card_frame_survival.png',
-  generic: '/assets/ui/generated/gameplay_panel.png',
-};
-
-const GAMEPLAY_BADGE_SRC: Record<GameplayBadgeId, string> = {
-  recommended: '/assets/ui/generated/badge_recommended.png',
-  daily_challenge: '/assets/ui/generated/badge_daily_challenge.png',
-  archive_record: '/assets/ui/generated/badge_archive_record.png',
-  bet_winner: '/assets/ui/generated/badge_bet_winner.png',
-};
-
 const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuristics>> = {
   governance: {
     primaryRoleKeywords: ['治理', '议会', '委员', 'govern', 'council', 'minister', 'oversight'],
@@ -896,36 +865,6 @@ const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuri
   },
 };
 
-const THEME_TO_PROFILE: Partial<Record<string, GameplayProfileId>> = {
-  scifi_base: 'governance',
-  surveillance_megacity: 'governance',
-  civic_chamber: 'governance',
-  modern_city: 'governance',
-  switchboard_forum: 'generic',
-  law_court: 'law',
-  war_battlefield: 'war',
-  logistics_hub: 'war',
-  war_command: 'war',
-  imperial_forum: 'empire',
-  dynastic_palace: 'empire',
-  ancient_empire: 'empire',
-  medieval_village: 'empire',
-  power_grid_nexus: 'industry',
-  factory_foundry: 'industry',
-  industrial_city: 'industry',
-  trade_harbor: 'trade',
-  desert_outpost: 'trade',
-  frontier_colony: 'frontier',
-  space_station: 'frontier',
-  ecology_wasteland: 'ecology',
-  underwater_kingdom: 'ecology',
-  arcane_sanctum: 'mythic',
-  faith_temple: 'faith',
-  fantasy_kingdom: 'mythic',
-  refuge_compound: 'survival',
-  post_apocalypse: 'survival',
-};
-
 const KEYWORD_TO_PROFILE: Array<[GameplayProfileId, string[]]> = [
   ['generic', ['随机交换负责人', '随机交换一次负责人', '每周随机交换一次负责人', '轮换负责人', '抽签换帅', '随机换帅', '每周换负责人', '所有关键城市都必须每三十天由抽签产生的临时委员会接管', '抽签产生的临时委员会', '如果每一项重大决策都必须交给轮值外部评审团重新裁决', '轮值外部评审团重新裁决', '轮值外部评审团', 'lottery-picked emergency committee', 'temporary lottery committee', 'lottery committee', 'rotating external review board', 'every high-stakes decision had to be re-approved by a rotating external review board', 'swap leaders', 'leader shuffle', 'rotating leadership', 'random leadership', 'weekly leadership shuffle']],
   ['law', ['法院', '法庭', '法律', '合规', '宪法', '宪章', '司法', '审计', '否决', 'court', 'legal', 'constitutional', 'judicial', 'compliance', 'audit', 'veto']],
@@ -940,6 +879,130 @@ const KEYWORD_TO_PROFILE: Array<[GameplayProfileId, string[]]> = [
   ['mythic', ['奇幻', '魔法', '龙', '巫师', '法师', '秘法', '奥术', '符文', '巨龙', 'fantasy', 'magic', 'dragon', 'wizard', 'arcane', 'rune', 'sorcerer']],
   ['survival', ['末日', '崩塌', '灾难', '灭绝', 'survival', 'collapse', 'apocalypse', 'disaster', 'extinction']],
 ];
+
+const PROFILE_SIGNATURE_ARCS: Record<GameplayProfileId, GameplaySignatureArcDefinition> = {
+  governance: {
+    labelZh: '治理听证链',
+    labelEn: 'Governance Hearing Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'mandate_surge'],
+    riskLabelZh: '权威噪声',
+    riskLabelEn: 'Authority Noise',
+    resourceLabelZh: '审议筹码',
+    resourceLabelEn: 'Review Leverage',
+  },
+  war: {
+    labelZh: '战线止损链',
+    labelEn: 'Frontline Recovery Arc',
+    sequence: ['public_hearing', 'evacuation_order', 'resource_triage'],
+    riskLabelZh: '升级时钟',
+    riskLabelEn: 'Escalation Clock',
+    resourceLabelZh: '补给余量',
+    resourceLabelEn: 'Supply Margin',
+  },
+  empire: {
+    labelZh: '帝国安抚链',
+    labelEn: 'Imperial Pacification Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'resource_triage'],
+    riskLabelZh: '行省裂缝',
+    riskLabelEn: 'Provincial Friction',
+    resourceLabelZh: '统御余量',
+    resourceLabelEn: 'Imperial Buffer',
+  },
+  industry: {
+    labelZh: '停机调度链',
+    labelEn: 'Shutdown Dispatch Arc',
+    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
+    riskLabelZh: '停摆时钟',
+    riskLabelEn: 'Shutdown Clock',
+    resourceLabelZh: '产能缓冲',
+    resourceLabelEn: 'Throughput Buffer',
+  },
+  trade: {
+    labelZh: '港口博弈链',
+    labelEn: 'Harbor Leverage Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'evacuation_order'],
+    riskLabelZh: '封锁噪声',
+    riskLabelEn: 'Blockade Noise',
+    resourceLabelZh: '航道筹码',
+    resourceLabelEn: 'Route Leverage',
+  },
+  law: {
+    labelZh: '程序急刹链',
+    labelEn: 'Procedural Brake Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'human_takeover'],
+    riskLabelZh: '程序风险',
+    riskLabelEn: 'Procedure Risk',
+    resourceLabelZh: '复核余量',
+    resourceLabelEn: 'Review Buffer',
+  },
+  faith: {
+    labelZh: '圣谕偏转链',
+    labelEn: 'Sacred Divergence Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'forbidden_ritual'],
+    riskLabelZh: '异端时钟',
+    riskLabelEn: 'Heresy Clock',
+    resourceLabelZh: '圣权余量',
+    resourceLabelEn: 'Sacred Margin',
+  },
+  ecology: {
+    labelZh: '阈值撤离链',
+    labelEn: 'Threshold Retreat Arc',
+    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
+    riskLabelZh: '阈值时钟',
+    riskLabelEn: 'Threshold Clock',
+    resourceLabelZh: '韧性余量',
+    resourceLabelEn: 'Resilience Buffer',
+  },
+  frontier: {
+    labelZh: '远征续航链',
+    labelEn: 'Expedition Sustain Arc',
+    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
+    riskLabelZh: '失压时钟',
+    riskLabelEn: 'Pressure-Loss Clock',
+    resourceLabelZh: '生命维持',
+    resourceLabelEn: 'Life Support',
+  },
+  mythic: {
+    labelZh: '禁术裂变链',
+    labelEn: 'Arcane Rupture Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'forbidden_ritual'],
+    riskLabelZh: '反噬时钟',
+    riskLabelEn: 'Backlash Clock',
+    resourceLabelZh: '奥术余量',
+    resourceLabelEn: 'Arcane Buffer',
+  },
+  survival: {
+    labelZh: '避难分诊链',
+    labelEn: 'Shelter Triage Arc',
+    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
+    riskLabelZh: '崩塌时钟',
+    riskLabelEn: 'Collapse Clock',
+    resourceLabelZh: '生存余量',
+    resourceLabelEn: 'Survival Buffer',
+  },
+  generic: {
+    labelZh: '通用转向链',
+    labelEn: 'General Pivot Arc',
+    sequence: ['public_hearing', 'backchannel_pact', 'resource_triage'],
+    riskLabelZh: '分歧时钟',
+    riskLabelEn: 'Tension Clock',
+    resourceLabelZh: '转圜筹码',
+    resourceLabelEn: 'Pivot Leverage',
+  },
+};
+
+const CARD_SYSTEM_EFFECTS: Record<GameplayCardId, { risk: number; resource: number }> = {
+  civilization_debate: { risk: 1, resource: 0 },
+  spy_infiltrate: { risk: 2, resource: -1 },
+  backchannel_pact: { risk: 1, resource: 1 },
+  human_takeover: { risk: 1, resource: 0 },
+  spacetime_rift: { risk: 2, resource: 0 },
+  mandate_surge: { risk: 2, resource: -1 },
+  evacuation_order: { risk: 1, resource: 1 },
+  public_hearing: { risk: 1, resource: 1 },
+  resource_triage: { risk: -1, resource: 2 },
+  forbidden_ritual: { risk: 3, resource: -2 },
+};
 
 export function getGameplayCardDefinition(cardId: GameplayCardId): GameplayCardDefinition {
   return GAMEPLAY_CARD_DEFS.find((card) => card.id === cardId) ?? GAMEPLAY_CARD_DEFS[0];
@@ -967,8 +1030,9 @@ export function inferGameplayProfile(
 
   // Question keywords should define the gameplay profile. Scene theme is only
   // a fallback when the question itself does not clearly map to a profile.
-  if (scores.size === 0 && sceneTheme && THEME_TO_PROFILE[sceneTheme]) {
-    addScore(THEME_TO_PROFILE[sceneTheme] as GameplayProfileId, 1);
+  const themedProfileId = getThemeProfileId(sceneTheme);
+  if (scores.size === 0 && themedProfileId) {
+    addScore(themedProfileId, 1);
   }
 
   let bestProfileId: GameplayProfileId | null = null;
@@ -1008,15 +1072,79 @@ export function getGameplayCardDirectivePreview(
 }
 
 export function getGameplayProfileFrameSrc(profileId: GameplayProfileId): string {
-  return GAMEPLAY_PROFILE_FRAME_SRC[profileId];
+  return GAMEPLAY_PROFILE_FRAME_ASSETS[profileId];
 }
 
 export function getGameplayBadgeSrc(badgeId: GameplayBadgeId): string {
-  return GAMEPLAY_BADGE_SRC[badgeId];
+  if (badgeId === 'recommended') return GAMEPLAY_BADGE_ASSETS.recommended;
+  if (badgeId === 'daily_challenge') return GAMEPLAY_BADGE_ASSETS.dailyChallenge;
+  if (badgeId === 'archive_record') return GAMEPLAY_BADGE_ASSETS.archiveRecord;
+  return GAMEPLAY_BADGE_ASSETS.betWinner;
 }
 
-export function getRecommendedGameplayCards(profileId: GameplayProfileId): GameplayCardId[] {
-  return GAMEPLAY_PROFILES[profileId].recommendedCards;
+export function getGameplaySignatureArc(profileId: GameplayProfileId, isZh: boolean) {
+  const arc = PROFILE_SIGNATURE_ARCS[profileId];
+  return {
+    ...arc,
+    label: isZh ? arc.labelZh : arc.labelEn,
+    riskLabel: isZh ? arc.riskLabelZh : arc.riskLabelEn,
+    resourceLabel: isZh ? arc.resourceLabelZh : arc.resourceLabelEn,
+  };
+}
+
+export function getGameplaySignatureArcState(
+  profileId: GameplayProfileId,
+  usages: GameplayUsageLike[],
+  isZh: boolean,
+) {
+  const arc = getGameplaySignatureArc(profileId, isZh);
+  const relevantUsages = usages
+    .filter((usage) => usage.profileId === profileId)
+    .sort((a, b) => a.round - b.round);
+
+  let matchedSteps = 0;
+  for (const usage of relevantUsages) {
+    if (usage.cardId === arc.sequence[matchedSteps]) {
+      matchedSteps += 1;
+      if (matchedSteps === arc.sequence.length) break;
+    }
+  }
+
+  const riskValue = relevantUsages.reduce((sum, usage) => sum + CARD_SYSTEM_EFFECTS[usage.cardId].risk, 0);
+  const resourceValue = relevantUsages.reduce((sum, usage) => sum + CARD_SYSTEM_EFFECTS[usage.cardId].resource, 0);
+  const normalizedRisk = Math.max(0, Math.min(6, riskValue));
+  const normalizedResource = Math.max(0, Math.min(6, 3 + resourceValue));
+  const nextCardId = arc.sequence[matchedSteps] ?? null;
+
+  return {
+    ...arc,
+    completedSteps: matchedSteps,
+    totalSteps: arc.sequence.length,
+    completed: matchedSteps >= arc.sequence.length,
+    nextCardId,
+    sequenceLabels: arc.sequence.map((cardId) => getGameplayCardLabel(cardId, isZh)),
+    riskValue: normalizedRisk,
+    resourceValue: normalizedResource,
+  };
+}
+
+export function getRecommendedGameplayCards(
+  profileId: GameplayProfileId,
+  usages: GameplayUsageLike[] = [],
+): GameplayCardId[] {
+  const cards = [...GAMEPLAY_PROFILES[profileId].recommendedCards];
+  if (usages.length === 0) {
+    return cards;
+  }
+  const arcState = getGameplaySignatureArcState(profileId, usages, true);
+  if (!arcState.nextCardId) {
+    return cards;
+  }
+
+  return [
+    arcState.nextCardId,
+    ...cards.filter((cardId) => cardId !== arcState.nextCardId),
+  ];
 }
 
 function unreachableGameplayCard(cardId: never): never {
@@ -1031,6 +1159,25 @@ function resolveAgentName(agentsById: Record<string, AgentInfo>, agentId?: strin
 function fallbackDirective(customDirective: string | undefined, fallback: string): string {
   const trimmed = customDirective?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function buildSignatureArcContextLines(
+  isZh: boolean,
+  signatureArcLabel?: string,
+  signatureArcProgress?: string,
+  systemTrackSummary?: string,
+): string[] {
+  const lines: string[] = [];
+  if (signatureArcLabel) {
+    lines.push(isZh ? `题材连锁：${signatureArcLabel}` : `Signature arc: ${signatureArcLabel}`);
+  }
+  if (signatureArcProgress) {
+    lines.push(isZh ? `当前进度：${signatureArcProgress}` : `Current progress: ${signatureArcProgress}`);
+  }
+  if (systemTrackSummary) {
+    lines.push(isZh ? `情势轨道：${systemTrackSummary}` : `System tracks: ${systemTrackSummary}`);
+  }
+  return lines;
 }
 
 function buildDirectorOverridePrefix(isZh: boolean): string[] {
@@ -1216,6 +1363,9 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
     secondaryAgentId,
     sourceBranchTitle,
     customDirective,
+    signatureArcLabel,
+    signatureArcProgress,
+    systemTrackSummary,
     isZh,
   } = input;
 
@@ -1238,6 +1388,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请在下一轮强制安排 ${primaryAgent} 与 ${secondaryAgent} 进行一场公开辩论，其余 agent 必须引用、反驳或放大这场辩论的观点。`,
           `辩题：${fallbackDirective(customDirective, directive)}`,
           '要求：让这场辩论改变后续讨论重心，并显式体现不同阵营的张力。',
@@ -1250,6 +1401,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让 ${primaryAgent} 在下一轮成为隐藏议程的间谍角色，但不要直接公开其身份。`,
           `隐藏任务：${fallbackDirective(customDirective, directive)}`,
           '要求：其他 agent 只能从措辞、立场偏移和策略建议里逐渐察觉异常。',
@@ -1262,6 +1414,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让 ${primaryAgent} 与 ${secondaryAgent} 绕开公开议程，在下一轮私下达成一份暂不曝光的密约：${fallbackDirective(customDirective, directive)}`,
           '要求：明确双方各自交换了什么筹码、红线或保护承诺，不能只写成模糊的“秘密合作”。',
           '持续效果：后续轮次要体现说法异常趋同、行动配合、外部阵营误判，或因密约泄漏引发新的裂痕。',
@@ -1273,6 +1426,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请在下一轮把 ${primaryAgent} 的发言改为由用户直接接管，并把下面这段内容视为该角色的真实表态。`,
           `用户输入：${fallbackDirective(customDirective, directive)}`,
           '要求：其他 agent 必须把这段输入当作真实政治动作继续推演。',
@@ -1286,6 +1440,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
           `信息来源分支：${sourceBranchTitle || '另一条世界线'}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让来自另一条世界线的一条关键信息泄漏到当前分支：${fallbackDirective(customDirective, directive)}`,
           '要求：把它写成一个突然出现的证据、传闻或被截获的信号，并让当前讨论因此转向。',
           '持续效果：该信息必须改变当前世界线的判断、优先级或风险感知，并在后续轮次持续产生余波。',
@@ -1297,6 +1452,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让当前世界线突然遭遇一波公开且无法忽视的民意/合法性冲击：${fallbackDirective(customDirective, directive)}`,
           '要求：把它写成街头浪潮、请愿、罢工、神殿号召、殖民地集体请命或其他群众性信号，让所有 agent 都必须明确表态。',
           '持续效果：后续轮次要继续体现这波冲击对联盟关系、政策优先级、执行正当性或风险感知的持续影响。',
@@ -1308,6 +1464,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让 ${primaryAgent} 在下一轮发布一项必须立刻执行的撤离、封锁或转运命令：${fallbackDirective(customDirective, directive)}`,
           '要求：明确谁先撤、谁被限留、哪些通道关闭或开辟、哪些物资与名额必须优先保障，不能只写“大家撤离”。',
           '持续效果：后续轮次要继续体现秩序压力、失序风险、抛弃感、后勤拥堵或新结盟带来的余波。',
@@ -1319,6 +1476,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让当前世界线立即进入一场无法跳过的公开听证：${fallbackDirective(customDirective, directive)}`,
           '要求：至少让三个不同立场/阵营拿出证据、条款、账本、代价或红线，不能只重复立场口号。',
           '持续效果：后续轮次要继续引用这场听证暴露出的事实与责任链，并让联盟、优先级或信任结构发生变化。',
@@ -1330,6 +1488,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让当前世界线立刻进入一轮公开且残酷的资源分诊：${fallbackDirective(customDirective, directive)}`,
           '要求：明确谁先获得水、粮、药品、运力、氧气、算力或撤离资格，谁被限供、延后或牺牲，不能只给抽象口号。',
           '持续效果：后续轮次要继续体现这次分诊造成的秩序压力、群体反应、联盟变化或生存代价。',
@@ -1341,6 +1500,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
           `当前 What-If：${question}`,
           `场景主题：${sceneTheme || '当前世界线'}`,
           `目标分支：${targetBranchTitle}`,
+          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
           `请让当前世界线立刻动用一项代价巨大、可能不可逆的禁术/秘仪/例外条款：${fallbackDirective(customDirective, directive)}`,
           '要求：明确这次举动要牺牲什么、冒犯哪条旧秩序、以及为什么各方仍被迫接受它，不能只写成抽象奇观。',
           '持续效果：后续轮次必须持续体现禁术带来的代价、裂痕、反噬或新的依赖关系。',
@@ -1358,6 +1518,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Force ${primaryAgent} and ${secondaryAgent} into a public debate in the next round.`,
         `Debate topic: ${fallbackDirective(customDirective, directive)}`,
         'Other agents must quote, oppose, or amplify that debate and let it reshape the branch momentum.',
@@ -1370,6 +1531,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Turn ${primaryAgent} into a covert infiltrator in the next round without openly revealing the identity.`,
         `Hidden mission: ${fallbackDirective(customDirective, directive)}`,
         'Other agents should only detect the anomaly through rhetoric, stance drift, and suspicious strategy proposals.',
@@ -1382,6 +1544,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Force ${primaryAgent} and ${secondaryAgent} to strike an off-book pact in the next round: ${fallbackDirective(customDirective, directive)}`,
         'Spell out what leverage, protection, access, or silence each side trades instead of vague secret cooperation.',
         'Persistent effect: later rounds should reflect suspicious alignment, coordinated moves, strategic blind spots, or fractures once the pact leaks.',
@@ -1393,6 +1556,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Let the user directly take over ${primaryAgent}'s next-round statement and treat the following as their authentic position.`,
         `User input: ${fallbackDirective(customDirective, directive)}`,
         'All other agents must respond as if this was a real move by that character.',
@@ -1406,6 +1570,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
         `Source branch: ${sourceBranchTitle || 'another timeline'}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Leak this signal from the other timeline into the current branch: ${fallbackDirective(customDirective, directive)}`,
         'Present it as intercepted evidence, rumor, or a temporal anomaly that forces the branch discussion to pivot.',
         'Persistent effect: the leak must keep reshaping the branch’s priorities or risk model in the rounds that follow.',
@@ -1417,6 +1582,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Hit the branch with a public legitimacy shock that no actor can ignore: ${fallbackDirective(customDirective, directive)}`,
         'Frame it as a strike wave, petition, sacred uprising, colony-wide demand, or any mass signal that forces every agent to answer in public.',
         'Persistent effect: later rounds should keep reflecting how this mandate reshapes alliances, priorities, and perceived legitimacy.',
@@ -1428,6 +1594,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Make ${primaryAgent} issue an immediate evacuation, lockdown, or emergency transfer order: ${fallbackDirective(customDirective, directive)}`,
         'Specify who gets evacuated first, who is left waiting, which corridors or ports open or close, and what resources are protected instead of saying everyone simply leaves.',
         'Persistent effect: later rounds should keep reflecting panic, coordination gains, moral backlash, logistics jams, or new alliances caused by the order.',
@@ -1439,6 +1606,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Force the branch into an immediate public hearing: ${fallbackDirective(customDirective, directive)}`,
         'At least three distinct factions must surface evidence, terms, ledgers, costs, or non-negotiable lines instead of repeating slogans.',
         'Persistent effect: later rounds should keep citing the facts and accountability links exposed by the hearing, with visible shifts in trust, priorities, or alliances.',
@@ -1450,6 +1618,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Force the branch into a visible round of resource triage: ${fallbackDirective(customDirective, directive)}`,
         'Make the branch spell out who gets water, food, medicine, transport, oxygen, compute, or evacuation priority first and who gets rationed, delayed, or cut off.',
         'Persistent effect: later rounds should keep reflecting the survival pressure, political backlash, and alliance shifts created by that triage.',
@@ -1461,6 +1630,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
         `What-if premise: ${question}`,
         `Scene theme: ${sceneTheme || 'current timeline'}`,
         `Target branch: ${targetBranchTitle}`,
+        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
         `Force the branch to invoke a costly and possibly irreversible taboo measure: ${fallbackDirective(customDirective, directive)}`,
         'Spell out what gets sacrificed, which old order gets violated, and why the actors still accept the move instead of treating it as flavor.',
         'Persistent effect: later rounds must keep reflecting the backlash, new dependency, or fractures caused by the ritual.',

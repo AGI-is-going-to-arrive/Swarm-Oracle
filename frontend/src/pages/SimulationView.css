@@ -59,6 +59,45 @@
   flex-shrink: 0;
 }
 
+@media (max-width: 600px) {
+  .sim-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .sim-header__info {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .sim-header__question {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.35;
+  }
+
+  .sim-header__actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .sim-header__actions .btn {
+    padding: 6px 10px;
+    font-size: 0.74rem;
+  }
+
+  .sim-header__logo {
+    display: none;
+  }
+}
+
 .btn--results {
   animation: subtlePulse 2s ease-in-out infinite;
 }

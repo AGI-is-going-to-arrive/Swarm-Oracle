@@ -3805,3 +3805,104 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `cd backend && .venv/bin/python -m pytest tests/test_simulator_viz_integration.py -q` → `70 passed`
   - `cd frontend && npm test` → `151 passed`
   - `cd frontend && npm run build` → 通过
+
+## 2026-03-17 E2E Hardening
+
+- 发现 `frontend/scripts/e2e-suite.mjs` 在 `law` 样本 replay 阶段存在瞬时失败：旧样本场景首轮读取 `render_game_to_text()` 可能返回空，导致 full 套件直接中断。
+- 已修复：`runReplayFlow()` 增加一次 fresh page reload 重试；`runMatrixSuite()` 在 legacy 样本仍失败时，会回退到 runtime 新建场景继续 replay/result 流程，并在结果中记录 `recovery`。
+- 定向复测：`node scripts/e2e-suite.mjs matrix --themes law --headless --output-dir output/e2e/law-repro-fix-20260317` 通过；日志显示首轮 replay 超时后自动重试成功。
+
+## 2026-03-17 Mobile Adaptation
+
+- 真实 390x844 Playwright 巡检发现 Theater 顶部操作条在移动端窄屏下裁切，`Classic View` 胶囊和头部动作区热区不完整。
+- 已修复：`SimulationView.css` 让头部动作区在 `max-width: 600px` 下可换行、隐藏品牌字样、压缩按钮；`game.css` 在同断点下把 `view-mode-toggle` 收成图标胶囊，保留切换功能但避免裁切。
+- 已复验：390x844 Playwright 截图中头部控件已完整显示，`玩法卡 / 预测 / 视图切换 / 返回` 都保留可点热区。
+
+## 2026-03-17 Theme Registry + Gameplay Arc
+
+- 新增 `frontend/src/lib/themeRegistry.ts`，把 Theater 场景 key、关键词、标签、asset path、profile 归属，以及玩法 frame/badge 资产集中成一份 manifest。
+- `BootScene.ts` 与 `VizSynthesizer.ts` 已切到同一份 registry；场景预载和题面选景不再维护两套常量，`BootScene` 的 `loaderror` 场景失败统计也一起修正。
+- `gameplayCards.ts` 改为读取 manifest 中的 frame/badge/profile fallback，并新增“题材连锁事件 + 轻量轨道” helper：每个题材都有一条三段式 arc，以及一对 `风险时钟 / 资源轨道` 标签与数值。
+- `GameplayCardsModal.tsx` 现会展示：
+  - 当前题材连锁事件序列
+  - 已完成步数 / 下一步推荐
+  - 风险时钟 / 资源轨道数值
+  - 推荐 badge 会优先标出当前链路的 `下一步`
+- Playwright 真实验证：
+  - generic 场景初次打开玩法卡时显示 `公开听证 → 密约交易 → 资源分诊`
+  - 注入一次 `公开听证` 后，再打开会更新为 `1/3`，下一步切到 `密约交易`
+
+## 2026-03-17 Docker Self-Consistency
+
+- `backend/Dockerfile` 已改为容器真实监听 `18927`，并简化为复制源码后直接 `pip install .`，避免 editable 安装和源码拷贝顺序不一致。
+- `frontend/Dockerfile` 的 Nginx 反代目标已统一改成 `backend:18927`，与 compose 对外端口一致。
+- `docker-compose.yml` 现保留 `18927/18928` 口径，并补齐 `127.0.0.1` 形式的 CORS origin。
+- 验证：
+  - `npm test -- --run src/components/gameplayCards.test.ts src/game/managers/VizSynthesizer.test.ts` → `44 passed`
+  - `npm run build` → 通过
+  - `cp .env.example .env && docker compose config` → 通过；随后已删除临时 `.env`
+  - `docker build` 本机未继续验证，仅做了 compose 静态展开检查
+
+## 2026-03-17 Final QA Closure
+
+- 新建 generic Theater 场景 `cc9a3fba-5fb3-423f-b6d0-d01bef479ef9` 成功从 `simulating -> done`，`scene_theme = switchboard_forum`。
+- 浏览器自动化读取到玩法卡 modal 的 `signature_arc`：
+  - `label = 通用转向链`
+  - `next_card_id = public_hearing`
+  - `risk_value = 0/6`
+  - `resource_value = 3/6`
+- 同一场景结果页已出现：
+  - `题材连锁`
+  - `公开听证 → 密约交易 → 资源分诊`
+  - `情势轨道`
+  - `分歧时钟 0/6`
+  - `转圜筹码 3/6`
+- 当前最终验证口径：
+  - `cd frontend && npm test` → `151 passed`
+  - `cd frontend && npm run build` → 通过
+  - `docker compose config` → 通过（基于临时 `.env`）
+
+## 2026-03-17 Docker Runtime Signoff
+
+- 真实 `docker compose up --build -d` 过程中暴露两个发布链问题：
+  - backend 镜像最初因 `pyproject.toml` 缺少 setuptools package 约束，`pip install .` 时把 `app / alembic` 一并做 top-level package 自动发现，导致构建失败。
+  - backend healthcheck 最初打到 `POST /api/health`，该接口会同步探测外部 LLM，导致服务进程已启动仍被判 `unhealthy`。
+- 已修复：
+  - `backend/pyproject.toml` 新增 `[tool.setuptools] packages = ["app"]`
+  - `docker-compose.yml` healthcheck 改为仅检查 `GET /`
+  - 临时容器验证环境里将根 `.env` 的 `LLM_RESPONSES_URL` 指向 `http://host.docker.internal:8318/v1/chat/completions`
+- 真实容器验证结果：
+  - `docker compose up --build -d` 成功
+  - `swarmoracle-backend` 状态为 `healthy`
+  - `swarmoracle-frontend` 成功监听 `18928`
+  - `curl http://127.0.0.1:18927/` 返回根信息
+  - `curl http://127.0.0.1:18928/` 返回前端静态页
+  - 通过前端代理 `POST http://127.0.0.1:18928/api/scenario` 创建 smoke 场景 `3ab10cc5-b08a-43a6-b4a2-84cf9990cd00`
+  - 轮询后该场景成功到达 `status = done`
+- 验证结束后已执行 `docker compose down`，并删除临时根 `.env`。
+
+## 2026-03-17 Documentation Sync
+
+- 已同步更新的文档：
+  - `README.md`
+  - `frontend/README.md`
+  - `backend/README.md`
+  - `frontend/public/assets/ASSET_CREDITS.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/reference/config.md`
+  - `llmdoc/reference/api.md`
+  - `.env.example`
+- 同步内容聚焦于本轮真实变更：
+  - `simulating` 占位启动口径
+  - 27 场景主题 + `themeRegistry.ts`
+  - 10 张玩法卡 + `题材连锁 / 情势轨道`
+  - 前端回归数 `151`
+  - Docker 容器运行签收、`host.docker.internal` 用法、healthcheck 改为 `GET /`
+  - backend README / llmdoc backend 中旧的 `/scenario/{id}/predict` / `/leaderboard` / `WS /ws/{scenario_id}` 路径已修正
+- 文档校验：
+  - `git diff --check -- llmdoc README.md frontend/README.md backend/README.md frontend/public/assets/ASSET_CREDITS.md .env.example` → 通过
+  - `rg '^(<<<<<<<|=======|>>>>>>>)' ...` → 无冲突标记
+  - `llmdoc/index.md` 中引用的文档文件均存在

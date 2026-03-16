@@ -11,6 +11,7 @@ import {
   type ScenarioMeta,
 } from '../lib/scenarioMeta';
 import type { AgentInfo, BranchInfo } from '../types';
+import { GAMEPLAY_PANEL_ASSET } from '../lib/themeRegistry';
 import {
   buildAgentsById,
   buildGameplayAutoDirective,
@@ -19,11 +20,13 @@ import {
   getDefaultGameplayTargetBranch,
   getGameplayCardDefinition,
   getGameplayBadgeSrc,
+  getGameplayCardLabel,
   getGameplayCardDirectivePreview,
   getGameplayProfileDescription,
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getGameplaySignatureArcState,
   getRecommendedGameplayCards,
   getSuggestedGameplayAgents,
   getSuggestedSourceBranchId,
@@ -64,13 +67,18 @@ export default function GameplayCardsModal({
     () => inferGameplayProfile(question, sceneTheme),
     [question, sceneTheme],
   );
+  const [meta, setMeta] = useState<ScenarioMeta>(() => loadScenarioMeta(scenarioId));
   const recommendedCards = useMemo(
-    () => getRecommendedGameplayCards(gameplayProfile.id),
-    [gameplayProfile.id],
+    () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog),
+    [gameplayProfile.id, meta.cards.usageLog],
   );
   const profileSignatureHooks = useMemo(
     () => getGameplayProfileSignatureHooks(gameplayProfile.id, isZh),
     [gameplayProfile.id, isZh],
+  );
+  const signatureArcState = useMemo(
+    () => getGameplaySignatureArcState(gameplayProfile.id, meta.cards.usageLog, isZh),
+    [gameplayProfile.id, isZh, meta.cards.usageLog],
   );
   const activeBranches = useMemo(
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
@@ -94,7 +102,6 @@ export default function GameplayCardsModal({
   const [customDirective, setCustomDirective] = useState('');
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
-  const [meta, setMeta] = useState<ScenarioMeta>(() => loadScenarioMeta(scenarioId));
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const normalizedCurrentRound = Math.max(1, currentRound);
@@ -106,6 +113,16 @@ export default function GameplayCardsModal({
   const profileFrameSrc = getGameplayProfileFrameSrc(gameplayProfile.id);
   const cardAvailability = canUseCard(meta, cardId, normalizedCurrentRound);
   const cardCooldownRemaining = getCardCooldownRemaining(meta, cardId, normalizedCurrentRound);
+  const signatureArcProgressText = signatureArcState.completed
+    ? (isZh
+      ? `已完成 ${signatureArcState.totalSteps}/${signatureArcState.totalSteps}，可转入自由推进。`
+      : `Completed ${signatureArcState.totalSteps}/${signatureArcState.totalSteps}; free-play from here.`)
+    : (isZh
+      ? `已完成 ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}，建议下一步：${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, true) : '自由推进'}`
+      : `Completed ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}. Recommended next move: ${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, false) : 'Free pivot'}`);
+  const systemTrackSummary = isZh
+    ? `${signatureArcState.riskLabel} ${signatureArcState.riskValue}/6；${signatureArcState.resourceLabel} ${signatureArcState.resourceValue}/6`
+    : `${signatureArcState.riskLabel} ${signatureArcState.riskValue}/6; ${signatureArcState.resourceLabel} ${signatureArcState.resourceValue}/6`;
   const autoDirective = useMemo(
     () => buildGameplayAutoDirective({
       cardId,
@@ -174,6 +191,14 @@ export default function GameplayCardsModal({
       cooldown_remaining: cardCooldownRemaining,
       current_round: normalizedCurrentRound,
       recommended_cards: recommendedCards,
+      signature_arc: {
+        label: signatureArcState.label,
+        completed_steps: signatureArcState.completedSteps,
+        total_steps: signatureArcState.totalSteps,
+        next_card_id: signatureArcState.nextCardId,
+        risk_value: signatureArcState.riskValue,
+        resource_value: signatureArcState.resourceValue,
+      },
       status,
       read_only: readOnly,
       error: errorMsg || null,
@@ -191,6 +216,12 @@ export default function GameplayCardsModal({
     readOnly,
     recommendedCards,
     secondaryAgentId,
+    signatureArcState.completedSteps,
+    signatureArcState.label,
+    signatureArcState.nextCardId,
+    signatureArcState.resourceValue,
+    signatureArcState.riskValue,
+    signatureArcState.totalSteps,
     sourceBranchId,
     status,
     targetBranchId,
@@ -291,6 +322,9 @@ export default function GameplayCardsModal({
       primaryAgentId,
       secondaryAgentId,
       customDirective,
+      signatureArcLabel: signatureArcState.label,
+      signatureArcProgress: signatureArcProgressText,
+      systemTrackSummary,
       isZh,
     });
 
@@ -333,7 +367,7 @@ export default function GameplayCardsModal({
         <header className="modal-header">
           <img
             className="gameplay-modal__art"
-            src="/assets/ui/generated/gameplay_panel.png"
+            src={GAMEPLAY_PANEL_ASSET}
             alt="Gameplay tactics crest"
           />
           <h2>{t('gameplay.title')}</h2>
@@ -353,6 +387,31 @@ export default function GameplayCardsModal({
             {isZh ? '导演点数：' : 'Director points: '}
             <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
           </p>
+          <p className="gameplay-modal__preview-note">
+            <strong>{isZh ? '题材连锁事件' : 'Signature arc'}</strong>
+            <br />
+            {signatureArcState.sequenceLabels.join(' → ')}
+            <br />
+            {(isZh ? '进度' : 'Progress')}
+            {': '}
+            <strong>{signatureArcState.completedSteps}/{signatureArcState.totalSteps}</strong>
+            {signatureArcState.nextCardId && (
+              <>
+                {' · '}
+                {isZh ? '下一步' : 'Next'}
+                {': '}
+                {getGameplayCardLabel(signatureArcState.nextCardId, isZh)}
+              </>
+            )}
+            <br />
+            {signatureArcState.riskLabel}
+            {': '}
+            <strong>{signatureArcState.riskValue}/6</strong>
+            {' · '}
+            {signatureArcState.resourceLabel}
+            {': '}
+            <strong>{signatureArcState.resourceValue}/6</strong>
+          </p>
           {readOnly && (
             <p className="gameplay-modal__preview-note">
               {disabledReason ?? (isZh ? '导演准备中，当前仅可预览玩法卡。' : 'Director tools are warming up. Preview only for now.')}
@@ -364,7 +423,8 @@ export default function GameplayCardsModal({
           <div className="gameplay-card-grid">
             {GAMEPLAY_CARD_DEFS.map((card) => {
               const selected = card.id === cardId;
-              const recommended = recommendedCards.includes(card.id);
+              const recommended = card.id === signatureArcState.nextCardId
+                || recommendedCards.slice(0, 3).includes(card.id);
               return (
                 <button
                   key={card.id}
@@ -385,7 +445,11 @@ export default function GameplayCardsModal({
                       {recommended && (
                         <span className="gameplay-card__badge">
                           <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
-                          <span>{isZh ? '推荐' : 'Recommended'}</span>
+                          <span>
+                            {card.id === signatureArcState.nextCardId
+                              ? (isZh ? '下一步' : 'Next')
+                              : (isZh ? '推荐' : 'Recommended')}
+                          </span>
                         </span>
                       )}
                     </span>

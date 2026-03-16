@@ -28,6 +28,11 @@ cp ../.env.example ../.env  # edit LLM_RESPONSES_URL / LLM_API_KEY
 uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
 ```
 
+If the backend runs in Docker but the LLM server runs on the host machine,
+set `LLM_RESPONSES_URL=http://host.docker.internal:8318/v1/chat/completions`
+in the root `.env` before `docker compose up --build`. On Linux, use an
+actual host-reachable address instead of `host.docker.internal`.
+
 ## API Modules
 
 | Module | File | Description |
@@ -44,8 +49,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | App info |
-| `GET` | `/health` | Server + LLM health check |
+| `GET` | `/` | App info and process-level health endpoint |
+| `POST` | `/api/health` | Server + LLM health check |
+| `POST` | `/api/health/test` | BYOK-aware LLM connectivity test |
 | `GET` | `/metrics` | Prometheus metrics (P3-9) |
 | `POST` | `/api/scenario` | Create scenario (parse + start simulation); Theater mode returns a provisional `scene_theme` immediately |
 | `GET` | `/api/scenario/{id}` | Get scenario status, agents, branches, and `scene_theme` |
@@ -56,14 +62,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
 | `POST` | `/api/scenario/{id}/intervene/retrospective` | Retrospective intervention |
 | `POST` | `/api/scenario/{id}/intervene/batch` | Batch intervention |
 | `GET` | `/api/scenario/{id}/social/{platform}` | Social media copy generation |
-| `GET` | `/scenarios` | List all scenarios |
+| `GET` | `/api/scenarios` | List all scenarios |
 | `DELETE` | `/api/scenario/{id}` | Delete scenario (cascade) |
 | `GET` | `/api/scenario/{id}/export` | Export scenario as Markdown |
-| `GET` | `/intervention-templates` | Preset intervention templates |
-| `POST` | `/scenario/{id}/predict` | Submit prediction |
-| `POST` | `/scenario/{id}/score-predictions` | Trigger LLM scoring |
-| `GET` | `/leaderboard` | Global prediction leaderboard |
-| `WS` | `/ws/{scenario_id}` | Real-time simulation events |
+| `GET` | `/api/intervention-templates` | Preset intervention templates |
+| `POST` | `/api/scenario/{id}/predict` | Submit prediction |
+| `GET` | `/api/scenario/{id}/predictions` | List predictions for a scenario |
+| `POST` | `/api/scenario/{id}/score-predictions` | Trigger LLM scoring |
+| `GET` | `/api/leaderboard` | Global prediction leaderboard |
+| `WS` | `/ws/scenario/{scenario_id}` | Real-time simulation events |
 
 ## Testing
 
@@ -75,7 +82,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
 Latest verified backend full regression: **777 passed, 2 warnings**
 Command: `.venv/bin/python -m pytest tests/ -q`
 
-Latest verified backend scene/theme regression: **201 passed**
+Latest verified backend scene/theme regression in this session: **209 passed**
 Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
 
 ## Database Migrations (Alembic)

@@ -46,6 +46,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/health/test` | POST | 使用可选 BYOK 参数测试 LLM 连通性 |
 | `GET /metrics` | GET | Prometheus 指标端点 (P3-9) — 请求计数/延迟/活跃模拟 |
 
+> 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
+
 ## WebSocket API
 
 连接: `ws://localhost:18927/ws/scenario/{scenario_id}`

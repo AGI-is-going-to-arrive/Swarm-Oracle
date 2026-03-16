@@ -27,6 +27,8 @@ api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联)
     │
+main.py ──► `GET /` 根信息端点（容器进程级健康检查）
+    │
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
@@ -113,6 +115,7 @@ alembic/ ──► Alembic 数据库迁移框架
     - keyed fallback（恢复轻微损坏的 `story/content/emotion/diverge` 这类键值）
     - `agent_message` 专用 fallback（把带键的坏 JSON 或纯文本尽量恢复成单条 agent 发言）
 - **BYOK (P4-E)**: 所有函数接受 `api_key`/`base_url`/`model` 可选覆盖，用户可自带 OpenAI 兼容 API Key；API Key 仅内存传递不持久化
+- **容器部署提示**: 如果后端在 Docker 容器内运行而 LLM 服务在宿主机本地，`LLM_RESPONSES_URL` 需要改为 `host.docker.internal` 或其他宿主可达地址；`POST /api/health` 会同步探测 LLM，因此容器健康检查现改用 `GET /`
 
 ### `parser.py` (≈200行) — 问题解析
 - **职责**: 将用户问题解析为结构化场景上下文
@@ -182,12 +185,12 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /scenarios/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符） |
 | `POST /scenarios/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演） |
-| `POST /scenarios/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支） |
+| `POST /api/scenarios/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支） |
 
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /scenario/{id}/social/{platform}` | GET | 生成社交媒体文案 — 支持小红书/微博/知乎/Reddit/X |
+| `GET /api/scenario/{id}/social/{platform}` | GET | 生成社交媒体文案 — 支持小红书/微博/知乎/Reddit/X |
 
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
@@ -197,13 +200,13 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `predictions.py` — 预测与排行榜路由 (P3-B **NEW**)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /scenario/{id}/predict` | POST | 提交预测（模拟完成前） |
-| `GET /scenario/{id}/predictions` | GET | 列出场景所有预测 |
-| `POST /scenario/{id}/score-predictions` | POST | 触发 LLM 评分 |
-| `GET /leaderboard` | GET | 全局预测排行榜 |
+| `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） |
+| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 |
+| `GET /api/leaderboard` | GET | 全局预测排行榜 |
 
 ### `ws.py` — WebSocket路由
-- `WS /ws/{scenario_id}` — 实时事件流
+- `WS /ws/scenario/{scenario_id}` — 实时事件流
 - **事件类型**: `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
 
 ## 模型层 (`app/models/`)

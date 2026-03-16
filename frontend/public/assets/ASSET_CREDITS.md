@@ -4,12 +4,13 @@ Most visual assets in this project are **AI-generated** pixel art, created speci
 SwarmOracle 2.0. A small set of in-repo timeline marker SVG icons is handcrafted for UI readability.
 They are original works and may be freely used under the project license.
 
-## Asset Inventory (99 total)
+## Asset Inventory (106 runtime + source assets)
 
-### Characters (18)
+### Characters (25 files, 18 preloaded at runtime)
 
 | File | Description |
 |------|-------------|
+| `sprite_alchemist.png` | Alchemy / occult variant |
 | `sprite_king.png` | Ruler with crown |
 | `sprite_warrior.png` | Combat role |
 | `sprite_scholar.png` | Knowledge role |
@@ -27,7 +28,15 @@ They are original works and may be freely used under the project license.
 | `sprite_engineer.png` | Builder role |
 | `sprite_noble.png` | Aristocracy role |
 | `sprite_healer.png` | Medical role |
+| `sprite_assassin.png` | Stealth variant |
+| `sprite_bard.png` | Performer variant |
 | `sprite_default.png` | Fallback sprite |
+| `sprite_knight.png` | Armored variant |
+| `sprite_monk.png` | Monastic variant |
+| `sprite_thief.png` | Rogue variant |
+| `sprite_witch.png` | Witchcraft variant |
+
+> Runtime note: `BootScene` currently preloads the 18 core sprite keys used by the live Theater. The remaining character sheets stay in the repository as style-consistent source variants for future expansion.
 
 ### Scenes (27)
 
@@ -90,9 +99,9 @@ They are original works and may be freely used under the project license.
 | `leaderboard.png` | Leaderboard frame |
 | `buttons.png` | Generic UI buttons |
 | `health_bar.png` | Health bar |
-| `event_icons.png` | Event type icons |
-| `dialog_box.png` | Dialogue frame |
-| `status_indicators.png` | Status icons |
+| `dialog_panel.png` | Dialogue / modal panel |
+| `panel_bg.png` | Shared panel background |
+| `status_icons.png` | Status icon strip |
 | `generated/daily_challenge_panel.png` | Daily challenge decorative panel |
 | `generated/archive_panel.png` | Archive decorative panel |
 | `generated/gameplay_panel.png` | Gameplay tactics decorative panel |

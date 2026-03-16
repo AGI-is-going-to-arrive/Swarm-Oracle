@@ -16,7 +16,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Hierarchical Agents (P3-A) | Leader-Worker分层架构，支持千人规模模拟 |
 | Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜 |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
-| Gameplay Cards | 10 张玩法卡（文明辩论/间谍渗透/密约交易/人类潜入/时空裂缝/民意浪潮/撤离令/公开听证/资源分诊/禁术仪式）按题目画像动态推荐；题材包已扩到 12 类，玩法卡弹窗会显示题材 hooks、题材导向文案，并在 warmup 阶段支持只读预览；玩法卡注入现会被 LLM 当成高优先级、持续生效的导演事件 |
+| Gameplay Cards | 10 张玩法卡（文明辩论/间谍渗透/密约交易/人类潜入/时空裂缝/民意浪潮/撤离令/公开听证/资源分诊/禁术仪式）按题目画像动态推荐；玩法卡弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件，以及 `风险时钟 / 资源轨道` 两条轻量状态；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
 | Director Points & Cooldowns | 单局 3 点导演点数 + 卡牌冷却，前端本地持久化 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案 |
 | Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；首页会显示完成态、已用卡数、下注态与题材回响反馈 |
@@ -52,7 +52,8 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
 | Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板 |
-| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现维护 99 张素材清单 |
+| Theme Registry & Asset Manifest | 前端已把 27 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步 |
+| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现维护 106 个 runtime + source 资产条目（其中 18 张角色贴图会在 Theater 运行期预载） |
 | i18n | 中英文支持 |
 
 ## 架构
@@ -100,7 +101,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | 工具 | 覆盖 |
 |------|------|
 | pytest + pytest-asyncio | 本轮已验证后端全量回归 777 passed, 2 warnings；最近定向回归包含 `test_scene_selector.py` 139 passed 与 `test_simulator_viz_integration.py` 70 passed |
-| Vitest + jsdom | 150 tests，前端覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；clean full 黑盒已覆盖 15 个矩阵题材 + 10 个 corners 用例 |
+| Vitest + jsdom | 151 tests，前端覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；clean full 黑盒已覆盖 15 个矩阵题材 + 10 个 corners 用例 |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 
