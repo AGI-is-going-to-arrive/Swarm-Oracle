@@ -291,6 +291,7 @@ describe('gameplayCards helpers', () => {
     expect(getGameplayProfileFrameSrc('law')).toContain('gameplay_card_frame_law');
     expect(getGameplayProfileFrameSrc('faith')).toContain('gameplay_card_frame_faith');
     expect(getGameplayProfileFrameSrc('ecology')).toContain('gameplay_card_frame_ecology');
+    expect(getGameplayProfileFrameSrc('generic')).toContain('gameplay_card_frame_generic');
     expect(getGameplayBadgeSrc('recommended')).toContain('badge_recommended');
     expect(getGameplayProfileSignatureHooks('trade', true)).toContain('关税杠杆');
     expect(getGameplayCardDirectivePreview('law', 'human_takeover', true)).toContain('暂停执行');

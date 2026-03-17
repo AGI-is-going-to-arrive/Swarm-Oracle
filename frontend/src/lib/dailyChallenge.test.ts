@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  challengeDateKey,
+  getChallengeQuestion,
   getChallengeProgress,
   getTodayChallenge,
   isChallengeScenario,
   markChallengeCompleted,
   markChallengeStarted,
+  resolveChallengeProgress,
+  findChallengeProgressByScenarioId,
 } from './dailyChallenge';
 
 const fixedDate = new Date('2026-03-15T12:00:00Z');
@@ -117,5 +121,96 @@ describe('dailyChallenge progress storage', () => {
     expect(profiles.has('mythic')).toBe(true);
     expect(profiles.has('survival')).toBe(true);
     expect(profiles.has('generic')).toBe(true);
+  });
+
+  it('returns the localized challenge question without leaking zh text into english UI', () => {
+    const challenge = getTodayChallenge(fixedDate);
+
+    expect(getChallengeQuestion(challenge, true)).toBe(challenge.question);
+    expect(getChallengeQuestion(challenge, false)).not.toBe('');
+  });
+
+  it('reuses local details when backend daily challenge status confirms the same scenario', () => {
+    const challenge = getTodayChallenge(fixedDate);
+    markChallengeStarted(challenge.id, 'scenario-4', fixedDate);
+    markChallengeCompleted(challenge.id, 'scenario-4', {
+      usedCards: ['civilization_debate'],
+      betPlaced: true,
+      bettingHit: true,
+      profileResonance: 'signature',
+    }, fixedDate);
+
+    const resolved = resolveChallengeProgress(
+      getChallengeProgress(challenge.id, fixedDate),
+      {
+        user_id: 'director-1',
+        profile_id: challenge.profileId,
+        local_date: challengeDateKey(fixedDate),
+        timezone_offset_minutes: -480,
+        completed: true,
+        scenario_id: 'scenario-4',
+        completed_at: fixedDate.toISOString(),
+        most_used_card: 'civilization_debate',
+        betting_hit: true,
+        profile_resonance: 'signature',
+        campaign_score_delta: 6,
+      },
+    );
+
+    expect(resolved).toMatchObject({
+      scenarioId: 'scenario-4',
+      completed: true,
+      usedCards: ['civilization_debate'],
+      betPlaced: true,
+      source: 'merged',
+      usedCardsKnown: true,
+      betPlacedKnown: true,
+    });
+  });
+
+  it('falls back to server truth without inventing local-only card details', () => {
+    const challenge = getTodayChallenge(fixedDate);
+
+    const resolved = resolveChallengeProgress(
+      null,
+      {
+        user_id: 'director-1',
+        profile_id: challenge.profileId,
+        local_date: challengeDateKey(fixedDate),
+        timezone_offset_minutes: -480,
+        completed: true,
+        scenario_id: 'scenario-backend',
+        completed_at: fixedDate.toISOString(),
+        most_used_card: 'public_hearing',
+        betting_hit: null,
+        profile_resonance: 'aligned',
+        campaign_score_delta: 4,
+      },
+    );
+
+    expect(resolved).toMatchObject({
+      scenarioId: 'scenario-backend',
+      completed: true,
+      usedCards: [],
+      betPlaced: false,
+      source: 'campaign',
+      usedCardsKnown: false,
+      betPlacedKnown: false,
+      profileResonance: 'aligned',
+    });
+  });
+
+  it('finds a stored challenge entry by scenario id across day buckets', () => {
+    const challenge = getTodayChallenge(fixedDate);
+    markChallengeStarted(challenge.id, 'scenario-lookup', fixedDate);
+
+    expect(findChallengeProgressByScenarioId('scenario-lookup')).toMatchObject({
+      challengeDay: challengeDateKey(fixedDate),
+      challengeId: challenge.id,
+      progress: {
+        scenarioId: 'scenario-lookup',
+        completed: false,
+      },
+    });
   });
 });

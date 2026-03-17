@@ -38,9 +38,11 @@ const THEME_PALETTES: Record<string, { sky1: number; sky2: number; ground: numbe
   industrial_city:     { sky1: 0x778899, sky2: 0x2f4f4f, ground: 0x696969, accent: 0xb22222, icon: '🏭' },
   modern_city:         { sky1: 0x6495ed, sky2: 0x4169e1, ground: 0x808080, accent: 0x00bfff, icon: '🌃' },
   switchboard_forum:   { sky1: 0x2b2441, sky2: 0x120f24, ground: 0x4f3f35, accent: 0xff66d9, icon: '🎛️' },
+  switchboard_forum_variant:{ sky1: 0xcda979, sky2: 0x8d684b, ground: 0x7a5d4d, accent: 0xff66d9, icon: '🧭' },
   surveillance_megacity:{ sky1: 0x1a2140, sky2: 0x10172f, ground: 0x28304d, accent: 0xff4fd8, icon: '📡' },
   civic_chamber:       { sky1: 0xd8d1c3, sky2: 0x5d5a63, ground: 0x8e7358, accent: 0x8bc34a, icon: '🏛️' },
   law_court:           { sky1: 0xe8dcc3, sky2: 0x7c6a52, ground: 0xbba88f, accent: 0x2d4f7a, icon: '⚖️' },
+  law_court_variant:   { sky1: 0xf2e1be, sky2: 0x8b6b48, ground: 0xcbb792, accent: 0xa54cff, icon: '⚖️' },
   imperial_forum:      { sky1: 0xf0e2be, sky2: 0x6ea5d8, ground: 0xd6c3a6, accent: 0xb22222, icon: '🦅' },
   dynastic_palace:     { sky1: 0xead7c1, sky2: 0x74494a, ground: 0xbf9a73, accent: 0xd8b24d, icon: '👑' },
   scifi_base:          { sky1: 0x191970, sky2: 0x0c0032, ground: 0x1a1a2e, accent: 0x00ffff, icon: '🚀' },
@@ -51,6 +53,7 @@ const THEME_PALETTES: Record<string, { sky1: number; sky2: number; ground: numbe
   fantasy_kingdom:     { sky1: 0xe6e6fa, sky2: 0x9370db, ground: 0x228b22, accent: 0xffd700, icon: '🧙' },
   arcane_sanctum:      { sky1: 0x241f45, sky2: 0x0f1022, ground: 0x40375e, accent: 0x5ae1ff, icon: '✨' },
   faith_temple:        { sky1: 0x2e3653, sky2: 0x111827, ground: 0x3b4258, accent: 0x9c7cff, icon: '🔮' },
+  faith_temple_variant:{ sky1: 0x332542, sky2: 0x171127, ground: 0x4a3a58, accent: 0xd987ff, icon: '🕯️' },
   refuge_compound:     { sky1: 0x70707a, sky2: 0x3f454d, ground: 0x756857, accent: 0xb4e197, icon: '⛺' },
   war_command:         { sky1: 0x243443, sky2: 0x0f1720, ground: 0x27313b, accent: 0xff6b57, icon: '🛰️' },
   logistics_hub:       { sky1: 0x6d7067, sky2: 0x3c413f, ground: 0x6f5d49, accent: 0x6ed2ff, icon: '🚚' },
@@ -89,6 +92,7 @@ const EVENT_ANIM_CONFIGS: Record<string, { color: number; shake?: number; flash?
   portal_open:       { color: 0x9400d3,  shake: 0.005, label_en: '🌀 Space-Time Rift',    label_zh: '🌀 时空裂缝' },
   mandate_surge:     { color: 0xff4fb3,  flash: [255, 79, 179], label_en: '📣 Mandate Surge', label_zh: '📣 民意浪潮' },
   evacuation_alarm:  { color: 0xff7043,  flash: [255, 112, 67], label_en: '🚨 Evacuation Order', label_zh: '🚨 撤离令' },
+  hearing_bell:      { color: 0xffd166,  flash: [255, 209, 102], label_en: '🏛️ Public Hearing', label_zh: '🏛️ 公开听证' },
 };
 
 // ── Faction Colors ──────────────────────────────────────
@@ -362,7 +366,7 @@ export class WorldScene extends Phaser.Scene {
   /** V3: Simple drifting cloud shapes in the sky area. */
   private createDriftingClouds(w: number, maxY: number, _palette: typeof DEFAULT_PALETTE): void {
     // Skip clouds for dark/space themes
-    const darkThemes = ['surveillance_megacity', 'scifi_base', 'power_grid_nexus', 'space_station', 'post_apocalypse', 'arcane_sanctum', 'faith_temple', 'law_court', 'war_command', 'refuge_compound', 'logistics_hub'];
+  const darkThemes = ['surveillance_megacity', 'scifi_base', 'power_grid_nexus', 'space_station', 'post_apocalypse', 'arcane_sanctum', 'faith_temple', 'faith_temple_variant', 'law_court', 'law_court_variant', 'war_command', 'refuge_compound', 'logistics_hub'];
     if (darkThemes.includes(this.sceneTheme)) return;
 
     for (let i = 0; i < 4; i++) {

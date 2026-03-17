@@ -27,6 +27,7 @@ import {
   type AutomationSceneState,
 } from './automation';
 import { ensureReplayStartsInWorldScene } from './replaySync';
+import { shouldBootstrapWorldScene } from './worldSceneBootstrap';
 import { useSimulationStore } from '../stores/simulationStore';
 import './game.css';
 
@@ -187,6 +188,50 @@ export function PhaserGame({
       }
     };
 
+    const bootstrapWorldSceneFromStore = (
+      state: ReturnType<typeof useSimulationStore.getState>,
+      source: string,
+    ) => {
+      if (!gameRef.current) return false;
+      if (!shouldBootstrapWorldScene({
+        synthDone: synthDone.current,
+        worldSceneActive: gameRef.current.scene.isActive('WorldScene'),
+        agentCount: state.agents.length,
+      })) {
+        return false;
+      }
+
+      synthDone.current = true;
+      const theme = resolveSceneTheme(state);
+      const initData = synthesizeSceneInit(state.agents, theme);
+      const replayMessages = state.isSimulationComplete
+        ? filterReplayMessages(state.messages, state.branches, playbackBranchId, playbackRound)
+        : state.messages;
+
+      syncReplayAutomationState(replayMessages.length);
+      dispatchVizEvent('viz:scene_init', initData);
+      for (const agent of state.agents) agentIds.add(agent.id);
+      lastBubbleIdx.current = 0;
+
+      if (replayMessages.length > 0) {
+        dispatchVizEvent('viz:clear_bubbles', {});
+        if (playbackMode === 'skip') {
+          synthesizeLatestBubbles(replayMessages, state.agents);
+        } else {
+          bubbleCleanup.current = synthesizeBubbles(
+            replayMessages,
+            state.agents,
+            REPLAY_BATCH_SIZE,
+            Math.max(250, Math.round(1800 / replaySpeed)),
+          );
+        }
+        lastBubbleIdx.current = state.messages.length;
+      }
+
+      console.log(`[PhaserGame] Bootstrap scene init from ${source} — theme=${theme}, agents=${state.agents.length}`);
+      return true;
+    };
+
     const updateReplayAutomationState = (
       next: Partial<AutomationReplayState>,
       messageCount?: number,
@@ -255,35 +300,8 @@ export function PhaserGame({
 
       const state = useSimulationStore.getState();
       if (state.agents.length > 0) {
-        synthDone.current = true;
-
-        const theme = resolveSceneTheme(state);
-        const initData = synthesizeSceneInit(state.agents, theme);
-        const replayMessages = state.isSimulationComplete
-          ? filterReplayMessages(state.messages, state.branches, playbackBranchId, playbackRound)
-          : state.messages;
-        syncReplayAutomationState(replayMessages.length);
-
-        // Small delay to ensure WorldScene event listeners are fully registered
-        setTimeout(() => {
-          dispatchVizEvent('viz:scene_init', initData);
-          console.log(`[PhaserGame] Synthesized viz:scene_init — theme=${theme}, agents=${state.agents.length}`);
-
-          // Replay historical messages as timed bubbles (for completed simulations)
-          if (replayMessages.length > 0) {
-            dispatchVizEvent('viz:clear_bubbles', {});
-            if (playbackMode === 'skip') {
-              synthesizeLatestBubbles(replayMessages, state.agents);
-            } else {
-              bubbleCleanup.current = synthesizeBubbles(
-                replayMessages,
-                state.agents,
-                REPLAY_BATCH_SIZE,
-                Math.max(250, Math.round(1800 / replaySpeed)),
-              );
-            }
-            lastBubbleIdx.current = state.messages.length; // mark as already dispatched
-          }
+        window.setTimeout(() => {
+          bootstrapWorldSceneFromStore(useSimulationStore.getState(), 'scene_ready');
         }, 300);
       }
     });
@@ -304,32 +322,7 @@ export function PhaserGame({
         state.agents.length > 0 &&
         prevState.agents.length === 0
       ) {
-        if (gameRef.current && gameRef.current.scene.isActive('WorldScene')) {
-          synthDone.current = true;
-          const theme = resolveSceneTheme(state);
-          const initData = synthesizeSceneInit(state.agents, theme);
-          const replayMessages = state.isSimulationComplete
-            ? filterReplayMessages(state.messages, state.branches, playbackBranchId, playbackRound)
-            : state.messages;
-          syncReplayAutomationState(replayMessages.length);
-          dispatchVizEvent('viz:scene_init', initData);
-          console.log(`[PhaserGame] Synthesized viz:scene_init (store sub) — agents=${state.agents.length}`);
-
-          if (replayMessages.length > 0) {
-            dispatchVizEvent('viz:clear_bubbles', {});
-            if (playbackMode === 'skip') {
-              synthesizeLatestBubbles(replayMessages, state.agents);
-            } else {
-              bubbleCleanup.current = synthesizeBubbles(
-                replayMessages,
-                state.agents,
-                REPLAY_BATCH_SIZE,
-                Math.max(250, Math.round(1800 / replaySpeed)),
-              );
-            }
-            lastBubbleIdx.current = state.messages.length;
-          }
-        }
+        bootstrapWorldSceneFromStore(state, 'store_agents_loaded');
       }
 
       // ── Fallback: auto-init if synthDone was never set ──
@@ -341,13 +334,7 @@ export function PhaserGame({
         state.messages.length > 0 &&
         gameRef.current?.scene.isActive('WorldScene')
       ) {
-        synthDone.current = true;
-        const theme = resolveSceneTheme(state);
-        const initData = synthesizeSceneInit(state.agents, theme);
-        dispatchVizEvent('viz:scene_init', initData);
-        for (const a of state.agents) agentIds.add(a.id);
-        lastBubbleIdx.current = 0; // replay all messages from start
-        console.log(`[PhaserGame] Fallback synth init — theme=${theme}, agents=${state.agents.length}`);
+        bootstrapWorldSceneFromStore(state, 'store_fallback');
       }
 
       // ── Incremental bubble dispatch for live simulations (rounds 2+) ──

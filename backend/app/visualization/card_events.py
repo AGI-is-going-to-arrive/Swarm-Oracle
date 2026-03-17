@@ -10,54 +10,34 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from app.services.gameplay_contract import load_gameplay_contract
+
 from .events import VizEventType, make_viz_event
 
 # ──────────────────────────────────────────────────────────
 # Card type definitions
 # ──────────────────────────────────────────────────────────
 
-CARD_TYPES: dict[str, dict[str, Any]] = {
-    "civilization_debate": {
-        "name": "Civilization Debate",
-        "name_zh": "文明辩论",
-        "description": "Two agents hold a public debate while others observe.",
-        "icon": "🗣️",
-        "trigger": "auto",  # auto-trigger at branch decision points
-        "min_round": 3,
-        "cooldown_rounds": 4,
-        "animation": "debate_spotlight",
-    },
-    "spy_infiltrate": {
-        "name": "Spy Infiltration",
-        "name_zh": "间谍渗透",
-        "description": "One agent is secretly marked as a spy. Others may detect shifted reasoning.",
-        "icon": "🕵️",
-        "trigger": "manual",  # user injects via intervention
-        "min_round": 2,
-        "cooldown_rounds": 5,
-        "animation": "shadow_reveal",
-    },
-    "human_takeover": {
-        "name": "Human Takeover",
-        "name_zh": "人类潜入",
-        "description": "The user replaces one agent for a single round.",
-        "icon": "🧑",
-        "trigger": "manual",
-        "min_round": 1,
-        "cooldown_rounds": 3,
-        "animation": "player_swap",
-    },
-    "spacetime_rift": {
-        "name": "Space-Time Rift",
-        "name_zh": "时空裂缝",
-        "description": "Information from another branch leaks into the current one.",
-        "icon": "🌀",
-        "trigger": "auto",
-        "min_round": 4,
-        "cooldown_rounds": 6,
-        "animation": "portal_open",
-    },
-}
+def _build_card_types() -> dict[str, dict[str, Any]]:
+    contract = load_gameplay_contract()
+    result: dict[str, dict[str, Any]] = {}
+
+    for card in contract["cards"]:
+        result[card["id"]] = {
+            "name": card["labels"]["en"],
+            "name_zh": card["labels"]["zh"],
+            "description": card["descriptions"]["en"],
+            "icon": card["icon"],
+            "trigger": "auto" if card["auto_enabled"] else "manual",
+            "min_round": card["min_round"],
+            "cooldown_rounds": card.get("auto_cooldown_rounds", card["cooldown_rounds"]),
+            "animation": card["animation_key"],
+        }
+
+    return result
+
+
+CARD_TYPES: dict[str, dict[str, Any]] = _build_card_types()
 
 
 def check_card_trigger(

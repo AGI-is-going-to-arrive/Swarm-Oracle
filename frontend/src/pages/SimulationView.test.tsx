@@ -549,7 +549,7 @@ describe('SimulationView replay automation output', () => {
       </MemoryRouter>,
     );
 
-    const toggle = screen.getByRole("button", { name: "Switch to Pixel Theater" });
+    const toggle = screen.getByRole("button", { name: "sim.switch_to_theater_aria" });
     expect(toggle).toBeDisabled();
 
     await waitFor(() => {

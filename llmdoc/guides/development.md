@@ -61,7 +61,7 @@ cd backend
 .venv/bin/python -m pytest tests/test_memory.py::TestCompressRounds -v
 ```
 
-- 当前后端全量回归为 **777 passed, 2 warnings**。
+- 本轮已真实执行后端全量回归，结果为 **798 passed, 2 warnings**。
 
 ### Frontend 测试
 
@@ -71,7 +71,7 @@ npm install
 npm test
 ```
 
-- 当前前端回归套件为 **151 tests**。
+- 本轮已真实执行 `npm test`，前端全量回归结果为 **155 passed (155)**。
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -83,27 +83,36 @@ npm test
   - `SimulationView` 额外暴露 `window.capture_game_screenshot(mode)`，黑盒客户端可显式请求 `panel|canvas|modal`。
   - 下载前会按文件扩展名归一化成标准 `image/png` / `image/gif`，减少“文件下好了但系统不认”的情况。
   - 分享文案现在会在前端补一层题材档案前缀；如需复测分享链路，优先从结果页的 `📱 生成文案` 入口进入。
-  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池为 27 个主题，支持主场景和轻量语义变体；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`。
+  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池已扩到 30 个主题，补上 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`，并可命中 `switchboard_forum_variant`。
   - 固定回归输入集已落盘：
     - `frontend/output/e2e/sample_matrix.json`
+    - `frontend/output/e2e/sample_matrix_variants.json`
   - 当前固定样本为 15 条，可直接作为后续 replay / result / share 取证的样本清单
   - 一键黑盒回归入口：
     - `npm run e2e:matrix`
+    - `npm run e2e:variants`
     - `npm run e2e:corners`
     - `npm run e2e:full`
+    - `node scripts/e2e-suite.mjs mobile --headless --output-dir <DIR>`
     - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
   - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
   - 若 `sample_matrix.json` 里的历史 `scenario_id` 缺失，suite 会按 theme/runtime fallback 题面自动重建场景，而不是直接失败
+  - 若历史样本的 `scene_theme` 已与当前 `select_scene(question)` 漂移，matrix 也会自动 runtime fallback 重建
   - `generic` matrix smoke 已可在无旧 DB 快照时依赖 runtime fallback 重跑
-  - 最近一次 clean full 黑盒结果：`frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`
+  - 当前 Track C 主工件目录：
+    - `frontend/output/e2e/20260317-track-c/matrix/`
+    - `frontend/output/e2e/20260317-track-c/corners/`
+    - `frontend/output/e2e/20260317-track-c/mobile/`
+    - `frontend/output/e2e/20260317-track-c/variants/`
+  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/full-regression-final/result.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
 
 ### 前端本地玩法状态
 
 - 新增本地持久化 helper：
   - `src/lib/scenarioMeta.ts` — 导演点数、卡冷却、玩法记录、下注记录、因果档案摘要
-  - `src/lib/dailyChallenge.ts` — 每日挑战题库与完成状态（现为 12 条 challenge，按本地日期切换）
+  - `src/lib/dailyChallenge.ts` — 每日挑战题库、双语题面与完成状态合并（现为 12 条 challenge，按本地日期切换；会把后端 `campaign daily-status` 与本地缓存合并）
   - `src/lib/predictionBetting.ts` — 结构化下注编码/反解析；现支持 `branch_winner / ending_tone / profile_resonance`
 
 ### 语言行为
@@ -128,17 +137,29 @@ frontend/public/assets/ui/generated/
 frontend/public/assets/scenes/
 ```
 
-- 新增素材包括：
-  - 11 张玩法卡题材 frame
-  - 27 张 Theater 场景背景
-  - 4 个 UI badge（recommended / daily challenge / archive / bet winner）
+- 当前 `frontend/public/assets/scenes/` 已可见 30 张 Theater 场景背景，包含新增的 `switchboard_forum_variant / law_court_variant / faith_temple_variant`
 - 当前玩法卡总数为 10（含 `密约交易 / Backchannel Pact`、`撤离令 / Evacuation Order`）
 - 玩法卡 modal 现在还会显示：
   - 题材专属三段式连锁事件
   - 下一步推荐卡
   - `风险时钟 / 资源轨道`
 
-- 已验证可用图像模型调用路径：
+- AI 图像生成脚本已存在：
+
+```bash
+frontend/scripts/generate-ui-assets.mjs
+```
+
+- 该脚本会优先请求 `aiplatform`，若失败再自动回退到 `generativelanguage`。
+- 已验证脚本里的图像模型调用路径包括：
+
+```bash
+https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-image-preview:generateContent
+```
+
+```bash
+https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3-pro-image-preview:generateContent
+```
 
 ```bash
 https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent
@@ -146,6 +167,13 @@ https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-p
 
 ```bash
 https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent
+```
+
+- 使用方式示例：
+
+```bash
+cd frontend
+node scripts/generate-ui-assets.mjs --preset generic_frame --preset generic_scene_variant
 ```
 
 - 使用时通过环境变量提供 API key，避免把密钥写入仓库：

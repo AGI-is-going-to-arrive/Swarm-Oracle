@@ -60,10 +60,12 @@ class TestSelectScene:
             ("war room", "war_command"),
             ("supply line", "logistics_hub"),
             ("constitutional court chamber", "law_court"),
+            ("grand tribunal archive chamber", "law_court_variant"),
             ("foundry floor", "factory_foundry"),
             ("surface settlement", "frontier_colony"),
             ("arcane rune chamber", "arcane_sanctum"),
             ("temporary lottery committee", "switchboard_forum"),
+            ("rotating review chamber for civic oversight", "switchboard_forum_variant"),
             ("quarantine zone", "refuge_compound"),
             ("deep sea exploration", "underwater_kingdom"),
             ("desert oasis", "desert_outpost"),
@@ -152,6 +154,7 @@ class TestSelectScene:
             ("奇幻", "fantasy_kingdom"),
             ("arcane wizard conclave in a rune sanctuary", "arcane_sanctum"),
             ("如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？", "law_court"),
+            ("constitutional chamber with a multi-judge hearing", "law_court_variant"),
             ("constitutional court emergency veto", "law_court"),
             ("如果罗马帝国从未衰落？", "imperial_forum"),
             ("roman senate power struggle", "imperial_forum"),
@@ -169,6 +172,7 @@ class TestSelectScene:
             ("如果跨大陆淡水供应在十年内枯竭，会发生什么？", "ecology_wasteland"),
             ("climate migration after freshwater collapse", "ecology_wasteland"),
             ("如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？", "faith_temple"),
+            ("doctrinal council facing a clerical schism", "faith_temple_variant"),
             ("prophecy-backed temple rule", "faith_temple"),
             ("fortified quarantine refuge after famine", "refuge_compound"),
             ("如果世界大战在高度自动化军备时代再次爆发？", "war_command"),
@@ -183,6 +187,7 @@ class TestSelectScene:
             ("如果火星殖民地在补给断裂后必须决定是否强制撤离，会发生什么？", "space_station"),
             ("What if a Mars colony lost life support and had to choose an evacuation route?", "space_station"),
             ("如果所有大型组织都必须每周随机交换一次负责人，会发生什么？", "switchboard_forum"),
+            ("rotating review chamber for procedural oversight", "switchboard_forum_variant"),
             ("What if every major institution had to swap leaders at random every week?", "switchboard_forum"),
             ("如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？", "switchboard_forum"),
             ("What if every high-stakes decision had to be re-approved by a rotating external review board?", "switchboard_forum"),
@@ -277,4 +282,4 @@ class TestAvailableScenes:
         assert len(AVAILABLE_SCENES) > 0
 
     def test_exactly_27_scenes(self):
-        assert len(AVAILABLE_SCENES) == 27
+        assert len(AVAILABLE_SCENES) == 30

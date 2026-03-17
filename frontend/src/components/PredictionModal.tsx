@@ -5,6 +5,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
+import { getDirectorIdentity, updateDirectorName } from '../lib/directorIdentity';
 import {
   buildStructuredPredictionText,
   ENDING_TONE_OPTIONS,
@@ -39,7 +40,9 @@ export default function PredictionModal({
   currentRound = 1,
   onAutomationStateChange,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isZh = i18n.language.startsWith('zh');
+  const directorIdentity = getDirectorIdentity();
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const branchOptions = getStructuredBetOptions(branches);
@@ -47,7 +50,7 @@ export default function PredictionModal({
   const [endingTone, setEndingTone] = useState<EndingToneId>('order');
   const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
   const [confidence, setConfidence] = useState(0.5);
-  const [userName, setUserName] = useState('');
+  const [userName, setUserName] = useState(directorIdentity.userName);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -115,8 +118,8 @@ export default function PredictionModal({
       betKind === 'branch_winner'
         ? branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? targetBranchId
         : betKind === 'ending_tone'
-          ? getEndingToneLabel(endingTone, true)
-          : PROFILE_RESONANCE_OPTIONS[profileResonance].zh;
+          ? getEndingToneLabel(endingTone, isZh)
+          : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
     const predictionText = buildStructuredPredictionText({
       kind: betKind,
       targetId:
@@ -135,7 +138,17 @@ export default function PredictionModal({
     });
 
     try {
-      await submitPrediction(scenarioId, predictionText, confidence, userName.trim() || undefined);
+      const trimmedName = userName.trim();
+      await submitPrediction(
+        scenarioId,
+        predictionText,
+        confidence,
+        trimmedName || undefined,
+        directorIdentity.userId,
+      );
+      if (trimmedName) {
+        updateDirectorName(trimmedName);
+      }
       placeBet(scenarioId, {
         betId: crypto.randomUUID(),
       kind: betKind,
@@ -206,9 +219,9 @@ export default function PredictionModal({
               onChange={(e) => setBetKind(e.target.value as StructuredBetKind)}
               disabled={isDisabled}
             >
-              <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', true)}</option>
-              <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', true)}</option>
-              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', true)}</option>
+              <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', isZh)}</option>
+              <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', isZh)}</option>
+              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', isZh)}</option>
             </select>
           </div>
 
@@ -236,11 +249,11 @@ export default function PredictionModal({
                 id="pred-tone"
                 className="pred-input"
                 value={endingTone}
-                onChange={(e) => setEndingTone(e.target.value as EndingToneId)}
-                disabled={isDisabled}
-              >
+              onChange={(e) => setEndingTone(e.target.value as EndingToneId)}
+              disabled={isDisabled}
+            >
                 {Object.entries(ENDING_TONE_OPTIONS).map(([tone, labels]) => (
-                  <option key={tone} value={tone}>{labels.zh}</option>
+                  <option key={tone} value={tone}>{labels[isZh ? 'zh' : 'en']}</option>
                 ))}
               </select>
             </div>
@@ -253,11 +266,11 @@ export default function PredictionModal({
                 id="pred-resonance"
                 className="pred-input"
                 value={profileResonance}
-                onChange={(e) => setProfileResonance(e.target.value as ProfileResonanceId)}
-                disabled={isDisabled}
-              >
+              onChange={(e) => setProfileResonance(e.target.value as ProfileResonanceId)}
+              disabled={isDisabled}
+            >
                 {Object.entries(PROFILE_RESONANCE_OPTIONS).map(([resonance, labels]) => (
-                  <option key={resonance} value={resonance}>{labels.zh}</option>
+                  <option key={resonance} value={resonance}>{labels[isZh ? 'zh' : 'en']}</option>
                 ))}
               </select>
             </div>
@@ -284,8 +297,8 @@ export default function PredictionModal({
               {betKind === 'branch_winner'
                 ? (branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? '—')
                 : betKind === 'ending_tone'
-                  ? ENDING_TONE_OPTIONS[endingTone].zh
-                  : PROFILE_RESONANCE_OPTIONS[profileResonance].zh}
+                  ? ENDING_TONE_OPTIONS[endingTone][isZh ? 'zh' : 'en']
+                  : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en']}
             </span>
           </div>
 

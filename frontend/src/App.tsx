@@ -4,6 +4,7 @@
 
 import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 
 const InputView = lazy(() =>
@@ -17,7 +18,8 @@ const HistoryView = lazy(() => import('./pages/HistoryView'));
 const LeaderboardView = lazy(() => import('./pages/LeaderboardView'));
 
 function RouteFallback() {
-  return <div className="game-skeleton">Loading…</div>;
+  const { t } = useTranslation();
+  return <div className="game-skeleton">{t('common.loading')}</div>;
 }
 
 export default function App() {

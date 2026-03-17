@@ -68,6 +68,67 @@ export interface LeaderboardEntry {
   win_streak: number;
 }
 
+export interface CampaignBadge {
+  id: string;
+  badge_id: string;
+  unlocked_at: string;
+  source_profile_id?: string | null;
+  source_scenario_id?: string | null;
+}
+
+export interface CampaignProfileSummary {
+  user_id: string;
+  user_name: string;
+  total_runs: number;
+  completed_challenges: number;
+  total_bets: number;
+  hit_bets: number;
+  highest_archive_grade: string | null;
+  created_at: string;
+  updated_at: string;
+  last_daily_challenge_completed_at?: string | null;
+  last_daily_challenge_profile_id?: string | null;
+  last_daily_challenge_scenario_id?: string | null;
+}
+
+export interface CampaignMastery {
+  profile_id: string;
+  runs: number;
+  challenge_completions: number;
+  signature_hits: number;
+  aligned_hits: number;
+  campaign_score: number;
+  level: number;
+  best_archive_grade: string | null;
+  favorite_card_id?: string | null;
+  next_level_score: number | null;
+  score_to_next_level: number | null;
+}
+
+export interface CampaignFinalizeResult {
+  scenario_id: string;
+  already_finalized: boolean;
+  campaign_score_delta: number;
+  profile: CampaignProfileSummary;
+  mastery: CampaignMastery;
+  newly_unlocked_badges: CampaignBadge[];
+  badges: CampaignBadge[];
+}
+
+export interface CampaignDailyChallengeStatus {
+  user_id: string;
+  profile_id: string;
+  local_date: string;
+  timezone_offset_minutes: number;
+  completed: boolean;
+  scenario_id?: string | null;
+  completed_at?: string | null;
+  most_used_card?: string | null;
+  betting_hit?: boolean | null;
+  profile_resonance?: 'signature' | 'aligned' | 'offbeat' | null;
+  campaign_score_delta?: number | null;
+}
+
 export interface BranchInfo {
   id: string;
   parent_branch_id: string | null;

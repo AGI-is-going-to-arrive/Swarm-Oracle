@@ -20,17 +20,20 @@ api/scenarios.py ──► api/schemas.py (Pydantic 模型)
     │       ├── events.py (事件类型枚举 + 工厂，含 WEATHER_CHANGE)
     │       ├── mapper.py (VisualizationMapper — 8 个 map_* 方法)
     │       ├── persona_mapper.py (Agent → Sprite 分配 + 坐标计算)
-    │       ├── scene_selector.py (双签名 → 27 场景语义池；原始题面优先，含 generic 专属 `switchboard_forum`)
-    │       └── card_events.py (卡牌事件触发 + 可视化映射)
+    │       ├── scene_selector.py (双签名 → 30 场景语义池；原始题面优先，含 `law_court_variant` / `faith_temple_variant` / `switchboard_forum_variant`)
+    │       └── card_events.py (卡牌事件触发 + 可视化映射；卡牌定义由 `services/gameplay_contract.py` 装载 shared contract)
+    │
+api/campaign.py ──► services/campaign.py (Track A / Phase A1 + A3 daily-status)
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联)
     │
-main.py ──► `GET /` 根信息端点（容器进程级健康检查）
+main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点
     │
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
+models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 config.py ──► pydantic-settings (Settings singleton)
 alembic/ ──► Alembic 数据库迁移框架
@@ -98,6 +101,12 @@ alembic/ ──► Alembic 数据库迁移框架
   - `VectorStore.health_check()` — 连通性检查
 - **设计**: 按 scenario_id 分 collection，全局单例，ChromaDB 不可用时静默降级
 
+### `gameplay_contract.py` (≈15行) — shared gameplay contract 载入器 (**NEW**)
+- **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约
+- **关键API**:
+  - `load_gameplay_contract()` → `dict[str, Any]` — `lru_cache(maxsize=1)` 缓存 contract JSON
+- **集成点**: `visualization/card_events.py` 启动时据此构建 `CARD_TYPES`，后端测试 `test_gameplay_contract_sync.py` 会校验卡牌 ID 与触发模式和 shared contract 保持一致
+
 ### `llm_client.py` (≈270行) — LLM调用封装
 - **职责**: httpx异步调用OpenAI兼容API
 - **关键函数**:
@@ -140,7 +149,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `events.py` (≈60行) — `VizEventType` 枚举 (9 种事件类型，含 `WEATHER_CHANGE`) + `make_viz_event()` 工厂函数
   - `mapper.py` (≈300行) — `VisualizationMapper` 类，8 个 `map_*` 方法（agent_speak、stance_move、branch_split、intervention、emotion_change、scene_change、ending、**weather_change**）；stance 参数统一 clamp [-1, 1]
   - `persona_mapper.py` (≈130行) — `assign_sprite()`/`assign_sprites_batch()`/`assign_position()` — 角色→精灵分配 + 坐标计算；total_agents ≤ 0 守卫 + stance clamp [-1, 1]
-  - `scene_selector.py` — `select_scene(question)` / `select_scene(era=, setting=)` 双签名；当前已扩到 27 个语义场景主题，优先扫描原始 `question`，再回退到 parser 的 `era/setting`，避免泛化词压过更贴题的场景语义；`switchboard_forum` 现同时覆盖“随机换帅 / 负责人轮换 / leader shuffle / lottery committee / rotating external review board”这类 generic 组织博弈题面
+  - `scene_selector.py` — `select_scene(question)` / `select_scene(era=, setting=)` 双签名；当前已扩到 30 个语义场景主题，优先扫描原始 `question`，再回退到 parser 的 `era/setting`，避免泛化词压过更贴题的场景语义；generic / law / faith 已补进 `switchboard_forum_variant / law_court_variant / faith_temple_variant`
   - `card_events.py` (≈120行) — `check_card_trigger()`/`get_card_viz_event()` — 卡牌事件触发 + 冷却 + 加权随机（单候选安全回退）
 - **集成点**: `simulator.py` (调用 `assign_sprites_batch`/`assign_position`) → WebSocket (`viz:*` 事件) → 前端 `EventBridge.ts` → Phaser `WorldScene.ts`
 - **测试覆盖**: `test_simulator_viz_integration.py` 覆盖 scene reachability、ending type 3级映射、Worker viz 事件和全流程 smoke
@@ -149,6 +158,19 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 为已完成的分支生成故事总结和洞察
 - **输出**: `{title, story, insight, key_moments[]}`
 - **返回值归一化**: narrator 现在会容忍 `llm_call_json()` 返回 `list[dict]` 或字符串列表，优先提取第一条可用叙事，避免再因 `list` 没有 `.get()` 把整局场景打进 `error`
+
+### `campaign.py` (≈330行) — Campaign 进度服务 (**NEW**)
+- **职责**: 管理导演 campaign 进度结算、档案积分、题材 mastery 与 badge 解锁
+- **关键函数**:
+  - `finalize_scenario_campaign(...)` — 对已完成 scenario 做一次性结算；同一 scenario 对同一导演幂等，若绑定到不同导演则抛 `CampaignConflictError`
+  - `calculate_campaign_score_delta(...)` — 按 archive grade / profile resonance / bet / daily challenge 规则计算积分增量
+  - `get_campaign_profile_summary(user_id)` — 读取导演总览
+  - `list_campaign_mastery_summaries(user_id)` — 按 `campaign_score` 列出题材 mastery
+  - `list_campaign_badge_summaries(user_id)` — 列出已解锁 badge
+  - `get_daily_challenge_summary(user_id, profile_id, local_date, timezone_offset_minutes)` — 返回指定题材在调用方本地日期上的 daily challenge 完成态
+- **数据写入**: 会更新 `DirectorProfile`、`ProfileMastery`，并写入不可变的 `ScenarioCampaignLog`
+- **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
+- **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
 - **职责**: LLM 对比用户预测与模拟实际结果，给出 0-100 准确度评分
@@ -192,6 +214,15 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `GET /api/scenario/{id}/social/{platform}` | GET | 生成社交媒体文案 — 支持小红书/微博/知乎/Reddit/X |
 
+### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
+| `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
+| `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
+| `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态 |
+| `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
+
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
 - 总模拟超时 `MAX_ROUNDS × 180s`
@@ -222,12 +253,16 @@ alembic/ ──► Alembic 数据库迁移框架
 | `InterventionLog` | id, branch_id, round_number, text | belongs_to: branch |
 | `AgentGroup` | id, scenario_id, name, leader_agent_id, member_count | belongs_to: scenario (P3-A) |
 | `AgentGroupMember` | id, group_id, agent_id, is_leader | belongs_to: group, agent (P3-A) |
+| `DirectorProfile` | id, user_id, user_name, total_runs, completed_challenges, total_bets, hit_bets, highest_archive_grade | campaign 导演总档案 |
+| `ProfileMastery` | id, director_profile_id, profile_id, runs, challenge_completions, signature_hits, aligned_hits, campaign_score, level | belongs_to: DirectorProfile |
+| `DirectorBadgeUnlock` | id, director_profile_id, badge_id, unlocked_at, source_profile_id, source_scenario_id | belongs_to: DirectorProfile |
+| `ScenarioCampaignLog` | id, scenario_id, director_profile_id, profile_id, archive_grade, profile_resonance, campaign_score_delta | 每局结算不可变日志 |
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
 ## 测试覆盖
 
-最近一次已验证的后端全量回归为 **777 passed, 2 warnings**；本轮额外跑过 `test_scene_selector.py` 与 `test_simulator_viz_integration.py`，结果分别为 **139 passed** 与 **70 passed**。
+后端本轮真实全量回归结果为 **798 passed, 2 warnings**；此外新增定向回归通过，覆盖 `test_campaign_api.py`、`test_campaign_service.py`、`test_gameplay_contract_sync.py`、`test_scene_selector.py`、`test_simulator_viz_integration.py` 与 `test_e2e_sample_matrix.py`。
 
 覆盖重心：
 
@@ -240,6 +275,14 @@ alembic/ ──► Alembic 数据库迁移框架
   - `test_visualization_mapper.py`
   - `test_visualization_events.py`
   - `test_scene_selector.py`
+- Campaign / shared contract 定向回归：
+  - `test_campaign_api.py`
+  - `test_campaign_service.py`
+  - `test_gameplay_contract_sync.py`
+  - 覆盖 `campaign` router / service 的 finalize 流程、幂等返回、`daily-status` 查询，以及 `card_events.py` 与 `shared/gameplay_contract.v1.json` 的同步约束
+- E2E 样本契约回归：
+  - `test_e2e_sample_matrix.py`
+  - 校验 `frontend/output/e2e/sample_matrix.json` 与 `sample_matrix_variants.json` 的 `scene_theme` 和当前 `select_scene(question)` 保持一致，避免旧样本主题漂移
 - 测试夹具：
   - `tests/conftest.py`
   - 每个 pytest case 使用独立临时 SQLite 文件，并在前后显式 `dispose_engine()`，避免共享 `test_swarmoracle.db` 带来的 `readonly database / disk I/O / table already exists`

@@ -5,12 +5,19 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { getScenario, getStory, getAgents, exportScenario, listPredictions, scorePredictions } from '../api/client';
-import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
-  getChallengeProgress,
-  getTodayChallenge,
-  isChallengeScenario,
+  exportScenario,
+  finalizeCampaign,
+  getAgents,
+  getScenario,
+  getStory,
+  listPredictions,
+  scorePredictions,
+} from '../api/client';
+import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
+import { getDirectorIdentity } from '../lib/directorIdentity';
+import {
+  findChallengeProgressByScenarioId,
   markChallengeCompleted,
 } from '../lib/dailyChallenge';
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
@@ -33,7 +40,7 @@ import {
   getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
-import type { StoryData, AgentInfo, PredictionInfo, Scenario } from '../types';
+import type { AgentInfo, CampaignFinalizeResult, PredictionInfo, Scenario, StoryData } from '../types';
 import ShareModal from '../components/ShareModal';
 import './ResultView.css';
 
@@ -50,11 +57,71 @@ function getBetOutcomeClass(outcome: StructuredBetOutcome) {
   return `bet-outcome-chip bet-outcome-chip--${outcome}`;
 }
 
+function getCampaignBadgeCopy(badgeId: string, isZh: boolean) {
+  const badges = {
+    daily_challenge: {
+      zh: {
+        label: '每日挑战',
+        description: '完成至少一场每日挑战。',
+      },
+      en: {
+        label: 'Daily Challenge',
+        description: 'Complete at least one daily challenge run.',
+      },
+    },
+    archive_record: {
+      zh: {
+        label: '档案留痕',
+        description: '拿到 A 或 S 级因果档案。',
+      },
+      en: {
+        label: 'Archive Record',
+        description: 'Earn an A or S causal archive grade.',
+      },
+    },
+    bet_winner: {
+      zh: {
+        label: '押注命中',
+        description: '至少命中一次已结算下注。',
+      },
+      en: {
+        label: 'Bet Winner',
+        description: 'Hit at least one resolved prediction bet.',
+      },
+    },
+  } as const;
+
+  const fallback = isZh
+    ? { label: badgeId, description: '新徽章已解锁。' }
+    : { label: badgeId, description: 'A new badge has been unlocked.' };
+  return badges[badgeId as keyof typeof badges]?.[isZh ? 'zh' : 'en'] ?? fallback;
+}
+
+function classifyCampaignFinalizeError(err: unknown): 'missing' | 'conflict' | 'other' {
+  if (!(err instanceof Error)) return 'other';
+  if (err.message.includes('API 404:')) return 'missing';
+  if (err.message.includes('API 409:')) return 'conflict';
+  return 'other';
+}
+
+function getCampaignBoundaryMessage(kind: 'missing' | 'conflict', isZh: boolean): string {
+  if (kind === 'missing') {
+    return isZh
+      ? '当前结果来自临时或模拟数据源，本地导演生涯未写入。'
+      : 'This result comes from a temporary or mocked data source, so campaign progress was not persisted locally.';
+  }
+
+  return isZh
+    ? '这条历史结果已归属于另一位导演档案，本设备不会重复计入生涯进展。'
+    : 'This archived run already belongs to another director profile, so it will not be counted again on this device.';
+}
+
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
+  const directorIdentity = getDirectorIdentity();
 
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -69,6 +136,9 @@ export default function ResultView() {
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState('');
+  const [campaignSummary, setCampaignSummary] = useState<CampaignFinalizeResult | null>(null);
+  const [campaignError, setCampaignError] = useState('');
+  const [campaignNotice, setCampaignNotice] = useState('');
   const hasUnscored = predictions.some((p) => p.score == null);
 
   useEffect(() => {
@@ -104,8 +174,8 @@ export default function ResultView() {
           ...story,
           question: story.question || scenario.question,
         });
-        const todayChallenge = getTodayChallenge();
-        const isDailyChallenge = isChallengeScenario(todayChallenge.id, id);
+        const challengeMatch = findChallengeProgressByScenarioId(id);
+        const isDailyChallenge = Boolean(challengeMatch);
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
         const nextMeta = updateArchive(id, {
           question: scenario.question,
@@ -126,14 +196,39 @@ export default function ResultView() {
           profileId: profile.id,
         });
         const finalMeta = updateArchive(id, archiveSummary);
-        if (isDailyChallenge) {
-          markChallengeCompleted(todayChallenge.id, id, {
+        if (isDailyChallenge && challengeMatch?.challengeId) {
+          markChallengeCompleted(challengeMatch.challengeId, id, {
             resultBranchId: story.branches[0]?.id,
             usedCards: finalMeta.cards.usageLog.map((usage) => usage.cardId),
             betPlaced: finalMeta.betting.bets.length > 0,
             bettingHit: archiveSummary.bettingHit ?? null,
             profileResonance: archiveSummary.profileResonance,
-          });
+          }, challengeMatch.challengeDay ? new Date(`${challengeMatch.challengeDay}T12:00:00`) : new Date());
+        }
+
+        const campaign = await finalizeCampaign(id, {
+          user_id: directorIdentity.userId,
+          user_name: directorIdentity.userName,
+          profile_id: profile.id,
+          archive_grade: archiveSummary.archiveGrade,
+          profile_resonance: archiveSummary.profileResonance,
+          betting_hit: archiveSummary.bettingHit ?? null,
+          bet_count: finalMeta.betting.bets.length,
+          most_used_card: archiveSummary.mostUsedCard ?? null,
+          completed_daily_challenge: isDailyChallenge,
+        }).catch((err) => {
+          if (!cancelled) {
+            const kind = classifyCampaignFinalizeError(err);
+            if (kind === 'missing' || kind === 'conflict') {
+              setCampaignNotice(getCampaignBoundaryMessage(kind, isZh));
+            } else {
+              setCampaignError(err instanceof Error ? err.message : 'Failed to finalize campaign');
+            }
+          }
+          return null;
+        });
+        if (!cancelled) {
+          setCampaignSummary(campaign);
         }
       } catch (err) {
         if (cancelled) return;
@@ -148,13 +243,16 @@ export default function ResultView() {
     setLoading(true);
     setError('');
     setStoryData(null);
+    setCampaignSummary(null);
+    setCampaignError('');
+    setCampaignNotice('');
     void load();
 
     return () => {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [id]);
+  }, [directorIdentity.userId, directorIdentity.userName, id, isZh]);
 
   useEffect(() => {
     const win = window as AutomationWindow;
@@ -193,6 +291,16 @@ export default function ResultView() {
               };
             })()
           : null,
+        campaign_summary: campaignSummary
+          ? {
+              already_finalized: campaignSummary.already_finalized,
+              campaign_score_delta: campaignSummary.campaign_score_delta,
+              level: campaignSummary.mastery.level,
+              score_to_next_level: campaignSummary.mastery.score_to_next_level,
+              badge_count: campaignSummary.badges.length,
+              newly_unlocked_badges: campaignSummary.newly_unlocked_badges.map((badge) => badge.badge_id),
+            }
+          : null,
         controls: {
           can_go_back_to_simulation: true,
           can_export_markdown: !exporting,
@@ -220,7 +328,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, error, expandedBranch, exporting, hasUnscored, loading, predictions, scoring, shareAutomation, showShare, storyData]);
+  }, [agents.length, campaignSummary, error, expandedBranch, exporting, hasUnscored, loading, predictions, scoring, shareAutomation, showShare, storyData]);
 
   const handleExport = async () => {
     if (!id || exporting) return;
@@ -275,9 +383,9 @@ export default function ResultView() {
       ? branches.find((branch) => branch.title === scenarioMeta.archive.dominantBranchTitle) ?? null
       : null
   ), [branches, scenarioMeta?.archive.dominantBranchTitle]);
-  const challenge = getTodayChallenge();
-  const isDailyChallenge = id ? isChallengeScenario(challenge.id, id) : false;
-  const challengeProgress = isDailyChallenge ? getChallengeProgress(challenge.id) : null;
+  const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
+  const isDailyChallenge = Boolean(challengeMatch);
+  const challengeProgress = challengeMatch?.progress ?? null;
   const profileResonanceLabel = scenarioMeta?.archive.profileResonance
     ? t(`result.archive_resonance_${scenarioMeta.archive.profileResonance}`)
     : t('result.archive_unset');
@@ -327,6 +435,12 @@ export default function ResultView() {
       outcome: resolveStructuredBetOutcome(bet, betOutcomeContext),
     })) ?? []
   ), [betOutcomeContext, scenarioMeta?.betting.bets]);
+  const newlyUnlockedBadges = useMemo(() => (
+    campaignSummary?.newly_unlocked_badges.map((badge) => ({
+      badge,
+      copy: getCampaignBadgeCopy(badge.badge_id, isZh),
+    })) ?? []
+  ), [campaignSummary?.newly_unlocked_badges, isZh]);
   const hitBetCount = localBetOutcomes.filter((entry) => entry.outcome === 'hit').length;
   const resolvedBetCount = localBetOutcomes.filter((entry) => entry.outcome !== 'pending').length;
 
@@ -572,7 +686,7 @@ export default function ResultView() {
           <img
             className="result-archive__art"
             src="/assets/ui/generated/archive_panel.png"
-            alt="Archive seal illustration"
+            alt={t('common.archive_seal_alt')}
           />
           <div className="result-archive__meta">
             {gameplayProfileLabel && (
@@ -606,7 +720,7 @@ export default function ResultView() {
             )}
           </div>
           {gameplayProfileHooks.length > 0 && (
-            <div className="result-archive__hooks" aria-label={isZh ? '题材钩子' : 'Theme hooks'}>
+            <div className="result-archive__hooks" aria-label={t('common.theme_hooks_aria')}>
               {gameplayProfileHooks.map((hook) => (
                 <span key={hook} className="archive-chip archive-chip--hook">
                   {hook}
@@ -714,6 +828,54 @@ export default function ResultView() {
             </div>
           )}
         </section>
+      )}
+
+      {campaignSummary && (
+        <section className="result-campaign">
+          <h2 className="result-campaign__title">{t('result.campaign_title')}</h2>
+          <div className="result-campaign__grid">
+            <div className="result-campaign__card">
+              <span>{t('result.campaign_delta')}</span>
+              <strong>+{campaignSummary.campaign_score_delta}</strong>
+            </div>
+            <div className="result-campaign__card">
+              <span>{t('result.campaign_level')}</span>
+              <strong>{t('home.campaign_mastery_level', { level: campaignSummary.mastery.level })}</strong>
+            </div>
+            <div className="result-campaign__card">
+              <span>{t('result.campaign_next')}</span>
+              <strong>
+                {(campaignSummary.mastery.score_to_next_level ?? 0) > 0
+                  ? t('home.campaign_next_unlock', { count: campaignSummary.mastery.score_to_next_level ?? 0 })
+                  : t('home.campaign_mastered')}
+              </strong>
+            </div>
+            <div className="result-campaign__card">
+              <span>{t('result.campaign_badges')}</span>
+              <strong>{campaignSummary.badges.length}</strong>
+            </div>
+          </div>
+          <div className="result-campaign__badges">
+            {newlyUnlockedBadges.length > 0 ? (
+              newlyUnlockedBadges.map(({ badge, copy }) => (
+                <article key={`${badge.id}-${badge.unlocked_at}`} className="result-campaign__badge">
+                  <strong>{copy.label}</strong>
+                  <small>{copy.description}</small>
+                </article>
+              ))
+            ) : (
+              <p className="result-campaign__empty">{t('result.campaign_badges_none')}</p>
+            )}
+          </div>
+        </section>
+      )}
+
+      {campaignNotice && (
+        <p className="result-note result-note--spaced">{campaignNotice}</p>
+      )}
+
+      {campaignError && (
+        <p className="result-error result-error--spaced">{campaignError}</p>
       )}
 
       {/* Agent Roster */}

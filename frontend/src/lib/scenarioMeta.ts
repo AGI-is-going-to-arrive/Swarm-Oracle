@@ -1,6 +1,7 @@
 import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
 import type { EndingToneId } from './predictionBetting';
 import type { ProfileResonance } from './archiveSummary';
+import { CONTRACT_CARD_RULES } from './gameplayContract';
 
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
 
@@ -65,18 +66,7 @@ interface RootStore {
   scenarios: Record<string, ScenarioMeta>;
 }
 
-export const CARD_RULES: Record<GameplayCardId, { cost: number; cooldownRounds: number }> = {
-  civilization_debate: { cost: 1, cooldownRounds: 1 },
-  spy_infiltrate: { cost: 1, cooldownRounds: 2 },
-  backchannel_pact: { cost: 1, cooldownRounds: 2 },
-  human_takeover: { cost: 1, cooldownRounds: 2 },
-  spacetime_rift: { cost: 1, cooldownRounds: 2 },
-  mandate_surge: { cost: 1, cooldownRounds: 1 },
-  evacuation_order: { cost: 1, cooldownRounds: 1 },
-  public_hearing: { cost: 1, cooldownRounds: 1 },
-  resource_triage: { cost: 1, cooldownRounds: 1 },
-  forbidden_ritual: { cost: 1, cooldownRounds: 2 },
-};
+export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
 
 function createDefaultScenarioMeta(): ScenarioMeta {
   return {

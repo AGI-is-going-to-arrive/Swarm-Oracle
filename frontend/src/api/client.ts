@@ -6,6 +6,7 @@ import type {
   Scenario, Branch, StoryData, AgentInfo, AgentGroupDetail,
   InterventionPayload, InterventionResponse,
   PredictionInfo, LeaderboardEntry,
+  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary,
 } from '../types';
 
 const BASE = '/api';
@@ -195,12 +196,14 @@ export async function submitPrediction(
   predictionText: string,
   confidence: number,
   userName?: string,
+  userId?: string,
 ): Promise<PredictionInfo> {
   return request(`/scenario/${scenarioId}/predict`, {
     method: 'POST',
     body: JSON.stringify({
       prediction_text: predictionText,
       confidence,
+      ...(userId && { user_id: userId }),
       ...(userName && { user_name: userName }),
     }),
   });
@@ -219,6 +222,54 @@ export async function scorePredictions(scenarioId: string): Promise<{ scored: nu
 /** GET /api/leaderboard — global prediction leaderboard (P5-B) */
 export async function getLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
   return request(`/leaderboard?limit=${limit}`);
+}
+
+export interface FinalizeCampaignPayload {
+  user_id: string;
+  user_name: string;
+  profile_id: string;
+  archive_grade?: string | null;
+  profile_resonance?: string | null;
+  betting_hit?: boolean | null;
+  most_used_card?: string | null;
+  completed_daily_challenge?: boolean;
+  bet_count?: number;
+}
+
+export async function finalizeCampaign(
+  scenarioId: string,
+  payload: FinalizeCampaignPayload,
+): Promise<CampaignFinalizeResult> {
+  return request(`/campaign/scenario/${scenarioId}/finalize`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getCampaignProfile(userId: string): Promise<CampaignProfileSummary> {
+  return request(`/campaign/profile/${userId}`);
+}
+
+export async function getCampaignMastery(userId: string): Promise<CampaignMastery[]> {
+  return request(`/campaign/profile/${userId}/mastery`);
+}
+
+export async function getCampaignBadges(userId: string): Promise<CampaignBadge[]> {
+  return request(`/campaign/profile/${userId}/badges`);
+}
+
+export async function getCampaignDailyChallengeStatus(
+  userId: string,
+  profileId: string,
+  localDate: string,
+  timezoneOffsetMinutes: number,
+): Promise<CampaignDailyChallengeStatus> {
+  const params = new URLSearchParams({
+    profile_id: profileId,
+    local_date: localDate,
+    timezone_offset_minutes: String(timezoneOffsetMinutes),
+  });
+  return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`);
 }
 
 /** Intervention template from backend */

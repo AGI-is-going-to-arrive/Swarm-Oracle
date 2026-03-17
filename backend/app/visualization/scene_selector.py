@@ -43,6 +43,18 @@ SCENE_MAP: dict[str, str] = {
     "every high-stakes decision had to be re-approved by a rotating external review board": "switchboard_forum",
     "所有关键城市都必须每三十天由抽签产生的临时委员会接管": "switchboard_forum",
 
+    # ── switchboard_forum_variant (more ceremonial / procedural generic governance) ──
+    "rotating review chamber": "switchboard_forum_variant",
+    "procedural tribunal": "switchboard_forum_variant",
+    "civic switchboard chamber": "switchboard_forum_variant",
+    "committee dais": "switchboard_forum_variant",
+    "oversight chamber": "switchboard_forum_variant",
+    "轮值审查议场": "switchboard_forum_variant",
+    "程序议场": "switchboard_forum_variant",
+    "外部审查议场": "switchboard_forum_variant",
+    "轮值委员会中枢": "switchboard_forum_variant",
+    "程序委员会大厅": "switchboard_forum_variant",
+
     # ── surveillance_megacity (platform governance / monitoring city) ──
     "platform state": "surveillance_megacity",
     "social credit": "surveillance_megacity",
@@ -140,6 +152,19 @@ SCENE_MAP: dict[str, str] = {
     "司法": "law_court",
     "否决": "law_court",
     "审计": "law_court",
+
+    # ── law_court_variant (more ceremonial / archival legal conflict) ──
+    "grand tribunal archive chamber": "law_court_variant",
+    "grand tribunal": "law_court_variant",
+    "constitutional chamber": "law_court_variant",
+    "appellate bench": "law_court_variant",
+    "multi-judge hearing": "law_court_variant",
+    "judicial archive": "law_court_variant",
+    "合议庭": "law_court_variant",
+    "大审判庭": "law_court_variant",
+    "终审法庭": "law_court_variant",
+    "法官合议": "law_court_variant",
+    "司法档案厅": "law_court_variant",
 
     # ── trade_harbor (must beat generic desert on maritime trade cues) ──
     "maritime trade": "trade_harbor",
@@ -272,6 +297,18 @@ SCENE_MAP: dict[str, str] = {
     "祭司": "faith_temple",
     "圣谕": "faith_temple",
     "神殿": "faith_temple",
+
+    # ── faith_temple_variant (doctrine council / clerical split) ──
+    "sacred council": "faith_temple_variant",
+    "doctrinal council": "faith_temple_variant",
+    "clerical schism": "faith_temple_variant",
+    "ritual council": "faith_temple_variant",
+    "canon schism": "faith_temple_variant",
+    "圣议会": "faith_temple_variant",
+    "教义议会": "faith_temple_variant",
+    "祭司议会": "faith_temple_variant",
+    "教团分裂": "faith_temple_variant",
+    "神殿议事": "faith_temple_variant",
     "神启": "faith_temple",
 
     # ── arcane_sanctum (mythic magic / wizard / dragon) ──
@@ -476,6 +513,7 @@ AVAILABLE_SCENES = frozenset({
     "surveillance_megacity",
     "civic_chamber",
     "law_court",
+    "law_court_variant",
     "imperial_forum",
     "dynastic_palace",
     "scifi_base",
@@ -486,6 +524,7 @@ AVAILABLE_SCENES = frozenset({
     "fantasy_kingdom",
     "arcane_sanctum",
     "faith_temple",
+    "faith_temple_variant",
     "refuge_compound",
     "war_command",
     "logistics_hub",
@@ -494,6 +533,7 @@ AVAILABLE_SCENES = frozenset({
     "underwater_kingdom",
     "desert_outpost",
     "trade_harbor",
+    "switchboard_forum_variant",
     "ecology_wasteland",
 })
 

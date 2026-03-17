@@ -12,15 +12,18 @@ const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json")
 const MATRIX_SCENARIO_FALLBACKS = {
   governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
   law: { question: "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？", rounds: 1, numAgents: 3 },
+  law_grand_tribunal: { question: "What if every constitutional dispute had to be retried in a grand tribunal archive chamber before enforcement?", rounds: 1, numAgents: 3 },
   trade: { question: "如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？", rounds: 1, numAgents: 3 },
   ecology: { question: "如果跨大陆淡水供应在十年内枯竭，会发生什么？", rounds: 1, numAgents: 3 },
   war: { question: "如果世界大战在高度自动化军备时代再次爆发，会发生什么？", rounds: 1, numAgents: 3 },
   faith: { question: "如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？", rounds: 1, numAgents: 3 },
+  faith_council: { question: "What if a sacred council had to settle a clerical schism before every prophecy could become law?", rounds: 1, numAgents: 3 },
   industry: { question: "如果一座跨大陆熔炉联合体遭遇产能瓶颈，会发生什么？", rounds: 1, numAgents: 3 },
   frontier: { question: "如果一座前哨殖民地被迫以自治城邦的形式自救，会发生什么？", rounds: 1, numAgents: 3 },
   mythic: { question: "如果一群法师在秘法圣所中试图改写巨龙契约，会发生什么？", rounds: 1, numAgents: 3 },
   survival: { question: "如果最后一座避难城只能再维持三十天供电，会发生什么？", rounds: 1, numAgents: 3 },
   generic: { question: "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？", rounds: 1, numAgents: 3 },
+  generic_review_chamber: { question: "What if every emergency review had to pass through a rotating review chamber before execution?", rounds: 1, numAgents: 3 },
   governance_surveillance: { question: "如果一个平台国家依靠社会信用哨卡治理整座城市，会发生什么？", rounds: 1, numAgents: 3 },
   empire_palace: { question: "如果一场继承危机在王朝宫廷内部突然爆发，会发生什么？", rounds: 1, numAgents: 3 },
   industry_grid: { question: "如果大陆级电网枢纽发生连锁停电，会发生什么？", rounds: 1, numAgents: 3 },
@@ -33,6 +36,13 @@ function ensureDir(dirPath) {
 
 function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+}
+
+function getSceneThemeMismatch(sample, resolvedScenario) {
+  if (!sample.scene_theme) return null;
+  if (!resolvedScenario.sceneTheme) return null;
+  if (sample.scene_theme === resolvedScenario.sceneTheme) return null;
+  return `scene_theme mismatch: expected ${sample.scene_theme}, got ${resolvedScenario.sceneTheme}`;
 }
 
 function timestampLabel() {
@@ -69,8 +79,8 @@ function parseArgs(argv) {
     }
   }
 
-  if (!["matrix", "corners", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|full> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--headless]");
+  if (!["matrix", "corners", "mobile", "full"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|mobile|full> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--headless]");
   }
 
   return args;
@@ -363,6 +373,12 @@ async function createRuntimeMatrixScenario(baseUrl, sample) {
     );
   }
 
+  if (sample.scene_theme && scenario.scene_theme && sample.scene_theme !== scenario.scene_theme) {
+    throw new Error(
+      `Runtime fallback scenario ${created.id} for ${sample.theme} still mismatched scene_theme: expected ${sample.scene_theme}, got ${scenario.scene_theme}.`,
+    );
+  }
+
   return {
     requestedScenarioId: sample.scenario_id ?? null,
     scenarioId: scenario.id,
@@ -476,8 +492,13 @@ async function runResultFlow(page, {
   await page.getByRole("button", { name: /小红书|xiaohongshu/i }).click();
   const generated = await waitForAutomation(
     page,
-    (payload) => payload.page?.controls?.active_modal === "share" && payload.page?.controls?.modal_state?.loading === false,
-    40000,
+    (payload) => (
+      payload.page?.controls?.active_modal === "share"
+      && payload.page?.controls?.modal_state?.active_platform === "xiaohongshu"
+      && payload.page?.controls?.modal_state?.loading === false
+      && payload.page?.controls?.modal_state?.has_copy === true
+    ),
+    90000,
     "share generation",
   );
   writeJson(path.join(outputDir, "share-generated.json"), generated);
@@ -1006,15 +1027,34 @@ async function runMatrixSuite(args) {
   try {
     const summaries = [];
     for (const sample of samples) {
-      const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
-      const replayDir = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-proof`);
-      const replayShot = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-replay-headed.png`);
-      const resultDir = path.join(DEFAULT_OUTPUT_ROOT, `${sample.theme}-result-headed`);
+      const sampleDir = path.join(args.outputDir, sample.theme);
+      const replayDir = path.join(sampleDir, "replay");
+      const replayShot = path.join(sampleDir, "replay.png");
+      const resultDir = path.join(sampleDir, "result");
+      ensureDir(sampleDir);
+      let page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+      console.log(`[matrix] starting ${sample.theme}`);
       try {
         let resolvedScenario = await resolveMatrixScenario(args.baseUrl, sample);
         let replay;
         let result;
         let recovery = null;
+        const themeMismatchReason = getSceneThemeMismatch(sample, resolvedScenario);
+        if (themeMismatchReason) {
+          console.warn(
+            `[matrix] ${sample.theme} sample ${resolvedScenario.scenarioId} ${themeMismatchReason}; recreating runtime fallback scenario.`,
+          );
+          resolvedScenario = await createRuntimeMatrixScenario(args.baseUrl, sample);
+          if (!page.isClosed()) {
+            await page.close().catch(() => {});
+          }
+          page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+          recovery = {
+            fromScenarioId: sample.scenario_id ?? null,
+            reason: themeMismatchReason,
+            strategy: "runtime_created_fallback",
+          };
+        }
         try {
           replay = await runReplayFlow(page, {
             baseUrl: args.baseUrl,
@@ -1037,6 +1077,10 @@ async function runMatrixSuite(args) {
             `[matrix] ${sample.theme} sample ${resolvedScenario.scenarioId} failed (${originalMessage}); retrying with a runtime-created fallback scenario.`,
           );
           resolvedScenario = await createRuntimeMatrixScenario(args.baseUrl, sample);
+          if (!page.isClosed()) {
+            await page.close().catch(() => {});
+          }
+          page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
           recovery = {
             fromScenarioId: sample.scenario_id ?? null,
             reason: originalMessage,
@@ -1056,6 +1100,9 @@ async function runMatrixSuite(args) {
           });
         }
 
+        console.log(
+          `[matrix] completed ${sample.theme} -> ${resolvedScenario.scenarioId} (${resolvedScenario.createdAtRuntime ? "runtime" : "existing"})`,
+        );
         summaries.push({
           theme: sample.theme,
           scenarioId: resolvedScenario.scenarioId,
@@ -1068,7 +1115,9 @@ async function runMatrixSuite(args) {
           result,
         });
       } finally {
-        await page.close();
+        if (!page.isClosed()) {
+          await page.close().catch(() => {});
+        }
       }
     }
     return {
@@ -1179,6 +1228,113 @@ async function runCornersSuite(args) {
   }
 }
 
+async function runMobileSuite(args) {
+  const { browser, launchProfile } = await launchBrowser(args.headless);
+  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
+  const page = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+
+  try {
+    const governanceSample = await resolveMatrixScenario(args.baseUrl, {
+      theme: "governance",
+      scenario_id: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+      question: MATRIX_SCENARIO_FALLBACKS.governance.question,
+    });
+
+    await page.goto(`${args.baseUrl}/`, { waitUntil: "domcontentloaded" });
+    const homepage = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "input",
+      10000,
+      "mobile homepage",
+    );
+    writeJson(path.join(args.outputDir, "mobile-home.json"), homepage);
+    await saveScreenshot(page, path.join(args.outputDir, "mobile-home.png"));
+
+    await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    let theater = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "simulation",
+      60000,
+      "mobile Theater shell",
+    );
+    let lastSceneName = theater?.scene?.scene ?? null;
+    let mobileTheaterReady = false;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const settleStart = Date.now();
+      while (Date.now() - settleStart < 30000) {
+        await advanceAutomationTime(page, 500);
+        theater = await readAutomation(page);
+        lastSceneName = theater?.scene?.scene ?? null;
+        if (
+          theater?.page?.kind === "simulation"
+          && theater.scene?.scene
+          && theater.scene.scene !== "BootScene"
+          && theater.scene.scene !== "TitleScene"
+          && typeof theater.scene.agent_count === "number"
+          && theater.scene.agent_count > 0
+        ) {
+          mobileTheaterReady = true;
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+      if (mobileTheaterReady) break;
+      if (attempt < 2) {
+        console.warn(`[mobile] scene not ready (last=${lastSceneName ?? "null"}) — retrying with fresh page load`);
+        await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+        theater = await waitForAutomation(
+          page,
+          (payload) => payload.page?.kind === "simulation",
+          60000,
+          "mobile Theater shell retry",
+        );
+      }
+    }
+    if (
+      theater?.page?.kind !== "simulation"
+      || !theater.scene?.scene
+      || theater.scene.scene === "BootScene"
+      || theater.scene.scene === "TitleScene"
+      || typeof theater.scene.agent_count !== "number"
+      || theater.scene.agent_count <= 0
+    ) {
+      throw new Error(
+        `Timed out waiting for mobile Theater scene for ${governanceSample.scenarioId}; last scene=${lastSceneName ?? "null"}, agent_count=${theater?.scene?.agent_count ?? "null"}`,
+      );
+    }
+    writeJson(path.join(args.outputDir, "mobile-theater.json"), theater);
+    await saveScreenshot(page, path.join(args.outputDir, "mobile-theater.png"));
+
+    await page.goto(`${args.baseUrl}/result/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    const result = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "result" && payload.page?.loading === false,
+      40000,
+      "mobile result",
+    );
+    writeJson(path.join(args.outputDir, "mobile-result.json"), result);
+    await saveScreenshot(page, path.join(args.outputDir, "mobile-result.png"));
+
+    return {
+      mode: "mobile",
+      launchProfile,
+      scenarioId: governanceSample.scenarioId,
+      homepage: homepage.page ?? null,
+      theater: {
+        replayState: theater.page?.replay_state ?? null,
+        scene: theater.scene ?? null,
+      },
+      result: result.page ?? null,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const outputDir = args.outputDir || path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-${args.mode}`);
@@ -1190,15 +1346,20 @@ async function main() {
     result = await runMatrixSuite(args);
   } else if (args.mode === "corners") {
     result = await runCornersSuite(args);
+  } else if (args.mode === "mobile") {
+    result = await runMobileSuite(args);
   } else {
     const matrixDir = path.join(outputDir, "matrix");
     const cornersDir = path.join(outputDir, "corners");
+    const mobileDir = path.join(outputDir, "mobile");
     ensureDir(matrixDir);
     ensureDir(cornersDir);
+    ensureDir(mobileDir);
     result = {
       mode: "full",
       matrix: await runMatrixSuite({ ...args, outputDir: matrixDir }),
       corners: await runCornersSuite({ ...args, outputDir: cornersDir }),
+      mobile: await runMobileSuite({ ...args, outputDir: mobileDir }),
     };
   }
 

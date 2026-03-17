@@ -10,12 +10,16 @@ export function LanguageSwitcher() {
   return (
     <div className="lang-switch lang-switch--global">
       <button
+        type="button"
+        aria-pressed={i18n.language.startsWith('en')}
         className={`lang-switch__opt ${i18n.language.startsWith('en') ? 'lang-switch__opt--active' : ''}`}
         onClick={() => i18n.changeLanguage('en')}
       >
         En
       </button>
       <button
+        type="button"
+        aria-pressed={!i18n.language.startsWith('en')}
         className={`lang-switch__opt ${!i18n.language.startsWith('en') ? 'lang-switch__opt--active' : ''}`}
         onClick={() => i18n.changeLanguage('zh')}
       >

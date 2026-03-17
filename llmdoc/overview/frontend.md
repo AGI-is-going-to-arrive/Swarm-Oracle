@@ -8,9 +8,9 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 
 | 页面 | 文件 | 描述 |
 |------|------|------|
-| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；challenge pool 现为 12 条，首页 quick start 已补进 mythic / survival / generic 直达题目，其中 generic 现为 3 条 `switchboard_forum` 小题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard）；移动端非剧场页面会把全局 `LanguageSwitcher` 放到右上安全区，避免挡住底部表单 |
-| SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；玩法卡 modal 现会显示题材专属三段式连锁事件，以及 `风险时钟 / 资源轨道` 两条轻量状态；移动端 Theater 头部动作区在窄屏下会自动换行，并把视图切换收成图标胶囊，避免控件裁切；Theater 背景现为 27 个语义主题，新增 `switchboard_forum` 作为 generic 专属场景，仍按题面选景而不是随机轮换 |
-| ResultView | `ResultView.tsx/.css` | 结果页：分支树 + 叙事对比 + 社交媒体文案生成 (P6)；如果用户在 narration 完成前过早打开 `/result/:id`，页面会先停在 loading，等故事真正生成完再展示；结构化下注与“因果档案”区块现已支持按单条下注显示 `命中 / 未中 / 待判定`，档案摘要会展示命中比，并保留 `dominantBranchTitle`、`dominantTone`、`mostUsedCard`、`archiveGrade`、`directorStyleTag`、`profileResonance`；因果档案还会根据玩法使用日志计算并显示 `题材连锁 / 情势轨道`；导出 Markdown 和分享文案会附带题材档案前缀 |
+| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status`，把后端 daily challenge 真值与本地缓存合并显示，避免跨设备时只看到本地旧状态；challenge pool 现为 12 条，题面与副标题都已支持 `zh/en`，首页 quick start 已补进 mythic / survival / generic 直达题目，其中 generic 现为 3 条 `switchboard_forum` 小题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard）；移动端非剧场页面会把全局 `LanguageSwitcher` 放到右上安全区，避免挡住底部表单 |
+| SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；玩法卡 modal 现会显示题材专属三段式连锁事件，以及 `风险时钟 / 资源轨道` 两条轻量状态；移动端 Theater 头部动作区在窄屏下会自动换行，并把视图切换收成图标胶囊，避免控件裁切；Theater 背景现为 30 个语义主题，新增 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体，generic 仍按题面落到 `switchboard_forum` 或其变体，而不是随机轮换 |
+| ResultView | `ResultView.tsx/.css` | 结果页：分支树 + 叙事对比 + 社交媒体文案生成 (P6)；如果用户在 narration 完成前过早打开 `/result/:id`，页面会先停在 loading，等故事真正生成完再展示；故事与档案摘要就绪后会调用 `finalizeCampaign()` 结算导演生涯，并渲染 `Campaign Progress` 区块（积分增量 / 等级 / 下次解锁 / 徽章）；结构化下注与“因果档案”区块现已支持按单条下注显示 `命中 / 未中 / 待判定`，档案摘要会展示命中比，并保留 `dominantBranchTitle`、`dominantTone`、`mostUsedCard`、`archiveGrade`、`directorStyleTag`、`profileResonance`；因果档案还会根据玩法使用日志计算并显示 `题材连锁 / 情势轨道`；导出 Markdown 和分享文案会附带题材档案前缀 |
 
 ## 组件 (`src/components/`)
 
@@ -22,7 +22,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `BranchEdge` | 分支树边（自定义样式） |
 | `BranchDetailModal` | 分支详情弹窗（故事、洞察、关键时刻） |
 | `InterventionModal` | 蝴蝶效应干预弹窗 |
-| `GameplayCardsModal` | 玩法卡弹窗：10 张玩法卡按题目画像动态推荐，支持目标分支/角色/来源分支选择、导演点数与冷却提示；当前新增 `密约交易 / 撤离令`，连同 `公开听证 / 资源分诊 / 禁术仪式` 一起把 law/trade、ecology/survival/frontier、faith/mythic 与 generic 的题材张力补得更完整；题材包已扩到 12 类，modal 会显示题材 hooks、题材导向文案、三段式题材连锁事件与 `风险时钟 / 资源轨道`；生成的 prompt 现显式标注为“导演级 override”，要求 LLM 把玩法卡当成已经发生且持续生效的世界线事件 |
+| `GameplayCardsModal` | 玩法卡弹窗：10 张玩法卡按题目画像动态推荐，支持目标分支/角色/来源分支选择、导演点数与冷却提示；当前新增 `密约交易 / 撤离令`，连同 `公开听证 / 资源分诊 / 禁术仪式` 一起把 law/trade、ecology/survival/frontier、faith/mythic 与 generic 的题材张力补得更完整；题材包已扩到 12 类，modal 会显示题材 hooks、题材导向文案、三段式题材连锁事件与 `风险时钟 / 资源轨道`；generic 题材现使用独立 `gameplay_card_frame_generic` 卡框，不再复用 `gameplay_panel` 做装饰框；生成的 prompt 现显式标注为“导演级 override”，要求 LLM 把玩法卡当成已经发生且持续生效的世界线事件 |
 | `TimelineBar` | 时间线进度条（轮次追踪）；完成态 replay 会接入 round marker 图标（`fork/card/bet/result`）并支持直接跳轮次回放；hover tooltip 会显示本轮分支标题、玩法卡、下注与结局摘要；compact 版会直接嵌入完成态 Theater 面板内 |
 | `QuickStartCards` | 首页快速开始示例卡片；generic 现为 3 条 `switchboard_forum` 题面，并可直接传递推荐起局参数 |
 | `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀 |
@@ -52,9 +52,9 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 ### `themeRegistry.ts`
 - Theater 场景与玩法素材的单一事实源
 - 保存：
-  - 27 个 `scene_theme` 的标签 / 关键词 / profile 归属 / asset path
+  - 30 个 `scene_theme` 的标签 / 关键词 / profile 归属 / asset path，含新增 `law_court_variant / faith_temple_variant / switchboard_forum_variant`
   - 运行时预载的角色 / 结局 / UI 资源 key
-  - 玩法卡 frame / badge / panel 素材路径
+  - 玩法卡 frame / badge / panel 素材路径；generic 卡框已改为独立 `gameplay_card_frame_generic`，不再借用 `gameplay_panel`
 - `BootScene.ts`、`VizSynthesizer.ts` 与 `gameplayCards.ts` 已共用这份 registry，避免扩新主题时多处手工同步
 
 ### `predictionBetting.ts`
@@ -73,6 +73,8 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - 记录 challenge started / completed 状态；进度以 `challengeId` 为主键读写，避免首页读不到当日状态
 - 已按本地日期换日，不再用 UTC 日期切 challenge
 - 完成反馈会记录 `profileResonance`
+- 题面现同时维护 `question / questionEn`，通过 `getChallengeQuestion()` 按当前 UI 语言返回实际文案
+- `resolveChallengeProgress()` 会把后端 `campaign daily-status` 与本地缓存合并，优先以后端完成态为真，只有本地已知细节才显示 `usedCards / betPlaced`
 
 ## Hooks (`src/hooks/`)
 
@@ -124,6 +126,8 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
 ## 自动化可观测性
 
 - `render_game_to_text()` 已覆盖 `InputView`、`SimulationView`、`ResultView`、`HistoryView`、`LeaderboardView`
+- `InputView` 的自动化摘要现会带 `campaign`（`user_id / total_runs / badge_count / daily_profile_level / daily_profile_score_to_next_level`），可直接取证首页 director campaign 进展
+- `InputView` 现在还会把 daily challenge 的后端真值合并进 `page.challenge_progress`，但不会凭空伪造本地未知的卡牌/下注细节
 - `SimulationView` / `ResultView` 在输出中带页面级控件摘要（按钮可用性、激活 modal、可展开/可干预分支等）
 - `SimulationView` 的预测弹窗会额外输出表单级状态摘要（文本长度、自信度、提交可用性、错误状态）
 - `SimulationView` 的玩法卡弹窗会额外输出玩法画像、推荐卡、目标分支/角色、导演点数与冷却摘要
@@ -134,20 +138,29 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
   - `page.warmup`
 - `ResultView` 的分享弹窗会额外输出平台选择、生成中状态、复制状态和文案长度摘要
 - `ResultView` 的分享弹窗会带 `share_context`
+- `ResultView` 在故事落稳后会调用 `finalizeCampaign()`；自动化摘要会输出 `campaign_summary`（`campaign_score_delta / level / score_to_next_level / badge_count / newly_unlocked_badges`）
 - 完成态 `SimulationView` 会输出 `page.replay_state`（选中世界线/轮次、batch 数、显示中的 bubble 数）
-- `inferSceneTheme(question)` 已与后端 `scene_selector` 对齐：优先取原始题面中的强语义词；当前 Theater 场景池已扩到 27 个主题，新增 `switchboard_forum`，并已接好 `switchboard_forum -> generic` fallback
+- `inferSceneTheme(question)` 已与后端 `scene_selector` 对齐：优先取原始题面中的强语义词；当前 Theater 场景池已扩到 30 个主题，新增 `law_court_variant / faith_temple_variant / switchboard_forum_variant`，并已接好 `switchboard_forum / switchboard_forum_variant -> generic` fallback
 - 固定回归样本集已落盘到：
   - `frontend/output/e2e/sample_matrix.json`
-  - 当前固定样本为 15 条；clean full 黑盒已覆盖 15 个矩阵题材，`generic` 另有独立 smoke 取证
+  - `frontend/output/e2e/sample_matrix_variants.json`
+  - 当前固定样本为 15 条；另有 3 条场景变体样本（`law_court_variant / faith_temple_variant / switchboard_forum_variant`），最新主工件位于 `frontend/output/e2e/20260317-track-c/variants/`
 - 一键回归入口：
   - `npm run e2e:matrix`
+  - `npm run e2e:variants`
   - `npm run e2e:corners`
   - `npm run e2e:full`
   - `scripts/e2e-suite.mjs` 现在会在输出目录附带 `browser-launch.json`，记录 `requestedHeadless / actualHeadless / channel / usedSwiftShader / attempts`
   - 历史 `scenario_id` 缺失时，`e2e-suite.mjs` 会按 theme 使用内置 fallback 题面 runtime 新建样本，而不是直接依赖旧数据库快照
+  - 如果历史样本的 `scene_theme` 已经与当前 `select_scene(question)` 漂移，matrix 也会自动 runtime fallback 重建样本
   - 如果 Playwright 在 `page.screenshot()` 阶段卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套回归直接中断
-  - 最近一次 clean full 黑盒结果位于 `frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`
-  - `generic` 独立 smoke 结果位于 `frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
+  - 当前 Track C 的主工件目录为：
+    - `frontend/output/e2e/20260317-track-c/matrix/`
+    - `frontend/output/e2e/20260317-track-c/corners/`
+    - `frontend/output/e2e/20260317-track-c/mobile/`
+    - `frontend/output/e2e/20260317-track-c/variants/`
+  - `generic` 变体 smoke 取证仍保留在 `frontend/output/e2e/generic-variant-smoke-switchboard-20260317/`（`scenario.json` + `theater.png`）
+  - `develop-web-game` 相关 Playwright 工件已存在：运行时脚本位于 `frontend/.tmp-playwright/web_game_playwright_client.mjs`，输出工件位于 `frontend/output/web-game*/` 下的 `shot-*.png` / `state-*.json`
 
 ## 像素化可视化游戏引擎 (`src/game/`) — Phase 1+2+3+4
 
@@ -161,11 +174,11 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 
 | 文件 | 描述 |
 |------|------|
-| `PhaserGame.tsx` | Phaser 游戏 React 包装组件，管理 Phaser.Game 生命周期 + 增量气泡分发（store 订阅实时消息）+ fallback synth init（竞态条件防御）；对自动化暴露 `advanceTime(ms)`，并通过 replay sync 在已完成回放与 live Theater 启动期跳过 `TitleScene`；Phaser `preBoot` 会注入初始 `scene_theme` |
+| `PhaserGame.tsx` | Phaser 游戏 React 包装组件，管理 Phaser.Game 生命周期 + 增量气泡分发（store 订阅实时消息）+ fallback synth init（竞态条件防御）；对自动化暴露 `advanceTime(ms)`，并通过 replay sync 在已完成回放与 live Theater 启动期跳过 `TitleScene`；`worldSceneBootstrap.ts` 现额外负责 completed replay / mobile Theater 的 `WorldScene` bootstrap guard，避免 `scene=null` 或 Agent 尚未 hydrate 时误判完成；Phaser `preBoot` 会注入初始 `scene_theme` |
 | `PhaserGameLoader.tsx` | 懒加载器，显示加载状态，动态导入 Phaser；透传 `playbackMode/replaySpeed/playbackBranchId/playbackRound` 到 `PhaserGame` |
 | `EventBridge.ts` | WebSocket 事件 → Phaser CustomEvent 桥接层，解耦 React 与 Phaser |
 | `EventBridge.test.ts` | EventBridge 单元测试（13 tests）— 生命周期/订阅/错误隔离/边界情况 |
-| `scenes/BootScene.ts` | Phaser 启动场景，加载角色、27 个场景背景、特效、UI 和结局资源，路由到 TitleScene |
+| `scenes/BootScene.ts` | Phaser 启动场景，加载角色、30 个场景背景、特效、UI 和结局资源，路由到 TitleScene |
 | `scenes/TitleScene.ts` | 像素风标题画面，打字机字幕效果 + 点击跳过交互 + 微光扫描线动画，i18n 支持 (Phase 3 + 3.0-B3)；自动化可读取标题场景状态 |
 | `scenes/WorldScene.ts` | 主游戏场景 — agent 精灵、打字机对话气泡变体、移动、世界分裂、情绪光环、天气/昼夜系统、阵营标记、MiniMap HUD、鼠标视差滚动、垂直擦除场景过渡；首次 `scene_init` 在 bootstrap 阶段会直接应用主题，避免先闪默认村庄；Phaser SHUTDOWN 生命周期自动清理所有 GameObjects/tweens/timers；气泡框仍保留像素风，但气泡文字已切到更高分辨率的常规 UI 字体栈，减少“字糊成像素块”的观感；自动化可读取主题/天气/agent/bubble 摘要 |
 | `HudOverlay.tsx` | React HUD 浮层 — 排行榜（画布上方）+ 竞猜面板（画布下方），通过 EventBridge 监听 `viz:leaderboard_update` / `viz:bet_update` 事件；竞猜条新增 CTA，可直接打开结构化下注弹窗 |
@@ -181,7 +194,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | `world_split` | 世界分裂动画（水平/象限） |
 | `event_anim` | 播放蝴蝶效应动画 + 粒子特效叠加 |
 | `emotion_change` | 更新精灵情绪光环颜色 + 粒子脉冲 |
-| `scene_change` | 切换像素世界主题（27 个语义场景） |
+| `scene_change` | 切换像素世界主题（30 个语义场景） |
 | `ending_play` | 渲染结局场景 → 切换至 EndingScene |
 | `weather_change` | 天气效果（雨/雪/雷/沙尘暴） + 昼夜光照切换 |
 | `bet_update` | 更新竞猜面板 — 阵营赔率 + 动态投注条 (Phase 3) |
@@ -208,8 +221,8 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | Leaderboard HUD | 排行榜（React HudOverlay，画布上方）— Top-3 玩家 + 称号徽章 |
 | 截图/GIF 导出 | useScreenCapture hook — 支持 `Panel/Canvas/Modal` 三种截图模式；GIF 保持 `Panel/Canvas` 可用（modal 模式禁用） |
 | Structured Betting 2.x | `PredictionModal` 支持押世界线 / 押结局倾向 / 押题材回响，Theater HUD 可直接打开下注；分支尚未 hydrate 时会自动回退到 `ending_tone`，避免空目标下注 |
-| Gameplay Cards | `GameplayCardsModal` 提供 10 张玩法卡，支持题目画像驱动推荐、导演点数与冷却；新增 `密约交易 / 撤离令` 后，law/trade、ecology/survival/frontier、faith/mythic 与 generic 都有更直接的导演事件入口；其余玩法如 `公开听证 / 资源分诊 / 禁术仪式` 继续负责高证据、高代价与生存压力类分支；注入 prompt 会显式要求 agent 把玩法卡当成高优先级、持续生效的世界线事件 |
-| Semantic Scene Pool | Theater 背景已扩到 27 个主题，包含主场景和轻量语义变体；generic 现有独立场景 `switchboard_forum`，同一 profile 也可按题面落到不同场景，例如 `governance -> scifi_base/civic_chamber/surveillance_megacity` |
+| Gameplay Cards | `GameplayCardsModal` 提供 10 张玩法卡，支持题目画像驱动推荐、导演点数与冷却；新增 `密约交易 / 撤离令` 后，law/trade、ecology/survival/frontier、faith/mythic 与 generic 都有更直接的导演事件入口；generic 卡框已改用独立 `gameplay_card_frame_generic`，不再复用 `gameplay_panel`；其余玩法如 `公开听证 / 资源分诊 / 禁术仪式` 继续负责高证据、高代价与生存压力类分支；注入 prompt 会显式要求 agent 把玩法卡当成高优先级、持续生效的世界线事件 |
+| Semantic Scene Pool | Theater 背景已扩到 30 个主题，包含主场景和轻量语义变体；本轮新增 `law_court_variant / faith_temple_variant / switchboard_forum_variant`，generic 现会按题面落到 `switchboard_forum` 或其变体，同一 profile 也可按语义命中不同场景，例如 `governance -> scifi_base/civic_chamber/surveillance_megacity` |
 | Causal Archive | `ResultView` 展示玩法记录、下注记录、关键记录、导演点数、每日挑战标记；新增 `profileResonance`，并把题材档案前缀接进导出/分享结果 |
 | Daily Challenge | `InputView` 每日挑战卡 + `dailyChallenge.ts` 题库/完成状态；挑战池现为 12 条，已补齐 mythic / survival / generic，并会显示题材 hooks 与完成后的题材回响 |
 | Branch/Round Replay | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 会直接出现在 Theater 面板内并显示 `fork/card/bet/result` marker |
@@ -222,7 +235,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | 视口裁剪 | cullAgent — VIEWPORT_MARGIN 40px 外 Agent 隐藏，减少 GPU 绘制调用 |
 | Pool 清理 | shutdown() 中销毁 weatherPool/bubblePool，防止内存泄漏 |
 | Automation Hooks | `render_game_to_text()` + `advanceTime(ms)` + `preserveDrawingBuffer=true`，提升浏览器黑盒测试的状态读取与截图稳定性；已覆盖页面级控件摘要、warmup 摘要、capture mode、modal 内部状态摘要与分享上下文摘要 |
-| WorldScene.test.ts | 20 断言 — 27 主题 + 15 事件 + 4 阵营 + 10 气泡 + 4 时段 + 双语 + 性能常量 |
+| WorldScene.test.ts | 20 断言 — 30 主题 + 15 事件 + 4 阵营 + 10 气泡 + 4 时段 + 双语 + 性能常量 |
 | EndingScene.test.ts | 14 断言 — 6 结局配置 + 3 类型映射 + resolveEndingId 逻辑 |
 
 ### 3.0 Phase B 美术风格全面升级
@@ -230,7 +243,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | 系统 | 描述 |
 |------|------|
 | GBC 调色板统一 | 16 个 CSS custom properties (`--gbc-*`)，替代硬编码色值 |
-| 资产重生成 | 场景背景已扩到 27 张，统一沿用当前 GBC 像素风与 Theater 视觉语言；`switchboard_forum` 负责 generic 的组织博弈主题 |
+| 资产重生成 | 场景背景已扩到 30 张，统一沿用当前 GBC 像素风与 Theater 视觉语言；本轮补入 `law_court_variant / faith_temple_variant / switchboard_forum_variant`，generic 卡框也已独立生成为 `gameplay_card_frame_generic` |
 | TitleScene B3 增强 | 打字机字幕 + 点击跳过 + 微光扫描线 |
 | WorldScene B4 增强 | 鼠标视差滚动 + 打字机气泡 + 垂直擦除过渡 |
 
@@ -262,6 +275,8 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 ## 构建与部署
 
 - **开发**: `npm run dev` → Vite dev server (localhost:18928)
-- **测试**: `npm test` → Vitest + Testing Library — 151 tests（覆盖状态管理、场景推断、回放、截图、玩法卡、分享和页面自动化摘要）；本轮还额外验证了 `VizSynthesizer / gameplayCards` 定向回归 44 passed
+- **测试**: `npm test` → Vitest + Testing Library — 本轮真实全量结果为 **155 passed (155)**；覆盖状态管理、场景推断、回放、截图、玩法卡、分享和页面自动化摘要。最近两组定向回归分别为：
+  - `src/lib/dailyChallenge.test.ts / src/pages/InputView.test.tsx / src/pages/ResultView.test.tsx / src/components/PredictionModal.test.tsx / src/components/gameplayContract.test.ts / src/components/gameplayCards.test.ts` → **37 passed**
+  - `src/game/PhaserGame.test.ts / src/game/replaySync.test.ts / src/game/replaySelection.test.ts / src/pages/SimulationView.test.tsx / src/hooks/useScreenCapture.test.ts` → **21 passed**
 - **构建**: `npm run build` → `tsc -b && vite build` → `dist/`
 - **Docker**: Nginx 静态文件服务，代理 `/api` 和 `/ws` 到后端 `18927`；本轮已完成一次 `docker compose up --build -d` 运行时 smoke，前端代理创建 Theater 场景可跑到 `done`

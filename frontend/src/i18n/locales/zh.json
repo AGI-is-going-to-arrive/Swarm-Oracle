@@ -52,7 +52,13 @@
       "daily_challenge_bet_missing": "未下注",
       "daily_challenge_start": "开始今日挑战",
       "daily_challenge_continue": "继续今日挑战",
-      "daily_challenge_replay": "再玩一次"
+      "daily_challenge_replay": "再玩一次",
+      "campaign_progress": "导演生涯",
+      "campaign_mastery_level": "Lv.{{level}}",
+      "campaign_next_unlock": "距下次解锁还差 {{count}} 分",
+      "campaign_mastered": "当前题材已达本阶段上限",
+      "campaign_quickstart_unlocks": "已解锁 {{count}} 枚徽章 · 完成 {{runs}} 局推演",
+      "campaign_first_run": "完成第一局后会在这里看到导演生涯进展"
     },
     "sim": {
       "status": {
@@ -117,7 +123,10 @@
       },
       "predict_btn": "🎯 预测",
       "panel_expand": "展开 Agent 面板",
-      "panel_collapse": "收起 Agent 面板"
+      "panel_collapse": "收起 Agent 面板",
+      "switch_to_theater_aria": "切换到像素剧场",
+      "switch_to_classic_aria": "切换到经典视图",
+      "theater_status_aria": "剧场实时状态"
     },
     "intervention": {
       "title": "蝴蝶效应",
@@ -183,11 +192,16 @@
       "loading_narration": "正在生成结局叙事…",
       "archive_completed": "已完成",
       "archive_in_progress": "进行中",
-      "archive_cards_used": "{{count}} 张牌"
-      ,
+      "archive_cards_used": "{{count}} 张牌",
       "archive_resonance_signature": "命中题材核心",
       "archive_resonance_aligned": "方向基本吻合",
-      "archive_resonance_offbeat": "走出了题材支线"
+      "archive_resonance_offbeat": "走出了题材支线",
+      "campaign_title": "导演生涯进展",
+      "campaign_delta": "本局增量",
+      "campaign_level": "当前题材等级",
+      "campaign_next": "下次解锁",
+      "campaign_badges": "总徽章数",
+      "campaign_badges_none": "本局没有新增徽章，但生涯进展已写入。"
     },
     "share": {
       "title": "📱 一键生成文案",
@@ -219,12 +233,36 @@
       "thinking": "思考中..."
     },
     "quick_starts_data": [
-      { "emoji": "⚔️", "question": "如果诸葛亮多活10年？", "subtitle": "三国演义 · 历史推演" },
-      { "emoji": "🚀", "question": "如果人类在2000年就登陆了火星？", "subtitle": "科技 · 平行宇宙" },
-      { "emoji": "🌍", "question": "如果互联网从未被发明？", "subtitle": "社会 · 文明走向" },
-      { "emoji": "🎵", "question": "如果贝多芬出生在现代？", "subtitle": "文化 · 艺术演变" },
-      { "emoji": "💡", "question": "如果爱因斯坦选择了工程而不是物理？", "subtitle": "科学 · 蝴蝶效应" },
-      { "emoji": "🏰", "question": "如果罗马帝国从未衰落？", "subtitle": "历史 · 文明推演" }
+      {
+        "emoji": "⚔️",
+        "question": "如果诸葛亮多活10年？",
+        "subtitle": "三国演义 · 历史推演"
+      },
+      {
+        "emoji": "🚀",
+        "question": "如果人类在2000年就登陆了火星？",
+        "subtitle": "科技 · 平行宇宙"
+      },
+      {
+        "emoji": "🌍",
+        "question": "如果互联网从未被发明？",
+        "subtitle": "社会 · 文明走向"
+      },
+      {
+        "emoji": "🎵",
+        "question": "如果贝多芬出生在现代？",
+        "subtitle": "文化 · 艺术演变"
+      },
+      {
+        "emoji": "💡",
+        "question": "如果爱因斯坦选择了工程而不是物理？",
+        "subtitle": "科学 · 蝴蝶效应"
+      },
+      {
+        "emoji": "🏰",
+        "question": "如果罗马帝国从未衰落？",
+        "subtitle": "历史 · 文明推演"
+      }
     ],
     "time": {
       "seconds": "{{count}}秒",
@@ -329,6 +367,12 @@
       "primary_agent": "目标角色",
       "secondary_agent": "第二角色",
       "hint": "这些玩法卡会复用现有 intervention API，把结构化指令直接注入推演引擎。"
+    },
+    "common": {
+      "loading": "加载中…",
+      "theme_hooks_aria": "题材钩子",
+      "daily_challenge_art_alt": "每日挑战像素插画",
+      "archive_seal_alt": "因果档案印章插画"
     }
   }
 }

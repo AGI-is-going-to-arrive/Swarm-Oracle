@@ -16,7 +16,6 @@ import {
   buildAgentsById,
   buildGameplayAutoDirective,
   buildGameplayCardPrompt,
-  GAMEPLAY_CARD_DEFS,
   getDefaultGameplayTargetBranch,
   getGameplayCardDefinition,
   getGameplayBadgeSrc,
@@ -33,6 +32,7 @@ import {
   inferGameplayProfile,
   type GameplayCardId,
 } from './gameplayCards';
+import { CONTRACT_GAMEPLAY_CARD_DEFS } from '../lib/gameplayContract';
 import './InterventionModal.css';
 import './GameplayCardsModal.css';
 
@@ -421,15 +421,17 @@ export default function GameplayCardsModal({
 
         <div className="modal-body gameplay-modal__body">
           <div className="gameplay-card-grid">
-            {GAMEPLAY_CARD_DEFS.map((card) => {
-              const selected = card.id === cardId;
-              const recommended = card.id === signatureArcState.nextCardId
-                || recommendedCards.slice(0, 3).includes(card.id);
+            {CONTRACT_GAMEPLAY_CARD_DEFS.map((card) => {
+              const nextCardId = signatureArcState.nextCardId as GameplayCardId | null;
+              const currentCardId = card.id as GameplayCardId;
+              const selected = currentCardId === cardId;
+              const recommended = currentCardId === nextCardId
+                || recommendedCards.slice(0, 3).includes(currentCardId);
               return (
                 <button
-                  key={card.id}
+                  key={currentCardId}
                   className={`gameplay-card gameplay-card--profile-${gameplayProfile.id} ${selected ? 'gameplay-card--active' : ''}`}
-                  onClick={() => setCardId(card.id)}
+                  onClick={() => setCardId(currentCardId)}
                   disabled={isDisabled}
                 >
                   <img
@@ -446,7 +448,7 @@ export default function GameplayCardsModal({
                         <span className="gameplay-card__badge">
                           <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
                           <span>
-                            {card.id === signatureArcState.nextCardId
+                            {currentCardId === nextCardId
                               ? (isZh ? '下一步' : 'Next')
                               : (isZh ? '推荐' : 'Recommended')}
                           </span>
@@ -457,16 +459,16 @@ export default function GameplayCardsModal({
                       {isZh ? card.descriptionZh : card.descriptionEn}
                     </span>
                     <span className="gameplay-card__flavor">
-                      {getGameplayCardDirectivePreview(gameplayProfile.id, card.id, isZh)}
+                      {getGameplayCardDirectivePreview(gameplayProfile.id, currentCardId, isZh)}
                     </span>
                     <span className="gameplay-card__meta">
                       {isZh ? '消耗 1 点' : 'Cost 1'}
-                      {getCardCooldownRemaining(meta, card.id, normalizedCurrentRound) > 0 && (
+                      {getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound) > 0 && (
                         <>
                           {' · '}
                           {isZh
-                            ? `冷却 ${getCardCooldownRemaining(meta, card.id, normalizedCurrentRound)} 轮`
-                            : `CD ${getCardCooldownRemaining(meta, card.id, normalizedCurrentRound)} rounds`}
+                            ? `冷却 ${getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound)} 轮`
+                            : `CD ${getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound)} rounds`}
                         </>
                       )}
                     </span>

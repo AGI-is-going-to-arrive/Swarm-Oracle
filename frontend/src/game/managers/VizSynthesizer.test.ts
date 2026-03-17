@@ -80,6 +80,7 @@ describe('VizSynthesizer — inferSceneTheme', () => {
   it('detects modern/internet keywords', () => {
     expect(inferSceneTheme('如果互联网从未被发明？')).toBe('modern_city');
     expect(inferSceneTheme('如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？')).toBe('law_court');
+    expect(inferSceneTheme('constitutional chamber with a multi-judge hearing')).toBe('law_court_variant');
   });
 
   it('detects governance, empire, and war semantic variants', () => {
@@ -111,7 +112,9 @@ describe('VizSynthesizer — inferSceneTheme', () => {
     expect(inferSceneTheme('如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？')).toBe('trade_harbor');
     expect(inferSceneTheme('如果跨大陆淡水供应在十年内枯竭，会发生什么？')).toBe('ecology_wasteland');
     expect(inferSceneTheme('如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？')).toBe('faith_temple');
+    expect(inferSceneTheme('doctrinal council facing a clerical schism')).toBe('faith_temple_variant');
     expect(inferSceneTheme('如果所有大型组织都必须每周随机交换一次负责人，会发生什么？')).toBe('switchboard_forum');
+    expect(inferSceneTheme('rotating review chamber for procedural oversight')).toBe('switchboard_forum_variant');
     expect(inferSceneTheme('如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？')).toBe('switchboard_forum');
     expect(inferSceneTheme('What if every high-stakes decision had to be re-approved by a rotating external review board?')).toBe('switchboard_forum');
   });

@@ -15,8 +15,9 @@
 | **Prediction Leaderboard** | 用户竞猜 + LLM 评分 + 排行榜 |
 | **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响，结果页可逐条查看命中状态 |
 | **Gameplay Cards** | 10 张玩法卡以导演级事件注入当前世界线，并要求后续轮次持续响应；玩法卡弹窗现会给出题材专属三段式连锁事件，以及 `风险时钟 / 资源轨道` 两条轻量状态，帮助用户沿着当前题材继续推进 |
-| **Theme Registry & Asset Manifest** | 前端已把 27 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 素材统一收进单一注册表，减少扩主题时的多处手工同步 |
-| **Semantic Scene Pool** | Pixel Theater 现有 27 个语义场景背景，按题面关键词选景；`generic` 题材现有独立场景 `switchboard_forum / 轮值议堂` |
+| **Theme Registry & Asset Manifest** | 前端已把 30 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 素材统一收进单一注册表；`generic` 现有独立 `gameplay_card_frame_generic` 卡框 |
+| **Semantic Scene Pool** | Pixel Theater 现有 30 个语义场景背景，按题面关键词选景；`law / faith / generic` 已补进 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体 |
+| **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status` API，首页会把 daily challenge 的后端真值与本地缓存合并显示，结果页会展示本局 campaign 进展 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Responsive Scenario Startup** | 创建场景后立即返回 `simulating` 占位状态，并附带 provisional root branch；后台继续解析并填充 Agent / 分支 |
 | **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
@@ -107,16 +108,22 @@ cd frontend && npm install && npm test
 
 # Matrix / corner-case / full black-box regression
 cd frontend && npm run e2e:matrix
+cd frontend && npm run e2e:variants
 cd frontend && npm run e2e:corners
 cd frontend && npm run e2e:full
 ```
 
-- 本轮已验证的后端全量回归：**777 passed, 2 warnings**
-- 后端定向回归：`test_scene_selector.py = 139 passed`，`test_simulator_viz_integration.py = 70 passed`
-- 当前前端主回归：**151 passed**
-- 固定回归样本矩阵：**15 条**
-- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失时会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若卡在字体加载，会自动回退到 Chromium CDP 截图
-- 最近一次 clean full 黑盒结果：`frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`
+- 本轮已验证的后端全量回归：**798 passed, 2 warnings**
+- 后端定向回归：`test_campaign_service.py / test_campaign_api.py / test_scene_selector.py / test_gameplay_contract_sync.py = 151 passed`
+- 当前前端主回归：**155 passed (155)**
+- 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
+- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若卡在字体加载，会自动回退到 Chromium CDP 截图
+- 当前 Track C 主工件目录：
+  - `frontend/output/e2e/20260317-track-c/matrix/`
+  - `frontend/output/e2e/20260317-track-c/corners/`
+  - `frontend/output/e2e/20260317-track-c/mobile/`
+  - `frontend/output/e2e/20260317-track-c/variants/`
+- 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/full-regression-final/result.json`
 - 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 
 ## License

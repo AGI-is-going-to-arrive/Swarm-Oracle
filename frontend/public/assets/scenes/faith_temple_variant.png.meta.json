@@ -1,0 +1,6 @@
+{
+  "preset": "faith_scene_variant",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "prompt": "Pixel-art sacred council hall for prophecy and doctrinal conflict, candlelit ivory stone, amethyst and gold glow, ritual banners, wide 16:9 composition, no text, no photorealism, consistent with SwarmOracle theater style."
+}

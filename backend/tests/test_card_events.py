@@ -6,15 +6,12 @@ get_card_viz_event, and the spacetime_rift probability fix.
 
 import random
 
-import pytest
-
 from app.visualization.card_events import (
     CARD_TYPES,
     check_card_trigger,
     get_card_viz_event,
 )
 from app.visualization.events import VizEventType
-
 
 # ── CARD_TYPES sanity ────────────────────────────────────
 

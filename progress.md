@@ -216,7 +216,276 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `page.branches[]`（含 `can_expand_story / expanded`）
 - 实测确认：
   - `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
-  - `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
+- `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
+
+## 2026-03-17 Track A3 + B2 继续推进
+
+- 已补 `Track A3`：
+  - `backend/app/services/campaign.py` 的 profile summary 现在会返回最近一次 daily challenge 完成记录：
+    - `last_daily_challenge_completed_at`
+    - `last_daily_challenge_profile_id`
+    - `last_daily_challenge_scenario_id`
+  - `backend/app/api/campaign.py` / `frontend/src/types.ts` 已同步这些字段。
+  - `frontend/src/pages/InputView.tsx` 现在会优先用后端 campaign 数据判定“今天的 daily challenge 是否已完成”，本地 `dailyChallenge` 存储只继续承担“进行中 / 细节缓存”的角色。
+  - 新增回归覆盖：
+    - `backend/tests/test_campaign_service.py`
+    - `backend/tests/test_campaign_api.py`
+    - `frontend/src/pages/InputView.test.tsx`
+
+- 已补 `Track B2`：
+  - `frontend/src/components/gameplayCards.ts` 已删除前端重复维护的 card/profile/signature arc/system effects 大块常量，改为直接 alias `shared/gameplay_contract.v1.json` 的 contract 消费层。
+  - 仍保留 profile inference / agent heuristics / prompt builder，这些属于消费逻辑，不再是第二份事实源。
+
+- 本轮定向验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q` → `8 passed`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/gameplayContract.test.ts` → `5 passed`
+  - `cd frontend && npm test -- --run src/components/gameplayCards.test.ts src/components/GameplayCardsModal.test.tsx src/components/PredictionModal.test.tsx` → `22 passed`
+  - `cd frontend && npm run build` → 通过
+
+- 运行时注意：
+  - 发现 `18927` 一度指向了别的工作区 `Desktop/test/backend`，已切回当前仓库 `upgrade-test/backend` 的 uvicorn 进程，否则 E2E 结论会被污染。
+
+- 下一步：
+  - 跑当前仓库自己的 `e2e-suite` / `develop-web-game` / `playwright-interactive`。
+  - 重点复核 12 profile 覆盖、mobile、scene selector、capture/headless、以及 replay 关键路径。
+
+## 2026-03-17 QA Inventory Refresh
+
+- 本轮 signoff 声称要覆盖的用户可见行为：
+  - 首页 daily challenge 会以后端 campaign 为准显示完成态
+  - 首页 / 结果页导演生涯信息可读
+  - gameplay contract 不会因前端 legacy 常量残留而和 shared JSON 漂移
+  - Theater / replay / result / share / mobile 关键路径仍可用
+
+- 本轮需要明确检查的控件与状态：
+  - 首页：daily challenge CTA、语言切换、快速开始、问题输入、模式切换、Theater 开关
+  - Theater：回放筛选、截图模式、玩法卡、下注弹窗、结果跳转
+  - 结果页：Campaign Progress、分享弹窗、排行榜跳转、预测评分
+  - mobile：首页首屏、Theater 首屏、结果页首屏
+
+- 本轮 off-happy-path：
+  - 旧数据库 `scenario_id` 缺失时 matrix runtime fallback 是否仍能跑通
+  - headless 截图异常时 suite 的 CDP fallback 是否把“工具黑底”与“真实 UI 问题”区分清楚
+
+## 2026-03-17 i18n + Browser QA 补充
+
+- 交互式 QA 中确认并修复：
+  - 英文界面的 daily challenge 卡片此前仍显示中文题面，并且启动挑战时会把中文题面直接送进英文 UI 流。
+  - 现已在 `frontend/src/lib/dailyChallenge.ts` 为 12 条 challenge 补上英文题面，并新增 `getChallengeQuestion()`。
+  - `frontend/src/pages/InputView.tsx` 已改为：
+    - challenge 卡片标题按当前语言展示；
+    - `Start Daily Challenge` / `开始今日挑战` 会按当前语言使用对应题面发起场景。
+
+- 新增验证：
+  - `cd frontend && npm test -- --run src/lib/dailyChallenge.test.ts src/pages/InputView.test.tsx`
+    - `11 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_gameplay_contract_sync.py -q`
+    - `10 passed`
+  - `cd frontend && npm test -- --run src/lib/dailyChallenge.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/PredictionModal.test.tsx src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts`
+    - `37 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 新增黑盒取证：
+  - 新建 Theater 场景：
+    - `e9e3e35e-db63-4ff8-a2ad-135529c7c412`
+  - `develop-web-game` 工件：
+    - `frontend/output/web-game/20260317-track-a3-b2/shot-0.png`
+    - `frontend/output/web-game/20260317-track-a3-b2/shot-1.png`
+    - `frontend/output/web-game/20260317-track-a3-b2/state-0.json`
+    - `frontend/output/web-game/20260317-track-a3-b2/state-1.json`
+  - 结果：
+    - `render_game_to_text()` 返回 Theater replay / control / scene 摘要正常；
+    - `law_court` 主题画面可见，panel 截图不是黑底；
+    - 回放态 `can_view_results / can_capture_screenshot / can_capture_gif / replay_state` 都在状态 JSON 里可见。
+
+- 浏览器自动化环境现状：
+  - 这台机器上的 Playwright/Chrome 自动化会话不稳定，出现过 dev server 僵住、`js_repl` 会话超时重置、以及 Playwright 持久上下文启动失败等宿主环境问题。
+  - 已拿到一部分真实浏览器证据，但全量 `e2e:full` 仍需要在更稳定的本机浏览器权限环境下重跑。
+
+## 2026-03-17 Track C 收口
+
+- 新增产品修复：
+  - `frontend/src/game/PhaserGame.tsx`
+    - 把 completed replay / mobile Theater 的 `WorldScene` bootstrap 竞态补上。
+    - 现在 `scene_ready` 延迟回读 store，并额外通过 `bootstrapWorldSceneFromStore()` 统一处理 late-loaded agents/messages。
+  - `frontend/src/game/worldSceneBootstrap.ts`
+    - 抽出纯函数 guard，避免测试把 Phaser runtime 整个拉进 jsdom。
+  - `frontend/scripts/e2e-suite.mjs`
+    - `mobile` 套件不再在 `scene=null` 时误判通过。
+    - 现在要求：
+      - `scene.scene` 存在且不为 `BootScene/TitleScene`
+      - `scene.agent_count > 0`
+    - 失败时会 fresh reload 一次再重试，并把最后 scene/agent_count 打进错误信息。
+
+- 新增/更新验证：
+  - `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/game/replaySync.test.ts src/game/replaySelection.test.ts src/pages/SimulationView.test.tsx src/hooks/useScreenCapture.test.ts`
+    - `21 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py tests/test_gameplay_contract_sync.py -q`
+    - `216 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 真实黑盒工件：
+  - corners:
+    - `frontend/output/e2e/20260317-track-c-corners/result.json`
+  - mobile:
+    - 首次暴露了 `scene=null` 的假通过问题：
+      - `frontend/output/e2e/20260317-track-c-mobile/mobile-theater.json`
+      - `frontend/output/e2e/20260317-track-c-mobile/mobile-theater.png`
+    - 修复后最终工件：
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-home.json`
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-home.png`
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-theater.json`
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-theater.png`
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-result.json`
+      - `frontend/output/e2e/20260317-track-c-mobile-final/mobile-result.png`
+  - matrix:
+    - `frontend/output/e2e/20260317-track-c-matrix/result.json`
+    - 已完成 15 个样本（12 profile + 语义变体）：
+      - governance / law / trade / ecology / war / faith / industry / frontier / mythic / survival / generic
+      - governance_surveillance / empire_palace / industry_grid / war_logistics
+
+- Track C 当前结论：
+  - replay：
+    - completed replay 不回 `TitleScene` 已有单测 + matrix replay 工件
+    - `skip -> branch switch -> replay` 已由 corners 工件 `replay_skip_switch` 取证
+  - scene selector：
+    - 后端 selector / 前端题材命中当前通过 `216` 个后端相关测试覆盖
+  - capture/headless：
+    - `panel / canvas / modal` 与 replay/result/share 相关路径已在 corners/mobile/matrix 工件取证
+  - mobile：
+    - completed Theater 首屏与结果页双证据已补齐
+    - 之前的 mobile false positive 已被修掉，不再把 `scene=null` 当作通过
+
+## 2026-03-17 Track C 完成收口
+
+- `Track C` 本轮已完成的代码/脚本收口：
+  - `frontend/scripts/e2e-suite.mjs`
+    - matrix 现在按 sample 输出到本次 `outputDir/<theme>/replay|result`，不再把工件散落到全局目录；
+    - 增加逐 theme 进度日志，避免长时间静默看起来像“卡死”；
+    - 修掉 fallback 分支里重赋值 `const page` 的潜在炸点；
+    - matrix 会检测历史 sample 的 `scene_theme` 是否和当前 runtime 结果漂移，发现旧 `scenario_id` 过期时会自动 runtime fallback 重建。
+  - `backend/app/visualization/scene_selector.py`
+    - 已按最新样本契约命中 `law_court_variant / faith_temple_variant / switchboard_forum_variant`。
+  - `backend/tests/test_e2e_sample_matrix.py`
+    - 新增样本契约回归：`sample_matrix.json` / `sample_matrix_variants.json` 的 `scene_theme` 必须与当前 `select_scene(question)` 一致。
+
+- 本轮定向验证：
+  - `cd frontend && npm test -- --run src/game/replaySync.test.ts src/game/replaySelection.test.ts src/pages/SimulationView.test.tsx src/hooks/useScreenCapture.test.ts`
+    - `18 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
+    - `214 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_scene_selector.py tests/test_e2e_sample_matrix.py -q`
+    - `146 passed`
+  - `node --check frontend/scripts/e2e-suite.mjs`
+    - 通过
+
+- 本轮真实浏览器工件：
+  - matrix：`frontend/output/e2e/20260317-track-c/matrix/`
+    - `result.json`
+    - 15 个样本：`governance / law / trade / ecology / war / faith / industry / frontier / mythic / survival / generic / governance_surveillance / empire_palace / industry_grid / war_logistics`
+  - corners：`frontend/output/e2e/20260317-track-c/corners/`
+    - `result.json`
+    - 已落 replay skip/switch、result loading gate、share context、share retry、history delete-last-page 等工件
+  - mobile：`frontend/output/e2e/20260317-track-c/mobile/`
+    - `mobile-home.png/.json`
+    - `mobile-theater.png/.json`
+    - `mobile-result.png/.json`
+  - variants：`frontend/output/e2e/20260317-track-c/variants/`
+    - `result.json`
+    - 已真实跑通：
+      - `law_grand_tribunal -> law_court_variant`
+      - `faith_council -> faith_temple_variant`
+      - `generic_review_chamber -> switchboard_forum_variant`
+  - develop-web-game：`frontend/output/web-game/20260317-track-c/`
+    - `shot-0.png`
+    - `shot-1.png`
+    - `state-0.json`
+    - `state-1.json`
+
+- 视觉复核结论：
+  - `mobile-home.png`：daily challenge 卡、语言切换与首屏表单可见，无致命裁切。
+  - `mobile-theater.png`：回放控件、主画布、结果入口可见；信息密度仍高，但关键控件未被裁掉。
+  - `mobile-result.png`：结果页首屏 CTA、标题和首张结果卡可见。
+  - `develop-web-game shot-1.png`：`scifi_base` 主题截图正常，非黑底；`state-1.json` 同时给出 replay/scene 双证据。
+
+- 运行时注意：
+  - 变体 matrix 初次失败并不是 selector 代码本身错误，而是 `18927` 上的 uvicorn 还在跑旧进程；重启当前仓库后端后，variants 已全部 runtime 通过。
+
+## 2026-03-17 Track D 文档已落盘
+
+- 已新增 `implement/20_track_d_debate_arena_design_execution_plan.md`。
+- 该文档已覆盖：
+  - Track D 产品定位与边界
+  - MVP 玩法循环与评分机制
+  - i18n 与跨平台约束
+  - 美术素材规划与 AI 生图方向
+  - 前后端代码开发拆分
+  - `develop-web-game` / `playwright-interactive` / Playwright CLI 三层测试方案
+  - code review 清单与验收标准
+- 已同步 `implement/README.md` 索引，下一轮可直接据此进入 Debate Arena 实现。
+
+## 2026-03-17 文档同步
+
+- 已按实际代码与真实测试结果同步以下文档：
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/reference/api.md`
+  - `README.md`
+  - `frontend/README.md`
+  - `backend/README.md`
+  - `implement/README.md`
+- 本轮文档同步重点：
+  - `campaign daily-status` API 与首页 daily challenge 真值合并
+  - daily challenge 双语题面
+  - Track C 最新 matrix / corners / mobile / variants / develop-web-game 工件目录
+  - `e2e-suite.mjs` 的 sample `scene_theme` 漂移 fallback
+  - Track D 设计文档索引
+
+## 2026-03-17 Track C 收口
+
+- 已补 `Track C` 的代码侧缺口：
+  - `frontend/scripts/e2e-suite.mjs`
+    - 现在会检测 `sample_matrix.json` 里的 `scene_theme` 是否与当前实际场景一致；
+    - 若历史 `scenario_id` 对应的是旧主题，会自动走 runtime fallback 重建，而不是继续拿漂移样本当作通过；
+    - `runMatrixSuite()` 的 fallback 路径已修复 `const page` 重建问题；
+    - matrix 现在会按 sample 独立落盘到 `outputDir/<theme>/{replay,result}`，便于追踪。
+  - `frontend/output/e2e/sample_matrix.json`
+    - 已把过时的 5 条 `scene_theme` 纠正为当前 selector 预期：
+      - `law -> law_court`
+      - `trade -> trade_harbor`
+      - `ecology -> ecology_wasteland`
+      - `war -> war_command`
+      - `faith -> faith_temple`
+  - `backend/app/visualization/scene_selector.py`
+    - 补了 `grand tribunal archive chamber -> law_court_variant` 的更具体命中，避免 `constitutional` 与 `grand tribunal` 同长度时误回落到普通 `law_court`。
+  - 新增守卫测试：
+    - `backend/tests/test_e2e_sample_matrix.py`
+    - 保证 `sample_matrix.json / sample_matrix_variants.json` 中每条 question 的 `scene_theme` 与当前 `select_scene(question)` 一致。
+
+- 本轮定向验证：
+  - `cd frontend && npm test -- --run src/game/replaySync.test.ts src/game/replaySelection.test.ts src/pages/SimulationView.test.tsx src/hooks/useScreenCapture.test.ts`
+    - `18 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
+    - `214 passed`
+  - `cd backend && .venv/bin/python -m pytest tests/test_scene_selector.py tests/test_e2e_sample_matrix.py -q`
+    - `146 passed`
+  - `node --check frontend/scripts/e2e-suite.mjs`
+    - 通过
+
+- 宿主环境结论（已明确区分，不再把它误判为产品问题）：
+  - 当前机器从 Node CLI 启动 Playwright 浏览器会直接崩在 Chromium/Chrome for Testing 的 Crashpad + MachPort 权限链路：
+    - `bootstrap_check_in ... Permission denied (1100)`
+    - `Crashpad/settings.dat: Operation not permitted`
+    - `MachPortRendezvousServer ... Permission denied (1100)`
+  - 这会阻塞 `npm run e2e:matrix|corners|full` 的本机浏览器拉起，但不影响已跑过的前后端定向测试结果，也不说明 replay/scene selector/capture 业务逻辑本身仍然损坏。
+
+- 当前 Track C 判断：
+  - **代码与样本契约层面：已收口。**
+  - **本机浏览器级全量回归：仍受宿主权限环境阻塞，需在能正常拉起 Playwright 浏览器的环境下重跑。**
 
 ## 2026-03-15 Replay Hardening + Timeline Director Pass
 
@@ -3906,3 +4175,664 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `git diff --check -- llmdoc README.md frontend/README.md backend/README.md frontend/public/assets/ASSET_CREDITS.md .env.example` → 通过
   - `rg '^(<<<<<<<|=======|>>>>>>>)' ...` → 无冲突标记
   - `llmdoc/index.md` 中引用的文档文件均存在
+
+## 2026-03-17 Four-Track Execution Doc + Skill-Based QA
+
+- 新增执行文档：
+  - `implement/19_four_track_execution_plan.md`
+  - 范围：
+    - `Director Campaign / 导演生涯`
+    - `玩法契约统一`
+    - `稳定性与验证面`
+    - `AI 辩论竞技场 MVP`
+  - 文档内容不是方向摘要，而是：
+    - 目标 / 非目标
+    - 建议数据模型 / API / 文件改造点
+    - 单测 / 集成 / E2E 清单
+    - review gate
+    - 本轮真实验证基线
+
+- 本轮按用户指定实际使用了 3 个 skill：
+  - `develop-web-game`
+  - `playwright-interactive`
+  - `Playwright CLI Skill`
+
+- `Playwright CLI Skill` 现实状态：
+  - `npx` 可用
+  - `frontend` 本地 `playwright` 可导入
+  - 但 skill wrapper 当前实际落到 `@playwright/mcp` server 命令，而不是可直接交互的 `playwright-cli` 子命令
+  - 本轮未把它作为主验证链路；在执行文档中已记录为“预检通过，但 wrapper 行为待修”
+
+- 本轮真实验证：
+  - 前端定向单测：
+    - `cd frontend && npm test -- --run src/components/GameplayCardsModal.test.tsx src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/lib/dailyChallenge.test.ts src/game/replaySelection.test.ts src/game/replaySync.test.ts src/pages/SimulationView.test.tsx`
+    - 结果：`30 passed`
+  - 后端定向集成：
+    - `cd backend && .venv/bin/python -m pytest tests/test_card_events.py tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
+    - 结果：`230 passed`
+  - matrix smoke：
+    - `cd frontend && npm run e2e:matrix -- --headless --themes governance,law,trade,war_logistics,generic --output-dir output/e2e/20260317-four-track-smoke`
+    - 结果：通过
+    - 工件：`frontend/output/e2e/20260317-four-track-smoke`
+
+- `develop-web-game` 客户端现实坑位再次确认：
+  - skill 脚本是 ESM 但扩展名为 `.js`，直接 `node` 会报：
+    - `SyntaxError: Cannot use import statement outside a module`
+  - 若复制到 `/tmp/*.mjs`，又会因找不到 `frontend/node_modules/playwright` 失败
+  - 本轮可用 workaround：
+    - 复制到 `frontend/.tmp-playwright/web_game_playwright_client.mjs`
+  - 实际运行命令：
+    - `cd frontend && node .tmp-playwright/web_game_playwright_client.mjs --url http://127.0.0.1:18928/sim/e8ae7cc0-8f11-4b7d-9c38-fdab2a6bac0f --actions-file ~/.codex/skills/develop-web-game/references/action_payloads.json --iterations 2 --pause-ms 250 --capture-mode panel --screenshot-dir output/web-game/20260317-director-campaign-doc`
+  - 工件：
+    - `frontend/output/web-game/20260317-director-campaign-doc/shot-0.png`
+    - `frontend/output/web-game/20260317-director-campaign-doc/state-0.json`
+
+- `playwright-interactive` 本轮真实检查面：
+  - desktop 首页
+  - mobile 首页
+  - completed Theater `/sim/:id` desktop / mobile
+  - result `/result/:id` desktop / mobile
+  - result 分享 modal
+  - 首页语言切换
+
+- 本轮真实 UI 观察：
+  - 首页 desktop / mobile 当前无致命裁切
+  - mobile 首页首屏密度仍高，参数区需要向下滚动才能完整看完
+  - completed Theater desktop 正常
+  - mobile Theater 可用，但 Agent 区与实时发言区首屏信息密度仍偏高
+  - result 页与分享 modal 正常
+
+- 给下一个 agent 的默认起点：
+  - 按 `implement/19_four_track_execution_plan.md` 从 `Track A / Phase A1` 开始：
+    - 建 campaign 表
+    - 写 finalize service
+    - 结果页落一次 finalize
+    - 前端先显示只读 campaign summary
+
+## 2026-03-17 Implement 19 Execution Pass
+
+- 已实际推进 `implement/19_four_track_execution_plan.md` 的前三条主线：
+  - `Track A / Director Campaign`
+  - `Track B / gameplay contract`
+  - `Track C / verification + mobile evidence`
+  - `Track D` 保持设计冻结，未开新模式代码
+
+- `Track A` 后端已落地：
+  - 新增 `backend/app/models/campaign.py`
+  - 新增 `backend/app/services/campaign.py`
+  - 新增 `backend/app/api/campaign.py`
+  - 接入 `backend/app/main.py`
+  - 新增 Alembic：`backend/alembic/versions/002_add_campaign_tables.py`
+  - 新增测试：
+    - `backend/tests/test_campaign_service.py`
+    - `backend/tests/test_campaign_api.py`
+  - 行为：
+    - `POST /api/campaign/scenario/{id}/finalize`
+    - `GET /api/campaign/profile/{user_id}`
+    - `GET /api/campaign/profile/{user_id}/mastery`
+    - `GET /api/campaign/profile/{user_id}/badges`
+    - finalize 幂等；已完成场景才允许结算
+
+- `Track A` 前端已接上：
+  - 新增 `frontend/src/lib/directorIdentity.ts`
+  - `PredictionModal` 现在会复用稳定本地 director identity，而不是每次匿名散掉
+  - `ResultView` 会在本地 archive summary 稳定后调用 campaign finalize，并展示 `Campaign Progress`
+  - `InputView` 会读取 director campaign 数据，在每日挑战卡与 quick start 区显示：
+    - 当前题材 `Lv`
+    - 距下次解锁差多少分
+    - 已解锁徽章数 / 已完成局数
+
+- `Track B` 已落一份共享事实源：
+  - 新增 `shared/gameplay_contract.v1.json`
+  - 来源不是手写 duplicate，而是从既有前端常量自动抽取生成
+  - 已包含：
+    - 10 张卡的 `labels / descriptions / animation / cost / cooldown / auto_cooldown / trigger flags`
+    - 12 个 profile 的 `labels / descriptions / signature hooks / recommended cards / default directives / signature arc`
+    - `card_system_effects`
+  - 前端已开始消费：
+    - `frontend/src/lib/gameplayContract.ts`
+    - `frontend/src/lib/scenarioMeta.ts`
+    - `frontend/src/components/GameplayCardsModal.tsx`
+    - `frontend/src/components/gameplayCards.ts` 的主要 helper 逻辑
+  - 后端已消费：
+    - `backend/app/services/gameplay_contract.py`
+    - `backend/app/visualization/card_events.py`
+  - 新增验证：
+    - `frontend/src/components/gameplayContract.test.ts`
+    - `backend/tests/test_gameplay_contract_sync.py`
+
+- 额外视觉契约补丁：
+  - `frontend/src/game/scenes/WorldScene.ts` 新增 `hearing_bell`，避免 `public_hearing` 落到 generic flash
+
+- 本轮前端验证：
+  - `cd frontend && npm run build` 通过
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/gameplayContract.test.ts src/components/PredictionModal.test.tsx`
+  - 结果：`7 passed`
+
+- 本轮后端验证：
+  - `cd backend && source .venv/bin/activate && ruff check ... && pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+  - 结果：`28 passed`
+
+- 本轮正式 E2E / 黑盒工件：
+  - 12-profile matrix + corners 主跑产物目录：
+    - `frontend/output/e2e/20260317-implement19-final`
+    - 说明：
+      - `full` 首轮因 mobile Theater 判定条件过严而在最后阶段超时
+      - matrix / corners 工件本身已落盘完成，不需要重跑
+  - mobile 正式重跑目录：
+    - `frontend/output/e2e/20260317-implement19-mobile-rerun`
+    - 工件：
+      - `mobile-home.json`
+      - `mobile-home.png`
+      - `mobile-theater.json`
+      - `mobile-theater.png`
+      - `mobile-result.json`
+      - `mobile-result.png`
+      - `result.json`
+    - 说明：
+      - `mobile-theater.json` 中 `replayState` 正常，但 `scene` 可能为 `null`
+      - 已用 Playwright 手工补证：
+        - `frontend/output/e2e/20260317-implement19-mobile-rerun/manual-mobile-theater.png`
+        - `frontend/output/e2e/20260317-implement19-mobile-rerun/manual-mobile-theater.md`
+      - 手工 `window.render_game_to_text()` 已确认 mobile Theater 实际为 `scene = WorldScene`、`theme = scifi_base`
+
+- `develop-web-game` 再次真实取证：
+  - 命令：
+    - `cd frontend && node .tmp-playwright/web_game_playwright_client.mjs --url http://127.0.0.1:18928/sim/72ae364d-3ea1-4959-939c-8fe1dbeca1c9 --actions-file ~/.codex/skills/develop-web-game/references/action_payloads.json --iterations 2 --pause-ms 250 --capture-mode panel --screenshot-dir output/web-game/20260317-implement19`
+  - 工件：
+    - `frontend/output/web-game/20260317-implement19/shot-0.png`
+    - `frontend/output/web-game/20260317-implement19/shot-1.png`
+    - `frontend/output/web-game/20260317-implement19/state-0.json`
+    - `frontend/output/web-game/20260317-implement19/state-1.json`
+  - 已人工看图：
+    - 非黑图
+    - HUD / scene / bubbles 正常可见
+
+- 本轮人工视觉 QA 结论：
+  - mobile 首页：
+    - `frontend/output/e2e/20260317-implement19-mobile-rerun/mobile-home.png`
+    - 每日挑战卡 + 生涯提示首屏可见
+  - mobile Theater：
+    - `frontend/output/e2e/20260317-implement19-mobile-rerun/manual-mobile-theater.png`
+    - 主剧场、HUD、Agent 列表首屏均可见；信息密度仍偏高，但未裁切到不可用
+  - mobile 结果页：
+    - `frontend/output/e2e/20260317-implement19-mobile-rerun/mobile-result.png`
+    - 顶部 CTA 与第一张结局卡首屏可见
+
+- 当前已知剩余边界 / 下一步：
+  - `Track B` 仍是 Phase B1：
+    - shared contract 已落地并被消费，但 `frontend/src/components/gameplayCards.ts` 里还保留 legacy 常量，下一轮可以清掉，进入更彻底的 Phase B2
+  - `Track C`：
+    - `full` 模式需要把 matrix / corners / mobile 的 summary result 再统一收口，避免首轮那种“最后一步 mobile 条件太严导致整套 exit 1”
+  - `Track A`：
+    - 现在是本地 director identity + 后端 campaign 的最小闭环
+    - 还没有真正跨设备身份统一；不同浏览器/无 localStorage 共享时，旧 scenario 可能对新 director 返回 `409`
+
+## 2026-03-17 Boundary Hardening + AI Asset Pipeline
+
+- 已补 `campaign` 边界收口：
+  - `InputView` 不再在“首次无 profile”时并发打 3 个 campaign GET 并制造重复 404；现在先取 `profile`，不存在就直接回退到空态。
+  - `ResultView` 对 `finalize` 的两类边界态做了降级处理：
+    - `404`：临时 / mocked result，不写 campaign
+    - `409`：该历史结果已归属另一 director profile，本设备不重复计入
+  - 这两类现在走普通说明文案，不再显示红色错误。
+
+- 已补 AI 素材批量生成脚本：
+  - 新增：
+    - `frontend/scripts/generate-ui-assets.mjs`
+  - 特点：
+    - 支持 `--preset ...` 批量出图
+    - 会先尝试 `aiplatform.googleapis.com`
+    - 若失败，自动回退到已验证可用的 `generativelanguage.googleapis.com`
+    - 输出 `.png` 与同名 `.meta.json`
+  - 当前预置 preset：
+    - `generic_frame`
+    - `law_scene_variant`
+    - `faith_scene_variant`
+
+- 真实 endpoint 结论再次确认：
+  - `aiplatform.googleapis.com/v1/publishers/google/models/...:generateContent?key=...`
+    - 当前返回 `401 UNAUTHENTICATED`
+    - 说明这条链路需要 OAuth，不接受手头这类 API key
+  - `generativelanguage.googleapis.com/v1beta/models/...:generateContent?key=...`
+    - 对同一把 key 可正常返回图片
+  - 因此当前脚本的实际稳定 provider 仍是 `generativelanguage`
+
+- 已用脚本真实补了一张资产：
+  - 新增：
+    - `frontend/public/assets/ui/generated/gameplay_card_frame_generic.png`
+    - `frontend/public/assets/ui/generated/gameplay_card_frame_generic.png.meta.json`
+  - 接线：
+    - `frontend/src/lib/themeRegistry.ts` 中 `generic` 已不再复用 `gameplay_panel.png`
+    - 改为使用 `gameplay_card_frame_generic.png`
+  - 资产清单已同步：
+    - `frontend/public/assets/ASSET_CREDITS.md`
+  - 手工验图：
+    - 风格与现有 magenta / violet / brass 像素 UI 一致
+    - 适合 generic 题材卡框，不再像之前那样直接借用整块 gameplay panel
+
+- 本轮补充回归：
+  - `cd frontend && npm run build && npm test -- --run src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/gameplayContract.test.ts src/components/PredictionModal.test.tsx src/components/gameplayCards.test.ts`
+  - 结果：
+    - build 通过
+    - `25 passed`
+
+## 2026-03-17 Sequential Variant Pass — Law Then Faith
+
+- 已按顺序补完两个薄弱主题的 scene 变体：
+  - `frontend/public/assets/scenes/law_court_variant.png`
+  - `frontend/public/assets/scenes/faith_temple_variant.png`
+  - 对应 meta：
+    - `law_court_variant.png.meta.json`
+    - `faith_temple_variant.png.meta.json`
+  - 生成方式：
+    - `frontend/scripts/generate-ui-assets.mjs`
+    - provider 实际命中 `generativelanguage`
+
+- 已人工看图：
+  - `law_court_variant.png`：更偏高耸合议庭 / 司法档案厅
+  - `faith_temple_variant.png`：更偏圣议会 / 教义争辩大厅
+  - 二者都与现有像素风、紫金点缀和 16:9 宽构图一致，可直接混入现有 Theater 池
+
+- 已完成接线：
+  - 前端：
+    - `frontend/src/lib/themeRegistry.ts`
+      - 新增 `law_court_variant`
+      - 新增 `faith_temple_variant`
+      - `SCENE_THEME_IDS` 实际从 27 → 29
+    - `frontend/src/game/scenes/WorldScene.ts`
+      - 新增两套 palette
+      - 加入 darkThemes
+  - 后端：
+    - `backend/app/visualization/scene_selector.py`
+      - 新增更具体的 `law` / `faith` 变体关键词
+      - `AVAILABLE_SCENES` 从 27 → 29
+
+- 关键词策略：
+  - `law_court` 继续负责泛法律 / 法院 / 宪法 / veto
+  - `law_court_variant` 只吃更具体的：
+    - `grand tribunal`
+    - `constitutional chamber`
+    - `appellate bench`
+    - `multi-judge hearing`
+    - `合议庭`
+    - `大审判庭`
+    - `终审法庭`
+  - `faith_temple` 继续负责泛神谕 / 教会 / 神权 / temple
+  - `faith_temple_variant` 只吃更具体的：
+    - `sacred council`
+    - `doctrinal council`
+    - `clerical schism`
+    - `ritual council`
+    - `圣议会`
+    - `教义议会`
+    - `祭司议会`
+    - `教团分裂`
+
+- 已更新清单：
+  - `frontend/public/assets/ASSET_CREDITS.md`
+
+- 已新增 / 更新验证：
+  - 后端：
+    - `backend/tests/test_scene_selector.py`
+      - 新增 `law_court_variant`
+      - 新增 `faith_temple_variant`
+      - `AVAILABLE_SCENES == 29`
+  - 前端：
+    - `frontend/src/game/managers/VizSynthesizer.test.ts`
+      - 新增两条 variant 命中
+    - `frontend/src/game/scenes/WorldScene.test.ts`
+      - 场景覆盖从 27 → 29
+
+- 本轮定向回归：
+  - `cd backend && source .venv/bin/activate && pytest tests/test_scene_selector.py -q`
+    - `142 passed`
+  - `cd frontend && npm test -- --run src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/components/gameplayCards.test.ts`
+    - `64 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 下一顺位建议：
+  - 若继续顺推，优先补 `generic` 的 scene 变体，而不是只停留在卡框：
+    - 例如 `switchboard_forum_variant / rotating review chamber`
+  - 再下一步再补 `law` / `faith` 的 matrix 样本清单，把变体真正纳入 E2E，而不是只停留在选景函数能命中
+
+## 2026-03-17 Sequential Variant Pass — Generic
+
+- 已继续顺推 `generic` 的第二场景变体：
+  - 新增：
+    - `frontend/public/assets/scenes/switchboard_forum_variant.png`
+    - `frontend/public/assets/scenes/switchboard_forum_variant.png.meta.json`
+  - 提示词方向：
+    - `rotating review chamber`
+    - `procedural tribunal`
+    - `civic switchboard chamber`
+    - 保持暖象牙 / 紫红 / 黄铜 / 像素策略 UI 风格
+
+- 已完成接线：
+  - 前端：
+    - `frontend/src/lib/themeRegistry.ts`
+      - 新增 `switchboard_forum_variant`
+      - `SCENE_THEME_IDS` / inventory scenes 实际从 29 → 30
+    - `frontend/src/game/scenes/WorldScene.ts`
+      - 新增 palette
+  - 后端：
+    - `backend/app/visualization/scene_selector.py`
+      - 新增更具体的 generic procedural / review chamber 关键词
+      - `AVAILABLE_SCENES` 从 29 → 30
+
+- 关键词策略：
+  - `switchboard_forum`
+    - 继续吃 `rotating leadership / random leader swap / lottery committee / rotating external review board`
+  - `switchboard_forum_variant`
+    - 只吃更具体的：
+      - `rotating review chamber`
+      - `procedural tribunal`
+      - `civic switchboard chamber`
+      - `committee dais`
+      - `oversight chamber`
+      - `轮值审查议场`
+      - `程序议场`
+      - `外部审查议场`
+      - `轮值委员会中枢`
+      - `程序委员会大厅`
+
+- 已更新：
+  - `frontend/public/assets/ASSET_CREDITS.md`
+  - 前端 / 后端选景测试与 WorldScene 覆盖计数
+
+- 本轮定向回归：
+  - `cd backend && source .venv/bin/activate && pytest tests/test_scene_selector.py -q`
+    - `144 passed`
+  - `cd frontend && npm test -- --run src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/components/gameplayCards.test.ts`
+    - `64 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 真实 smoke：
+  - 新建题面：
+    - `What if every emergency review had to pass through a rotating review chamber before execution?`
+  - 后端 `POST /api/scenario` 首响应即命中：
+    - `scene_theme = switchboard_forum_variant`
+  - 前端 Theater 实测：
+    - HUD 显示 `轮值审查议场`
+    - `render_game_to_text().scene.theme = switchboard_forum_variant`
+  - 工件：
+    - `frontend/output/e2e/generic-variant-smoke-switchboard-20260317/scenario.json`
+    - `frontend/output/e2e/generic-variant-smoke-switchboard-20260317/theater.png`
+
+- 当前下一顺位：
+  - 若继续顺推，就该把 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 真正并入 `sample_matrix.json` 或独立 `variant_matrix.json`
+  - 然后跑一次 variants-only matrix，把变体从“函数命中 + 单条 smoke”升级为正式 E2E 套件成员
+
+## 2026-03-17 Variant Matrix Formalized
+
+- 已把三个变体正式纳入独立 blackbox matrix：
+  - `law_grand_tribunal`
+  - `faith_council`
+  - `generic_review_chamber`
+
+- 新增：
+  - `frontend/output/e2e/sample_matrix_variants.json`
+  - `frontend/package.json` 脚本：
+    - `npm run e2e:variants`
+  - `frontend/scripts/e2e-suite.mjs`
+    - 新增 3 个 variant fallback 题面
+
+- 这套 matrix 不污染默认 `sample_matrix.json` / `e2e:full`
+  - 保持主 12-profile 套件稳定
+  - variants 作为独立加跑层
+
+## 2026-03-17 A3 Daily Truth + i18n Hardening
+
+- 已继续收口 `implement/19_four_track_execution_plan.md` 的剩余项：
+  - `Track A3`：daily challenge 完成态开始优先结合后端 campaign 真源，而不是只看 localStorage
+  - `Track B2`：`frontend/src/components/gameplayCards.ts` 的 legacy gameplay contract 副本已切到 shared contract 单一事实源
+  - i18n：`PredictionModal` 的 bet kind / tone / resonance / preview 文案不再硬编码中文
+
+- 前端当前状态：
+  - `InputView` 会并行读取：
+    - `getCampaignProfile`
+    - `getCampaignMastery`
+    - `getCampaignBadges`
+    - `getCampaignDailyChallengeStatus`
+  - `dailyChallenge.ts` 现通过 `resolveChallengeProgress()` 合并：
+    - 本地进度
+    - 后端 daily challenge 完成态
+  - 同场景时保留本地 `usedCards / betPlaced` 明细；跨设备只信后端“已完成”事实，不伪造本地细节
+  - `PredictionModal` 现按当前语言渲染：
+    - `Branch Winner / Ending Tone / Theme Resonance`
+    - `ENDING_TONE_OPTIONS`
+    - `PROFILE_RESONANCE_OPTIONS`
+    - preview 行文案
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/components/PredictionModal.test.tsx src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts`
+    - `26 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q`
+    - `8 passed`
+
+- 真实浏览器 QA：
+  - 本地 dev server 已重新用持久 TTY 会话启动：
+    - backend `uvicorn ... 127.0.0.1:18927`
+    - frontend `vite ... 127.0.0.1:18928`
+  - 使用 Playwright MCP 真实检查：
+    - desktop 首页语言切换
+    - 英文 `PredictionModal`
+    - desktop 结果页
+    - mobile 首页
+    - mobile Theater
+    - result share modal 打开态
+  - 截图工件：
+    - `frontend/result-desktop-a3-b2.png`
+    - `frontend/home-mobile-top-a3-b2.png`
+    - `frontend/theater-mobile-a3-b2.png`
+
+- 关键限制 / 已知边界：
+  - `npm run e2e:matrix/full` 仍无法作为主签收链路，原因不是业务回归，而是本机 Playwright browser launch 在 Chromium headless / headed 都被 macOS 权限拦截：
+    - `bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer ... Permission denied (1100)`
+  - `develop-web-game` 客户端同样命中这条底层浏览器启动限制，因此本轮已记录失败事实，并改用 Playwright MCP 做页面级真实 QA
+  - 当前浏览器 console 仍有两类可见网络噪声：
+    - 首页首次无 campaign profile 时的 `404`
+    - 打开已归属其他 director 的结果页时 `finalize` 返回 `409`
+  - 这些边界当前都已有 UI 降级文案，不会阻断使用；如果下一轮继续硬化，可考虑把这两类“预期边界”从 HTTP error 收口成非错误态摘要接口
+
+- 已实际运行：
+  - `cd frontend && npm run e2e:variants -- --headless --output-dir output/e2e/20260317-variant-matrix`
+
+- 结果：
+  - 3/3 通过
+  - 工件目录：
+    - `frontend/output/e2e/20260317-variant-matrix/result.json`
+
+- 已回填固定样本：
+  - `frontend/output/e2e/sample_matrix_variants.json`
+    - 已写入：
+      - `scenario_id`
+      - `completed_branch_count`
+      - `replay/result/share` 工件绝对路径
+
+- 实际命中结果：
+  - `law_grand_tribunal`
+    - 后端 fallback 场景：`ac977548-39d4-4bf8-8e2f-8700e79e0d21`
+    - 正式工件：
+      - `frontend/output/e2e/law_grand_tribunal-replay-proof/`
+      - `frontend/output/e2e/law_grand_tribunal-result-headed/`
+  - `faith_council`
+    - 后端 fallback 场景：`67bba632-e320-450a-a608-513b313a8a3f`
+    - 正式工件：
+      - `frontend/output/e2e/faith_council-replay-proof/`
+      - `frontend/output/e2e/faith_council-result-headed/`
+  - `generic_review_chamber`
+    - 后端 fallback 场景：`d5e2191d-1ca7-43d9-8d52-58317228837e`
+    - 正式工件：
+      - `frontend/output/e2e/generic_review_chamber-replay-proof/`
+      - `frontend/output/e2e/generic_review_chamber-result-headed/`
+
+- 到这里为止，薄弱题材变体不再只是：
+  - 单测命中
+  - 单条 smoke
+  - 手工截图
+  而是已经升级成可重复执行的正式 E2E 套件成员
+
+## 2026-03-17 Campaign Truth + Prediction i18n Follow-up
+
+- 已继续推进 `implement/19_four_track_execution_plan.md` 的剩余收口点：
+  - `Track A3`
+    - 首页 daily challenge 不再只看 localStorage
+    - 现已接入后端 `campaign daily-status`
+    - `frontend/src/lib/dailyChallenge.ts` 新增 `resolveChallengeProgress()`，把本地缓存与后端真源合并为单一显示状态
+  - `Track B2`
+    - `frontend/src/components/gameplayCards.ts` 的 legacy gameplay contract 大常量已被清理，改为统一消费 `frontend/src/lib/gameplayContract.ts`
+  - `i18n`
+    - `PredictionModal` 的下注类型、结局倾向、题材回响下拉和 preview 文案不再硬编码中文
+    - 英文 UI 下现在会正确显示 `Branch Winner / Ending Tone / Theme Resonance` 及英文 target label
+
+- 本轮前端定向验证：
+  - `cd frontend && npm test -- --run src/lib/dailyChallenge.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/PredictionModal.test.tsx src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts`
+    - `34 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 本轮后端定向验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_gameplay_contract_sync.py -q`
+    - `10 passed`
+
+- 当前环境限制：
+  - `playwright-interactive` / `e2e:corners` / `develop-web-game` 在这台机器上都无法成功启动浏览器
+  - 真实错误：
+    - `bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer.*: Permission denied (1100)`
+  - 影响：
+    - 本轮无法在当前环境重新生成新的 browser-level screenshot 工件
+    - 代码、类型、单测与 API 层已验证；浏览器真值仍需要在可正常启动 Chromium 的环境里补跑
+
+- 给下一轮 agent 的直接建议：
+  - 若继续做真实 E2E，先解决当前 macOS 浏览器启动权限问题，再重跑：
+    - `npm run e2e:corners -- --headless --output-dir output/e2e/<run>`
+    - `node .tmp-playwright/web_game_playwright_client.mjs --url http://127.0.0.1:18928/sim/<scenario_id> --actions-file ~/.codex/skills/develop-web-game/references/action_payloads.json --iterations 2 --pause-ms 250 --capture-mode panel --screenshot-dir output/web-game/<run>`
+  - 若只继续代码层推进，当前更值得优先补的是：
+    - 把 `campaign daily-status` 真值也接入更多自动化摘要 / E2E 脚本
+    - 清理 `backend/app/api/campaign.py` / `campaign.py` 中新增 daily-status 时留下的轻微重复字段与 helper
+
+## 2026-03-17 Campaign Truth + Prediction i18n Verification Addendum
+
+- 已重新在主工作区复验一轮，最新结果以这条为准：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_gameplay_contract_sync.py -q`
+    - `10 passed`
+  - `cd frontend && npm test -- --run src/lib/dailyChallenge.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/PredictionModal.test.tsx src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts`
+    - `36 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 为避免误连到别的工作区进程，本轮还单独起过：
+  - 当前仓库 backend：`127.0.0.1:18937`
+  - 当前仓库 frontend：`127.0.0.1:18938`
+  - 目的：把 daily challenge 后端真源与前端改动放到同一套运行时里验证
+
+- 结论保持不变：
+  - 代码层、API 层、类型检查、前端定向测试都已通过
+  - 浏览器级 Playwright 黑盒仍被当前 macOS 权限环境阻塞，不属于项目代码失败
+
+## 2026-03-17 Implement19 Final Push
+
+- 已继续收口 `implement/19_four_track_execution_plan.md`：
+  - `Track A3`
+    - 新增后端 `GET /api/campaign/profile/{user_id}/daily-status`
+    - 首页改为优先读取后端 daily challenge 真源，再和本地缓存合并显示
+    - `frontend/src/lib/dailyChallenge.ts` 新增 `ResolvedChallengeProgress` / `resolveChallengeProgress()`
+    - 仅当本地确有对应场景细节时才显示“已用卡数 / 是否已下注”，避免后端真源场景被前端瞎补本地细节
+  - `Track B2`
+    - `frontend/src/components/gameplayCards.ts` 已进一步去掉重复导出的 contract 常量别名
+    - 文件内部改为统一走 `gameplayContract.ts` 提供的 typed alias，不再暴露第二份 card/profile/signature/system-effect 事实源
+
+- 本轮验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q`
+    - `8 passed`
+  - `cd frontend && npm test -- --run src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts src/pages/InputView.test.tsx src/lib/dailyChallenge.test.ts src/pages/ResultView.test.tsx`
+    - `30 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 本轮浏览器工件补充：
+  - `frontend/output/e2e/20260317-implement19-final/mobile/mobile-home.png`
+  - `frontend/output/e2e/20260317-implement19-final/mobile/mobile-home.json`
+  - `frontend/output/e2e/20260317-implement19-final/corners/replay-skip-switch/replay-corner.png`
+  - `frontend/output/e2e/20260317-implement19-final/corners/replay-skip-switch/replay-corner.json`
+  - `frontend/output/e2e/20260317-implement19-final/corners/share-context/share-generated.png`
+  - `frontend/output/e2e/20260317-implement19-final/corners/share-context/share-generated.json`
+
+- 本轮浏览器限制更新：
+  - `develop-web-game` client 在当前环境启动 Chromium 时仍会报：
+    - `bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer.*: Permission denied (1100)`
+  - `npm run e2e:matrix` / `npm run e2e:full` 在这台机器上也出现 Playwright browser launch fallback 全失败
+  - 这更像当前 macOS 自动化/浏览器会话环境问题，而不是业务代码失败
+  - 部分新工件来自套件在失败前已经跑完的 `corners / mobile` 子流程；`replay-corner.png` 里的黑色 Theater 区很可能仍是 headless WebGL 取图伪像，和仓库内已有 `*-replay-headed.png` 的正常有画面结果不一致
+
+- 给下一轮 agent 的直接建议：
+  - 如果继续做真浏览器验证，先清掉测试浏览器残留进程，再在可正常启动 Playwright 的环境里补跑：
+    - `npm run e2e:matrix -- --headless --themes governance,law,trade,ecology,war,faith,industry,frontier,mythic,survival,generic,governance_surveillance,empire_palace,industry_grid,war_logistics --output-dir output/e2e/<run>`
+    - `npm run e2e:full -- --headless --output-dir output/e2e/<run>`
+  - 如果继续代码层推进，当前更适合做的是：
+    - 把 `daily-status` 接进更多自动化摘要 / E2E 断言
+    - 把 `playwright` 启动 profile 冲突与 macOS 权限问题收敛到脚本层，避免每次手工清理
+
+## 2026-03-17 A3 Wiring + E2E Recovery
+
+- 本轮实际完成：
+  - 首页 `InputView` 已接入后端 `campaign daily-status` 真源，并通过 `resolveChallengeProgress()` 与本地缓存合并。
+  - `ResultView` 不再只按“今天的 challenge id”判断 daily challenge，而是通过 `findChallengeProgressByScenarioId()` 反查，跨天回看同机缓存场景时也能保持 challenge 身份。
+  - `dailyChallenge.ts` 新增：
+    - `ResolvedChallengeProgress`
+    - `resolveChallengeProgress()`
+    - `findChallengeProgressByScenarioId()`
+  - `frontend/scripts/e2e-suite.mjs` 已修：
+    - matrix runtime fallback 会重开新页面，不再复用已关闭 page
+    - share generation 等待条件改为等待 `active_platform=xiaohongshu + has_copy=true`，并把超时放宽到 90s
+
+- 本轮验证结果：
+  - `cd frontend && env TMPDIR=/Users/yangjunjie/Desktop/upgrade-test/frontend/.tmp npm test -- --run src/lib/dailyChallenge.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts`
+    - `32 passed`
+  - `cd backend && env TMPDIR=/Users/yangjunjie/Desktop/upgrade-test/backend .venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_gameplay_contract_sync.py tests/test_card_events.py -q`
+    - `31 passed`
+  - `cd frontend && env TMPDIR=/Users/yangjunjie/Desktop/upgrade-test/frontend/.tmp npm run build`
+    - 通过
+
+- 本轮真实浏览器 / 黑盒结果：
+  - matrix 全量 15 主题通过：
+    - `frontend/output/e2e/20260317-matrix-rerun/result.json`
+  - corners 全量通过：
+    - `frontend/output/e2e/20260317-corners-rerun/result.json`
+  - mobile 套件通过：首页 / Theater / result 三段摘要已落盘：
+    - `frontend/output/e2e/20260317-mobile-rerun/result.json`
+  - `develop-web-game` 客户端本轮成功运行，不再被浏览器权限阻塞：
+    - `frontend/output/web-game/20260317-a3-b2-law-check/shot-0.png`
+    - `frontend/output/web-game/20260317-a3-b2-law-check/state-0.json`
+
+- 交互式人工复核（本轮用 chrome-devtools 代替 playwright wrapper，会话可正常工作）：
+  - desktop 首页：daily challenge 卡、campaign 文案、quick start 正常
+  - mobile 首页：首屏可用，无明显裁切
+  - result 页：`Campaign Progress` 可见，share modal 可打开
+  - 手工点击 `小红书` 后文案最终成功生成；说明之前 corners 失败是 harness 等待条件过紧，不是产品不可用
+
+- 残余观察：
+  - mobile suite 输出的 `agent_count=0` 更像 capture 时机问题；同一场景用交互式快照复看时，移动端 Theater 实际有完整 HUD、Agent 列表与消息流
+  - share generation 在复杂结果页上可能接近 30s，脚本层已放宽等待，但产品层仍属于“可用但偏慢”
+
+- 给下一轮 agent 的建议：
+  - 若继续扩 daily challenge 真源，可把后端 `daily-status` 的字段继续扩到 `used_card_count / bet_placed`，这样首页就能完全摆脱本地缓存细节
+  - 若继续做跨平台 QA，优先补 Safari / iOS 真机或模拟器验证；本轮实际浏览器验证主要基于 Chromium
+
+## 2026-03-17 Track D Blueprint
+
+- 已新增 implement/21_track_d_debate_arena_mvp_blueprint.md。
+- 文档覆盖：
+  - 产品设计与玩法循环
+  - 美术素材与 Gemini 生图约束
+  - 前后端代码开发拆解
+  - i18n 与跨平台 Web 约束
+  - 单测 / 集成 / E2E / skill-based QA 矩阵
+  - code review 与验收标准
+- 已同步 implement/README.md 索引。
+- 本轮未实现 Debate Arena 代码，只产出可直接开工的 Track D 规格与执行蓝图。

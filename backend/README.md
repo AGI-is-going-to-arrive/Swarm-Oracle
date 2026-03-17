@@ -42,6 +42,7 @@ actual host-reachable address instead of `host.docker.internal`.
 | Helpers | `api/helpers.py` | Background tasks / utility functions (P0-1) |
 | Interventions | `api/interventions.py` | Butterfly Effect intervention routes (P0-1) |
 | Social | `api/social.py` | Social media copy generation routes (P0-1) |
+| Campaign | `api/campaign.py` | Director campaign finalize / profile / mastery / badges / daily-status (Track A / Phase A1 + A3) |
 | Predictions | `api/predictions.py` | Prediction / leaderboard API (P3-B) |
 | WebSocket | `api/ws.py` | Real-time simulation events |
 
@@ -66,6 +67,11 @@ actual host-reachable address instead of `host.docker.internal`.
 | `DELETE` | `/api/scenario/{id}` | Delete scenario (cascade) |
 | `GET` | `/api/scenario/{id}/export` | Export scenario as Markdown |
 | `GET` | `/api/intervention-templates` | Preset intervention templates |
+| `POST` | `/api/campaign/scenario/{scenario_id}/finalize` | Finalize director campaign progress for one completed scenario |
+| `GET` | `/api/campaign/profile/{user_id}` | Director campaign profile summary |
+| `GET` | `/api/campaign/profile/{user_id}/mastery` | Per-profile mastery list |
+| `GET` | `/api/campaign/profile/{user_id}/badges` | Unlocked campaign badges |
+| `GET` | `/api/campaign/profile/{user_id}/daily-status` | Daily challenge completion status for one profile on the caller's local day |
 | `POST` | `/api/scenario/{id}/predict` | Submit prediction |
 | `GET` | `/api/scenario/{id}/predictions` | List predictions for a scenario |
 | `POST` | `/api/scenario/{id}/score-predictions` | Trigger LLM scoring |
@@ -79,11 +85,17 @@ actual host-reachable address instead of `host.docker.internal`.
 .venv/bin/python -m pytest tests/ -x -q
 ```
 
-Latest verified backend full regression: **777 passed, 2 warnings**
+Latest verified backend full regression: **798 passed, 2 warnings**
 Command: `.venv/bin/python -m pytest tests/ -q`
 
-Latest verified backend scene/theme regression in this session: **209 passed**
-Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
+Latest verified backend scene/theme regression in this session: **144 passed**
+Command: `.venv/bin/python -m pytest tests/test_scene_selector.py -q`
+
+Latest verified campaign / gameplay contract regression in this session: **151 passed**
+Command: `.venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_scene_selector.py tests/test_gameplay_contract_sync.py -q`
+
+Latest verified Track C scene/theme + sample-matrix regression in this session: **146 passed**
+Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_e2e_sample_matrix.py -q`
 
 ## Database Migrations (Alembic)
 

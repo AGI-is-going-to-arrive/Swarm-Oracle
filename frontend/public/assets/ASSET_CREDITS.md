@@ -50,6 +50,7 @@ They are original works and may be freely used under the project license.
 | `surveillance_megacity.png` | Platform-governed surveillance metropolis |
 | `civic_chamber.png` | Democratic assembly chamber |
 | `law_court.png` | Constitutional court chamber |
+| `law_court_variant.png` | Grand tribunal law scene variant |
 | `imperial_forum.png` | Imperial senate forum |
 | `dynastic_palace.png` | Dynastic palace intrigue hall |
 | `scifi_base.png` | Science-fiction outpost |
@@ -60,6 +61,7 @@ They are original works and may be freely used under the project license.
 | `fantasy_kingdom.png` | High-fantasy realm |
 | `arcane_sanctum.png` | Arcane magic sanctum |
 | `faith_temple.png` | Sacred temple sanctuary |
+| `faith_temple_variant.png` | Sacred council faith scene variant |
 | `refuge_compound.png` | Organized survival refuge compound |
 | `war_command.png` | Automated war command bunker |
 | `logistics_hub.png` | War logistics and convoy hub |
@@ -67,6 +69,7 @@ They are original works and may be freely used under the project license.
 | `space_station.png` | Orbital station |
 | `underwater_kingdom.png` | Undersea civilisation |
 | `desert_outpost.png` | Arid settlement |
+| `switchboard_forum_variant.png` | Rotating review chamber generic scene variant |
 | `trade_harbor.png` | Maritime trade harbor |
 | `ecology_wasteland.png` | Climate-scarcity threshold zone |
 
@@ -117,6 +120,7 @@ They are original works and may be freely used under the project license.
 | `generated/gameplay_card_frame_faith.png` | Faith gameplay card frame |
 | `generated/gameplay_card_frame_ecology.png` | Ecology gameplay card frame |
 | `generated/gameplay_card_frame_frontier.png` | Frontier gameplay card frame |
+| `generated/gameplay_card_frame_generic.png` | Generic gameplay card frame |
 | `generated/gameplay_card_frame_mythic.png` | Mythic gameplay card frame |
 | `generated/gameplay_card_frame_survival.png` | Survival gameplay card frame |
 | `generated/badge_recommended.png` | Recommended tactics badge |

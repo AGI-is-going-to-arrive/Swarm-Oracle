@@ -52,7 +52,13 @@
       "daily_challenge_bet_missing": "No Bet",
       "daily_challenge_start": "Start Daily Challenge",
       "daily_challenge_continue": "Continue Challenge",
-      "daily_challenge_replay": "Play Again"
+      "daily_challenge_replay": "Play Again",
+      "campaign_progress": "Director Campaign",
+      "campaign_mastery_level": "Lv.{{level}}",
+      "campaign_next_unlock": "{{count}} points to next unlock",
+      "campaign_mastered": "This profile is capped for the current milestone",
+      "campaign_quickstart_unlocks": "{{count}} badges unlocked · {{runs}} completed runs",
+      "campaign_first_run": "Complete your first run to reveal campaign progress here"
     },
     "sim": {
       "status": {
@@ -117,7 +123,10 @@
       },
       "predict_btn": "🎯 Predict",
       "panel_expand": "Expand agent panel",
-      "panel_collapse": "Collapse agent panel"
+      "panel_collapse": "Collapse agent panel",
+      "switch_to_theater_aria": "Switch to Pixel Theater",
+      "switch_to_classic_aria": "Switch to Classic View",
+      "theater_status_aria": "Theater live status"
     },
     "intervention": {
       "title": "Butterfly Effect",
@@ -186,7 +195,13 @@
       "archive_cards_used": "{{count}} cards",
       "archive_resonance_signature": "Signature hit",
       "archive_resonance_aligned": "Direction aligned",
-      "archive_resonance_offbeat": "Unexpected side route"
+      "archive_resonance_offbeat": "Unexpected side route",
+      "campaign_title": "Director Campaign Progress",
+      "campaign_delta": "Run Delta",
+      "campaign_level": "Current Profile Level",
+      "campaign_next": "Next Unlock",
+      "campaign_badges": "Total Badges",
+      "campaign_badges_none": "No new badges unlocked this run, but the campaign log was saved."
     },
     "share": {
       "title": "📱 Generate Social Copy",
@@ -218,12 +233,36 @@
       "thinking": "Thinking..."
     },
     "quick_starts_data": [
-      { "emoji": "⚔️", "question": "What if Zhuge Liang lived 10 more years?", "subtitle": "Three Kingdoms · Historical Simulation" },
-      { "emoji": "🚀", "question": "What if we landed on Mars in 2000?", "subtitle": "Technology · Parallel Universe" },
-      { "emoji": "🌍", "question": "What if the internet was never invented?", "subtitle": "Society · Civilization Path" },
-      { "emoji": "🎵", "question": "What if Beethoven was born in modern times?", "subtitle": "Culture · Art Evolution" },
-      { "emoji": "💡", "question": "What if Einstein chose engineering over physics?", "subtitle": "Science · Butterfly Effect" },
-      { "emoji": "🏰", "question": "What if the Roman Empire never fell?", "subtitle": "History · Civilization Simulation" }
+      {
+        "emoji": "⚔️",
+        "question": "What if Zhuge Liang lived 10 more years?",
+        "subtitle": "Three Kingdoms · Historical Simulation"
+      },
+      {
+        "emoji": "🚀",
+        "question": "What if we landed on Mars in 2000?",
+        "subtitle": "Technology · Parallel Universe"
+      },
+      {
+        "emoji": "🌍",
+        "question": "What if the internet was never invented?",
+        "subtitle": "Society · Civilization Path"
+      },
+      {
+        "emoji": "🎵",
+        "question": "What if Beethoven was born in modern times?",
+        "subtitle": "Culture · Art Evolution"
+      },
+      {
+        "emoji": "💡",
+        "question": "What if Einstein chose engineering over physics?",
+        "subtitle": "Science · Butterfly Effect"
+      },
+      {
+        "emoji": "🏰",
+        "question": "What if the Roman Empire never fell?",
+        "subtitle": "History · Civilization Simulation"
+      }
     ],
     "time": {
       "seconds": "{{count}}s",
@@ -328,6 +367,12 @@
       "primary_agent": "Primary Agent",
       "secondary_agent": "Second Agent",
       "hint": "These cards reuse the existing intervention API and inject structured prompts into the simulation engine."
+    },
+    "common": {
+      "loading": "Loading…",
+      "theme_hooks_aria": "Theme hooks",
+      "daily_challenge_art_alt": "Daily challenge pixel illustration",
+      "archive_seal_alt": "Archive seal illustration"
     }
   }
 }

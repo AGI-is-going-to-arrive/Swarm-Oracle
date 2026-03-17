@@ -7,6 +7,7 @@ import PredictionModal from './PredictionModal';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
+    i18n: { language: 'en' },
   }),
 }));
 
@@ -74,5 +75,34 @@ describe('PredictionModal automation callback', () => {
     expect(latestState.bet_kind).toBe('profile_resonance');
     expect(latestState.profile_resonance).toBe('aligned');
     expect(latestState.can_submit).toBe(true);
+  });
+
+  it('renders english labels for structured bet targets when the UI language is english', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PredictionModal
+        scenarioId="scenario-1"
+        onClose={() => {}}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText('prediction.bet_kind_label'), 'ending_tone');
+    expect(screen.getByRole('option', { name: 'Order Consolidation' })).toBeInTheDocument();
+    expect(
+      screen.getByText((content) => (
+        content.includes('prediction.bet_preview_prefix')
+        && content.includes('Order Consolidation')
+      )),
+    ).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('prediction.bet_kind_label'), 'profile_resonance');
+    expect(screen.getByRole('option', { name: 'Direction Aligned' })).toBeInTheDocument();
+    expect(
+      screen.getByText((content) => (
+        content.includes('prediction.bet_preview_prefix')
+        && content.includes('Direction Aligned')
+      )),
+    ).toBeInTheDocument();
   });
 });

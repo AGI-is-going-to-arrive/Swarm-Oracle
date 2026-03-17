@@ -32,10 +32,50 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家"}` | PredictionResponse |
+| `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | — | PredictionResponse[] |
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 | — | `{scored, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20` | LeaderboardEntry[] |
+
+> `POST /api/scenario/{id}/predict` 当前会透传并回显 `user_id`；若未提供，后端会退回到 `user_name`，再退回到 `"anonymous"`。
+
+### Director Campaign (Track A)
+
+| 端点 | 方法 | 描述 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 结算单局导演生涯进度；同一 `scenario_id` 对同一导演档案重复提交为幂等返回，响应内会带 `already_finalized` | `{"user_id": "...", "user_name?": "匿名导演", "profile_id": "...", "archive_grade?": "C", "profile_resonance?": "offbeat", "betting_hit?": true, "bet_count?": 0, "most_used_card?": "...", "completed_daily_challenge?": false}` | CampaignFinalizeResponse |
+| `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
+| `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
+| `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
+| `GET /api/campaign/profile/{user_id}/daily-status` | GET | 查询指定题材在调用方本地日期上的 daily challenge 完成态；供首页把后端真值与本地缓存合并显示 | `?profile_id=governance&local_date=2026-03-17&timezone_offset_minutes=-480` | CampaignDailyChallengeResponse |
+
+> `POST /api/campaign/scenario/{scenario_id}/finalize` 边界行为（已按当前实现与实测核对）：
+> - `200 OK`：首次结算成功，或同一 `scenario_id` 被同一导演档案重复结算；重复结算时 `already_finalized = true`，不会重复累计进度。
+> - `404 Not Found`：目标场景不存在，或命中旧日志但关联导演档案不存在。
+> - `409 Conflict`：该场景已被另一位导演档案结算。
+> - `400 Bad Request`：场景尚未完成，或 `user_id / profile_id / archive_grade / profile_resonance / bet_count` 等请求字段不合法。
+>
+> `GET /api/campaign/profile/{user_id}`、`/mastery`、`/badges`、`/daily-status` 在导演档案不存在时统一返回 `404 Not Found`。
+>
+> `GET /api/campaign/profile/{user_id}/daily-status` 的边界行为：
+> - `200 OK`：返回该题材在调用方本地日期上的完成态；若当日没有完成记录，会返回 `completed = false`，而不是报错。
+> - `400 Bad Request`：`profile_id` 为空、`local_date` 非法，或 `timezone_offset_minutes` 无法构造本地时区。
+
+> `CampaignProfileResponse` 当前额外包含：
+> - `last_daily_challenge_completed_at`
+> - `last_daily_challenge_profile_id`
+> - `last_daily_challenge_scenario_id`
+>
+> `CampaignDailyChallengeResponse` 当前包含：
+> - `completed`
+> - `scenario_id`
+> - `completed_at`
+> - `most_used_card`
+> - `betting_hit`
+> - `profile_resonance`
+> - `campaign_score_delta`
+>
+> 当前前端 `ResultView` 会把 `finalize` 的 `404 / 409` 识别为边界态，只显示提示文案，不阻断主结果页展示；其他 `finalize` 错误仍按普通错误展示。
 
 ### Health & Observability
 

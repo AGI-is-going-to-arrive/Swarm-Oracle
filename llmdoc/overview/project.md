@@ -17,9 +17,11 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜 |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
 | Gameplay Cards | 10 张玩法卡（文明辩论/间谍渗透/密约交易/人类潜入/时空裂缝/民意浪潮/撤离令/公开听证/资源分诊/禁术仪式）按题目画像动态推荐；玩法卡弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件，以及 `风险时钟 / 资源轨道` 两条轻量状态；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
+| Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；后端 `card_events.py` 与前端 `gameplayContract.ts` 共用同一份定义，并有同步测试覆盖 |
 | Director Points & Cooldowns | 单局 3 点导演点数 + 卡牌冷却，前端本地持久化 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案 |
-| Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；首页会显示完成态、已用卡数、下注态与题材回响反馈 |
+| Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；题面与副标题都支持 `zh/en`，首页会把后端 `campaign daily-status` 真值与本地缓存合并显示完成态、已用卡数、下注态与题材回响反馈 |
+| Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章，首页会读取题材 mastery 与当日 challenge 真值 |
 | Generic Quick Start | 首页 generic 题材现有 3 条 `switchboard_forum` 题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard） |
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
@@ -37,7 +39,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Alembic Migrations (P1-4) | 数据库迁移框架，支持版本化 schema 变更 |
 | Prometheus Observability (P3-9) | /metrics 端点暴露请求延迟、计数、活跃模拟等指标 |
 | Pixel Art Visualization (Phase 1) | 像素风可视化基础设施 — 事件映射 + 精灵分配 + 场景选择 + 卡牌事件 |
-| Reasoning Visualization (Phase 2) | 核心推理可视化 — 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效；后续语义场景池已在此基础上扩到 27 个背景主题，并新增 `switchboard_forum / 轮值议堂` 作为 generic 专属 Theater 场景 |
+| Reasoning Visualization (Phase 2) | 核心推理可视化 — 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效；后续语义场景池已在此基础上扩到 30 个背景主题，补上 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体场景；generic 仍保留 `switchboard_forum / 轮值议堂` 主场景 |
 | Gamification UI (Phase 3) | 游戏化打磨 — 标题画面 + 6种结局演出 + MiniMap HUD + 竞猜面板 + 排行榜 + 截图/GIF导出 |
 | HUD Migration (Phase 5) | 排行榜/竞猜面板迁移至 React 层 — HudOverlay.tsx 浮层渲染，画布无遮挡 |
 | Visual Upgrade (3.0 Phase A) | 动态场景 & 角色选择 — WS 广播 viz:scene_init + 前端 VizSynthesizer 关键词匹配 |
@@ -45,14 +47,14 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Visual Upgrade (3.0 Phase C) | UI/UX布局优化 + Theater模式完善 — SimulationView布局重构 + GBC暗色主题 + HUD像素风 + 8个Theater Bug修复（精灵/气泡/漫游/多轮回放） |
 | Theater Bubble Bugfix (3.0-D) | 剧场气泡冻结修复 — `visualization_enabled` 参数透传后端 + 增量气泡分发竞态条件修复（fallback synth init）+ Scenario hydration 恢复 Theater 模式 + completed replay 自动跳过 `TitleScene` 回到 `WorldScene` |
 | Theater Stability Hardening (3.0-E) | 剧场稳定性加固 — simulator 将数值/文本 stance 统一归一化到可视化坐标，避免中文立场词在 Theater 链路中触发类型错误 |
-| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；Simulation 页面新增 `page.replay_state`、`page.warmup`、`page.controls.capture_mode/can_capture_modal`，并通过 `capture_game_screenshot(panel|canvas|modal)` 提供显式截图模式；前端同时提供 `e2e:matrix / e2e:corners / e2e:full` 一键回归入口，`e2e-suite.mjs` 会在输出目录落盘 `browser-launch.json`，记录本次实际采用的浏览器启动 profile；当前固定样本为 15 条，但历史 `scenario_id` 缺失时会按 theme runtime 新建 fallback 样本；最近一次 clean full 结果位于 `frontend/frontend/output/e2e/20260317-full-rerun-clean/result.json`，`generic` 主题额外补了 `frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json` smoke 取证 |
-| Semantic Scene Pool | Pixel Theater 现有 27 个语义场景背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换 |
+| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；Simulation 页面新增 `page.replay_state`、`page.warmup`、`page.controls.capture_mode/can_capture_modal`，并通过 `capture_game_screenshot(panel|canvas|modal)` 提供显式截图模式；前端同时提供 `e2e:matrix / e2e:variants / e2e:corners / e2e:full` 一键回归入口，`e2e-suite.mjs` 会在输出目录落盘 `browser-launch.json`，记录本次实际采用的浏览器启动 profile；当前固定样本为 15 条，变体样本为 3 条；历史 `scenario_id` 缺失或 `scene_theme` 与当前 `select_scene(question)` 漂移时，suite 会按 theme runtime fallback 重建样本。Track C 最新主工件位于 `frontend/output/e2e/20260317-track-c/{matrix,corners,mobile,variants}/` |
+| Semantic Scene Pool | Pixel Theater 现有 30 个语义场景背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换；法庭 / 信仰 / generic 题面已补进对应的 variant 场景 |
 | Theater Replay Director | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 直接嵌回 Theater 面板内，显示 `fork/card/bet/result` marker |
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
 | Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板 |
-| Theme Registry & Asset Manifest | 前端已把 27 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步 |
+| Theme Registry & Asset Manifest | 前端已把 30 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；12 类画像都有独立 gameplay card frame，generic 现使用 `gameplay_card_frame_generic`，不再拿 `gameplay_panel` 充当卡框 |
 | Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现维护 106 个 runtime + source 资产条目（其中 18 张角色贴图会在 Theater 运行期预载） |
 | i18n | 中英文支持 |
 
@@ -100,8 +102,8 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 ### Testing
 | 工具 | 覆盖 |
 |------|------|
-| pytest + pytest-asyncio | 本轮已验证后端全量回归 777 passed, 2 warnings；最近定向回归包含 `test_scene_selector.py` 139 passed 与 `test_simulator_viz_integration.py` 70 passed |
-| Vitest + jsdom | 151 tests，前端覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；clean full 黑盒已覆盖 15 个矩阵题材 + 10 个 corners 用例 |
+| pytest + pytest-asyncio | 本轮已验证后端全量回归 **798 passed, 2 warnings**；最近定向回归包含 `test_campaign_service.py / test_campaign_api.py / test_scene_selector.py / test_gameplay_contract_sync.py` 共 **151 passed**；Track C 的 `test_scene_selector.py / test_e2e_sample_matrix.py` 另有 **146 passed** |
+| Vitest + jsdom | 本轮已验证前端全量回归 **155 passed (155)**，覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；最近两组定向回归分别为 **37 passed**（daily challenge / InputView / ResultView / PredictionModal / gameplay contract）和 **21 passed**（PhaserGame / replay / SimulationView / useScreenCapture） |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 

@@ -144,6 +144,26 @@
   margin-top: 6px;
 }
 
+.daily-challenge-card__campaign {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.daily-challenge-card__campaign-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.daily-challenge-card__campaign strong {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
 .daily-challenge-card__pill {
   padding: 3px 8px;
   border-radius: 999px;
@@ -590,6 +610,12 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.quick-start-section__meta {
+  margin: -10px 0 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .section-title {

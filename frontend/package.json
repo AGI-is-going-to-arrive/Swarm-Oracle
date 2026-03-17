@@ -14,6 +14,7 @@
     "e2e:result": "node scripts/e2e-automation.mjs result",
     "e2e:health": "node scripts/e2e-automation.mjs health",
     "e2e:matrix": "node scripts/e2e-suite.mjs matrix",
+    "e2e:variants": "node scripts/e2e-suite.mjs matrix --sample-matrix output/e2e/sample_matrix_variants.json",
     "e2e:corners": "node scripts/e2e-suite.mjs corners",
     "e2e:full": "node scripts/e2e-suite.mjs full"
   },

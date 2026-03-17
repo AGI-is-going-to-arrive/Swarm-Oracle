@@ -1,0 +1,6 @@
+{
+  "preset": "generic_frame",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "prompt": "Pixel-art gameplay card frame for general strategy scenarios, warm ivory panel, magenta violet and brass accents, subtle switchboard and civic committee motifs, centered empty window for content, wide 16:9 composition, no text, no checkerboard transparency, consistent with SwarmOracle retro theater UI."
+}

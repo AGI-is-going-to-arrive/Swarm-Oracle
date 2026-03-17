@@ -14,11 +14,11 @@ import { describe, it, expect } from 'vitest';
 
 const THEME_PALETTES_KEYS = [
   'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
-  'switchboard_forum',
-  'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
+  'switchboard_forum', 'switchboard_forum_variant',
+  'surveillance_megacity', 'civic_chamber', 'law_court', 'law_court_variant', 'imperial_forum',
   'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
   'frontier_colony', 'post_apocalypse', 'fantasy_kingdom',
-  'arcane_sanctum', 'faith_temple', 'refuge_compound', 'war_command', 'logistics_hub',
+  'arcane_sanctum', 'faith_temple', 'faith_temple_variant', 'refuge_compound', 'war_command', 'logistics_hub',
   'war_battlefield', 'space_station', 'underwater_kingdom',
   'desert_outpost', 'trade_harbor', 'ecology_wasteland',
 ];
@@ -41,18 +41,18 @@ const TIME_TINT_KEYS = ['dawn', 'noon', 'dusk', 'night'];
 
 const SCENE_KEYS = [
   'medieval_village', 'ancient_empire', 'industrial_city', 'modern_city',
-  'switchboard_forum',
-  'surveillance_megacity', 'civic_chamber', 'law_court', 'imperial_forum',
+  'switchboard_forum', 'switchboard_forum_variant',
+  'surveillance_megacity', 'civic_chamber', 'law_court', 'law_court_variant', 'imperial_forum',
   'dynastic_palace', 'scifi_base', 'power_grid_nexus', 'factory_foundry',
   'frontier_colony', 'post_apocalypse', 'fantasy_kingdom',
-  'arcane_sanctum', 'faith_temple', 'refuge_compound', 'war_command', 'logistics_hub',
+  'arcane_sanctum', 'faith_temple', 'faith_temple_variant', 'refuge_compound', 'war_command', 'logistics_hub',
   'war_battlefield', 'space_station', 'underwater_kingdom',
   'desert_outpost', 'trade_harbor', 'ecology_wasteland',
 ];
 
 describe('WorldScene — THEME_PALETTES coverage', () => {
-  it('covers all 27 scene themes', () => {
-    expect(THEME_PALETTES_KEYS).toHaveLength(27);
+  it('covers all 30 scene themes', () => {
+    expect(THEME_PALETTES_KEYS).toHaveLength(30);
   });
 
   it('includes all scene key names matching SCENE_KEYS', () => {

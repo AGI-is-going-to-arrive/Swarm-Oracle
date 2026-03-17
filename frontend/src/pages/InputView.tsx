@@ -7,8 +7,22 @@ import { useNavigate } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
-import { testLlmConnection } from '../api/client';
-import { getChallengeProgress, getTodayChallenge, markChallengeStarted } from '../lib/dailyChallenge';
+import {
+  getCampaignBadges,
+  getCampaignDailyChallengeStatus,
+  getCampaignMastery,
+  getCampaignProfile,
+  testLlmConnection,
+} from '../api/client';
+import { getDirectorIdentity } from '../lib/directorIdentity';
+import {
+  challengeDateKey,
+  getChallengeQuestion,
+  getChallengeProgress,
+  getTodayChallenge,
+  markChallengeStarted,
+  resolveChallengeProgress,
+} from '../lib/dailyChallenge';
 import { stringifyAutomationPayload } from '../game/automation';
 import {
   getGameplayBadgeSrc,
@@ -16,6 +30,12 @@ import {
   getGameplayProfileSignatureHooks,
 } from '../components/gameplayCards';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
+import type {
+  CampaignBadge,
+  CampaignDailyChallengeStatus,
+  CampaignMastery,
+  CampaignProfileSummary,
+} from '../types';
 import './InputView.css';
 
 /* ── Loading Step Component ───────────────────────────────── */
@@ -53,15 +73,21 @@ export function InputView() {
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
   const navigate = useNavigate();
+  const directorIdentity = getDirectorIdentity();
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const reset = useSimulationStore((s) => s.reset);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const todayChallenge = getTodayChallenge();
-  const todayChallengeProgress = getChallengeProgress(todayChallenge.id);
+  const todayChallengeQuestion = getChallengeQuestion(todayChallenge, isZh);
+  const cachedChallengeProgress = getChallengeProgress(todayChallenge.id);
   const challengeProfileLabel = getGameplayProfileLabel(todayChallenge.profileId, isZh);
   const challengeHooks = getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2);
+  const [campaignProfile, setCampaignProfile] = useState<CampaignProfileSummary | null>(null);
+  const [campaignMastery, setCampaignMastery] = useState<CampaignMastery[]>([]);
+  const [campaignBadges, setCampaignBadges] = useState<CampaignBadge[]>([]);
+  const [campaignDailyStatus, setCampaignDailyStatus] = useState<CampaignDailyChallengeStatus | null>(null);
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -148,6 +174,53 @@ export function InputView() {
   useEffect(() => {
     resizeQuestionField();
   }, [question, placeholder, resizeQuestionField]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCampaign = async () => {
+      const profile = await getCampaignProfile(directorIdentity.userId).catch(() => null);
+      if (!profile) {
+        if (!cancelled) {
+          setCampaignProfile(null);
+          setCampaignMastery([]);
+          setCampaignBadges([]);
+          setCampaignDailyStatus(null);
+        }
+        return;
+      }
+
+      const [mastery, badges, dailyStatus] = await Promise.all([
+        getCampaignMastery(directorIdentity.userId).catch(() => [] as CampaignMastery[]),
+        getCampaignBadges(directorIdentity.userId).catch(() => [] as CampaignBadge[]),
+        getCampaignDailyChallengeStatus(
+          directorIdentity.userId,
+          todayChallenge.profileId,
+          challengeDateKey(),
+          new Date().getTimezoneOffset(),
+        ).catch(() => null),
+      ]);
+      if (cancelled) return;
+      setCampaignProfile(profile);
+      setCampaignMastery(mastery);
+      setCampaignBadges(badges);
+      setCampaignDailyStatus(dailyStatus);
+    };
+
+    void loadCampaign();
+    return () => {
+      cancelled = true;
+    };
+  }, [directorIdentity.userId, todayChallenge.profileId]);
+
+  const dailyMastery = campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null;
+  const todayChallengeProgress = resolveChallengeProgress(
+    cachedChallengeProgress,
+    campaignDailyStatus,
+  );
+  const nextUnlockLabel = dailyMastery?.score_to_next_level != null
+    ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
+    : t('home.campaign_mastered');
 
   // Entry animations
   useEffect(() => {
@@ -249,13 +322,18 @@ export function InputView() {
   };
 
   const handleStartChallenge = async () => {
-    setQuestion(todayChallenge.question);
+    if (todayChallengeProgress?.scenarioId) {
+      navigate(`/sim/${todayChallengeProgress.scenarioId}`);
+      return;
+    }
+
+    setQuestion(todayChallengeQuestion);
     setRounds(todayChallenge.rounds);
     setNumAgents(todayChallenge.numAgents);
     setMode(todayChallenge.mode);
     setVizEnabled(todayChallenge.visualizationEnabled);
     await launchSimulation({
-      nextQuestion: todayChallenge.question,
+      nextQuestion: todayChallengeQuestion,
       nextRounds: todayChallenge.rounds,
       nextAgents: todayChallenge.numAgents,
       nextMode: todayChallenge.mode,
@@ -301,12 +379,23 @@ export function InputView() {
         error: submitError || null,
         challenge_progress: todayChallengeProgress
           ? {
+              source: todayChallengeProgress.source,
+              scenario_id: todayChallengeProgress.scenarioId ?? null,
               completed: todayChallengeProgress.completed,
-              used_cards_count: todayChallengeProgress.usedCards.length,
-              bet_placed: todayChallengeProgress.betPlaced,
+              used_cards_count: todayChallengeProgress.usedCardsKnown ? todayChallengeProgress.usedCards.length : null,
+              used_cards_known: todayChallengeProgress.usedCardsKnown,
+              bet_placed: todayChallengeProgress.betPlacedKnown ? todayChallengeProgress.betPlaced : null,
+              bet_placed_known: todayChallengeProgress.betPlacedKnown,
               betting_hit: todayChallengeProgress.bettingHit ?? null,
             }
           : null,
+        campaign: {
+          user_id: directorIdentity.userId,
+          total_runs: campaignProfile?.total_runs ?? 0,
+          badge_count: campaignBadges.length,
+          daily_profile_level: dailyMastery?.level ?? 0,
+          daily_profile_score_to_next_level: dailyMastery?.score_to_next_level ?? null,
+        },
       },
     );
 
@@ -328,6 +417,11 @@ export function InputView() {
     testStatus,
     todayChallengeProgress,
     vizEnabled,
+    campaignBadges.length,
+    campaignProfile?.total_runs,
+    dailyMastery?.level,
+    dailyMastery?.score_to_next_level,
+    directorIdentity.userId,
   ]);
 
   return (
@@ -383,7 +477,7 @@ export function InputView() {
             <img
               className="daily-challenge-card__art"
               src="/assets/ui/generated/daily_challenge_panel.png"
-              alt="Daily challenge pixel illustration"
+              alt={t('common.daily_challenge_art_alt')}
             />
             <div className="daily-challenge-card__copy">
               <span className="daily-challenge-card__eyebrow">
@@ -395,19 +489,34 @@ export function InputView() {
                 />
                 <span>{t('home.daily_challenge_label')}</span>
               </span>
-              <strong className="daily-challenge-card__title">{todayChallenge.question}</strong>
+              <strong className="daily-challenge-card__title">{todayChallengeQuestion}</strong>
               <span className="daily-challenge-card__subtitle">
                 {isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn}
               </span>
-              <div className="daily-challenge-card__hooks" aria-label={isZh ? '题材钩子' : 'Theme hooks'}>
+              <div className="daily-challenge-card__hooks" aria-label={t('common.theme_hooks_aria')}>
                 <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
                   {challengeProfileLabel}
                 </span>
+                {dailyMastery && (
+                  <span className="daily-challenge-card__pill">
+                    {t('home.campaign_mastery_level', { level: dailyMastery.level })}
+                  </span>
+                )}
                 {challengeHooks.map((hook) => (
                   <span key={hook} className="daily-challenge-card__pill">
                     {hook}
                   </span>
                 ))}
+              </div>
+              <div className="daily-challenge-card__campaign">
+                <span className="daily-challenge-card__campaign-label">
+                  {t('home.campaign_progress')}
+                </span>
+                <strong>
+                  {dailyMastery
+                    ? `${t('home.campaign_mastery_level', { level: dailyMastery.level })} · ${nextUnlockLabel}`
+                    : t('home.campaign_first_run')}
+                </strong>
               </div>
               {todayChallengeProgress && (
                 <div className="daily-challenge-card__status">
@@ -421,14 +530,18 @@ export function InputView() {
                       {challengeProfileLabel} · {t(`result.archive_resonance_${todayChallengeProgress.profileResonance}`)}
                     </span>
                   )}
-                  <span className="daily-challenge-card__pill">
-                    {t('home.daily_challenge_cards_used', { count: todayChallengeProgress.usedCards.length })}
-                  </span>
-                  <span className="daily-challenge-card__pill">
-                    {todayChallengeProgress.betPlaced
-                      ? t('home.daily_challenge_bet_placed')
-                      : t('home.daily_challenge_bet_missing')}
-                  </span>
+                  {todayChallengeProgress.usedCardsKnown && (
+                    <span className="daily-challenge-card__pill">
+                      {t('home.daily_challenge_cards_used', { count: todayChallengeProgress.usedCards.length })}
+                    </span>
+                  )}
+                  {todayChallengeProgress.betPlacedKnown && (
+                    <span className="daily-challenge-card__pill">
+                      {todayChallengeProgress.betPlaced
+                        ? t('home.daily_challenge_bet_placed')
+                        : t('home.daily_challenge_bet_missing')}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -677,6 +790,14 @@ export function InputView() {
         {/* Quick Start */}
         <div className="quick-start-section">
           <h3 className="section-title">{t('home.quick_starts')}</h3>
+          <p className="quick-start-section__meta">
+            {campaignProfile
+              ? t('home.campaign_quickstart_unlocks', {
+                  count: campaignBadges.length,
+                  runs: campaignProfile.total_runs,
+                })
+              : t('home.campaign_first_run')}
+          </p>
           <QuickStartCards onSelect={handleQuickStartSelect} />
         </div>
       </div>

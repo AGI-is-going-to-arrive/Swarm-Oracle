@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.scenarios import router as scenarios_router
 from app.api.interventions import router as interventions_router
 from app.api.social import router as social_router
+from app.api.campaign import router as campaign_router
 from app.api.predictions import router as predictions_router
 from app.api.ws import router as ws_router
 from app.config import settings
@@ -65,6 +66,7 @@ app.add_middleware(
 app.include_router(scenarios_router)
 app.include_router(interventions_router)
 app.include_router(social_router)
+app.include_router(campaign_router)
 app.include_router(predictions_router)
 app.include_router(ws_router)
 

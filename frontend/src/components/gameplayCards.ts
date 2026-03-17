@@ -1,5 +1,11 @@
 import type { AgentInfo, BranchInfo } from '../types';
 import {
+  CONTRACT_CARD_SYSTEM_EFFECTS,
+  CONTRACT_GAMEPLAY_CARD_DEFS,
+  CONTRACT_GAMEPLAY_PROFILES,
+  CONTRACT_SIGNATURE_ARCS,
+} from '../lib/gameplayContract';
+import {
   GAMEPLAY_BADGE_ASSETS,
   GAMEPLAY_PROFILE_FRAME_ASSETS,
   getThemeProfileId,
@@ -87,725 +93,10 @@ interface GameplaySignatureArcDefinition {
   resourceLabelEn: string;
 }
 
-export const GAMEPLAY_CARD_DEFS: GameplayCardDefinition[] = [
-  {
-    id: 'civilization_debate',
-    icon: '🗣️',
-    labelZh: '文明辩论',
-    labelEn: 'Civilization Debate',
-    descriptionZh: '强制两名角色公开交锋，其他人必须回应这场辩论。',
-    descriptionEn: 'Force two agents into a public debate and make others react to it.',
-    animation: 'debate_spotlight',
-  },
-  {
-    id: 'spy_infiltrate',
-    icon: '🕵️',
-    labelZh: '间谍渗透',
-    labelEn: 'Spy Infiltration',
-    descriptionZh: '让一名角色带着隐藏议程发言，扰动局势。',
-    descriptionEn: 'Give one agent a hidden agenda that disturbs the simulation.',
-    animation: 'shadow_reveal',
-  },
-  {
-    id: 'backchannel_pact',
-    icon: '🤝',
-    labelZh: '密约交易',
-    labelEn: 'Backchannel Pact',
-    descriptionZh: '让两名角色绕开公开议程私下结盟，用交易筹码改写局势。',
-    descriptionEn: 'Let two agents strike a private bargain off the public agenda and rewrite the branch with traded leverage.',
-    animation: 'backchannel_signal',
-  },
-  {
-    id: 'human_takeover',
-    icon: '🧑',
-    labelZh: '人类潜入',
-    labelEn: 'Human Takeover',
-    descriptionZh: '由用户接管一名角色一轮发言，把输入直接注入世界线。',
-    descriptionEn: 'Let the user take over one agent for a round and inject direct intent.',
-    animation: 'player_swap',
-  },
-  {
-    id: 'spacetime_rift',
-    icon: '🌀',
-    labelZh: '时空裂缝',
-    labelEn: 'Space-Time Rift',
-    descriptionZh: '把另一条世界线的一条信息泄漏到当前分支，制造外源扰动。',
-    descriptionEn: 'Leak one signal from another branch into the current branch.',
-    animation: 'portal_open',
-  },
-  {
-    id: 'mandate_surge',
-    icon: '📣',
-    labelZh: '民意浪潮',
-    labelEn: 'Mandate Surge',
-    descriptionZh: '注入一波突发民意或合法性冲击，迫使整条世界线立刻重新站位。',
-    descriptionEn: 'Inject a sudden legitimacy shock that forces the whole branch to reposition.',
-    animation: 'mandate_surge',
-  },
-  {
-    id: 'evacuation_order',
-    icon: '🚨',
-    labelZh: '撤离令',
-    labelEn: 'Evacuation Order',
-    descriptionZh: '强制当前世界线执行撤离、封锁或转运命令，立刻重排优先级。',
-    descriptionEn: 'Force the branch into an evacuation, lockdown, or emergency transfer order that immediately rewrites priorities.',
-    animation: 'evacuation_alarm',
-  },
-  {
-    id: 'public_hearing',
-    icon: '🏛️',
-    labelZh: '公开听证',
-    labelEn: 'Public Hearing',
-    descriptionZh: '强制当前世界线召开公开听证，所有阵营都必须拿出证据、条款或代价。',
-    descriptionEn: 'Force the branch into a public hearing where every side must surface evidence, terms, or trade-offs.',
-    animation: 'hearing_bell',
-  },
-  {
-    id: 'resource_triage',
-    icon: '🧰',
-    labelZh: '资源分诊',
-    labelEn: 'Resource Triage',
-    descriptionZh: '强制世界线进入资源分诊，公开谁先保命、谁被限供、哪些线路必须让路。',
-    descriptionEn: 'Force the branch into resource triage and openly decide who gets protected, cut back, or rerouted first.',
-    animation: 'generic_flash',
-  },
-  {
-    id: 'forbidden_ritual',
-    icon: '🕯️',
-    labelZh: '禁术仪式',
-    labelEn: 'Forbidden Ritual',
-    descriptionZh: '强制世界线动用一项代价高昂的禁术、圣物或禁令，换取一次危险转向。',
-    descriptionEn: 'Force the branch to invoke a costly forbidden rite, relic, or taboo exception for a dangerous pivot.',
-    animation: 'generic_flash',
-  },
-];
-
-const GAMEPLAY_PROFILES: Record<GameplayProfileId, GameplayProfileDefinition> = {
-  governance: {
-    id: 'governance',
-    labelZh: '治理博弈',
-    labelEn: 'Governance Conflict',
-    descriptionZh: '适合 AI 治理、民主、制度与权力分配类问题。',
-    descriptionEn: 'Fits AI governance, democracy, institutions, and power allocation.',
-    signatureHooksZh: ['主权边界', '算法否决', '地方复核'],
-    signatureHooksEn: ['Sovereignty lines', 'Algorithmic vetoes', 'Local review'],
-    recommendedCards: ['civilization_debate', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'evacuation_order', 'spacetime_rift', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '算法是否应拥有最终否决权，还是必须接受地方人类审议。',
-        en: 'Should the algorithm hold final veto power, or remain subject to local human review?',
-      },
-      spy_infiltrate: {
-        zh: '暗中推动中央权力扩张，同时伪装成温和改革派。',
-        en: 'Quietly expand central control while sounding like a moderate reformer.',
-      },
-      backchannel_pact: {
-        zh: '让中央技术集团与地方问责派私下达成一笔“离线保命换有限审计”的密约。',
-        en: 'Broker a quiet deal between the central tech bloc and local accountability camp: offline resilience in exchange for limited audit oversight.',
-      },
-      human_takeover: {
-        zh: '暂停自动裁决，先恢复人工复核与地方问责。',
-        en: 'Pause automatic rule and restore human review plus local accountability.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线显示，算法统治最终因基层反叛而被迫让权。',
-        en: 'Another timeline shows algorithmic rule being forced to cede power after a grassroots revolt.',
-      },
-      mandate_surge: {
-        zh: '各地城市同步爆发要求人工复核与地方问责的民意浪潮。',
-        en: 'Cities erupt in a synchronized mandate demanding human review and local accountability.',
-      },
-      evacuation_order: {
-        zh: '立刻发布关键系统撤离令，优先转移医院、电网与水务的人工接管队伍，其他城市延后处理。',
-        en: 'Issue an emergency evacuation order that prioritizes human takeover crews for hospitals, power, and water, while other cities wait.',
-      },
-      public_hearing: {
-        zh: '立刻召开公开听证，要求中央、地方与技术方各自提交一条可核验的数据、责任链或否决依据。',
-        en: 'Call an immediate public hearing and force central, local, and technical actors to surface one verifiable metric, accountability chain, or veto basis.',
-      },
-      resource_triage: {
-        zh: '立刻进入资源分诊，公开哪些城市、系统或群体先获得算力、供给与人工复核保护。',
-        en: 'Enter immediate resource triage and expose which cities, systems, or groups receive compute, supplies, and human review first.',
-      },
-      forbidden_ritual: {
-        zh: '动用一条程序外、代价高昂的黑箱紧急授权，以短期稳定换取长期信任裂缝。',
-        en: 'Invoke an out-of-band emergency override with a steep cost, trading short-term stability for long-term trust damage.',
-      },
-    },
-  },
-  war: {
-    id: 'war',
-    labelZh: '战争抉择',
-    labelEn: 'War Doctrine',
-    descriptionZh: '适合战争、入侵、边疆冲突和军事扩张类问题。',
-    descriptionEn: 'Fits war, invasion, border conflict, and military escalation.',
-    signatureHooksZh: ['停火窗口', '后勤断点', '误判升级'],
-    signatureHooksEn: ['Ceasefire windows', 'Logistics breaks', 'Escalation by mistake'],
-    recommendedCards: ['civilization_debate', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'spy_infiltrate', 'evacuation_order', 'spacetime_rift', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '应当继续全面进攻，还是转向补给稳固与防线收缩。',
-        en: 'Should the branch keep pushing a full offensive or pivot toward logistics and defense?',
-      },
-      spy_infiltrate: {
-        zh: '暗中破坏后勤协同，把注意力引向一次冒险突击。',
-        en: 'Quietly sabotage logistics coordination and redirect attention toward a reckless strike.',
-      },
-      backchannel_pact: {
-        zh: '让前线司令与后勤代表私下约定一条有限停火与补给换俘的密约。',
-        en: 'Broker a private pact between the front-line commander and logistics faction: limited ceasefire windows in exchange for convoy access and prisoner swaps.',
-      },
-      human_takeover: {
-        zh: '立刻宣布停火窗口，用人类谈判压制升级冲动。',
-        en: 'Announce an immediate ceasefire window and force a human-led negotiation pause.',
-      },
-      spacetime_rift: {
-        zh: '另一条战线泄漏的情报显示，继续强攻会导致补给线崩溃。',
-        en: 'Leaked intel from another front shows that continued assault will collapse the supply line.',
-      },
-      mandate_surge: {
-        zh: '后方城镇与退役军团突然要求停火、清算误判并公开补给真相。',
-        en: 'Home-front cities and veteran legions surge with demands for ceasefire, accountability, and supply transparency.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离与封锁令，优先疏散伤员、补给车队与侧翼居民区，暂停最冒险的推进线。',
-        en: 'Issue an evacuation and lockdown order that evacuates casualties, convoy crews, and exposed civilian blocks first while freezing the riskiest advance.',
-      },
-      public_hearing: {
-        zh: '立刻召开战时公开听证，要求前线、后勤与平民代表各自交代一条损耗、误判或补给证据。',
-        en: 'Open a wartime public hearing and make the front line, logistics staff, and civilian representatives each disclose one loss, miscalculation, or supply fact.',
-      },
-      resource_triage: {
-        zh: '立即执行战时资源分诊，明确哪些战线、伤员与补给节点必须优先保住，哪些行动必须让路。',
-        en: 'Run wartime resource triage and make explicit which fronts, casualties, and supply nodes must be saved first and which operations must yield.',
-      },
-      forbidden_ritual: {
-        zh: '动用一项危险且可能越线的焦土/禁武方案，换取短期战场逆转。',
-        en: 'Invoke a dangerous scorched-earth or taboo-weapons measure to force a short-term battlefield reversal.',
-      },
-    },
-  },
-  empire: {
-    id: 'empire',
-    labelZh: '帝国统合',
-    labelEn: 'Imperial Balance',
-    descriptionZh: '适合帝国、王朝、君主制、历史秩序维持类问题。',
-    descriptionEn: 'Fits empires, dynasties, monarchies, and historical order maintenance.',
-    signatureHooksZh: ['中央与行省', '宫廷裂缝', '军团忠诚'],
-    signatureHooksEn: ['Center vs provinces', 'Court fractures', 'Legion loyalty'],
-    recommendedCards: ['civilization_debate', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'evacuation_order', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '帝国应继续中央集权，还是把更多空间让给地方自治与商贸网络。',
-        en: 'Should the empire keep centralizing power or yield more room to provincial autonomy and trade networks?',
-      },
-      spy_infiltrate: {
-        zh: '以忠诚官员身份渗透朝堂，暗中挑动贵族与军团之间的不信任。',
-        en: 'Infiltrate the court as a loyal official while quietly amplifying distrust between nobles and the military.',
-      },
-      backchannel_pact: {
-        zh: '让宫廷近臣与地方总督秘密交易税赋豁免与军团效忠，换取短期稳局。',
-        en: 'Arrange a secret bargain between palace insiders and provincial governors: tax relief and legion loyalty in exchange for short-term stability.',
-      },
-      human_takeover: {
-        zh: '以统治者口吻发布一项亲自裁决的诏令，重写权力平衡。',
-        en: 'Issue a ruler-level decree that personally resets the balance of power.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线传来的密信显示，地方总督最终会借商路自立。',
-        en: 'A leaked dispatch from another timeline shows provincial governors eventually breaking away through trade power.',
-      },
-      mandate_surge: {
-        zh: '都城与行省同时掀起要求减税、分权与重审军团忠诚的民意浪潮。',
-        en: 'The capital and provinces surge with demands for tax relief, shared authority, and a review of legion loyalty.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离令，优先转移皇室档案、粮仓与边境总督家眷，并封锁最可能叛乱的关口。',
-        en: 'Issue an evacuation order that first secures imperial archives, granaries, and governor families while sealing the likeliest rebel gates.',
-      },
-      public_hearing: {
-        zh: '召集帝国公开听证，要求皇权、军团与行省各自摊开一条忠诚、税赋或调兵证据。',
-        en: 'Convene an imperial hearing and force the throne, legions, and provinces to lay out one concrete loyalty, taxation, or mobilization fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行帝国资源分诊，明确粮税、军团与行省保障中哪些必须优先，哪些扩张计划必须暂停。',
-        en: 'Enter imperial resource triage and decide which grain, tax, legion, and provincial guarantees stay protected while expansion plans are paused.',
-      },
-      forbidden_ritual: {
-        zh: '启用一项血统诏令、禁军誓约或秘仪惩戒，强行改写帝国忠诚结构。',
-        en: 'Invoke a bloodline decree, praetorian oath, or secret rite to forcibly rewrite the empire’s loyalty structure.',
-      },
-    },
-  },
-  industry: {
-    id: 'industry',
-    labelZh: '工业与资源',
-    labelEn: 'Industry and Resources',
-    descriptionZh: '适合工业革命、能源、资源调配、市场与生产线类问题。',
-    descriptionEn: 'Fits industrialization, energy, resource allocation, markets, and production.',
-    signatureHooksZh: ['产能瓶颈', '关键资源', '调度委员会'],
-    signatureHooksEn: ['Throughput bottlenecks', 'Strategic resources', 'Dispatch committees'],
-    recommendedCards: ['human_takeover', 'resource_triage', 'evacuation_order', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'civilization_debate', 'spy_infiltrate', 'spacetime_rift', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '资源应优先用于产能扩张，还是用于社会缓冲与安全冗余。',
-        en: 'Should resources prioritize production growth or social buffering and safety redundancy?',
-      },
-      spy_infiltrate: {
-        zh: '暗中操纵价格与供给预期，迫使各方过度依赖单一基础设施。',
-        en: 'Quietly manipulate prices and supply expectations so the branch over-relies on one infrastructure path.',
-      },
-      backchannel_pact: {
-        zh: '让工厂财团与配给委员会秘密交换库存豁免与停工顺序，换取脆弱稳态。',
-        en: 'Broker a covert bargain between factory owners and rationing committees: inventory exemptions and shutdown order in exchange for a fragile calm.',
-      },
-      human_takeover: {
-        zh: '立刻冻结关键资源外流，把调度权从自动系统拉回人工委员会。',
-        en: 'Freeze key resource outflows and pull dispatch authority back to a human committee.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线证明，当前这条高效率路线最终会引发资源挤兑。',
-        en: 'Another timeline proves that the current high-efficiency route ends in a resource squeeze.',
-      },
-      mandate_surge: {
-        zh: '工人城市与配给社区突然要求停机审计、公开库存并保留安全冗余。',
-        en: 'Worker cities and rationing districts demand a stop-work audit, public inventories, and safety redundancy.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离与停机令，优先疏散高危工段、化学仓储和轮班宿舍，其他产线降载运行。',
-        en: 'Issue an evacuation and shutdown order that clears the most hazardous lines, chemical stores, and worker dorms first while the rest of production throttles down.',
-      },
-      public_hearing: {
-        zh: '立即召开产能听证，要求工厂、调度委员会与社区代表各自公开一条库存、停机或安全冗余证据。',
-        en: 'Launch a production hearing and require factories, dispatch committees, and community delegates to surface one stock, shutdown, or safety-redundancy fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行工业资源分诊，决定哪些产线、能源节点与社区配给先保住，哪些订单必须砍掉。',
-        en: 'Run industrial resource triage and decide which lines, energy nodes, and community rations stay protected first and which orders get cut.',
-      },
-      forbidden_ritual: {
-        zh: '启动一项高污染、高透支且不可持续的极限增产方案，换取短期产能冲刺。',
-        en: 'Trigger a highly polluting, unsustainable surge-production scheme to buy a short-term throughput spike.',
-      },
-    },
-  },
-  trade: {
-    id: 'trade',
-    labelZh: '贸易绞盘',
-    labelEn: 'Trade Leverage',
-    descriptionZh: '适合港口、关税、商路、供应链与商团博弈类问题。',
-    descriptionEn: 'Fits ports, tariffs, trade routes, supply chains, and merchant coalitions.',
-    signatureHooksZh: ['关税杠杆', '港口封锁', '商团倒戈'],
-    signatureHooksEn: ['Tariff leverage', 'Port choke points', 'Merchant defections'],
-    recommendedCards: ['spy_infiltrate', 'backchannel_pact', 'public_hearing', 'mandate_surge', 'evacuation_order', 'spacetime_rift', 'civilization_debate', 'human_takeover', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '应优先保住关税与商路控制，还是用让利来换取更大的同盟网络。',
-        en: 'Should the branch protect tariffs and route control, or trade margin for a wider alliance network?',
-      },
-      spy_infiltrate: {
-        zh: '暗中操控码头配额与船队保险，逼关键商团临阵倒向另一侧。',
-        en: 'Quietly manipulate dock quotas and convoy insurance to force a key merchant bloc to defect.',
-      },
-      backchannel_pact: {
-        zh: '让两大商团私下签下一笔过路费减免换封锁配合的密约，不经公开议会备案。',
-        en: 'Cut a secret side deal between rival merchant blocs: tariff relief in exchange for blockade cooperation, bypassing the public council.',
-      },
-      human_takeover: {
-        zh: '由玩家亲自宣布临时降税或封港，把谈判桌节奏硬拉回自己手里。',
-        en: 'Let the player impose an emergency tariff cut or port closure to seize the tempo of the negotiation.',
-      },
-      spacetime_rift: {
-        zh: '另一条世界线泄漏的账本显示，当前最赚钱的商路最终会成为致命依赖。',
-        en: 'A leaked ledger from another timeline shows the most profitable route becoming a fatal dependency.',
-      },
-      mandate_surge: {
-        zh: '港口工人与商团客户同时发起抵制浪潮，要求立刻重谈关税与封锁规则。',
-        en: 'Port workers and merchant clients launch a boycott wave demanding an immediate rewrite of tariffs and blockade rules.',
-      },
-      evacuation_order: {
-        zh: '立刻发布港区撤离令，优先转运粮船、医院补给与关键航道引航员，其余货轮暂缓离港。',
-        en: 'Issue a port evacuation order that moves food convoys, medical supplies, and channel pilots first while lower-priority cargo stays delayed.',
-      },
-      public_hearing: {
-        zh: '立刻召开港口公开听证，要求商团、工会与税务方各自拿出一条账本、运力或补贴证据。',
-        en: 'Call an immediate port hearing and require merchant blocs, labor, and tax officials to reveal one ledger, throughput, or subsidy fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行港口资源分诊，明确哪些货轮、仓位与补给线优先保住，哪些贸易承诺必须延后。',
-        en: 'Run port resource triage and make clear which convoys, berths, and supply routes stay protected first and which trade promises get delayed.',
-      },
-      forbidden_ritual: {
-        zh: '强行动用一项撕毁旧约、扣押船队或祭出黑箱担保的危险交易手段，换取短期筹码。',
-        en: 'Invoke a dangerous taboo trade move such as voiding old covenants, seizing fleets, or using opaque guarantees to buy leverage.',
-      },
-    },
-  },
-  law: {
-    id: 'law',
-    labelZh: '法律红线',
-    labelEn: 'Legal Red Lines',
-    descriptionZh: '适合宪法、法院、程序正义、合规与否决权类问题。',
-    descriptionEn: 'Fits constitutions, courts, due process, compliance, and veto powers.',
-    signatureHooksZh: ['紧急否决', '审计证据', '程序补丁'],
-    signatureHooksEn: ['Emergency vetoes', 'Audit evidence', 'Procedural patches'],
-    recommendedCards: ['public_hearing', 'human_takeover', 'backchannel_pact', 'mandate_surge', 'evacuation_order', 'civilization_debate', 'spacetime_rift', 'spy_infiltrate', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '是否应把最终否决权交给法院式复核机制，而不是继续依赖单一执行中心。',
-        en: 'Should final veto power move to a court-like review layer instead of staying with one executive core?',
-      },
-      spy_infiltrate: {
-        zh: '暗中修改例外条款的适用门槛，让看似合法的程序变成特权通道。',
-        en: 'Quietly alter the exception thresholds so a seemingly lawful process becomes a privilege tunnel.',
-      },
-      backchannel_pact: {
-        zh: '让法院顾问与执行中枢私下达成一笔“暂缓追责换有限放行”的密约，不公开入卷。',
-        en: 'Broker an off-record compromise between court advisers and implementers: limited relief in exchange for deferred accountability.',
-      },
-      human_takeover: {
-        zh: '由玩家直接发起“暂停执行 + 公开证据包 + 48小时复核”的法律急刹方案。',
-        en: 'Let the player trigger a legal emergency brake: pause execution, publish the evidence pack, and mandate a 48-hour review.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线的裁决书显示，当前这条程序路径最终会被判定违宪。',
-        en: 'A ruling leaked from another timeline shows the current procedural path being struck down as unconstitutional.',
-      },
-      mandate_surge: {
-        zh: '街头、公民团体与法律社群同时要求公开证据并立即冻结争议政策。',
-        en: 'Streets, civic groups, and legal networks surge with demands to publish the evidence and freeze the disputed policy.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离与保护令，优先转移关键证人、法庭档案与受影响社区，暂停最具争议的执行动作。',
-        en: 'Issue an emergency protection order that evacuates key witnesses, court archives, and exposed communities first while freezing the hottest enforcement moves.',
-      },
-      public_hearing: {
-        zh: '立刻进入公开听证，要求法院、执行方与公民团体各自提交一份证据包、程序依据或风险备忘。',
-        en: 'Move straight into a public hearing and require the court, implementers, and civic groups to submit one evidence pack, procedural basis, or risk memo each.',
-      },
-      resource_triage: {
-        zh: '立即执行程序与资源分诊，明确哪些案件、证据包与复核窗口先保住，哪些执行动作必须冻结。',
-        en: 'Run legal-resource triage and decide which cases, evidence packs, and review windows stay protected first and which enforcement moves freeze.',
-      },
-      forbidden_ritual: {
-        zh: '启用一项程序外的紧急例外或密室授权，以牺牲正当性换取一次危险裁断。',
-        en: 'Invoke an extra-procedural emergency exception or closed-door mandate, sacrificing legitimacy for a dangerous ruling.',
-      },
-    },
-  },
-  faith: {
-    id: 'faith',
-    labelZh: '神权号角',
-    labelEn: 'Sacred Order',
-    descriptionZh: '适合宗教、教会、神谕、异端与象征合法性类问题。',
-    descriptionEn: 'Fits religion, churches, prophecies, heresy, and symbolic legitimacy.',
-    signatureHooksZh: ['异端审判', '圣谕改写', '祭司联盟'],
-    signatureHooksEn: ['Heresy trials', 'Rewritten prophecy', 'Clerical alliances'],
-    recommendedCards: ['forbidden_ritual', 'backchannel_pact', 'civilization_debate', 'public_hearing', 'mandate_surge', 'evacuation_order', 'spy_infiltrate', 'human_takeover', 'spacetime_rift', 'resource_triage'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '神权秩序应继续垄断解释权，还是允许世俗共同体重新定义神谕。',
-        en: 'Should sacred authority keep a monopoly on interpretation, or let secular communities redefine the prophecy?',
-      },
-      spy_infiltrate: {
-        zh: '伪装成虔诚代言人渗透议会，暗中重写圣谕的政治含义。',
-        en: 'Infiltrate the council as a devout advocate while quietly rewriting the prophecy’s political meaning.',
-      },
-      backchannel_pact: {
-        zh: '让祭司联盟与世俗王权私下交换赦免、税赋或圣物通行权，结成不公开的保命密约。',
-        en: 'Arrange a hidden pact between the clerical alliance and secular throne: indulgence, taxes, or relic passage traded in a private survival deal.',
-      },
-      human_takeover: {
-        zh: '由玩家公开宣布一条打破旧神谕的新诏令，逼全体角色重新站队。',
-        en: 'Let the player issue a decree that breaks the old prophecy and forces everyone to realign.',
-      },
-      spacetime_rift: {
-        zh: '另一条世界线传来的圣谕残片揭示，当前祭司联盟最终会亲手毁掉秩序。',
-        en: 'A prophetic fragment from another timeline reveals the current clerical alliance eventually destroying the order it protects.',
-      },
-      mandate_surge: {
-        zh: '信众与地方神殿突然要求重审圣谕、公开祭司联盟的真实代价。',
-        en: 'Believers and local temples surge with demands to reopen the prophecy and expose the clerical alliance’s true cost.',
-      },
-      evacuation_order: {
-        zh: '立即发布圣殿撤离令，优先转移难民、圣物与抄经档案，并封锁最容易爆发异端冲突的街区。',
-        en: 'Issue a temple evacuation order that moves refugees, relics, and sacred archives first while sealing districts most likely to ignite heresy violence.',
-      },
-      public_hearing: {
-        zh: '立刻召开圣殿听证，要求祭司、君主与信众各自公开一条神谕解释、祭品代价或秩序风险。',
-        en: 'Open a temple hearing and force clergy, rulers, and believers to surface one prophecy reading, sacrificial cost, or order-risk fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行圣殿资源分诊，明确粮仓、避难所与祭司庇护中谁先被保住，哪些仪式必须停下。',
-        en: 'Enter sacred resource triage and decide which granaries, shelters, and protections get preserved first and which rituals must stop.',
-      },
-      forbidden_ritual: {
-        zh: '立刻动用禁术、圣物或献祭仪式，以高昂神权代价换取一次神谕偏转。',
-        en: 'Invoke a forbidden rite, relic, or sacrificial act to bend the prophecy at a steep sacred cost.',
-      },
-    },
-  },
-  ecology: {
-    id: 'ecology',
-    labelZh: '生态阈值',
-    labelEn: 'Ecology Thresholds',
-    descriptionZh: '适合气候、水源、瘟疫、环境承载与长期韧性类问题。',
-    descriptionEn: 'Fits climate, water, plague, environmental carrying capacity, and long-run resilience.',
-    signatureHooksZh: ['生态红线', '迁徙窗口', '系统韧性'],
-    signatureHooksEn: ['Ecological red lines', 'Migration windows', 'System resilience'],
-    recommendedCards: ['resource_triage', 'evacuation_order', 'human_takeover', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'spacetime_rift', 'civilization_debate', 'spy_infiltrate', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '应优先守住生态红线与撤离窗口，还是继续押注短期增长与征服速度。',
-        en: 'Should the branch protect ecological red lines and evacuation windows, or keep chasing short-term growth and conquest speed?',
-      },
-      spy_infiltrate: {
-        zh: '暗中压低环境风险预警，把群体引向一条表面高效、实际透支生态的路线。',
-        en: 'Quietly suppress environmental warnings and steer the branch toward a path that looks efficient while burning ecological slack.',
-      },
-      backchannel_pact: {
-        zh: '让上游管理者与下游配给方私下交换水权、迁徙通行与余粮名额，形成一纸见不得光的救命密约。',
-        en: 'Broker a hidden water-rights pact between upstream managers and downstream rationers, trading migration lanes and reserve access off the books.',
-      },
-      human_takeover: {
-        zh: '由玩家下令进入保守韧性模式，暂停扩张并重排水粮与防疫优先级。',
-        en: 'Let the player switch the branch into resilience mode, pausing expansion and reprioritizing water, food, and outbreak control.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线的灾害日志证明，当前这条路线会在下一个季节突破生态阈值。',
-        en: 'A disaster log from another timeline proves the current route crosses the ecological threshold next season.',
-      },
-      mandate_surge: {
-        zh: '受灾社区突然要求立刻限水、公开迁徙路线，并暂停一切高消耗扩张。',
-        en: 'Affected communities surge with demands for water limits, open migration corridors, and an immediate halt to high-consumption expansion.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离令，优先转移饮水断供区、儿童病患与防疫人员，并封锁即将突破阈值的污染带。',
-        en: 'Issue an evacuation order that moves water-starved districts, children, medical cases, and outbreak crews first while sealing the zones about to cross the threshold.',
-      },
-      public_hearing: {
-        zh: '立刻召开生态听证，要求科学家、行政方与受灾社区各自拿出一条阈值、迁徙或余粮证据。',
-        en: 'Convene an ecological hearing and require scientists, administrators, and affected communities to disclose one threshold, migration, or reserve fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行生态资源分诊，决定水源、余粮、迁徙通道与防疫能力谁先保住，哪些区域必须退让。',
-        en: 'Run ecological resource triage and decide which water, reserves, migration corridors, and outbreak controls stay protected first and which zones retreat.',
-      },
-      forbidden_ritual: {
-        zh: '动用一项高代价的气候工程、抽水禁令或保育区豁免，冒险换取短期生存缓冲。',
-        en: 'Invoke a costly climate intervention, emergency extraction ban, or sanctuary exemption to buy a short-lived survival buffer.',
-      },
-    },
-  },
-  frontier: {
-    id: 'frontier',
-    labelZh: '边疆探索',
-    labelEn: 'Frontier Expansion',
-    descriptionZh: '适合太空、海洋、边疆探索与新殖民地治理类问题。',
-    descriptionEn: 'Fits space, oceanic, frontier exploration, and colony governance.',
-    signatureHooksZh: ['远征风险', '生命维持', '撤离路线'],
-    signatureHooksEn: ['Expedition risk', 'Life support', 'Evac routes'],
-    recommendedCards: ['resource_triage', 'evacuation_order', 'spacetime_rift', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'human_takeover', 'civilization_debate', 'spy_infiltrate', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '应当继续激进拓展边疆，还是先建立更稳固的生命维持与治理规则。',
-        en: 'Should the branch keep expanding aggressively, or secure life-support and governance first?',
-      },
-      spy_infiltrate: {
-        zh: '以技术顾问身份隐藏真实目的，推动一次高风险远征来争夺资源优势。',
-        en: 'Hide behind a technical role and push a high-risk expedition to seize strategic advantage.',
-      },
-      backchannel_pact: {
-        zh: '让舰队指挥与殖民自治派私下交换返航席位、氧气配额与资源坐标，换取暂时合作。',
-        en: 'Arrange a backchannel bargain between fleet command and colonial autonomists: return seats, oxygen quotas, and resource coordinates traded for temporary alignment.',
-      },
-      human_takeover: {
-        zh: '以人为主导下令暂停扩张，先重新审查环境风险与撤离路线。',
-        en: 'Take human command, pause expansion, and re-audit environmental risk plus evacuation routes.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线传来的信号显示，前方殖民地最终因补给断裂而失守。',
-        en: 'A signal from another timeline shows the frontier colony eventually collapsing after a logistics break.',
-      },
-      mandate_surge: {
-        zh: '前线殖民地居民突然要求暂停外扩，优先保障生命维持、返航权与家属名额。',
-        en: 'Frontier settlers surge with demands to pause expansion and prioritize life support, return rights, and family slots.',
-      },
-      evacuation_order: {
-        zh: '立即发布殖民地撤离令，优先转移氧气脆弱舱段、孩童家属与维修队，并关闭最远端的试采站。',
-        en: 'Issue a colony evacuation order that clears oxygen-fragile decks, family berths, and repair crews first while abandoning the farthest extraction outpost.',
-      },
-      public_hearing: {
-        zh: '立刻召开边疆听证，要求舰队、殖民地与生命维持团队各自公开一条风险、余量或撤离条件。',
-        en: 'Open a frontier hearing and make the fleet, colony council, and life-support teams each reveal one risk, reserve, or evacuation condition.',
-      },
-      resource_triage: {
-        zh: '立即执行边疆资源分诊，明确氧气、席位、维修窗口与返航资格谁先保住，哪些扩张计划必须让路。',
-        en: 'Run frontier resource triage and decide which oxygen, seats, repair windows, and return rights stay protected first and which expansion plans yield.',
-      },
-      forbidden_ritual: {
-        zh: '启动一项高风险生命维持实验、封存协议或返航禁令，强行换取边疆窗口。',
-        en: 'Invoke a high-risk life-support experiment, sealing protocol, or return-ban to force open a frontier window.',
-      },
-    },
-  },
-  mythic: {
-    id: 'mythic',
-    labelZh: '神话秩序',
-    labelEn: 'Mythic Order',
-    descriptionZh: '适合奇幻、魔法、神权与传说秩序类问题。',
-    descriptionEn: 'Fits fantasy, magic, sacred order, and legendary politics.',
-    signatureHooksZh: ['神谕偏转', '禁术代价', '王权传说'],
-    signatureHooksEn: ['Bent prophecy', 'Forbidden arts', 'Royal myth'],
-    recommendedCards: ['forbidden_ritual', 'backchannel_pact', 'civilization_debate', 'public_hearing', 'mandate_surge', 'evacuation_order', 'spacetime_rift', 'human_takeover', 'spy_infiltrate', 'resource_triage'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '魔法秩序应继续由少数守护者垄断，还是向更多人开放。',
-        en: 'Should magical order remain under a few guardians, or open to broader participation?',
-      },
-      spy_infiltrate: {
-        zh: '伪装成预言者渗透议会，暗中引导神谕向自己倾斜。',
-        en: 'Infiltrate the council as a prophet and quietly bend the prophecy toward your own faction.',
-      },
-      backchannel_pact: {
-        zh: '让法师议会与王权近臣私下交换龙约碎片、庇护承诺与边境封印权限，缔结密约。',
-        en: 'Forge a covert pact between the mage council and royal intimates: dragon-accord fragments, sanctuary promises, and ward permissions traded in secret.',
-      },
-      human_takeover: {
-        zh: '以玩家视角颁布一条违背旧神谕的新命令。',
-        en: 'As the player, issue a command that openly contradicts the old prophecy.',
-      },
-      spacetime_rift: {
-        zh: '另一条世界线传来预言残片，显示守旧路线会毁掉整个王国。',
-        en: 'A prophecy fragment from another timeline reveals that the conservative path destroys the whole kingdom.',
-      },
-      mandate_surge: {
-        zh: '王国民众与边境守望者突然要求公开禁术代价，并重写旧神谕的解释权。',
-        en: 'The kingdom’s crowds and frontier wardens surge with demands to expose forbidden costs and rewrite who interprets prophecy.',
-      },
-      evacuation_order: {
-        zh: '立即发布撤离令，优先迁出遭诅咒的村镇、龙火前线与王室学徒，并封锁即将失守的法阵节点。',
-        en: 'Issue an evacuation order that clears cursed villages, dragonfire front lines, and royal apprentices first while sealing the warding nodes about to fail.',
-      },
-      public_hearing: {
-        zh: '立刻召开王国听证，要求法师、祭司与守望者各自公开一条禁术代价、预言偏差或边境代偿。',
-        en: 'Call a kingdom hearing and require mages, priests, and wardens to reveal one forbidden cost, prophecy deviation, or frontier trade-off each.',
-      },
-      resource_triage: {
-        zh: '立即执行王国资源分诊，明确庇护、粮仓、法阵与边境守备中哪些必须优先，哪些献祭必须停下。',
-        en: 'Run kingdom resource triage and decide which shelter, granaries, warding circles, and frontier defenses stay protected first and which sacrifices stop.',
-      },
-      forbidden_ritual: {
-        zh: '立刻施放一项禁术、龙契约或王权秘仪，以巨大代价换取一次神话级转向。',
-        en: 'Invoke a forbidden spell, dragon pact, or royal rite to force a mythic pivot at great cost.',
-      },
-    },
-  },
-  survival: {
-    id: 'survival',
-    labelZh: '生存极限',
-    labelEn: 'Survival Pressure',
-    descriptionZh: '适合末日、崩塌、灾难、资源短缺与社会存亡类问题。',
-    descriptionEn: 'Fits apocalypse, collapse, disaster, scarcity, and survival crises.',
-    signatureHooksZh: ['最后冗余', '撤退路线', '极限配给'],
-    signatureHooksEn: ['Last reserves', 'Retreat routes', 'Scarcity rationing'],
-    recommendedCards: ['resource_triage', 'evacuation_order', 'human_takeover', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'spacetime_rift', 'spy_infiltrate', 'civilization_debate', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '应该集中最后资源赌一次豪赌，还是保留冗余来换取更长生存时间。',
-        en: 'Should the branch spend its last reserves on a high-risk gamble or preserve redundancy for longer survival?',
-      },
-      spy_infiltrate: {
-        zh: '暗中囤积关键资源，引导群体走向错误避难路线。',
-        en: 'Secretly hoard key resources and steer the group toward the wrong refuge route.',
-      },
-      backchannel_pact: {
-        zh: '让避难所负责人与武装护卫私下交换药品、床位和撤离名额，换取一份不公开的生存密约。',
-        en: 'Broker a secret survival pact between shelter leads and armed escorts: medicine, beds, and evacuation slots traded off the official ledger.',
-      },
-      human_takeover: {
-        zh: '立刻发布一条保守生存命令，把人群从高风险路线撤回。',
-        en: 'Issue an immediate conservative survival order and pull the population off the high-risk route.',
-      },
-      spacetime_rift: {
-        zh: '另一条时间线的残缺求救信号证明，当前路线最终会导致集体灭失。',
-        en: 'A fragmented distress signal from another timeline proves the current route ends in collective failure.',
-      },
-      mandate_surge: {
-        zh: '避难居民突然要求公开余粮库存、改写配给顺序，并优先保护撤离路线。',
-        en: 'Shelter residents surge with demands to publish food reserves, rewrite rationing order, and secure evacuation routes first.',
-      },
-      evacuation_order: {
-        zh: '立刻发布撤离令，优先转移病患、儿童、余粮车队与最后的发电机，其他人转入限供待命。',
-        en: 'Issue an evacuation order that moves patients, children, food convoys, and the last generators first while everyone else enters rationed standby.',
-      },
-      public_hearing: {
-        zh: '立刻召开生存听证，要求避难负责人、医护与后勤方各自公开一条余粮、风险或撤离证据。',
-        en: 'Open a survival hearing and require shelter leads, medics, and logistics crews to disclose one reserve, risk, or evacuation fact each.',
-      },
-      resource_triage: {
-        zh: '立即执行生存资源分诊，明确余粮、药品、床位与撤离载具谁先使用，哪些群体必须转移或限供。',
-        en: 'Run survival resource triage and decide who gets food, medicine, beds, and evacuation transport first while others are moved or rationed.',
-      },
-      forbidden_ritual: {
-        zh: '动用最后储备、封门令或极端牺牲协议，换取一次高代价的生存喘息。',
-        en: 'Invoke last-reserve burn, a hard shelter seal, or an extreme sacrifice protocol to buy one costly breath of survival.',
-      },
-    },
-  },
-  generic: {
-    id: 'generic',
-    labelZh: '通用博弈',
-    labelEn: 'General Tension',
-    descriptionZh: '适合暂时无法归类的问题，用通用冲突机制增强推演。',
-    descriptionEn: 'Use general conflict tools when the scenario does not map cleanly to a domain.',
-    signatureHooksZh: ['关键分歧', '隐藏议程', '世界线证据'],
-    signatureHooksEn: ['Core tensions', 'Hidden agendas', 'Branch evidence'],
-    recommendedCards: ['civilization_debate', 'public_hearing', 'backchannel_pact', 'mandate_surge', 'human_takeover', 'spy_infiltrate', 'evacuation_order', 'spacetime_rift', 'resource_triage', 'forbidden_ritual'],
-    defaultDirectives: {
-      civilization_debate: {
-        zh: '让两名角色围绕当前世界线最核心的分歧展开公开辩论。',
-        en: 'Make two agents publicly debate the branch’s central disagreement.',
-      },
-      spy_infiltrate: {
-        zh: '让一名角色带着隐藏议程发言，悄悄把局势推向更极端的方向。',
-        en: 'Give one agent a hidden agenda that quietly pushes the branch toward a sharper outcome.',
-      },
-      backchannel_pact: {
-        zh: '让两名关键角色绕过公开流程私下交换保护、情报或让步，形成一笔见不得光的密约。',
-        en: 'Force two key actors to bypass the public process and quietly trade protection, intelligence, or concessions in a hidden pact.',
-      },
-      human_takeover: {
-        zh: '让用户直接接管一名角色，强行改变当前讨论的重心。',
-        en: 'Let the user take over one agent and force a pivot in the branch conversation.',
-      },
-      spacetime_rift: {
-        zh: '让另一条世界线的一条关键信号泄漏到当前分支，制造新的冲突与证据。',
-        en: 'Leak a critical signal from another branch into the current one to create a fresh conflict.',
-      },
-      mandate_surge: {
-        zh: '让一股突发的群众压力席卷当前世界线，逼所有角色重新表态与站队。',
-        en: 'Trigger a sudden wave of public pressure that forces every actor in the branch to restate their position.',
-      },
-      evacuation_order: {
-        zh: '立刻发布撤离、封锁或转运命令，明确谁先离场、哪些区域暂停、哪些关键资源先走。',
-        en: 'Issue an immediate evacuation, lockdown, or transfer order that spells out who exits first, which zones pause, and which resources move first.',
-      },
-      public_hearing: {
-        zh: '立刻召开公开听证，要求当前世界线里最关键的阵营各自拿出一条事实、代价或底线。',
-        en: 'Call a public hearing and force the branch’s key factions to surface one fact, trade-off, or non-negotiable line each.',
-      },
-      resource_triage: {
-        zh: '立即执行资源分诊，明确当前世界线里哪些人、区域或系统先被保住，哪些必须降级或撤离。',
-        en: 'Enter resource triage and decide which people, zones, or systems get protected first while others are degraded or evacuated.',
-      },
-      forbidden_ritual: {
-        zh: '动用一项代价极高且可能不可逆的非常规手段，强行换取局势转折。',
-        en: 'Invoke a costly and potentially irreversible extraordinary measure to force a sharp turn in the branch.',
-      },
-    },
-  },
-};
+const gameplayCardDefs = CONTRACT_GAMEPLAY_CARD_DEFS as GameplayCardDefinition[];
+const gameplayProfiles = CONTRACT_GAMEPLAY_PROFILES as Record<GameplayProfileId, GameplayProfileDefinition>;
+const gameplaySignatureArcs = CONTRACT_SIGNATURE_ARCS as Record<GameplayProfileId, GameplaySignatureArcDefinition>;
+const gameplayCardEffects = CONTRACT_CARD_SYSTEM_EFFECTS as Record<GameplayCardId, { risk: number; resource: number }>;
 
 const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuristics>> = {
   governance: {
@@ -880,132 +171,11 @@ const KEYWORD_TO_PROFILE: Array<[GameplayProfileId, string[]]> = [
   ['survival', ['末日', '崩塌', '灾难', '灭绝', 'survival', 'collapse', 'apocalypse', 'disaster', 'extinction']],
 ];
 
-const PROFILE_SIGNATURE_ARCS: Record<GameplayProfileId, GameplaySignatureArcDefinition> = {
-  governance: {
-    labelZh: '治理听证链',
-    labelEn: 'Governance Hearing Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'mandate_surge'],
-    riskLabelZh: '权威噪声',
-    riskLabelEn: 'Authority Noise',
-    resourceLabelZh: '审议筹码',
-    resourceLabelEn: 'Review Leverage',
-  },
-  war: {
-    labelZh: '战线止损链',
-    labelEn: 'Frontline Recovery Arc',
-    sequence: ['public_hearing', 'evacuation_order', 'resource_triage'],
-    riskLabelZh: '升级时钟',
-    riskLabelEn: 'Escalation Clock',
-    resourceLabelZh: '补给余量',
-    resourceLabelEn: 'Supply Margin',
-  },
-  empire: {
-    labelZh: '帝国安抚链',
-    labelEn: 'Imperial Pacification Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'resource_triage'],
-    riskLabelZh: '行省裂缝',
-    riskLabelEn: 'Provincial Friction',
-    resourceLabelZh: '统御余量',
-    resourceLabelEn: 'Imperial Buffer',
-  },
-  industry: {
-    labelZh: '停机调度链',
-    labelEn: 'Shutdown Dispatch Arc',
-    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
-    riskLabelZh: '停摆时钟',
-    riskLabelEn: 'Shutdown Clock',
-    resourceLabelZh: '产能缓冲',
-    resourceLabelEn: 'Throughput Buffer',
-  },
-  trade: {
-    labelZh: '港口博弈链',
-    labelEn: 'Harbor Leverage Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'evacuation_order'],
-    riskLabelZh: '封锁噪声',
-    riskLabelEn: 'Blockade Noise',
-    resourceLabelZh: '航道筹码',
-    resourceLabelEn: 'Route Leverage',
-  },
-  law: {
-    labelZh: '程序急刹链',
-    labelEn: 'Procedural Brake Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'human_takeover'],
-    riskLabelZh: '程序风险',
-    riskLabelEn: 'Procedure Risk',
-    resourceLabelZh: '复核余量',
-    resourceLabelEn: 'Review Buffer',
-  },
-  faith: {
-    labelZh: '圣谕偏转链',
-    labelEn: 'Sacred Divergence Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'forbidden_ritual'],
-    riskLabelZh: '异端时钟',
-    riskLabelEn: 'Heresy Clock',
-    resourceLabelZh: '圣权余量',
-    resourceLabelEn: 'Sacred Margin',
-  },
-  ecology: {
-    labelZh: '阈值撤离链',
-    labelEn: 'Threshold Retreat Arc',
-    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
-    riskLabelZh: '阈值时钟',
-    riskLabelEn: 'Threshold Clock',
-    resourceLabelZh: '韧性余量',
-    resourceLabelEn: 'Resilience Buffer',
-  },
-  frontier: {
-    labelZh: '远征续航链',
-    labelEn: 'Expedition Sustain Arc',
-    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
-    riskLabelZh: '失压时钟',
-    riskLabelEn: 'Pressure-Loss Clock',
-    resourceLabelZh: '生命维持',
-    resourceLabelEn: 'Life Support',
-  },
-  mythic: {
-    labelZh: '禁术裂变链',
-    labelEn: 'Arcane Rupture Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'forbidden_ritual'],
-    riskLabelZh: '反噬时钟',
-    riskLabelEn: 'Backlash Clock',
-    resourceLabelZh: '奥术余量',
-    resourceLabelEn: 'Arcane Buffer',
-  },
-  survival: {
-    labelZh: '避难分诊链',
-    labelEn: 'Shelter Triage Arc',
-    sequence: ['public_hearing', 'resource_triage', 'evacuation_order'],
-    riskLabelZh: '崩塌时钟',
-    riskLabelEn: 'Collapse Clock',
-    resourceLabelZh: '生存余量',
-    resourceLabelEn: 'Survival Buffer',
-  },
-  generic: {
-    labelZh: '通用转向链',
-    labelEn: 'General Pivot Arc',
-    sequence: ['public_hearing', 'backchannel_pact', 'resource_triage'],
-    riskLabelZh: '分歧时钟',
-    riskLabelEn: 'Tension Clock',
-    resourceLabelZh: '转圜筹码',
-    resourceLabelEn: 'Pivot Leverage',
-  },
-};
-
-const CARD_SYSTEM_EFFECTS: Record<GameplayCardId, { risk: number; resource: number }> = {
-  civilization_debate: { risk: 1, resource: 0 },
-  spy_infiltrate: { risk: 2, resource: -1 },
-  backchannel_pact: { risk: 1, resource: 1 },
-  human_takeover: { risk: 1, resource: 0 },
-  spacetime_rift: { risk: 2, resource: 0 },
-  mandate_surge: { risk: 2, resource: -1 },
-  evacuation_order: { risk: 1, resource: 1 },
-  public_hearing: { risk: 1, resource: 1 },
-  resource_triage: { risk: -1, resource: 2 },
-  forbidden_ritual: { risk: 3, resource: -2 },
-};
-
 export function getGameplayCardDefinition(cardId: GameplayCardId): GameplayCardDefinition {
-  return GAMEPLAY_CARD_DEFS.find((card) => card.id === cardId) ?? GAMEPLAY_CARD_DEFS[0];
+  return (
+    gameplayCardDefs.find((card) => card.id === cardId)
+    ?? gameplayCardDefs[0]
+  );
 }
 
 export function getGameplayCardLabel(cardId: GameplayCardId, isZh: boolean): string {
@@ -1044,21 +214,21 @@ export function inferGameplayProfile(
     }
   }
 
-  return bestProfileId ? GAMEPLAY_PROFILES[bestProfileId] : GAMEPLAY_PROFILES.generic;
+  return bestProfileId ? gameplayProfiles[bestProfileId] : gameplayProfiles.generic;
 }
 
 export function getGameplayProfileLabel(profileId: GameplayProfileId, isZh: boolean): string {
-  const profile = GAMEPLAY_PROFILES[profileId];
+  const profile = gameplayProfiles[profileId];
   return isZh ? profile.labelZh : profile.labelEn;
 }
 
 export function getGameplayProfileDescription(profileId: GameplayProfileId, isZh: boolean): string {
-  const profile = GAMEPLAY_PROFILES[profileId];
+  const profile = gameplayProfiles[profileId];
   return isZh ? profile.descriptionZh : profile.descriptionEn;
 }
 
 export function getGameplayProfileSignatureHooks(profileId: GameplayProfileId, isZh: boolean): string[] {
-  const profile = GAMEPLAY_PROFILES[profileId];
+  const profile = gameplayProfiles[profileId];
   return isZh ? profile.signatureHooksZh : profile.signatureHooksEn;
 }
 
@@ -1067,7 +237,7 @@ export function getGameplayCardDirectivePreview(
   cardId: GameplayCardId,
   isZh: boolean,
 ): string {
-  const directive = GAMEPLAY_PROFILES[profileId].defaultDirectives[cardId];
+  const directive = gameplayProfiles[profileId].defaultDirectives[cardId];
   return isZh ? directive.zh : directive.en;
 }
 
@@ -1083,7 +253,7 @@ export function getGameplayBadgeSrc(badgeId: GameplayBadgeId): string {
 }
 
 export function getGameplaySignatureArc(profileId: GameplayProfileId, isZh: boolean) {
-  const arc = PROFILE_SIGNATURE_ARCS[profileId];
+  const arc = gameplaySignatureArcs[profileId];
   return {
     ...arc,
     label: isZh ? arc.labelZh : arc.labelEn,
@@ -1110,8 +280,8 @@ export function getGameplaySignatureArcState(
     }
   }
 
-  const riskValue = relevantUsages.reduce((sum, usage) => sum + CARD_SYSTEM_EFFECTS[usage.cardId].risk, 0);
-  const resourceValue = relevantUsages.reduce((sum, usage) => sum + CARD_SYSTEM_EFFECTS[usage.cardId].resource, 0);
+  const riskValue = relevantUsages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].risk, 0);
+  const resourceValue = relevantUsages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].resource, 0);
   const normalizedRisk = Math.max(0, Math.min(6, riskValue));
   const normalizedResource = Math.max(0, Math.min(6, 3 + resourceValue));
   const nextCardId = arc.sequence[matchedSteps] ?? null;
@@ -1132,7 +302,7 @@ export function getRecommendedGameplayCards(
   profileId: GameplayProfileId,
   usages: GameplayUsageLike[] = [],
 ): GameplayCardId[] {
-  const cards = [...GAMEPLAY_PROFILES[profileId].recommendedCards];
+  const cards = [...gameplayProfiles[profileId].recommendedCards];
   if (usages.length === 0) {
     return cards;
   }
@@ -1341,7 +511,7 @@ export function buildGameplayAutoDirective(params: {
   isZh: boolean;
 }): string {
   const { cardId, question, sceneTheme, profileId, isZh } = params;
-  const profile = GAMEPLAY_PROFILES[profileId];
+  const profile = gameplayProfiles[profileId];
   const base = isZh ? profile.defaultDirectives[cardId].zh : profile.defaultDirectives[cardId].en;
 
   if (isZh) {

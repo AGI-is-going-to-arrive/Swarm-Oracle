@@ -1,0 +1,6 @@
+{
+  "preset": "law_scene_variant",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "prompt": "Pixel-art constitutional court chamber for a retro strategy simulation, warm ivory stone, brass and violet judicial accents, elevated bench, legal archive walls, wide 16:9 composition, no text, no photorealism, consistent with SwarmOracle theater style."
+}

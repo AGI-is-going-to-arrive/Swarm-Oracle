@@ -732,7 +732,7 @@ export function SimulationView() {
           <button
             className={`view-mode-toggle ${viewMode === 'theater' ? 'view-mode-toggle--active' : ''}`}
             onClick={toggleViewMode}
-            aria-label={viewMode === 'classic' ? 'Switch to Pixel Theater' : 'Switch to Classic View'}
+            aria-label={viewMode === 'classic' ? t('sim.switch_to_theater_aria') : t('sim.switch_to_classic_aria')}
             disabled={!canToggleViewMode}
             title={theaterToggleHint}
           >
@@ -846,7 +846,7 @@ export function SimulationView() {
                 </div>
                 <span className="theater-panel__power-led" />
               </div>
-              <div className="theater-panel__status" aria-label="Theater live status">
+              <div className="theater-panel__status" aria-label={t('sim.theater_status_aria')}>
                 {theaterSceneLabel && (
                   <span className="theater-chip theater-chip--primary">
                     🎬 {theaterSceneLabel}
