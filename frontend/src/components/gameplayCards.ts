@@ -34,6 +34,21 @@ export interface GameplayCardDefinition {
   descriptionZh: string;
   descriptionEn: string;
   animation: string;
+  cost: number;
+  cooldownRounds: number;
+  autoCooldownRounds: number;
+  minRound: number;
+  triggerType: 'auto' | 'manual';
+  manualEnabled: boolean;
+  autoEnabled: boolean;
+  branchingBonus: number;
+  requiresPrimaryAgent: boolean;
+  requiresSecondaryAgent: boolean;
+  requiresSourceBranch: boolean;
+  placeholderZh: string;
+  placeholderEn: string;
+  promptLinesZh: string[];
+  promptLinesEn: string[];
 }
 
 export interface GameplayCardPromptInput {
@@ -317,10 +332,6 @@ export function getRecommendedGameplayCards(
   ];
 }
 
-function unreachableGameplayCard(cardId: never): never {
-  throw new Error(`Unhandled gameplay card: ${cardId}`);
-}
-
 function resolveAgentName(agentsById: Record<string, AgentInfo>, agentId?: string): string {
   if (!agentId) return '';
   return agentsById[agentId]?.name ?? '';
@@ -364,6 +375,13 @@ function buildDirectorOverridePrefix(isZh: boolean): string[] {
     'This is not flavor text. It is a director-level event that every actor in the branch already knows.',
     'Treat it as an immediate and persistent state change: the named actors must act on it now, everyone else must explicitly react, and the consequences should continue shaping later rounds until superseded.',
   ];
+}
+
+function interpolateGameplayPromptLine(
+  template: string,
+  values: Record<string, string>,
+): string {
+  return template.replace(/\{([a-z_]+)\}/g, (_, key: string) => values[key] ?? '');
 }
 
 function normalizeStance(stance: string | undefined): number {
@@ -541,6 +559,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
 
   const primaryAgent = resolveAgentName(agentsById, primaryAgentId);
   const secondaryAgent = resolveAgentName(agentsById, secondaryAgentId);
+  const card = getGameplayCardDefinition(cardId);
   const directive = buildGameplayAutoDirective({
     cardId,
     question,
@@ -548,266 +567,28 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
     profileId,
     isZh,
   });
+  const sourceBranchLabel = sourceBranchTitle || (isZh ? '另一条世界线' : 'another timeline');
+  const promptLines = (isZh ? card.promptLinesZh : card.promptLinesEn).map((line) => (
+    interpolateGameplayPromptLine(line, {
+      primary_agent: primaryAgent,
+      secondary_agent: secondaryAgent,
+      directive: fallbackDirective(customDirective, directive),
+      source_branch: sourceBranchLabel,
+    })
+  ));
 
-  if (isZh) {
-    switch (cardId) {
-      case 'civilization_debate':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Civilization Debate / 文明辩论]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请在下一轮强制安排 ${primaryAgent} 与 ${secondaryAgent} 进行一场公开辩论，其余 agent 必须引用、反驳或放大这场辩论的观点。`,
-          `辩题：${fallbackDirective(customDirective, directive)}`,
-          '要求：让这场辩论改变后续讨论重心，并显式体现不同阵营的张力。',
-          '持续效果：后续轮次要继续围绕这场辩论产生结盟、裂痕、站队变化或新政策提案。',
-        ].join('\n');
-      case 'spy_infiltrate':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Spy Infiltration / 间谍渗透]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让 ${primaryAgent} 在下一轮成为隐藏议程的间谍角色，但不要直接公开其身份。`,
-          `隐藏任务：${fallbackDirective(customDirective, directive)}`,
-          '要求：其他 agent 只能从措辞、立场偏移和策略建议里逐渐察觉异常。',
-          '持续效果：这次渗透必须改变信任结构、联盟判断或关键资源/情报流向，而不是只说一句可有可无的话。',
-        ].join('\n');
-      case 'backchannel_pact':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Backchannel Pact / 密约交易]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让 ${primaryAgent} 与 ${secondaryAgent} 绕开公开议程，在下一轮私下达成一份暂不曝光的密约：${fallbackDirective(customDirective, directive)}`,
-          '要求：明确双方各自交换了什么筹码、红线或保护承诺，不能只写成模糊的“秘密合作”。',
-          '持续效果：后续轮次要体现说法异常趋同、行动配合、外部阵营误判，或因密约泄漏引发新的裂痕。',
-        ].join('\n');
-      case 'human_takeover':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Human Takeover / 人类潜入]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请在下一轮把 ${primaryAgent} 的发言改为由用户直接接管，并把下面这段内容视为该角色的真实表态。`,
-          `用户输入：${fallbackDirective(customDirective, directive)}`,
-          '要求：其他 agent 必须把这段输入当作真实政治动作继续推演。',
-          '持续效果：这段接管发言要引发后续轮次中的再回应、策略修正、联盟变化或风险升级/缓和。',
-        ].join('\n');
-      case 'spacetime_rift':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Space-Time Rift / 时空裂缝]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          `信息来源分支：${sourceBranchTitle || '另一条世界线'}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让来自另一条世界线的一条关键信息泄漏到当前分支：${fallbackDirective(customDirective, directive)}`,
-          '要求：把它写成一个突然出现的证据、传闻或被截获的信号，并让当前讨论因此转向。',
-          '持续效果：该信息必须改变当前世界线的判断、优先级或风险感知，并在后续轮次持续产生余波。',
-        ].join('\n');
-      case 'mandate_surge':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Mandate Surge / 民意浪潮]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让当前世界线突然遭遇一波公开且无法忽视的民意/合法性冲击：${fallbackDirective(customDirective, directive)}`,
-          '要求：把它写成街头浪潮、请愿、罢工、神殿号召、殖民地集体请命或其他群众性信号，让所有 agent 都必须明确表态。',
-          '持续效果：后续轮次要继续体现这波冲击对联盟关系、政策优先级、执行正当性或风险感知的持续影响。',
-        ].join('\n');
-      case 'evacuation_order':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Evacuation Order / 撤离令]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让 ${primaryAgent} 在下一轮发布一项必须立刻执行的撤离、封锁或转运命令：${fallbackDirective(customDirective, directive)}`,
-          '要求：明确谁先撤、谁被限留、哪些通道关闭或开辟、哪些物资与名额必须优先保障，不能只写“大家撤离”。',
-          '持续效果：后续轮次要继续体现秩序压力、失序风险、抛弃感、后勤拥堵或新结盟带来的余波。',
-        ].join('\n');
-      case 'public_hearing':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Public Hearing / 公开听证]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让当前世界线立即进入一场无法跳过的公开听证：${fallbackDirective(customDirective, directive)}`,
-          '要求：至少让三个不同立场/阵营拿出证据、条款、账本、代价或红线，不能只重复立场口号。',
-          '持续效果：后续轮次要继续引用这场听证暴露出的事实与责任链，并让联盟、优先级或信任结构发生变化。',
-        ].join('\n');
-      case 'resource_triage':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Resource Triage / 资源分诊]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让当前世界线立刻进入一轮公开且残酷的资源分诊：${fallbackDirective(customDirective, directive)}`,
-          '要求：明确谁先获得水、粮、药品、运力、氧气、算力或撤离资格，谁被限供、延后或牺牲，不能只给抽象口号。',
-          '持续效果：后续轮次要继续体现这次分诊造成的秩序压力、群体反应、联盟变化或生存代价。',
-        ].join('\n');
-      case 'forbidden_ritual':
-        return [
-          ...buildDirectorOverridePrefix(true),
-          '[Special Card: Forbidden Ritual / 禁术仪式]',
-          `当前 What-If：${question}`,
-          `场景主题：${sceneTheme || '当前世界线'}`,
-          `目标分支：${targetBranchTitle}`,
-          ...buildSignatureArcContextLines(true, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-          `请让当前世界线立刻动用一项代价巨大、可能不可逆的禁术/秘仪/例外条款：${fallbackDirective(customDirective, directive)}`,
-          '要求：明确这次举动要牺牲什么、冒犯哪条旧秩序、以及为什么各方仍被迫接受它，不能只写成抽象奇观。',
-          '持续效果：后续轮次必须持续体现禁术带来的代价、裂痕、反噬或新的依赖关系。',
-        ].join('\n');
-      default:
-        return unreachableGameplayCard(cardId);
-    }
-  }
-
-  switch (cardId) {
-    case 'civilization_debate':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Civilization Debate]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Force ${primaryAgent} and ${secondaryAgent} into a public debate in the next round.`,
-        `Debate topic: ${fallbackDirective(customDirective, directive)}`,
-        'Other agents must quote, oppose, or amplify that debate and let it reshape the branch momentum.',
-        'Persistent effect: later rounds should keep reflecting the alliances, fractures, or policy shifts created by this debate.',
-      ].join('\n');
-    case 'spy_infiltrate':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Spy Infiltration]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Turn ${primaryAgent} into a covert infiltrator in the next round without openly revealing the identity.`,
-        `Hidden mission: ${fallbackDirective(customDirective, directive)}`,
-        'Other agents should only detect the anomaly through rhetoric, stance drift, and suspicious strategy proposals.',
-        'Persistent effect: the infiltration must alter trust, coalitions, or resource/intel flows beyond a single line of dialogue.',
-      ].join('\n');
-    case 'backchannel_pact':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Backchannel Pact]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Force ${primaryAgent} and ${secondaryAgent} to strike an off-book pact in the next round: ${fallbackDirective(customDirective, directive)}`,
-        'Spell out what leverage, protection, access, or silence each side trades instead of vague secret cooperation.',
-        'Persistent effect: later rounds should reflect suspicious alignment, coordinated moves, strategic blind spots, or fractures once the pact leaks.',
-      ].join('\n');
-    case 'human_takeover':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Human Takeover]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Let the user directly take over ${primaryAgent}'s next-round statement and treat the following as their authentic position.`,
-        `User input: ${fallbackDirective(customDirective, directive)}`,
-        'All other agents must respond as if this was a real move by that character.',
-        'Persistent effect: the branch should continue reacting to this move in later rounds through strategy changes, alliances, or escalating tension.',
-      ].join('\n');
-    case 'spacetime_rift':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Space-Time Rift]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        `Source branch: ${sourceBranchTitle || 'another timeline'}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Leak this signal from the other timeline into the current branch: ${fallbackDirective(customDirective, directive)}`,
-        'Present it as intercepted evidence, rumor, or a temporal anomaly that forces the branch discussion to pivot.',
-        'Persistent effect: the leak must keep reshaping the branch’s priorities or risk model in the rounds that follow.',
-      ].join('\n');
-    case 'mandate_surge':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Mandate Surge]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Hit the branch with a public legitimacy shock that no actor can ignore: ${fallbackDirective(customDirective, directive)}`,
-        'Frame it as a strike wave, petition, sacred uprising, colony-wide demand, or any mass signal that forces every agent to answer in public.',
-        'Persistent effect: later rounds should keep reflecting how this mandate reshapes alliances, priorities, and perceived legitimacy.',
-      ].join('\n');
-    case 'evacuation_order':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Evacuation Order]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Make ${primaryAgent} issue an immediate evacuation, lockdown, or emergency transfer order: ${fallbackDirective(customDirective, directive)}`,
-        'Specify who gets evacuated first, who is left waiting, which corridors or ports open or close, and what resources are protected instead of saying everyone simply leaves.',
-        'Persistent effect: later rounds should keep reflecting panic, coordination gains, moral backlash, logistics jams, or new alliances caused by the order.',
-      ].join('\n');
-    case 'public_hearing':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Public Hearing]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Force the branch into an immediate public hearing: ${fallbackDirective(customDirective, directive)}`,
-        'At least three distinct factions must surface evidence, terms, ledgers, costs, or non-negotiable lines instead of repeating slogans.',
-        'Persistent effect: later rounds should keep citing the facts and accountability links exposed by the hearing, with visible shifts in trust, priorities, or alliances.',
-      ].join('\n');
-    case 'resource_triage':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Resource Triage]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Force the branch into a visible round of resource triage: ${fallbackDirective(customDirective, directive)}`,
-        'Make the branch spell out who gets water, food, medicine, transport, oxygen, compute, or evacuation priority first and who gets rationed, delayed, or cut off.',
-        'Persistent effect: later rounds should keep reflecting the survival pressure, political backlash, and alliance shifts created by that triage.',
-      ].join('\n');
-    case 'forbidden_ritual':
-      return [
-        ...buildDirectorOverridePrefix(false),
-        '[Special Card: Forbidden Ritual]',
-        `What-if premise: ${question}`,
-        `Scene theme: ${sceneTheme || 'current timeline'}`,
-        `Target branch: ${targetBranchTitle}`,
-        ...buildSignatureArcContextLines(false, signatureArcLabel, signatureArcProgress, systemTrackSummary),
-        `Force the branch to invoke a costly and possibly irreversible taboo measure: ${fallbackDirective(customDirective, directive)}`,
-        'Spell out what gets sacrificed, which old order gets violated, and why the actors still accept the move instead of treating it as flavor.',
-        'Persistent effect: later rounds must keep reflecting the backlash, new dependency, or fractures caused by the ritual.',
-      ].join('\n');
-    default:
-      return unreachableGameplayCard(cardId);
-  }
+  return [
+    ...buildDirectorOverridePrefix(isZh),
+    isZh ? `[Special Card: ${card.labelEn} / ${card.labelZh}]` : `[Special Card: ${card.labelEn}]`,
+    isZh ? `当前 What-If：${question}` : `What-if premise: ${question}`,
+    isZh ? `场景主题：${sceneTheme || '当前世界线'}` : `Scene theme: ${sceneTheme || 'current timeline'}`,
+    isZh ? `目标分支：${targetBranchTitle}` : `Target branch: ${targetBranchTitle}`,
+    ...(card.requiresSourceBranch
+      ? [isZh ? `信息来源分支：${sourceBranchLabel}` : `Source branch: ${sourceBranchLabel}`]
+      : []),
+    ...buildSignatureArcContextLines(isZh, signatureArcLabel, signatureArcProgress, systemTrackSummary),
+    ...promptLines,
+  ].join('\n');
 }
 
 export function buildAgentsById(agents: AgentInfo[]): Record<string, AgentInfo> {

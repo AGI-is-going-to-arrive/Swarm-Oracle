@@ -1,9 +1,9 @@
 # SwarmOracle - Track D AI 辩论竞技场 MVP 蓝图
 
-> 目标：把 Track D 从候选方向推进成可直接开工的执行蓝图。  
-> 范围：产品设计、美术素材、代码开发拆解、测试、code review、E2E 方案。  
-> 原则：不偏离项目初衷 What-If 推演引擎 + Pixel Theater + 分支比较 + 下注排行 + 分享。  
-> 当前时间：2026-03-17
+> 目标：记录 Track D Debate Arena MVP 的设计蓝图与已实现状态，而不是继续把它当作候选方向。
+> 范围：产品设计、美术素材、代码开发拆解、测试、code review、E2E 方案。
+> 原则：不偏离项目初衷 What-If 推演引擎 + Pixel Theater + 分支比较 + 下注排行 + 分享。
+> 当前时间：2026-03-18
 
 ---
 
@@ -18,6 +18,27 @@
 5. i18n、跨平台、自动化钩子从第一天就要怎么设计。
 6. develop-web-game、playwright-interactive、Playwright CLI Skill 在这条线里怎么用。
 7. 什么时候才算 Track D 真正达到可玩、可测、可审查的完成态。
+
+---
+
+## 0.1 2026-03-18 落地状态同步
+
+这份蓝图已不再是“候选方向”。当前 Debate Arena MVP 已经落地，后文中的设计条目主要作为设计基线与验收参考。
+
+- 已落地的用户面
+  - 首页已有 `Debate Arena` 入口
+  - live 页：`/debate/:id`
+  - result 页：`/debate/:id/result`
+  - 押注：`winner / verdict_tone`
+  - 分享：`DebateShareModal`
+- 已落地的实现面
+  - 后端：`Debate / DebateTurn / DebatePrediction` 独立模型与 `/api/debate` + `/ws/debate/{id}`
+  - 前端：`DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
+  - 自动化：`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`
+- 已落地的验证面
+  - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - 本轮 desktop smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+  - develop-web-game 工件：`frontend/output/web-game/20260317-debate-arena-signoff/`
 
 ---
 
@@ -407,13 +428,13 @@ frontend/src/
 │   ├── DebateScoreCard.tsx
 │   ├── DebateMomentumBar.tsx
 │   ├── DebateStageRibbon.tsx
-│   └── DebateBetModal.tsx
+│   ├── DebateBetModal.tsx
+│   └── DebateShareModal.tsx
 ├── stores/
 │   └── debateStore.ts
 ├── hooks/
 │   └── useDebateWS.ts
 └── lib/
-    ├── debateMotion.ts
     ├── debateLabels.ts
     └── debateShare.ts
 ~~~

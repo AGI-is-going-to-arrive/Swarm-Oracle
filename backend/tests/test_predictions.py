@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -49,7 +49,7 @@ class TestPredictionModel(unittest.TestCase):
             prediction_text="Market crash",
             score=85.0,
             score_reason="核心趋势命中",
-            scored_at=datetime.utcnow(),
+            scored_at=datetime.now(timezone.utc),
         )
         self.assertEqual(p.score, 85.0)
         self.assertEqual(p.score_reason, "核心趋势命中")
@@ -220,7 +220,7 @@ class TestScoringService(unittest.TestCase):
             engine = create_engine("sqlite:///:memory:")
             SQLModel.metadata.create_all(engine)
             mock_engine.return_value = engine
-            result = asyncio.get_event_loop().run_until_complete(score_prediction("nonexistent"))
+            result = asyncio.run(score_prediction("nonexistent"))
             self.assertIsNone(result)
 
     def test_score_prediction_already_scored(self):
@@ -238,13 +238,13 @@ class TestScoringService(unittest.TestCase):
                     prediction_text="Test",
                     score=80.0,
                     score_reason="Already scored",
-                    scored_at=datetime.utcnow(),
+                    scored_at=datetime.now(timezone.utc),
                 )
                 session.add(pred)
                 session.commit()
                 pred_id = pred.id
 
-            result = asyncio.get_event_loop().run_until_complete(score_prediction(pred_id))
+            result = asyncio.run(score_prediction(pred_id))
             self.assertIsNone(result)
 
 

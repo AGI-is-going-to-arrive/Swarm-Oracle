@@ -61,7 +61,7 @@ cd backend
 .venv/bin/python -m pytest tests/test_memory.py::TestCompressRounds -v
 ```
 
-- 本轮已真实执行后端全量回归，结果为 **798 passed, 2 warnings**。
+- 本轮已真实执行后端全量回归，结果为 **815 passed**。
 
 ### Frontend 测试
 
@@ -71,7 +71,8 @@ npm install
 npm test
 ```
 
-- 本轮已真实执行 `npm test`，前端全量回归结果为 **155 passed (155)**。
+- 本轮已真实执行 `npm test`，前端全量回归结果为 **175 passed**。
+- 本轮也已真实执行 `npm run build`，结果通过。
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -87,14 +88,19 @@ npm test
   - 固定回归输入集已落盘：
     - `frontend/output/e2e/sample_matrix.json`
     - `frontend/output/e2e/sample_matrix_variants.json`
-  - 当前固定样本为 15 条，可直接作为后续 replay / result / share 取证的样本清单
-  - 一键黑盒回归入口：
-    - `npm run e2e:matrix`
-    - `npm run e2e:variants`
-    - `npm run e2e:corners`
-    - `npm run e2e:full`
-    - `node scripts/e2e-suite.mjs mobile --headless --output-dir <DIR>`
-    - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
+- 当前固定样本为 15 条，可直接作为后续 replay / result / share 取证的样本清单
+- 一键黑盒回归入口：
+  - `npm run e2e:matrix`
+  - `npm run e2e:variants`
+  - `npm run e2e:corners`
+  - `npm run e2e:full`
+  - `npm run e2e:debate:desktop`
+  - `npm run e2e:debate:mobile`
+  - `npm run e2e:debate:full`
+  - `npm run e2e:debate`
+  - `node scripts/e2e-suite.mjs mobile --headless --output-dir <DIR>`
+  - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
+  - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/<DIR>`
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
   - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
   - 若 `sample_matrix.json` 里的历史 `scenario_id` 缺失，suite 会按 theme/runtime fallback 题面自动重建场景，而不是直接失败
@@ -105,23 +111,26 @@ npm test
     - `frontend/output/e2e/20260317-track-c/corners/`
     - `frontend/output/e2e/20260317-track-c/mobile/`
     - `frontend/output/e2e/20260317-track-c/variants/`
-  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/full-regression-final/result.json`
+  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/20260318-post-b2-full/result.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
+  - Debate 专项最新成功工件：
+    - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
 
 ### 前端本地玩法状态
 
 - 新增本地持久化 helper：
   - `src/lib/scenarioMeta.ts` — 导演点数、卡冷却、玩法记录、下注记录、因果档案摘要
-  - `src/lib/dailyChallenge.ts` — 每日挑战题库、双语题面与完成状态合并（现为 12 条 challenge，按本地日期切换；会把后端 `campaign daily-status` 与本地缓存合并）
+  - `src/lib/dailyChallenge.ts` — 每日挑战题库、双语题面与完成状态合并（现为 12 条 challenge，按本地日期切换；会把后端 `campaign daily-status` 与本地缓存合并。后端在判定 `completed` 时会先把 SQLite round-trip 的 naive UTC `created_at` 归一为 UTC，再按调用方本地日期换算；`completed_at` 继续返回 UTC ISO 字符串）
   - `src/lib/predictionBetting.ts` — 结构化下注编码/反解析；现支持 `branch_winner / ending_tone / profile_resonance`
 
 ### 语言行为
 
 - UI 文案跟随右下角语言切换器（EN / ZH）。
+- Debate Arena 是当前的例外：当页面拿到 `debate.language` / result payload `language` 后，会自动把整页 UI 切到相同语言，避免出现“英文题挂中文壳”或反过来的情况。
 - agent 发言、结果叙事、评分语言主要跟随后端输入语言检测：
   - 英文输入 → 英文输出
   - 中文输入 → 中文输出
-- 当前产品规则不是“只看 UI 切换器强制改语言”，而是“UI 看切换器，LLM 输出看输入语言”。
+- 当前产品规则不是“只看 UI 切换器强制改语言”，而是“常规页面 UI 看切换器，LLM 输出看输入语言；Debate 页面则以 `debate.language` 为准同步 UI”。
 
 ### Vertex / Gemini 图像素材
 

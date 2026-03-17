@@ -33,7 +33,6 @@ describe('scenarioMeta gameplay card rules', () => {
       branchId: 'branch-1',
       branchTitle: '法律急刹',
       round: 1,
-      cost: 1,
       directive: '街头与法律社群要求公开证据并冻结争议政策。',
       usedAt: '2026-03-16T04:00:00.000Z',
     });
@@ -55,7 +54,6 @@ describe('scenarioMeta gameplay card rules', () => {
       branchId: 'branch-2',
       branchTitle: '算法否决',
       round: 2,
-      cost: 1,
       directive: '各地城市同步爆发要求人工复核与地方问责的民意浪潮。',
       usedAt: '2026-03-16T04:05:00.000Z',
     });
@@ -74,7 +72,6 @@ describe('scenarioMeta gameplay card rules', () => {
       branchId: 'branch-3',
       branchTitle: '港区密议',
       round: 2,
-      cost: 1,
       directive: '以通行税减免换取关键港区在 48 小时内配合静默封锁。',
       usedAt: '2026-03-17T03:00:00.000Z',
     });
@@ -93,7 +90,6 @@ describe('scenarioMeta gameplay card rules', () => {
       branchId: 'branch-4',
       branchTitle: '阈值撤离',
       round: 1,
-      cost: 1,
       directive: '优先撤离饮水断供区与儿童病患，并封锁即将失守的净化站。',
       usedAt: '2026-03-17T03:05:00.000Z',
     });

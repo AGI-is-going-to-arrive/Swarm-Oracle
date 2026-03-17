@@ -5004,3 +5004,319 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - code review 与验收标准
 - 已同步 implement/README.md 索引。
 - 本轮未实现 Debate Arena 代码，只产出可直接开工的 Track D 规格与执行蓝图。
+
+## 2026-03-17 Track D Gameplay + Cross-Platform Hardening
+
+- Debate Arena 后端规则层已继续加厚，但保持协议不扩张：
+  - `backend/app/services/debate_prompts.py`
+    - `law / governance / trade / faith / ecology / war` 现有明确区分的 deterministic 辩风文案，中英双语都不再只是换 profile 标签。
+  - `backend/app/services/debate_scoring.py`
+    - profile 会轻量影响 `coherence / evidence / adaptability / impact` 偏置；
+    - `war / ecology` 在高风险题面更容易落到 `rupture`。
+  - `backend/app/api/debate.py`
+    - `closing / verdict` 阶段会锁单，不再允许临近结果时补押；
+    - `ERROR` 终态的 result API 现返回 `500`，不再伪装成 `409 未就绪`；
+    - create debate 时新增 `3.0s` 开场缓冲，确保 live 页真的留出下注窗口。
+
+- Debate Arena 前端 live/result 继续打磨：
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - 阶段 ribbon 现在支持手动锁定回看，`selected_phase / is_phase_locked / unlocked_phases` 已进入 automation payload；
+    - 新增 `Arena Read / 局势解读` 面板，显示本阶段焦点、局势压力、评委关注轴与押注窗口状态；
+    - `auto_reveal` 的 `On/Off` 已本地化；
+    - 移动端新增固定底部主 CTA：live 时优先给 `下注`，结算后优先给 `查看判词`。
+  - `frontend/src/pages/DebateResultView.tsx`
+    - `show_share_modal / active_modal` 已进入 automation payload；
+    - 终态错误会直接显示，不再无限轮询。
+  - `frontend/src/pages/DebateArena.css`
+    - 小屏下压缩 hero、改 stage ribbon 为横向滚动，并为 mobile 主 CTA 预留固定底部区域。
+  - `frontend/src/i18n/locales/en.json` / `zh.json`
+    - 已补 Debate live/result 的策略文案、bet window、终态错误与 mobile CTA 语义。
+
+- 本轮验证通过：
+  - 后端：
+    - `cd backend && ./.venv/bin/python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q`
+    - `10 passed`
+  - 前端：
+    - `cd frontend && npm exec -- tsc --noEmit`
+    - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/stores/debateStore.test.ts`
+    - `4 passed`
+    - `cd frontend && npm run build`
+    - 通过
+
+- 本轮真实浏览器 / 黑盒取证：
+  - Desktop 英文：
+    - `Start Debate Arena -> Open Bet -> Lock Bet -> View Verdict -> Share Result` 已由 Playwright 真实跑通；
+    - 英文 trade 题面最终落到 `debate_arena_forum`，结果页 automation payload 显示 `prediction_count = 1`。
+  - Mobile 中文：
+    - `进入辩论竞技场 -> 下注 -> 锁定押注 -> 查看判词 -> 分享结果` 已真实跑通；
+    - 中文 law 题面最终落到 `debate_arena_judicial`；
+    - share modal 中文文案可见且可复制。
+  - `develop-web-game` 黑盒客户端已产出工件：
+    - `frontend/output/web-game/20260317-debate-arena-signoff/shot-0.png`
+    - `frontend/output/web-game/20260317-debate-arena-signoff/shot-1.png`
+    - `frontend/output/web-game/20260317-debate-arena-signoff/state-0.json`
+    - `frontend/output/web-game/20260317-debate-arena-signoff/state-1.json`
+    - 当前黑盒工件验证的是 result 页；state JSON 已包含 `show_share_modal / active_modal / prediction_count` 等 Debate 专属摘要。
+
+- 本轮额外截图工件：
+  - `debate-mobile-zh-result.png`
+  - `debate-mobile-zh-share.png`
+  - `debate-mobile-zh-opening-top-2.png`
+
+- 下一轮若继续 Track D，建议优先级：
+  - 给 `useDebateWS` 补一版和 `useSimulationWS` 对齐的 StrictMode / cleanup 防抖，避免延迟首连计时器竞态；
+  - 给 `DebateBetModal` / `DebateShareModal` 补组件测试和更细的 automation payload；
+  - 若继续提升移动端首屏，再把 live hero 的 momentum + CTA 再压一层，争取把 `下注` 也完全收进最上方首屏里。
+
+## 2026-03-17 Track D Follow-up - Debate WS Cleanup
+
+- 已继续完成上一条建议里的第一项：
+  - `frontend/src/hooks/useDebateWS.ts`
+    - 增加 `connectTimerRef`，现在会在 cleanup 时取消延迟首连；
+    - 正常关闭 `code=1000` 时不再触发重连；
+    - reconnect timer 在重复调度前会先清理，避免残留定时器。
+- 新增 hook 级回归：
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+    - 覆盖：
+      - `unmount before delayed connect`
+      - `normal close does not reconnect`
+      - `abnormal close still reconnects`
+- 回归通过：
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx`
+    - `5 passed`
+  - `cd frontend && npm exec -- tsc --noEmit`
+    - 通过
+
+## 2026-03-17 Track D Debate E2E Baseline Script
+
+- 已新增 Debate 专项黑盒基线脚本：
+  - `frontend/scripts/e2e-debate-suite.mjs`
+- 设计取向：
+  - 不去改现有 `matrix / corners / mobile / full` 主套件；
+  - 单独收口 Debate 的最小闭环：
+    - `live -> bet -> result -> share`
+  - 输出结构延续现有 `e2e-suite` 风格：
+    - `browser-launch.json`
+    - `live.json/.png`
+    - `bet-open.json/.png`
+    - `bet-submitted.json/.png`
+    - `result-ready.json/.png`
+    - `result-initial.json/.png`
+    - `share-open.json/.png`
+    - `share-generated.json/.png`
+    - `result.json`
+- 脚本模式：
+  - `desktop`
+    - 英文 trade 辩题
+  - `mobile`
+    - 中文 law 辩题
+  - `full`
+    - 同时产出 `desktop/` 与 `mobile/` 两套 Debate 工件
+- 使用方式：
+  - `cd frontend && node scripts/e2e-debate-suite.mjs desktop --output-dir output/e2e/debate-desktop`
+  - `cd frontend && node scripts/e2e-debate-suite.mjs mobile --output-dir output/e2e/debate-mobile`
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --output-dir output/e2e/debate-full`
+
+## 2026-03-18 Track D Debate E2E Baseline - Green Run
+
+- Debate 专项基线脚本已继续修到可真实跑通：
+  - `frontend/scripts/e2e-debate-suite.mjs`
+- 本轮关键脚本修复：
+  - 去掉脚本里的 TS-only 语法，保证 `node --check` 可通过；
+  - Playwright 浏览器启动优先改为 `chromium-default`，避免系统 Chrome 会话/Google 跳转污染；
+  - desktop 按钮点击改为基于 Debate hero 控件位次，而不是脆弱的文本匹配；
+  - mobile 按钮点击改为优先点 `.debate-mobile-rail .btn`，失败再 fallback 到 hero controls；
+  - Debate modal / share modal 的状态抓取改为 DOM 读取，不再依赖 locator 文本阻塞；
+  - mobile 时序改为更保守的 `disable auto reveal -> open bet -> wait modal -> save live screenshot`；
+  - Debate 开场缓冲从 `3.0s` 提升到 `5.0s`，给 mobile 留出真实下注窗口。
+
+- 本轮真实执行命令：
+  - `node --check frontend/scripts/e2e-debate-suite.mjs`
+  - `node frontend/scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18929 --output-dir frontend/output/e2e/20260318-debate-full-5s`
+
+- 结果：
+  - `full` 通过
+  - `desktop`：
+    - locale: `en`
+    - scene: `debate_arena_forum`
+    - winner: `opposition`
+    - verdictTone: `order`
+    - predictionCount: `1`
+    - share modal: `Xiaohongshu`, `copy_length=675`
+  - `mobile`：
+    - locale: `zh`
+    - scene: `debate_arena_judicial`
+    - winner: `proposition`
+    - verdictTone: `balance`
+    - predictionCount: `1`
+    - share modal: `小红书`, `copy_length=251`
+
+- 成功工件目录：
+  - `frontend/output/e2e/20260318-debate-full-5s/`
+  - 其中包含：
+    - `desktop/live.json`
+    - `desktop/bet-open.json`
+    - `desktop/bet-submitted.json`
+    - `desktop/result-ready.json`
+    - `desktop/result-initial.json`
+    - `desktop/share-open.json`
+    - `desktop/share-generated.json`
+    - `mobile/live.json`
+    - `mobile/bet-open.json`
+    - `mobile/bet-submitted.json`
+    - `mobile/result-ready.json`
+    - `mobile/result-initial.json`
+    - `mobile/share-open.json`
+    - `mobile/share-generated.json`
+    - 顶层 `result.json`
+
+- 已把 Debate 基线脚本正式接到前端 npm scripts：
+  - `cd frontend && npm run e2e:debate:desktop`
+  - `cd frontend && npm run e2e:debate:mobile`
+  - `cd frontend && npm run e2e:debate:full`
+  - `cd frontend && npm run e2e:debate`
+
+## 2026-03-18 Implement Docs + Track B2 收口
+
+- 已同步 `implement/README.md`：
+  - `Track B2` 改为已完成，不再标“半完成”；
+  - `Track D Debate Arena` 改为已实现 MVP，而不是“待评估”。
+- 已同步：
+  - `implement/19_four_track_execution_plan.md`
+  - `implement/20_track_d_debate_arena_design_execution_plan.md`
+  - `implement/21_track_d_debate_arena_mvp_blueprint.md`
+- 这三份文档现在都补了 `2026-03-18` 的实现状态同步，明确：
+  - Debate 已有独立 backend domain / frontend live+result / bet+share / automation hooks；
+  - 当前真实测试与 E2E 工件路径；
+  - 旧的“待开工 / 设计冻结”表述仅作为归档设计基线，不再代表真实剩余工程。
+
+- `Track B2` 本轮代码收口：
+  - `shared/gameplay_contract.v1.json`
+    - 新增每张卡的 `ui` 输入契约：
+      - `requires_primary_agent`
+      - `requires_secondary_agent`
+      - `requires_source_branch`
+      - `placeholder.zh/en`
+    - 新增每张卡的 `prompt_lines.zh/en`
+    - 新增 `branching_bonus`（当前 `spacetime_rift=0.15`）
+  - `frontend/src/lib/gameplayContract.ts`
+    - 前端 contract selector 现暴露 cost/cooldown、输入契约、placeholder、prompt lines、branching bonus
+  - `frontend/src/components/GameplayCardsModal.tsx`
+    - 删除卡牌 UI 的手写 `requires*` 常量
+    - 删除 placeholder switch
+    - 默认卡 fallback 改为从 contract 首项取，不再手写 `civilization_debate`
+    - usage 写入不再硬编码 `cost: 1`
+  - `frontend/src/lib/scenarioMeta.ts`
+    - `applyCardUsage()` 改为内部按 contract 写入 cost，调用方不再传入
+  - `frontend/src/components/gameplayCards.ts`
+    - 删除大段 card-specific prompt switch
+    - 改为从 contract `prompt_lines` 组装 prompt
+  - `backend/app/visualization/card_events.py`
+    - branching bonus 现从 contract 读取
+    - auto trigger 逻辑不再写死 `spacetime_rift` 常量特例
+
+- 本轮验证：
+  - 前端定向：
+    - `cd frontend && npm test -- --run src/components/gameplayContract.test.ts src/components/gameplayCards.test.ts src/components/GameplayCardsModal.test.tsx src/lib/scenarioMeta.test.ts`
+    - 结果：`26 passed`
+  - 后端定向：
+    - `cd backend && .venv/bin/python -m pytest tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+    - 结果：`24 passed`
+  - 前端构建：
+    - `cd frontend && npm run build`
+    - 结果：通过
+
+- 本轮真实浏览器验证：
+  - 新建 live scenario：
+    - `3e0fedb0-2c53-486c-91bb-dac0f21b942e`
+  - Playwright 真实检查：
+    - `Gameplay Cards` modal 可打开；
+    - `Public Hearing` 选中后不再显示 agent selector，placeholder 正确；
+    - `Civilization Debate` 选中后显示 `Primary Agent + Second Agent`，placeholder 正确；
+    - `Space-Time Rift` 选中后显示 `Source Branch`，placeholder 正确。
+
+- 本轮新工件：
+  - `frontend/output/web-game/20260318-b2-contract-smoke/shot-0.png`
+  - `frontend/output/web-game/20260318-b2-contract-smoke/state-0.json`
+  - `frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+
+- 下一轮可选继续项：
+  - 如果要继续抬高 B2 的“声明式程度”，可再评估是否把 `getSuggestedGameplayAgents()` 的卡牌分叉也进一步 schema 化；
+  - 当前我没有重跑 full matrix，只做了定向单测 + live modal 浏览器检查 + Debate smoke。
+
+## 2026-03-18 Full Regression After B2 Close
+
+- 已重新起本地服务：
+  - backend: `http://127.0.0.1:18927`
+  - frontend: `http://127.0.0.1:18928`
+
+- 前端全量回归：
+  - `cd frontend && npm test`
+  - 结果：`31 files, 175 passed`
+
+- 主链路完整 E2E：
+  - `cd frontend && npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-b2-full --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/20260318-post-b2-full/result.json`
+  - 关键信号：
+    - matrix 15 样本通过
+    - corners 通过
+    - mobile 段通过
+    - 若历史样本 `scene_theme` 与当前 selector 漂移，suite 正常做了 runtime fallback 重建
+
+- Debate 完整 E2E：
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-b2-debate-full --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+
+- 后端全量 pytest：
+  - `cd backend && .venv/bin/python -m pytest tests/ -x -q`
+  - 结果：未全绿，首个失败为：
+    - `tests/test_campaign_api.py::test_daily_status_endpoint_returns_backend_truth_for_today`
+    - 失败断言：`data["completed"] is True`，实际返回 `False`
+  - 现场结果：
+    - `1 failed, 148 passed in 46.53s`
+  - 该失败落点在 Track A / campaign `daily-status`，不属于本轮 `implement/` 文档收口或 Track B2 gameplay contract 去重改动范围。
+
+## 2026-03-18 Campaign Daily-Status 时区修复
+
+- 已定位根因：
+  - SQLite / SQLModel 会把原本的 UTC aware 时间读回成 naive datetime；
+  - `campaign daily-status` 之前直接拿 `created_at.astimezone(local_timezone)` 做本地日期换算，跨日边界会把同一天完成态误判成前一天。
+- 已修复：
+  - `backend/app/services/campaign.py`
+    - 新增 UTC 归一与序列化 helper
+    - `daily-status` 比对前会先把 campaign log 时间按 UTC 归一，再换算调用方本地日期
+    - `profile / mastery / badges / daily-status` 中返回的时间字段统一输出带 `+00:00` 的 UTC ISO string
+  - `backend/tests/test_campaign_service.py`
+    - 补断言，锁住 `completed_at` 的 UTC ISO 输出口径
+- 已验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q`
+  - 结果：`9 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/ -q`
+  - 结果：`815 passed`
+
+## 2026-03-18 Prediction 测试 Warning 清理 + 文档同步
+
+- 已清理 `backend/tests/test_predictions.py` 中两类测试层 warning：
+  - `datetime.utcnow()` -> `datetime.now(timezone.utc)`
+  - `asyncio.get_event_loop().run_until_complete(...)` -> `asyncio.run(...)`
+- 已验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_predictions.py -q`
+  - 结果：`17 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/ -q`
+  - 结果：`815 passed`
+- 已同步文档口径：
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/reference/api.md`
+  - `README.md`
+  - `implement/README.md`
+  - `implement/18_next_session_gameplay_art_replay_plan.md`
+  - `implement/19_four_track_execution_plan.md`
+  - `implement/20_track_d_debate_arena_design_execution_plan.md`
+  - `implement/21_track_d_debate_arena_mvp_blueprint.md`

@@ -28,6 +28,8 @@ export interface CardUsageRecord {
   usedAt: string;
 }
 
+export type CardUsageInput = Omit<CardUsageRecord, 'cost'>;
+
 export interface ScenarioArchiveState {
   question?: string;
   sceneTheme?: string | null;
@@ -153,7 +155,7 @@ export function getCardCooldownRemaining(
   return Math.max(0, cooldown.cooldownRounds - (currentRound - cooldown.lastUsedRound));
 }
 
-export function applyCardUsage(scenarioId: string, usage: CardUsageRecord): ScenarioMeta {
+export function applyCardUsage(scenarioId: string, usage: CardUsageInput): ScenarioMeta {
   return updateScenarioMeta(scenarioId, (current) => {
     const rule = CARD_RULES[usage.cardId];
     const remaining = Math.max(0, current.director.remainingPoints - rule.cost);
@@ -173,7 +175,7 @@ export function applyCardUsage(scenarioId: string, usage: CardUsageRecord): Scen
         },
       },
       cards: {
-        usageLog: [...current.cards.usageLog, usage],
+        usageLog: [...current.cards.usageLog, { ...usage, cost: rule.cost }],
       },
       archive: {
         ...current.archive,

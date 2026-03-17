@@ -17,3 +17,11 @@ def test_backend_trigger_modes_follow_contract():
     for card_id, card_type in CARD_TYPES.items():
         expected_trigger = "auto" if contract_by_id[card_id]["auto_enabled"] else "manual"
         assert card_type["trigger"] == expected_trigger
+
+
+def test_backend_branching_bonus_follows_contract():
+    contract = load_gameplay_contract()
+    contract_by_id = {card["id"]: card for card in contract["cards"]}
+
+    for card_id, card_type in CARD_TYPES.items():
+        assert card_type["branching_bonus"] == contract_by_id[card_id].get("branching_bonus", 0)

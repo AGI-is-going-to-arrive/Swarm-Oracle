@@ -5,6 +5,18 @@ interface LocalizedText {
   en: string;
 }
 
+interface ContractCardUi {
+  requires_primary_agent: boolean;
+  requires_secondary_agent: boolean;
+  requires_source_branch: boolean;
+  placeholder: LocalizedText;
+}
+
+interface ContractPromptLines {
+  zh: string[];
+  en: string[];
+}
+
 interface ContractCard {
   id: string;
   icon: string;
@@ -18,6 +30,9 @@ interface ContractCard {
   manual_enabled: boolean;
   auto_enabled: boolean;
   min_round: number;
+  branching_bonus: number;
+  ui: ContractCardUi;
+  prompt_lines: ContractPromptLines;
 }
 
 interface ContractProfile {
@@ -57,6 +72,21 @@ export const CONTRACT_GAMEPLAY_CARD_DEFS = gameplayContract.cards.map((card) => 
   descriptionZh: card.descriptions.zh,
   descriptionEn: card.descriptions.en,
   animation: card.animation_key,
+  cost: card.cost,
+  cooldownRounds: card.cooldown_rounds,
+  autoCooldownRounds: card.auto_cooldown_rounds,
+  minRound: card.min_round,
+  triggerType: card.trigger_type,
+  manualEnabled: card.manual_enabled,
+  autoEnabled: card.auto_enabled,
+  branchingBonus: card.branching_bonus,
+  requiresPrimaryAgent: card.ui.requires_primary_agent,
+  requiresSecondaryAgent: card.ui.requires_secondary_agent,
+  requiresSourceBranch: card.ui.requires_source_branch,
+  placeholderZh: card.ui.placeholder.zh,
+  placeholderEn: card.ui.placeholder.en,
+  promptLinesZh: card.prompt_lines.zh,
+  promptLinesEn: card.prompt_lines.en,
 }));
 
 export const CONTRACT_GAMEPLAY_PROFILES = Object.fromEntries(

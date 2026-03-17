@@ -165,6 +165,7 @@ def test_daily_challenge_summary_prefers_backend_log_for_local_day():
     assert summary is not None
     assert summary["completed"] is True
     assert summary["scenario_id"] == scenario_id
+    assert summary["completed_at"].endswith("+00:00")
     assert summary["most_used_card"] == "public_hearing"
     assert summary["betting_hit"] is True
     assert summary["profile_resonance"] == "aligned"

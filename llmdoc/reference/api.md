@@ -63,6 +63,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `GET /api/campaign/profile/{user_id}/daily-status` 的边界行为：
 > - `200 OK`：返回该题材在调用方本地日期上的完成态；若当日没有完成记录，会返回 `completed = false`，而不是报错。
 > - `400 Bad Request`：`profile_id` 为空、`local_date` 非法，或 `timezone_offset_minutes` 无法构造本地时区。
+> - campaign log 时间在比对前会先按 UTC 归一；即使 SQLite 把时间读回成 naive datetime，也会按 UTC 解释后再换算调用方本地日期。
 
 > `CampaignProfileResponse` 当前额外包含：
 > - `last_daily_challenge_completed_at`
@@ -72,7 +73,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `CampaignDailyChallengeResponse` 当前包含：
 > - `completed`
 > - `scenario_id`
-> - `completed_at`
+> - `completed_at`（UTC ISO string）
 > - `most_used_card`
 > - `betting_hit`
 > - `profile_resonance`
@@ -109,7 +110,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `winner`
 > - `verdict_tone`
 >
-> `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳。
+> `POST /api/debate` 当前会在返回 live snapshot 后保留约 `5s` pre-roll，再启动后台阶段推进；这样前端 live 页能稳定出现下注窗口。
+>
+> `POST /api/debate/{id}/predict` 只在 `opening / crossfire / rebuttal` 阶段开放；进入 `closing / verdict` 后会返回 `400`。
+>
+> `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳；若 Debate 已进入 `ERROR` 终态，则返回 `500`，前端会直接显示终态错误。
 
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 

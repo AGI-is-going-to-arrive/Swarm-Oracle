@@ -1,7 +1,7 @@
 # SwarmOracle — 实现文档索引
 
 > 汇总自多个开发对话的所有项目文档  
-> 最后更新: 2026-03-17
+> 最后更新: 2026-03-18
 
 ---
 
@@ -26,9 +26,9 @@
 | 16 | — | **Phase 4 开源准备**: Weather 对象池(120) + 视口裁剪(40px) + ASSET_CREDITS 106 个 runtime + source 资产条目 + WorldScene/EndingScene 32 新测试 | Phase 4 实现 |
 | 17 | — | **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布无遮挡 | HUD 迁移 |
 | 18 | [下一轮玩法/美术/回放执行文档](18_next_session_gameplay_art_replay_plan.md) | 下一次对话可直接复用的执行 briefing：玩法系统、Vertex 生图、Theater 回放、验收标准；已同步本轮真实落地状态 | 当前会话 |
-| 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | 围绕 `Director Campaign / 玩法契约统一 / 稳定性与验证面 / AI 辩论竞技场 MVP` 的实现、测试、review、E2E 执行文档；已附本轮真实 skill 验证基线 | 当前会话 |
-| 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | AI 辩论竞技场 MVP 的完整开工文档：产品设计、美术素材、代码拆分、i18n、跨平台、测试、code review 与 E2E 方案 | 当前会话 |
-| 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | 面向 AI 辩论竞技场的产品设计、美术素材、代码开发、测试、code review 与 E2E 执行蓝图；覆盖 i18n、跨平台 Web 与 skill-based QA 路线 | 当前会话 |
+| 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | 四轨路线的执行与落地状态文档；已同步 `Track A` 最小闭环、`Track B2` shared contract 收口、`Track C` 工件基线，以及 `Track D Debate Arena` 已实现事实、测试与 E2E 工件 | 当前会话 |
+| 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | Debate Arena 的设计基线 + 2026-03-18 落地偏差记录；覆盖当前真实 API、前端拆分、i18n、跨平台、自动化钩子、测试与 E2E 工件 | 当前会话 |
+| 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | Debate Arena MVP 的产品/美术/代码蓝图及其已实现状态同步；包含 live/result、押注、分享、自动化钩子与现有 skill-based QA 工件 | 当前会话 |
 
 ---
 
@@ -40,8 +40,8 @@
 - ✅ 前端核心（InputView → SimulationView → BranchTree）
 - ✅ 蝴蝶效应干预功能（回溯 + 多点 + 模板）
 - ✅ ResultView 多结局对比
-- ✅ 后端主回归现为 **798 passed, 2 warnings**
-- ✅ 前端主回归现为 **155 passed (155)**（Vitest）
+- ✅ 后端主回归现为 **815 passed**
+- ✅ 前端主回归现为 **175 passed**（Vitest）
 - ✅ 中英双语 i18n
 - ✅ 实时 Agent 消息推送（per-agent 即时推送）
 - ✅ 用户可选推演轮数（滑块 3-40）
@@ -59,7 +59,7 @@
 - ✅ LLM 重试 + 指数退避 (P1-3)
 - ✅ Alembic 数据库迁移框架 (P1-4)
 - ✅ Prometheus 可观测性 (`/metrics`) (P3-9)
-- ✅ 前端测试框架 (Vitest) (P2-6) — 155 passed（覆盖状态管理、回放、截图、玩法卡、分享和页面自动化摘要）
+- ✅ 前端测试框架 (Vitest) (P2-6) — 175 passed（覆盖状态管理、回放、截图、玩法卡、分享和页面自动化摘要）
 - ✅ 批量 SQL 删除优化 (P2-7)
 - ✅ **Phase 2 推理可视化**: 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效 + 30 个语义场景主题（含 law/faith/generic 变体）
 - ✅ **Phase 3 游戏化打磨**: 标题画面 + 6种结局 + MiniMap + 竞猜面板 + 排行榜 + 截图/GIF导出
@@ -71,9 +71,9 @@
 - ✅ 前端代码分割优化（SimulationView 业务块已拆小）
 - ✅ Docker Compose 一键部署（已完成真实容器 smoke）
 - ✅ Director Campaign / 导演生涯最小闭环（A1 已落地，首页与结果页可见）
-- ◐ 玩法契约统一（B1 已落地：shared gameplay contract + 前后端接入；B2 彻底去重未完成）
+- ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
 - ✅ 12 个题材画像全量 E2E / 工件补齐（主 12 profile + 3 条 variant matrix + mobile 双证据）
-- ⬜ AI 辩论竞技场 MVP 设计与实现评估
+- ✅ AI 辩论竞技场 MVP（独立 Debate domain + `/api/debate` / `/ws/debate/{id}` + live/result 页 + 结构化押注 + share + automation hooks + desktop/mobile E2E）
 
 ### 已完成 Sprint
 - ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试

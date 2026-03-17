@@ -3,26 +3,25 @@
 > 目标：把以下四个方向扩展成可执行的实现、测试、review、E2E 文档，而不是停留在方向判断。  
 > 范围：`Director Campaign / 导演生涯`、玩法契约统一、稳定性与验证面、`AI 辩论竞技场 MVP`。  
 > 原则：不偏离项目初衷 `What-If 推演引擎 + Pixel Theater + 分支比较 + 下注/排行`，避免把产品拉成小游戏合集。  
-> 当前时间：2026-03-17
+> 当前时间：2026-03-18
 
 ---
 
 ## 0. 背景与结论
 
-### 0.1 2026-03-17 执行状态同步
+### 0.1 2026-03-18 执行状态同步
 
 按这份执行文档继续推进后，当前状态已经不是“纯规划”：
 
 - `Track A`
-  - 已完成 `A1`，并推进到一部分 `A2`
-  - 后端已有 `campaign finalize / profile / mastery / badges`
-  - 首页与结果页都能看到导演生涯进展
-  - 仍未完成 `A3`：daily challenge 还不是以后端 campaign 数据作为唯一真源
+  - 导演生涯最小闭环已落地，`campaign finalize / profile / mastery / badges / daily-status` 都已在真实代码中存在
+  - 首页与结果页都能看到导演生涯进展，并会把后端 `daily-status` 与本地缓存合并显示
+  - 仍然保留本地 `scenarioMeta` 作为缓存层，但主链路已经不是只靠前端本地状态
 
 - `Track B`
-  - 已完成 `B1`
-  - `shared/gameplay_contract.v1.json` 已落地，前后端都开始消费
-  - 仍未完成 `B2`：前端 legacy 常量还没有彻底删干净
+  - `B1` 已完成
+  - `B2` 也已收口：`shared/gameplay_contract.v1.json` 现在不仅覆盖卡牌规则/画像推荐，也覆盖 modal 输入契约、prompt 语义和后端 branching bonus
+  - 前后端不再各自维护第二份静态玩法卡事实源；保留下来的 `profile` heuristics / animation 表现属于派生实现层，不再算第二事实源
 
 - `Track C`
   - 主 12 profile 工件、mobile 双证据、`develop-web-game` 工件、variant matrix 都已补齐
@@ -32,8 +31,12 @@
     - `switchboard_forum_variant`
 
 - `Track D`
-  - 仍保持设计冻结
-  - 还没有进入代码实现
+  - 已不再处于“设计冻结”
+  - 已有独立 Debate domain：`backend/app/models/debate.py`、`backend/app/api/debate.py`、`backend/app/services/debate*.py`
+  - 前端已有 `DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
+  - 已有真实工件：`frontend/output/e2e/20260318-post-b2-debate-full/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
+
+后文保留的设计型条目主要作为归档设计基线；若与当前实现冲突，以本节同步状态为准。
 
 当前仓库已经具备一条可玩的基础主循环：
 
@@ -50,13 +53,13 @@
 1. `Track A`：先做 `Director Campaign / 导演生涯` 最小闭环。
 2. `Track B`：统一玩法契约，建立单一事实源。
 3. `Track C`：并行补稳定性和验证面。
-4. `Track D`：只保留一个贴主线的新大方向，先设计 `AI 辩论竞技场 MVP`，不立即扩散成多模式合集。
+4. `Track D`：当前已实现 MVP，后续重点转为文档收口、回归验证和增量迭代，而不是继续把产品扩成多模式合集。
 
 ---
 
 ## 1. 本轮真实验证基线
 
-本轮没有改业务代码，但已补了一轮真实验证，作为本执行文档的当前基线。
+本轮先完成了 `implement/` 收口与 Track B2 shared contract 去重，随后又补了 Track A `campaign daily-status` 时区修复、`test_predictions.py` warning 清理，并完成了一轮真实验证，作为本执行文档的当前基线。
 
 ### 1.1 单测 / 集成测试
 
@@ -647,6 +650,8 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ## 5. Track D — AI 辩论竞技场 MVP
 
+> 2026-03-18 状态：本节最初是“启动前计划”。当前 Debate Arena MVP 已实现，因此这里应按“已落地范围 + 后续增量”来阅读，而不是按“尚未开工”理解。
+
 ### 5.1 目标
 
 作为唯一保留的新大方向，设计一个最贴近现有主线的模式：
@@ -680,51 +685,53 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 - 人类实时插话
 - 辩论赛季
 
-### 5.4 后端建议
+### 5.4 当前已落地实现
 
-新增：
+- 后端
+  - `backend/app/models/debate.py`
+  - `backend/app/api/debate.py`
+  - `backend/app/services/debate.py`
+  - `backend/app/services/debate_prompts.py`
+  - `backend/app/services/debate_scoring.py`
+- 前端
+  - `frontend/src/pages/DebateArenaView.tsx`
+  - `frontend/src/pages/DebateResultView.tsx`
+  - `frontend/src/components/DebateStageRibbon.tsx`
+  - `frontend/src/components/DebateMomentumBar.tsx`
+  - `frontend/src/components/DebateScoreCard.tsx`
+  - `frontend/src/components/DebateBetModal.tsx`
+  - `frontend/src/components/DebateShareModal.tsx`
+  - `frontend/src/stores/debateStore.ts`
+  - `frontend/src/hooks/useDebateWS.ts`
+- 实际 API / 自动化链路
+  - `POST /api/debate`
+  - `GET /api/debate/{id}`
+  - `POST /api/debate/{id}/predict`
+  - `GET /api/debate/{id}/result`
+  - `/ws/debate/{id}`
+  - `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`
 
-- `backend/app/services/debate.py`
-- `backend/app/api/debate.py`
+### 5.5 当前已验证范围
 
-最小接口：
+- 后端测试
+  - `backend/tests/test_debate_service.py`
+  - `backend/tests/test_debate_api.py`
+- 前端测试
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+  - `frontend/src/pages/DebateResultView.test.tsx`
+  - `frontend/src/components/DebateBetModal.test.tsx`
+  - `frontend/src/components/DebateShareModal.test.tsx`
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+- E2E / skill 工件
+  - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - `frontend/output/web-game/20260317-debate-arena-signoff/`
+  - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
 
-- `POST /api/debate`
-- `GET /api/debate/{id}`
-- `POST /api/debate/{id}/predict`
+### 5.6 剩余增量方向
 
-也可以先复用现有 `scenario`，但不建议把 debate 逻辑直接塞进通用 scenario，避免主模拟引擎继续膨胀。
-
-### 5.5 前端建议
-
-新增：
-
-- `frontend/src/pages/DebateArenaView.tsx`
-- `frontend/src/components/DebateScoreCard.tsx`
-
-但视觉上仍沿用 Theater 语言，不另起一套设计系统。
-
-### 5.6 测试
-
-#### 单测
-
-- debate prompt/score parser
-- debate result summary
-
-#### E2E
-
-- 创建辩题
-- 进入 live debate
-- 下预测
-- 完成后结果页查看评分和胜方
-
-### 5.7 启动条件
-
-只有在 Track A/B/C 至少达到以下状态后才启动：
-
-- campaign finalize 已落地
-- 玩法契约单一事实源已建立
-- 12 profile matrix smoke 全绿
+- 保持 Debate live/result 与主 Theater 美术语言持续对齐
+- 如需继续扩充 replay、stage 切片回看或额外判词维度，应在现有独立 domain 内增量做，不要回塞通用 `scenario` 主引擎
+- Debate 现在不是“是否进入实现”的问题，而是“是否继续扩功能”的问题
 
 ---
 
@@ -757,10 +764,11 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### Milestone 4
 
-主题：`AI 辩论竞技场 MVP 设计冻结`
+主题：`AI 辩论竞技场 MVP 落地与回归`
 
-- 只做规格与最小 API/UI 设计
-- 评估是否进入实现
+- 独立 Debate domain 与 live/result 页面
+- 结构化押注 / 分享 / 自动化钩子
+- desktop/mobile Debate E2E 工件
 
 ---
 
@@ -785,7 +793,7 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### D. 新模式边界
 
-- debate arena 只在 Track A/B/C 达标后再进实现
+- debate arena 已实现，并保持为唯一新增模式
 - 不允许同时并行开多个新大模式
 
 ---
@@ -794,10 +802,10 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 按优先级：
 
-1. 先实现 Track A 的 `campaign finalize + profile mastery`
-2. 然后实现 Track B 的 `shared/gameplay_contract.v1.json`
-3. 并行把 Track C 的 12 profile E2E 覆盖补齐
-4. 暂不进入 Track D 的代码实现，只保留为下一阶段唯一候选方向
+1. 保持 Track A `campaign finalize / daily-status` 与首页真值链路持续回归全绿
+2. 继续收口 Track B / Track C 尾项，优先减少实现层重复和验证盲区，而不是继续扩玩法面
+3. Track D 如需继续扩功能，保持独立 debate domain，不回塞通用 `scenario` 主引擎
+4. 所有新增玩法 / 题材 / 辩题都先补自动化工件，再继续扩美术或交互
 
 ---
 
@@ -805,18 +813,31 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### 测试
 
-- 前端闭环单测：`30 passed`
-- 后端定向集成：`230 passed`
+- 前端全量回归：`175 passed`
+- 后端全量回归：`815 passed`
+- 本轮 B2 定向回归：
+  - 前端：`26 passed`
+  - 后端：`24 passed`
+- 本轮 Track A / warning 收口回归：
+  - `test_campaign_service.py / test_campaign_api.py`：`9 passed`
+  - `test_predictions.py`：`17 passed`
+- `frontend` 构建：通过
 
 ### E2E
 
-- matrix smoke：
-  - `frontend/output/e2e/20260317-four-track-smoke`
+- full 主链路：
+  - `frontend/output/e2e/20260318-post-b2-full/result.json`
+- Debate full：
+  - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+- Debate desktop smoke：
+  - `frontend/output/e2e/20260318-b2-debate-smoke/result.json`
 
 ### develop-web-game
 
 - `frontend/output/web-game/20260317-director-campaign-doc/shot-0.png`
 - `frontend/output/web-game/20260317-director-campaign-doc/state-0.json`
+- `frontend/output/web-game/20260318-b2-contract-smoke/shot-0.png`
+- `frontend/output/web-game/20260318-b2-contract-smoke/state-0.json`
 
 ### 交互式 QA
 

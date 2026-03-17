@@ -173,6 +173,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - `get_daily_challenge_summary(user_id, profile_id, local_date, timezone_offset_minutes)` — 返回指定题材在调用方本地日期上的 daily challenge 完成态
 - **数据写入**: 会更新 `DirectorProfile`、`ProfileMastery`，并写入不可变的 `ScenarioCampaignLog`
 - **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
+- **时区归一**: `daily-status` 查询现在会把 SQLite round-trip 回来的 naive UTC 时间先按 UTC 归一，再换算调用方本地日期，避免跨时区同日完成态误判
+- **时间序列化**: `profile / mastery / badges / daily-status` 响应里的时间字段统一输出带 `+00:00` 的 UTC ISO 字符串
 - **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
 - **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
 
@@ -185,6 +187,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction`
   - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
   - prediction 只支持 `winner` 与 `verdict_tone`
+  - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 辩风文案
+  - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
 
@@ -236,10 +240,10 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
-| `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态 |
+| `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态；内部会先把 SQLite round-trip 的 naive UTC 时间按 UTC 归一后再做本地日期换算 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
-> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
 
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
@@ -257,10 +261,10 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker |
+| `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options） |
-| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions） |
-| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`） |
+| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions）；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
+| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注 |
 
 ### `ws.py` — WebSocket路由
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
@@ -298,7 +302,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-后端本轮真实全量回归结果为 **798 passed, 2 warnings**；此外新增定向回归通过，覆盖 `test_campaign_api.py`、`test_campaign_service.py`、`test_gameplay_contract_sync.py`、`test_scene_selector.py`、`test_simulator_viz_integration.py` 与 `test_e2e_sample_matrix.py`。Track D 本轮新增的 `test_debate_api.py / test_debate_service.py` 已通过；campaign 空摘要修复对应的 `test_campaign_api.py / test_campaign_service.py` 也已重新验证。
+后端本轮真实全量回归结果为 **815 passed**。本轮又补跑了 `test_card_events.py / test_gameplay_contract_sync.py`（**24 passed**）、`test_campaign_service.py / test_campaign_api.py`（**9 passed**）和 `test_predictions.py`（**17 passed**）；分别覆盖 Track B2 shared contract 收口、campaign `daily-status` 时区归一修复与 prediction 测试 warning 清理。Track D 的 `test_debate_api.py / test_debate_service.py` 仍处于当前通过基线。
 
 覆盖重心：
 

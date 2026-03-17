@@ -45,6 +45,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_utc_datetime(value: datetime) -> datetime:
+    """SQLite can round-trip aware UTC timestamps back as naive datetimes."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return _normalize_utc_datetime(value).isoformat()
+
+
 def _normalize_archive_grade(archive_grade: str | None) -> str:
     normalized = (archive_grade or "C").strip().upper()
     if normalized not in VALID_ARCHIVE_GRADES:
@@ -207,10 +220,10 @@ def _build_profile_summary(
         "total_bets": profile.total_bets,
         "hit_bets": profile.hit_bets,
         "highest_archive_grade": profile.highest_archive_grade,
-        "created_at": profile.created_at.isoformat(),
-        "updated_at": profile.updated_at.isoformat(),
-        "last_daily_challenge_completed_at": (
-            last_daily_log.created_at.isoformat() if last_daily_log else None
+        "created_at": _serialize_datetime(profile.created_at),
+        "updated_at": _serialize_datetime(profile.updated_at),
+        "last_daily_challenge_completed_at": _serialize_datetime(
+            last_daily_log.created_at if last_daily_log else None
         ),
         "last_daily_challenge_profile_id": last_daily_log.profile_id if last_daily_log else None,
         "last_daily_challenge_scenario_id": last_daily_log.scenario_id if last_daily_log else None,
@@ -250,7 +263,7 @@ def _build_mastery_summary(mastery: ProfileMastery) -> dict[str, Any]:
         "level": mastery.level,
         "best_archive_grade": mastery.best_archive_grade,
         "favorite_card_id": mastery.favorite_card_id,
-        "updated_at": mastery.updated_at.isoformat(),
+        "updated_at": _serialize_datetime(mastery.updated_at),
         "next_level_score": next_level_score,
         "score_to_next_level": max(0, next_level_score - mastery.campaign_score),
     }
@@ -260,7 +273,7 @@ def _build_badge_summary(badge: DirectorBadgeUnlock) -> dict[str, Any]:
     return {
         "id": badge.id,
         "badge_id": badge.badge_id,
-        "unlocked_at": badge.unlocked_at.isoformat(),
+        "unlocked_at": _serialize_datetime(badge.unlocked_at),
         "source_profile_id": badge.source_profile_id,
         "source_scenario_id": badge.source_scenario_id,
     }
@@ -295,7 +308,7 @@ def _build_daily_challenge_summary(
         "timezone_offset_minutes": timezone_offset_minutes,
         "completed": completed,
         "scenario_id": log.scenario_id if log else None,
-        "completed_at": log.created_at.isoformat() if log else None,
+        "completed_at": _serialize_datetime(log.created_at if log else None),
         "most_used_card": log.most_used_card if log else None,
         "betting_hit": log.betting_hit if log else None,
         "profile_resonance": log.profile_resonance if log else None,
@@ -628,7 +641,8 @@ def get_daily_challenge_summary(
             (
                 log
                 for log in logs
-                if log.created_at.astimezone(local_timezone).date() == target_date
+                if _normalize_utc_datetime(log.created_at).astimezone(local_timezone).date()
+                == target_date
             ),
             None,
         )

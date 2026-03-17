@@ -72,6 +72,10 @@ export default function GameplayCardsModal({
     () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog),
     [gameplayProfile.id, meta.cards.usageLog],
   );
+  const defaultCardId = useMemo(
+    () => (CONTRACT_GAMEPLAY_CARD_DEFS[0]?.id ?? 'civilization_debate') as GameplayCardId,
+    [],
+  );
   const profileSignatureHooks = useMemo(
     () => getGameplayProfileSignatureHooks(gameplayProfile.id, isZh),
     [gameplayProfile.id, isZh],
@@ -88,11 +92,11 @@ export default function GameplayCardsModal({
     () => getDefaultGameplayTargetBranch(activeBranches),
     [activeBranches],
   );
-  const [cardId, setCardId] = useState<GameplayCardId>(recommendedCards[0] ?? 'civilization_debate');
+  const [cardId, setCardId] = useState<GameplayCardId>(recommendedCards[0] ?? defaultCardId);
   const [targetBranchId, setTargetBranchId] = useState(defaultTargetBranchId);
   const initialAgentSuggestion = useMemo(
-    () => getSuggestedGameplayAgents(recommendedCards[0] ?? 'civilization_debate', agents, gameplayProfile.id),
-    [agents, gameplayProfile.id, recommendedCards],
+    () => getSuggestedGameplayAgents(recommendedCards[0] ?? defaultCardId, agents, gameplayProfile.id),
+    [agents, defaultCardId, gameplayProfile.id, recommendedCards],
   );
   const [primaryAgentId, setPrimaryAgentId] = useState(initialAgentSuggestion.primaryAgentId);
   const [secondaryAgentId, setSecondaryAgentId] = useState(
@@ -145,8 +149,8 @@ export default function GameplayCardsModal({
   }, [scenarioId]);
 
   useEffect(() => {
-    setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? current));
-  }, [recommendedCards]);
+    setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? defaultCardId));
+  }, [defaultCardId, recommendedCards]);
 
   useEffect(() => {
     const suggestion = getSuggestedGameplayAgents(cardId, agents, gameplayProfile.id);
@@ -240,35 +244,11 @@ export default function GameplayCardsModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
-  const requiresPrimaryAgent = ['civilization_debate', 'spy_infiltrate', 'backchannel_pact', 'human_takeover', 'evacuation_order'].includes(cardId);
-  const requiresSecondAgent = cardId === 'civilization_debate' || cardId === 'backchannel_pact';
-  const requiresSourceBranch = cardId === 'spacetime_rift';
+  const requiresPrimaryAgent = cardDef.requiresPrimaryAgent;
+  const requiresSecondAgent = cardDef.requiresSecondaryAgent;
+  const requiresSourceBranch = cardDef.requiresSourceBranch;
   const isDisabled = readOnly || status === 'submitting' || status === 'success';
-
-  const placeholder = (() => {
-    switch (cardId) {
-      case 'civilization_debate':
-        return isZh ? '输入辩题，例如：算法应否拥有最终否决权？' : 'Enter the debate topic…';
-      case 'spy_infiltrate':
-        return isZh ? '输入隐藏议程，例如：暗中瓦解地方议会联盟。' : 'Enter the hidden agenda…';
-      case 'backchannel_pact':
-        return isZh ? '输入密约筹码，例如：以港口豁免换取暂时停火。' : 'Describe the off-book bargain or leverage being traded…';
-      case 'human_takeover':
-        return isZh ? '输入你要让该角色说的话…' : 'Write the line the user wants to inject…';
-      case 'spacetime_rift':
-        return isZh ? '输入另一条时间线泄漏的信号…' : 'Describe the leaked signal from another timeline…';
-      case 'mandate_surge':
-        return isZh ? '输入这波民意浪潮要求立刻发生什么…' : 'Describe what the sudden mandate wave is demanding…';
-      case 'evacuation_order':
-        return isZh ? '输入这道撤离、封锁或转运命令的优先级与代价…' : 'Describe the evacuation, lockdown, or transfer order and who gets prioritized…';
-      case 'public_hearing':
-        return isZh ? '输入这场公开听证必须摊开的证据、条款或代价…' : 'Describe the evidence, terms, or trade-offs the hearing must expose…';
-      case 'resource_triage':
-        return isZh ? '输入这轮资源分诊必须明确保住或限供的对象…' : 'Describe who must be protected first and who gets rationed in this triage…';
-      case 'forbidden_ritual':
-        return isZh ? '输入这次禁术、秘仪或例外条款要付出的代价…' : 'Describe the taboo act and the price the branch must pay for it…';
-    }
-  })();
+  const placeholder = isZh ? cardDef.placeholderZh : cardDef.placeholderEn;
 
   const handleSubmit = async () => {
     if (!targetBranch) {
@@ -347,7 +327,6 @@ export default function GameplayCardsModal({
           branchId: targetBranch.id,
           branchTitle: targetBranch.title,
           round: normalizedCurrentRound,
-          cost: 1,
           directive: customDirective,
           usedAt: new Date().toISOString(),
         }),

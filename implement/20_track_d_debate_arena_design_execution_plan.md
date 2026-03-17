@@ -1,9 +1,9 @@
 # SwarmOracle Track D — AI 辩论竞技场 MVP 设计与执行方案
 
-> 目标：把 `Track D` 从“只有方向”推进到“可以直接开工”的执行文档。  
-> 范围：产品设计、玩法规则、美术素材、代码开发拆分、i18n、跨平台约束、测试、code review、E2E。  
-> 原则：严格贴合项目初衷 `What-If 推演引擎 + Pixel Theater + 分支比较 + 下注/排行`，不把产品拉成独立电竞游戏。  
-> 当前时间：2026-03-17
+> 目标：保留 Debate Arena 的设计执行基线，并把当前真实实现、测试与 E2E 状态同步到同一份文档。
+> 范围：产品设计、玩法规则、美术素材、代码开发拆分、i18n、跨平台约束、测试、code review、E2E。
+> 原则：严格贴合项目初衷 `What-If 推演引擎 + Pixel Theater + 分支比较 + 下注/排行`，不把产品拉成独立电竞游戏。
+> 当前时间：2026-03-18
 
 ---
 
@@ -28,6 +28,45 @@
 - 多模式小游戏合集
 - 复杂赛季/ELO 平台
 - 需要大量新资产和全新 UI 系统的“第二产品”
+
+---
+
+## 0.1 2026-03-18 实现状态同步
+
+这份文档最初是“可直接开工”的设计文档。当前仓库状态已经进入实现态，后文未逐段改写的设计条目都应以本节为准解释。
+
+- 已实现的后端竖切
+  - `backend/app/models/debate.py`
+  - `backend/app/api/debate.py`
+  - `backend/app/services/debate.py`
+  - `backend/app/services/debate_prompts.py`
+  - `backend/app/services/debate_scoring.py`
+- 已实现的前端拆分
+  - `frontend/src/pages/DebateArenaView.tsx`
+  - `frontend/src/pages/DebateResultView.tsx`
+  - `frontend/src/components/DebateStageRibbon.tsx`
+  - `frontend/src/components/DebateMomentumBar.tsx`
+  - `frontend/src/components/DebateScoreCard.tsx`
+  - `frontend/src/components/DebateBetModal.tsx`
+  - `frontend/src/components/DebateShareModal.tsx`
+  - `frontend/src/stores/debateStore.ts`
+  - `frontend/src/hooks/useDebateWS.ts`
+  - `frontend/src/lib/debateLabels.ts`
+  - `frontend/src/lib/debateShare.ts`
+- 当前真实 API / 协议口径
+  - `POST /api/debate`：接收 `question` 与可选 `profile_hint`
+  - `GET /api/debate/{id}`
+  - `GET /api/debate/{id}/result`
+  - `POST /api/debate/{id}/predict`：接收 `kind / target_value / confidence / user_id / user_name`
+  - `WS /ws/debate/{id}`
+- 当前真实自动化钩子
+  - live/result 页已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`
+  - live 页会输出 `selected_phase / is_phase_locked / unlocked_phases / active_modal / modal_state / bet_window_open`
+- 当前真实测试与工件
+  - 后端：`backend/tests/test_debate_service.py`、`backend/tests/test_debate_api.py`
+  - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`
+  - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
 
 ---
 
@@ -326,17 +365,17 @@ backend/app/
 POST /api/debate
 {
   "question": "What if every city had to publish every emergency decision before execution?",
-  "language": "en",
-  "profile_id": "law",
-  "rounds": 4
+  "profile_hint": "law"
 }
 
 GET /api/debate/{id}
 
 POST /api/debate/{id}/predict
 {
-  "winner_pick": "pro",
+  "kind": "winner",
+  "target_value": "proposition",
   "confidence": 0.7,
+  "user_id": "director-demo",
   "user_name": "Arena QA"
 }
 ```
@@ -360,19 +399,21 @@ POST /api/debate/{id}/predict
 ```text
 frontend/src/
 ├── pages/
-│   └── DebateArenaView.tsx
+│   ├── DebateArenaView.tsx
+│   └── DebateResultView.tsx
 ├── components/
 │   ├── DebateScoreCard.tsx
-│   ├── DebatePredictionPanel.tsx
-│   ├── DebateTurnTimeline.tsx
-│   └── DebateVerdictCard.tsx
+│   ├── DebateMomentumBar.tsx
+│   ├── DebateStageRibbon.tsx
+│   ├── DebateBetModal.tsx
+│   └── DebateShareModal.tsx
 ├── stores/
 │   └── debateStore.ts
 ├── hooks/
 │   └── useDebateWS.ts
 ├── lib/
-│   ├── debateScore.ts
-│   └── debateTheme.ts
+│   ├── debateLabels.ts
+│   └── debateShare.ts
 └── game/
     └── automation.ts
 ```
@@ -391,22 +432,25 @@ frontend/src/
 ```js
 window.render_game_to_text = () => JSON.stringify({
   page: {
-    kind: "debate_arena",
+    kind: "debate",
     route: window.location.pathname,
     phase: "crossfire",
-    round: 2,
-    can_open_prediction: true,
-    can_view_results: false
+    selected_phase: "crossfire",
+    is_phase_locked: false,
+    unlocked_phases: ["opening", "crossfire"],
+    controls: {
+      can_open_prediction: true,
+      can_view_result: false,
+      active_modal: null
+    }
   },
   debate: {
-    question: "...",
-    profile_id: "law",
-    pro_score: 7,
-    con_score: 6,
-    judge_ready: false,
-    current_speaker: "pro",
-    visible_claims: 2,
-    visible_rebuttals: 1
+    motion: "...",
+    proposition: { score: 41 },
+    opposition: { score: 39 },
+    judge: { summary_ready: false },
+    visible_quotes: ["...", "..."],
+    bet_window_open: true
   }
 });
 
@@ -454,9 +498,9 @@ window.advanceTime = async (ms) => { ... };
   - 正反方角色分配正确
   - verdict 幂等
 
-- `test_debate_scoring.py`
-  - score breakdown 解析正确
-  - 非法 JSON / 文本 fallback 正确
+- `test_debate_api.py`
+  - create/get/result/predict 路径正确
+  - prediction 锁单与结果页读取正确
 
 前端：
 

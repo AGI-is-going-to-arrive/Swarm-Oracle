@@ -19,7 +19,31 @@
       "auto_enabled": true,
       "manual_enabled": true,
       "min_round": 3,
-      "auto_cooldown_rounds": 4
+      "auto_cooldown_rounds": 4,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": true,
+        "requires_secondary_agent": true,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入辩题，例如：算法应否拥有最终否决权？",
+          "en": "Enter the debate topic..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请在下一轮强制安排 {primary_agent} 与 {secondary_agent} 进行一场公开辩论，其余 agent 必须引用、反驳或放大这场辩论的观点。",
+          "辩题：{directive}",
+          "要求：让这场辩论改变后续讨论重心，并显式体现不同阵营的张力。",
+          "持续效果：后续轮次要继续围绕这场辩论产生结盟、裂痕、站队变化或新政策提案。"
+        ],
+        "en": [
+          "Force {primary_agent} and {secondary_agent} into a public debate in the next round.",
+          "Debate topic: {directive}",
+          "Other agents must quote, oppose, or amplify that debate and let it reshape the branch momentum.",
+          "Persistent effect: later rounds should keep reflecting the alliances, fractures, or policy shifts created by this debate."
+        ]
+      }
     },
     {
       "id": "spy_infiltrate",
@@ -39,7 +63,31 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 5
+      "auto_cooldown_rounds": 5,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": true,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入隐藏议程，例如：暗中瓦解地方议会联盟。",
+          "en": "Enter the hidden agenda..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让 {primary_agent} 在下一轮成为隐藏议程的间谍角色，但不要直接公开其身份。",
+          "隐藏任务：{directive}",
+          "要求：其他 agent 只能从措辞、立场偏移和策略建议里逐渐察觉异常。",
+          "持续效果：这次渗透必须改变信任结构、联盟判断或关键资源/情报流向，而不是只说一句可有可无的话。"
+        ],
+        "en": [
+          "Turn {primary_agent} into a covert infiltrator in the next round without openly revealing the identity.",
+          "Hidden mission: {directive}",
+          "Other agents should only detect the anomaly through rhetoric, stance drift, and suspicious strategy proposals.",
+          "Persistent effect: the infiltration must alter trust, coalitions, or resource/intel flows beyond a single line of dialogue."
+        ]
+      }
     },
     {
       "id": "backchannel_pact",
@@ -59,7 +107,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 2
+      "auto_cooldown_rounds": 2,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": true,
+        "requires_secondary_agent": true,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入密约筹码，例如：以港口豁免换取暂时停火。",
+          "en": "Describe the off-book bargain or leverage being traded..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让 {primary_agent} 与 {secondary_agent} 绕开公开议程，在下一轮私下达成一份暂不曝光的密约：{directive}",
+          "要求：明确双方各自交换了什么筹码、红线或保护承诺，不能只写成模糊的“秘密合作”。",
+          "持续效果：后续轮次要体现说法异常趋同、行动配合、外部阵营误判，或因密约泄漏引发新的裂痕。"
+        ],
+        "en": [
+          "Force {primary_agent} and {secondary_agent} to strike an off-book pact in the next round: {directive}",
+          "Spell out what leverage, protection, access, or silence each side trades instead of vague secret cooperation.",
+          "Persistent effect: later rounds should reflect suspicious alignment, coordinated moves, strategic blind spots, or fractures once the pact leaks."
+        ]
+      }
     },
     {
       "id": "human_takeover",
@@ -79,7 +149,31 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 1,
-      "auto_cooldown_rounds": 3
+      "auto_cooldown_rounds": 3,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": true,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入你要让该角色说的话...",
+          "en": "Write the line the user wants to inject..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请在下一轮把 {primary_agent} 的发言改为由用户直接接管，并把下面这段内容视为该角色的真实表态。",
+          "用户输入：{directive}",
+          "要求：其他 agent 必须把这段输入当作真实政治动作继续推演。",
+          "持续效果：这段接管发言要引发后续轮次中的再回应、策略修正、联盟变化或风险升级/缓和。"
+        ],
+        "en": [
+          "Let the user directly take over {primary_agent}'s next-round statement and treat the following as their authentic position.",
+          "User input: {directive}",
+          "All other agents must respond as if this was a real move by that character.",
+          "Persistent effect: the branch should continue reacting to this move in later rounds through strategy changes, alliances, or escalating tension."
+        ]
+      }
     },
     {
       "id": "spacetime_rift",
@@ -99,7 +193,29 @@
       "auto_enabled": true,
       "manual_enabled": true,
       "min_round": 4,
-      "auto_cooldown_rounds": 6
+      "auto_cooldown_rounds": 6,
+      "branching_bonus": 0.15,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": true,
+        "placeholder": {
+          "zh": "输入另一条时间线泄漏的信号...",
+          "en": "Describe the leaked signal from another timeline..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让来自另一条世界线的一条关键信息泄漏到当前分支：{directive}",
+          "要求：把它写成一个突然出现的证据、传闻或被截获的信号，并让当前讨论因此转向。",
+          "持续效果：该信息必须改变当前世界线的判断、优先级或风险感知，并在后续轮次持续产生余波。"
+        ],
+        "en": [
+          "Leak this signal from the other timeline into the current branch: {directive}",
+          "Present it as intercepted evidence, rumor, or a temporal anomaly that forces the branch discussion to pivot.",
+          "Persistent effect: the leak must keep reshaping the branch’s priorities or risk model in the rounds that follow."
+        ]
+      }
     },
     {
       "id": "mandate_surge",
@@ -119,7 +235,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 1
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这波民意浪潮要求立刻发生什么...",
+          "en": "Describe what the sudden mandate wave is demanding..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线突然遭遇一波公开且无法忽视的民意/合法性冲击：{directive}",
+          "要求：把它写成街头浪潮、请愿、罢工、神殿号召、殖民地集体请命或其他群众性信号，让所有 agent 都必须明确表态。",
+          "持续效果：后续轮次要继续体现这波冲击对联盟关系、政策优先级、执行正当性或风险感知的持续影响。"
+        ],
+        "en": [
+          "Hit the branch with a public legitimacy shock that no actor can ignore: {directive}",
+          "Frame it as a strike wave, petition, sacred uprising, colony-wide demand, or any mass signal that forces every agent to answer in public.",
+          "Persistent effect: later rounds should keep reflecting how this mandate reshapes alliances, priorities, and perceived legitimacy."
+        ]
+      }
     },
     {
       "id": "evacuation_order",
@@ -139,7 +277,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 1
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": true,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这道撤离、封锁或转运命令的优先级与代价...",
+          "en": "Describe the evacuation, lockdown, or transfer order and who gets prioritized..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让 {primary_agent} 在下一轮发布一项必须立刻执行的撤离、封锁或转运命令：{directive}",
+          "要求：明确谁先撤、谁被限留、哪些通道关闭或开辟、哪些物资与名额必须优先保障，不能只写“大家撤离”。",
+          "持续效果：后续轮次要继续体现秩序压力、失序风险、抛弃感、后勤拥堵或新结盟带来的余波。"
+        ],
+        "en": [
+          "Have {primary_agent} issue an evacuation, lockdown, or emergency transfer order that must take effect immediately: {directive}",
+          "Spell out who is prioritized, who gets left behind, which corridors close or open, and what resources or seats must be protected first.",
+          "Persistent effect: later rounds should keep showing the order’s logistical strain, abandonment pressure, disorder risk, or unexpected coalitions."
+        ]
+      }
     },
     {
       "id": "public_hearing",
@@ -159,7 +319,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 1
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这场公开听证必须摊开的证据、条款或代价...",
+          "en": "Describe the evidence, terms, or trade-offs the hearing must expose..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线立即进入一场无法跳过的公开听证：{directive}",
+          "要求：至少让三个不同立场/阵营拿出证据、条款、账本、代价或红线，不能只重复立场口号。",
+          "持续效果：后续轮次要继续引用这场听证暴露出的事实与责任链，并让联盟、优先级或信任结构发生变化。"
+        ],
+        "en": [
+          "Force the current branch into a public hearing that cannot be skipped: {directive}",
+          "At minimum, have three distinct camps surface evidence, terms, ledgers, costs, or red lines instead of repeating slogans.",
+          "Persistent effect: later rounds should keep citing what the hearing exposed and let it alter alliances, priorities, or trust."
+        ]
+      }
     },
     {
       "id": "resource_triage",
@@ -179,7 +361,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 1
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这轮资源分诊必须明确保住或限供的对象...",
+          "en": "Describe who must be protected first and who gets rationed in this triage..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线立刻进入一轮公开且残酷的资源分诊：{directive}",
+          "要求：明确谁先获得水、粮、药品、运力、氧气、算力或撤离资格，谁被限供、延后或牺牲，不能只给抽象口号。",
+          "持续效果：后续轮次要继续体现这次分诊造成的秩序压力、群体反应、联盟变化或生存代价。"
+        ],
+        "en": [
+          "Force the branch into a brutal open round of resource triage: {directive}",
+          "Spell out who receives water, food, medicine, transport, oxygen, compute, or evacuation priority first, and who is rationed, delayed, or sacrificed.",
+          "Persistent effect: later rounds should keep reflecting the triage’s social pressure, group reactions, alliance shifts, or survival cost."
+        ]
+      }
     },
     {
       "id": "forbidden_ritual",
@@ -199,7 +403,29 @@
       "auto_enabled": false,
       "manual_enabled": true,
       "min_round": 2,
-      "auto_cooldown_rounds": 2
+      "auto_cooldown_rounds": 2,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这次禁术、圣物或例外条款的代价与目标...",
+          "en": "Describe the forbidden rite, relic, or exception being invoked and its cost..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线立刻动用一项代价巨大、可能不可逆的禁术/秘仪/例外条款：{directive}",
+          "要求：明确这次举动要牺牲什么、冒犯哪条旧秩序、以及为什么各方仍被迫接受它，不能只写成抽象奇观。",
+          "持续效果：后续轮次必须持续体现禁术带来的代价、裂痕、反噬或新的依赖关系。"
+        ],
+        "en": [
+          "Force the branch to invoke a costly, possibly irreversible forbidden rite, relic, or taboo exception right now: {directive}",
+          "Spell out what is sacrificed, which prior order is violated, and why the actors still accept it instead of presenting it as abstract spectacle.",
+          "Persistent effect: later rounds must keep showing the rite’s cost, fractures, backlash, or new dependencies."
+        ]
+      }
     }
   ],
   "profiles": [

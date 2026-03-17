@@ -151,10 +151,10 @@
 
 ### 1.4 已通过验证
 
-- `cd frontend && npm test` → `155 passed (155)`
+- `cd frontend && npm test` → `175 passed`
 - `cd frontend && npm run build` → 通过
 - 后端当前全量通过：
-  - `cd backend && .venv/bin/python -m pytest tests/ -q` → `798 passed, 2 warnings`
+  - `cd backend && .venv/bin/python -m pytest tests/ -q` → `815 passed`
 
 ### 1.5 当前稳定样本库
 

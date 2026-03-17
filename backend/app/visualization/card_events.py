@@ -32,6 +32,7 @@ def _build_card_types() -> dict[str, dict[str, Any]]:
             "min_round": card["min_round"],
             "cooldown_rounds": card.get("auto_cooldown_rounds", card["cooldown_rounds"]),
             "animation": card["animation_key"],
+            "branching_bonus": card.get("branching_bonus", 0),
         }
 
     return result
@@ -78,18 +79,20 @@ def check_card_trigger(
     if not candidates:
         return None
 
-    # Weighted random — spacetime rift slightly more likely with multiple branches.
-    if "spacetime_rift" in candidates and branch_count >= 2:
-        if random.random() < 0.15:
-            return "spacetime_rift"
-        # Pre-check did not fire → remove from uniform pool to avoid
-        # double-counting (it already had its 15 % chance).
-        # BUT only remove if there are other candidates to pick from.
-        other_candidates = [c for c in candidates if c != "spacetime_rift"]
-        if other_candidates:
-            candidates = other_candidates
-        # else: keep spacetime_rift in pool so we don't return None
-        # when it's the only eligible card.
+    # Cards can optionally claim a multi-branch bonus chance before the
+    # uniform fallback pool is used. This keeps the trigger logic generic
+    # while allowing individual cards to bias toward branch-heavy states.
+    if branch_count >= 2:
+        for card_key in list(candidates):
+            bonus = CARD_TYPES[card_key].get("branching_bonus", 0)
+            if bonus <= 0:
+                continue
+            if random.random() < bonus:
+                return card_key
+
+            other_candidates = [candidate for candidate in candidates if candidate != card_key]
+            if other_candidates:
+                candidates = other_candidates
 
     return random.choice(candidates)
 
