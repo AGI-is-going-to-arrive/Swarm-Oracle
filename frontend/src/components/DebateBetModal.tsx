@@ -1,0 +1,127 @@
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import {
+  type DebatePredictionKind,
+  getDebateSideLabel,
+  getDebateVerdictToneLabel,
+} from '../lib/debateLabels';
+
+interface DebateBetModalProps {
+  loading?: boolean;
+  onClose: () => void;
+  onSubmit: (payload: { kind: DebatePredictionKind; targetValue: string; confidence: number }) => Promise<void>;
+}
+
+export function DebateBetModal({
+  loading = false,
+  onClose,
+  onSubmit,
+}: DebateBetModalProps) {
+  const { t } = useTranslation();
+  const [kind, setKind] = useState<DebatePredictionKind>('winner');
+  const [targetValue, setTargetValue] = useState<string>('proposition');
+  const [confidence, setConfidence] = useState<number>(0.7);
+  const [error, setError] = useState<string>('');
+
+  const options = kind === 'winner'
+    ? ['proposition', 'opposition']
+    : ['order', 'balance', 'rupture'];
+
+  const handleSubmit = async () => {
+    setError('');
+    try {
+      await onSubmit({ kind, targetValue, confidence });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : t('debate.bet_error'));
+    }
+  };
+
+  return (
+    <div className="debate-modal-overlay" onClick={onClose}>
+      <div className="debate-modal" onClick={(event) => event.stopPropagation()}>
+        <header className="debate-modal__header">
+          <h2>{t('debate.bet_title')}</h2>
+          <button type="button" className="debate-modal__close" onClick={onClose}>
+            ✕
+          </button>
+        </header>
+
+        <div className="debate-modal__body">
+          <div className="debate-modal__group">
+            <span className="debate-modal__label">{t('debate.bet_kind')}</span>
+            <div className="debate-modal__options">
+              <button
+                type="button"
+                className={`mode-btn ${kind === 'winner' ? 'mode-btn--active' : ''}`}
+                onClick={() => {
+                  setKind('winner');
+                  setTargetValue('proposition');
+                }}
+              >
+                {t('debate.bet_kind_winner')}
+              </button>
+              <button
+                type="button"
+                className={`mode-btn ${kind === 'verdict_tone' ? 'mode-btn--active' : ''}`}
+                onClick={() => {
+                  setKind('verdict_tone');
+                  setTargetValue('order');
+                }}
+              >
+                {t('debate.bet_kind_tone')}
+              </button>
+            </div>
+          </div>
+
+          <div className="debate-modal__group">
+            <span className="debate-modal__label">{t('debate.bet_target')}</span>
+            <div className="debate-modal__options">
+              {options.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={`mode-btn ${targetValue === option ? 'mode-btn--active' : ''}`}
+                  onClick={() => setTargetValue(option)}
+                >
+                  {kind === 'winner'
+                    ? getDebateSideLabel(t, option as 'proposition' | 'opposition' | 'judge')
+                    : getDebateVerdictToneLabel(t, option)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="debate-modal__group">
+            <label className="debate-modal__label" htmlFor="debate-confidence">
+              {t('debate.bet_confidence')}
+            </label>
+            <input
+              id="debate-confidence"
+              type="range"
+              min={0.1}
+              max={1}
+              step={0.1}
+              value={confidence}
+              onChange={(event) => setConfidence(Number(event.target.value))}
+            />
+            <strong className="debate-modal__confidence">{Math.round(confidence * 100)}%</strong>
+          </div>
+
+          {error && (
+            <p className="debate-modal__error" role="alert">{error}</p>
+          )}
+        </div>
+
+        <footer className="debate-modal__footer">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+            {loading ? t('debate.bet_submitting') : t('debate.bet_submit')}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}

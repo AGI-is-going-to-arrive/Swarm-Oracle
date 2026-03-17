@@ -1,0 +1,10 @@
+{
+  "preset": "debate_badge_proposition",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-17T12:15:15.807Z",
+  "output": "public/assets/ui/generated/debate_badge_proposition.png",
+  "prompt": "Pixel-art badge icon for the proposition side in a retro strategy debate arena, same visual language as SwarmOracle theater, warm brass and parchment crest, upward civic torch motif, compact emblem, no text, transparent-friendly, no photorealism."
+}

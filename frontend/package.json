@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "generate:ui-assets": "node scripts/generate-ui-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e:predict": "node scripts/e2e-automation.mjs predict",

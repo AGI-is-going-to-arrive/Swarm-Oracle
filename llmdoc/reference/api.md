@@ -55,7 +55,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `409 Conflict`：该场景已被另一位导演档案结算。
 > - `400 Bad Request`：场景尚未完成，或 `user_id / profile_id / archive_grade / profile_resonance / bet_count` 等请求字段不合法。
 >
-> `GET /api/campaign/profile/{user_id}`、`/mastery`、`/badges`、`/daily-status` 在导演档案不存在时统一返回 `404 Not Found`。
+> `GET /api/campaign/profile/{user_id}`、`/mastery`、`/badges`、`/daily-status` 在导演档案不存在时不再返回 `404 Not Found`：
+> - `profile` 返回空摘要（`total_runs = 0`）
+> - `mastery / badges` 返回空数组
+> - `daily-status` 返回 `completed = false`
 >
 > `GET /api/campaign/profile/{user_id}/daily-status` 的边界行为：
 > - `200 OK`：返回该题材在调用方本地日期上的完成态；若当日没有完成记录，会返回 `completed = false`，而不是报错。
@@ -86,6 +89,28 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/health/test` | POST | 使用可选 BYOK 参数测试 LLM 连通性 |
 | `GET /metrics` | GET | Prometheus 指标端点 (P3-9) — 请求计数/延迟/活跃模拟 |
 
+### Debate Arena (Track D)
+
+| 端点 | 方法 | 描述 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law"}` | DebateSnapshot |
+| `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot |
+| `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload |
+| `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "..."}` | DebatePrediction |
+
+> Debate 当前已按真实实现固定为 5 个阶段：
+> - `opening`
+> - `crossfire`
+> - `rebuttal`
+> - `closing`
+> - `verdict`
+>
+> prediction 只支持两类：
+> - `winner`
+> - `verdict_tone`
+>
+> `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳。
+
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 
 ## WebSocket API
@@ -110,3 +135,15 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `batch_intervention_applied` | `{interventions[]}` | S→C | 批量干预已应用 |
 | `simulation_done` | — | S→C | 模拟完成 |
 | `simulation_error` | `{error}` | S→C | 模拟出错 |
+
+### Debate Arena WebSocket
+
+连接: `ws://localhost:18927/ws/debate/{debate_id}`
+
+| type | data | 方向 | 描述 |
+|------|------|------|------|
+| `status` | `{status, error?}` | S→C | Debate 状态变更 |
+| `agent_speak` | `{id, sequence, phase, speaker_side, speaker_name, content, score_delta, created_at?}` | S→C | 单条阶段发言 |
+| `debate_phase_change` | `{phase}` | S→C | 当前阶段切换 |
+| `debate_score_update` | `{score: {proposition, opposition}, audience_meter}` | S→C | 势能 / 分数更新 |
+| `debate_verdict` | DebateResultSummary | S→C | 最终 verdict 就绪 |

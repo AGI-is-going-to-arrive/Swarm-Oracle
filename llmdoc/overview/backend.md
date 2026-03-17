@@ -25,6 +25,8 @@ api/scenarios.py ──► api/schemas.py (Pydantic 模型)
     │
 api/campaign.py ──► services/campaign.py (Track A / Phase A1 + A3 daily-status)
     │
+api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.py (Track D)
+    │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联)
@@ -34,6 +36,7 @@ main.py ──► 汇总挂载 scenarios / interventions / social / campaign / p
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
+models/debate.py ──► Debate, DebateTurn, DebatePrediction
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 config.py ──► pydantic-settings (Settings singleton)
 alembic/ ──► Alembic 数据库迁移框架
@@ -170,7 +173,20 @@ alembic/ ──► Alembic 数据库迁移框架
   - `get_daily_challenge_summary(user_id, profile_id, local_date, timezone_offset_minutes)` — 返回指定题材在调用方本地日期上的 daily challenge 完成态
 - **数据写入**: 会更新 `DirectorProfile`、`ProfileMastery`，并写入不可变的 `ScenarioCampaignLog`
 - **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
+- **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
 - **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
+
+### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
+- **职责**:
+  - `debate.py`：独立 Debate Arena 运行、turn 落库、verdict 结算、prediction 评分
+  - `debate_prompts.py`：deterministic motion / cast / turn 文案与题材→场景映射
+  - `debate_scoring.py`：winner / verdict tone / breakdown / phase delta 规划
+- **关键行为**:
+  - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction`
+  - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
+  - prediction 只支持 `winner` 与 `verdict_tone`
+  - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
+  - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
 - **职责**: LLM 对比用户预测与模拟实际结果，给出 0-100 准确度评分
@@ -223,6 +239,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。
+
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
 - 总模拟超时 `MAX_ROUNDS × 180s`
@@ -236,9 +254,24 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 |
 
+### `debate.py` — Debate Arena 路由 (Track D **NEW**)
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker |
+| `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options） |
+| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions） |
+| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`） |
+
 ### `ws.py` — WebSocket路由
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
 - **事件类型**: `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
+- `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
+- **事件类型**:
+  - `status`
+  - `agent_speak`
+  - `debate_phase_change`
+  - `debate_score_update`
+  - `debate_verdict`
 
 ## 模型层 (`app/models/`)
 
@@ -257,12 +290,15 @@ alembic/ ──► Alembic 数据库迁移框架
 | `ProfileMastery` | id, director_profile_id, profile_id, runs, challenge_completions, signature_hits, aligned_hits, campaign_score, level | belongs_to: DirectorProfile |
 | `DirectorBadgeUnlock` | id, director_profile_id, badge_id, unlocked_at, source_profile_id, source_scenario_id | belongs_to: DirectorProfile |
 | `ScenarioCampaignLog` | id, scenario_id, director_profile_id, profile_id, archive_grade, profile_resonance, campaign_score_delta | 每局结算不可变日志 |
+| `Debate` | id, question, motion, language, profile_id, scene_theme, status, current_phase, winner, verdict_tone | Debate Arena 主体 |
+| `DebateTurn` | id, debate_id, sequence, phase, speaker_side, speaker_name, content, score_delta_json | belongs_to: Debate |
+| `DebatePrediction` | id, debate_id, kind, target_value, confidence, score | belongs_to: Debate |
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
 ## 测试覆盖
 
-后端本轮真实全量回归结果为 **798 passed, 2 warnings**；此外新增定向回归通过，覆盖 `test_campaign_api.py`、`test_campaign_service.py`、`test_gameplay_contract_sync.py`、`test_scene_selector.py`、`test_simulator_viz_integration.py` 与 `test_e2e_sample_matrix.py`。
+后端本轮真实全量回归结果为 **798 passed, 2 warnings**；此外新增定向回归通过，覆盖 `test_campaign_api.py`、`test_campaign_service.py`、`test_gameplay_contract_sync.py`、`test_scene_selector.py`、`test_simulator_viz_integration.py` 与 `test_e2e_sample_matrix.py`。Track D 本轮新增的 `test_debate_api.py / test_debate_service.py` 已通过；campaign 空摘要修复对应的 `test_campaign_api.py / test_campaign_service.py` 也已重新验证。
 
 覆盖重心：
 

@@ -49,6 +49,16 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function resolveFrontendPath(inputPath) {
+  if (path.isAbsolute(inputPath)) return inputPath;
+
+  const normalized = inputPath.replace(/^\.\/+/, "");
+  if (normalized === "frontend" || normalized.startsWith(`frontend${path.sep}`) || normalized.startsWith("frontend/")) {
+    return path.join(path.dirname(FRONTEND_ROOT), normalized);
+  }
+  return path.join(FRONTEND_ROOT, normalized);
+}
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -66,10 +76,10 @@ function parseArgs(argv) {
       args.baseUrl = next;
       i += 1;
     } else if (arg === "--sample-matrix" && next) {
-      args.sampleMatrixPath = path.resolve(next);
+      args.sampleMatrixPath = resolveFrontendPath(next);
       i += 1;
     } else if (arg === "--output-dir" && next) {
-      args.outputDir = path.resolve(next);
+      args.outputDir = resolveFrontendPath(next);
       i += 1;
     } else if (arg === "--themes" && next) {
       args.themes = next.split(",").map((theme) => theme.trim()).filter(Boolean);

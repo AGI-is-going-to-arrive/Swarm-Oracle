@@ -15,6 +15,16 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function resolveFrontendPath(inputPath) {
+  if (path.isAbsolute(inputPath)) return inputPath;
+
+  const normalized = inputPath.replace(/^\.\/+/, "");
+  if (normalized === "frontend" || normalized.startsWith(`frontend${path.sep}`) || normalized.startsWith("frontend/")) {
+    return path.join(path.dirname(FRONTEND_ROOT), normalized);
+  }
+  return path.join(FRONTEND_ROOT, normalized);
+}
+
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -50,7 +60,7 @@ function parseArgs(argv) {
       args.question = next;
       i += 1;
     } else if (arg === "--output-dir" && next) {
-      args.outputDir = next;
+      args.outputDir = resolveFrontendPath(next);
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;

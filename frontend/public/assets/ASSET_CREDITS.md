@@ -4,7 +4,7 @@ Most visual assets in this project are **AI-generated** pixel art, created speci
 SwarmOracle 2.0. A small set of in-repo timeline marker SVG icons is handcrafted for UI readability.
 They are original works and may be freely used under the project license.
 
-## Asset Inventory (106 runtime + source assets)
+## Asset Inventory (Debate Arena D4 additions included)
 
 ### Characters (25 files, 18 preloaded at runtime)
 
@@ -38,7 +38,7 @@ They are original works and may be freely used under the project license.
 
 > Runtime note: `BootScene` currently preloads the 18 core sprite keys used by the live Theater. The remaining character sheets stay in the repository as style-consistent source variants for future expansion.
 
-### Scenes (27)
+### Scenes
 
 | File | Description |
 |------|-------------|
@@ -49,6 +49,9 @@ They are original works and may be freely used under the project license.
 | `switchboard_forum.png` | Rotating leadership and institutional switchboard chamber |
 | `surveillance_megacity.png` | Platform-governed surveillance metropolis |
 | `civic_chamber.png` | Democratic assembly chamber |
+| `debate_arena_civic.png` | Debate Arena civic tribunal stage |
+| `debate_arena_judicial.png` | Debate Arena judicial chamber |
+| `debate_arena_forum.png` | Debate Arena high-conflict forum |
 | `law_court.png` | Constitutional court chamber |
 | `law_court_variant.png` | Grand tribunal law scene variant |
 | `imperial_forum.png` | Imperial senate forum |
@@ -92,7 +95,7 @@ They are original works and may be freely used under the project license.
 | `particle_star.png` | Star particle |
 | `particle_smoke.png` | Smoke particle |
 
-### UI (34)
+### UI
 
 | File | Description |
 |------|-------------|
@@ -110,6 +113,13 @@ They are original works and may be freely used under the project license.
 | `generated/gameplay_panel.png` | Gameplay tactics decorative panel |
 | `generated/archive_seal.png` | Archive seal illustration |
 | `generated/daily_challenge_badge.png` | Legacy daily challenge badge |
+| `generated/debate_stage_banner.png` | Debate stage ceremonial banner |
+| `generated/debate_verdict_panel.png` | Debate verdict decorative panel |
+| `generated/debate_score_meter.png` | Debate score meter frame |
+| `generated/debate_badge_proposition.png` | Debate proposition badge |
+| `generated/debate_badge_opposition.png` | Debate opposition badge |
+| `generated/debate_badge_judge.png` | Debate judge badge |
+| `generated/debate_quote_frame.png` | Debate quote frame |
 | `generated/gameplay_crest.png` | Gameplay crest illustration |
 | `generated/gameplay_card_frame_governance.png` | Governance gameplay card frame |
 | `generated/gameplay_card_frame_war.png` | War gameplay card frame |
@@ -145,5 +155,5 @@ They are original works and may be freely used under the project license.
 
 ---
 
-**Generation**: Raster art assets were created using AI image generation tools. Latest generated UI assets were produced with Gemini image-preview models. Timeline marker SVGs were handcrafted in-repo.
+**Generation**: Raster art assets were created using AI image generation tools. Latest generated UI and Debate Arena assets were produced with Gemini image-preview models, with per-file `.meta.json` provenance next to generated PNGs when available. Timeline marker SVGs were handcrafted in-repo.
 **License**: Same as the project license (see root `LICENSE`).

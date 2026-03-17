@@ -6,6 +6,7 @@ import type {
   Scenario, Branch, StoryData, AgentInfo, AgentGroupDetail,
   InterventionPayload, InterventionResponse,
   PredictionInfo, LeaderboardEntry,
+  DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary,
 } from '../types';
 
@@ -101,6 +102,47 @@ export async function createScenario(
       ...(llmModel && { llm_model: llmModel }),
       ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
       ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
+    }),
+  });
+}
+
+/** POST /api/debate — create a new Debate Arena match */
+export async function createDebate(
+  question: string,
+  profileHint?: string,
+): Promise<DebateSnapshot> {
+  return request('/debate', {
+    method: 'POST',
+    body: JSON.stringify({
+      question,
+      ...(profileHint ? { profile_hint: profileHint } : {}),
+    }),
+  });
+}
+
+/** GET /api/debate/:id — get debate live snapshot */
+export async function getDebate(id: string): Promise<DebateSnapshot> {
+  return request(`/debate/${id}`);
+}
+
+/** GET /api/debate/:id/result — get finalized debate result */
+export async function getDebateResult(id: string): Promise<DebateResultPayload> {
+  return request(`/debate/${id}/result`);
+}
+
+/** POST /api/debate/:id/predict — submit a debate bet */
+export async function predictDebate(
+  debateId: string,
+  payload: DebatePredictionRequest,
+): Promise<DebatePrediction> {
+  return request(`/debate/${debateId}/predict`, {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: payload.kind,
+      target_value: payload.targetValue,
+      confidence: payload.confidence,
+      ...(payload.userId ? { user_id: payload.userId } : {}),
+      ...(payload.userName ? { user_name: payload.userName } : {}),
     }),
   });
 }

@@ -1,0 +1,10 @@
+{
+  "preset": "debate_arena_civic",
+  "model": "gemini-3-pro-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-17T12:12:51.632Z",
+  "output": "public/assets/scenes/debate_arena_civic.png",
+  "prompt": "Pixel-art civic debate arena for a retro strategy theater interface, same visual language as SwarmOracle Game Boy Color inspired political simulation, ceremonial public assembly floor, two opposed speaker podiums, central judge dais, warm ivory stone, muted magenta and brass civic banners, clear center stage for UI overlays, cinematic yet grid-friendly, 16:9 composition, no text, no photorealism, no neon esports style."
+}

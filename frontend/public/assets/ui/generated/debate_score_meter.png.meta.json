@@ -1,0 +1,10 @@
+{
+  "preset": "debate_score_meter",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-17T12:13:43.572Z",
+  "output": "public/assets/ui/generated/debate_score_meter.png",
+  "prompt": "Pixel-art score meter frame for a retro strategy debate arena UI, same visual language as SwarmOracle theater, symmetrical dual-lane gauge, brass rails, parchment backing, muted berry-violet civic accents, empty transparent center for dynamic bars, no text, no photorealism."
+}

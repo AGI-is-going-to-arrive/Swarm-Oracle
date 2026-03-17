@@ -60,6 +60,16 @@ export const GAMEPLAY_BADGE_ASSETS = {
 
 export const GAMEPLAY_PANEL_ASSET = '/assets/ui/generated/gameplay_panel.png';
 
+export const DEBATE_UI_ASSETS = {
+  stageBanner: '/assets/ui/generated/debate_stage_banner.png',
+  verdictPanel: '/assets/ui/generated/debate_verdict_panel.png',
+  scoreMeter: '/assets/ui/generated/debate_score_meter.png',
+  badgeProposition: '/assets/ui/generated/debate_badge_proposition.png',
+  badgeOpposition: '/assets/ui/generated/debate_badge_opposition.png',
+  badgeJudge: '/assets/ui/generated/debate_badge_judge.png',
+  quoteFrame: '/assets/ui/generated/debate_quote_frame.png',
+} as const;
+
 export const ASSET_MANIFEST = {
   runtime: {
     characters: CHARACTER_SPRITE_KEYS,
@@ -122,6 +132,9 @@ export const ASSET_MANIFEST = {
       'ancient_empire',
       'arcane_sanctum',
       'civic_chamber',
+      'debate_arena_civic',
+      'debate_arena_forum',
+      'debate_arena_judicial',
       'desert_outpost',
       'dynastic_palace',
       'ecology_wasteland',
@@ -171,6 +184,13 @@ export const ASSET_MANIFEST = {
         'badge_recommended',
         'daily_challenge_badge',
         'daily_challenge_panel',
+        'debate_badge_judge',
+        'debate_badge_opposition',
+        'debate_badge_proposition',
+        'debate_quote_frame',
+        'debate_score_meter',
+        'debate_stage_banner',
+        'debate_verdict_panel',
         'gameplay_card_frame_ecology',
         'gameplay_card_frame_empire',
         'gameplay_card_frame_faith',
@@ -317,6 +337,54 @@ export const THEME_REGISTRY = {
       '审议',
       '选举',
       '民主',
+    ],
+  },
+  debate_arena_civic: {
+    labelZh: '公民辩论剧场',
+    labelEn: 'Civic Debate Arena',
+    assetPath: '/assets/scenes/debate_arena_civic.png',
+    profileId: 'governance',
+    keywords: [
+      'civic debate',
+      'citizens debate',
+      'public policy showdown',
+      'democratic duel',
+      '公民辩论',
+      '治理对决',
+      '民主程序',
+      '政策辩局',
+    ],
+  },
+  debate_arena_judicial: {
+    labelZh: '法政辩论法庭',
+    labelEn: 'Judicial Debate Arena',
+    assetPath: '/assets/scenes/debate_arena_judicial.png',
+    profileId: 'law',
+    keywords: [
+      'judicial debate',
+      'legal showdown',
+      'procedural duel',
+      'constitutional debate',
+      '法庭辩论',
+      '程序对决',
+      '宪政辩论',
+      '紧急否决',
+    ],
+  },
+  debate_arena_forum: {
+    labelZh: '高冲突议场',
+    labelEn: 'Conflict Forum Arena',
+    assetPath: '/assets/scenes/debate_arena_forum.png',
+    profileId: 'generic',
+    keywords: [
+      'arena forum',
+      'public forum clash',
+      'oversight duel',
+      'committee arena',
+      '议场对决',
+      '审查议场',
+      '制度博弈',
+      '委员会对抗',
     ],
   },
   law_court: {

@@ -217,6 +217,25 @@ def _build_profile_summary(
     }
 
 
+def _build_empty_profile_summary(user_id: str) -> dict[str, Any]:
+    now = _now().isoformat()
+    return {
+        "id": user_id,
+        "user_id": user_id,
+        "user_name": "匿名导演",
+        "total_runs": 0,
+        "completed_challenges": 0,
+        "total_bets": 0,
+        "hit_bets": 0,
+        "highest_archive_grade": None,
+        "created_at": now,
+        "updated_at": now,
+        "last_daily_challenge_completed_at": None,
+        "last_daily_challenge_profile_id": None,
+        "last_daily_challenge_scenario_id": None,
+    }
+
+
 def _build_mastery_summary(mastery: ProfileMastery) -> dict[str, Any]:
     next_level_score = _next_level_score(mastery.level)
     return {
@@ -533,7 +552,7 @@ def get_campaign_profile_summary(user_id: str) -> dict[str, Any] | None:
     with Session(engine) as session:
         profile = _get_director_profile(session, user_id)
         if profile is None:
-            return None
+            return _build_empty_profile_summary(user_id)
         last_daily_log = _get_last_daily_challenge_log(session, profile.id)
         return _build_profile_summary(profile, last_daily_log=last_daily_log)
 
@@ -544,7 +563,7 @@ def list_campaign_mastery_summaries(user_id: str) -> list[dict[str, Any]] | None
     with Session(engine) as session:
         profile = _get_director_profile(session, user_id)
         if profile is None:
-            return None
+            return []
 
         masteries = list(session.exec(
             select(ProfileMastery)
@@ -560,7 +579,7 @@ def list_campaign_badge_summaries(user_id: str) -> list[dict[str, Any]] | None:
     with Session(engine) as session:
         profile = _get_director_profile(session, user_id)
         if profile is None:
-            return None
+            return []
         badges = _list_badge_unlocks(session, profile.id)
         return [_build_badge_summary(badge) for badge in badges]
 
@@ -584,7 +603,14 @@ def get_daily_challenge_summary(
     with Session(engine) as session:
         profile = _get_director_profile(session, user_id)
         if profile is None:
-            return None
+            return _build_daily_challenge_summary(
+                user_id=user_id,
+                profile_id=normalized_profile_id,
+                local_date=target_date.isoformat(),
+                timezone_offset_minutes=timezone_offset_minutes,
+                completed=False,
+                log=None,
+            )
 
         logs = list(
             session.exec(

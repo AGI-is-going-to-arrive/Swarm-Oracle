@@ -1,0 +1,10 @@
+{
+  "preset": "debate_arena_judicial",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-17T12:15:11.440Z",
+  "output": "public/assets/scenes/debate_arena_judicial.png",
+  "prompt": "Pixel-art judicial debate arena for a retro strategy theater interface, same visual language as SwarmOracle Game Boy Color inspired political simulation, grand tribunal bench, opposing legal podiums, stacked archive walls, restrained ivory stone, aged brass and violet procedural accents, readable center stage for UI overlays, cinematic but grid-friendly, 16:9 composition, no text, no photorealism, no modern TV studio look."
+}

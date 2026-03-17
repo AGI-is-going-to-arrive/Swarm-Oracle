@@ -185,6 +185,113 @@ export interface StoryBranch {
   fork_reason: string;
 }
 
+// ── Debate Arena ───────────────────────────────────────
+
+export type DebatePhase =
+  | 'opening'
+  | 'crossfire'
+  | 'rebuttal'
+  | 'closing'
+  | 'verdict';
+
+export type DebateSide = 'proposition' | 'opposition' | 'judge';
+export type DebatePredictionKind = 'winner' | 'verdict_tone';
+export type DebateVerdictTone = 'order' | 'balance' | 'rupture';
+
+export interface DebateParticipant {
+  side: DebateSide;
+  name: string;
+  role: string;
+}
+
+export interface DebateScore {
+  proposition: number;
+  opposition: number;
+  audience_meter: number;
+}
+
+export interface DebateTurn {
+  id: string;
+  sequence: number;
+  phase: DebatePhase;
+  speaker_side: DebateSide;
+  speaker_name: string;
+  content: string;
+  score_delta?: Partial<Record<'proposition' | 'opposition', number>> | null;
+  created_at: string;
+}
+
+export interface DebatePrediction {
+  id: string;
+  debate_id: string;
+  kind: DebatePredictionKind;
+  target_value: string;
+  confidence: number;
+  user_id: string;
+  user_name: string;
+  score: number | null;
+  score_reason: string | null;
+  created_at: string;
+  scored_at: string | null;
+}
+
+export interface DebateResultSummary {
+  winner: 'proposition' | 'opposition';
+  verdict_tone: DebateVerdictTone;
+  score: DebateScore;
+  breakdown: Record<string, { proposition: number; opposition: number }>;
+  best_argument: string;
+  best_rebuttal: string;
+  judge_summary: string;
+  replay: Array<{
+    phase: DebatePhase;
+    speaker_side: DebateSide;
+    speaker_name: string;
+    quote: string;
+  }>;
+}
+
+export interface DebateSnapshot {
+  id: string;
+  question: string;
+  motion: string;
+  language: 'zh' | 'en';
+  profile_id: string;
+  scene_theme: string;
+  status: 'queued' | 'live' | 'done' | 'error';
+  current_phase: DebatePhase;
+  created_at: string;
+  updated_at: string;
+  participants: DebateParticipant[];
+  score: DebateScore;
+  turns: DebateTurn[];
+  available_prediction_options: {
+    winner: string[];
+    verdict_tone: string[];
+  };
+  result_ready: boolean;
+}
+
+export interface DebateResultPayload extends DebateSnapshot {
+  result: DebateResultSummary;
+  predictions: DebatePrediction[];
+}
+
+export interface DebatePredictionRequest {
+  kind: DebatePredictionKind;
+  targetValue: string;
+  confidence: number;
+  userId?: string;
+  userName?: string;
+}
+
+export type DebateWSEvent =
+  | { type: 'status'; data: { status: DebateSnapshot['status']; error?: string } }
+  | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
+  | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
+  | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
+  | { type: 'debate_verdict'; data: DebateResultSummary };
+
 // ── WebSocket Events ─────────────────────────────────────
 
 export type WSEvent =

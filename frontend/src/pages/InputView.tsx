@@ -8,6 +8,7 @@ import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import {
+  createDebate,
   getCampaignBadges,
   getCampaignDailyChallengeStatus,
   getCampaignMastery,
@@ -300,6 +301,23 @@ export function InputView() {
     }
   };
 
+  const launchDebate = async ({
+    nextQuestion,
+  }: {
+    nextQuestion: string;
+  }) => {
+    const trimmed = nextQuestion.trim();
+    if (!trimmed || isSubmitting) return;
+
+    setIsSubmitting(true);
+    try {
+      const debate = await createDebate(trimmed);
+      navigate(`/debate/${debate.id}`);
+    } catch {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (q: string) => {
     await launchSimulation({
       nextQuestion: q,
@@ -365,7 +383,7 @@ export function InputView() {
         branchCount: 0,
       },
       null,
-      {
+          {
         route: window.location.pathname,
         kind: 'input',
         question: question || null,
@@ -395,6 +413,10 @@ export function InputView() {
           badge_count: campaignBadges.length,
           daily_profile_level: dailyMastery?.level ?? 0,
           daily_profile_score_to_next_level: dailyMastery?.score_to_next_level ?? null,
+        },
+        controls: {
+          can_start_simulation: Boolean(question.trim()) && !isSubmitting,
+          can_start_debate: Boolean(question.trim()) && !isSubmitting,
         },
       },
     );
@@ -774,14 +796,24 @@ export function InputView() {
             )}
           </div>
 
-          <button
-            className="btn btn-primary btn--submit"
-            onClick={() => handleSubmit(question)}
-            disabled={!question.trim() || isSubmitting}
-          >
-            {isSubmitting ? <span className="spinner spinner--sm" /> : null}
-            {t('home.submit')}
-          </button>
+          <div className="input-view__submit-row">
+            <button
+              className="btn btn-primary btn--submit"
+              onClick={() => handleSubmit(question)}
+              disabled={!question.trim() || isSubmitting}
+            >
+              {isSubmitting ? <span className="spinner spinner--sm" /> : null}
+              {t('home.submit')}
+            </button>
+            <button
+              className="btn btn-ghost btn--submit"
+              onClick={() => void launchDebate({ nextQuestion: question })}
+              disabled={!question.trim() || isSubmitting}
+            >
+              {t('debate.entry_cta')}
+            </button>
+          </div>
+          <p className="input-view__debate-hint">{t('debate.entry_hint')}</p>
           {submitError && !isSubmitting && (
             <span className="byok-test-error" role="alert">{submitError}</span>
           )}

@@ -1,0 +1,10 @@
+{
+  "preset": "debate_verdict_panel",
+  "model": "gemini-3.1-flash-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-17T12:13:11.155Z",
+  "output": "public/assets/ui/generated/debate_verdict_panel.png",
+  "prompt": "Pixel-art verdict panel for a retro strategy debate result screen, same visual language as SwarmOracle Game Boy Color inspired theater UI, layered ivory paper, brass frame, muted magenta judicial wax seal, centered empty content area, elegant but readable, no text, no photorealism, no esports HUD look."
+}

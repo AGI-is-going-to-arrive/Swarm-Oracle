@@ -22,6 +22,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案 |
 | Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；题面与副标题都支持 `zh/en`，首页会把后端 `campaign daily-status` 真值与本地缓存合并显示完成态、已用卡数、下注态与题材回响反馈 |
 | Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章，首页会读取题材 mastery 与当日 challenge 真值 |
+| Debate Arena (Track D) | 已落地独立 Debate domain：`/api/debate` + `/ws/debate/{id}` 后端竖切、首页 `Debate Arena` 入口、`/debate/:id` live 页、`/debate/:id/result` 结果页、结构化押注（`winner / verdict_tone`）、`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()` 自动化钩子；当前先用 deterministic 5 阶段辩论脚本打通 MVP 闭环，不继续塞胖通用 scenario 引擎 |
 | Generic Quick Start | 首页 generic 题材现有 3 条 `switchboard_forum` 题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard） |
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
@@ -48,14 +49,14 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Theater Bubble Bugfix (3.0-D) | 剧场气泡冻结修复 — `visualization_enabled` 参数透传后端 + 增量气泡分发竞态条件修复（fallback synth init）+ Scenario hydration 恢复 Theater 模式 + completed replay 自动跳过 `TitleScene` 回到 `WorldScene` |
 | Theater Stability Hardening (3.0-E) | 剧场稳定性加固 — simulator 将数值/文本 stance 统一归一化到可视化坐标，避免中文立场词在 Theater 链路中触发类型错误 |
 | Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；Simulation 页面新增 `page.replay_state`、`page.warmup`、`page.controls.capture_mode/can_capture_modal`，并通过 `capture_game_screenshot(panel|canvas|modal)` 提供显式截图模式；前端同时提供 `e2e:matrix / e2e:variants / e2e:corners / e2e:full` 一键回归入口，`e2e-suite.mjs` 会在输出目录落盘 `browser-launch.json`，记录本次实际采用的浏览器启动 profile；当前固定样本为 15 条，变体样本为 3 条；历史 `scenario_id` 缺失或 `scene_theme` 与当前 `select_scene(question)` 漂移时，suite 会按 theme runtime fallback 重建样本。Track C 最新主工件位于 `frontend/output/e2e/20260317-track-c/{matrix,corners,mobile,variants}/` |
-| Semantic Scene Pool | Pixel Theater 现有 30 个语义场景背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换；法庭 / 信仰 / generic 题面已补进对应的 variant 场景 |
+| Semantic Scene Pool | Pixel Theater 现有 33 个语义场景背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换；原有法庭 / 信仰 / generic 变体仍保留，Track D 另补 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张辩论专用背景 |
 | Theater Replay Director | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 直接嵌回 Theater 面板内，显示 `fork/card/bet/result` marker |
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
-| Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板 |
-| Theme Registry & Asset Manifest | 前端已把 30 个 Theater 场景主题、关键词、题材画像归属，以及玩法 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；12 类画像都有独立 gameplay card frame，generic 现使用 `gameplay_card_frame_generic`，不再拿 `gameplay_panel` 充当卡框 |
-| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现维护 106 个 runtime + source 资产条目（其中 18 张角色贴图会在 Theater 运行期预载） |
+| Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame，并为新 PNG 落盘 `.meta.json` provenance |
+| Theme Registry & Asset Manifest | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 / 辩论 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；Track D 的 `DEBATE_UI_ASSETS` 也走同一套 registry |
+| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现已同步到 Debate Arena 新资产；新生成图统一补同名 `.meta.json`（`preset/model/provider/source/source_url/generated_at/output/prompt`） |
 | i18n | 中英文支持 |
 
 ## 架构
@@ -102,8 +103,8 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 ### Testing
 | 工具 | 覆盖 |
 |------|------|
-| pytest + pytest-asyncio | 本轮已验证后端全量回归 **798 passed, 2 warnings**；最近定向回归包含 `test_campaign_service.py / test_campaign_api.py / test_scene_selector.py / test_gameplay_contract_sync.py` 共 **151 passed**；Track C 的 `test_scene_selector.py / test_e2e_sample_matrix.py` 另有 **146 passed** |
-| Vitest + jsdom | 本轮已验证前端全量回归 **155 passed (155)**，覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；最近两组定向回归分别为 **37 passed**（daily challenge / InputView / ResultView / PredictionModal / gameplay contract）和 **21 passed**（PhaserGame / replay / SimulationView / useScreenCapture） |
+| pytest + pytest-asyncio | 本轮已验证后端全量回归 **798 passed, 2 warnings**；最近定向回归包含 `test_campaign_service.py / test_campaign_api.py / test_scene_selector.py / test_gameplay_contract_sync.py` 共 **151 passed**；Track C 的 `test_scene_selector.py / test_e2e_sample_matrix.py` 另有 **146 passed**；Track D / Debate Arena 本轮新增 `test_debate_service.py / test_debate_api.py`，连同 campaign 空摘要修复回归一并通过 |
+| Vitest + jsdom | 本轮已验证前端全量回归 **155 passed (155)**，覆盖状态管理、回放、截图、玩法卡、场景推断和页面自动化摘要；最近两组定向回归分别为 **37 passed**（daily challenge / InputView / ResultView / PredictionModal / gameplay contract）和 **21 passed**（PhaserGame / replay / SimulationView / useScreenCapture）；Track D / Debate Arena 本轮新增 `debateStore / DebateArenaView / DebateResultView` 定向回归，并与首页入口/Simulation 关键路径一起复核通过 |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 
@@ -122,11 +123,13 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 │   │   │   ├── interventions.py # 干预路由 (P0-1)
 │   │   │   ├── social.py       # 社交媒体文案路由 (P0-1)
 │   │   │   ├── predictions.py   # 预测/排行榜 API (P3-B)
+│   │   │   ├── debate.py        # Debate Arena 路由 (Track D)
 │   │   │   └── ws.py            # WebSocket 路由
 │   │   ├── models/
 │   │   │   ├── __init__.py      # init_db, model re-exports
 │   │   │   ├── database.py      # SQLModel 模型定义
 │   │   │   ├── agent_group.py   # 分层分组模型 (P3-A)
+│   │   │   ├── debate.py        # Debate Arena 模型 (Track D)
 │   │   │   └── predictions.py   # 预测/排行榜模型 (P3-B)
 │   │   └── services/
 │   │       ├── simulator.py     # 核心模拟引擎
@@ -135,6 +138,9 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 │   │       ├── parser.py        # 问题解析
 │   │       ├── narrator.py      # 叙事生成
 │   │       ├── vector_store.py  # ChromaDB 向量记忆 L2
+│   │       ├── debate.py        # Debate Arena 运行与结算 (Track D)
+│   │       ├── debate_prompts.py # Debate 文案/场景映射 (Track D)
+│   │       ├── debate_scoring.py # Debate 评分与 verdict 规划 (Track D)
 │   │       ├── scoring.py       # 预测评分 (P3-B)
 │   │       └── lang_detect.py   # 语言检测 + 指令生成 (P9)
 │   ├── visualization/          # 像素化可视化映射层 (Phase 1)
@@ -155,10 +161,10 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 │   │   ├── App.tsx              # 路由入口
 │   │   ├── main.tsx             # ReactDOM 挂载
 │   │   ├── types.ts             # 全局类型定义
-│   │   ├── pages/               # 5 页面 (InputView, SimulationView, ResultView, HistoryView, LeaderboardView)
-│   │   ├── components/          # 9 组件
-│   │   ├── stores/              # simulationStore (Zustand)
-│   │   ├── hooks/               # useSimulationWS
+│   │   ├── pages/               # 7 页面 (含 DebateArenaView, DebateResultView)
+│   │   ├── components/          # UI 组件 + Debate 组件
+│   │   ├── stores/              # simulationStore / debateStore (Zustand)
+│   │   ├── hooks/               # useSimulationWS / useDebateWS
 │   │   ├── api/                 # HTTP 客户端
 │   │   ├── i18n/                # 国际化
 │   │   ├── animations/          # GSAP 动画

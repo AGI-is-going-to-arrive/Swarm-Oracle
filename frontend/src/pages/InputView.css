@@ -585,6 +585,22 @@
   overflow-y: hidden;
 }
 
+.input-view__submit-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.input-view__debate-hint {
+  margin-top: -10px;
+  max-width: 560px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .btn--submit {
   height: 48px;
   padding: 0 40px;
@@ -682,6 +698,14 @@
   .mode-options {
     flex-wrap: wrap;
     justify-content: center;
+  }
+
+  .input-view__submit-row {
+    flex-direction: column;
+  }
+
+  .input-view__submit-row .btn {
+    width: 100%;
   }
 }
 

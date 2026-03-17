@@ -133,3 +133,30 @@ def test_daily_status_endpoint_returns_backend_truth_for_today(client: TestClien
     assert data["completed"] is True
     assert data["scenario_id"] == scenario_id
     assert data["most_used_card"] == "public_hearing"
+
+
+def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient):
+    profile = client.get("/api/campaign/profile/fresh-director")
+    assert profile.status_code == 200
+    assert profile.json()["user_id"] == "fresh-director"
+    assert profile.json()["total_runs"] == 0
+
+    mastery = client.get("/api/campaign/profile/fresh-director/mastery")
+    assert mastery.status_code == 200
+    assert mastery.json() == []
+
+    badges = client.get("/api/campaign/profile/fresh-director/badges")
+    assert badges.status_code == 200
+    assert badges.json() == []
+
+    local_date = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    daily = client.get(
+        "/api/campaign/profile/fresh-director/daily-status",
+        params={
+            "profile_id": "governance",
+            "local_date": local_date,
+            "timezone_offset_minutes": -480,
+        },
+    )
+    assert daily.status_code == 200
+    assert daily.json()["completed"] is False

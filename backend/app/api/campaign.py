@@ -150,24 +150,18 @@ class CampaignFinalizeResponse(BaseModel):
 @router.get("/profile/{user_id}", response_model=CampaignProfileResponse)
 async def get_profile(user_id: str) -> CampaignProfileResponse:
     profile = get_campaign_profile_summary(user_id)
-    if profile is None:
-        raise HTTPException(404, "Campaign profile not found")
     return CampaignProfileResponse(**profile)
 
 
 @router.get("/profile/{user_id}/mastery", response_model=list[CampaignMasteryResponse])
 async def get_mastery(user_id: str) -> list[CampaignMasteryResponse]:
     masteries = list_campaign_mastery_summaries(user_id)
-    if masteries is None:
-        raise HTTPException(404, "Campaign profile not found")
     return [CampaignMasteryResponse(**mastery) for mastery in masteries]
 
 
 @router.get("/profile/{user_id}/badges", response_model=list[CampaignBadgeResponse])
 async def get_badges(user_id: str) -> list[CampaignBadgeResponse]:
     badges = list_campaign_badge_summaries(user_id)
-    if badges is None:
-        raise HTTPException(404, "Campaign profile not found")
     return [CampaignBadgeResponse(**badge) for badge in badges]
 
 
@@ -191,8 +185,6 @@ async def get_daily_status(
     except CampaignError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    if summary is None:
-        raise HTTPException(404, "Campaign profile not found")
     return CampaignDailyChallengeResponse(**summary)
 
 

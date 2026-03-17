@@ -218,6 +218,174 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
 - `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
 
+## 2026-03-17 Track D / Phase D1
+
+- 已按 `implement/21_track_d_debate_arena_mvp_blueprint.md` 开始独立 Debate domain 竖切，不把逻辑继续塞进通用 `scenario` 链路。
+- 当前新增后端骨架：
+  - `backend/app/models/debate.py`
+  - `backend/app/services/debate_prompts.py`
+  - `backend/app/services/debate_scoring.py`
+  - `backend/app/services/debate.py`
+  - `backend/app/api/debate.py`
+  - 对应测试 `backend/tests/test_debate_service.py` / `backend/tests/test_debate_api.py`
+- 本轮 D1 设计取向：
+  - 先用 deterministic 文案 + 评分计划打通 create/get/result/predict/WS，避免首版被外部 LLM 稳定性拖垮。
+  - i18n 从第一刀进入协议层：按输入问题自动判 `zh/en`，turn/judge_summary/score_reason 跟随语言。
+  - 美术/主题暂不新增资源，优先复用当前 Theater 风格场景：`law_court_variant / civic_chamber / switchboard_forum_variant / faith_temple_variant / imperial_forum / war_command`。
+  - 这能先覆盖更多题材，同时避免 Debate Arena 视觉风格偏离现有 Pixel Theater。
+- 待下一步验证：
+  - 后端定向 pytest
+  - API/WS 事件字段是否与前端 D2 预期一致
+  - 是否继续推进前端 `DebateArenaView / DebateResultView / debateStore`
+
+### 2026-03-17 D1 Validation
+
+- 后端新增定向测试已通过：
+  - `cd backend && .venv/bin/python -m pytest tests/test_debate_service.py -q`
+  - `cd backend && .venv/bin/python -m pytest tests/test_debate_api.py -q`
+- 主应用 smoke 也通过：
+  - `cd backend && .venv/bin/python -m pytest tests/test_api.py -k 'test_root or test_health' -q`
+- 当前 D1 结果：
+  - 已具备 `POST /api/debate`
+  - 已具备 `GET /api/debate/{id}`
+  - 已具备 `GET /api/debate/{id}/result`
+  - 已具备 `POST /api/debate/{id}/predict`
+  - 已具备 `WS /ws/debate/{id}`
+  - 背景执行为 deterministic 5 phase debate，支持 `winner / verdict_tone` 两类结构化押注，结果会自动评分已提交 prediction
+- 当前未做：
+  - 前端 `DebateArenaView / DebateResultView / debateStore`
+  - Debate 专属素材生成与前端接线
+  - desktop/mobile Debate E2E
+
+## 2026-03-17 Track D / Phase D2-D3
+
+- 已完成前端 Debate Arena 最小闭环：
+  - 路由：
+    - `frontend/src/App.tsx`
+    - `/debate/:id`
+    - `/debate/:id/result`
+  - 首页入口：
+    - `frontend/src/pages/InputView.tsx`
+    - `frontend/src/pages/InputView.css`
+    - 现已新增 `Start Debate Arena / 进入辩论竞技场` 次入口，不替换原 simulation 主入口
+  - API / 类型 / store / hook：
+    - `frontend/src/types.ts`
+    - `frontend/src/api/client.ts`
+    - `frontend/src/stores/debateStore.ts`
+    - `frontend/src/hooks/useDebateWS.ts`
+  - 页面与组件：
+    - `frontend/src/pages/DebateArenaView.tsx`
+    - `frontend/src/pages/DebateResultView.tsx`
+    - `frontend/src/pages/DebateArena.css`
+    - `frontend/src/components/DebateStageRibbon.tsx`
+    - `frontend/src/components/DebateMomentumBar.tsx`
+    - `frontend/src/components/DebateScoreCard.tsx`
+    - `frontend/src/components/DebateBetModal.tsx`
+    - `frontend/src/components/DebateShareModal.tsx`
+    - `frontend/src/lib/debateLabels.ts`
+    - `frontend/src/lib/debateShare.ts`
+- 关键实现取向：
+  - Debate live/result 暂不硬塞进 Phaser，先用 DOM 舞台复用现有 Theater 场景图、GBC 色调和仪式感面板，保证跨平台和首版稳定性。
+  - `render_game_to_text()`、`advanceTime(ms)`、`capture_game_screenshot()` 已接到 Debate live/result 页面，便于后续 E2E / Playwright 自动化。
+  - i18n 已补齐 Debate 文案到 `frontend/src/i18n/locales/en.json` / `zh.json`，避免新页面再写硬编码串语言。
+  - 主题/美术暂时优先复用当前场景池，不新增风格冲突的素材；Track D 当前更适合先验证玩法与适配，再决定是否补 debate 专属资产。
+
+## 2026-03-17 Validation — Frontend + Smoke
+
+- 前端类型检查通过：
+  - `cd frontend && npm exec -- tsc --noEmit`
+- 前端定向测试通过：
+  - `cd frontend && npm test -- --run src/stores/debateStore.test.ts src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/debateStore.test.ts src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx`
+- 前端构建通过：
+  - `cd frontend && npm run build`
+- 后端定向测试仍通过：
+  - `cd backend && .venv/bin/python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q`
+- 真实浏览器 smoke：
+  - 已启动本地后端 `127.0.0.1:18927` 与前端 `127.0.0.1:18928`
+  - Desktop：首页输入问题 -> `Start Debate Arena` -> 进入 `/debate/:id` 成功，live 页能显示 motion / phase / momentum / panel / result CTA
+  - Mobile viewport `390x844`：同一路径下首屏仍可读到舞台标题、阶段条、势能条与主按钮
+  - Result：`/debate/:id/result` 可显示 winner / score breakdown / replay digest / share modal
+
+## Residual Risks
+
+- Debate live 当前后台生成较快，前端通过本地 `auto reveal` 做阶段揭示；后续若要更强“现场感”，可考虑在服务端事件节奏上增加可配置延迟或流式生成。
+- Debate 专属美术仍未补新素材；现在依赖现有 Theater 场景池，风格一致但题材表现还不算专门化。
+- 首页仍会因 campaign profile 的 404 打控制台资源错误；这是现有系统的旧行为，不是 Debate 新增问题。
+
+## 2026-03-17 Track D / Phase D4
+
+- 已补 Debate 专属资产生成链路：
+  - `frontend/scripts/generate-ui-assets.mjs`
+  - `frontend/package.json` 新增 `generate:ui-assets`
+  - 新 preset：
+    - `debate_arena_civic`
+    - `debate_arena_judicial`
+    - `debate_arena_forum`
+    - `debate_stage_banner`
+    - `debate_verdict_panel`
+    - `debate_score_meter`
+    - `debate_badge_proposition`
+    - `debate_badge_opposition`
+    - `debate_badge_judge`
+    - `debate_quote_frame`
+- 已使用 Gemini 图像模型生成并落盘：
+  - `frontend/public/assets/scenes/debate_arena_*.png`
+  - `frontend/public/assets/ui/generated/debate_*.png`
+- 已为新生成文件补 sidecar provenance：
+  - 同名 `.meta.json`
+  - 字段现包含 `preset/model/provider/source/source_url/generated_at/output/prompt`
+- 已补 front-end 接线：
+  - `frontend/src/lib/themeRegistry.ts` 新增 `debate_arena_*` theme 和 `DEBATE_UI_ASSETS`
+  - `backend/app/services/debate_prompts.py` 已把 debate profile 映射改为 Debate 专属 scene id
+  - `frontend/src/pages/DebateArenaView.tsx`
+  - `frontend/src/pages/DebateResultView.tsx`
+  - `frontend/src/components/DebateScoreCard.tsx`
+  - `frontend/src/components/DebateMomentumBar.tsx`
+  - `frontend/src/pages/DebateArena.css`
+- 已补 credits：
+  - `frontend/public/assets/ASSET_CREDITS.md`
+
+## 2026-03-17 D4 Validation
+
+- 后端 debate 测试通过：
+  - `cd backend && .venv/bin/python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q`
+- 前端类型 / 测试 / 构建通过：
+  - `cd frontend && npm exec -- tsc --noEmit`
+  - `cd frontend && npm test -- --run src/stores/debateStore.test.ts src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx`
+  - `cd frontend && npm run build`
+- 真实浏览器 smoke：
+  - desktop：首页 -> Debate live -> result -> share modal 成功
+  - mobile viewport `390x844`：result 首屏仍能读到 verdict hero、scoreline、按钮和分数卡；live 首屏可见 stage ribbon、momentum 和主按钮
+
+## Remaining Nice-to-Haves
+
+- 若继续提升 D4 质量，可补：
+  - Debate 专属 screenshot baseline 到 `frontend/output/e2e/debate-*`
+  - 生成资产的批量重试/断点续跑能力（当前 TLS `ECONNRESET` 仍需人工重跑）
+  - 将旧的 `.meta.json` 统一补齐到新 provenance schema
+
+## 2026-03-17 Cleanup Fixes
+
+- 已修复首页 campaign 404 噪声：
+  - `backend/app/services/campaign.py`
+  - `backend/app/api/campaign.py`
+  - 无 profile 时现在返回空摘要 / 空 mastery / 空 badges / `completed=false` 的 daily-status
+  - 新增 API 回归：
+    - `backend/tests/test_campaign_api.py`
+- 已修复 E2E 脚本对 `frontend/output/...` 参数的路径归一化：
+  - `frontend/scripts/e2e-suite.mjs`
+  - `frontend/scripts/e2e-automation.mjs`
+  - 现在从 `frontend` 包目录执行时，传 `frontend/output/...` 不会再误落到 `frontend/frontend/output/...`
+- 额外验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
+  - `cd frontend && node scripts/e2e-automation.mjs health --url http://127.0.0.1:18928 --output-dir frontend/output/e2e/path-fix-check --headless`
+  - 浏览器实测首页加载不再出现 campaign profile 404 控制台报错
+
+## Left Untouched
+
+- `frontend/frontend/` 目录下已有历史工件仍保留，未自动删除，避免误删用户现有产物。当前修复只保证后续新工件不再错误写入这个嵌套路径。
+
 ## 2026-03-17 Track A3 + B2 继续推进
 
 - 已补 `Track A3`：
