@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyCardUsage,
   canUseCard,
+  clearBranchCommitment,
+  ensureScenarioObjectives,
   getCardCooldownRemaining,
   loadScenarioMeta,
+  setBranchCommitment,
 } from './scenarioMeta';
 
 describe('scenarioMeta gameplay card rules', () => {
@@ -97,5 +100,59 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(next.cards.usageLog.at(-1)?.cardId).toBe('evacuation_order');
     expect(getCardCooldownRemaining(next, 'evacuation_order', 1)).toBe(1);
     expect(canUseCard(next, 'evacuation_order', 2)).toEqual({ ok: true });
+  });
+
+  it('hydrates new director-goal and commitment defaults for old local state', () => {
+    const scenarioId = 'scenario-defaults';
+    const meta = loadScenarioMeta(scenarioId);
+
+    expect(meta.objectives.goals).toEqual([]);
+    expect(meta.commitment.active).toBe(false);
+    expect(meta.archive.objectiveCompletedCount).toBeUndefined();
+  });
+
+  it('stores and clears branch commitment state', () => {
+    const scenarioId = 'scenario-commitment';
+    const committed = setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    });
+
+    expect(committed.commitment.active).toBe(true);
+    expect(committed.commitment.branchId).toBe('branch-9');
+    expect(committed.commitment.branchTitle).toBe('自治同盟');
+
+    const cleared = clearBranchCommitment(scenarioId);
+    expect(cleared.commitment.active).toBe(false);
+    expect(cleared.commitment.branchId).toBeNull();
+  });
+
+  it('persists generated director objectives once per question/profile pair', () => {
+    const scenarioId = 'scenario-objectives';
+    const first = ensureScenarioObjectives(scenarioId, {
+      question: '如果算法治理城市会怎样？',
+      profileId: 'governance',
+      goals: [
+        {
+          id: 'goal-1',
+          kind: 'signature_arc_step',
+          targetCardId: 'public_hearing',
+          rewardLabel: 'director_point',
+          createdAt: '2026-03-18T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(first.objectives.goals).toHaveLength(1);
+
+    const second = ensureScenarioObjectives(scenarioId, {
+      question: '如果算法治理城市会怎样？',
+      profileId: 'governance',
+      goals: [],
+    });
+
+    expect(second.objectives.goals).toHaveLength(1);
+    expect(second.objectives.goals[0].id).toBe('goal-1');
   });
 });

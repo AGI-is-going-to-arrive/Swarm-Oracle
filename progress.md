@@ -215,8 +215,160 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `page.controls.expanded_branch_id`
     - `page.branches[]`（含 `can_expand_story / expanded`）
 - 实测确认：
-  - `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
+- `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
 - `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
+
+## 2026-03-18 Audit + E2E Revalidation
+
+- 已重新读取 `llmdoc/index.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`README.md`、`implement/19_four_track_execution_plan.md`、`implement/20_track_d_debate_arena_design_execution_plan.md`、`progress.md`。
+- 本轮真实运行：
+  - backend: `python -m uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - frontend: `npm run dev -- --host 127.0.0.1 --port 18928`
+  - `POST /api/health` 返回 `server=ok` 且 `llm.status=ok`
+- 本轮真实验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_debate_service.py tests/test_debate_api.py tests/test_config.py tests/test_campaign_api.py tests/test_campaign_service.py tests/test_predictions.py -q`
+  - 结果：`41 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx`
+  - 结果：`21 passed`
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/pages/SimulationView.test.tsx src/components/DebateBetModal.test.tsx`
+  - 结果：`12 passed`
+  - `cd frontend && npm run build`
+  - 结果：通过（仍有 Phaser chunk > 500 kB 的打包告警，但不是失败）
+- 本轮真实黑盒：
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-full --headless`
+  - 结果：通过，desktop/mobile live/result/share 全链路可复查
+  - `cd frontend && node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-mobile-after-i18n --headless`
+  - 结果：通过，`bet-open.png` 已确认中文按钮显示“取消”，不再泄漏 `common.cancel`
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-corners --headless`
+  - 结果：通过，`capture_modes` 取证恢复通过
+  - `cd frontend && node scripts/e2e-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-full-rerun --headless`
+  - 结果：通过，matrix/corners/mobile 全套产物已落盘
+- 本轮代码修复：
+  - i18n 收口：
+    - `frontend/src/i18n/locales/{en,zh}.json` 补 `common.cancel`
+    - `frontend/src/pages/SimulationView.tsx` 去掉 view-mode 英文硬编码，改走 locale
+    - 中文 locale 的 `capture_mode_panel/canvas/modal` 现为 `面板/画布/弹窗`
+    - 新增 `frontend/src/i18n/locales.test.ts` 做资源级回归
+  - E2E 稳定性：
+    - `frontend/scripts/e2e-suite.mjs` 的 `capture_modes` case 场景轮数从 `1` 调到 `2`
+    - 原因：`1 round` 场景在当前环境下会过快完成，脚本来不及进入“可开预测 + 可预览玩法卡”的 live Theater 状态，导致假失败
+- 本轮审计结论：
+  - Debate Arena / Director Campaign / 自动化钩子 / E2E 脚本都是真实现，不是文档空话
+  - i18n 不是完全收口，但本轮已修掉可见的 `common.cancel` 与 `SimulationView` 英文泄漏
+  - 跨平台应表述为“浏览器可用的 Web”，不是原生 Windows/macOS/Linux/iOS/Android 客户端
+  - 素材 provenance 旧账仍明显未清：`frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下共 `62` 张 PNG，仅 `14` 个 `.meta.json`，整体覆盖率约 `22.6%`
+- 残余风险 / TODO：
+  - Safari / Firefox / 真机 iOS / 真机 Android 仍无本轮新工件，只能算兼容目标，不算已实证
+  - 旧 AI 资产 provenance 仍需补；新 Debate 资产已补得较完整
+  - 前端包体里 `phaser` chunk 仍 > 1 MB gzip 前体积，后续若做性能专项可继续拆包
+
+## 2026-03-18 Provenance + Gameplay Deepening
+
+- 已完成素材 provenance 回填：
+  - 新增 `frontend/scripts/backfill-asset-provenance.mjs`
+  - 新增 `frontend/scripts/check-asset-provenance.mjs`
+  - `frontend/package.json` 新增：
+    - `npm run assets:provenance:backfill`
+    - `npm run assets:provenance:check`
+  - 实际回填结果：
+    - `created: 48`
+    - `updated: 4`
+    - `unchanged: 10`
+  - 检查结果：`npm run assets:provenance:check` 返回 `status: ok`
+  - 这意味着 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 `62/62` PNG 已有 sidecar；但 legacy 资产中大量字段属于诚实回填（`unknown/null + provenance_status=backfilled_*`），不是伪造原始生成记录
+
+- 已完成玩法增强最小闭环：
+  - `shared/gameplay_contract.v1.json`
+    - 新增 4 张反制卡：
+      - `audit_reckoning / 审计清算`
+      - `intel_blowback / 情报反噬`
+      - `mandate_snapback / 民意回摆`
+      - `ceasefire_committee / 停火委员会`
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 新增 `commitment`（branch 承诺）
+    - 新增 `objectives`（导演目标定义）
+    - 新增 `ensureScenarioObjectives / setBranchCommitment / clearBranchCommitment`
+    - 保持对旧 localStorage 的默认填充兼容
+  - `frontend/src/lib/directorObjectives.ts`
+    - 新增导演目标生成/评估 helper
+    - 当前目标为：
+      - `signature_arc_step`
+      - `branch_commitment`
+  - `frontend/src/components/gameplayCards.ts`
+    - 新增 `isCounterplayCard`
+    - 新增 `getScenarioSystemTrackState`
+    - 风险高/资源低时会把反制卡前置推荐
+    - 对缺失 `defaultDirectives` 的新卡做 generic fallback，不强迫一次性补齐 12 个 profile 文案
+  - `frontend/src/components/PredictionModal.tsx`
+    - 结构化下注会优先默认到已承诺的 worldline
+  - `frontend/src/components/GameplayCardsModal.tsx`
+    - modal 顶部显示常驻风险/资源/压强
+    - 显示当前承诺分支
+    - 反制卡显示 `反制 / Counter` badge
+    - 目标分支默认优先承诺 worldline
+  - `frontend/src/pages/SimulationView.tsx`
+    - Theater 面板新增导演层：
+      - 导演目标
+      - 常驻风险/资源轨道
+      - 承诺 worldline 选择 + 锁定/取消
+    - `render_game_to_text()` 现已输出 `page.director`
+  - `frontend/src/pages/ResultView.tsx`
+    - 因果档案新增：
+      - 导演目标完成度
+      - 世界线承诺结果
+      - 常驻风险/资源轨道
+    - `archive_summary` 自动化输出新增：
+      - `objective_completed_count`
+      - `objective_total_count`
+      - `commitment_outcome`
+      - `risk_value`
+      - `resource_value`
+  - `frontend/src/lib/archiveSummary.ts`
+    - 归档评分现在会考虑：
+      - `objectiveCompletedCount`
+      - `commitmentOutcome`
+
+- 本轮测试与构建：
+  - `cd backend && .venv/bin/python -m pytest tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+  - 结果：`24 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx`
+  - 结果：`49 passed`
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+- 本轮 `develop-web-game` / Playwright / E2E 取证：
+  - `develop-web-game` 客户端：
+    - `frontend/output/web-game/20260318-director-layer-smoke-v2/state-0.json`
+    - 已确认 `render_game_to_text()` 输出 `page.director.completed_objectives/objectives/system_tracks/commitment`
+    - 截图 `frontend/output/web-game/20260318-director-layer-smoke-v2/shot-0.png` 可见 Director Goals + 轨道
+  - Playwright 交互式复核：
+    - live 页已确认：
+      - 导演目标卡可见
+      - 承诺 worldline 下拉 + 锁定按钮可见
+      - 锁定后 UI 变为：
+        - `🎯 B线紧急稳压`
+        - `当前承诺：B线紧急稳压`
+        - `进行中`
+      - GameplayCardsModal 已出现 4 张新反制卡
+    - result 页已确认：
+      - 因果档案出现：
+        - `导演目标 0/2`
+        - `世界线承诺 承诺落空`
+        - `情势轨道 权威噪声 1/6 · 审议筹码 2/6`
+        - `关键记录 R4 承诺世界线 B线紧急稳压`
+  - Debate 回归：
+    - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
+    - 结果：desktop/mobile 全通过
+  - 主模式 full 回归：
+    - `frontend/output/e2e/20260318-post-director-goals-full/result.json`
+    - 结果：`matrix + corners + mobile` 全通过
+    - `capture_modes` 取证仍正常，`activeModal = gameplay_cards`
+
+- 当前边界 / 后续 TODO：
+  - 分支承诺当前是前端本地元状态，还没后端化；跨设备不会同步
+  - 导演目标当前是最小两目标制，且奖励只反映到 archive/campaign 侧，不做局中额外点数返还
+  - 反制卡已进 modal 与 prompt，但仍依赖 LLM/推演链路吸收，不是硬规则求值系统
+  - result 页对“正在生成叙事”的 live 场景仍会出现 `campaign/scenario/{id}/summary 404` console 噪声；这是旧链路行为，本轮未处理
 
 ## 2026-03-17 Track D / Phase D1
 

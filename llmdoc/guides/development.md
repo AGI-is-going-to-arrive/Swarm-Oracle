@@ -66,16 +66,16 @@ cd backend
 .venv/bin/python -m pytest tests/test_memory.py::TestCompressRounds -v
 ```
 
-- 本轮已真实执行后端全量回归，结果为 **815 passed**。
-- 本次文档同步前重新执行了与 campaign/config 收口直接相关的定向回归：
+- 仓库内历史后端全量基线仍记录为 **815 passed**。
+- 本次文档同步前重新执行了与当前改动直接相关的定向回归：
 
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_config.py tests/test_campaign_api.py tests/test_campaign_service.py -q
+python -m pytest tests/test_card_events.py tests/test_gameplay_contract_sync.py -q
 ```
 
-- 结果：**14 passed**
+- 结果：**24 passed**
 
 ### Frontend 测试
 
@@ -85,25 +85,34 @@ npm install
 npm test
 ```
 
-- 本轮已真实执行 `npm test`，前端全量回归结果为 **179 passed**。
-- 本次文档同步前重新执行了与本轮前端文档变更直接相关的定向回归：
+- 仓库内历史前端全量基线仍记录为 **179 passed**。
+- 本次文档同步前重新执行了与当前玩法增强 / provenance / 文档改动直接相关的定向回归：
 
 ```bash
 cd frontend
-npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx
+npm test -- --run \
+  src/lib/scenarioMeta.test.ts \
+  src/lib/archiveSummary.test.ts \
+  src/components/gameplayCards.test.ts \
+  src/components/gameplayContract.test.ts \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/components/GameplayCardsModal.test.tsx
 ```
 
 - 结果：
-  - `vitest`：**14 passed**
+  - `vitest`：**49 passed**
 - 本次文档同步还重新执行了：
 
 ```bash
 cd frontend
 npm run build
+npm run assets:provenance:check
 ```
 
 - 结果：
-  - 已恢复通过
+  - `npm run build`：通过
+  - `npm run assets:provenance:check`：通过
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -114,10 +123,11 @@ npm run build
   - DOM 截图会在 `html2canvas` 遇到 `oklch()` 解析失败时自动回退到颜色归一化 + `foreignObject SVG` 路径，`panel / canvas / modal` 三模式都可返回图片。
   - `SimulationView` 额外暴露 `window.capture_game_screenshot(mode)`，黑盒客户端可显式请求 `panel|canvas|modal`。
   - `SimulationView` 的自动化摘要现还会带 `page.controls.capture_result_kind`，可直接区分 `gif` 与 `gif_fallback_png`。
+  - `SimulationView` 现还会输出 `page.director.objectives / system_tracks / commitment`，可直接取证导演目标、风险/资源轨道与 worldline 承诺。
   - 下载前会按文件扩展名归一化成标准 `image/png` / `image/gif`，减少“文件下好了但系统不认”的情况。
   - 分享文案现在会在前端补一层题材档案前缀；如需复测分享链路，优先从结果页的 `📱 生成文案` 入口进入。
-  - `ResultView` 的 `archive_summary` 现还会输出 `profile_id / profile_resonance / completed_daily_challenge`，方便核对 backend summary 兜底是否生效。
-  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池已扩到 30 个主题，补上 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`，并可命中 `switchboard_forum_variant`。
+  - `ResultView` 的 `archive_summary` 现还会输出 `profile_id / profile_resonance / completed_daily_challenge`，并新增 `objective_completed_count / objective_total_count / commitment_outcome / risk_value / resource_value`，方便核对导演层和后端 summary 兜底是否生效。
+  - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面；当前 registry 共有 33 个主题条目，其中 Theater 为 30 个语义主题，Debate 另有 3 张专属背景；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`，并可命中 `switchboard_forum_variant`。
   - 固定回归输入集已落盘：
     - `frontend/output/e2e/sample_matrix.json`
     - `frontend/output/e2e/sample_matrix_variants.json`
@@ -131,6 +141,8 @@ npm run build
   - `npm run e2e:debate:mobile`
   - `npm run e2e:debate:full`
   - `npm run e2e:debate`
+  - `npm run assets:provenance:backfill`
+  - `npm run assets:provenance:check`
   - `node scripts/e2e-suite.mjs mobile --headless --output-dir <DIR>`
   - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
   - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/<DIR>`
@@ -147,11 +159,11 @@ npm run build
     - `frontend/output/e2e/20260317-track-c/corners/`
     - `frontend/output/e2e/20260317-track-c/mobile/`
     - `frontend/output/e2e/20260317-track-c/variants/`
-  - 本轮 full smoke 工件：`frontend/output/e2e/20260318-codex-full-smoke/result.json`
+  - 本轮 full smoke 工件：`frontend/output/e2e/20260318-post-director-goals-full/result.json`
   - ResultView backend summary smoke 工件：`frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
   - Debate 专项最新成功工件：
-    - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+    - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
   - Debate 额外补充工件：
     - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
     - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
@@ -168,6 +180,9 @@ node scripts/codex-heartbeat.mjs --interval 30 --label implement-tail --log-file
 ```
 
   - 该脚本会定时汇总当前 `git status`、最新 `frontend/output/e2e/**/result.json` 与 `progress.md` 最新段落；不带 `--interval` 时可单次输出，也支持 `--json`。
+  - 本轮 `develop-web-game` 相关最新工件：
+    - `frontend/output/web-game/20260318-director-layer-smoke-v2/state-0.json`
+    - `frontend/output/web-game/20260318-director-layer-smoke-v2/shot-0.png`
 
 ### 前端本地玩法状态
 
@@ -199,12 +214,13 @@ frontend/public/assets/ui/generated/
 frontend/public/assets/scenes/
 ```
 
-- 当前 `frontend/public/assets/scenes/` 已可见 30 张 Theater 场景背景，包含新增的 `switchboard_forum_variant / law_court_variant / faith_temple_variant`
-- 当前玩法卡总数为 10（含 `密约交易 / Backchannel Pact`、`撤离令 / Evacuation Order`）
+- 当前 `frontend/public/assets/scenes/` 已可见 30 张 Theater 场景背景；再加 3 张 Debate 专属背景后，registry 总条目为 33
+- 当前 `frontend/public/assets/scenes/` 加上 Debate 专属 3 张背景后，总主题条目为 33
+- 当前玩法卡总数为 14（10 张原始导演卡 + 4 张反制卡）
 - 玩法卡 modal 现在还会显示：
   - 题材专属三段式连锁事件
   - 下一步推荐卡
-  - `风险时钟 / 资源轨道`
+  - `风险 / 资源` 轨道
 
 - AI 图像生成脚本已存在：
 
@@ -243,6 +259,9 @@ node scripts/generate-ui-assets.mjs --preset generic_frame --preset generic_scen
 ```bash
 export GOOGLE_API_KEY="..."
 ```
+
+- 当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有 `.meta.json` sidecar。
+- 其中较新的 Debate 资产保留原始生成字段；较早的 legacy 资产则使用诚实回填的 sidecar，允许 `unknown / null` 字段与 `provenance_status=backfilled_*` 并存，而不是伪造原始生成记录。
 
 **测试约定**:
 - `conftest.py` 现为每个 pytest case 创建独立临时 SQLite 数据库，并在前后显式释放 engine

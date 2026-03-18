@@ -30,6 +30,25 @@ export interface CardUsageRecord {
 
 export type CardUsageInput = Omit<CardUsageRecord, 'cost'>;
 
+export type DirectorObjectiveKind = 'signature_arc_step' | 'branch_commitment';
+
+export interface DirectorObjectiveRecord {
+  id: string;
+  kind: DirectorObjectiveKind;
+  targetCardId?: GameplayCardId | null;
+  rewardLabel?: string | null;
+  createdAt: string;
+}
+
+export interface BranchCommitmentState {
+  active: boolean;
+  branchId?: string | null;
+  branchTitle?: string | null;
+  committedAtRound?: number | null;
+  committedAt?: string | null;
+  outcome?: 'pending' | 'hit' | 'miss' | null;
+}
+
 export interface ScenarioArchiveState {
   question?: string;
   sceneTheme?: string | null;
@@ -43,6 +62,11 @@ export interface ScenarioArchiveState {
   dominantTone?: EndingToneId | null;
   directorStyleTag?: string | null;
   profileResonance?: ProfileResonance | null;
+  objectiveCompletedCount?: number | null;
+  objectiveTotalCount?: number | null;
+  commitmentOutcome?: 'pending' | 'hit' | 'miss' | null;
+  riskValue?: number | null;
+  resourceValue?: number | null;
   updatedAt?: string;
 }
 
@@ -60,6 +84,13 @@ export interface ScenarioMeta {
   betting: {
     bets: StructuredBetRecord[];
   };
+  commitment: BranchCommitmentState;
+  objectives: {
+    generatedForQuestion?: string | null;
+    generatedForProfile?: GameplayProfileId | null;
+    goals: DirectorObjectiveRecord[];
+    lastUpdatedAt?: string;
+  };
   archive: ScenarioArchiveState;
 }
 
@@ -69,6 +100,17 @@ interface RootStore {
 }
 
 export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
+
+function createDefaultCommitmentState(): BranchCommitmentState {
+  return {
+    active: false,
+    branchId: null,
+    branchTitle: null,
+    committedAtRound: null,
+    committedAt: null,
+    outcome: null,
+  };
+}
 
 function createDefaultScenarioMeta(): ScenarioMeta {
   return {
@@ -84,9 +126,49 @@ function createDefaultScenarioMeta(): ScenarioMeta {
     betting: {
       bets: [],
     },
+    commitment: createDefaultCommitmentState(),
+    objectives: {
+      generatedForQuestion: null,
+      generatedForProfile: null,
+      goals: [],
+    },
     archive: {
       branchSnapshots: [],
       keyMoments: [],
+    },
+  };
+}
+
+function hydrateScenarioMeta(raw: Partial<ScenarioMeta> | null | undefined): ScenarioMeta {
+  const base = createDefaultScenarioMeta();
+  if (!raw) return base;
+
+  return {
+    director: {
+      ...base.director,
+      ...raw.director,
+    },
+    cooldowns: raw.cooldowns ?? base.cooldowns,
+    cards: {
+      usageLog: raw.cards?.usageLog ?? base.cards.usageLog,
+    },
+    betting: {
+      bets: raw.betting?.bets ?? base.betting.bets,
+    },
+    commitment: {
+      ...base.commitment,
+      ...raw.commitment,
+    },
+    objectives: {
+      ...base.objectives,
+      ...raw.objectives,
+      goals: raw.objectives?.goals ?? base.objectives.goals,
+    },
+    archive: {
+      ...base.archive,
+      ...raw.archive,
+      branchSnapshots: raw.archive?.branchSnapshots ?? base.archive.branchSnapshots,
+      keyMoments: raw.archive?.keyMoments ?? base.archive.keyMoments,
     },
   };
 }
@@ -113,7 +195,7 @@ function safeWriteStore(store: RootStore) {
 
 export function loadScenarioMeta(scenarioId: string): ScenarioMeta {
   const store = safeReadStore();
-  return store.scenarios[scenarioId] ?? createDefaultScenarioMeta();
+  return hydrateScenarioMeta(store.scenarios[scenarioId]);
 }
 
 export function saveScenarioMeta(scenarioId: string, next: ScenarioMeta): ScenarioMeta {
@@ -212,5 +294,71 @@ export function updateArchive(
       ...patch,
       updatedAt: patch.updatedAt ?? new Date().toISOString(),
     },
+  }));
+}
+
+export function ensureScenarioObjectives(
+  scenarioId: string,
+  payload: {
+    question: string;
+    profileId: GameplayProfileId;
+    goals: DirectorObjectiveRecord[];
+  },
+): ScenarioMeta {
+  return updateScenarioMeta(scenarioId, (current) => {
+    const shouldReplaceGoals =
+      current.objectives.goals.length === 0
+      || current.objectives.generatedForQuestion !== payload.question
+      || current.objectives.generatedForProfile !== payload.profileId;
+
+    if (!shouldReplaceGoals) {
+      return current;
+    }
+
+    return {
+      ...current,
+      objectives: {
+        generatedForQuestion: payload.question,
+        generatedForProfile: payload.profileId,
+        goals: payload.goals,
+        lastUpdatedAt: new Date().toISOString(),
+      },
+    };
+  });
+}
+
+export function setBranchCommitment(
+  scenarioId: string,
+  payload: {
+    branchId: string;
+    branchTitle: string;
+    currentRound: number;
+  },
+): ScenarioMeta {
+  return updateScenarioMeta(scenarioId, (current) => ({
+    ...current,
+    commitment: {
+      active: true,
+      branchId: payload.branchId,
+      branchTitle: payload.branchTitle,
+      committedAtRound: payload.currentRound,
+      committedAt: new Date().toISOString(),
+      outcome: 'pending',
+    },
+    archive: {
+      ...current.archive,
+      updatedAt: new Date().toISOString(),
+      keyMoments: [
+        ...current.archive.keyMoments,
+        `R${payload.currentRound} 承诺世界线 ${payload.branchTitle}`,
+      ],
+    },
+  }));
+}
+
+export function clearBranchCommitment(scenarioId: string): ScenarioMeta {
+  return updateScenarioMeta(scenarioId, (current) => ({
+    ...current,
+    commitment: createDefaultCommitmentState(),
   }));
 }

@@ -364,6 +364,73 @@
   margin: 0 0 12px;
 }
 
+.theater-panel__director {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(18, 16, 38, 0.88), rgba(12, 10, 29, 0.88));
+}
+
+.theater-panel__director-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: rgba(245, 243, 255, 0.92);
+  font-size: 0.8rem;
+}
+
+.theater-panel__director-goals {
+  display: grid;
+  gap: 8px;
+}
+
+.director-goal {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(245, 243, 255, 0.82);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.director-goal strong {
+  color: rgba(255, 247, 252, 0.98);
+  font-size: 0.78rem;
+}
+
+.director-goal small {
+  color: rgba(245, 243, 255, 0.68);
+}
+
+.director-goal--completed {
+  border-color: rgba(108, 207, 127, 0.28);
+  background: rgba(67, 160, 71, 0.12);
+}
+
+.director-goal--active {
+  border-color: rgba(255, 183, 77, 0.28);
+  background: rgba(255, 152, 0, 0.12);
+}
+
+.director-goal--failed {
+  border-color: rgba(244, 67, 54, 0.24);
+  background: rgba(244, 67, 54, 0.1);
+}
+
+.theater-panel__commitment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .theater-panel__timeline {
   width: 100%;
   margin: 0 0 12px;
@@ -477,6 +544,11 @@
   }
 
   .theater-panel__warmup {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .theater-panel__director {
     gap: 8px;
     padding: 10px 12px;
   }

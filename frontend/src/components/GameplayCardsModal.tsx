@@ -25,11 +25,13 @@ import {
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getScenarioSystemTrackState,
   getGameplaySignatureArcState,
   getRecommendedGameplayCards,
   getSuggestedGameplayAgents,
   getSuggestedSourceBranchId,
   inferGameplayProfile,
+  isCounterplayCard,
   type GameplayCardId,
 } from './gameplayCards';
 import { CONTRACT_GAMEPLAY_CARD_DEFS } from '../lib/gameplayContract';
@@ -69,8 +71,8 @@ export default function GameplayCardsModal({
   );
   const [meta, setMeta] = useState<ScenarioMeta>(() => loadScenarioMeta(scenarioId));
   const recommendedCards = useMemo(
-    () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog),
-    [gameplayProfile.id, meta.cards.usageLog],
+    () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog, meta.commitment),
+    [gameplayProfile.id, meta.cards.usageLog, meta.commitment],
   );
   const defaultCardId = useMemo(
     () => (CONTRACT_GAMEPLAY_CARD_DEFS[0]?.id ?? 'civilization_debate') as GameplayCardId,
@@ -84,13 +86,22 @@ export default function GameplayCardsModal({
     () => getGameplaySignatureArcState(gameplayProfile.id, meta.cards.usageLog, isZh),
     [gameplayProfile.id, isZh, meta.cards.usageLog],
   );
+  const systemTracks = useMemo(
+    () => getScenarioSystemTrackState(gameplayProfile.id, meta.cards.usageLog, meta.commitment, isZh),
+    [gameplayProfile.id, isZh, meta.cards.usageLog, meta.commitment],
+  );
   const activeBranches = useMemo(
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
   );
   const defaultTargetBranchId = useMemo(
-    () => getDefaultGameplayTargetBranch(activeBranches),
-    [activeBranches],
+    () => {
+      const committedActiveBranch = meta.commitment.active
+        ? activeBranches.find((branch) => branch.id === meta.commitment.branchId)
+        : null;
+      return committedActiveBranch?.id ?? getDefaultGameplayTargetBranch(activeBranches);
+    },
+    [activeBranches, meta.commitment.active, meta.commitment.branchId],
   );
   const [cardId, setCardId] = useState<GameplayCardId>(recommendedCards[0] ?? defaultCardId);
   const [targetBranchId, setTargetBranchId] = useState(defaultTargetBranchId);
@@ -125,8 +136,8 @@ export default function GameplayCardsModal({
       ? `已完成 ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}，建议下一步：${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, true) : '自由推进'}`
       : `Completed ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}. Recommended next move: ${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, false) : 'Free pivot'}`);
   const systemTrackSummary = isZh
-    ? `${signatureArcState.riskLabel} ${signatureArcState.riskValue}/6；${signatureArcState.resourceLabel} ${signatureArcState.resourceValue}/6`
-    : `${signatureArcState.riskLabel} ${signatureArcState.riskValue}/6; ${signatureArcState.resourceLabel} ${signatureArcState.resourceValue}/6`;
+    ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6；${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`
+    : `${systemTracks.riskLabel} ${systemTracks.riskValue}/6; ${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`;
   const autoDirective = useMemo(
     () => buildGameplayAutoDirective({
       cardId,
@@ -195,13 +206,15 @@ export default function GameplayCardsModal({
       cooldown_remaining: cardCooldownRemaining,
       current_round: normalizedCurrentRound,
       recommended_cards: recommendedCards,
+      commitment_branch_id: meta.commitment.branchId ?? null,
+      commitment_active: meta.commitment.active,
       signature_arc: {
         label: signatureArcState.label,
         completed_steps: signatureArcState.completedSteps,
         total_steps: signatureArcState.totalSteps,
         next_card_id: signatureArcState.nextCardId,
-        risk_value: signatureArcState.riskValue,
-        resource_value: signatureArcState.resourceValue,
+        risk_value: systemTracks.riskValue,
+        resource_value: systemTracks.resourceValue,
       },
       status,
       read_only: readOnly,
@@ -223,11 +236,11 @@ export default function GameplayCardsModal({
     signatureArcState.completedSteps,
     signatureArcState.label,
     signatureArcState.nextCardId,
-    signatureArcState.resourceValue,
-    signatureArcState.riskValue,
     signatureArcState.totalSteps,
     sourceBranchId,
     status,
+    systemTracks.resourceValue,
+    systemTracks.riskValue,
     targetBranchId,
   ]);
 
@@ -383,13 +396,25 @@ export default function GameplayCardsModal({
               </>
             )}
             <br />
-            {signatureArcState.riskLabel}
+            {systemTracks.riskLabel}
             {': '}
-            <strong>{signatureArcState.riskValue}/6</strong>
+            <strong>{systemTracks.riskValue}/6</strong>
             {' · '}
-            {signatureArcState.resourceLabel}
+            {systemTracks.resourceLabel}
             {': '}
-            <strong>{signatureArcState.resourceValue}/6</strong>
+            <strong>{systemTracks.resourceValue}/6</strong>
+            {' · '}
+            {isZh ? '压强' : 'Pressure'}
+            {': '}
+            <strong>{systemTracks.pressure}</strong>
+            {meta.commitment.active && meta.commitment.branchTitle && (
+              <>
+                <br />
+                {isZh ? '当前承诺' : 'Committed branch'}
+                {': '}
+                <strong>{meta.commitment.branchTitle}</strong>
+              </>
+            )}
           </p>
           {readOnly && (
             <p className="gameplay-modal__preview-note">
@@ -431,6 +456,11 @@ export default function GameplayCardsModal({
                               ? (isZh ? '下一步' : 'Next')
                               : (isZh ? '推荐' : 'Recommended')}
                           </span>
+                        </span>
+                      )}
+                      {isCounterplayCard(currentCardId) && (
+                        <span className="gameplay-card__badge">
+                          <span>{isZh ? '反制' : 'Counter'}</span>
                         </span>
                       )}
                     </span>

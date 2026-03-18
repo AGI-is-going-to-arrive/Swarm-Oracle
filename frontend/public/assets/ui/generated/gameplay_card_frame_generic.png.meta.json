@@ -2,5 +2,12 @@
   "preset": "generic_frame",
   "model": "gemini-3.1-flash-image-preview",
   "provider": "generativelanguage",
-  "prompt": "Pixel-art gameplay card frame for general strategy scenarios, warm ivory panel, magenta violet and brass accents, subtle switchboard and civic committee motifs, centered empty window for content, wide 16:9 composition, no text, no checkerboard transparency, consistent with SwarmOracle retro theater UI."
+  "prompt": "Pixel-art gameplay card frame for general strategy scenarios, warm ivory panel, magenta violet and brass accents, subtle switchboard and civic committee motifs, centered empty window for content, wide 16:9 composition, no text, no checkerboard transparency, consistent with SwarmOracle retro theater UI.",
+  "source": "Legacy repository generated UI asset with missing original generation record",
+  "source_url": null,
+  "generated_at": null,
+  "output": "public/assets/ui/generated/gameplay_card_frame_generic.png",
+  "provenance_status": "backfilled_partial",
+  "backfilled_at": "2026-03-18T09:21:31.108Z",
+  "notes": "Original generation preset/model/timestamp were not fully preserved in repository history; this sidecar was backfilled from an on-repo asset audit."
 }

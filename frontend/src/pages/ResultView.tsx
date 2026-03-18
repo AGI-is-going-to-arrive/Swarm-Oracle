@@ -22,7 +22,12 @@ import {
   markChallengeCompleted,
 } from '../lib/dailyChallenge';
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
-import { loadScenarioMeta, updateArchive } from '../lib/scenarioMeta';
+import { ensureScenarioObjectives, loadScenarioMeta, updateArchive } from '../lib/scenarioMeta';
+import {
+  buildDefaultDirectorObjectives,
+  countCompletedObjectives,
+  evaluateDirectorObjectives,
+} from '../lib/directorObjectives';
 import {
   getEndingToneLabel,
   getPredictionRationale,
@@ -38,6 +43,7 @@ import {
   getGameplayCardDefinition,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getScenarioSystemTrackState,
   getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
@@ -204,15 +210,58 @@ export default function ResultView() {
             probability: branch.probability,
           })),
         });
+        if (nextMeta.objectives.goals.length === 0) {
+          const objectiveArc = getGameplaySignatureArcState(
+            profile.id,
+            nextMeta.cards.usageLog,
+            isZh,
+          );
+          ensureScenarioObjectives(id, {
+            question: scenario.question,
+            profileId: profile.id,
+            goals: buildDefaultDirectorObjectives({
+              profileId: profile.id,
+              signatureCardId: objectiveArc?.nextCardId ?? null,
+            }),
+          });
+        }
+        const objectiveMeta = loadScenarioMeta(id);
+        const dominantBranchForArchive = [...story.branches].sort((a, b) => b.probability - a.probability)[0] ?? null;
+        const evaluatedObjectives = evaluateDirectorObjectives({
+          objectives: objectiveMeta.objectives.goals,
+          meta: objectiveMeta,
+          dominantBranch: dominantBranchForArchive,
+          isZh,
+          isFinal: true,
+        });
+        const completedObjectiveCount = countCompletedObjectives(evaluatedObjectives);
+        const commitmentOutcome = !objectiveMeta.commitment.active
+          ? null
+          : dominantBranchForArchive?.id === objectiveMeta.commitment.branchId
+            ? 'hit'
+            : 'miss';
+        const tracks = getScenarioSystemTrackState(
+          profile.id,
+          objectiveMeta.cards.usageLog,
+          objectiveMeta.commitment,
+          isZh,
+        );
         const archiveSummary = buildArchiveSummary({
           branches: story.branches,
-          usages: nextMeta.cards.usageLog,
-          bets: nextMeta.betting.bets,
-          keyMomentCount: nextMeta.archive.keyMoments.length,
+          usages: objectiveMeta.cards.usageLog,
+          bets: objectiveMeta.betting.bets,
+          keyMomentCount: objectiveMeta.archive.keyMoments.length,
           isDailyChallenge,
           profileId: profile.id,
+          objectiveCompletedCount: completedObjectiveCount,
+          objectiveTotalCount: evaluatedObjectives.length,
+          commitmentOutcome,
         });
-        const finalMeta = updateArchive(id, archiveSummary);
+        const finalMeta = updateArchive(id, {
+          ...archiveSummary,
+          riskValue: tracks?.riskValue ?? null,
+          resourceValue: tracks?.resourceValue ?? null,
+        });
         if (isDailyChallenge && challengeMatch?.challengeId) {
           markChallengeCompleted(challengeMatch.challengeId, id, {
             resultBranchId: story.branches[0]?.id,
@@ -338,21 +387,27 @@ export default function ResultView() {
       archive: {
         ...storedScenarioMeta.archive,
         profileId:
-          storedScenarioMeta.archive.profileId
-          ?? campaignScenarioSummary?.profile_id
-          ?? inferredProfile?.id,
+          (
+            storedScenarioMeta.archive.profileId
+            ?? campaignScenarioSummary?.profile_id
+            ?? inferredProfile?.id
+          ) as typeof storedScenarioMeta.archive.profileId,
         mostUsedCard:
-          campaignScenarioSummary?.most_used_card
-          ?? storedScenarioMeta.archive.mostUsedCard
-          ?? null,
+          (
+            campaignScenarioSummary?.most_used_card
+            ?? storedScenarioMeta.archive.mostUsedCard
+            ?? null
+          ) as typeof storedScenarioMeta.archive.mostUsedCard,
         bettingHit:
           campaignScenarioSummary?.betting_hit
           ?? storedScenarioMeta.archive.bettingHit
           ?? null,
         archiveGrade:
-          campaignScenarioSummary?.archive_grade
-          ?? storedScenarioMeta.archive.archiveGrade
-          ?? null,
+          (
+            campaignScenarioSummary?.archive_grade
+            ?? storedScenarioMeta.archive.archiveGrade
+            ?? null
+          ) as typeof storedScenarioMeta.archive.archiveGrade,
         profileResonance:
           campaignScenarioSummary?.profile_resonance
           ?? storedScenarioMeta.archive.profileResonance
@@ -405,6 +460,38 @@ export default function ResultView() {
         )
       : null
   ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog]);
+  const systemTracks = useMemo(() => (
+    scenarioMeta?.archive.profileId
+      ? getScenarioSystemTrackState(
+          scenarioMeta.archive.profileId as Parameters<typeof getScenarioSystemTrackState>[0],
+          scenarioMeta.cards.usageLog,
+          scenarioMeta.commitment,
+          isZh,
+        )
+      : null
+  ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog, scenarioMeta?.commitment]);
+  const evaluatedObjectives = useMemo(() => (
+    scenarioMeta
+      ? evaluateDirectorObjectives({
+          objectives: scenarioMeta.objectives.goals,
+          meta: scenarioMeta,
+          dominantBranch,
+          isZh,
+          isFinal: true,
+        })
+      : []
+  ), [dominantBranch, isZh, scenarioMeta]);
+  const completedObjectiveCount = useMemo(
+    () => countCompletedObjectives(evaluatedObjectives),
+    [evaluatedObjectives],
+  );
+  const commitmentOutcomeLabel = scenarioMeta?.archive.commitmentOutcome
+    ? scenarioMeta.archive.commitmentOutcome === 'hit'
+      ? (isZh ? '承诺命中' : 'Commitment hit')
+      : scenarioMeta.archive.commitmentOutcome === 'miss'
+        ? (isZh ? '承诺落空' : 'Commitment missed')
+        : (isZh ? '承诺进行中' : 'Commitment pending')
+    : (isZh ? '未承诺' : 'No commitment');
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
     profileLabel: gameplayProfileLabel,
@@ -480,6 +567,11 @@ export default function ResultView() {
               dominant_tone: scenarioMeta.archive.dominantTone ?? null,
               profile_id: scenarioMeta.archive.profileId ?? null,
               profile_resonance: scenarioMeta.archive.profileResonance ?? null,
+              objective_completed_count: scenarioMeta.archive.objectiveCompletedCount ?? 0,
+              objective_total_count: scenarioMeta.archive.objectiveTotalCount ?? 0,
+              commitment_outcome: scenarioMeta.archive.commitmentOutcome ?? null,
+              risk_value: scenarioMeta.archive.riskValue ?? null,
+              resource_value: scenarioMeta.archive.resourceValue ?? null,
               completed_daily_challenge: isDailyChallenge,
             }
           : null,
@@ -844,6 +936,24 @@ export default function ResultView() {
               <span className="archive-summary-card__label">{t('result.archive_resonance')}</span>
               <strong>{profileResonanceLabel}</strong>
             </div>
+            <div className="archive-summary-card">
+              <span className="archive-summary-card__label">{isZh ? '导演目标' : 'Director Goals'}</span>
+              <strong>{completedObjectiveCount}/{evaluatedObjectives.length || 0}</strong>
+              {evaluatedObjectives.length > 0 && (
+                <small>
+                  {evaluatedObjectives
+                    .map((objective) => `${objective.title} · ${objective.progress}`)
+                    .join(' / ')}
+                </small>
+              )}
+            </div>
+            <div className="archive-summary-card">
+              <span className="archive-summary-card__label">{isZh ? '世界线承诺' : 'Worldline Commitment'}</span>
+              <strong>{commitmentOutcomeLabel}</strong>
+              {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
+                <small>{scenarioMeta.commitment.branchTitle}</small>
+              )}
+            </div>
             {signatureArcState && (
               <div className="archive-summary-card">
                 <span className="archive-summary-card__label">{isZh ? '题材连锁' : 'Signature Arc'}</span>
@@ -855,11 +965,11 @@ export default function ResultView() {
                 </small>
               </div>
             )}
-            {signatureArcState && (
+            {systemTracks && (
               <div className="archive-summary-card">
                 <span className="archive-summary-card__label">{isZh ? '情势轨道' : 'System Tracks'}</span>
-                <strong>{signatureArcState.riskLabel} {signatureArcState.riskValue}/6</strong>
-                <small>{signatureArcState.resourceLabel} {signatureArcState.resourceValue}/6</small>
+                <strong>{systemTracks.riskLabel} {systemTracks.riskValue}/6</strong>
+                <small>{systemTracks.resourceLabel} {systemTracks.resourceValue}/6 · {systemTracks.pressure}</small>
               </div>
             )}
             <div className="archive-summary-card">

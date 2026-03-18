@@ -3,6 +3,7 @@ import {
   ENDING_TONE_OPTIONS,
   PROFILE_RESONANCE_OPTIONS,
   type EndingToneId,
+  type StructuredBetOutcome,
 } from './predictionBetting';
 import type { CardUsageRecord, StructuredBetRecord } from './scenarioMeta';
 
@@ -33,6 +34,9 @@ export interface ArchiveSummary {
   archiveGrade: ArchiveGrade;
   directorStyleTag: DirectorStyleTag;
   profileResonance: ProfileResonance;
+  objectiveCompletedCount: number;
+  objectiveTotalCount: number;
+  commitmentOutcome: StructuredBetOutcome | null;
 }
 
 const RUPTURE_KEYWORDS = [
@@ -137,6 +141,8 @@ function resolveArchiveGrade(params: {
   keyMomentCount: number;
   isDailyChallenge: boolean;
   profileResonance: ProfileResonance;
+  objectiveCompletedCount: number;
+  commitmentOutcome: StructuredBetOutcome | null;
 }): ArchiveGrade {
   const {
     usageCount,
@@ -146,6 +152,8 @@ function resolveArchiveGrade(params: {
     keyMomentCount,
     isDailyChallenge,
     profileResonance,
+    objectiveCompletedCount,
+    commitmentOutcome,
   } = params;
 
   let score = 0;
@@ -159,6 +167,9 @@ function resolveArchiveGrade(params: {
   if (isDailyChallenge) score += 1;
   if (profileResonance === 'signature') score += 2;
   else if (profileResonance === 'aligned') score += 1;
+  if (objectiveCompletedCount >= 2) score += 2;
+  else if (objectiveCompletedCount >= 1) score += 1;
+  if (commitmentOutcome === 'hit') score += 1;
 
   if (score >= 6) return 'S';
   if (score >= 5) return 'A';
@@ -205,12 +216,18 @@ export function buildArchiveSummary(params: {
   keyMomentCount: number;
   isDailyChallenge: boolean;
   profileId?: GameplayProfileId;
+  objectiveCompletedCount?: number;
+  objectiveTotalCount?: number;
+  commitmentOutcome?: StructuredBetOutcome | null;
 }): ArchiveSummary {
   const dominantBranch = pickDominantBranch(params.branches);
   const dominantTone = inferDominantTone(dominantBranch);
   const mostUsedCard = pickMostUsedCard(params.usages);
   const profileResonance = resolveProfileResonance(params.profileId, dominantBranch);
   const bettingHit = resolveBettingHit(params.bets, dominantBranch, dominantTone, profileResonance);
+  const objectiveCompletedCount = params.objectiveCompletedCount ?? 0;
+  const objectiveTotalCount = params.objectiveTotalCount ?? 0;
+  const commitmentOutcome = params.commitmentOutcome ?? null;
 
   return {
     dominantBranchTitle: dominantBranch?.title ?? null,
@@ -225,9 +242,14 @@ export function buildArchiveSummary(params: {
       keyMomentCount: params.keyMomentCount,
       isDailyChallenge: params.isDailyChallenge,
       profileResonance,
+      objectiveCompletedCount,
+      commitmentOutcome,
     }),
     directorStyleTag: resolveDirectorStyleTag(mostUsedCard, params.bets.length),
     profileResonance,
+    objectiveCompletedCount,
+    objectiveTotalCount,
+    commitmentOutcome,
   };
 }
 

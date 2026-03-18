@@ -22,6 +22,8 @@
   - `B1` 已完成
   - `B2` 也已收口：`shared/gameplay_contract.v1.json` 现在不仅覆盖卡牌规则/画像推荐，也覆盖 modal 输入契约、prompt 语义和后端 branching bonus
   - 前后端不再各自维护第二份静态玩法卡事实源；保留下来的 `profile` heuristics / animation 表现属于派生实现层，不再算第二事实源
+  - 本轮又在同一份 shared contract 上补进 4 张反制卡：`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`
+  - 当前玩法卡总数已变为 `14`（10 张原始导演卡 + 4 张反制卡）
 
 - `Track C`
   - 主 12 profile 工件、mobile 双证据、`develop-web-game` 工件、variant matrix 都已补齐
@@ -29,12 +31,13 @@
     - `law_court_variant`
     - `faith_temple_variant`
     - `switchboard_forum_variant`
+  - `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json`；较新的 Debate 资产保留原始生成字段，较早的 legacy 资产则以 backfilled 方式补齐 provenance sidecar
 
 - `Track D`
   - 已不再处于“设计冻结”
   - 已有独立 Debate domain：`backend/app/models/debate.py`、`backend/app/api/debate.py`、`backend/app/services/debate*.py`
   - 前端已有 `DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
-  - 已有真实工件：`frontend/output/e2e/20260318-post-b2-debate-full/`、`frontend/output/e2e/20260318-debate-mobile-430x932-v2/`、`frontend/output/e2e/20260318-debate-civic-v2/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
+  - 已有真实工件：`frontend/output/e2e/20260318-post-director-goals-debate-full/`、`frontend/output/e2e/20260318-debate-mobile-430x932-v2/`、`frontend/output/e2e/20260318-debate-civic-v2/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
 
 后文保留的设计型条目主要作为归档设计基线；若与当前实现冲突，以本节同步状态为准。
 
@@ -42,11 +45,21 @@
 
 `每日挑战 / 快速开始 -> 起局 -> Theater 推演 -> 出牌 / 下注 -> 结果页 -> 因果档案 / 分享`
 
-但它还不是“长期可反复玩”的系统，原因主要有三类：
+并且本轮又补上了第一层“导演玩法”：
+
+`导演目标 -> 常驻风险/资源 -> worldline 承诺 -> 反制卡推荐 -> 结果页目标/承诺结算`
+
+它仍然不是高操作深度游戏，但现在已经不再只是“看推演 + 出牌 + 下注意图”的轻元玩法。当前更准确的判断是：
+
+- 已经形成可玩的导演式闭环
+- 仍主要依赖 What-If 推演和 prompt 驱动，不是硬规则战棋
+- 当前新增的导演目标 / worldline 承诺 / 反制卡 / 风险资源轨道，属于第一层玩法加深，而不是最终形态
+
+后续要继续做深，主要还卡在三类问题：
 
 1. 玩法状态主要仍停留在前端本地持久化，缺少跨设备、跨会话、可积累的后端生涯层。
-2. 前后端对玩法卡的定义与可视化语义还未完全收束，继续横向加卡会放大系统漂移。
-3. replay、scene selector、capture/headless、全题材 E2E 仍有尾项，继续扩系统会先扩大验证面。
+2. 新增的导演目标 / worldline 承诺 / 风险资源轨道目前先落在前端 `scenarioMeta`，还没有进入后端权威结算和跨设备同步。
+3. replay、scene selector、capture/headless、全题材 E2E 虽已补强，但继续扩系统仍会先扩大验证面。
 
 因此本执行文档采用四轨路线：
 
@@ -723,9 +736,10 @@ node .tmp-playwright/web_game_playwright_client.mjs \
   - `frontend/src/components/DebateShareModal.test.tsx`
   - `frontend/src/hooks/useDebateWS.test.tsx`
 - E2E / skill 工件
-  - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
   - `frontend/output/web-game/20260317-debate-arena-signoff/`
-  - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+  - 本轮主模式 full 工件：`frontend/output/e2e/20260318-post-director-goals-full/result.json`
+  - 本轮 `develop-web-game` 导演层工件：`frontend/output/web-game/20260318-director-layer-smoke-v2/`
   - 本轮补充移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
   - 本轮补充 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
 
@@ -815,22 +829,20 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### 测试
 
-- 前端全量回归：`179 passed`
-- 后端全量回归：`815 passed`
-- 本轮 B2 定向回归：
-  - 前端：`26 passed`
+- 历史全量基线：
+  - 前端：`179 passed`
+  - 后端：`815 passed`
+- 本轮围绕 provenance / 导演层 / 反制卡的定向回归：
+  - 前端：`49 passed`
   - 后端：`24 passed`
-- 本轮 Track A / warning 收口回归：
-  - `test_campaign_service.py / test_campaign_api.py`：`9 passed`
-  - `test_predictions.py`：`17 passed`
 - `frontend` 构建：通过
 
 ### E2E
 
 - full 主链路 smoke：
-  - `frontend/output/e2e/20260318-codex-full-smoke/result.json`
+  - `frontend/output/e2e/20260318-post-director-goals-full/result.json`
 - Debate full：
-  - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
 - Debate desktop smoke：
   - `frontend/output/e2e/20260318-b2-debate-smoke/result.json`
 - Debate mobile `430x932`：

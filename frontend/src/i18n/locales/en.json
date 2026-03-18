@@ -126,6 +126,7 @@
       "panel_collapse": "Collapse agent panel",
       "switch_to_theater_aria": "Switch to Pixel Theater",
       "switch_to_classic_aria": "Switch to Classic View",
+      "theater_unavailable_hint": "Pixel Theater was not enabled for this scenario. Go back and start it with Pixel Theater enabled.",
       "theater_status_aria": "Theater live status"
     },
     "intervention": {
@@ -464,6 +465,7 @@
     },
     "common": {
       "loading": "Loading…",
+      "cancel": "Cancel",
       "close": "Close",
       "theme_hooks_aria": "Theme hooks",
       "daily_challenge_art_alt": "Daily challenge pixel illustration",

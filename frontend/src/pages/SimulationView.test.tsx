@@ -156,6 +156,16 @@ vi.mock('react-router-dom', async () => {
 
 describe('SimulationView replay automation output', () => {
   beforeEach(() => {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+      },
+    });
     navigateMock.mockReset();
     captureScreenshotMock.mockReset();
     captureGIFMock.mockReset();

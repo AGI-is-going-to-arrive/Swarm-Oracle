@@ -9,12 +9,14 @@ import {
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getScenarioSystemTrackState,
   getRecommendedGameplayCards,
   getSuggestedGameplayAgents,
   getSuggestedSourceBranchId,
   getDefaultGameplayTargetBranch,
   getGameplayCardDirectivePreview,
   inferGameplayProfile,
+  isCounterplayCard,
 } from './gameplayCards';
 
 const agents: AgentInfo[] = [
@@ -226,6 +228,42 @@ describe('gameplayCards helpers', () => {
     expect(prompt).toContain('龙契裂解');
     expect(prompt).toContain('献祭代价与王权后果');
     expect(prompt).toContain('可能不可逆');
+  });
+
+  it('falls back to a generic directive preview for newly added counterplay cards', () => {
+    const preview = getGameplayCardDirectivePreview('governance', 'audit_reckoning', true);
+    expect(preview).toContain('审计清算');
+    expect(preview).toContain('反制');
+  });
+
+  it('recommends counterplay cards when risk is high or resources are low', () => {
+    const recommended = getRecommendedGameplayCards(
+      'governance',
+      [
+        { cardId: 'forbidden_ritual', profileId: 'governance', round: 1 },
+        { cardId: 'mandate_surge', profileId: 'governance', round: 2 },
+      ],
+      { active: true },
+    );
+
+    expect(recommended[0]).toBe('audit_reckoning');
+    expect(isCounterplayCard(recommended[0])).toBe(true);
+  });
+
+  it('computes scenario-level system tracks with commitment pressure', () => {
+    const tracks = getScenarioSystemTrackState(
+      'governance',
+      [
+        { cardId: 'public_hearing', profileId: 'governance', round: 1 },
+        { cardId: 'resource_triage', profileId: 'governance', round: 2 },
+      ],
+      { active: true },
+      true,
+    );
+
+    expect(tracks.riskValue).toBeGreaterThanOrEqual(0);
+    expect(tracks.resourceValue).toBeGreaterThanOrEqual(0);
+    expect(tracks.pressure).toBeTruthy();
   });
 
   it('infers gameplay profiles from theme and question', () => {

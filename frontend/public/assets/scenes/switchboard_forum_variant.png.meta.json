@@ -2,5 +2,12 @@
   "preset": "generic_scene_variant",
   "model": "gemini-3.1-flash-image-preview",
   "provider": "generativelanguage",
-  "prompt": "Pixel-art rotating review chamber for retro strategy governance drama, warm ivory stone, magenta violet and brass committee signals, civic switchboard consoles, procedural tribunal atmosphere, wide 16:9 composition, no text, no photorealism, consistent with SwarmOracle theater style."
+  "prompt": "Pixel-art rotating review chamber for retro strategy governance drama, warm ivory stone, magenta violet and brass committee signals, civic switchboard consoles, procedural tribunal atmosphere, wide 16:9 composition, no text, no photorealism, consistent with SwarmOracle theater style.",
+  "source": "Legacy repository scene asset with missing original generation record",
+  "source_url": null,
+  "generated_at": null,
+  "output": "public/assets/scenes/switchboard_forum_variant.png",
+  "provenance_status": "backfilled_partial",
+  "backfilled_at": "2026-03-18T09:21:31.116Z",
+  "notes": "Original generation preset/model/timestamp were not fully preserved in repository history; this sidecar was backfilled from an on-repo asset audit."
 }

@@ -24,7 +24,11 @@ export type GameplayCardId =
   | 'evacuation_order'
   | 'public_hearing'
   | 'resource_triage'
-  | 'forbidden_ritual';
+  | 'forbidden_ritual'
+  | 'audit_reckoning'
+  | 'intel_blowback'
+  | 'mandate_snapback'
+  | 'ceasefire_committee';
 
 export interface GameplayCardDefinition {
   id: GameplayCardId;
@@ -98,6 +102,10 @@ interface GameplayUsageLike {
   round: number;
 }
 
+interface BranchCommitmentLike {
+  active: boolean;
+}
+
 interface GameplaySignatureArcDefinition {
   labelZh: string;
   labelEn: string;
@@ -112,6 +120,14 @@ const gameplayCardDefs = CONTRACT_GAMEPLAY_CARD_DEFS as GameplayCardDefinition[]
 const gameplayProfiles = CONTRACT_GAMEPLAY_PROFILES as Record<GameplayProfileId, GameplayProfileDefinition>;
 const gameplaySignatureArcs = CONTRACT_SIGNATURE_ARCS as Record<GameplayProfileId, GameplaySignatureArcDefinition>;
 const gameplayCardEffects = CONTRACT_CARD_SYSTEM_EFFECTS as Record<GameplayCardId, { risk: number; resource: number }>;
+const COUNTERPLAY_CARD_IDS = new Set<GameplayCardId>([
+  'audit_reckoning',
+  'intel_blowback',
+  'mandate_snapback',
+  'ceasefire_committee',
+  'resource_triage',
+  'public_hearing',
+]);
 
 const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuristics>> = {
   governance: {
@@ -252,8 +268,7 @@ export function getGameplayCardDirectivePreview(
   cardId: GameplayCardId,
   isZh: boolean,
 ): string {
-  const directive = gameplayProfiles[profileId].defaultDirectives[cardId];
-  return isZh ? directive.zh : directive.en;
+  return resolveGameplayDirective(profileId, cardId, isZh);
 }
 
 export function getGameplayProfileFrameSrc(profileId: GameplayProfileId): string {
@@ -313,22 +328,73 @@ export function getGameplaySignatureArcState(
   };
 }
 
+export function isCounterplayCard(cardId: GameplayCardId): boolean {
+  return COUNTERPLAY_CARD_IDS.has(cardId);
+}
+
+export function getScenarioSystemTrackState(
+  profileId: GameplayProfileId,
+  usages: GameplayUsageLike[],
+  commitment: BranchCommitmentLike | null | undefined,
+  isZh: boolean,
+) {
+  const arc = getGameplaySignatureArc(profileId, isZh);
+  const totalRisk = usages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].risk, 0);
+  const totalResource = usages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].resource, 0);
+  const commitmentRisk = commitment?.active ? 1 : 0;
+  const commitmentResource = commitment?.active ? -1 : 0;
+  const riskValue = Math.max(0, Math.min(6, totalRisk + commitmentRisk));
+  const resourceValue = Math.max(0, Math.min(6, 3 + totalResource + commitmentResource));
+  const pressure = riskValue >= 5
+    ? (isZh ? '高压' : 'Critical')
+    : riskValue >= 3
+      ? (isZh ? '紧绷' : 'Strained')
+      : (isZh ? '可控' : 'Stable');
+  const counterplayRecommended = riskValue >= 4 || resourceValue <= 2;
+
+  return {
+    label: arc.label,
+    riskLabel: arc.riskLabel,
+    resourceLabel: arc.resourceLabel,
+    riskValue,
+    resourceValue,
+    pressure,
+    counterplayRecommended,
+  };
+}
+
 export function getRecommendedGameplayCards(
   profileId: GameplayProfileId,
   usages: GameplayUsageLike[] = [],
+  commitment?: BranchCommitmentLike | null,
 ): GameplayCardId[] {
   const cards = [...gameplayProfiles[profileId].recommendedCards];
   if (usages.length === 0) {
-    return cards;
+    return commitment?.active
+      ? [
+        'public_hearing',
+        ...cards.filter((cardId) => cardId !== 'public_hearing'),
+      ]
+      : cards;
   }
   const arcState = getGameplaySignatureArcState(profileId, usages, true);
-  if (!arcState.nextCardId) {
-    return cards;
+  const systemTracks = getScenarioSystemTrackState(profileId, usages, commitment, true);
+  const counterplayCards = Array.from(COUNTERPLAY_CARD_IDS);
+  const priorities: GameplayCardId[] = [];
+
+  if (systemTracks.counterplayRecommended) {
+    priorities.push(...counterplayCards);
+  }
+  if (arcState.nextCardId) {
+    priorities.push(arcState.nextCardId);
+  }
+  if (commitment?.active) {
+    priorities.push('public_hearing');
   }
 
   return [
-    arcState.nextCardId,
-    ...cards.filter((cardId) => cardId !== arcState.nextCardId),
+    ...priorities.filter((cardId, index, array) => array.indexOf(cardId) === index),
+    ...cards.filter((cardId) => !priorities.includes(cardId)),
   ];
 }
 
@@ -529,8 +595,7 @@ export function buildGameplayAutoDirective(params: {
   isZh: boolean;
 }): string {
   const { cardId, question, sceneTheme, profileId, isZh } = params;
-  const profile = gameplayProfiles[profileId];
-  const base = isZh ? profile.defaultDirectives[cardId].zh : profile.defaultDirectives[cardId].en;
+  const base = resolveGameplayDirective(profileId, cardId, isZh);
 
   if (isZh) {
     return `围绕题目「${question}」在${sceneTheme ? `${sceneTheme}场景` : '当前场景'}中推进：${base}`;
@@ -597,4 +662,21 @@ export function buildAgentsById(agents: AgentInfo[]): Record<string, AgentInfo> 
 
 export function getDefaultGameplayTargetBranch(branches: BranchInfo[]): string | null {
   return branches.find((branch) => branch.status === 'ACTIVE')?.id ?? null;
+}
+
+function resolveGameplayDirective(
+  profileId: GameplayProfileId,
+  cardId: GameplayCardId,
+  isZh: boolean,
+): string {
+  const directive = gameplayProfiles[profileId].defaultDirectives[cardId];
+  if (directive) {
+    return isZh ? directive.zh : directive.en;
+  }
+
+  const card = getGameplayCardDefinition(cardId);
+  const profile = gameplayProfiles[profileId];
+  return isZh
+    ? `围绕${profile.labelZh}局势执行「${card.labelZh}」，明确要反制什么、代价落到谁头上、以及后续余波。`
+    : `Use "${card.labelEn}" inside the ${profile.labelEn.toLowerCase()} situation and spell out what is being countered, who pays the cost, and what follow-on consequences remain.`;
 }

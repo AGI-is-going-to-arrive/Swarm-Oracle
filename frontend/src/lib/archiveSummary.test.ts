@@ -86,6 +86,9 @@ describe('archiveSummary helpers', () => {
       archiveGrade: 'S',
       directorStyleTag: 'debate_conductor',
       profileResonance: 'offbeat',
+      objectiveCompletedCount: 0,
+      objectiveTotalCount: 0,
+      commitmentOutcome: null,
     });
   });
 
@@ -104,6 +107,8 @@ describe('archiveSummary helpers', () => {
     expect(summary.archiveGrade).toBe('C');
     expect(summary.directorStyleTag).toBe('quiet_observer');
     expect(summary.profileResonance).toBe('offbeat');
+    expect(summary.objectiveCompletedCount).toBe(0);
+    expect(summary.commitmentOutcome).toBeNull();
   });
 
   it('treats theme resonance bets as hittable archive outcomes', () => {
@@ -129,6 +134,25 @@ describe('archiveSummary helpers', () => {
 
     expect(summary.profileResonance).toBe('offbeat');
     expect(summary.bettingHit).toBe(true);
+  });
+
+  it('rewards completed objectives and a successful branch commitment in archive grading', () => {
+    const summary = buildArchiveSummary({
+      branches,
+      usages,
+      bets: [],
+      keyMomentCount: 1,
+      isDailyChallenge: false,
+      profileId: 'governance',
+      objectiveCompletedCount: 2,
+      objectiveTotalCount: 2,
+      commitmentOutcome: 'hit',
+    });
+
+    expect(summary.objectiveCompletedCount).toBe(2);
+    expect(summary.objectiveTotalCount).toBe(2);
+    expect(summary.commitmentOutcome).toBe('hit');
+    expect(summary.archiveGrade).toBe('B');
   });
 
   it('returns localized director style labels', () => {

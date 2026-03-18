@@ -17,7 +17,7 @@ import {
   type ProfileResonanceId,
   type StructuredBetKind,
 } from '../lib/predictionBetting';
-import { placeBet } from '../lib/scenarioMeta';
+import { loadScenarioMeta, placeBet } from '../lib/scenarioMeta';
 import type { BranchInfo } from '../types';
 import './PredictionModal.css';
 
@@ -46,7 +46,12 @@ export default function PredictionModal({
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const branchOptions = getStructuredBetOptions(branches);
-  const [targetBranchId, setTargetBranchId] = useState(branchOptions[0]?.id ?? '');
+  const committedBranchId = loadScenarioMeta(scenarioId).commitment.branchId ?? '';
+  const [targetBranchId, setTargetBranchId] = useState(
+    branchOptions.some((branch) => branch.id === committedBranchId)
+      ? committedBranchId
+      : branchOptions[0]?.id ?? '',
+  );
   const [endingTone, setEndingTone] = useState<EndingToneId>('order');
   const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
   const [confidence, setConfidence] = useState(0.5);
@@ -200,6 +205,12 @@ export default function PredictionModal({
       setTargetBranchId(branchOptions[0].id);
     }
   }, [branchOptions, targetBranchId]);
+
+  useEffect(() => {
+    if (!committedBranchId) return;
+    if (!branchOptions.some((branch) => branch.id === committedBranchId)) return;
+    setTargetBranchId(committedBranchId);
+  }, [branchOptions, committedBranchId]);
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>

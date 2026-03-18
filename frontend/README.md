@@ -15,7 +15,7 @@ React + TypeScript frontend for the SwarmOracle "What-If" prediction engine.
 ## 3.0 Phase B: Visual Upgrade
 
 - **GBC Palette** — 16 CSS custom properties (`--gbc-*`) for unified retro color scheme
-- **Asset Regeneration** — 18 runtime sprites + 30 semantic scene backgrounds + 6 ending images (GBC pixel art)
+- **Asset Regeneration** — 18 runtime sprites + 33 semantic scene backgrounds + 6 ending images (GBC pixel art)
 - **TitleScene** — Typewriter subtitle, click-to-skip, shimmer scanline animation
 - **WorldScene** — Mouse parallax, typewriter bubbles, vertical wipe transitions
 
@@ -33,8 +33,8 @@ npm run dev     # → http://localhost:18928
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
 | `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, and UI language that syncs to `debate.language` |
 | `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, prediction settlement, dedicated share modal, and UI language that syncs to the result payload language |
-| `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export |
-| `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also falls back to backend campaign scenario summary when local archive metadata is missing |
+| `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment` |
+| `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also falls back to backend campaign scenario summary when local archive metadata is missing, and shows objective completion, commitment outcome, and final system-track state |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
 | `/leaderboard` | `LeaderboardView` | Global prediction leaderboard |
 
@@ -45,11 +45,12 @@ npm run dev     # → http://localhost:18928
 - **BranchNode** — Custom node with probability bar + intervene button
 - **AgentPanel** — Agent roster with pixel avatars, emotion dots, speech bubbles
 - **InterventionModal** — Butterfly Effect user intervention input
-- **GameplayCardsModal** — 10 domain-driven “director cards” that inject high-priority branch events; the modal now also shows a profile-specific three-step signature arc plus lightweight `risk / resource` tracks
+- **GameplayCardsModal** — 14 domain-driven “director cards” that inject high-priority branch events; beyond the original escalation cards, the modal now includes `Audit Reckoning / Intel Blowback / Mandate Snapback / Ceasefire Committee` as counterplay cards, and also shows a profile-specific three-step signature arc plus lightweight `risk / resource` tracks
 - **DebateStageRibbon / DebateMomentumBar / DebateScoreCard** — Debate Arena stage, score, and side-state UI; the momentum HUD is now simplified for readability instead of relying on the old transparent frame overlay
 - **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the share modal buttons and first copy line also include platform emoji
 - **themeRegistry.ts** — single source of truth for the 33 Theater / Debate themes, their keyword routing, profile mapping, gameplay frame / badge paths, and Debate-specific UI asset paths
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
+- **Director Layer** — `scenarioMeta` now stores `objectives + commitment` so Theater can show two short run-scoped goals, current system-track pressure, and the currently committed worldline without waiting for a backend schema change
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
 - **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
@@ -76,28 +77,34 @@ npm run e2e:debate:mobile
 npm run e2e:debate:full
 ```
 
-- Latest verified full frontend run: **175 passed**
-- Current doc-sync validation passed for:
-  - `npm test -- --run src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx` → **12 passed**
+- Historical full frontend baseline recorded in repo docs: **179 passed**
+- This doc-sync pass re-ran:
+  - `npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx` → **49 passed**
+  - `npm run build` → passed
+  - `npm run assets:provenance:check` → passed
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`
   - `frontend/output/e2e/20260317-track-c/corners/`
   - `frontend/output/e2e/20260317-track-c/mobile/`
   - `frontend/output/e2e/20260317-track-c/variants/`
-- Latest full baseline artifact: `frontend/output/e2e/20260318-post-db-path-fix-full/result.json` (`15 samples`, `runtime=0`, `recovery=0`)
+- Latest full baseline artifact: `frontend/output/e2e/20260318-post-director-goals-full/result.json`
 - ResultView backend-summary smoke artifact: `frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
 - `scripts/e2e-suite.mjs` now writes `browser-launch.json` into the chosen output directory so you can see which browser launch profile actually ran
-- `scripts/e2e-debate-suite.mjs` now provides a Debate-only baseline for `live -> bet -> result -> share`; the latest successful artifact bundle is `frontend/output/e2e/20260318-post-b2-debate-full/`
+- `scripts/e2e-debate-suite.mjs` now provides a Debate-only baseline for `live -> bet -> result -> share`; the latest successful artifact bundle is `frontend/output/e2e/20260318-post-director-goals-debate-full/`
 - `scripts/e2e-suite.mjs` and `scripts/e2e-automation.mjs` now normalize `frontend/output/...` arguments to the real frontend root, preventing future runs from writing nested `frontend/frontend/output/...` paths
 - Matrix runs now also recreate samples when an old `scenario_id` resolves to a stale `scene_theme`, not only when the scenario is missing
 - `capture-modes` now records `predictionModalBytes` and `gameplayModalBytes`, and replay recovery waits for `theater_ready === true` before marking the flow healthy again
 - `SimulationView` automation output now includes `page.controls.capture_result_kind`, so black-box checks can distinguish a real GIF from `gif_fallback_png`
-- `ResultView` automation output now includes `archive_summary.profile_id / profile_resonance / completed_daily_challenge`, matching the merged backend-fallback state shown on screen
+- `SimulationView` automation output now also includes `page.director.objectives / system_tracks / commitment`
+- `ResultView` automation output now includes `archive_summary.profile_id / profile_resonance / completed_daily_challenge` and additionally `objective_completed_count / objective_total_count / commitment_outcome / risk_value / resource_value`
 - If Playwright screenshot capture stalls on font loading, the suite falls back to Chromium CDP capture instead of aborting the whole run
 - Latest Docker runtime smoke: `docker compose up --build -d` succeeded, and a proxied `POST /api/scenario` request created a Theater scenario that reached `status = done`
 - Repo-root progress heartbeat helper: `node scripts/codex-heartbeat.mjs --interval 30 --label implement-tail --log-file /tmp/upgrade-test-heartbeat.log`
   - It summarizes `git status`, the latest `frontend/output/e2e/**/result.json`, and the newest `progress.md` section in one line-oriented snapshot
+- Latest `develop-web-game` evidence for the new director layer:
+  - `frontend/output/web-game/20260318-director-layer-smoke-v2/state-0.json`
+  - `frontend/output/web-game/20260318-director-layer-smoke-v2/shot-0.png`
 - Language behavior:
   - UI labels follow the EN/ZH switcher
   - Debate pages are the exception: once a Debate payload arrives, the page switches UI language to match `debate.language`
@@ -109,6 +116,9 @@ npm run e2e:debate:full
 - Debate Arena and gameplay art generation helper:
   - `npm run generate:ui-assets -- --preset <preset> [--preset ...] --model gemini-3.1-flash-image-preview`
 - UI / Theater asset generation helper: `frontend/scripts/generate-ui-assets.mjs`
+- Legacy provenance helper scripts:
+  - `npm run assets:provenance:backfill`
+  - `npm run assets:provenance:check`
 - The script tries `aiplatform.googleapis.com` first and falls back to `generativelanguage.googleapis.com` when the former rejects API-key-only calls
 - Newly added assets in this pass include:
   - `public/assets/scenes/debate_arena_civic.png`
@@ -125,7 +135,9 @@ npm run e2e:debate:full
   - `public/assets/scenes/law_court_variant.png`
   - `public/assets/scenes/faith_temple_variant.png`
   - `public/assets/scenes/switchboard_forum_variant.png`
-- Generated PNG assets now store sidecar provenance in same-name `.meta.json` files with `preset / model / provider / source / source_url / generated_at / output / prompt`
+- `frontend/public/assets/ui/generated + frontend/public/assets/scenes` now have sidecar provenance for all **62/62** PNG files
+- Newly generated assets still keep the original `preset / model / provider / source / source_url / generated_at / output / prompt` record
+- Older legacy assets were backfilled from an on-repo audit; those `.meta.json` files may legitimately use `unknown` / `null` fields together with `provenance_status` and `backfilled_at` instead of pretending the original generation metadata survived
 
 ## Build
 

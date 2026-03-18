@@ -126,6 +126,7 @@
       "panel_collapse": "收起 Agent 面板",
       "switch_to_theater_aria": "切换到像素剧场",
       "switch_to_classic_aria": "切换到经典视图",
+      "theater_unavailable_hint": "该场景未启用像素剧场，请返回首页开启像素剧场后重新开始推演。",
       "theater_status_aria": "剧场实时状态"
     },
     "intervention": {
@@ -336,9 +337,9 @@
       "gif_btn": "录制 GIF",
       "capture_mode_label": "截图模式",
       "capture_mode_current": "当前截取目标：",
-      "capture_mode_panel": "Panel",
-      "capture_mode_canvas": "Canvas",
-      "capture_mode_modal": "Modal",
+      "capture_mode_panel": "面板",
+      "capture_mode_canvas": "画布",
+      "capture_mode_modal": "弹窗",
       "capture_mode_panel_desc": "截取当前 Theater 工作区（含 HUD）",
       "capture_mode_canvas_desc": "只截主剧场画布，不带外层 UI",
       "capture_mode_modal_desc": "只截当前打开的弹窗",
@@ -464,6 +465,7 @@
     },
     "common": {
       "loading": "加载中…",
+      "cancel": "取消",
       "close": "关闭",
       "theme_hooks_aria": "题材钩子",
       "daily_challenge_art_alt": "每日挑战像素插画",

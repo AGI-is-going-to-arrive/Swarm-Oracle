@@ -426,6 +426,174 @@
           "Persistent effect: later rounds must keep showing the rite’s cost, fractures, backlash, or new dependencies."
         ]
       }
+    },
+    {
+      "id": "audit_reckoning",
+      "icon": "🧾",
+      "labels": {
+        "zh": "审计清算",
+        "en": "Audit Reckoning"
+      },
+      "descriptions": {
+        "zh": "强制公开账本、责任链和漏洞，把失控局势拉回可审计轨道。",
+        "en": "Force ledgers, accountability chains, and hidden liabilities into the open to drag a runaway branch back into audit."
+      },
+      "animation_key": "hearing_bell",
+      "cost": 1,
+      "cooldown_rounds": 1,
+      "trigger_type": "manual",
+      "auto_enabled": false,
+      "manual_enabled": true,
+      "min_round": 2,
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这次审计要揭开的账本、责任链或黑箱条款...",
+          "en": "Describe which ledger, accountability chain, or black-box clause the audit will force into the open..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线立刻进入一轮无法回避的审计清算：{directive}",
+          "要求：明确哪些账本、责任链、例外条款或黑箱流程被摊开，谁因此失去掩护，谁必须马上自证。",
+          "持续效果：后续轮次要继续体现审计结果如何重排联盟、降温风险、但也带来新的程序阻力与资源消耗。"
+        ],
+        "en": [
+          "Force the branch into an unavoidable round of audit reckoning: {directive}",
+          "Spell out which ledgers, accountability chains, emergency exceptions, or black-box routines are exposed, who loses cover, and who now has to justify themselves in public.",
+          "Persistent effect: later rounds should keep reflecting how the audit lowers some risk while adding friction, delay, and political cost."
+        ]
+      }
+    },
+    {
+      "id": "intel_blowback",
+      "icon": "📡",
+      "labels": {
+        "zh": "情报反噬",
+        "en": "Intel Blowback"
+      },
+      "descriptions": {
+        "zh": "让一次情报操盘、渗透或密约反咬操作者，逼局势重新洗牌。",
+        "en": "Turn an infiltration, secret channel, or intelligence play into blowback that reshuffles the branch."
+      },
+      "animation_key": "shadow_reveal",
+      "cost": 1,
+      "cooldown_rounds": 2,
+      "trigger_type": "manual",
+      "auto_enabled": false,
+      "manual_enabled": true,
+      "min_round": 2,
+      "auto_cooldown_rounds": 2,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这次情报反噬如何暴露潜伏者、密约或误导情报...",
+          "en": "Describe how this blowback exposes infiltrators, secret pacts, or a poisoned intelligence feed..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线发生一次情报反噬：{directive}",
+          "要求：明确是哪条潜伏线、密约链或情报通道出了问题，谁被迫暴露，谁因此改口或切断合作。",
+          "持续效果：后续轮次要继续体现信任崩塌、错误纠偏、反向调查或更谨慎的站队变化。"
+        ],
+        "en": [
+          "Trigger an intelligence blowback event in the current branch: {directive}",
+          "Spell out which covert line, secret pact, or intel channel failed, who gets exposed, and who is forced to retreat, reverse, or cut ties.",
+          "Persistent effect: later rounds should keep showing trust erosion, counter-investigation, and more cautious coalition behavior."
+        ]
+      }
+    },
+    {
+      "id": "mandate_snapback",
+      "icon": "↩️",
+      "labels": {
+        "zh": "民意回摆",
+        "en": "Mandate Snapback"
+      },
+      "descriptions": {
+        "zh": "让先前被压住的民意突然反弹，迫使高压叙事收缩或转向。",
+        "en": "Let suppressed public sentiment snap back and force an overextended branch to shrink, soften, or reverse."
+      },
+      "animation_key": "mandate_surge",
+      "cost": 1,
+      "cooldown_rounds": 1,
+      "trigger_type": "manual",
+      "auto_enabled": false,
+      "manual_enabled": true,
+      "min_round": 2,
+      "auto_cooldown_rounds": 1,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这次民意回摆如何推翻旧叙事、要求让步或强迫重谈...",
+          "en": "Describe how the public snapback overturns the old narrative, demands concessions, or forces renegotiation..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线遭遇一波民意回摆：{directive}",
+          "要求：把它写成先前被压制、忽略或误判的公众要求重新爆发，并迫使所有阵营重新估算合法性与代价。",
+          "持续效果：后续轮次要继续体现政策收缩、让步谈判、宣传失灵或新的群众压力。"
+        ],
+        "en": [
+          "Hit the branch with a public snapback: {directive}",
+          "Present it as previously suppressed or misread public demands returning with enough force to recalculate legitimacy and cost for every side.",
+          "Persistent effect: later rounds should keep showing policy retreat, concession bargaining, propaganda failure, or renewed pressure from below."
+        ]
+      }
+    },
+    {
+      "id": "ceasefire_committee",
+      "icon": "🕊️",
+      "labels": {
+        "zh": "停火委员会",
+        "en": "Ceasefire Committee"
+      },
+      "descriptions": {
+        "zh": "强制把高压冲突拖进一个临时停火/缓冲机制，争取喘息与资源回补。",
+        "en": "Force a high-pressure branch into a temporary ceasefire or buffer mechanism to buy breathing room and resource recovery."
+      },
+      "animation_key": "handshake",
+      "cost": 1,
+      "cooldown_rounds": 2,
+      "trigger_type": "manual",
+      "auto_enabled": false,
+      "manual_enabled": true,
+      "min_round": 2,
+      "auto_cooldown_rounds": 2,
+      "branching_bonus": 0,
+      "ui": {
+        "requires_primary_agent": false,
+        "requires_secondary_agent": false,
+        "requires_source_branch": false,
+        "placeholder": {
+          "zh": "输入这次停火委员会如何冻结冲突、让出窗口并交换最低限度承诺...",
+          "en": "Describe how this committee freezes the conflict, opens a buffer window, and trades minimum guarantees..."
+        }
+      },
+      "prompt_lines": {
+        "zh": [
+          "请让当前世界线立刻成立一个停火委员会/缓冲机制：{directive}",
+          "要求：明确谁被迫坐下来、哪些行动被冻结、窗口持续多久、以及哪类最低保障或交换条件让各方勉强接受。",
+          "持续效果：后续轮次要继续体现风险降温、资源回补、但也伴随新的妥协成本与反对派压力。"
+        ],
+        "en": [
+          "Force the branch to form a ceasefire committee or temporary buffer mechanism right now: {directive}",
+          "Spell out who is dragged to the table, which actions freeze, how long the window lasts, and which minimum guarantees make the deal barely acceptable.",
+          "Persistent effect: later rounds should keep showing cooler risk, some resource recovery, and the new cost of compromise or backlash from hardliners."
+        ]
+      }
     }
   ],
   "profiles": [
@@ -1622,6 +1790,22 @@
     "forbidden_ritual": {
       "risk": 3,
       "resource": -2
+    },
+    "audit_reckoning": {
+      "risk": -2,
+      "resource": -1
+    },
+    "intel_blowback": {
+      "risk": -1,
+      "resource": 0
+    },
+    "mandate_snapback": {
+      "risk": -2,
+      "resource": 0
+    },
+    "ceasefire_committee": {
+      "risk": -2,
+      "resource": 1
     }
   }
 }

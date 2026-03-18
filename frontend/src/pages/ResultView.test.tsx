@@ -85,11 +85,24 @@ vi.mock('../lib/dailyChallenge', () => ({
 }));
 
 vi.mock('../lib/scenarioMeta', () => {
-  const meta = {
+  const meta: ScenarioMeta = {
     director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
     cooldowns: {},
     cards: { usageLog: [] },
     betting: { bets: [] },
+    commitment: {
+      active: false,
+      branchId: null,
+      branchTitle: null,
+      committedAtRound: null,
+      committedAt: null,
+      outcome: null,
+    },
+    objectives: {
+      generatedForQuestion: null,
+      generatedForProfile: null,
+      goals: [],
+    },
     archive: {
       branchSnapshots: [],
       keyMoments: [],
@@ -105,6 +118,7 @@ vi.mock('../lib/scenarioMeta', () => {
   };
   return {
     loadScenarioMeta: vi.fn(() => meta),
+    ensureScenarioObjectives: vi.fn(() => meta),
     updateArchive: vi.fn(() => meta),
   };
 });
@@ -118,6 +132,9 @@ vi.mock('../lib/archiveSummary', () => ({
     archiveGrade: 'A',
     directorStyleTag: 'quiet_observer',
     profileResonance: 'aligned',
+    objectiveCompletedCount: 0,
+    objectiveTotalCount: 0,
+    commitmentOutcome: null,
   })),
   getDirectorStyleLabel: vi.fn(() => 'Quiet Observer'),
 }));
@@ -132,6 +149,7 @@ vi.mock('../components/gameplayCards', () => ({
   getGameplayProfileLabel: vi.fn(() => 'Law'),
   getGameplayProfileSignatureHooks: vi.fn(() => ['Judicial review']),
   getGameplaySignatureArcState: vi.fn(() => null),
+  getScenarioSystemTrackState: vi.fn(() => null),
   inferGameplayProfile: vi.fn(() => ({ id: 'law' })),
 }));
 
@@ -277,6 +295,19 @@ describe('ResultView campaign summary', () => {
       cooldowns: {},
       cards: { usageLog: [] },
       betting: { bets: [] },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
       archive: {
         branchSnapshots: [],
         keyMoments: [],

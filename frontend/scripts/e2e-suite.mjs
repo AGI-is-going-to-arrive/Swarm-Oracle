@@ -775,7 +775,9 @@ async function runCaptureModesCase(page, {
   ensureDir(outputDir);
   const scenario = await createScenarioViaApi(baseUrl, {
     question,
-    rounds: 1,
+    // Keep this case in a live, capture-ready theater state long enough for
+    // prediction/gameplay modal probes before the scenario auto-completes.
+    rounds: 2,
     numAgents: 3,
     visualizationEnabled: true,
   });

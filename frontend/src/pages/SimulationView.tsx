@@ -14,8 +14,23 @@ import {
   type CaptureMode,
   useScreenCapture,
 } from '../hooks/useScreenCapture';
-import { loadScenarioMeta } from '../lib/scenarioMeta';
-import { getGameplayCardDefinition } from '../components/gameplayCards';
+import {
+  clearBranchCommitment,
+  ensureScenarioObjectives,
+  loadScenarioMeta,
+  setBranchCommitment,
+} from '../lib/scenarioMeta';
+import {
+  getGameplayCardDefinition,
+  getGameplaySignatureArcState,
+  getScenarioSystemTrackState,
+  inferGameplayProfile,
+} from '../components/gameplayCards';
+import {
+  buildDefaultDirectorObjectives,
+  countCompletedObjectives,
+  evaluateDirectorObjectives,
+} from '../lib/directorObjectives';
 const LazyClassicBranchTree = lazy(() =>
   import('../components/ClassicBranchTree').then((mod) => ({ default: mod.ClassicBranchTree }))
 );
@@ -131,6 +146,8 @@ export function SimulationView() {
   const [theaterMountKey, setTheaterMountKey] = useState(0);
   const [selectedReplayBranchId, setSelectedReplayBranchId] = useState<string | null>(null);
   const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
+  const [localMetaRevision, setLocalMetaRevision] = useState(0);
+  const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
@@ -145,6 +162,52 @@ export function SimulationView() {
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
   );
+  const scenarioMeta = useMemo(
+    () => (id ? loadScenarioMeta(id) : null),
+    [id, localMetaRevision],
+  );
+  const gameplayProfile = useMemo(
+    () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
+    [scenario],
+  );
+  const signatureArcState = useMemo(
+    () => (
+      scenarioMeta && gameplayProfile
+        ? getGameplaySignatureArcState(gameplayProfile.id, scenarioMeta.cards.usageLog, isZh)
+        : null
+    ),
+    [gameplayProfile, isZh, scenarioMeta],
+  );
+  const systemTracks = useMemo(
+    () => (
+      scenarioMeta && gameplayProfile
+        ? getScenarioSystemTrackState(gameplayProfile.id, scenarioMeta.cards.usageLog, scenarioMeta.commitment, isZh)
+        : null
+    ),
+    [gameplayProfile, isZh, scenarioMeta],
+  );
+  const dominantBranch = useMemo(
+    () => [...branches].sort((a, b) => b.probability - a.probability)[0] ?? null,
+    [branches],
+  );
+  const evaluatedObjectives = useMemo(
+    () => (
+      scenarioMeta
+        ? evaluateDirectorObjectives({
+          objectives: scenarioMeta.objectives.goals,
+          meta: scenarioMeta,
+          dominantBranch,
+          isZh,
+          isFinal: isSimulationComplete,
+        })
+        : []
+    ),
+    [dominantBranch, isSimulationComplete, isZh, scenarioMeta],
+  );
+  const completedObjectiveCount = useMemo(
+    () => countCompletedObjectives(evaluatedObjectives),
+    [evaluatedObjectives],
+  );
   const canPreviewGameplayCards = viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
   const canUseGameplayCards = !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
   const isWarmupPhase =
@@ -154,9 +217,7 @@ export function SimulationView() {
     && currentRound === 0;
   const canToggleViewMode = viewMode === 'theater' || visualizationEnabled;
   const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
-    ? (isZh
-      ? '该场景未启用像素剧场，请返回首页开启像素剧场后重新开始推演。'
-      : 'Pixel Theater was not enabled for this scenario. Go back and start it with Pixel Theater enabled.')
+    ? t('sim.theater_unavailable_hint')
     : undefined;
   const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
   const replayBranchOptions = useMemo(
@@ -168,6 +229,33 @@ export function SimulationView() {
     if (viewMode !== 'theater' && !visualizationEnabled) return;
     preloadPhaserGame();
   }, [viewMode, visualizationEnabled]);
+
+  const refreshLocalMeta = useCallback(() => {
+    setLocalMetaRevision((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
+    if (scenarioMeta.objectives.goals.length > 0) return;
+
+    ensureScenarioObjectives(id, {
+      question: scenario.question,
+      profileId: gameplayProfile.id,
+      goals: buildDefaultDirectorObjectives({
+        profileId: gameplayProfile.id,
+        signatureCardId: signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null,
+      }),
+    });
+    refreshLocalMeta();
+  }, [gameplayProfile, id, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
+
+  useEffect(() => {
+    if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {
+      setCommitmentDraftBranchId(scenarioMeta.commitment.branchId);
+      return;
+    }
+    setCommitmentDraftBranchId(activeBranches[0]?.id ?? '');
+  }, [activeBranches, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
 
   const replayRounds = useMemo(
     () => getReplayRounds(messages, branches, selectedReplayBranchId),
@@ -297,6 +385,31 @@ export function SimulationView() {
         route: window.location.pathname,
         kind: 'simulation',
         error: error || null,
+        director: scenarioMeta && systemTracks
+          ? {
+            completed_objectives: completedObjectiveCount,
+            objective_count: evaluatedObjectives.length,
+            objectives: evaluatedObjectives.map((objective) => ({
+              kind: objective.kind,
+              status: objective.status,
+              title: objective.title,
+              progress: objective.progress,
+            })),
+            system_tracks: {
+              risk_value: systemTracks.riskValue,
+              resource_value: systemTracks.resourceValue,
+              pressure: systemTracks.pressure,
+            },
+            commitment: scenarioMeta.commitment.active
+              ? {
+                active: true,
+                branch_id: scenarioMeta.commitment.branchId,
+                branch_title: scenarioMeta.commitment.branchTitle,
+                outcome: scenarioMeta.commitment.outcome,
+              }
+              : { active: false },
+          }
+          : null,
         controls: {
           can_go_back: true,
           can_toggle_view_mode: canToggleViewMode,
@@ -355,9 +468,13 @@ export function SimulationView() {
     branches,
     captureStatus,
     captureMode,
+    completedObjectiveCount,
     currentRound,
+    evaluatedObjectives,
     detailBranch,
     error,
+    scenarioMeta,
+    systemTracks,
     interventionTarget,
     isSimulationComplete,
     agents.length,
@@ -506,6 +623,32 @@ export function SimulationView() {
   const displayedReplayRound = canUseReplayControls
     ? (selectedReplayRound ?? currentRound)
     : currentRound;
+  const handlePredictionClose = useCallback(() => {
+    setShowPrediction(false);
+    setPredictionAutomation(null);
+    refreshLocalMeta();
+  }, [refreshLocalMeta]);
+  const handleGameplayCardsClose = useCallback(() => {
+    setShowGameplayCards(false);
+    setGameplayAutomation(null);
+    refreshLocalMeta();
+  }, [refreshLocalMeta]);
+  const handleCommitBranch = useCallback(() => {
+    if (!id || !commitmentDraftBranchId) return;
+    const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
+    if (!branch) return;
+    setBranchCommitment(id, {
+      branchId: branch.id,
+      branchTitle: branch.title,
+      currentRound: Math.max(1, currentRound),
+    });
+    refreshLocalMeta();
+  }, [activeBranches, commitmentDraftBranchId, currentRound, id, refreshLocalMeta]);
+  const handleClearCommitment = useCallback(() => {
+    if (!id) return;
+    clearBranchCommitment(id);
+    refreshLocalMeta();
+  }, [id, refreshLocalMeta]);
   const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
   const captureDoneLabel = lastCaptureKind === 'gif'
     ? t('game.gif_saved')
@@ -587,6 +730,31 @@ export function SimulationView() {
         route: window.location.pathname,
         kind: 'simulation',
         error: error || null,
+        director: scenarioMeta && systemTracks
+          ? {
+            completed_objectives: completedObjectiveCount,
+            objective_count: evaluatedObjectives.length,
+            objectives: evaluatedObjectives.map((objective) => ({
+              kind: objective.kind,
+              status: objective.status,
+              title: objective.title,
+              progress: objective.progress,
+            })),
+            system_tracks: {
+              risk_value: systemTracks.riskValue,
+              resource_value: systemTracks.resourceValue,
+              pressure: systemTracks.pressure,
+            },
+            commitment: scenarioMeta.commitment.active
+              ? {
+                active: true,
+                branch_id: scenarioMeta.commitment.branchId,
+                branch_title: scenarioMeta.commitment.branchTitle,
+                outcome: scenarioMeta.commitment.outcome,
+              }
+              : { active: false },
+          }
+          : null,
         controls: {
           can_go_back: true,
           can_toggle_view_mode: canToggleViewMode,
@@ -636,9 +804,11 @@ export function SimulationView() {
     branches,
     captureStatus,
     captureMode,
+    completedObjectiveCount,
     currentRound,
     detailBranch,
     error,
+    evaluatedObjectives,
     hasActiveModal,
     interventionTarget,
     isSimulationComplete,
@@ -650,10 +820,12 @@ export function SimulationView() {
     gameplayAutomation,
     predictionAutomation,
     replayAutomationState,
+    scenarioMeta,
     scenario,
     showGameplayCards,
     showPrediction,
     status,
+    systemTracks,
     canToggleViewMode,
     viewMode,
     visualizationEnabled,
@@ -762,7 +934,7 @@ export function SimulationView() {
               {viewMode === 'classic' ? '🎮' : '📊'}
             </span>
             <span className="view-mode-toggle__label">
-              {viewMode === 'classic' ? 'Pixel Theater' : 'Classic View'}
+              {viewMode === 'classic' ? t('home.viz_theater') : t('home.viz_classic')}
             </span>
           </button>
           <span className="sim-header__logo">{t('app_title')}</span>
@@ -904,6 +1076,61 @@ export function SimulationView() {
                   ✉ {messages.length}
                 </span>
               </div>
+              {scenarioMeta && systemTracks && evaluatedObjectives.length > 0 && (
+                <div className="theater-panel__director">
+                  <div className="theater-panel__director-top">
+                    <strong>{isZh ? '导演目标' : 'Director Goals'}</strong>
+                    <span className="theater-chip">
+                      {systemTracks.riskLabel} {systemTracks.riskValue}/6 · {systemTracks.resourceLabel} {systemTracks.resourceValue}/6
+                    </span>
+                    <span className="theater-chip">
+                      {isZh ? '完成' : 'Done'} {completedObjectiveCount}/{evaluatedObjectives.length}
+                    </span>
+                    {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
+                      <span className="theater-chip theater-chip--primary">
+                        🎯 {scenarioMeta.commitment.branchTitle}
+                      </span>
+                    )}
+                  </div>
+                  <div className="theater-panel__director-goals">
+                    {evaluatedObjectives.map((objective) => (
+                      <div
+                        key={objective.id}
+                        className={`director-goal director-goal--${objective.status}`}
+                      >
+                        <strong>{objective.title}</strong>
+                        <span>{objective.detail}</span>
+                        <small>{objective.progress}</small>
+                      </div>
+                    ))}
+                  </div>
+                  {!isSimulationComplete && activeBranches.length > 0 && (
+                    <div className="theater-panel__commitment">
+                      <label className="theater-select">
+                        <span>{isZh ? '承诺世界线' : 'Committed worldline'}</span>
+                        <select
+                          value={commitmentDraftBranchId}
+                          onChange={(event) => setCommitmentDraftBranchId(event.target.value)}
+                        >
+                          {activeBranches.map((branch) => (
+                            <option key={branch.id} value={branch.id}>
+                              {branch.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className="btn btn-ghost btn--capture" onClick={handleCommitBranch}>
+                        {isZh ? '锁定承诺' : 'Commit'}
+                      </button>
+                      {scenarioMeta.commitment.active && (
+                        <button className="btn btn-ghost btn--capture" onClick={handleClearCommitment}>
+                          {isZh ? '取消承诺' : 'Clear'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {isWarmupPhase && (
                 <div className="theater-panel__warmup" aria-label={t('sim.warmup.title')}>
                   <div className="theater-panel__warmup-copy">
@@ -1059,7 +1286,7 @@ export function SimulationView() {
             sceneTheme={scenario?.scene_theme}
             currentRound={Math.max(currentRound, 1)}
             onAutomationStateChange={setPredictionAutomation}
-            onClose={() => setShowPrediction(false)}
+            onClose={handlePredictionClose}
           />
         </Suspense>
       )}
@@ -1076,7 +1303,7 @@ export function SimulationView() {
             readOnly={!canUseGameplayCards}
             disabledReason={!canUseGameplayCards ? t('sim.warmup.cards_preview') : null}
             onAutomationStateChange={setGameplayAutomation}
-            onClose={() => setShowGameplayCards(false)}
+            onClose={handleGameplayCardsClose}
           />
         </Suspense>
       )}
