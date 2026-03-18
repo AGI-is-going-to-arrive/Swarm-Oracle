@@ -356,6 +356,18 @@ async function deleteScenarioViaApi(baseUrl, scenarioId) {
   return response.json();
 }
 
+async function putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState) {
+  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/director-state`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(directorState),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${await response.text()}`);
+  }
+  return response.json();
+}
+
 async function waitForScenarioStatus(baseUrl, scenarioId, predicate, timeout = 60000, label = "scenario status") {
   const start = Date.now();
   let lastError = null;
@@ -377,6 +389,41 @@ async function waitForScenarioStatus(baseUrl, scenarioId, predicate, timeout = 6
     throw new Error(`Timed out waiting for ${label} on scenario ${scenarioId}; last error: ${lastError}`);
   }
   throw new Error(`Timed out waiting for ${label} on scenario ${scenarioId}`);
+}
+
+async function clearOriginStorage(page, baseUrl) {
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate(async () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    if ("indexedDB" in window && typeof indexedDB.databases === "function") {
+      const databases = await indexedDB.databases();
+      await Promise.all(
+        databases
+          .map((db) => db?.name)
+          .filter(Boolean)
+          .map((name) => new Promise((resolve) => {
+            const request = indexedDB.deleteDatabase(name);
+            request.onsuccess = () => resolve();
+            request.onerror = () => resolve();
+            request.onblocked = () => resolve();
+          })),
+      );
+    }
+  });
+  await page.context().clearCookies();
+}
+
+async function extractResultArchiveCards(page) {
+  return page.evaluate(() => {
+    const cards = Array.from(document.querySelectorAll(".archive-summary-card"));
+    return cards.map((card) => {
+      const label = card.querySelector(".archive-summary-card__label")?.textContent?.trim() ?? null;
+      const value = card.querySelector("strong")?.textContent?.trim() ?? null;
+      const detail = card.querySelector("small")?.textContent?.trim() ?? null;
+      return { label, value, detail };
+    });
+  });
 }
 
 async function resolveMatrixScenario(baseUrl, sample) {
@@ -532,6 +579,7 @@ async function runReplayFlow(page, {
   return {
     scenarioId,
     replayState: settledPayload.page?.replay_state ?? null,
+    director: settledPayload.page?.director ?? null,
     scene: settledPayload.scene?.scene ?? null,
     theme: settledPayload.scene?.theme ?? null,
   };
@@ -587,10 +635,108 @@ async function runResultFlow(page, {
   const finalPayload = await readAutomation(page);
   writeJson(path.join(outputDir, "result-final.json"), finalPayload);
   await saveScreenshot(page, path.join(outputDir, "result-final.png"));
+  const archiveCards = await extractResultArchiveCards(page);
+  writeJson(path.join(outputDir, "archive-cards.json"), archiveCards);
   return {
     scenarioId,
     branchTitles: finalPayload?.page?.branch_titles ?? [],
+    archiveSummary: finalPayload?.page?.archive_summary ?? null,
+    archiveCards,
     shareContext: generated?.page?.controls?.modal_state?.share_context ?? null,
+  };
+}
+
+async function runDirectorStateRoundtripCase(page, {
+  baseUrl,
+  scenarioId,
+  outputDir,
+}) {
+  ensureDir(outputDir);
+  const scenario = await getScenarioViaApi(baseUrl, scenarioId);
+  const dominantBranch = [...(scenario.branches ?? [])]
+    .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))[0] ?? null;
+  if (!dominantBranch?.id || !dominantBranch?.title) {
+    throw new Error(`Scenario ${scenarioId} does not expose a dominant branch for director-state smoke`);
+  }
+
+  const directorState = {
+    objectives: {
+      generated_for_question: scenario.question,
+      generated_for_profile: "governance",
+      goals: [
+        {
+          id: "e2e-director-goal-signature",
+          kind: "signature_arc_step",
+          target_card_id: "public_hearing",
+          reward_label: "director_point",
+          created_at: "2026-03-19T00:00:00Z",
+        },
+        {
+          id: "e2e-director-goal-commitment",
+          kind: "branch_commitment",
+          target_card_id: null,
+          reward_label: "archive_grade",
+          created_at: "2026-03-19T00:00:00Z",
+        },
+      ],
+      last_updated_at: "2026-03-19T00:00:00Z",
+    },
+    commitment: {
+      active: true,
+      branch_id: dominantBranch.id,
+      branch_title: dominantBranch.title,
+      committed_at_round: 2,
+      committed_at: "2026-03-19T00:02:00Z",
+      outcome: "pending",
+    },
+  };
+
+  await putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState);
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const simulation = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.page?.director?.objective_count === 2
+      && payload.page?.director?.commitment?.active === true
+      && payload.page?.director?.commitment?.branch_title === dominantBranch.title
+    ),
+    30000,
+    "director state simulation readback",
+  );
+  writeJson(path.join(outputDir, "simulation.json"), simulation);
+  await saveScreenshot(page, path.join(outputDir, "simulation.png"));
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const result = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "result"
+      && payload.page?.loading === false
+      && payload.page?.archive_summary?.dominant_branch_title === dominantBranch.title
+      && payload.page?.archive_summary?.commitment_outcome === "hit"
+    ),
+    40000,
+    "director state result readback",
+  );
+  const archiveCards = await extractResultArchiveCards(page);
+  writeJson(path.join(outputDir, "result.json"), result);
+  writeJson(path.join(outputDir, "archive-cards.json"), archiveCards);
+  await saveScreenshot(page, path.join(outputDir, "result.png"));
+
+  const directorGoalsCard = archiveCards.find((card) => /director goals|导演目标/i.test(card.label ?? ""));
+  const commitmentCard = archiveCards.find((card) => /worldline commitment|世界线承诺/i.test(card.label ?? ""));
+
+  return {
+    scenarioId,
+    dominantBranchTitle: dominantBranch.title,
+    simulationDirector: simulation.page?.director ?? null,
+    resultArchiveSummary: result.page?.archive_summary ?? null,
+    directorGoalsCard: directorGoalsCard ?? null,
+    commitmentCard: commitmentCard ?? null,
   };
 }
 
@@ -1423,6 +1569,12 @@ async function runCornersSuite(args) {
       baseUrl: args.baseUrl,
       scenarioId: governanceReplaySample.scenarioId,
       outputDir: path.join(outputDir, "replay-skip-switch"),
+    });
+
+    cases.director_state_roundtrip = await runDirectorStateRoundtripCase(page, {
+      baseUrl: args.baseUrl,
+      scenarioId: governanceReplaySample.scenarioId,
+      outputDir: path.join(outputDir, "director-state-roundtrip"),
     });
 
     cases.capture_modes = await runCaptureModesCase(page, {

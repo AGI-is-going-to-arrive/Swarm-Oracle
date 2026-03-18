@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
-import type { BranchInfo } from '../types';
+import type { BranchInfo, ScenarioDirectorState } from '../types';
 
 const navigateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
@@ -14,6 +14,29 @@ const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
 let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
 let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
+const { upsertScenarioDirectorStateMock } = vi.hoisted(() => ({
+  upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
+    scenario_id: scenarioId,
+    ...(payload as Record<string, unknown>),
+  })),
+}));
+
+const emptyDirectorState: ScenarioDirectorState = {
+  objectives: {
+    generated_for_question: null,
+    generated_for_profile: null,
+    goals: [],
+    last_updated_at: null,
+  },
+  commitment: {
+    active: false,
+    branch_id: null,
+    branch_title: null,
+    committed_at_round: null,
+    committed_at: null,
+    outcome: null,
+  },
+};
 
 const mockStore = {
   scenario: {
@@ -29,6 +52,7 @@ const mockStore = {
     groups: [],
     hierarchical: false,
     visualization_enabled: true,
+    director_state: emptyDirectorState,
   },
   agents: [
     { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -79,6 +103,10 @@ vi.mock('../stores/simulationStore', () => {
 
 vi.mock('../hooks/useSimulationWS', () => ({
   useSimulationWS: () => undefined,
+}));
+
+vi.mock('../api/client', () => ({
+  upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
 }));
 
 vi.mock('../hooks/useScreenCapture', () => ({
@@ -175,6 +203,7 @@ describe('SimulationView replay automation output', () => {
     mockLastCaptureKind = null;
     captureCompositeElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
+    upsertScenarioDirectorStateMock.mockClear();
     mockStore.status = 'done';
     mockStore.isSimulationComplete = true;
     mockStore.visualizationEnabled = true;
@@ -212,6 +241,7 @@ describe('SimulationView replay automation output', () => {
         batch_count: 1,
       }),
     });
+    mockStore.scenario.director_state = emptyDirectorState;
   });
 
   it('publishes replay_state inside render_game_to_text', async () => {
@@ -598,6 +628,80 @@ describe('SimulationView replay automation output', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.controls?.can_toggle_view_mode).toBe(false);
       expect(payload?.simulation?.visualizationEnabled).toBe(false);
+    });
+  });
+
+  it('prefers backend director state over empty local scenarioMeta', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 2;
+    mockStore.branches = [
+      {
+        id: 'b1',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '历史拐点',
+        summary: '',
+        story: '',
+        insight: '',
+        key_moments: [],
+        probability: 1,
+        status: 'ACTIVE' as const,
+      },
+    ];
+    mockStore.scenario.director_state = {
+      objectives: {
+        generated_for_question: '如果罗马帝国从未衰落？',
+        generated_for_profile: 'empire',
+        goals: [
+          {
+            id: 'goal-1',
+            kind: 'signature_arc_step',
+            target_card_id: 'civilization_debate',
+            reward_label: 'director_point',
+            created_at: '2026-03-18T00:00:00Z',
+          },
+          {
+            id: 'goal-2',
+            kind: 'branch_commitment',
+            target_card_id: null,
+            reward_label: 'archive_grade',
+            created_at: '2026-03-18T00:00:00Z',
+          },
+        ],
+        last_updated_at: '2026-03-18T00:00:00Z',
+      },
+      commitment: {
+        active: true,
+        branch_id: 'b1',
+        branch_title: '历史拐点',
+        committed_at_round: 2,
+        committed_at: '2026-03-18T00:02:00Z',
+        outcome: 'pending',
+      },
+    } as ScenarioDirectorState;
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.director).toMatchObject({
+        objective_count: 2,
+        commitment: {
+          active: true,
+          branch_id: 'b1',
+          branch_title: '历史拐点',
+          outcome: 'pending',
+        },
+      });
     });
   });
 });

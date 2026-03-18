@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -24,6 +25,23 @@ VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
 VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
 LEVEL_SCORE_STEP = 5
 BADGE_IDS = ("daily_challenge", "archive_record", "bet_winner")
+
+DEFAULT_SCENARIO_DIRECTOR_STATE = {
+    "objectives": {
+        "generated_for_question": None,
+        "generated_for_profile": None,
+        "goals": [],
+        "last_updated_at": None,
+    },
+    "commitment": {
+        "active": False,
+        "branch_id": None,
+        "branch_title": None,
+        "committed_at_round": None,
+        "committed_at": None,
+        "outcome": None,
+    },
+}
 
 
 class CampaignError(Exception):
@@ -97,6 +115,82 @@ def _normalize_commitment_outcome(value: str | None) -> str | None:
             f"Unsupported commitment_outcome: {value}"
         )
     return normalized
+
+
+def get_default_scenario_director_state() -> dict[str, Any]:
+    return deepcopy(DEFAULT_SCENARIO_DIRECTOR_STATE)
+
+
+def normalize_scenario_director_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+    state = get_default_scenario_director_state()
+    if not isinstance(payload, dict):
+        return state
+
+    raw_objectives = payload.get("objectives")
+    if isinstance(raw_objectives, dict):
+        goals: list[dict[str, Any]] = []
+        for goal in raw_objectives.get("goals") or []:
+            if not isinstance(goal, dict):
+                continue
+            goals.append(
+                {
+                    "id": str(goal.get("id", "")).strip(),
+                    "kind": str(goal.get("kind", "")).strip(),
+                    "target_card_id": (
+                        str(goal["target_card_id"]).strip()
+                        if goal.get("target_card_id") is not None
+                        else None
+                    ),
+                    "reward_label": (
+                        str(goal["reward_label"]).strip()
+                        if goal.get("reward_label") is not None
+                        else None
+                    ),
+                    "created_at": str(goal.get("created_at", "")).strip(),
+                }
+            )
+        state["objectives"] = {
+            "generated_for_question": raw_objectives.get("generated_for_question"),
+            "generated_for_profile": raw_objectives.get("generated_for_profile"),
+            "goals": goals,
+            "last_updated_at": raw_objectives.get("last_updated_at"),
+        }
+
+    raw_commitment = payload.get("commitment")
+    if not isinstance(raw_commitment, dict):
+        return state
+
+    active = bool(raw_commitment.get("active"))
+    branch_id = (
+        str(raw_commitment["branch_id"]).strip()
+        if raw_commitment.get("branch_id") is not None
+        else None
+    )
+    branch_title = (
+        str(raw_commitment["branch_title"]).strip()
+        if raw_commitment.get("branch_title") is not None
+        else None
+    )
+    if not active or not branch_id or not branch_title:
+        return state
+
+    committed_at_round = raw_commitment.get("committed_at_round")
+    if committed_at_round is not None:
+        try:
+            committed_at_round = int(committed_at_round)
+        except (TypeError, ValueError):
+            committed_at_round = None
+
+    outcome = raw_commitment.get("outcome")
+    state["commitment"] = {
+        "active": True,
+        "branch_id": branch_id,
+        "branch_title": branch_title,
+        "committed_at_round": committed_at_round,
+        "committed_at": raw_commitment.get("committed_at"),
+        "outcome": _normalize_commitment_outcome(str(outcome) if outcome is not None else None),
+    }
+    return state
 
 
 def calculate_campaign_score_delta(
@@ -632,6 +726,34 @@ def get_campaign_profile_summary(user_id: str) -> dict[str, Any] | None:
             return _build_empty_profile_summary(user_id)
         last_daily_log = _get_last_daily_challenge_log(session, profile.id)
         return _build_profile_summary(profile, last_daily_log=last_daily_log)
+
+
+def get_scenario_director_state(scenario_id: str) -> dict[str, Any]:
+    """Return the persisted per-scenario director state or a safe default."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise CampaignNotFoundError("Scenario not found")
+        return normalize_scenario_director_state(scenario.director_state_json)
+
+
+def save_scenario_director_state(
+    scenario_id: str,
+    director_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the authoritative per-scenario director state."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise CampaignNotFoundError("Scenario not found")
+
+        scenario.director_state_json = normalize_scenario_director_state(director_state)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        return normalize_scenario_director_state(scenario.director_state_json)
 
 
 def get_scenario_campaign_summary(scenario_id: str) -> dict[str, Any]:

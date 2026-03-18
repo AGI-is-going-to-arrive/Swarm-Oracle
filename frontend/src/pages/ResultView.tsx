@@ -14,6 +14,7 @@ import {
   getStory,
   listPredictions,
   scorePredictions,
+  upsertScenarioDirectorState,
 } from '../api/client';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { getDirectorIdentity } from '../lib/directorIdentity';
@@ -23,6 +24,12 @@ import {
 } from '../lib/dailyChallenge';
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
 import { ensureScenarioObjectives, loadScenarioMeta, updateArchive } from '../lib/scenarioMeta';
+import {
+  applyScenarioDirectorState,
+  hasMeaningfulScenarioDirectorState,
+  mergeScenarioMetaWithDirectorState,
+  scenarioMetaToDirectorState,
+} from '../lib/scenarioDirectorState';
 import {
   buildDefaultDirectorObjectives,
   countCompletedObjectives,
@@ -200,7 +207,11 @@ export default function ResultView() {
         const challengeMatch = findChallengeProgressByScenarioId(id);
         const isDailyChallenge = Boolean(challengeMatch);
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
-        const nextMeta = updateArchive(id, {
+        const remoteDirectorState = scenario.director_state ?? null;
+        if (hasMeaningfulScenarioDirectorState(remoteDirectorState)) {
+          applyScenarioDirectorState(id, remoteDirectorState as NonNullable<typeof remoteDirectorState>);
+        }
+        let nextMeta = updateArchive(id, {
           question: scenario.question,
           sceneTheme: scenario.scene_theme,
           profileId: profile.id,
@@ -224,6 +235,17 @@ export default function ResultView() {
               signatureCardId: objectiveArc?.nextCardId ?? null,
             }),
           });
+          nextMeta = loadScenarioMeta(id);
+        }
+        if (
+          !hasMeaningfulScenarioDirectorState(remoteDirectorState)
+          && hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(nextMeta))
+        ) {
+          try {
+            await upsertScenarioDirectorState(id, scenarioMetaToDirectorState(nextMeta));
+          } catch (err) {
+            console.warn('[DirectorState] Failed to backfill backend state from result view', err);
+          }
         }
         const objectiveMeta = loadScenarioMeta(id);
         const dominantBranchForArchive = [...story.branches].sort((a, b) => b.probability - a.probability)[0] ?? null;
@@ -388,51 +410,56 @@ export default function ResultView() {
   const scenarioMeta = useMemo(() => {
     if (!storedScenarioMeta) return null;
 
+    const baseMeta = mergeScenarioMetaWithDirectorState(
+      storedScenarioMeta,
+      scenario?.director_state ?? null,
+    );
+
     return {
-      ...storedScenarioMeta,
+      ...baseMeta,
       archive: {
-        ...storedScenarioMeta.archive,
+        ...baseMeta.archive,
         profileId:
           (
-            storedScenarioMeta.archive.profileId
+            baseMeta.archive.profileId
             ?? campaignScenarioSummary?.profile_id
             ?? inferredProfile?.id
-          ) as typeof storedScenarioMeta.archive.profileId,
+          ) as typeof baseMeta.archive.profileId,
         mostUsedCard:
           (
             campaignScenarioSummary?.most_used_card
-            ?? storedScenarioMeta.archive.mostUsedCard
+            ?? baseMeta.archive.mostUsedCard
             ?? null
-          ) as typeof storedScenarioMeta.archive.mostUsedCard,
+          ) as typeof baseMeta.archive.mostUsedCard,
         bettingHit:
           campaignScenarioSummary?.betting_hit
-          ?? storedScenarioMeta.archive.bettingHit
+          ?? baseMeta.archive.bettingHit
           ?? null,
         archiveGrade:
           (
             campaignScenarioSummary?.archive_grade
-            ?? storedScenarioMeta.archive.archiveGrade
+            ?? baseMeta.archive.archiveGrade
             ?? null
-          ) as typeof storedScenarioMeta.archive.archiveGrade,
+          ) as typeof baseMeta.archive.archiveGrade,
         profileResonance:
           campaignScenarioSummary?.profile_resonance
-          ?? storedScenarioMeta.archive.profileResonance
+          ?? baseMeta.archive.profileResonance
           ?? null,
         objectiveCompletedCount:
           campaignScenarioSummary?.objective_completed_count
-          ?? storedScenarioMeta.archive.objectiveCompletedCount
+          ?? baseMeta.archive.objectiveCompletedCount
           ?? null,
         objectiveTotalCount:
           campaignScenarioSummary?.objective_total_count
-          ?? storedScenarioMeta.archive.objectiveTotalCount
+          ?? baseMeta.archive.objectiveTotalCount
           ?? null,
         commitmentOutcome:
           campaignScenarioSummary?.commitment_outcome
-          ?? storedScenarioMeta.archive.commitmentOutcome
+          ?? baseMeta.archive.commitmentOutcome
           ?? null,
       },
     };
-  }, [campaignScenarioSummary, inferredProfile?.id, storedScenarioMeta]);
+  }, [campaignScenarioSummary, inferredProfile?.id, scenario?.director_state, storedScenarioMeta]);
   const gameplayProfileLabel =
     scenarioMeta?.archive.profileId
       ? getGameplayProfileLabel(
@@ -617,13 +644,19 @@ export default function ResultView() {
               dominant_tone: scenarioMeta.archive.dominantTone ?? null,
               profile_id: scenarioMeta.archive.profileId ?? null,
               profile_resonance: scenarioMeta.archive.profileResonance ?? null,
-              objective_completed_count: scenarioMeta.archive.objectiveCompletedCount ?? 0,
-              objective_total_count: scenarioMeta.archive.objectiveTotalCount ?? 0,
+              objective_completed_count:
+                evaluatedObjectives.length > 0
+                  ? completedObjectiveCount
+                  : scenarioMeta.archive.objectiveCompletedCount ?? 0,
+              objective_total_count:
+                evaluatedObjectives.length > 0
+                  ? evaluatedObjectives.length
+                  : scenarioMeta.archive.objectiveTotalCount ?? 0,
               commitment_outcome: scenarioMeta.archive.commitmentOutcome ?? null,
               counterplay_card_count: scenarioMeta.archive.counterplayCardCount ?? 0,
               last_counterplay_card: scenarioMeta.archive.lastCounterplayCard ?? null,
-              risk_value: scenarioMeta.archive.riskValue ?? null,
-              resource_value: scenarioMeta.archive.resourceValue ?? null,
+              risk_value: systemTracks?.riskValue ?? scenarioMeta.archive.riskValue ?? null,
+              resource_value: systemTracks?.resourceValue ?? scenarioMeta.archive.resourceValue ?? null,
               completed_daily_challenge: isDailyChallenge,
             }
           : null,
@@ -664,7 +697,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, error, expandedBranch, exporting, hasUnscored, isDailyChallenge, loading, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, hasUnscored, isDailyChallenge, loading, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
 
   if (loading) {
     return (
@@ -915,10 +948,11 @@ export default function ResultView() {
             <img src={getGameplayBadgeSrc('archive_record')} alt="" aria-hidden="true" />
             <span>{t('result.archive_title')}</span>
           </h2>
-          <img
+          <div
             className="result-archive__art"
-            src="/assets/ui/generated/archive_panel.png"
-            alt={t('common.archive_seal_alt')}
+            role="img"
+            aria-label={t('common.archive_seal_alt')}
+            style={{ backgroundImage: 'url(/assets/ui/generated/archive_panel.png)' }}
           />
           <div className="result-archive__meta">
             {gameplayProfileLabel && (

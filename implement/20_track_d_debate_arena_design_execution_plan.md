@@ -242,6 +242,8 @@ Track D 必须满足以下不变式：
 - iOS：Safari / Chromium 内核壳
 - Android：Chrome
 
+当前真实验证证据已覆盖 Chromium/Chrome、Firefox、WebKit 与 Safari 的主模式 director-state smoke；Safari 若开启翻译插件，截图会被浏览器/插件浮层污染，但功能链路已实测通过。
+
 要求：
 
 - 首屏不依赖 hover

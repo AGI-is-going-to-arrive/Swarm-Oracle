@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
+import { upsertScenarioDirectorState } from '../api/client';
 import {
   captureCompositeElementDataUrl,
   captureElementDataUrl,
@@ -20,6 +21,11 @@ import {
   loadScenarioMeta,
   setBranchCommitment,
 } from '../lib/scenarioMeta';
+import {
+  hasMeaningfulScenarioDirectorState,
+  mergeScenarioMetaWithDirectorState,
+  scenarioMetaToDirectorState,
+} from '../lib/scenarioDirectorState';
 import {
   getGameplayCardDefinition,
   getGameplaySignatureArcState,
@@ -59,7 +65,7 @@ import {
 } from '../game/automation';
 import { HudOverlay } from '../game/HudOverlay';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
-import type { BranchInfo } from '../types';
+import type { BranchInfo, ScenarioDirectorState } from '../types';
 import './SimulationView.css';
 
 const THEATER_SCENE_LABELS = {
@@ -148,6 +154,7 @@ export function SimulationView() {
   const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
+  const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(null);
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
@@ -162,9 +169,17 @@ export function SimulationView() {
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
   );
-  const scenarioMeta = useMemo(
+  const storedScenarioMeta = useMemo(
     () => (id ? loadScenarioMeta(id) : null),
     [id, localMetaRevision],
+  );
+  const scenarioMeta = useMemo(
+    () => (
+      storedScenarioMeta
+        ? mergeScenarioMetaWithDirectorState(storedScenarioMeta, backendDirectorState)
+        : null
+    ),
+    [backendDirectorState, storedScenarioMeta],
   );
   const gameplayProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
@@ -235,10 +250,33 @@ export function SimulationView() {
   }, []);
 
   useEffect(() => {
+    setBackendDirectorState(scenario?.director_state ?? null);
+  }, [scenario?.director_state]);
+
+  const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+    if (!id) return;
+    const nextState = scenarioMetaToDirectorState(nextMeta);
+    setBackendDirectorState(nextState);
+    try {
+      await upsertScenarioDirectorState(id, nextState);
+    } catch (err) {
+      console.warn('[DirectorState] Failed to persist backend state', err);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || !storedScenarioMeta) return;
+    if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
+    if (hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
+    void persistDirectorState(storedScenarioMeta);
+  }, [backendDirectorState, id, persistDirectorState, storedScenarioMeta]);
+
+  useEffect(() => {
     if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
+    if (hasMeaningfulScenarioDirectorState(backendDirectorState ?? scenario.director_state ?? null)) return;
     if (scenarioMeta.objectives.goals.length > 0) return;
 
-    ensureScenarioObjectives(id, {
+    const nextMeta = ensureScenarioObjectives(id, {
       question: scenario.question,
       profileId: gameplayProfile.id,
       goals: buildDefaultDirectorObjectives({
@@ -247,7 +285,8 @@ export function SimulationView() {
       }),
     });
     refreshLocalMeta();
-  }, [gameplayProfile, id, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
+    void persistDirectorState(nextMeta);
+  }, [backendDirectorState, gameplayProfile, id, persistDirectorState, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
 
   useEffect(() => {
     if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {
@@ -637,18 +676,20 @@ export function SimulationView() {
     if (!id || !commitmentDraftBranchId) return;
     const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
     if (!branch) return;
-    setBranchCommitment(id, {
+    const nextMeta = setBranchCommitment(id, {
       branchId: branch.id,
       branchTitle: branch.title,
       currentRound: Math.max(1, currentRound),
     });
     refreshLocalMeta();
-  }, [activeBranches, commitmentDraftBranchId, currentRound, id, refreshLocalMeta]);
+    void persistDirectorState(nextMeta);
+  }, [activeBranches, commitmentDraftBranchId, currentRound, id, persistDirectorState, refreshLocalMeta]);
   const handleClearCommitment = useCallback(() => {
     if (!id) return;
-    clearBranchCommitment(id);
+    const nextMeta = clearBranchCommitment(id);
     refreshLocalMeta();
-  }, [id, refreshLocalMeta]);
+    void persistDirectorState(nextMeta);
+  }, [id, persistDirectorState, refreshLocalMeta]);
   const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
   const captureDoneLabel = lastCaptureKind === 'gif'
     ? t('game.gif_saved')

@@ -19,10 +19,10 @@
 | **Semantic Scene Pool** | 当前 registry 共有 33 个主题条目：30 张 Theater 语义背景 + 3 张 Debate 专属背景；`law / faith / generic` 已补进 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体，Debate 另有 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张专用背景 |
 | **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status` API，首页会把 daily challenge 的后端真值与本地缓存合并显示，结果页会展示本局 campaign 进展 |
 | **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前 `counterplay` 已由后端显式返回到 live snapshot / result payload / WS，结果页与分享文案都会显示这次反制是否命中 |
-| **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态主要保存在前端本地 `scenarioMeta`，尚未后端化为跨设备权威状态 |
+| **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json`，前端 `scenarioMeta` 只继续承担导演点数 / 卡牌冷却 / 玩法记录 / 下注 / 档案摘要等本地缓存与兼容层 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Asset Provenance** | `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json` sidecar；较新的 Debate 资产保留完整生成记录，较早的 legacy 资产会标记为 backfilled provenance。这里的 backfill 只表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
-| **Platform Scope** | 当前交付形态是浏览器优先的 Web 应用；已针对桌面/移动浏览器视口做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
+| **Platform Scope** | 当前交付形态是浏览器优先的 Web 应用；已针对 Chromium/Chrome、Firefox、WebKit 与 Safari 做主模式 director-state smoke，并针对桌面/移动浏览器视口做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
 | **Responsive Scenario Startup** | 创建场景后立即返回 `simulating` 占位状态，并附带 provisional root branch；后台继续解析并填充 Agent / 分支 |
 | **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
 | **Intervention Templates** | 预设干预模板（自然灾害、技术突破等） |
@@ -131,8 +131,18 @@ cd frontend && npm run e2e:full
   - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `frontend`：`npm run build` → 通过
   - Debate desktop 最小黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+- 本次 session 围绕主模式 director state 后端化又补跑：
+  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py` → **17 passed**
+  - 前端：`SimulationView / ResultView / scenarioMeta` 定向回归 → **21 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
+  - 主模式黑盒：`frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
+  - 跨浏览器 smoke：
+    - Firefox / WebKit：`frontend/output/e2e/20260319-director-state-cross-browser/result.json`
+    - Safari：`frontend/output/e2e/20260319-director-state-safari/result.json`
 - 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
 - `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若超时或失败，会自动回退到 Chromium CDP 截图
+- `scripts/e2e-suite.mjs` 的 `corners` 现已补 `director_state_roundtrip`，会把 `simulationDirector / resultArchiveSummary / directorGoalsCard / commitmentCard` 直接写进结果 JSON，方便单独回归“后端写入 director state → 清空本地缓存 → `/sim` / `/result` 仍能回读”这条链路
 - 当前 Track C 主工件目录：
   - `frontend/output/e2e/20260317-track-c/matrix/`
   - `frontend/output/e2e/20260317-track-c/corners/`

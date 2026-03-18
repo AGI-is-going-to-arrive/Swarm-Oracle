@@ -98,6 +98,7 @@ class ScenarioResponse(BaseModel):
     # V2: Pixel visualization
     visualization_enabled: bool = False
     scene_theme: str | None = None
+    director_state: dict | None = None
 
 
 class StoryBranch(BaseModel):

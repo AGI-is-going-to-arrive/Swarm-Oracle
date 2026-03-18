@@ -14,7 +14,12 @@ from app.models.campaign import (
     ScenarioCampaignLog,
 )
 from app.models.database import get_engine
-from app.services.campaign import finalize_scenario_campaign, get_daily_challenge_summary
+from app.services.campaign import (
+    finalize_scenario_campaign,
+    get_daily_challenge_summary,
+    get_scenario_director_state,
+    save_scenario_director_state,
+)
 
 
 def _seed_completed_scenario(question: str = "测试 campaign") -> str:
@@ -282,3 +287,87 @@ def test_scenario_summary_persists_objectives_and_commitment_outcome():
     assert log.objective_completed_count == 1
     assert log.objective_total_count == 2
     assert log.commitment_outcome == "miss"
+
+
+def test_scenario_director_state_defaults_and_round_trip():
+    scenario_id = _seed_completed_scenario("director state round trip")
+
+    default_state = get_scenario_director_state(scenario_id)
+    assert default_state["objectives"]["goals"] == []
+    assert default_state["commitment"]["active"] is False
+
+    saved_state = save_scenario_director_state(
+        scenario_id,
+        {
+            "objectives": {
+                "generated_for_question": "director state round trip",
+                "generated_for_profile": "governance",
+                "goals": [
+                    {
+                        "id": "goal-1",
+                        "kind": "signature_arc_step",
+                        "target_card_id": "public_hearing",
+                        "reward_label": "director_point",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                    {
+                        "id": "goal-2",
+                        "kind": "branch_commitment",
+                        "target_card_id": None,
+                        "reward_label": "archive_grade",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                ],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": True,
+                "branch_id": "branch-1",
+                "branch_title": "Archive Branch",
+                "committed_at_round": 2,
+                "committed_at": "2026-03-18T00:02:00Z",
+                "outcome": "pending",
+            },
+        },
+    )
+
+    assert saved_state["objectives"]["generated_for_profile"] == "governance"
+    assert len(saved_state["objectives"]["goals"]) == 2
+    assert saved_state["commitment"]["branch_id"] == "branch-1"
+    assert saved_state["commitment"]["outcome"] == "pending"
+
+    loaded_state = get_scenario_director_state(scenario_id)
+    assert loaded_state == saved_state
+
+
+def test_scenario_director_state_normalizes_inactive_commitment_to_default():
+    scenario_id = _seed_completed_scenario("director state reset")
+
+    saved_state = save_scenario_director_state(
+        scenario_id,
+        {
+            "objectives": {
+                "generated_for_question": "director state reset",
+                "generated_for_profile": "law",
+                "goals": [],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": False,
+                "branch_id": "stale-branch",
+                "branch_title": "Stale Branch",
+                "committed_at_round": 3,
+                "committed_at": "2026-03-18T00:03:00Z",
+                "outcome": "miss",
+            },
+        },
+    )
+
+    assert saved_state["commitment"] == {
+        "active": False,
+        "branch_id": None,
+        "branch_title": None,
+        "committed_at_round": None,
+        "committed_at": None,
+        "outcome": None,
+    }

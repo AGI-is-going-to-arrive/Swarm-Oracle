@@ -33,8 +33,8 @@ npm run dev     # → http://localhost:18928
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
 | `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, and a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window |
 | `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language |
-| `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment` |
-| `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also falls back to backend campaign scenario summary when local archive metadata is missing, and shows objective completion, commitment outcome, and final system-track state |
+| `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer |
+| `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also reads backend `director_state` first and still falls back to backend campaign scenario summary when local archive metadata is missing, showing objective completion, commitment outcome, and final system-track state |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
 | `/leaderboard` | `LeaderboardView` | Global prediction leaderboard |
 
@@ -50,7 +50,7 @@ npm run dev     # → http://localhost:18928
 - **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the bet modal supports counterplay presets, and the share copy now carries both the counterplay summary and the final hit/miss result
 - **themeRegistry.ts** — single source of truth for the 33 Theater / Debate themes, their keyword routing, profile mapping, gameplay frame / badge paths, and Debate-specific UI asset paths
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
-- **Director Layer** — `scenarioMeta` now stores `objectives + commitment` so Theater can show two short run-scoped goals, current system-track pressure, and the currently committed worldline without waiting for a backend schema change
+- **Director Layer** — Theater goals and worldline commitment now persist through backend `Scenario.director_state_json`; `scenarioMeta` still caches points / cooldowns / card usage / bets / archive details locally so old runs and local-only gameplay state do not break
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
 - **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
@@ -87,6 +87,13 @@ npm run e2e:debate:full
   - `npx tsc --noEmit -p tsconfig.app.json` → passed
   - `npm run build` → passed
   - Debate desktop live/result/share smoke → `frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+- This session also re-ran the director-state backendization path:
+  - `npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioMeta.test.ts` → **21 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - Main-mode corners with `director_state_roundtrip` → `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
+  - Firefox / WebKit cross-browser smoke → `frontend/output/e2e/20260319-director-state-cross-browser/result.json`
+  - Safari smoke → `frontend/output/e2e/20260319-director-state-safari/result.json`
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`
@@ -103,6 +110,11 @@ npm run e2e:debate:full
 - `SimulationView` automation output now includes `page.controls.capture_result_kind`, so black-box checks can distinguish a real GIF from `gif_fallback_png`
 - `SimulationView` automation output now also includes `page.director.objectives / system_tracks / commitment`
 - `ResultView` automation output now includes `archive_summary.profile_id / profile_resonance / completed_daily_challenge` and additionally `objective_completed_count / objective_total_count / commitment_outcome / risk_value / resource_value`
+- `scripts/e2e-suite.mjs corners` now also includes `director_state_roundtrip`, so the result JSON directly captures `simulationDirector / resultArchiveSummary / directorGoalsCard / commitmentCard`
+- Latest cross-browser findings from real runs:
+  - Firefox: director-state live/result readback passed
+  - WebKit: director-state readback passed; the previous ResultView archive-hero white block is fixed
+  - Safari: director-state readback passed; if a browser translation plugin is enabled, it can still pollute screenshots even though the app itself is rendering correctly
 - If Playwright screenshot capture stalls on font loading, the suite falls back to Chromium CDP capture instead of aborting the whole run
 - Latest Docker runtime smoke: `docker compose up --build -d` succeeded, and a proxied `POST /api/scenario` request created a Theater scenario that reached `status = done`
 - Repo-root progress heartbeat helper: `node scripts/codex-heartbeat.mjs --interval 30 --label implement-tail --log-file /tmp/upgrade-test-heartbeat.log`

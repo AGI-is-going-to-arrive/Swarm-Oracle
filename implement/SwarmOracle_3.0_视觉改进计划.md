@@ -8,7 +8,12 @@
 > - Timeline marker 已从文本 `F/C/B` 升级为 `fork/card/bet/result` 图标。
 > - 剧场气泡文字已切到更清晰的常规字体栈，保留气泡框像素风。
 > - 截图 / GIF 下载链路已加固为标准 `PNG / GIF` 下载。
-> - 当前验证口径：后端 `708 passed`，前端 `128 passed`，完整黑盒结果位于 `frontend/output/e2e/full-regression-final/result.json`。
+> - 2026-03-19 补充同步：
+>   - 导演目标 / worldline 承诺已后端化到 `Scenario.director_state_json`，不再只是前端本地态。
+>   - 当前定向验证口径：后端 `65 passed + 17 passed`，前端 `60 passed + 21 passed`。
+>   - 当前主模式 director-state 黑盒工件位于 `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`。
+>   - 当前跨浏览器工件位于 `frontend/output/e2e/20260319-director-state-cross-browser/result.json` 与 `frontend/output/e2e/20260319-director-state-safari/result.json`。
+>   - WebKit 下结果页因果档案顶部大图白块已修复；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染。
 
 ## 问题诊断
 

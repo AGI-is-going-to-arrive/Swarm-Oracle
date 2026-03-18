@@ -5,9 +5,17 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
 import ResultView from './ResultView';
 
-const { finalizeCampaignMock, findChallengeProgressByScenarioIdMock } = vi.hoisted(() => ({
+const {
+  finalizeCampaignMock,
+  findChallengeProgressByScenarioIdMock,
+  upsertScenarioDirectorStateMock,
+} = vi.hoisted(() => ({
   finalizeCampaignMock: vi.fn(),
   findChallengeProgressByScenarioIdMock: vi.fn(),
+  upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
+    scenario_id: scenarioId,
+    ...(payload as Record<string, unknown>),
+  })),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -61,12 +69,29 @@ vi.mock('../api/client', () => ({
     branches: [],
     groups: [],
     hierarchical: false,
+    director_state: {
+      objectives: {
+        generated_for_question: null,
+        generated_for_profile: null,
+        goals: [],
+        last_updated_at: null,
+      },
+      commitment: {
+        active: false,
+        branch_id: null,
+        branch_title: null,
+        committed_at_round: null,
+        committed_at: null,
+        outcome: null,
+      },
+    },
   })),
   listPredictions: vi.fn(async () => []),
   exportScenario: vi.fn(async () => '# export'),
   scorePredictions: vi.fn(async () => ({ scored: 0 })),
   finalizeCampaign: finalizeCampaignMock,
   getCampaignScenarioSummary: vi.fn(async () => null),
+  upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -122,6 +147,7 @@ vi.mock('../lib/scenarioMeta', () => {
     loadScenarioMeta: vi.fn(() => meta),
     ensureScenarioObjectives: vi.fn(() => meta),
     updateArchive: vi.fn(() => meta),
+    updateScenarioMeta: vi.fn((_scenarioId: string, updater: (current: ScenarioMeta) => ScenarioMeta) => updater(meta)),
   };
 });
 
@@ -376,5 +402,131 @@ describe('ResultView campaign summary', () => {
         commitment_outcome: 'miss',
       });
     });
+  });
+
+  it('prefers backend director state when local commitment is empty', async () => {
+    const { getScenario } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue({
+      director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: { bets: [] },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [],
+        keyMoments: [],
+        profileId: 'law',
+        dominantBranchTitle: 'Archive Branch',
+        dominantTone: 'order',
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'A',
+        directorStyleTag: 'quiet_observer',
+        profileResonance: 'aligned',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    });
+    vi.mocked(getScenario).mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      director_state: {
+        objectives: {
+          generated_for_question: 'What if the archive had to sync?',
+          generated_for_profile: 'law',
+          goals: [
+            {
+              id: 'goal-1',
+              kind: 'branch_commitment',
+              target_card_id: null,
+              reward_label: 'archive_grade',
+              created_at: '2026-03-18T00:00:00Z',
+            },
+          ],
+          last_updated_at: '2026-03-18T00:00:00Z',
+        },
+        commitment: {
+          active: true,
+          branch_id: 'branch-1',
+          branch_title: 'Archive Branch',
+          committed_at_round: 2,
+          committed_at: '2026-03-18T00:02:00Z',
+          outcome: 'pending',
+        },
+      },
+    });
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 4,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 0,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 4,
+        level: 1,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 5,
+        score_to_next_level: 1,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.archive_summary?.dominant_branch_title).toBe('Archive Branch');
+    });
+
+    expect(screen.getByText('1/1')).toBeInTheDocument();
+    expect(screen.getByText('Worldline Commitment')).toBeInTheDocument();
+    expect(screen.getByText('No commitment')).toBeInTheDocument();
+    expect(screen.getAllByText('Archive Branch').length).toBeGreaterThan(1);
   });
 });

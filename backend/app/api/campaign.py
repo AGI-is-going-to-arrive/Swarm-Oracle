@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.services.campaign import (
     CampaignConflictError,
@@ -13,9 +15,11 @@ from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_campaign_profile_summary,
+    get_scenario_director_state,
     get_scenario_campaign_summary,
     list_campaign_badge_summaries,
     list_campaign_mastery_summaries,
+    save_scenario_director_state,
 )
 
 router = APIRouter(prefix="/api/campaign", tags=["campaign"])
@@ -194,6 +198,108 @@ class CampaignScenarioSummaryResponse(BaseModel):
     finalized_at: str | None = None
 
 
+class ScenarioDirectorObjectiveResponse(BaseModel):
+    id: str
+    kind: Literal["signature_arc_step", "branch_commitment"]
+    target_card_id: str | None = None
+    reward_label: str | None = None
+    created_at: str
+
+    @field_validator("id", "created_at")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field cannot be empty")
+        return normalized
+
+    @field_validator("target_card_id", "reward_label")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ScenarioDirectorObjectivesResponse(BaseModel):
+    generated_for_question: str | None = None
+    generated_for_profile: str | None = None
+    goals: list[ScenarioDirectorObjectiveResponse] = Field(default_factory=list)
+    last_updated_at: str | None = None
+
+    @field_validator("generated_for_question", "generated_for_profile", "last_updated_at")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ScenarioDirectorCommitmentResponse(BaseModel):
+    active: bool = False
+    branch_id: str | None = None
+    branch_title: str | None = None
+    committed_at_round: int | None = None
+    committed_at: str | None = None
+    outcome: str | None = None
+
+    @field_validator("branch_id", "branch_title", "committed_at")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("outcome")
+    @classmethod
+    def validate_commitment_outcome(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in VALID_COMMITMENT_OUTCOMES:
+            raise ValueError(
+                f"outcome must be one of {sorted(VALID_COMMITMENT_OUTCOMES)}"
+            )
+        return normalized
+
+    @field_validator("committed_at_round")
+    @classmethod
+    def validate_committed_at_round(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("committed_at_round must be >= 0")
+        return value
+
+    @model_validator(mode="after")
+    def validate_active_commitment(self) -> "ScenarioDirectorCommitmentResponse":
+        if not self.active:
+            self.branch_id = None
+            self.branch_title = None
+            self.committed_at_round = None
+            self.committed_at = None
+            self.outcome = None
+            return self
+
+        if not self.branch_id or not self.branch_title:
+            raise ValueError("active commitment requires branch_id and branch_title")
+        return self
+
+
+class ScenarioDirectorStateRequest(BaseModel):
+    objectives: ScenarioDirectorObjectivesResponse = Field(
+        default_factory=ScenarioDirectorObjectivesResponse
+    )
+    commitment: ScenarioDirectorCommitmentResponse = Field(
+        default_factory=ScenarioDirectorCommitmentResponse
+    )
+
+
+class ScenarioDirectorStateResponse(ScenarioDirectorStateRequest):
+    scenario_id: str
+
+
 @router.get("/profile/{user_id}", response_model=CampaignProfileResponse)
 async def get_profile(user_id: str) -> CampaignProfileResponse:
     profile = get_campaign_profile_summary(user_id)
@@ -223,6 +329,37 @@ async def get_scenario_summary(scenario_id: str) -> CampaignScenarioSummaryRespo
         raise HTTPException(404, str(exc)) from exc
 
     return CampaignScenarioSummaryResponse(**summary)
+
+
+@router.get(
+    "/scenario/{scenario_id}/director-state",
+    response_model=ScenarioDirectorStateResponse,
+)
+async def get_director_state(scenario_id: str) -> ScenarioDirectorStateResponse:
+    try:
+        state = get_scenario_director_state(scenario_id)
+    except CampaignNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    return ScenarioDirectorStateResponse(scenario_id=scenario_id, **state)
+
+
+@router.put(
+    "/scenario/{scenario_id}/director-state",
+    response_model=ScenarioDirectorStateResponse,
+)
+async def put_director_state(
+    scenario_id: str,
+    req: ScenarioDirectorStateRequest,
+) -> ScenarioDirectorStateResponse:
+    try:
+        state = save_scenario_director_state(scenario_id, req.model_dump())
+    except CampaignNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except CampaignError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return ScenarioDirectorStateResponse(scenario_id=scenario_id, **state)
 
 
 @router.get(

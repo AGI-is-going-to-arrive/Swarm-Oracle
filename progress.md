@@ -6860,6 +6860,252 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     1. 让 live automation payload 也显式输出 `counterplay.outcome`
     2. 把 counterplay 结果也做成结果页里的更细粒度玩法统计
 
+## 2026-03-19 Director Goals / Commitment Backendization
+
+- 已把主模式 `director goals / worldline commitment` 从“纯前端 `scenarioMeta` 本地态”推进到“后端 `Scenario.director_state_json` 权威态 + 前端本地兜底/迁移态”。
+
+- 后端改动：
+  - `backend/app/models/database.py`
+    - `Scenario` 新增 `director_state_json` JSON 列
+    - `init_db()` 增加对现有开发库的 best-effort 列补齐
+  - `backend/alembic/versions/006_add_director_state_to_scenario.py`
+    - 新增正式 migration
+  - `backend/app/services/campaign.py`
+    - 新增：
+      - `get_default_scenario_director_state()`
+      - `normalize_scenario_director_state()`
+      - `get_scenario_director_state()`
+      - `save_scenario_director_state()`
+  - `backend/app/api/campaign.py`
+    - 新增：
+      - `GET /api/campaign/scenario/{id}/director-state`
+      - `PUT /api/campaign/scenario/{id}/director-state`
+    - 补了 goals / commitment 的 request/response 校验
+  - `backend/app/api/helpers.py`
+    - `GET /api/scenario/{id}` / `POST /api/scenario` 返回体现在显式带：
+      - `director_state`
+
+- 前端改动：
+  - `frontend/src/types.ts`
+    - 新增：
+      - `ScenarioDirectorState`
+      - `ScenarioDirectorStateResponse`
+      - goals / commitment 子类型
+    - `Scenario` 新增：
+      - `director_state?: ScenarioDirectorState | null`
+  - `frontend/src/api/client.ts`
+    - 新增：
+      - `upsertScenarioDirectorState()`
+  - `frontend/src/lib/scenarioDirectorState.ts`
+    - 新增本地/后端 director state 映射与合并 helper：
+      - `scenarioMetaToDirectorState()`
+      - `mergeScenarioMetaWithDirectorState()`
+      - `applyScenarioDirectorState()`
+      - `hasMeaningfulScenarioDirectorState()`
+  - `frontend/src/pages/SimulationView.tsx`
+    - 改成：
+      - 后端 `scenario.director_state` 优先
+      - 本地 `scenarioMeta` 作为 fallback / migration 缓冲层
+    - 生成默认 goals、设置 commitment、清除 commitment 时会同步 `PUT /director-state`
+    - 避免“后端已有 director state，却被本地默认 goals 初始化覆盖”的竞态
+  - `frontend/src/pages/ResultView.tsx`
+    - 改成：
+      - 先把 `scenario.director_state` 合并进本地 meta，再做 archive / finalize
+      - 当后端 director state 为空且本地已有有效状态时，会尝试回写后端
+    - 结果页现在在清空本地缓存后，仍能回读 goals / commitment / 风险资源轨道
+
+- 本轮新增/更新测试：
+  - `backend/tests/test_campaign_api.py`
+    - 新增 director state API round-trip
+    - 新增 scenario readback 带 `director_state`
+    - 新增 invalid active commitment 的 `422`
+  - `backend/tests/test_campaign_service.py`
+    - 新增 director state 默认值
+    - 新增 director state round-trip
+    - 新增 inactive commitment 归一化回默认值
+  - `frontend/src/pages/SimulationView.test.tsx`
+    - 新增“后端 director state 优先于空本地 meta”的 automation 验证
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增“结果页在本地 commitment 为空时仍能使用后端 director state”的验证
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
+  - 结果：`17 passed`
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioMeta.test.ts`
+  - 结果：`21 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 手动浏览器 smoke：
+    - 先 `PUT /api/campaign/scenario/{id}/director-state`
+    - 再在全新浏览器上下文里清空 `localStorage/sessionStorage`
+    - 打开：
+      - `/sim/b74f08a6-a37d-4817-8e11-3f9a1914053c`
+      - `/result/b74f08a6-a37d-4817-8e11-3f9a1914053c`
+    - 结果：
+      - `SimulationView` 的 `render_game_to_text()` 仍返回：
+        - `page.director.objective_count = 2`
+        - `page.director.commitment.active = true`
+        - `page.director.commitment.branch_title = 世界线抉择`
+      - `ResultView` 的 `render_game_to_text()` 仍返回：
+        - `archive_summary.commitment_outcome = hit`
+        - `archive_summary.risk_value = 1`
+        - `archive_summary.resource_value = 2`
+      - 视觉工件：
+        - `frontend/output/e2e/20260319-director-state-smoke-theater.png`
+        - `frontend/output/e2e/20260319-director-state-smoke-archive.png`
+      - 文本工件：
+        - `frontend/output/e2e/20260319-director-state-smoke-sim.json`
+        - `frontend/output/e2e/20260319-director-state-smoke-result.json`
+  - 黑盒回归：
+    - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-director-state-corners --headless`
+    - 结果：通过
+
+- 这轮后的真实状态：
+  - P0“director goals / worldline commitment 后端化”已经不再是空白项
+  - live 页、结果页、跨刷新 readback 已经可以不依赖本地 `scenarioMeta`
+  - 但还没有把整套 `scenarioMeta` 全量后端化：
+    - cards usage
+    - cooldowns / director points
+    - bets
+    - archive key moments
+    这些仍主要是本地态
+
+- 仍然建议的下一步：
+  1. 把 `e2e-suite.mjs` 的 aggregate summary 补上：
+     - `page.director`
+     - `archive_summary`
+     这样 full 工件能直接回归 director-state 链路
+  2. 增加“clear localStorage 后再打开 `/sim` + `/result`”的专门 smoke case
+  3. 补 Firefox / WebKit / Safari 级真实浏览器 QA
+     - 当前黑盒 runner 仍主要是 Chromium / Chrome
+
+- 后续补充：`e2e-suite.mjs` 已进一步完成这部分：
+  - `runReplayFlow()` summary 现显式带：
+    - `director`
+  - `runResultFlow()` summary 现显式带：
+    - `archiveSummary`
+    - `archiveCards`
+  - `corners` 新增：
+    - `director_state_roundtrip`
+  - 新工件：
+    - `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
+    - 其中 `cases.director_state_roundtrip` 现会稳定输出：
+      - `simulationDirector`
+      - `resultArchiveSummary`
+      - `directorGoalsCard`
+      - `commitmentCard`
+
+- 2026-03-19 跨浏览器 QA：
+  - Playwright browser binaries 已补齐：
+    - `npx playwright install firefox webkit`
+  - Firefox / WebKit 自动 smoke：
+    - 运行脚本：
+      - `frontend/.tmp/director-state-cross-browser-smoke.mjs`
+    - 工件目录：
+      - `frontend/output/e2e/20260319-director-state-cross-browser/`
+    - 结果：
+      - `firefox`：
+        - live `simulationDirector.objective_count = 2`
+        - live `commitment.active = true`
+        - result `commitment_outcome = hit`
+        - result `risk_value = 1 / resource_value = 2`
+      - `webkit`：
+        - automation 数据同样通过
+        - 但视觉上发现真实问题：
+          - `result-archive` 顶部大图在 WebKit 下显示为空白白块
+          - 证据：
+            - `frontend/output/e2e/20260319-director-state-cross-browser/webkit-archive.png`
+            - `frontend/output/e2e/20260319-director-state-cross-browser/webkit-archive-delayed.png`
+          - 已排除“图片没加载”：
+            - `img.complete = true`
+            - `naturalWidth = 1408`
+            - `naturalHeight = 768`
+          - 说明这是 WebKit 渲染/样式兼容问题，不是等待时序问题
+      - Firefox 视觉工件正常：
+        - `frontend/output/e2e/20260319-director-state-cross-browser/firefox-archive.png`
+
+- Safari 真机自动化现状：
+  - 当前机器存在：
+    - `safaridriver`
+  - 已在用户手动开启 `Developer > Allow remote automation` 后重新执行 Safari 真机 smoke
+  - 结果：
+    - Safari WebDriver session 创建成功
+    - live / result 的 automation payload 均通过
+    - 工件目录：
+      - `frontend/output/e2e/20260319-director-state-safari/`
+    - 关键结果：
+      - `simulationDirector.objective_count = 2`
+      - `simulationDirector.commitment.active = true`
+      - `resultArchiveSummary.commitment_outcome = hit`
+      - `resultArchiveSummary.risk_value = 1 / resource_value = 2`
+- Safari 额外观察：
+    - 在用户关闭翻译插件后重新复跑，Safari 结果页截图已恢复干净
+    - 说明此前污染源来自浏览器/插件层，不是应用 DOM 自己渲染出的组件
+    - `sim` 页整页截图表现不可靠，截图里主界面内容接近空白，但 automation payload 是正常的
+    - 因此 Safari 本轮可确认：
+      - 功能链路可跑通
+      - `result` 页在关闭翻译插件后可以给出可用视觉证据
+      - `sim` 页整页截图仍不如 Firefox / WebKit 稳定
+
+- 当前最明确的后续优先级：
+  1. 继续处理 Safari 截图里的浏览器原生翻译浮层干扰
+  2. 如果需要更稳定的 Safari 视觉证据，考虑在 Safari 配置层关闭自动翻译/提示
+  3. 再把跨浏览器 smoke 合并进正式脚本入口（当前 Firefox/WebKit/Safari 仍是临时 smoke 脚本）
+
+- 2026-03-19 WebKit archive hero fix:
+  - 已定位问题点：
+    - `ResultView.tsx` 使用的是：
+      - `<img className="result-archive__art" ... />`
+    - `ResultView.css` 对它使用：
+      - `object-fit: cover`
+      - `max-height: 180px`
+  - 在 Playwright WebKit 下，这条渲染路径会把顶部大图渲染成白块；Safari 真机不复现，但 WebKit headless 稳定复现
+  - 实际修复：
+    - `frontend/src/pages/ResultView.tsx`
+      - 改为：
+        - `div.result-archive__art`
+        - `role="img"`
+        - `aria-label`
+        - inline `backgroundImage`
+    - `frontend/src/pages/ResultView.css`
+      - 改为：
+        - `display: block`
+        - `height: clamp(140px, 18vw, 180px)`
+        - `background-size: cover`
+        - `background-position: center`
+        - `background-repeat: no-repeat`
+        - 轻量背景色 fallback
+  - 回归：
+    - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+      - 通过
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+      - 通过
+    - `cd frontend && npm run build`
+      - 通过
+
+- 2026-03-19 修复后跨浏览器复验：
+  - Firefox / WebKit：
+    - 运行：
+      - `frontend/.tmp/director-state-cross-browser-smoke.mjs`
+    - 结果：
+      - automation 仍全部通过
+      - WebKit 顶部大图白块已消失
+    - 关键视觉工件：
+      - `frontend/output/e2e/20260319-director-state-cross-browser/firefox-archive.png`
+      - `frontend/output/e2e/20260319-director-state-cross-browser/webkit-archive.png`
+  - Safari 真机：
+    - 运行：
+      - `frontend/.tmp/safari-director-state-smoke.mjs`
+    - 结果：
+      - automation 仍通过
+      - 顶部大图正常显示
+      - 但截图仍会被 Safari 原生翻译提示浮层污染
+    - 关键工件：
+      - `frontend/output/e2e/20260319-director-state-safari/result.json`
+      - `frontend/output/e2e/20260319-director-state-safari/safari-result.png`
+
 ## 2026-03-18 Debate Counterplay Backendization
 
 - 已继续把 Debate `counterplay` 从“前端本地记录”推进到“后端权威元数据 + 前端本地兜底”：

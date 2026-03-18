@@ -8,6 +8,7 @@ import type {
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary,
+  ScenarioDirectorState, ScenarioDirectorStateResponse,
 } from '../types';
 
 const BASE = '/api';
@@ -310,6 +311,16 @@ export async function getCampaignScenarioSummary(
   scenarioId: string,
 ): Promise<CampaignScenarioSummary> {
   return request(`/campaign/scenario/${scenarioId}/summary`);
+}
+
+export async function upsertScenarioDirectorState(
+  scenarioId: string,
+  payload: ScenarioDirectorState,
+): Promise<ScenarioDirectorStateResponse> {
+  return request(`/campaign/scenario/${scenarioId}/director-state`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getCampaignDailyChallengeStatus(

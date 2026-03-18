@@ -78,7 +78,8 @@
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 当前主要落在前端本地 `scenarioMeta`，不是后端权威状态；跨设备一致性不应按“已完成”理解
+- ℹ️ `director goals / worldline commitment` 当前已后端化到 `Scenario.director_state_json`；前端 `scenarioMeta` 继续保留为 points / cooldowns / usageLog / bets / archive 的本地缓存层，不应再把 goals / commitment 理解成“只保存在前端本地”
+- ℹ️ 主模式 director-state 已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari smoke；Safari 若开启翻译插件，截图会被浏览器/插件浮层污染，但功能链路本身已验证通过
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
 

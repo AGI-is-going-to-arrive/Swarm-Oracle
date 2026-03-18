@@ -513,7 +513,7 @@ frontend/src/
 
 - Windows、macOS、Linux
   - Chromium 系浏览器优先
-  - Safari、Firefox 作为兼容目标
+  - Firefox / WebKit / Safari 当前已有主模式 director-state smoke 证据，后续再扩更完整矩阵
 - iOS、Android
   - 移动浏览器可玩
   - 触控优先，不依赖 hover-only 交互

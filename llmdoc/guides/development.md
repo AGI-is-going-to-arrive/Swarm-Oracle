@@ -140,6 +140,26 @@ npm test -- --run \
 
 - 结果：
   - `vitest`：**13 passed**
+- 本次 session 围绕主模式 director state 后端化又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q
+
+cd frontend
+npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioMeta.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-director-state-corners-v2 --headless
+```
+
+- 结果：
+  - backend `pytest`：**17 passed**
+  - frontend `vitest`：**21 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `e2e-suite.mjs corners`：通过
 - 本轮还重新执行了：
 
 ```bash
@@ -171,6 +191,11 @@ node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 43
   - `SimulationView` 额外暴露 `window.capture_game_screenshot(mode)`，黑盒客户端可显式请求 `panel|canvas|modal`。
   - `SimulationView` 的自动化摘要现还会带 `page.controls.capture_result_kind`，可直接区分 `gif` 与 `gif_fallback_png`。
   - `SimulationView` 现还会输出 `page.director.objectives / system_tracks / commitment`，可直接取证导演目标、风险/资源轨道与 worldline 承诺。
+  - `scripts/e2e-suite.mjs corners` 现已补 `director_state_roundtrip`，结果 JSON 会直接带：
+    - `simulationDirector`
+    - `resultArchiveSummary`
+    - `directorGoalsCard`
+    - `commitmentCard`
   - 下载前会按文件扩展名归一化成标准 `image/png` / `image/gif`，减少“文件下好了但系统不认”的情况。
   - 分享文案现在会在前端补一层题材档案前缀；如需复测分享链路，优先从结果页的 `📱 生成文案` 入口进入。
   - `ResultView` 的 `archive_summary` 现还会输出 `profile_id / profile_resonance / completed_daily_challenge`，并新增 `objective_completed_count / objective_total_count / commitment_outcome / risk_value / resource_value`，方便核对导演层和后端 summary 兜底是否生效。
@@ -209,6 +234,13 @@ node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 43
   - 本轮 full smoke 工件：`frontend/output/e2e/20260318-post-director-goals-full/result.json`
   - ResultView backend summary smoke 工件：`frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
+  - 本次 director-state corners 工件：
+    - `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
+  - Firefox / WebKit director-state smoke：
+    - `frontend/output/e2e/20260319-director-state-cross-browser/result.json`
+  - Safari director-state smoke：
+    - `frontend/output/e2e/20260319-director-state-safari/result.json`
+    - Safari 若开启翻译插件，截图可能被浏览器/插件浮层污染；本轮在关闭插件后重新复跑，结果页截图已恢复正常
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
   - Debate 额外补充工件：

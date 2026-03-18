@@ -184,3 +184,83 @@ def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient)
 def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
     response = client.get("/api/campaign/scenario/missing-scenario/summary")
     assert response.status_code == 404
+
+
+def test_director_state_endpoint_round_trip_and_scenario_readback(client: TestClient):
+    scenario_id = _seed_completed_scenario("director state api")
+
+    initial = client.get(f"/api/campaign/scenario/{scenario_id}/director-state")
+    assert initial.status_code == 200
+    assert initial.json()["objectives"]["goals"] == []
+    assert initial.json()["commitment"]["active"] is False
+
+    update = client.put(
+        f"/api/campaign/scenario/{scenario_id}/director-state",
+        json={
+            "objectives": {
+                "generated_for_question": "director state api",
+                "generated_for_profile": "trade",
+                "goals": [
+                    {
+                        "id": "goal-1",
+                        "kind": "signature_arc_step",
+                        "target_card_id": "backchannel_pact",
+                        "reward_label": "director_point",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                    {
+                        "id": "goal-2",
+                        "kind": "branch_commitment",
+                        "target_card_id": None,
+                        "reward_label": "archive_grade",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                ],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": True,
+                "branch_id": "branch-2",
+                "branch_title": "Trade Branch",
+                "committed_at_round": 2,
+                "committed_at": "2026-03-18T00:02:00Z",
+                "outcome": "pending",
+            },
+        },
+    )
+    assert update.status_code == 200
+    update_data = update.json()
+    assert update_data["objectives"]["generated_for_profile"] == "trade"
+    assert update_data["commitment"]["branch_id"] == "branch-2"
+
+    scenario = client.get(f"/api/scenario/{scenario_id}")
+    assert scenario.status_code == 200
+    scenario_data = scenario.json()
+    assert scenario_data["director_state"]["objectives"]["goals"][0]["id"] == "goal-1"
+    assert scenario_data["director_state"]["commitment"]["branch_title"] == "Trade Branch"
+
+
+def test_director_state_endpoint_rejects_incomplete_active_commitment(client: TestClient):
+    scenario_id = _seed_completed_scenario("director state invalid")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/director-state",
+        json={
+            "objectives": {
+                "generated_for_question": "director state invalid",
+                "generated_for_profile": "law",
+                "goals": [],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": True,
+                "branch_id": "",
+                "branch_title": "Incomplete Branch",
+                "committed_at_round": 1,
+                "committed_at": "2026-03-18T00:01:00Z",
+                "outcome": "pending",
+            },
+        },
+    )
+
+    assert response.status_code == 422

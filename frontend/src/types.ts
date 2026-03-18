@@ -16,6 +16,7 @@ export interface Scenario {
   groups: GroupInfo[];  // P3-A
   hierarchical: boolean;  // P3-A
   messages?: AgentMessage[];  // Historical messages from DB
+  director_state?: ScenarioDirectorState | null;
 }
 
 export interface AgentInfo {
@@ -128,6 +129,39 @@ export interface CampaignScenarioSummary {
   commitment_outcome?: 'hit' | 'miss' | 'pending' | null;
   campaign_score_delta: number;
   finalized_at?: string | null;
+}
+
+export interface ScenarioDirectorObjective {
+  id: string;
+  kind: 'signature_arc_step' | 'branch_commitment';
+  target_card_id?: string | null;
+  reward_label?: string | null;
+  created_at: string;
+}
+
+export interface ScenarioDirectorObjectivesState {
+  generated_for_question?: string | null;
+  generated_for_profile?: string | null;
+  goals: ScenarioDirectorObjective[];
+  last_updated_at?: string | null;
+}
+
+export interface ScenarioDirectorCommitmentState {
+  active: boolean;
+  branch_id?: string | null;
+  branch_title?: string | null;
+  committed_at_round?: number | null;
+  committed_at?: string | null;
+  outcome?: 'hit' | 'miss' | 'pending' | null;
+}
+
+export interface ScenarioDirectorState {
+  objectives: ScenarioDirectorObjectivesState;
+  commitment: ScenarioDirectorCommitmentState;
+}
+
+export interface ScenarioDirectorStateResponse extends ScenarioDirectorState {
+  scenario_id: string;
 }
 
 export interface CampaignDailyChallengeStatus {

@@ -5,7 +5,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlmodel import Field, Relationship, SQLModel, Column, JSON
 
@@ -138,6 +138,7 @@ class Scenario(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     question: str
     parsed_context: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    director_state_json: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     status: ScenarioStatus = ScenarioStatus.PARSING
     created_at: datetime = Field(default_factory=_now)
     user_id: Optional[str] = None
@@ -199,6 +200,7 @@ def init_db():
             # V2: Visualization fields
             _migrate_add_column(cursor, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
             _migrate_add_column(cursor, "scenario", "scene_theme", "TEXT")
+            _migrate_add_column(cursor, "scenario", "director_state_json", "TEXT")
             # Track A follow-up: commitment/objective settlement fields
             _migrate_add_column(
                 cursor, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
