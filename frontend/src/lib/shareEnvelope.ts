@@ -5,6 +5,8 @@ export interface ShareFlavorContext {
   resonanceLabel?: string | null;
   directorStyleLabel?: string | null;
   dominantBranchTitle?: string | null;
+  counterplaySummary?: string | null;
+  commitmentSummary?: string | null;
 }
 
 function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[] {
@@ -14,6 +16,8 @@ function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[]
   const hooks = (context.profileHooks ?? []).filter(Boolean).slice(0, 3);
   const director = context.directorStyleLabel?.trim();
   const dominantBranch = context.dominantBranchTitle?.trim();
+  const counterplay = context.counterplaySummary?.trim();
+  const commitment = context.commitmentSummary?.trim();
 
   if (profile || resonance) {
     lines.push(
@@ -42,6 +46,22 @@ function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[]
 
   if (tailBits.length > 0) {
     lines.push(tailBits.join(' · '));
+  }
+
+  if (counterplay) {
+    lines.push(
+      isZh
+        ? `反制轨迹：${counterplay}`
+        : `Counterplay: ${counterplay}`,
+    );
+  }
+
+  if (commitment) {
+    lines.push(
+      isZh
+        ? `世界线承诺：${commitment}`
+        : `Worldline commitment: ${commitment}`,
+    );
   }
 
   return lines;

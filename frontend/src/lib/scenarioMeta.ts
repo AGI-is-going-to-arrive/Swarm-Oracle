@@ -65,6 +65,8 @@ export interface ScenarioArchiveState {
   objectiveCompletedCount?: number | null;
   objectiveTotalCount?: number | null;
   commitmentOutcome?: 'pending' | 'hit' | 'miss' | null;
+  counterplayCardCount?: number | null;
+  lastCounterplayCard?: GameplayCardId | null;
   riskValue?: number | null;
   resourceValue?: number | null;
   updatedAt?: string;

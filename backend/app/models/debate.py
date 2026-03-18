@@ -105,7 +105,29 @@ class DebatePrediction(SQLModel, table=True):
     confidence: float = 0.5
     user_id: str = "anonymous"
     user_name: str = "Anonymous Director"
+    is_counterplay: bool = False
+    counterplay_phase: DebatePhase | None = None
+    counterplay_variant: str | None = None
     score: float | None = None
     score_reason: str | None = None
     created_at: datetime = Field(default_factory=_now)
     scored_at: datetime | None = None
+
+
+class DebateCounterplay(SQLModel, table=True):
+    """Dedicated counterplay record for Debate Arena."""
+
+    __tablename__ = "debate_counterplay"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    debate_id: str = Field(foreign_key="debate.id", index=True)
+    prediction_id: str | None = Field(default=None, foreign_key="debate_prediction.id")
+    kind: DebatePredictionKind
+    target_value: str
+    confidence: float = 0.5
+    phase: DebatePhase
+    variant: str
+    outcome: str | None = None
+    user_id: str = "anonymous"
+    user_name: str = "Anonymous Director"
+    created_at: datetime = Field(default_factory=_now)

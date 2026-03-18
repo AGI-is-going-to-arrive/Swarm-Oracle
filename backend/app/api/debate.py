@@ -6,12 +6,13 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import Session
 
 from app.api.helpers import schedule_background_task
 from app.api.ws import WSManager
 from app.models import Debate, DebatePhase, DebatePrediction, DebatePredictionKind, DebateStatus
+from app.models import DebateCounterplay
 from app.models.database import get_engine
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.debate import (
@@ -29,6 +30,7 @@ _PREDICTION_OPTIONS = {
     DebatePredictionKind.WINNER: {"proposition", "opposition"},
     DebatePredictionKind.VERDICT_TONE: {"order", "balance", "rupture"},
 }
+_COUNTERPLAY_VARIANTS = {"balanced", "reversal"}
 
 
 class CreateDebateRequest(BaseModel):
@@ -62,6 +64,9 @@ class DebatePredictionRequest(BaseModel):
     confidence: float = 0.5
     user_id: str = "anonymous"
     user_name: str = "Anonymous Director"
+    is_counterplay: bool = False
+    counterplay_phase: DebatePhase | None = None
+    counterplay_variant: str | None = None
 
     @field_validator("confidence")
     @classmethod
@@ -82,6 +87,27 @@ class DebatePredictionRequest(BaseModel):
     @classmethod
     def validate_user_name(cls, value: str) -> str:
         return value.strip() or "Anonymous Director"
+
+    @field_validator("counterplay_variant")
+    @classmethod
+    def validate_counterplay_variant(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if cleaned not in _COUNTERPLAY_VARIANTS:
+            raise ValueError(
+                f"counterplay_variant must be one of {sorted(_COUNTERPLAY_VARIANTS)}"
+            )
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_counterplay_bundle(self) -> "DebatePredictionRequest":
+        if self.is_counterplay:
+            if self.counterplay_phase is None:
+                raise ValueError("counterplay_phase is required when is_counterplay=true")
+            if self.counterplay_variant is None:
+                raise ValueError("counterplay_variant is required when is_counterplay=true")
+        return self
 
 
 @router.post("/api/debate")
@@ -149,11 +175,31 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
             confidence=req.confidence,
             user_id=req.user_id or "anonymous",
             user_name=req.user_name,
+            is_counterplay=req.is_counterplay,
+            counterplay_phase=req.counterplay_phase,
+            counterplay_variant=req.counterplay_variant,
         )
         session.add(prediction)
+        session.flush()
+        counterplay = None
+        if req.is_counterplay and req.counterplay_phase and req.counterplay_variant:
+            counterplay = DebateCounterplay(
+                debate_id=debate_id,
+                prediction_id=prediction.id,
+                kind=req.kind,
+                target_value=req.target_value,
+                confidence=req.confidence,
+                phase=req.counterplay_phase,
+                variant=req.counterplay_variant,
+                user_id=req.user_id or "anonymous",
+                user_name=req.user_name,
+            )
+            session.add(counterplay)
         session.commit()
         session.refresh(prediction)
-        return {
+        if counterplay is not None:
+            session.refresh(counterplay)
+        payload = {
             "id": prediction.id,
             "debate_id": prediction.debate_id,
             "kind": prediction.kind.value,
@@ -161,10 +207,32 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
             "confidence": prediction.confidence,
             "user_id": prediction.user_id,
             "user_name": prediction.user_name,
+            "is_counterplay": prediction.is_counterplay,
+            "counterplay_phase": prediction.counterplay_phase.value if prediction.counterplay_phase else None,
+            "counterplay_variant": prediction.counterplay_variant,
             "score": prediction.score,
             "score_reason": prediction.score_reason,
             "created_at": prediction.created_at.isoformat(),
         }
+        if prediction.is_counterplay:
+            await debate_ws_manager.broadcast(
+                debate_id,
+                {
+                    "type": "debate_counterplay",
+                    "data": {
+                        "debate_id": prediction.debate_id,
+                        "kind": prediction.kind.value,
+                        "target_value": prediction.target_value,
+                        "confidence": prediction.confidence,
+                        "phase": counterplay.phase.value if counterplay else None,
+                        "variant": counterplay.variant if counterplay else None,
+                        "outcome": counterplay.outcome if counterplay else None,
+                        "user_name": prediction.user_name,
+                        "created_at": prediction.created_at.isoformat(),
+                    },
+                },
+            )
+        return payload
 
 
 @router.websocket("/ws/debate/{debate_id}")

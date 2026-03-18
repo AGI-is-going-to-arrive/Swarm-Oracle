@@ -55,10 +55,16 @@ async def test_predict_then_fetch_result(client: TestClient):
             "confidence": 0.8,
             "user_id": "debate-user",
             "user_name": "Debate QA",
+            "is_counterplay": True,
+            "counterplay_phase": "crossfire",
+            "counterplay_variant": "reversal",
         },
     )
     assert predict.status_code == 200
     assert predict.json()["kind"] == "winner"
+    assert predict.json()["is_counterplay"] is True
+    assert predict.json()["counterplay_phase"] == "crossfire"
+    assert predict.json()["counterplay_variant"] == "reversal"
 
     async def _push(_debate_id: str, _event: dict) -> None:
         return None
@@ -70,7 +76,14 @@ async def test_predict_then_fetch_result(client: TestClient):
     payload = result.json()
     assert payload["result_ready"] is True
     assert payload["result"]["winner"] in {"proposition", "opposition"}
+    assert payload["counterplay"]["kind"] == "winner"
+    assert payload["counterplay"]["phase"] == "crossfire"
+    assert payload["counterplay"]["variant"] == "reversal"
+    assert payload["counterplay"]["outcome"] in {"hit", "miss"}
     assert len(payload["predictions"]) == 1
+    assert payload["predictions"][0]["is_counterplay"] is True
+    assert payload["predictions"][0]["counterplay_phase"] == "crossfire"
+    assert payload["predictions"][0]["counterplay_variant"] == "reversal"
     assert payload["predictions"][0]["score"] is not None
 
 
@@ -83,6 +96,22 @@ def test_predict_rejects_invalid_target_value(client: TestClient):
             "kind": "winner",
             "target_value": "judge",
             "confidence": 0.4,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_predict_rejects_counterplay_without_required_metadata(client: TestClient):
+    debate = create_debate_record("如果所有法院都必须公开解释每一次紧急禁令，会更稳吗？")
+
+    resp = client.post(
+        f"/api/debate/{debate.id}/predict",
+        json={
+            "kind": "winner",
+            "target_value": "proposition",
+            "confidence": 0.4,
+            "is_counterplay": True,
         },
     )
 

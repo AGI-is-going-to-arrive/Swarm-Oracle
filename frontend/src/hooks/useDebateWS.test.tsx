@@ -8,6 +8,7 @@ const storeState = {
   setDebate: vi.fn(),
   setPhase: vi.fn(),
   setScore: vi.fn(),
+  setCounterplay: vi.fn(),
   appendTurn: vi.fn(),
   setVerdict: vi.fn(),
   debate: null,
@@ -120,5 +121,38 @@ describe('useDebateWS', () => {
     });
 
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('forwards debate_counterplay events into the store', () => {
+    render(<Harness debateId="debate-4" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_counterplay',
+          data: {
+            debate_id: 'debate-4',
+            kind: 'winner',
+            target_value: 'opposition',
+            confidence: 0.6,
+            phase: 'crossfire',
+            variant: 'reversal',
+            outcome: null,
+            user_name: 'QA',
+            created_at: new Date().toISOString(),
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setCounterplay).toHaveBeenCalledWith(expect.objectContaining({
+      debate_id: 'debate-4',
+      kind: 'winner',
+      target_value: 'opposition',
+    }));
   });
 });

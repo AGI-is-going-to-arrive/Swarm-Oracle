@@ -199,6 +199,17 @@ def init_db():
             # V2: Visualization fields
             _migrate_add_column(cursor, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
             _migrate_add_column(cursor, "scenario", "scene_theme", "TEXT")
+            # Track A follow-up: commitment/objective settlement fields
+            _migrate_add_column(
+                cursor, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
+            )
+            _migrate_add_column(
+                cursor, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"
+            )
+            _migrate_add_column(cursor, "scenario_campaign_log", "commitment_outcome", "TEXT")
+            _migrate_add_column(cursor, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
+            _migrate_add_column(cursor, "debate_prediction", "counterplay_phase", "TEXT")
+            _migrate_add_column(cursor, "debate_prediction", "counterplay_variant", "TEXT")
             conn.commit()
             conn.close()
         except Exception as exc:

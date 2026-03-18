@@ -114,6 +114,8 @@ vi.mock('../lib/scenarioMeta', () => {
       archiveGrade: 'A',
       directorStyleTag: 'quiet_observer',
       profileResonance: 'aligned',
+      counterplayCardCount: 0,
+      lastCounterplayCard: null,
     },
   };
   return {
@@ -135,6 +137,8 @@ vi.mock('../lib/archiveSummary', () => ({
     objectiveCompletedCount: 0,
     objectiveTotalCount: 0,
     commitmentOutcome: null,
+    counterplayCardCount: 0,
+    lastCounterplayCard: null,
   })),
   getDirectorStyleLabel: vi.fn(() => 'Quiet Observer'),
 }));
@@ -333,10 +337,13 @@ describe('ResultView campaign summary', () => {
       profile_resonance: 'aligned',
       betting_hit: false,
       most_used_card: 'public_hearing',
-      completed_daily_challenge: true,
-      campaign_score_delta: 4,
-      finalized_at: '2026-03-18T00:00:00Z',
-    });
+        completed_daily_challenge: true,
+        objective_completed_count: 1,
+        objective_total_count: 2,
+        commitment_outcome: 'miss',
+        campaign_score_delta: 4,
+        finalized_at: '2026-03-18T00:00:00Z',
+      });
     finalizeCampaignMock.mockRejectedValue(new Error('API 409: already finalized elsewhere'));
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
 
@@ -364,6 +371,9 @@ describe('ResultView campaign summary', () => {
         profile_id: 'law',
         profile_resonance: 'aligned',
         completed_daily_challenge: true,
+        objective_completed_count: 1,
+        objective_total_count: 2,
+        commitment_outcome: 'miss',
       });
     });
   });

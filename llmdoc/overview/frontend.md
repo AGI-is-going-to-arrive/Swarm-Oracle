@@ -4,13 +4,15 @@
 
 React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + Phaser.js
 
+- 交付形态：浏览器优先的 Web 应用。当前“跨平台”指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+
 ## 页面 (`src/pages/`)
 
 | 页面 | 文件 | 描述 |
 |------|------|------|
 | InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status`，把后端 daily challenge 真值与本地缓存合并显示，避免跨设备时只看到本地旧状态；challenge pool 现为 12 条，题面与副标题都已支持 `zh/en`，首页 quick start 已补进 mythic / survival / generic 直达题目，其中 generic 现为 3 条 `switchboard_forum` 小题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard）；移动端非剧场页面会把全局 `LanguageSwitcher` 放到右上安全区，避免挡住底部表单 |
-| DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证 |
-| DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标 |
+| DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证；当前 live 页会优先读取后端显式 `counterplay` snapshot/WS 数据，本地 helper 只做兜底 |
+| DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标；当前结果页会优先读取后端显式 `counterplay` 字段，展示反制摘要、命中/未中结果，并继续传给 share copy |
 | SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；本轮新增的导演层会在 Theater 面板内显示 2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺选择与锁定/取消按钮；玩法卡 modal 现会显示题材专属三段式连锁事件，以及 `风险 / 资源` 两条轻量状态；移动端 Theater 头部动作区在窄屏下会自动换行，并把视图切换收成图标胶囊，避免控件裁切；Theater 背景现为 30 个 Theater 语义主题 + 3 个 Debate 专属主题，共 33 个 registry 条目；截图自动化摘要现还会带 `capture_result_kind`，便于区分 `gif` 与 `gif_fallback_png` |
 | ResultView | `ResultView.tsx/.css` | 结果页：分支树 + 叙事对比 + 社交媒体文案生成 (P6)；如果用户在 narration 完成前过早打开 `/result/:id`，页面会先停在 loading，等故事真正生成完再展示；故事与档案摘要就绪后会调用 `finalizeCampaign()` 结算导演生涯，并渲染 `Campaign Progress` 区块（积分增量 / 等级 / 下次解锁 / 徽章）；结构化下注与“因果档案”区块现已支持按单条下注显示 `命中 / 未中 / 待判定`，档案摘要会展示命中比，并保留 `dominantBranchTitle`、`dominantTone`、`mostUsedCard`、`archiveGrade`、`directorStyleTag`、`profileResonance`；本轮新增的归档字段包括导演目标完成度、worldline 承诺结果，以及最终 `风险 / 资源` 轨道；导出 Markdown 和分享文案会附带题材档案前缀；当本地 `scenarioMeta` 缺字段时，页面会并行读取后端 `/api/campaign/scenario/{id}/summary` 回填 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`，并避免把默认 `3/3` 导演点数误当成真值展示 |
 
@@ -30,8 +32,8 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `DebateStageRibbon` | Debate Arena 五阶段 ribbon，支持按已解锁阶段切片回看，并可手动锁定在某个阶段后再回到 live |
 | `DebateMomentumBar` | Debate 势能条；当前已收敛成更易读的深色 HUD，不再把透明像素边框直接压在核心文案上 |
 | `DebateScoreCard` | Debate 三方 score card；现支持 proposition / opposition / judge badge 装饰位 |
-| `DebateBetModal` | Debate Arena 结构化押注弹窗，只支持 `winner / verdict_tone`；现会输出 modal 内部 automation state，并显示更直白的押注说明文案 |
-| `DebateShareModal` | Debate 结果页专用分享弹窗，复用现有 share copy 口径但不走旧 scenario social API；现会输出平台、copy length、复制状态等 automation state，平台按钮与文案首行也会带对应 emoji 图标 |
+| `DebateBetModal` | Debate Arena 结构化押注弹窗，只支持 `winner / verdict_tone`；现会输出 modal 内部 automation state，并显示更直白的押注说明文案；当 live 页触发 `counterplay` 预设时，它会接收 preset kind/target/confidence |
+| `DebateShareModal` | Debate 结果页专用分享弹窗，复用现有 share copy 口径但不走旧 scenario social API；现会输出平台、copy length、复制状态等 automation state，平台按钮与文案首行也会带对应 emoji 图标；当前 share copy 会带 `counterplay` 摘要和命中/未中结果 |
 | `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀 |
 | `LanguageSwitcher` | 全局语言切换器（EN/ZH）；桌面端固定右下角，移动端普通页面移到右上安全区，Theater 页继续贴右下安全区 |
 
@@ -49,15 +51,16 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - **Actions**:
   - `startDebate(question)` — 创建独立 Debate Arena
   - `loadDebate(id)` — 拉取 live snapshot
-  - `appendTurn()` / `setPhase()` / `setScore()` / `setVerdict()` / `setError()`
+  - `appendTurn()` / `setPhase()` / `setScore()` / `setCounterplay()` / `setVerdict()` / `setError()`
 - **特点**:
   - 与 `simulationStore` 完全分离，不把 Debate 状态继续塞回 scenario 主 store
-  - `agent_speak / debate_phase_change / debate_score_update / debate_verdict` 只更新 Debate 闭环需要的最小状态
+  - `agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict` 只更新 Debate 闭环需要的最小状态
 
 ## 本地玩法元数据 (`src/lib/`)
 
 ### `scenarioMeta.ts`
 - 单局前端持久化层（localStorage）
+- 当前不是后端权威状态，也不承诺跨设备一致
 - 保存：
   - 导演点数
   - 卡牌冷却
@@ -85,6 +88,18 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 提供 Debate 结果页 share copy 组装 helper
   - 当前会统一提供平台 `icon + labelKey` 元数据
   - 保证 Debate share 文案和结果页字段口径一致；文案首行会带平台 emoji
+  - 当前 share copy 会带 `counterplay` 摘要与命中/未中结果
+
+### `debateCounterplay.ts`
+- Debate 轻量 counterplay helper
+- 负责：
+  - 本地兜底记录（仍保留 `localStorage`）
+  - 从后端 `counterplay` payload 或 legacy `predictions[]` 提取统一记录
+  - 计算摘要文本与 hit/miss outcome
+- 当前优先级：
+  1. 后端显式 `counterplay`
+  2. `predictions[]` 中的 legacy metadata
+  3. 本地记录
 
 ### `predictionBetting.ts`
 - 定义结构化下注协议：
@@ -120,6 +135,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - `agent_speak`
   - `debate_phase_change`
   - `debate_score_update`
+  - `debate_counterplay`
   - `debate_verdict`
 - 出错时会保留 `error` 状态，而不是把整个 Debate store 清空，便于前端显示可读错误
 - 初始连接和重连都已补 cleanup：
@@ -206,13 +222,15 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
   - `page.phase`
   - `page.selected_phase / is_phase_locked / unlocked_phases`
   - `page.controls.can_open_prediction`
+  - `page.controls.can_open_counterplay`
+  - `page.controls.counterplay_used`
   - `page.controls.can_view_result`
   - `page.controls.active_modal / show_bet_modal / modal_state`
-  - `page.debate.motion / visible_quotes / proposition.score / opposition.score / judge.summary_ready / bet_window_open`
+  - `page.debate.motion / visible_quotes / proposition.score / opposition.score / judge.summary_ready / bet_window_open / counterplay / counterplay_used`
 - `DebateResultView` 现会输出：
   - `page.kind = "debate_result"`
   - `page.controls.active_modal / show_share_modal / modal_state`
-  - `page.result.winner / verdict_tone / score / prediction_count`
+  - `page.result.winner / verdict_tone / score / prediction_count / counterplay_summary / counterplay_outcome`
 - `inferSceneTheme(question)` 已与后端 `scene_selector` 对齐：优先取原始题面中的强语义词；当前 Theater 场景池为 30 个语义主题，再加 3 个 Debate 专属背景，共 33 个 registry 条目；`law_court_variant / faith_temple_variant / switchboard_forum_variant` 已接好 `switchboard_forum / switchboard_forum_variant -> generic` fallback
 - Track D 资产生成链路：
   - `npm run generate:ui-assets -- --preset ...`
@@ -221,7 +239,8 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
 - Legacy provenance 回填链路：
   - `npm run assets:provenance:backfill`
   - `npm run assets:provenance:check`
-  - 当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有 sidecar；较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则会以 backfilled 口径记录 `unknown / null` 字段
+  - 当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有 sidecar；其中 `10` 份保留完整生成字段，`4` 份为 `backfilled_partial`，`48` 份为 `backfilled_legacy`
+  - backfilled 口径表示 sidecar 补齐；允许 `unknown / null` 字段存在，不代表恢复了原始生成时间、模型或 prompt
 - 固定回归样本集已落盘到：
   - `frontend/output/e2e/sample_matrix.json`
   - `frontend/output/e2e/sample_matrix_variants.json`
@@ -254,6 +273,12 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
     - `frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
   - 当前 Track D Debate 主工件目录为：
     - `frontend/output/e2e/20260318-post-director-goals-debate-full/`
+  - 本轮额外复验通过的主模式 full 工件：
+    - `frontend/output/e2e/20260318-codex-audit-main-full/result.json`
+  - 本轮额外复验通过的 Debate full 工件：
+    - `frontend/output/e2e/20260318-codex-audit-debate-full-rerun/result.json`
+  - 本轮额外复验通过的 Debate `430x932` 工件：
+    - `frontend/output/e2e/20260318-codex-audit-debate-mobile-430x932/result.json`
   - 本轮新增 Debate 工件目录为：
     - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/`
     - `frontend/output/e2e/20260318-debate-civic-v2/`
@@ -375,7 +400,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 ## 构建与部署
 
 - **开发**: `npm run dev` → Vite dev server (localhost:18928)
-- **测试**: `npm test` → Vitest + Testing Library — 仓库内历史全量基线仍记录为 **179 passed**；本轮围绕玩法增强 / provenance / 文档同步实际重跑：
-  - `src/lib/scenarioMeta.test.ts / src/lib/archiveSummary.test.ts / src/components/gameplayCards.test.ts / src/components/gameplayContract.test.ts / src/pages/SimulationView.test.tsx / src/pages/ResultView.test.tsx / src/components/GameplayCardsModal.test.tsx` → **49 passed**
+- **测试**: `npm test` → Vitest + Testing Library — 仓库内历史全量基线仍记录为 **179 passed**；本轮重新复验：
+  - `src/lib/scenarioMeta.test.ts / src/lib/archiveSummary.test.ts / src/components/gameplayCards.test.ts / src/components/gameplayContract.test.ts / src/pages/SimulationView.test.tsx / src/pages/ResultView.test.tsx / src/components/GameplayCardsModal.test.tsx / src/pages/DebateArenaView.test.tsx / src/pages/DebateResultView.test.tsx / src/components/DebateBetModal.test.tsx / src/components/DebateShareModal.test.tsx / src/hooks/useDebateWS.test.tsx / src/i18n/locales.test.ts` → **60 passed**
 - **构建**: `npm run build` → `tsc -b && vite build` → `dist/`；本轮已重新验证通过
 - **Docker**: Nginx 静态文件服务，代理 `/api` 和 `/ws` 到后端 `18927`；本轮已完成一次 `docker compose up --build -d` 运行时 smoke，前端代理创建 Theater 场景可跑到 `done`

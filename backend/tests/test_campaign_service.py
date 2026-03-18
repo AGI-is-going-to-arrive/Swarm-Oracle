@@ -67,6 +67,50 @@ def test_finalize_accumulates_campaign_score_and_summaries():
     }
 
 
+def test_finalize_rewards_completed_objectives_and_commitment_hit():
+    scenario_id = _seed_completed_scenario()
+
+    result = finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-commit-hit",
+        user_name="Helena",
+        profile_id="governance",
+        archive_grade="A",
+        profile_resonance="aligned",
+        betting_hit=False,
+        bet_count=1,
+        most_used_card="public_hearing",
+        completed_daily_challenge=False,
+        objective_completed_count=2,
+        objective_total_count=2,
+        commitment_outcome="hit",
+    )
+
+    assert result["campaign_score_delta"] == 6
+
+
+def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
+    scenario_id = _seed_completed_scenario()
+
+    result = finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-commit-miss",
+        user_name="Iris",
+        profile_id="trade",
+        archive_grade="C",
+        profile_resonance="offbeat",
+        betting_hit=None,
+        bet_count=0,
+        most_used_card=None,
+        completed_daily_challenge=False,
+        objective_completed_count=0,
+        objective_total_count=2,
+        commitment_outcome="miss",
+    )
+
+    assert result["campaign_score_delta"] == 1
+
+
 def test_finalize_is_idempotent_for_same_scenario():
     scenario_id = _seed_completed_scenario()
 
@@ -207,3 +251,34 @@ def test_daily_challenge_summary_returns_incomplete_when_no_matching_log():
         "profile_resonance": None,
         "campaign_score_delta": None,
     }
+
+
+def test_scenario_summary_persists_objectives_and_commitment_outcome():
+    scenario_id = _seed_completed_scenario()
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-summary",
+        user_name="Jules",
+        profile_id="law",
+        archive_grade="A",
+        profile_resonance="aligned",
+        betting_hit=True,
+        bet_count=1,
+        most_used_card="public_hearing",
+        completed_daily_challenge=False,
+        objective_completed_count=1,
+        objective_total_count=2,
+        commitment_outcome="miss",
+    )
+
+    engine = get_engine()
+    with Session(engine) as session:
+        log = session.exec(
+            select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
+        ).first()
+
+    assert log is not None
+    assert log.objective_completed_count == 1
+    assert log.objective_total_count == 2
+    assert log.commitment_outcome == "miss"

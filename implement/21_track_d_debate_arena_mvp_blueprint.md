@@ -32,7 +32,7 @@
   - 押注：`winner / verdict_tone`
   - 分享：`DebateShareModal`
 - 已落地的实现面
-  - 后端：`Debate / DebateTurn / DebatePrediction` 独立模型与 `/api/debate` + `/ws/debate/{id}`
+  - 后端：`Debate / DebateTurn / DebatePrediction / DebateCounterplay` 独立模型与 `/api/debate` + `/ws/debate/{id}`
   - 前端：`DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
   - 自动化：`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`
 - 已落地的验证面
@@ -41,6 +41,7 @@
   - 本轮移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
   - 本轮 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
   - develop-web-game 工件：`frontend/output/web-game/20260317-debate-arena-signoff/`
+  - 本次 session 又补了 Debate counterplay live/result desktop 黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
 
 ---
 

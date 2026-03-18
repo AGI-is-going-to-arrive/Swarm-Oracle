@@ -40,8 +40,8 @@
 - ✅ 前端核心（InputView → SimulationView → BranchTree）
 - ✅ 蝴蝶效应干预功能（回溯 + 多点 + 模板）
 - ✅ ResultView 多结局对比
-- ✅ 后端主回归现为 **815 passed**
-- ✅ 前端主回归现为 **179 passed**（Vitest）
+- ✅ 后端历史全量基线仍记录为 **815 passed**
+- ✅ 前端历史全量基线仍记录为 **179 passed**（Vitest）
 - ✅ 中英双语 i18n
 - ✅ 实时 Agent 消息推送（per-agent 即时推送）
 - ✅ 用户可选推演轮数（滑块 3-40）
@@ -59,7 +59,7 @@
 - ✅ LLM 重试 + 指数退避 (P1-3)
 - ✅ Alembic 数据库迁移框架 (P1-4)
 - ✅ Prometheus 可观测性 (`/metrics`) (P3-9)
-- ✅ 前端测试框架 (Vitest) (P2-6) — 179 passed（覆盖状态管理、回放、截图、玩法卡、分享和页面自动化摘要）
+- ✅ 前端测试框架 (Vitest) (P2-6) — 历史全量基线 **179 passed**；本轮围绕玩法卡 / Debate / i18n / 自动化摘要的定向回归为 **60 passed**
 - ✅ 批量 SQL 删除优化 (P2-7)
 - ✅ **Phase 2 推理可视化**: 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效 + 30 个语义场景主题（含 law/faith/generic 变体）
 - ✅ **Phase 3 游戏化打磨**: 标题画面 + 6种结局 + MiniMap + 竞猜面板 + 排行榜 + 截图/GIF导出
@@ -67,13 +67,20 @@
 - ✅ **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布场景无遮挡
 
 ### 待完成
-- ✅ 完整 E2E 测试（matrix / corners / full 黑盒套件）
+- ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
 - ✅ 前端代码分割优化（SimulationView 业务块已拆小）
 - ✅ Docker Compose 一键部署（已完成真实容器 smoke）
 - ✅ Director Campaign / 导演生涯最小闭环（A1 已落地，首页与结果页可见）
 - ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
 - ✅ 12 个题材画像全量 E2E / 工件补齐（主 12 profile + 3 条 variant matrix + mobile 双证据）
 - ✅ AI 辩论竞技场 MVP（独立 Debate domain + `/api/debate` / `/ws/debate/{id}` + live/result 页 + 结构化押注 + share + automation hooks + desktop/mobile E2E）
+- ✅ Debate `counterplay` 最小闭环（可提示、可一键提交、后端显式返回到 live snapshot / result payload / WS、结果页与 share 会显示命中/未中）
+
+### 当前边界
+- ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
+- ℹ️ `director goals / worldline commitment` 当前主要落在前端本地 `scenarioMeta`，不是后端权威状态；跨设备一致性不应按“已完成”理解
+- ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
+- ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
 
 ### 已完成 Sprint
 - ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试

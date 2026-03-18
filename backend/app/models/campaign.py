@@ -96,5 +96,8 @@ class ScenarioCampaignLog(SQLModel, table=True):
     betting_hit: Optional[bool] = None
     most_used_card: Optional[str] = None
     completed_daily_challenge: bool = False
+    objective_completed_count: int = 0
+    objective_total_count: int = 0
+    commitment_outcome: Optional[str] = None
     campaign_score_delta: int = 0
     created_at: datetime = Field(default_factory=_now)

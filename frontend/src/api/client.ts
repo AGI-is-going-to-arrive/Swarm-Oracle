@@ -143,6 +143,9 @@ export async function predictDebate(
       confidence: payload.confidence,
       ...(payload.userId ? { user_id: payload.userId } : {}),
       ...(payload.userName ? { user_name: payload.userName } : {}),
+      ...(payload.isCounterplay ? { is_counterplay: true } : {}),
+      ...(payload.counterplayPhase ? { counterplay_phase: payload.counterplayPhase } : {}),
+      ...(payload.counterplayVariant ? { counterplay_variant: payload.counterplayVariant } : {}),
     }),
   });
 }
@@ -276,6 +279,9 @@ export interface FinalizeCampaignPayload {
   most_used_card?: string | null;
   completed_daily_challenge?: boolean;
   bet_count?: number;
+  objective_completed_count?: number;
+  objective_total_count?: number;
+  commitment_outcome?: 'hit' | 'miss' | 'pending' | null;
 }
 
 export async function finalizeCampaign(

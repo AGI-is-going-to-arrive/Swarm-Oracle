@@ -31,8 +31,8 @@ npm run dev     # → http://localhost:18928
 | Route | Component | Description |
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
-| `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, and UI language that syncs to `debate.language` |
-| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, prediction settlement, dedicated share modal, and UI language that syncs to the result payload language |
+| `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, and a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window |
+| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language |
 | `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment` |
 | `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also falls back to backend campaign scenario summary when local archive metadata is missing, and shows objective completion, commitment outcome, and final system-track state |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
@@ -47,12 +47,12 @@ npm run dev     # → http://localhost:18928
 - **InterventionModal** — Butterfly Effect user intervention input
 - **GameplayCardsModal** — 14 domain-driven “director cards” that inject high-priority branch events; beyond the original escalation cards, the modal now includes `Audit Reckoning / Intel Blowback / Mandate Snapback / Ceasefire Committee` as counterplay cards, and also shows a profile-specific three-step signature arc plus lightweight `risk / resource` tracks
 - **DebateStageRibbon / DebateMomentumBar / DebateScoreCard** — Debate Arena stage, score, and side-state UI; the momentum HUD is now simplified for readability instead of relying on the old transparent frame overlay
-- **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the share modal buttons and first copy line also include platform emoji
+- **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the bet modal supports counterplay presets, and the share copy now carries both the counterplay summary and the final hit/miss result
 - **themeRegistry.ts** — single source of truth for the 33 Theater / Debate themes, their keyword routing, profile mapping, gameplay frame / badge paths, and Debate-specific UI asset paths
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
 - **Director Layer** — `scenarioMeta` now stores `objectives + commitment` so Theater can show two short run-scoped goals, current system-track pressure, and the currently committed worldline without waiting for a backend schema change
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
-- **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state
+- **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
 - **ShareModal** — Social media copy generation (小红书/微博/知乎/Reddit/X)
@@ -82,6 +82,11 @@ npm run e2e:debate:full
   - `npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx` → **49 passed**
   - `npm run build` → passed
   - `npm run assets:provenance:check` → passed
+- This session additionally re-ran the Debate counterplay path:
+  - `npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/hooks/useDebateWS.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts` → **13 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - Debate desktop live/result/share smoke → `frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`

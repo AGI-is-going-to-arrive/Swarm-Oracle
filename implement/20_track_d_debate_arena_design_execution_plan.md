@@ -57,18 +57,19 @@
   - `POST /api/debate`：接收 `question` 与可选 `profile_hint`
   - `GET /api/debate/{id}`
   - `GET /api/debate/{id}/result`
-  - `POST /api/debate/{id}/predict`：接收 `kind / target_value / confidence / user_id / user_name`
+  - `POST /api/debate/{id}/predict`：接收 `kind / target_value / confidence / user_id / user_name`，并可选带 `is_counterplay / counterplay_phase / counterplay_variant`
   - `WS /ws/debate/{id}`
 - 当前真实自动化钩子
   - live/result 页已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`
-  - live 页会输出 `selected_phase / is_phase_locked / unlocked_phases / active_modal / modal_state / bet_window_open`
+  - live 页会输出 `selected_phase / is_phase_locked / unlocked_phases / active_modal / modal_state / bet_window_open / counterplay`
 - 当前真实测试与工件
   - 后端：`backend/tests/test_debate_service.py`、`backend/tests/test_debate_api.py`
-  - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`
+  - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`、`debateCounterplay.test.ts`
   - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
   - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
   - 本轮补充移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
   - 本轮补充 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
+  - 本次 session 补充的 Debate counterplay desktop 黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
 
 ---
 

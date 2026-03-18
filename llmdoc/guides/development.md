@@ -67,15 +67,32 @@ cd backend
 ```
 
 - 仓库内历史后端全量基线仍记录为 **815 passed**。
-- 本次文档同步前重新执行了与当前改动直接相关的定向回归：
+- 本轮基于当前仓库状态重新执行了定向回归：
 
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_card_events.py tests/test_gameplay_contract_sync.py -q
+python -m pytest \
+  tests/test_debate_service.py \
+  tests/test_debate_api.py \
+  tests/test_config.py \
+  tests/test_campaign_api.py \
+  tests/test_campaign_service.py \
+  tests/test_predictions.py \
+  tests/test_card_events.py \
+  tests/test_gameplay_contract_sync.py -q
 ```
 
-- 结果：**24 passed**
+- 结果：**65 passed**
+- 本次 session 围绕 Debate `counterplay` 又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q
+```
+
+- 结果：**11 passed**
 
 ### Frontend 测试
 
@@ -86,7 +103,7 @@ npm test
 ```
 
 - 仓库内历史前端全量基线仍记录为 **179 passed**。
-- 本次文档同步前重新执行了与当前玩法增强 / provenance / 文档改动直接相关的定向回归：
+- 本轮基于当前仓库状态重新执行了定向回归：
 
 ```bash
 cd frontend
@@ -97,22 +114,52 @@ npm test -- --run \
   src/components/gameplayContract.test.ts \
   src/pages/SimulationView.test.tsx \
   src/pages/ResultView.test.tsx \
-  src/components/GameplayCardsModal.test.tsx
+  src/components/GameplayCardsModal.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/components/DebateBetModal.test.tsx \
+  src/components/DebateShareModal.test.tsx \
+  src/hooks/useDebateWS.test.tsx \
+  src/i18n/locales.test.ts
 ```
 
 - 结果：
-  - `vitest`：**49 passed**
-- 本次文档同步还重新执行了：
+  - `vitest`：**60 passed**
+- 本次 session 围绕 Debate `counterplay` 又补跑了：
 
 ```bash
 cd frontend
-npm run build
-npm run assets:provenance:check
+npm test -- --run \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/hooks/useDebateWS.test.tsx \
+  src/components/DebateShareModal.test.tsx \
+  src/lib/debateShare.test.ts \
+  src/lib/debateCounterplay.test.ts
 ```
 
 - 结果：
+  - `vitest`：**13 passed**
+- 本轮还重新执行了：
+
+```bash
+cd frontend
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run assets:provenance:check
+node scripts/e2e-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-main-full --headless
+node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-full-rerun --headless
+node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 430 --height 932 --output-dir output/e2e/20260318-codex-audit-debate-mobile-430x932 --headless
+```
+
+- 结果：
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过
   - `npm run assets:provenance:check`：通过
+  - `e2e-suite.mjs full`：通过
+  - `e2e-debate-suite.mjs full`：通过
+  - `e2e-debate-suite.mjs mobile --width 430 --height 932`：通过
+  - Debate counterplay live/result desktop 黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -261,7 +308,7 @@ export GOOGLE_API_KEY="..."
 ```
 
 - 当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有 `.meta.json` sidecar。
-- 其中较新的 Debate 资产保留原始生成字段；较早的 legacy 资产则使用诚实回填的 sidecar，允许 `unknown / null` 字段与 `provenance_status=backfilled_*` 并存，而不是伪造原始生成记录。
+- 其中较新的 Debate 资产保留原始生成字段；较早的 legacy 资产则使用诚实回填的 sidecar，允许 `unknown / null` 字段与 `provenance_status=backfilled_*` 并存，而不是伪造原始生成记录。当前统计为：`62/62` PNG 都有 sidecar，其中 `10` 份完整、`4` 份 `backfilled_partial`、`48` 份 `backfilled_legacy`。
 
 **测试约定**:
 - `conftest.py` 现为每个 pytest case 创建独立临时 SQLite 数据库，并在前后显式释放 engine

@@ -17,13 +17,13 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜 |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
 | Gameplay Cards | 当前共有 14 张玩法卡：10 张原始导演卡 + 4 张反制卡（`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`）；玩法卡会按题目画像动态推荐，弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件，以及常驻 `风险 / 资源` 轨道；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
-| Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；后端 `card_events.py` 与前端 `gameplayContract.ts` 共用同一份定义，当前已覆盖卡牌规则、modal 输入契约、prompt 语义与 branching bonus，并有同步测试覆盖 |
+| Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；前端 `gameplayContract.ts` 直接消费卡牌规则、modal 输入契约与 prompt 语义，后端 `card_events.py` 当前主要消费 card event 映射与 `branching_bonus`，并有同步测试覆盖 |
 | Director Points & Cooldowns | 单局 3 点导演点数 + 卡牌冷却，前端本地持久化 |
 | Director Goals & Worldline Commitment | Theater 局内现有最小导演层：2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页中的目标完成度 / 承诺命中或落空结算；这批状态当前先落在前端 `scenarioMeta`，后续再决定是否后端化 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案；当本地 `scenarioMeta` 不完整时，结果页也会回读后端单局 campaign summary 兜底这批核心档案字段 |
 | Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；题面与副标题都支持 `zh/en`，首页会把后端 `campaign daily-status` 真值与本地缓存合并显示完成态、已用卡数、下注态与题材回响反馈 |
 | Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status/scenario/{id}/summary` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章；当本地 `scenarioMeta` 缺字段时，也会用后端 `scenario summary` 回填 `archiveGrade / profileResonance / mostUsedCard / bettingHit / completedDailyChallenge`，首页会读取题材 mastery 与当日 challenge 真值 |
-| Debate Arena (Track D) | 已落地独立 Debate domain：`/api/debate` + `/ws/debate/{id}` 后端竖切、首页 `Debate Arena` 入口、`/debate/:id` live 页、`/debate/:id/result` 结果页、结构化押注（`winner / verdict_tone`）、`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()` 自动化钩子；当前使用 deterministic 5 阶段辩论脚本 + 题材化 deterministic 文案/评分偏置打通 MVP，并在创建后保留短暂 pre-roll 供 live 页下注，`closing / verdict` 阶段会锁单；live/result 页会按 `debate.language` 自动同步 UI 语言，移动端当前同屏只保留一个主 CTA，不继续塞胖通用 scenario 引擎 |
+| Debate Arena (Track D) | 已落地独立 Debate domain：`/api/debate` + `/ws/debate/{id}` 后端竖切、首页 `Debate Arena` 入口、`/debate/:id` live 页、`/debate/:id/result` 结果页、结构化押注（`winner / verdict_tone`）、`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()` 自动化钩子；当前使用 deterministic 5 阶段辩论脚本 + 题材化 deterministic 文案/评分偏置打通 MVP，并在创建后保留短暂 pre-roll 供 live 页下注，`closing / verdict` 阶段会锁单；live/result 页会按 `debate.language` 自动同步 UI 语言，移动端当前同屏只保留一个主 CTA，不继续塞胖通用 scenario 引擎；本次又补了最小 `counterplay` 闭环：可提示、可一键提交、后端独立落库、live snapshot / WS / result payload 显式返回、结果页和 share copy 都会显示命中/未中 |
 | Generic Quick Start | 首页 generic 题材现有 3 条 `switchboard_forum` 题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard） |
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
@@ -55,9 +55,10 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
-| Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame；当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有同名 `.meta.json` sidecar，其中较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则使用诚实回填的 provenance 记录 |
+| Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame；当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有同名 `.meta.json` sidecar，其中较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则使用诚实回填的 provenance 记录；这里的 backfill 代表 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
 | Theme Registry & Asset Manifest | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 / 辩论 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；Track D 的 `DEBATE_UI_ASSETS` 也走同一套 registry |
-| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现已同步到 Debate Arena 新资产；`generate-ui-assets.mjs` 会继续为新图像写入完整 sidecar，而 `assets:provenance:backfill` / `assets:provenance:check` 则负责把 legacy UI/scenes 资产补成可审计的 sidecar 完整态 |
+| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现已同步到 Debate Arena 新资产；`generate-ui-assets.mjs` 会继续为新图像写入完整 sidecar，而 `assets:provenance:backfill` / `assets:provenance:check` 则负责把 legacy UI/scenes 资产补成可审计的 sidecar 完整态，但不会伪造原始生成记录 |
+| Platform Scope | 当前交付形态是浏览器优先的 Web 应用；已对桌面/移动浏览器视口做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
 | i18n | 中英文支持 |
 
 ## 架构
@@ -104,8 +105,8 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 ### Testing
 | 工具 | 覆盖 |
 |------|------|
-| pytest + pytest-asyncio | 仓库内历史后端全量基线仍记录为 **815 passed**；本轮围绕当前改动实际重跑了 `test_card_events.py + test_gameplay_contract_sync.py`，结果为 **24 passed** |
-| Vitest + jsdom | 仓库内历史前端全量基线仍记录为 **179 passed**；本轮围绕玩法增强、provenance 与文档同步实际重跑了 `scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal`，结果为 **49 passed**；`npm run build` 通过，`e2e:full` 与 `e2e:debate:full` 也已重跑通过 |
+| pytest + pytest-asyncio | 仓库内历史后端全量基线仍记录为 **815 passed**；本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed** |
+| Vitest + jsdom | 仓库内历史前端全量基线仍记录为 **179 passed**；本轮重新复验了 `scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales`，结果为 **60 passed**；`npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run assets:provenance:check` 均通过，`e2e-suite.mjs full` 与 `e2e-debate-suite.mjs full` 也已重跑通过 |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 

@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/campaign", tags=["campaign"])
 
 VALID_ARCHIVE_GRADES = {"S", "A", "B", "C"}
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
+VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
 
 
 class CampaignProfileResponse(BaseModel):
@@ -89,6 +90,9 @@ class CampaignFinalizeRequest(BaseModel):
     bet_count: int = 0
     most_used_card: str | None = None
     completed_daily_challenge: bool = False
+    objective_completed_count: int = 0
+    objective_total_count: int = 0
+    commitment_outcome: str | None = None
 
     @field_validator("user_id", "profile_id")
     @classmethod
@@ -129,6 +133,13 @@ class CampaignFinalizeRequest(BaseModel):
             raise ValueError("bet_count must be >= 0")
         return value
 
+    @field_validator("objective_completed_count", "objective_total_count")
+    @classmethod
+    def validate_objective_counts(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("objective counts must be >= 0")
+        return value
+
     @field_validator("most_used_card")
     @classmethod
     def validate_most_used_card(cls, value: str | None) -> str | None:
@@ -136,6 +147,26 @@ class CampaignFinalizeRequest(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("commitment_outcome")
+    @classmethod
+    def validate_commitment_outcome(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in VALID_COMMITMENT_OUTCOMES:
+            raise ValueError(
+                f"commitment_outcome must be one of {sorted(VALID_COMMITMENT_OUTCOMES)}"
+            )
+        return normalized
+
+    @field_validator("objective_total_count")
+    @classmethod
+    def validate_objective_total_count(cls, value: int, info) -> int:
+        completed = info.data.get("objective_completed_count", 0)
+        if completed > value:
+            raise ValueError("objective_total_count must be >= objective_completed_count")
+        return value
 
 
 class CampaignFinalizeResponse(BaseModel):
@@ -156,6 +187,9 @@ class CampaignScenarioSummaryResponse(BaseModel):
     betting_hit: bool | None = None
     most_used_card: str | None = None
     completed_daily_challenge: bool
+    objective_completed_count: int = 0
+    objective_total_count: int = 0
+    commitment_outcome: str | None = None
     campaign_score_delta: int
     finalized_at: str | None = None
 
@@ -234,6 +268,9 @@ async def finalize_campaign(
             bet_count=req.bet_count,
             most_used_card=req.most_used_card,
             completed_daily_challenge=req.completed_daily_challenge,
+            objective_completed_count=req.objective_completed_count,
+            objective_total_count=req.objective_total_count,
+            commitment_outcome=req.commitment_outcome,
         )
     except CampaignNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc

@@ -1,4 +1,8 @@
-import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
+import {
+  isCounterplayCard,
+  type GameplayCardId,
+  type GameplayProfileId,
+} from '../components/gameplayCards';
 import {
   ENDING_TONE_OPTIONS,
   PROFILE_RESONANCE_OPTIONS,
@@ -37,6 +41,8 @@ export interface ArchiveSummary {
   objectiveCompletedCount: number;
   objectiveTotalCount: number;
   commitmentOutcome: StructuredBetOutcome | null;
+  counterplayCardCount: number;
+  lastCounterplayCard: GameplayCardId | null;
 }
 
 const RUPTURE_KEYWORDS = [
@@ -93,6 +99,23 @@ function pickMostUsedCard(usages: CardUsageRecord[]): GameplayCardId | null {
     if (b[1] !== a[1]) return b[1] - a[1];
     return a[0].localeCompare(b[0]);
   })[0]?.[0] as GameplayCardId | undefined) ?? null;
+}
+
+function getCounterplaySummary(usages: CardUsageRecord[]): {
+  counterplayCardCount: number;
+  lastCounterplayCard: GameplayCardId | null;
+} {
+  const counterplayUsages = usages.filter((usage) => isCounterplayCard(usage.cardId));
+  const lastCounterplayCard = [...counterplayUsages]
+    .sort((a, b) => {
+      if (a.round !== b.round) return b.round - a.round;
+      return b.usedAt.localeCompare(a.usedAt);
+    })[0]?.cardId ?? null;
+
+  return {
+    counterplayCardCount: counterplayUsages.length,
+    lastCounterplayCard,
+  };
 }
 
 function matchesEndingTone(targetLabel: string, tone: EndingToneId): boolean {
@@ -228,6 +251,7 @@ export function buildArchiveSummary(params: {
   const objectiveCompletedCount = params.objectiveCompletedCount ?? 0;
   const objectiveTotalCount = params.objectiveTotalCount ?? 0;
   const commitmentOutcome = params.commitmentOutcome ?? null;
+  const { counterplayCardCount, lastCounterplayCard } = getCounterplaySummary(params.usages);
 
   return {
     dominantBranchTitle: dominantBranch?.title ?? null,
@@ -250,6 +274,8 @@ export function buildArchiveSummary(params: {
     objectiveCompletedCount,
     objectiveTotalCount,
     commitmentOutcome,
+    counterplayCardCount,
+    lastCounterplayCard,
   };
 }
 

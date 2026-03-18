@@ -36,6 +36,8 @@ describe('DebateShareModal automation callback', () => {
           motion: 'Motion',
           winnerLabel: 'Proposition',
           toneLabel: 'Order',
+          counterplaySummary: 'Quick hedge on Opposition at 60%',
+          counterplayOutcomeLabel: 'Counterplay missed',
           bestArgument: 'Best argument',
           bestRebuttal: 'Best rebuttal',
           judgeSummary: 'Judge summary',
@@ -58,5 +60,7 @@ describe('DebateShareModal automation callback', () => {
     expect(latestState.has_copy).toBe(true);
     expect(latestState.copy_length).toBeGreaterThan(0);
     expect(latestState.copied).toBe(true);
+    expect(screen.getByText(/Quick hedge on Opposition at 60%/)).toBeInTheDocument();
+    expect(screen.getByText(/Counterplay missed/)).toBeInTheDocument();
   });
 });

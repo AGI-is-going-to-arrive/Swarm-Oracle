@@ -43,11 +43,14 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
             "betting_hit": True,
             "most_used_card": "civilization_debate",
             "completed_daily_challenge": True,
+            "objective_completed_count": 2,
+            "objective_total_count": 2,
+            "commitment_outcome": "hit",
         },
     )
     assert finalize.status_code == 200
     finalize_data = finalize.json()
-    assert finalize_data["campaign_score_delta"] == 9
+    assert finalize_data["campaign_score_delta"] == 11
     assert finalize_data["profile"]["user_id"] == "director-api"
     assert finalize_data["profile"]["last_daily_challenge_profile_id"] == "governance"
     assert finalize_data["mastery"]["profile_id"] == "governance"
@@ -67,7 +70,7 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert mastery.status_code == 200
     mastery_data = mastery.json()
     assert len(mastery_data) == 1
-    assert mastery_data[0]["campaign_score"] == 9
+    assert mastery_data[0]["campaign_score"] == 11
 
     badges = client.get("/api/campaign/profile/director-api/badges")
     assert badges.status_code == 200
@@ -83,7 +86,10 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert scenario_summary_data["betting_hit"] is True
     assert scenario_summary_data["most_used_card"] == "civilization_debate"
     assert scenario_summary_data["completed_daily_challenge"] is True
-    assert scenario_summary_data["campaign_score_delta"] == 9
+    assert scenario_summary_data["objective_completed_count"] == 2
+    assert scenario_summary_data["objective_total_count"] == 2
+    assert scenario_summary_data["commitment_outcome"] == "hit"
+    assert scenario_summary_data["campaign_score_delta"] == 11
     assert scenario_summary_data["finalized_at"] is not None
 
 

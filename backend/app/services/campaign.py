@@ -21,6 +21,7 @@ from app.models.database import get_engine
 ARCHIVE_GRADE_ORDER = {"C": 0, "B": 1, "A": 2, "S": 3}
 VALID_ARCHIVE_GRADES = set(ARCHIVE_GRADE_ORDER)
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
+VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
 LEVEL_SCORE_STEP = 5
 BADGE_IDS = ("daily_challenge", "archive_record", "bet_winner")
 
@@ -76,6 +77,28 @@ def _has_resolved_bet(bet_count: int, betting_hit: bool | None) -> bool:
     return bet_count > 0 or betting_hit is not None
 
 
+def _normalize_objective_counts(
+    objective_completed_count: int,
+    objective_total_count: int,
+) -> tuple[int, int]:
+    if objective_completed_count < 0 or objective_total_count < 0:
+        raise CampaignError("objective counts must be >= 0")
+    if objective_completed_count > objective_total_count:
+        raise CampaignError("objective_completed_count cannot exceed objective_total_count")
+    return objective_completed_count, objective_total_count
+
+
+def _normalize_commitment_outcome(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized not in VALID_COMMITMENT_OUTCOMES:
+        raise CampaignError(
+            f"Unsupported commitment_outcome: {value}"
+        )
+    return normalized
+
+
 def calculate_campaign_score_delta(
     *,
     archive_grade: str,
@@ -83,6 +106,9 @@ def calculate_campaign_score_delta(
     completed_daily_challenge: bool,
     bet_count: int,
     betting_hit: bool | None,
+    objective_completed_count: int = 0,
+    objective_total_count: int = 0,
+    commitment_outcome: str | None = None,
 ) -> int:
     """Apply the Phase A1 campaign score rules."""
     score = 1  # completed run
@@ -105,7 +131,14 @@ def calculate_campaign_score_delta(
     elif archive_grade == "A":
         score += 1
 
-    return score
+    if objective_total_count > 0 and objective_completed_count >= objective_total_count:
+        score += 1
+
+    if commitment_outcome == "hit":
+        score += 1
+    elif commitment_outcome == "miss":
+        score -= 1
+    return max(1, score)
 
 
 def calculate_mastery_level(campaign_score: int) -> int:
@@ -288,6 +321,9 @@ def _build_scenario_campaign_summary(log: ScenarioCampaignLog) -> dict[str, Any]
         "betting_hit": log.betting_hit,
         "most_used_card": log.most_used_card,
         "completed_daily_challenge": log.completed_daily_challenge,
+        "objective_completed_count": log.objective_completed_count,
+        "objective_total_count": log.objective_total_count,
+        "commitment_outcome": log.commitment_outcome,
         "campaign_score_delta": log.campaign_score_delta,
         "finalized_at": _serialize_datetime(log.created_at),
     }
@@ -427,6 +463,9 @@ def finalize_scenario_campaign(
     bet_count: int = 0,
     most_used_card: str | None = None,
     completed_daily_challenge: bool = False,
+    objective_completed_count: int = 0,
+    objective_total_count: int = 0,
+    commitment_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Finalize campaign progression for one completed scenario."""
     if not user_id.strip():
@@ -438,6 +477,11 @@ def finalize_scenario_campaign(
 
     normalized_grade = _normalize_archive_grade(archive_grade)
     normalized_resonance = _normalize_profile_resonance(profile_resonance)
+    normalized_completed_count, normalized_total_count = _normalize_objective_counts(
+        objective_completed_count,
+        objective_total_count,
+    )
+    normalized_commitment_outcome = _normalize_commitment_outcome(commitment_outcome)
 
     engine = get_engine()
     with Session(engine) as session:
@@ -483,6 +527,9 @@ def finalize_scenario_campaign(
             completed_daily_challenge=completed_daily_challenge,
             bet_count=bet_count,
             betting_hit=betting_hit,
+            objective_completed_count=normalized_completed_count,
+            objective_total_count=normalized_total_count,
+            commitment_outcome=normalized_commitment_outcome,
         )
 
         director_profile.total_runs += 1
@@ -519,6 +566,9 @@ def finalize_scenario_campaign(
             betting_hit=betting_hit,
             most_used_card=(most_used_card or "").strip() or None,
             completed_daily_challenge=completed_daily_challenge,
+            objective_completed_count=normalized_completed_count,
+            objective_total_count=normalized_total_count,
+            commitment_outcome=normalized_commitment_outcome,
             campaign_score_delta=score_delta,
         )
         session.add(log)

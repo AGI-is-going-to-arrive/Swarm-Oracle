@@ -123,6 +123,9 @@ export interface CampaignScenarioSummary {
   betting_hit?: boolean | null;
   most_used_card?: string | null;
   completed_daily_challenge: boolean;
+  objective_completed_count?: number;
+  objective_total_count?: number;
+  commitment_outcome?: 'hit' | 'miss' | 'pending' | null;
   campaign_score_delta: number;
   finalized_at?: string | null;
 }
@@ -241,6 +244,9 @@ export interface DebatePrediction {
   confidence: number;
   user_id: string;
   user_name: string;
+  is_counterplay?: boolean;
+  counterplay_phase?: DebatePhase | null;
+  counterplay_variant?: 'balanced' | 'reversal' | null;
   score: number | null;
   score_reason: string | null;
   created_at: string;
@@ -263,6 +269,18 @@ export interface DebateResultSummary {
   }>;
 }
 
+export interface DebateCounterplayResult {
+  debate_id: string;
+  kind: DebatePredictionKind;
+  target_value: string;
+  confidence: number;
+  phase: DebatePhase;
+  variant: 'balanced' | 'reversal';
+  outcome: 'hit' | 'miss';
+  user_name: string;
+  created_at: string;
+}
+
 export interface DebateSnapshot {
   id: string;
   question: string;
@@ -281,11 +299,13 @@ export interface DebateSnapshot {
     winner: string[];
     verdict_tone: string[];
   };
+  counterplay?: DebateCounterplayResult | null;
   result_ready: boolean;
 }
 
 export interface DebateResultPayload extends DebateSnapshot {
   result: DebateResultSummary;
+  counterplay?: DebateCounterplayResult | null;
   predictions: DebatePrediction[];
 }
 
@@ -295,6 +315,9 @@ export interface DebatePredictionRequest {
   confidence: number;
   userId?: string;
   userName?: string;
+  isCounterplay?: boolean;
+  counterplayPhase?: DebatePhase;
+  counterplayVariant?: 'balanced' | 'reversal';
 }
 
 export type DebateWSEvent =
@@ -302,6 +325,7 @@ export type DebateWSEvent =
   | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
   | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
   | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
+  | { type: 'debate_counterplay'; data: DebateCounterplayResult }
   | { type: 'debate_verdict'; data: DebateResultSummary };
 
 // ── WebSocket Events ─────────────────────────────────────

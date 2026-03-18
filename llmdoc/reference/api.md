@@ -113,7 +113,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law"}` | DebateSnapshot |
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot |
 | `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload |
-| `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "..."}` | DebatePrediction |
+| `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
 
 > Debate 当前已按真实实现固定为 5 个阶段：
 > - `opening`
@@ -128,7 +128,20 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > `POST /api/debate` 当前会在返回 live snapshot 后保留约 `5s` pre-roll，再启动后台阶段推进；这样前端 live 页能稳定出现下注窗口。
 >
-> `POST /api/debate/{id}/predict` 只在 `opening / crossfire / rebuttal` 阶段开放；进入 `closing / verdict` 后会返回 `400`。
+> `POST /api/debate/{id}/predict` 只在 `opening / crossfire / rebuttal` 阶段开放；进入 `closing / verdict` 后会返回 `400`。当 `is_counterplay = true` 时，当前实现要求同时提供：
+> - `counterplay_phase`
+> - `counterplay_variant`
+>
+> `GET /api/debate/{id}` 与 `GET /api/debate/{id}/result` 当前都会在顶层返回可选 `counterplay` 对象：
+> - `debate_id`
+> - `kind`
+> - `target_value`
+> - `confidence`
+> - `phase`
+> - `variant`
+> - `outcome`
+> - `user_name`
+> - `created_at`
 >
 > `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳；若 Debate 已进入 `ERROR` 终态，则返回 `500`，前端会直接显示终态错误。
 
@@ -167,4 +180,5 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `agent_speak` | `{id, sequence, phase, speaker_side, speaker_name, content, score_delta, created_at?}` | S→C | 单条阶段发言 |
 | `debate_phase_change` | `{phase}` | S→C | 当前阶段切换 |
 | `debate_score_update` | `{score: {proposition, opposition}, audience_meter}` | S→C | 势能 / 分数更新 |
+| `debate_counterplay` | DebateCounterplayResult | S→C | live counterplay 记录已创建/更新 |
 | `debate_verdict` | DebateResultSummary | S→C | 最终 verdict 就绪 |

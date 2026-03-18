@@ -9,6 +9,12 @@ import {
 
 interface DebateBetModalProps {
   loading?: boolean;
+  initialSelection?: {
+    kind: DebatePredictionKind;
+    targetValue: string;
+    confidence: number;
+  } | null;
+  strategyHint?: string | null;
   onClose: () => void;
   onSubmit: (payload: { kind: DebatePredictionKind; targetValue: string; confidence: number }) => Promise<void>;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
@@ -16,15 +22,23 @@ interface DebateBetModalProps {
 
 export function DebateBetModal({
   loading = false,
+  initialSelection = null,
+  strategyHint = null,
   onClose,
   onSubmit,
   onAutomationStateChange,
 }: DebateBetModalProps) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<DebatePredictionKind>('winner');
-  const [targetValue, setTargetValue] = useState<string>('proposition');
-  const [confidence, setConfidence] = useState<number>(0.7);
+  const [kind, setKind] = useState<DebatePredictionKind>(initialSelection?.kind ?? 'winner');
+  const [targetValue, setTargetValue] = useState<string>(initialSelection?.targetValue ?? 'proposition');
+  const [confidence, setConfidence] = useState<number>(initialSelection?.confidence ?? 0.7);
   const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    setKind(initialSelection?.kind ?? 'winner');
+    setTargetValue(initialSelection?.targetValue ?? 'proposition');
+    setConfidence(initialSelection?.confidence ?? 0.7);
+  }, [initialSelection]);
 
   const options = useMemo(
     () => (kind === 'winner'
@@ -41,6 +55,8 @@ export function DebateBetModal({
       target_options: options,
       confidence,
       confidence_percent: Math.round(confidence * 100),
+      preset_kind: initialSelection?.kind ?? null,
+      preset_target: initialSelection?.targetValue ?? null,
       submit_disabled: loading,
       error: error || null,
     });
@@ -72,6 +88,9 @@ export function DebateBetModal({
         <div className="debate-modal__body">
           <div className="debate-modal__group">
             <span className="debate-modal__label">{t('debate.bet_kind')}</span>
+            {strategyHint && (
+              <p className="debate-rule-copy">{strategyHint}</p>
+            )}
             <div className="debate-modal__options">
               <button
                 type="button"

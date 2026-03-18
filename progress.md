@@ -6297,3 +6297,706 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 结果：输出正常
   - `cd frontend && npm run build`
   - 结果：当前失败，错误集中在 `ResultView.tsx / ResultView.test.tsx / SimulationView.test.tsx` 的 TypeScript 类型检查；本轮只同步文档，没有顺手改代码
+
+## 2026-03-18 Codex Audit Revalidation
+
+- 本轮目标：
+  - 基于真实代码、真实测试、真实 E2E 工件，重新判断 `implement/` 与 llmdoc/README 中的“已实现”表述是否站得住；
+  - 明确回答：是否全部实现、是否真可玩、i18n 是否有真实支撑、跨平台到底是 Web 兼容还是原生客户端、asset provenance sidecar/backfill 的真实含义是什么。
+
+- 本轮真实运行：
+  - backend: `source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - frontend: `npm run dev -- --host 127.0.0.1 --port 18928`
+  - `curl -X POST http://127.0.0.1:18927/api/health`
+  - 结果：`server=ok`，`llm.status=ok`
+
+- 本轮定向回归：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_service.py tests/test_debate_api.py tests/test_config.py tests/test_campaign_api.py tests/test_campaign_service.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+  - 结果：`65 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts`
+  - 结果：`60 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run assets:provenance:check`
+  - 结果：`{"status":"ok"}`
+  - `cd frontend && npm run build`
+  - 结果：通过（仍有 Phaser chunk > 500 kB 告警，但非失败）
+
+- 本轮真实黑盒：
+  - `cd frontend && node scripts/e2e-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-main-full --headless`
+  - 结果：通过；输出目录已落 `result.json` 与完整 matrix/corners/mobile 工件
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-full-rerun --headless`
+  - 结果：通过；desktop `1440x960` 英文 + mobile `390x844` 中文 live/result/share 均通过
+  - `cd frontend && node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 430 --height 932 --output-dir output/e2e/20260318-codex-audit-debate-mobile-430x932 --headless`
+  - 结果：通过；额外补齐 `430x932` 小屏工件
+
+- 本轮 `develop-web-game` 取证：
+  - 因 skill 自带 client 源文件是 ESM 但扩展名为 `.js`，先复制为：
+    - `frontend/.tmp-playwright/web_game_playwright_client.mjs`
+  - 新建 debate：
+    - `POST /api/debate`
+    - debate id: `466999be-97a7-4b07-90e6-11587b885d3c`
+  - 运行：
+    - `node frontend/.tmp-playwright/web_game_playwright_client.mjs --url http://127.0.0.1:18928/debate/466999be-97a7-4b07-90e6-11587b885d3c --actions-json '{"steps":[{"buttons":[],"frames":8},{"buttons":[],"frames":8}]}' --iterations 2 --pause-ms 250 --capture-mode panel --screenshot-dir frontend/output/web-game/20260318-codex-audit-develop-web-game`
+  - 结果：
+    - `state-0.json / state-1.json` 已生成
+    - `shot-0.png / shot-1.png` 已生成
+    - state 中可见：
+      - `page.kind = "debate"`
+      - `phase = "verdict"`
+      - `can_view_result = true`
+      - `render_game_to_text / capture_game_screenshot` 链路可用
+  - 视觉复核：
+    - 已直接打开 `shot-0.png / shot-1.png`
+    - Debate 舞台主结构、局势条、三张 podium card、局势解读、查看判词按钮均可见
+    - 但 podium card 顶部的图标位在截图中呈现为低信息量的小白方块，后续若继续 polish，可优先检查这些 icon 的视觉存在感是否过弱
+
+- 本轮结论（供下一轮直接复用）：
+  - `implement/` 与 llmdoc 里大部分“已实现”条目确实有代码与测试支撑，但“全部实现”不能无条件照单全收：
+    - 主模式/辩论模式/玩法卡/自动化钩子/移动端 Debate E2E：可以判定为已实现且本轮已复验
+    - `director goals / worldline commitment`：当前是前端本地持久化层，不是后端权威状态；不应表述成跨设备稳定持久系统
+    - `完整 E2E 已完成`：现在可以说“脚本存在且本轮 main full + debate full + debate 430x932 均已重跑通过”
+    - `前端 179 passed / 后端 815 passed`：仍应视为历史基线，不应误写成本轮实时复验结果
+  - 跨平台边界：
+    - 当前是 Web 应用，不是原生 Windows/macOS/Linux/iOS/Android 客户端
+    - 可以说“桌面/移动浏览器层面可用”，不能说“已交付原生客户端”
+  - provenance 边界：
+    - 当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 `62/62` PNG 都有 sidecar
+    - 其中：
+      - `backfilled_legacy = 48`
+      - `backfilled_partial = 4`
+      - `complete_or_unmarked = 10`
+    - backfill 的含义只是“sidecar 补齐”，不代表恢复了原始生成时间、模型或 prompt
+
+- 下一轮建议：
+  1. 若要继续提高“可玩性好”的结论强度，优先补一套真实用户交互覆盖：
+     - 主模式中实际点击 `worldline commitment`
+     - 玩法卡 modal 内对至少 1 张新增反制卡做真实提交流程
+     - 结果页验证承诺命中/落空不再为 `null`
+  2. 若要继续做视觉 polish，优先检查 Debate podium card 顶部 icon 的可见性和辨识度
+  3. 若要继续对外收口文档，请把“跨平台”明确限定为“响应式 Web + Chromium/Chrome 视口 E2E 已验证”
+
+## 2026-03-18 Docs Drift Tightening
+
+- 已按本轮真实复验结果，收口以下文档中过满或漂移的表述：
+  - `README.md`
+  - `implement/README.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+
+- 这次文档收口的核心点：
+  - 明确“跨平台”当前指桌面/移动浏览器响应式与 Chromium/Chrome 视口 E2E，不是原生 Windows/macOS/Linux/iOS/Android 客户端
+  - 明确 `director goals / worldline commitment` 当前主要是前端本地 `scenarioMeta`，不是后端权威状态
+  - 明确 asset provenance 的 backfill 代表 sidecar 补齐，不代表恢复原始生成时间、模型或 prompt
+  - 把历史全量基线（backend `815 passed` / frontend `179 passed`）与本轮真实复验（backend `65 passed` / frontend `60 passed`）分开记录
+  - 把本轮新增黑盒工件补进文档：
+    - `frontend/output/e2e/20260318-codex-audit-main-full/result.json`
+    - `frontend/output/e2e/20260318-codex-audit-debate-full-rerun/result.json`
+    - `frontend/output/e2e/20260318-codex-audit-debate-mobile-430x932/result.json`
+
+- 当前状态：
+  - 文档口径已经与本轮代码/测试/E2E 审计结果对齐
+  - 本轮未改业务代码，只调整说明边界与验证事实
+
+## 2026-03-18 Commitment + Counterplay Optimization
+
+- 本轮按“短局高张力推演”的方向做了两项真实落地，而不是继续停在建议层：
+  1. `worldline commitment` 现在会真实影响 campaign 结算
+  2. 反制卡在结果页因果档案中有了独立摘要，不再只隐含在 `mostUsedCard`
+
+- 后端改动：
+  - `backend/app/models/campaign.py`
+    - `ScenarioCampaignLog` 新增：
+      - `objective_completed_count`
+      - `objective_total_count`
+      - `commitment_outcome`
+  - `backend/app/services/campaign.py`
+    - `finalize_scenario_campaign()` 新增接收：
+      - `objective_completed_count`
+      - `objective_total_count`
+      - `commitment_outcome`
+    - `calculate_campaign_score_delta()` 现新增：
+      - 目标全完成 `+1`
+      - 承诺命中 `+1`
+      - 承诺落空 `-1`
+      - 最低结算分仍保底 `1`
+    - `get_scenario_campaign_summary()` 现会返回这批结算字段，便于跨设备回读
+  - `backend/app/api/campaign.py`
+    - finalize request / scenario summary response 已补同名字段与校验
+  - `backend/app/models/database.py`
+    - `init_db()` 的 lightweight migration 已补 `scenario_campaign_log` 新列
+  - `backend/alembic/versions/003_add_commitment_fields_to_campaign_log.py`
+    - 新增正式 migration
+
+- 前端改动：
+  - `frontend/src/pages/ResultView.tsx`
+    - finalizeCampaign 时会把：
+      - `objective_completed_count`
+      - `objective_total_count`
+      - `commitment_outcome`
+      一并发给后端
+    - backend `campaign scenario summary` fallback 现会把上述字段合并回本地档案状态
+    - 因果档案新增 `Counterplay` 摘要卡：
+      - 显示反制卡使用次数
+      - 显示最近一张反制卡
+    - `render_game_to_text()` 的 `archive_summary` 已新增：
+      - `counterplay_card_count`
+      - `last_counterplay_card`
+  - `frontend/src/lib/archiveSummary.ts`
+    - 新增：
+      - `counterplayCardCount`
+      - `lastCounterplayCard`
+    - 通过 `isCounterplayCard()` 从 usage log 归纳反制摘要
+  - `frontend/src/lib/scenarioMeta.ts`
+    - `ScenarioArchiveState` 已补 counterplay 归档字段
+  - `frontend/src/types.ts` / `frontend/src/api/client.ts`
+    - 已补 campaign finalize payload / scenario summary 的新字段
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - 已新增 counterplay 档案文案
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_config.py -q`
+  - 结果：`17 passed`
+  - `cd frontend && npm test -- --run src/lib/archiveSummary.test.ts src/pages/ResultView.test.tsx`
+  - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - 结果：现有开发库启动时自动补齐：
+    - `scenario_campaign_log.objective_completed_count`
+    - `scenario_campaign_log.objective_total_count`
+    - `scenario_campaign_log.commitment_outcome`
+    且 `GET /` / `POST /api/health` 均正常返回
+
+- 这轮优化后的实际含义：
+  - worldline commitment 不再只是结果页上一个静态标签；
+  - 命中/落空会进入后端 campaign 计分与单局 summary；
+  - 跨设备打开结果页时，也能读回 commitment/objective 的结算字段；
+  - 反制卡不再只在过程 modal 中有存在感，结果页档案现在会明确告诉用户这局是否进入 counterplay 节奏。
+
+- 下一轮可继续扩：
+  1. Debate live 页增加最小“阶段干预 / 押注反制”动作，但不要引入第二套大系统
+  2. 把 counterplay 摘要继续接到 share copy / export markdown
+  3. 让 `worldline commitment` 命中/落空进一步影响 badge 或 mastery 细分统计，而不仅是 score delta
+
+## 2026-03-18 Debate Counterplay + Share/Export Envelope
+
+- 本轮继续把上一条 TODO 往下落，没有扩成新系统，而是做了一个“阶段反制押注预设”：
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - `Arena Read / 局势解读` 面板新增 `Counterplay Cue / 反制提示`
+    - 当 live 辩局仍可下注时，会根据当前阶段分差自动生成最小反制预设：
+      - 若该阶段分差为 `0`：预设 `verdict_tone = balance`
+      - 若一方在该阶段领先：预设押落后方做逆转对冲
+    - 仍然复用现有 `predictDebate()` 链路，不引入新的 Debate backend state machine
+    - `render_game_to_text()` 现会额外输出：
+      - `page.controls.can_open_counterplay`
+      - `page.debate.counterplay.{kind,target_value,confidence,label}`
+  - `frontend/src/components/DebateBetModal.tsx`
+    - 新增 `initialSelection` 与 `strategyHint`
+    - 可被 Debate live 页以“反制预设”方式打开，并把预设状态暴露进 automation state
+  - `frontend/src/pages/DebateArena.css`
+    - 只补了轻量 counterplay 卡样式，继续沿用现有 Debate panel 视觉语言
+
+- 本轮还把新的 `counterplay / commitment` 摘要接进了分享与导出 envelope：
+  - `frontend/src/lib/shareEnvelope.ts`
+    - `ShareFlavorContext` 新增：
+      - `counterplaySummary`
+      - `commitmentSummary`
+    - share copy / export preface 现会在题材档案上下文里追加：
+      - 反制轨迹
+      - 世界线承诺
+  - `frontend/src/pages/ResultView.tsx`
+    - `shareFlavorContext` 现会带：
+      - 反制卡摘要（次数 + 最近一张）
+      - worldline commitment 摘要（结果 + 分支标题）
+    - 因此：
+      - `ShareModal` 生成的社交文案前缀
+      - `Export Markdown` 的题材档案前缀
+      都会带上这两块信息
+
+- 这轮新增/更新的测试：
+  - `frontend/src/components/DebateBetModal.test.tsx`
+    - 新增预设带入测试
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+    - 新增 counterplay preset 可见性与 automation state 测试
+  - `frontend/src/lib/shareEnvelope.test.ts`
+    - 新增反制轨迹 / 世界线承诺进入 share/export preface 的断言
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/components/DebateBetModal.test.tsx src/pages/DebateArenaView.test.tsx src/lib/shareEnvelope.test.ts src/pages/ResultView.test.tsx`
+  - 结果：`10 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 最小 runtime 黑盒：
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-counterplay-desktop --headless`
+    - 结果：通过，live/result/share 主链路未被新增 counterplay preset 打断
+
+- 当前状态：
+  - 建议里的三项中，已真正落地两项半：
+    1. `worldline commitment` 已成为可结算循环，并影响 campaign reward
+    2. 反制卡已更明确地进入结果页档案总结
+    3. Debate 已有最小“押注反制”动作，但仍属于前端预设层，不是后端 phase intervention system
+
+- 下一轮如果继续顺着这条线做，最值当的是：
+  1. 让 counterplay preset 支持“一键直接提交低信心对冲”，而不是只预填 modal
+  2. 给 Debate result / share copy 显式写出用户这局是否采用过 counterplay 预设
+  3. 把 commitment hit/miss 再接进 badge 或 mastery 统计，而不是只停留在 score delta
+
+## 2026-03-18 Debate Quick Counterplay + Share Copy
+
+- 已继续完成上面列的前两项：
+  1. Debate live 页的 counterplay preset 现在支持一键直接提交
+  2. Debate share copy 现在会显式写出这局使用过的 counterplay 预设
+
+- 本轮改动：
+  - `frontend/src/lib/debateCounterplay.ts`
+    - 新增本地 helper，记录某场 debate 是否通过 counterplay preset 下过对冲押注
+    - 提供 `save/load` 与 `getDebateCounterplaySummary()`
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - `Counterplay Cue / 反制提示` 现在有两条动作：
+      - `counterplay_submit`：一键直接提交低信心对冲
+      - `counterplay_apply`：仍可带入 modal 手工确认
+    - 一键提交成功后会把 counterplay 记录写入本地 helper
+    - automation payload 现新增：
+      - `page.controls.counterplay_used`
+      - `page.debate.counterplay_used`
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页分享上下文现会读取 debate counterplay 记录
+    - `render_game_to_text().page.result` 现会带 `counterplay_summary`
+  - `frontend/src/lib/debateShare.ts`
+    - share copy 现在会追加一行 `Counterplay / 反制提示`
+
+- 本轮新增/更新测试：
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+    - 现在会断言：
+      - 点击 `counterplay_submit` 会直接调用 `predictDebate`
+      - automation payload 会标记 `counterplay_used = true`
+  - `frontend/src/components/DebateBetModal.test.tsx`
+    - 继续覆盖 preset 带入
+  - `frontend/src/lib/debateShare.test.ts`
+    - 新增 share copy 中带 counterplay summary 的断言
+  - `frontend/src/components/DebateShareModal.test.tsx`
+    - 新增 share modal 文案中可见 counterplay summary 的断言
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/components/DebateBetModal.test.tsx src/pages/DebateArenaView.test.tsx src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/lib/shareEnvelope.test.ts src/pages/ResultView.test.tsx`
+  - 结果：`12 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 最小黑盒复查：
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-counterplay-desktop --headless`
+    - 结果：通过，新增改动未打断 Debate live/result/share 主链路
+
+## 2026-03-18 Debate Counterplay Result Surface
+
+- 已继续把这条 Debate 小玩法补到结果页主体，不再只存在于 share copy：
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页现在会读取本地 `debateCounterplay` 记录
+    - `render_game_to_text().page.result` 已带：
+      - `counterplay_summary`
+    - 结果页右侧结果栈新增 `Counterplay / 反制提示` 面板：
+      - 若这局用过反制预设，会显示发生阶段、押向结果、信心值的摘要
+      - 若没用过，会显示显式空态
+  - `frontend/src/lib/debateShare.ts`
+    - Debate share copy 继续沿用同一份 `counterplaySummary`
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - 新增：
+      - `counterplay_submit`
+      - `counterplay_success`
+      - `counterplay_used`
+      - `counterplay_unused`
+      - `counterplay_summary_balanced`
+      - `counterplay_summary_reversal`
+
+- 本轮新增/更新测试：
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 现会断言结果页主体和 automation payload 都能读到 counterplay summary
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+    - 现会显式 stub `localStorage`
+    - 继续断言 counterplay quick submit 会调用 `predictDebate`
+  - `frontend/src/lib/debateShare.test.ts`
+    - 保持 share copy 对 counterplay summary 的断言
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts`
+  - 结果：`7 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+- 当前状态：
+  - Debate counterplay 现在已经形成：
+    - live 页可提示
+    - 可一键提交
+    - result 页可见
+    - share copy 可见
+  - 但它仍然是前端轻量玩法层，不是后端权威 debate intervention system
+
+## 2026-03-18 Debate Counterplay Result Outcome Surface
+
+- 已继续把上一轮建议里的最后一段补到用户可见层：
+  - Debate 结果页主体现在会直接显示这局的 counterplay 使用结果
+  - 不再只有 share copy 才能看到这条反馈
+
+- 本轮改动：
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页现在会读取 `debateCounterplay` 记录
+    - 右侧结果栈新增 `Counterplay / 反制提示` 面板
+    - 若这局用过 counterplay：
+      - 会显示发生阶段
+      - 会显示押向目标（胜方 / 判词倾向）
+      - 会显示信心值摘要
+    - 若没用过：
+      - 会显示显式空态文案
+    - `render_game_to_text().page.result` 继续输出 `counterplay_summary`
+  - `frontend/src/lib/debateShare.ts`
+    - share copy 继续沿用同一份 `counterplaySummary`
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - 补全了 counterplay 结果面板和摘要需要的文案 key
+
+- 本轮新增/更新测试：
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 现在会断言：
+      - 结果页主体能直接渲染 counterplay summary
+      - automation payload 中也能读到 `counterplay_summary`
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts`
+  - 结果：`7 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+- 当前状态：
+  - Debate 小玩法现在已经形成完整用户可见链路：
+    - live 页提示
+    - 可一键提交
+    - result 页主体可见
+    - share copy 可见
+  - 仍然没有后端化 counterplay 记录；它还是前端轻量玩法层
+
+## 2026-03-18 Debate Counterplay Hit/Miss In Share Copy
+
+- 已继续补上上一轮的最后一块：Debate share copy 正文现在会显式写出 counterplay 的命中/未中结果，而不只写“用了什么反制”。
+
+- 本轮改动：
+  - `frontend/src/lib/debateShare.ts`
+    - `DebateShareContext` 新增：
+      - `counterplayOutcomeLabel`
+    - share copy 现会额外输出：
+      - `Counterplay Result / 反制结果`
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页 share context 现会把：
+      - `counterplaySummary`
+      - `counterplayOutcomeLabel`
+      一起传给 `DebateShareModal`
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - 新增 `debate.counterplay_result`
+
+- 本轮新增/更新测试：
+  - `frontend/src/lib/debateShare.test.ts`
+    - 现会断言 share copy 中包含 `counterplay_result`
+  - `frontend/src/components/DebateShareModal.test.tsx`
+    - 现会断言 modal 中能看到 `Counterplay missed` 这类正文结果反馈
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx`
+  - 结果：通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+## 2026-03-18 Debate Live Snapshot + WS Counterplay
+
+- 已继续把 Debate counterplay 从“结果页后端化”推进到“live + result 全链路显式 payload”：
+  - `backend/app/services/debate.py`
+    - `load_debate_snapshot()` 现在也会显式返回顶层 `counterplay`
+    - `load_debate_result_payload()` 继续返回顶层 `counterplay`
+  - `backend/app/api/debate.py`
+    - 当 `POST /api/debate/{id}/predict` 提交的是 counterplay 时，现在会广播：
+      - `debate_counterplay`
+  - `frontend/src/types.ts`
+    - `DebateSnapshot` 现支持顶层 `counterplay`
+    - `DebateWSEvent` 现支持 `debate_counterplay`
+  - `frontend/src/stores/debateStore.ts`
+    - 新增 `setCounterplay()`
+  - `frontend/src/hooks/useDebateWS.ts`
+    - 现会消费 `debate_counterplay` 事件，更新 live store
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - live 页现在会优先读 `debate.counterplay`
+    - 本地 helper 只作为兜底
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页优先级现为：
+      1. `result.counterplay`
+      2. `predictions[]` 中的 counterplay metadata
+      3. 本地 `localStorage`
+
+- 本轮新增/更新测试：
+  - `backend/tests/test_debate_api.py`
+    - 现在会断言：
+      - `GET /api/debate/{id}` snapshot 有顶层 `counterplay`
+      - `GET /api/debate/{id}/result` 的顶层 `counterplay` 带 `debate_id`
+  - `backend/tests/test_debate_service.py`
+    - 现在会断言：
+      - `load_debate_snapshot()` 有顶层 `counterplay`
+      - `load_debate_result_payload()` 有顶层 `counterplay`
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+    - 新增 `debate_counterplay` event → `setCounterplay()` 的断言
+  - `frontend/src/lib/debateCounterplay.test.ts`
+    - 现在会断言：
+      - `resultCounterplay` 优先
+      - `predictions[]` 次之
+      - 本地记录兜底
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+    - 继续断言 quick counterplay submit 会把 metadata 发给后端
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
+  - 结果：`11 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/hooks/useDebateWS.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts`
+  - 结果：`13 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 最小黑盒：
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-explicit-counterplay-desktop --headless`
+    - 结果：通过
+
+- 当前状态：
+  - Debate counterplay 现在已经形成后端优先的显式 payload 链：
+    - live snapshot
+    - live WS event
+    - result payload
+    - result 页主体
+    - share copy
+  - 本地 `debateCounterplay` 仍保留，但已经降为兜底层
+
+## 2026-03-18 Docs Sync For Debate Counterplay
+
+- 已按这次 session 的真实代码与真实验证结果，更新以下文档口径：
+  - `README.md`
+  - `frontend/README.md`
+  - `backend/README.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/guides/development.md`
+  - `implement/20_track_d_debate_arena_design_execution_plan.md`
+  - `implement/21_track_d_debate_arena_mvp_blueprint.md`
+
+- 这次文档同步的核心点：
+  - Debate `counterplay` 现已是后端优先的显式 payload，不再只靠前端本地记录
+  - `POST /api/debate/{id}/predict` 现支持可选：
+    - `is_counterplay`
+    - `counterplay_phase`
+    - `counterplay_variant`
+  - `GET /api/debate/{id}` / `GET /api/debate/{id}/result` 顶层现会显式返回：
+    - `counterplay`
+  - `WS /ws/debate/{id}` 现已补 `debate_counterplay`
+  - 前端 live/result/share 对 `counterplay` 的说明已统一成：
+    - live snapshot/WS/result payload 优先
+    - 本地 `debateCounterplay` 仅兜底
+  - 文档中的测试口径已补：
+    - backend debate counterplay regression：`11 passed`
+    - frontend debate counterplay regression：`13 passed`
+    - 最新 desktop 黑盒工件：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+
+- 这轮继续把它从“挂在 prediction 的元数据”往独立 domain 靠了一步：
+  - `backend/app/models/debate.py`
+    - 新增 `DebateCounterplay` 独立表模型
+  - `backend/alembic/versions/005_add_debate_counterplay_table.py`
+    - 新增正式 migration
+  - `backend/app/api/debate.py`
+    - counterplay predict 现在会同时写：
+      - `DebatePrediction`
+      - `DebateCounterplay`
+  - `backend/app/services/debate.py`
+    - live snapshot / result payload / WS 现在都优先读 `DebateCounterplay`
+    - 仅在新表没有记录时才 fallback 到旧的 `DebatePrediction` metadata
+
+- 前端继续同步收口：
+  - `frontend/src/types.ts`
+    - `DebateSnapshot` / `DebateResultPayload` 现都显式带 `counterplay`
+  - `frontend/src/lib/debateCounterplay.ts`
+    - 解析优先级现为：
+      1. 独立 `counterplay` payload
+      2. `predictions[]` 中的 legacy metadata
+      3. 本地 helper
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - live 页现优先吃 `debate.counterplay`
+  - `frontend/src/hooks/useDebateWS.ts`
+    - 仍保留 `debate_counterplay` event 对 live store 的更新
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
+  - 结果：`11 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/hooks/useDebateWS.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts`
+  - 结果：`13 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 最小黑盒补充：
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-audit-debate-live-counterplay-desktop --headless`
+    - 结果：通过
+
+- 当前状态：
+  - Debate counterplay 仍然与 prediction 评分链兼容
+  - 但读路径已经开始独立化：前端不再需要靠扫描 `predictions[]` 才知道 counterplay
+  - 下一步如果还继续，最自然的是：
+    1. 让 live automation payload 也显式输出 `counterplay.outcome`
+    2. 把 counterplay 结果也做成结果页里的更细粒度玩法统计
+
+## 2026-03-18 Debate Counterplay Backendization
+
+- 已继续把 Debate `counterplay` 从“前端本地记录”推进到“后端权威元数据 + 前端本地兜底”：
+  - 后端现在会把 counterplay 当作 `DebatePrediction` 的结构化元数据保存
+  - 结果页现在优先读取后端 `predictions[]` 中的 counterplay 记录，再 fallback 到本地 `debateCounterplay`
+
+- 后端改动：
+  - `backend/app/models/debate.py`
+    - `DebatePrediction` 新增：
+      - `is_counterplay`
+      - `counterplay_phase`
+      - `counterplay_variant`
+  - `backend/app/api/debate.py`
+    - `DebatePredictionRequest` 新增同名入参
+    - 当 `is_counterplay = true` 时，要求：
+      - `counterplay_phase`
+      - `counterplay_variant`
+    - `POST /api/debate/{id}/predict` 现在会回显这批字段
+  - `backend/app/services/debate.py`
+    - `_serialize_prediction()` 现会把这批字段带进 `GET /api/debate/{id}/result`
+  - `backend/app/models/database.py`
+    - `init_db()` 现会对现有开发库自动补：
+      - `debate_prediction.is_counterplay`
+      - `debate_prediction.counterplay_phase`
+      - `debate_prediction.counterplay_variant`
+  - `backend/alembic/versions/004_add_counterplay_fields_to_debate_prediction.py`
+    - 新增正式 migration
+
+- 前端改动：
+  - `frontend/src/types.ts`
+    - `DebatePrediction`
+    - `DebatePredictionRequest`
+    现已补 counterplay 元数据字段
+  - `frontend/src/api/client.ts`
+    - `predictDebate()` 现支持把 counterplay 元数据发给后端
+  - `frontend/src/lib/debateCounterplay.ts`
+    - 新增：
+      - `extractDebateCounterplayRecord()`
+      - `resolveDebateCounterplayRecord()`
+    - 结果页现在走“后端优先、本地兜底”
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - quick submit / preset submit 现会把 counterplay metadata 一起发给后端
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页现优先从后端 `payload.predictions` 解析 counterplay 记录，再 fallback 到本地 helper
+
+- 本轮新增/更新测试：
+  - `backend/tests/test_debate_api.py`
+    - 新增：
+      - counterplay predict 的回显与 result payload 断言
+      - `is_counterplay=true` 但缺 phase/variant 时的 `422`
+  - `backend/tests/test_debate_service.py`
+    - 新增带 counterplay 元数据的 prediction，断言 `load_debate_result_payload()` 保留这些字段
+  - `frontend/src/lib/debateCounterplay.test.ts`
+    - 覆盖：
+      - 后端优先
+      - 本地 fallback
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+    - 断言 quick counterplay submit 会把：
+      - `isCounterplay`
+      - `counterplayPhase`
+      - `counterplayVariant`
+      一起发给 `predictDebate`
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
+  - 结果：`11 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts`
+  - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+  - 轻量 runtime 检查：
+    - 现有开发库启动时已自动补齐 `debate_prediction` 三个新列
+    - `GET /` / `POST /api/health` 均正常
+
+- 当前状态：
+  - Debate counterplay 现在已经不是纯前端本地记录
+  - 结果页和分享可以在跨刷新、跨本地状态丢失时优先依赖后端 `predictions[]`
+  - 但前端 local helper 仍保留兜底；尚未把 counterplay 变成 Debate 顶层 domain 概念或单独表
+
+- 这轮继续补了一层结果 payload 收口：
+  - `backend/app/services/debate.py`
+    - `GET /api/debate/{id}/result` 现在会显式返回：
+      - `counterplay`
+    - 字段包括：
+      - `debate_id`
+      - `kind`
+      - `target_value`
+      - `confidence`
+      - `phase`
+      - `variant`
+      - `outcome`
+      - `user_name`
+      - `created_at`
+  - `frontend/src/types.ts`
+    - 新增 `DebateCounterplayResult`
+    - `DebateResultPayload` 现可直接消费 `counterplay`
+  - `frontend/src/lib/debateCounterplay.ts`
+    - `resolveDebateCounterplayRecord()` 现为：
+      - `resultCounterplay`（后端显式字段）优先
+      - `predictions[]` 中的 metadata 次之
+      - 本地 `localStorage` 记录兜底
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页已切到显式 `counterplay` payload 优先，不再需要前端自己先扫描 `predictions[]`
+
+- 这轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
+  - 结果：`11 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateShareModal.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts`
+  - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+- 当前状态：
+  - Debate counterplay 现在已经形成更完整的反馈链：
+    - live 页提示
+    - 可一键提交
+    - result 页主体显示 summary + hit/miss
+    - share copy 正文也会带 hit/miss
+  - 但仍然是前端本地玩法层，不是后端权威记录
+
+- 本轮实际收口：
+  - `frontend/src/lib/debateShare.ts`
+    - share copy 现新增 `counterplayOutcomeLabel`
+    - 会显式输出 `Counterplay Result / 反制结果`
+  - `frontend/src/pages/DebateResultView.tsx`
+    - share context 现在会把 `counterplay_hit / counterplay_miss` 同步传进 DebateShareModal
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - 已补 `debate.counterplay_result`
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx`
+  - 结果：通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过

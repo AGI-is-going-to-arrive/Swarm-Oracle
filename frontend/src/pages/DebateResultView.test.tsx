@@ -41,6 +41,17 @@ function buildPayload() {
       judge_summary: 'Judge summary',
       replay: [],
     },
+    counterplay: {
+      debate_id: 'debate-1',
+      kind: 'winner',
+      target_value: 'opposition',
+      confidence: 0.6,
+      phase: 'crossfire',
+      variant: 'reversal',
+      outcome: 'miss',
+      user_name: 'Local Director',
+      created_at: new Date().toISOString(),
+    },
     predictions: [],
   };
 }
@@ -58,6 +69,29 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../hooks/useScreenCapture', () => ({
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
+}));
+
+vi.mock('../lib/debateCounterplay', () => ({
+  loadDebateCounterplay: vi.fn(() => ({
+    debateId: 'debate-1',
+    kind: 'winner',
+    targetValue: 'opposition',
+    confidence: 0.6,
+    phase: 'crossfire',
+    variant: 'reversal',
+    createdAt: new Date().toISOString(),
+  })),
+  resolveDebateCounterplayRecord: vi.fn(() => ({
+    debateId: 'debate-1',
+    kind: 'winner',
+    targetValue: 'opposition',
+    confidence: 0.6,
+    phase: 'crossfire',
+    variant: 'reversal',
+    createdAt: new Date().toISOString(),
+  })),
+  getDebateCounterplaySummary: vi.fn(() => 'Counterplay used during Crossfire → Opposition at 60%.'),
+  resolveDebateCounterplayOutcome: vi.fn(() => 'miss'),
 }));
 
 describe('DebateResultView', () => {
@@ -110,7 +144,12 @@ describe('DebateResultView', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.kind).toBe('debate_result');
       expect(payload?.page?.result?.winner).toBe('proposition');
+      expect(payload?.page?.result?.counterplay_summary).toContain('Counterplay used during Crossfire');
+      expect(payload?.page?.result?.counterplay_outcome).toBe('miss');
     });
+
+    expect(screen.getByText('Counterplay used during Crossfire → Opposition at 60%.')).toBeInTheDocument();
+    expect(screen.getByText('debate.counterplay_miss')).toBeInTheDocument();
   });
 
   it('retries result polling after API 409 and eventually renders', async () => {

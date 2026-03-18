@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import { createDebate, getDebate } from '../api/client';
 import type {
+  DebateCounterplayResult,
   DebateResultSummary,
   DebateScore,
   DebateSnapshot,
@@ -18,6 +19,7 @@ interface DebateState {
   appendTurn: (turn: DebateTurn) => void;
   setPhase: (phase: DebateSnapshot['current_phase']) => void;
   setScore: (score: DebateScore) => void;
+  setCounterplay: (counterplay: DebateCounterplayResult) => void;
   setVerdict: (verdict: DebateResultSummary) => void;
   setError: (message: string) => void;
   reset: () => void;
@@ -109,6 +111,16 @@ export const useDebateStore = create<DebateState>((set) => ({
       debate: {
         ...state.debate,
         score,
+      },
+    };
+  }),
+
+  setCounterplay: (counterplay) => set((state) => {
+    if (!state.debate) return state;
+    return {
+      debate: {
+        ...state.debate,
+        counterplay,
       },
     };
   }),

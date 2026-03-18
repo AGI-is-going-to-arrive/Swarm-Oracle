@@ -55,6 +55,9 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
               audience_meter: payload.data.audience_meter,
             });
             break;
+          case 'debate_counterplay':
+            store.setCounterplay(payload.data);
+            break;
           case 'agent_speak':
             store.appendTurn({
               ...payload.data,

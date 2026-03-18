@@ -76,7 +76,12 @@ actual host-reachable address instead of `host.docker.internal`.
 | `GET` | `/api/scenario/{id}/predictions` | List predictions for a scenario |
 | `POST` | `/api/scenario/{id}/score-predictions` | Trigger LLM scoring |
 | `GET` | `/api/leaderboard` | Global prediction leaderboard |
+| `POST` | `/api/debate` | Create Debate Arena and return live snapshot immediately |
+| `GET` | `/api/debate/{id}` | Get Debate live snapshot; now includes top-level `counterplay` when present |
+| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay` plus `predictions[]` |
+| `POST` | `/api/debate/{id}/predict` | Submit Debate structured bet; when `is_counterplay=true`, the backend now records dedicated counterplay metadata and keeps prediction scoring compatible |
 | `WS` | `/ws/scenario/{scenario_id}` | Real-time simulation events |
+| `WS` | `/ws/debate/{debate_id}` | Debate live events (`status / agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict`) |
 
 ## Testing
 
@@ -96,6 +101,9 @@ Command: `.venv/bin/python -m pytest tests/test_campaign_service.py tests/test_c
 
 Latest verified Track C scene/theme + sample-matrix regression in this session: **146 passed**
 Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_e2e_sample_matrix.py -q`
+
+Latest verified Debate counterplay backend regression in this session: **11 passed**
+Command: `.venv/bin/python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
 
 ## Database Migrations (Alembic)
 

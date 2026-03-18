@@ -36,7 +36,7 @@ main.py ──► 汇总挂载 scenarios / interventions / social / campaign / p
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
-models/debate.py ──► Debate, DebateTurn, DebatePrediction
+models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录)
 alembic/ ──► Alembic 数据库迁移框架
@@ -182,13 +182,14 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
 - **职责**:
-  - `debate.py`：独立 Debate Arena 运行、turn 落库、verdict 结算、prediction 评分
+  - `debate.py`：独立 Debate Arena 运行、turn 落库、verdict 结算、prediction 评分、counterplay 显式 payload
   - `debate_prompts.py`：deterministic motion / cast / turn 文案与题材→场景映射
   - `debate_scoring.py`：winner / verdict tone / breakdown / phase delta 规划
 - **关键行为**:
-  - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction`
+  - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction / DebateCounterplay`
   - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
   - prediction 只支持 `winner` 与 `verdict_tone`
+  - `counterplay` 当前已提升成 Debate 域内的显式记录：提交时会同时写 `DebatePrediction + DebateCounterplay`，live snapshot / result payload / WS 会优先读独立 `DebateCounterplay`，仅在缺失时回退到旧的 prediction metadata
   - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 辩风文案
   - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
@@ -265,9 +266,9 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
-| `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options） |
-| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions）；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
-| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注 |
+| `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` |
+| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions）；当前顶层也会显式带 `counterplay`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
+| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
@@ -278,6 +279,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `agent_speak`
   - `debate_phase_change`
   - `debate_score_update`
+  - `debate_counterplay`
   - `debate_verdict`
 
 ## 模型层 (`app/models/`)
@@ -299,13 +301,14 @@ alembic/ ──► Alembic 数据库迁移框架
 | `ScenarioCampaignLog` | id, scenario_id, director_profile_id, profile_id, archive_grade, profile_resonance, campaign_score_delta | 每局结算不可变日志 |
 | `Debate` | id, question, motion, language, profile_id, scene_theme, status, current_phase, winner, verdict_tone | Debate Arena 主体 |
 | `DebateTurn` | id, debate_id, sequence, phase, speaker_side, speaker_name, content, score_delta_json | belongs_to: Debate |
-| `DebatePrediction` | id, debate_id, kind, target_value, confidence, score | belongs_to: Debate |
+| `DebatePrediction` | id, debate_id, kind, target_value, confidence, score, is_counterplay, counterplay_phase, counterplay_variant | belongs_to: Debate |
+| `DebateCounterplay` | id, debate_id, prediction_id, kind, target_value, confidence, phase, variant, outcome | belongs_to: Debate |
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
 ## 测试覆盖
 
-后端本轮真实全量回归结果为 **815 passed**。最近又补跑了 `test_card_events.py / test_gameplay_contract_sync.py`（**24 passed**）、`test_predictions.py`（**17 passed**），以及这次文档同步重新验证的 `test_config.py / test_campaign_api.py / test_campaign_service.py`（**14 passed**）；分别覆盖 shared contract、prediction 评分、`campaign scenario summary` 路由和 backend-root 路径归一。Track D 的 `test_debate_api.py / test_debate_service.py` 仍处于当前通过基线。
+仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
 
 覆盖重心：
 

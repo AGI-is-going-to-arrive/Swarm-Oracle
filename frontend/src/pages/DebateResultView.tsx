@@ -8,6 +8,12 @@ import { DebateScoreCard } from '../components/DebateScoreCard';
 import { captureElementDataUrl } from '../hooks/useScreenCapture';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
+  resolveDebateCounterplayRecord,
+  getDebateCounterplaySummary,
+  loadDebateCounterplay,
+  resolveDebateCounterplayOutcome,
+} from '../lib/debateCounterplay';
+import {
   getDebateDimensionLabel,
   getDebatePhaseLabel,
   getDebateSideLabel,
@@ -66,6 +72,27 @@ export function DebateResultView() {
     };
   }, [id, t]);
 
+  const localCounterplayRecord = useMemo(
+    () => (id ? loadDebateCounterplay(id) : null),
+    [id],
+  );
+  const counterplayRecord = useMemo(
+    () => resolveDebateCounterplayRecord({
+      resultCounterplay: payload?.counterplay ?? null,
+      predictions: payload?.predictions ?? null,
+      localRecord: localCounterplayRecord,
+    }),
+    [localCounterplayRecord, payload?.counterplay, payload?.predictions],
+  );
+  const counterplaySummary = useMemo(
+    () => getDebateCounterplaySummary(counterplayRecord, t),
+    [counterplayRecord, t],
+  );
+  const counterplayOutcome = useMemo(
+    () => resolveDebateCounterplayOutcome(counterplayRecord, payload?.result),
+    [counterplayRecord, payload?.result],
+  );
+
   const shareContext = useMemo(() => {
     if (!payload) return null;
     return {
@@ -77,8 +104,15 @@ export function DebateResultView() {
       judgeSummary: payload.result.judge_summary,
       propositionScore: payload.result.score.proposition,
       oppositionScore: payload.result.score.opposition,
+      counterplaySummary,
+      counterplayOutcomeLabel:
+        counterplayOutcome === 'hit'
+          ? t('debate.counterplay_hit')
+          : counterplayOutcome === 'miss'
+            ? t('debate.counterplay_miss')
+            : null,
     };
-  }, [payload, t]);
+  }, [counterplayOutcome, counterplaySummary, payload, t]);
 
   useEffect(() => {
     if (!payload?.language) return;
@@ -143,6 +177,8 @@ export function DebateResultView() {
           verdict_tone: payload.result.verdict_tone,
           score: payload.result.score,
           prediction_count: payload.predictions.length,
+          counterplay_summary: counterplaySummary ?? null,
+          counterplay_outcome: counterplayOutcome,
         } : null,
       },
     );
@@ -151,7 +187,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [error, loading, payload, shareModalState, showShare]);
+  }, [counterplayOutcome, counterplaySummary, error, loading, payload, shareModalState, showShare]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -357,6 +393,31 @@ export function DebateResultView() {
                 ) : (
                   <p className="debate-empty-state">{t('debate.result_empty_predictions')}</p>
                 )}
+              </div>
+            </section>
+
+            <section className="debate-panel">
+              <div className="debate-panel__header">
+                <h3>{t('debate.counterplay_title')}</h3>
+              </div>
+              <div className="debate-panel__body">
+                <div className="debate-turn-list">
+                  <article className="debate-turn-card">
+                    <div className="debate-turn-card__meta">
+                      <strong>{t('debate.counterplay_title')}</strong>
+                      <span className="debate-outcome-chip">
+                        {counterplayOutcome === 'hit'
+                          ? t('debate.counterplay_hit')
+                          : counterplayOutcome === 'miss'
+                            ? t('debate.counterplay_miss')
+                            : t('debate.counterplay_unused')}
+                      </span>
+                    </div>
+                    <p className="debate-rule-copy">
+                      {counterplaySummary ?? t('debate.counterplay_unused')}
+                    </p>
+                  </article>
+                </div>
               </div>
             </section>
           </div>

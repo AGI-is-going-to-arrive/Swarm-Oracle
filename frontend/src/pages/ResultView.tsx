@@ -282,6 +282,9 @@ export default function ResultView() {
           bet_count: finalMeta.betting.bets.length,
           most_used_card: archiveSummary.mostUsedCard ?? null,
           completed_daily_challenge: isDailyChallenge,
+          objective_completed_count: completedObjectiveCount,
+          objective_total_count: evaluatedObjectives.length,
+          commitment_outcome: commitmentOutcome,
         }).catch((err) => {
           if (!cancelled) {
             const kind = classifyCampaignFinalizeError(err);
@@ -304,6 +307,9 @@ export default function ResultView() {
               betting_hit: archiveSummary.bettingHit ?? null,
               most_used_card: archiveSummary.mostUsedCard ?? null,
               completed_daily_challenge: isDailyChallenge,
+              objective_completed_count: completedObjectiveCount,
+              objective_total_count: evaluatedObjectives.length,
+              commitment_outcome: commitmentOutcome,
               campaign_score_delta: campaign.campaign_score_delta,
               finalized_at: null,
             });
@@ -412,6 +418,18 @@ export default function ResultView() {
           campaignScenarioSummary?.profile_resonance
           ?? storedScenarioMeta.archive.profileResonance
           ?? null,
+        objectiveCompletedCount:
+          campaignScenarioSummary?.objective_completed_count
+          ?? storedScenarioMeta.archive.objectiveCompletedCount
+          ?? null,
+        objectiveTotalCount:
+          campaignScenarioSummary?.objective_total_count
+          ?? storedScenarioMeta.archive.objectiveTotalCount
+          ?? null,
+        commitmentOutcome:
+          campaignScenarioSummary?.commitment_outcome
+          ?? storedScenarioMeta.archive.commitmentOutcome
+          ?? null,
       },
     };
   }, [campaignScenarioSummary, inferredProfile?.id, storedScenarioMeta]);
@@ -492,6 +510,23 @@ export default function ResultView() {
         ? (isZh ? '承诺落空' : 'Commitment missed')
         : (isZh ? '承诺进行中' : 'Commitment pending')
     : (isZh ? '未承诺' : 'No commitment');
+  const lastCounterplayCardLabel = scenarioMeta?.archive.lastCounterplayCard
+    ? (
+      isZh
+        ? getGameplayCardDefinition(
+            scenarioMeta.archive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
+          ).labelZh
+        : getGameplayCardDefinition(
+            scenarioMeta.archive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
+          ).labelEn
+    )
+    : t('result.archive_no_counterplay');
+  const counterplaySummaryLabel =
+    !scenarioMeta || (scenarioMeta.archive.counterplayCardCount ?? 0) === 0
+      ? t('result.archive_no_counterplay')
+      : t('result.archive_counterplay_count', {
+          count: scenarioMeta.archive.counterplayCardCount ?? 0,
+        });
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
     profileLabel: gameplayProfileLabel,
@@ -499,6 +534,14 @@ export default function ResultView() {
     resonanceLabel: profileResonanceLabel,
     directorStyleLabel,
     dominantBranchTitle: scenarioMeta?.archive.dominantBranchTitle ?? null,
+    counterplaySummary:
+      scenarioMeta && (scenarioMeta.archive.counterplayCardCount ?? 0) > 0
+        ? `${counterplaySummaryLabel} · ${t('result.archive_last_counterplay')}: ${lastCounterplayCardLabel}`
+        : null,
+    commitmentSummary:
+      scenarioMeta?.commitment.active && scenarioMeta.commitment.branchTitle
+        ? `${commitmentOutcomeLabel} · ${scenarioMeta.commitment.branchTitle}`
+        : null,
   }), [
     storyData?.question,
     gameplayProfileLabel,
@@ -506,6 +549,13 @@ export default function ResultView() {
     profileResonanceLabel,
     directorStyleLabel,
     scenarioMeta?.archive.dominantBranchTitle,
+    scenarioMeta?.archive.counterplayCardCount,
+    scenarioMeta?.commitment.active,
+    scenarioMeta?.commitment.branchTitle,
+    counterplaySummaryLabel,
+    lastCounterplayCardLabel,
+    commitmentOutcomeLabel,
+    t,
   ]);
   const betOutcomeContext = useMemo(() => ({
     dominantBranchId: dominantBranch?.id ?? null,
@@ -570,6 +620,8 @@ export default function ResultView() {
               objective_completed_count: scenarioMeta.archive.objectiveCompletedCount ?? 0,
               objective_total_count: scenarioMeta.archive.objectiveTotalCount ?? 0,
               commitment_outcome: scenarioMeta.archive.commitmentOutcome ?? null,
+              counterplay_card_count: scenarioMeta.archive.counterplayCardCount ?? 0,
+              last_counterplay_card: scenarioMeta.archive.lastCounterplayCard ?? null,
               risk_value: scenarioMeta.archive.riskValue ?? null,
               resource_value: scenarioMeta.archive.resourceValue ?? null,
               completed_daily_challenge: isDailyChallenge,
@@ -927,6 +979,17 @@ export default function ResultView() {
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_bet_result')}</span>
               <strong>{bettingHitLabel}</strong>
+            </div>
+            <div className="archive-summary-card">
+              <span className="archive-summary-card__label">{t('result.archive_counterplay')}</span>
+              <strong>{counterplaySummaryLabel}</strong>
+              {(scenarioMeta.archive.counterplayCardCount ?? 0) > 0 && (
+                <small>
+                  {t('result.archive_last_counterplay')}
+                  {': '}
+                  {lastCounterplayCardLabel}
+                </small>
+              )}
             </div>
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_grade')}</span>

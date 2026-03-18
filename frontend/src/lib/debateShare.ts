@@ -9,6 +9,8 @@ export interface DebateShareContext {
   judgeSummary: string;
   propositionScore: number;
   oppositionScore: number;
+  counterplaySummary?: string | null;
+  counterplayOutcomeLabel?: string | null;
 }
 
 export type DebateSharePlatform = 'xiaohongshu' | 'weibo' | 'zhihu' | 'reddit' | 'x';
@@ -34,6 +36,8 @@ export function buildDebateShareCopy(
     `${t('debate.result_winner')}: ${context.winnerLabel}`,
     `${t('debate.result_scoreline')}: ${context.propositionScore} : ${context.oppositionScore}`,
     `${t('debate.result_tone')}: ${context.toneLabel}`,
+    ...(context.counterplaySummary ? [`${t('debate.counterplay_title')}: ${context.counterplaySummary}`] : []),
+    ...(context.counterplayOutcomeLabel ? [`${t('debate.counterplay_result')}: ${context.counterplayOutcomeLabel}`] : []),
     `${t('debate.result_best_argument')}: ${context.bestArgument}`,
     `${t('debate.result_best_rebuttal')}: ${context.bestRebuttal}`,
     `${t('debate.result_judge_summary')}: ${context.judgeSummary}`,

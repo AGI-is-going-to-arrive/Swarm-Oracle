@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session
 
-from app.models import DebatePhase
+from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
 from app.models.database import get_engine
 from app.services.debate_scoring import _profile_dimension_bias
 from app.services.debate import (
@@ -21,6 +21,20 @@ async def test_run_debate_background_finishes_with_structured_result():
     debate = create_debate_record("如果雅典把所有高风险决策都交给抽签议会，会更稳定吗？")
     pushed_events: list[dict] = []
 
+    with Session(get_engine()) as session:
+        session.add(DebatePrediction(
+            debate_id=debate.id,
+            kind=DebatePredictionKind.WINNER,
+            target_value="proposition",
+            confidence=0.6,
+            user_id="counterplay-user",
+            user_name="Counterplay QA",
+            is_counterplay=True,
+            counterplay_phase=DebatePhase.CROSSFIRE,
+            counterplay_variant="reversal",
+        ))
+        session.commit()
+
     async def _push(_debate_id: str, event: dict) -> None:
         pushed_events.append(event)
 
@@ -34,10 +48,22 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert snapshot["status"] == "done"
     assert snapshot["language"] == "zh"
     assert snapshot["profile_id"] == "governance"
+    assert snapshot["counterplay"]["kind"] == "winner"
+    assert snapshot["counterplay"]["phase"] == "crossfire"
+    assert snapshot["counterplay"]["variant"] == "reversal"
+    assert snapshot["counterplay"]["outcome"] in {"hit", "miss"}
     assert snapshot["scene_theme"] == "debate_arena_civic"
     assert len(snapshot["turns"]) == 9
     assert result["result"]["winner"] in {"proposition", "opposition"}
     assert result["result"]["verdict_tone"] in {"order", "balance", "rupture"}
+    assert result["counterplay"]["debate_id"] == debate.id
+    assert result["counterplay"]["kind"] == "winner"
+    assert result["counterplay"]["phase"] == "crossfire"
+    assert result["counterplay"]["variant"] == "reversal"
+    assert result["counterplay"]["outcome"] in {"hit", "miss"}
+    assert result["predictions"][0]["is_counterplay"] is True
+    assert result["predictions"][0]["counterplay_phase"] == "crossfire"
+    assert result["predictions"][0]["counterplay_variant"] == "reversal"
     assert set(result["result"]["breakdown"].keys()) == {
         "coherence",
         "evidence",

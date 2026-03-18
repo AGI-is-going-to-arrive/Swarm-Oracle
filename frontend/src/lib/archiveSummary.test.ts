@@ -89,6 +89,8 @@ describe('archiveSummary helpers', () => {
       objectiveCompletedCount: 0,
       objectiveTotalCount: 0,
       commitmentOutcome: null,
+      counterplayCardCount: 0,
+      lastCounterplayCard: null,
     });
   });
 
@@ -109,6 +111,8 @@ describe('archiveSummary helpers', () => {
     expect(summary.profileResonance).toBe('offbeat');
     expect(summary.objectiveCompletedCount).toBe(0);
     expect(summary.commitmentOutcome).toBeNull();
+    expect(summary.counterplayCardCount).toBe(0);
+    expect(summary.lastCounterplayCard).toBeNull();
   });
 
   it('treats theme resonance bets as hittable archive outcomes', () => {
@@ -153,6 +157,32 @@ describe('archiveSummary helpers', () => {
     expect(summary.objectiveTotalCount).toBe(2);
     expect(summary.commitmentOutcome).toBe('hit');
     expect(summary.archiveGrade).toBe('B');
+  });
+
+  it('summarizes counterplay usage for archive presentation', () => {
+    const summary = buildArchiveSummary({
+      branches,
+      usages: [
+        ...usages,
+        {
+          cardId: 'audit_reckoning',
+          profileId: 'governance',
+          branchId: 'b1',
+          branchTitle: '秩序收束',
+          round: 3,
+          cost: 1,
+          directive: 'counter',
+          usedAt: '2026-03-15T00:02:00Z',
+        },
+      ],
+      bets: [],
+      keyMomentCount: 1,
+      isDailyChallenge: false,
+      profileId: 'governance',
+    });
+
+    expect(summary.counterplayCardCount).toBe(1);
+    expect(summary.lastCounterplayCard).toBe('audit_reckoning');
   });
 
   it('returns localized director style labels', () => {

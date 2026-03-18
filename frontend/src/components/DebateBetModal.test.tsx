@@ -34,4 +34,30 @@ describe('DebateBetModal automation callback', () => {
     expect(latestState.confidence_percent).toBeGreaterThan(0);
     expect(screen.getByText('debate.bet_kind_tone_hint')).toBeInTheDocument();
   });
+
+  it('applies an incoming preset selection and exposes it in automation state', async () => {
+    const onAutomationStateChange = vi.fn();
+
+    render(
+      <DebateBetModal
+        initialSelection={{
+          kind: 'verdict_tone',
+          targetValue: 'balance',
+          confidence: 0.6,
+        }}
+        strategyHint="counterplay hint"
+        onClose={() => {}}
+        onSubmit={vi.fn(async () => undefined)}
+        onAutomationStateChange={onAutomationStateChange}
+      />,
+    );
+
+    expect(screen.getByText('counterplay hint')).toBeInTheDocument();
+
+    const latestState = onAutomationStateChange.mock.calls.at(-1)?.[0];
+    expect(latestState.selected_kind).toBe('verdict_tone');
+    expect(latestState.selected_target).toBe('balance');
+    expect(latestState.preset_kind).toBe('verdict_tone');
+    expect(latestState.preset_target).toBe('balance');
+  });
 });

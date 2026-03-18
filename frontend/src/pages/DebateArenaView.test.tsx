@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DebateSnapshot } from '../types';
 import { DebateArenaView } from './DebateArenaView';
@@ -129,10 +129,25 @@ vi.mock('../lib/directorIdentity', () => ({
 
 describe('DebateArenaView', () => {
   beforeEach(() => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => store.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        store.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        store.delete(key);
+      }),
+    });
     resetMockDebateStore();
+    predictDebateMock.mockReset();
     captureScreenshotMock.mockReset();
     captureElementDataUrlMock.mockReset();
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,fake');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('publishes debate automation payload and renders result action', async () => {
@@ -210,5 +225,58 @@ describe('DebateArenaView', () => {
     }).capture_game_screenshot?.('modal');
     expect(modalShot).toBe('data:image/png;base64,fake');
     expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-modal', 'element');
+  });
+
+  it('offers a counterplay preset during live betting windows', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'debate.counterplay_submit' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'debate.counterplay_submit' }));
+
+    expect(predictDebateMock).toHaveBeenCalledWith('debate-1', expect.objectContaining({
+      kind: 'winner',
+      targetValue: 'opposition',
+      isCounterplay: true,
+      counterplayPhase: 'crossfire',
+      counterplayVariant: 'reversal',
+    }));
+
+    expect(await screen.findByText('debate.counterplay_used')).toBeInTheDocument();
+
+    const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    const payload = raw ? JSON.parse(raw) : null;
+    expect(payload?.page?.controls?.can_open_counterplay).toBe(true);
+    expect(payload?.page?.controls?.counterplay_used).toBe(true);
+    expect(payload?.page?.debate?.counterplay?.kind).toBe('winner');
+    expect(payload?.page?.debate?.counterplay?.target_value).toBe('opposition');
+    expect(payload?.page?.debate?.counterplay_used).toBe(true);
   });
 });

@@ -9,6 +9,12 @@ import { DebateScoreCard } from '../components/DebateScoreCard';
 import { DebateStageRibbon } from '../components/DebateStageRibbon';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
+  resolveDebateCounterplayRecord,
+  loadDebateCounterplay,
+  saveDebateCounterplay,
+  type DebateCounterplayRecord,
+} from '../lib/debateCounterplay';
+import {
   getDebateDimensionLabel,
   getDebatePhaseLabel,
   getDebateSideLabel,
@@ -21,6 +27,7 @@ import {
 import { useDebateWS } from '../hooks/useDebateWS';
 import { useDebateStore } from '../stores/debateStore';
 import { getDirectorIdentity } from '../lib/directorIdentity';
+import type { DebatePhase } from '../types';
 import './DebateArena.css';
 
 const REVEAL_INTERVAL_MS = 1400;
@@ -46,6 +53,15 @@ export function DebateArenaView() {
   const [captureNotice, setCaptureNotice] = useState('');
   const [autoReveal, setAutoReveal] = useState(true);
   const [phaseLocked, setPhaseLocked] = useState(false);
+  const [betPreset, setBetPreset] = useState<{
+    kind: 'winner' | 'verdict_tone';
+    targetValue: string;
+    confidence: number;
+    strategyHint: string;
+    phase: DebatePhase;
+    variant: 'balanced' | 'reversal';
+  } | null>(null);
+  const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
   const revealRef = useRef(0);
 
   const { status: captureStatus, captureScreenshot } = useScreenCapture({
@@ -55,7 +71,19 @@ export function DebateArenaView() {
   useEffect(() => {
     if (!id) return;
     void loadDebate(id);
+    setCounterplayRecord(resolveDebateCounterplayRecord({
+      resultCounterplay: debate?.counterplay ?? null,
+      localRecord: loadDebateCounterplay(id),
+    }));
   }, [id, loadDebate]);
+
+  useEffect(() => {
+    if (!id) return;
+    setCounterplayRecord(resolveDebateCounterplayRecord({
+      resultCounterplay: debate?.counterplay ?? null,
+      localRecord: loadDebateCounterplay(id),
+    }));
+  }, [debate?.counterplay, id]);
 
   useEffect(() => {
     if (!debate?.language) return;
@@ -160,6 +188,44 @@ export function DebateArenaView() {
     return t('debate.pressure_edge', { side: phaseLeaderLabel, value: swing });
   }, [phaseLeaderLabel, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
   const betWindowLabel = canBetNow ? t('debate.bet_window_open') : t('debate.bet_window_locked');
+  const counterplayPlan = useMemo(() => {
+    if (!debate || !canBetNow) return null;
+
+    const phaseSwing = Math.abs(phaseScoreDelta.proposition - phaseScoreDelta.opposition);
+    if (phaseSwing === 0) {
+      return {
+        kind: 'verdict_tone' as const,
+        targetValue: 'balance',
+        confidence: 0.5,
+        label: t('debate.counterplay_balanced_label'),
+        summary: t('debate.counterplay_balanced_summary'),
+        strategyHint: t('debate.counterplay_balanced_hint'),
+        variant: 'balanced' as const,
+      };
+    }
+
+    const trailingSide = phaseScoreDelta.proposition > phaseScoreDelta.opposition
+      ? 'opposition'
+      : 'proposition';
+    const confidence = phaseSwing >= 8 ? 0.7 : phaseSwing >= 4 ? 0.6 : 0.5;
+
+    return {
+      kind: 'winner' as const,
+      targetValue: trailingSide,
+      confidence,
+      label: t('debate.counterplay_reversal_label'),
+      summary: t('debate.counterplay_reversal_summary', {
+        side: getDebateSideLabel(t, trailingSide),
+        value: phaseSwing,
+      }),
+      strategyHint: t('debate.counterplay_reversal_hint', {
+        side: getDebateSideLabel(t, trailingSide),
+        value: phaseSwing,
+        confidence: Math.round(confidence * 100),
+      }),
+      variant: 'reversal' as const,
+    };
+  }, [canBetNow, debate, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
 
   const themeLabel = getTheaterThemeLabel(debate?.scene_theme, isZh);
   const themeAsset = debate?.scene_theme ? getThemeAssetPath(debate.scene_theme as never) : null;
@@ -168,7 +234,10 @@ export function DebateArenaView() {
     if (!canBetNow && showBetModal) {
       setShowBetModal(false);
     }
-  }, [canBetNow, showBetModal]);
+    if (!canBetNow && betPreset) {
+      setBetPreset(null);
+    }
+  }, [betPreset, canBetNow, showBetModal]);
 
   useEffect(() => {
     const win = window as AutomationWindow;
@@ -213,6 +282,8 @@ export function DebateArenaView() {
         unlocked_phases: unlockedPhases,
         controls: {
           can_open_prediction: canBetNow,
+          can_open_counterplay: Boolean(counterplayPlan),
+          counterplay_used: Boolean(counterplayRecord),
           can_view_result: Boolean(debate?.result_ready),
           can_capture_screenshot: captureStatus === 'idle',
           capture_mode: 'panel',
@@ -229,6 +300,13 @@ export function DebateArenaView() {
           judge: { summary_ready: debate.result_ready },
           visible_quotes: visibleTurns.slice(-3).map((turn) => turn.content),
           bet_window_open: canBetNow,
+          counterplay: counterplayPlan ? {
+            kind: counterplayPlan.kind,
+            target_value: counterplayPlan.targetValue,
+            confidence: counterplayPlan.confidence,
+            label: counterplayPlan.label,
+          } : null,
+          counterplay_used: Boolean(counterplayRecord),
           stage_turn_count: stageTurns.length,
           phase_delta: phaseScoreDelta,
           watched_dimension: watchedDimension,
@@ -261,7 +339,30 @@ export function DebateArenaView() {
     unlockedPhases,
     visibleTurns,
     watchedDimension,
+    counterplayPlan,
+    counterplayRecord,
   ]);
+
+  const persistCounterplay = (payload: {
+    kind: 'winner' | 'verdict_tone';
+    targetValue: string;
+    confidence: number;
+    phase: DebatePhase;
+    variant: 'balanced' | 'reversal';
+  }) => {
+    if (!id) return null;
+    const record = saveDebateCounterplay({
+      debateId: id,
+      kind: payload.kind,
+      targetValue: payload.targetValue,
+      confidence: payload.confidence,
+      phase: payload.phase,
+      variant: payload.variant,
+      createdAt: new Date().toISOString(),
+    });
+    setCounterplayRecord(record);
+    return record;
+  };
 
   const handleBetSubmit = async (payload: {
     kind: 'winner' | 'verdict_tone';
@@ -277,9 +378,71 @@ export function DebateArenaView() {
         confidence: payload.confidence,
         userId: directorIdentity.userId,
         userName: directorIdentity.userName,
+        ...(betPreset ? {
+          isCounterplay: true,
+          counterplayPhase: betPreset.phase,
+          counterplayVariant: betPreset.variant,
+        } : {}),
       });
+      if (betPreset) {
+        persistCounterplay({
+          kind: payload.kind,
+          targetValue: payload.targetValue,
+          confidence: payload.confidence,
+          phase: betPreset.phase,
+          variant: betPreset.variant,
+        });
+      }
       setBetNotice(t('debate.bet_success'));
+      setBetPreset(null);
       setShowBetModal(false);
+    } finally {
+      setBetSubmitting(false);
+    }
+  };
+
+  const handleOpenBet = () => {
+    setBetPreset(null);
+    setShowBetModal(true);
+  };
+
+  const handleOpenCounterplay = () => {
+    if (!counterplayPlan) return;
+    setBetPreset({
+      kind: counterplayPlan.kind,
+      targetValue: counterplayPlan.targetValue,
+      confidence: counterplayPlan.confidence,
+      strategyHint: counterplayPlan.strategyHint,
+      phase: currentPhase as DebatePhase,
+      variant: counterplayPlan.variant,
+    });
+    setShowBetModal(true);
+  };
+
+  const handleQuickCounterplay = async () => {
+    if (!id || !counterplayPlan || !canBetNow || betSubmitting) return;
+    setBetSubmitting(true);
+    try {
+      await predictDebate(id, {
+        kind: counterplayPlan.kind,
+        targetValue: counterplayPlan.targetValue,
+        confidence: counterplayPlan.confidence,
+        userId: directorIdentity.userId,
+        userName: directorIdentity.userName,
+        isCounterplay: true,
+        counterplayPhase: currentPhase,
+        counterplayVariant: counterplayPlan.variant,
+      });
+      persistCounterplay({
+        kind: counterplayPlan.kind,
+        targetValue: counterplayPlan.targetValue,
+        confidence: counterplayPlan.confidence,
+        phase: currentPhase as DebatePhase,
+        variant: counterplayPlan.variant,
+      });
+      setBetNotice(t('debate.counterplay_success'));
+    } catch (nextError) {
+      setBetNotice(nextError instanceof Error ? nextError.message : t('debate.bet_error'));
     } finally {
       setBetSubmitting(false);
     }
@@ -344,7 +507,7 @@ export function DebateArenaView() {
                   <button
                     type="button"
                     className="btn btn-ghost debate-primary-cta debate-primary-cta--hero"
-                    onClick={() => setShowBetModal(true)}
+                    onClick={handleOpenBet}
                     disabled={!canBetNow}
                   >
                     {t('debate.open_bet')}
@@ -375,7 +538,7 @@ export function DebateArenaView() {
             <button
               type="button"
               className="btn btn-primary debate-primary-cta debate-primary-cta--rail"
-              onClick={() => setShowBetModal(true)}
+              onClick={handleOpenBet}
               disabled={!canBetNow}
             >
               {t('debate.open_bet')}
@@ -517,6 +680,36 @@ export function DebateArenaView() {
                       {canBetNow ? t('debate.watchlist_open') : t('debate.watchlist_locked')}
                     </p>
                   </article>
+                  {counterplayPlan && (
+                    <article className="debate-turn-card debate-turn-card--counterplay">
+                      <div className="debate-turn-card__meta">
+                        <strong>{t('debate.counterplay_title')}</strong>
+                        <span>{counterplayPlan.label}</span>
+                      </div>
+                      <p className="debate-rule-copy">{counterplayPlan.summary}</p>
+                      <div className="debate-counterplay-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary debate-counterplay-btn"
+                          onClick={handleQuickCounterplay}
+                          disabled={!canBetNow || betSubmitting}
+                        >
+                          {betSubmitting ? t('debate.bet_submitting') : t('debate.counterplay_submit')}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost debate-counterplay-btn"
+                          onClick={handleOpenCounterplay}
+                          disabled={!canBetNow || betSubmitting}
+                        >
+                          {t('debate.counterplay_apply')}
+                        </button>
+                      </div>
+                      {counterplayRecord && (
+                        <p className="debate-rule-copy">{t('debate.counterplay_used')}</p>
+                      )}
+                    </article>
+                  )}
                 </div>
               </div>
             </section>
@@ -536,7 +729,12 @@ export function DebateArenaView() {
       {showBetModal && (
         <DebateBetModal
           loading={betSubmitting}
-          onClose={() => setShowBetModal(false)}
+          initialSelection={betPreset}
+          strategyHint={betPreset?.strategyHint ?? null}
+          onClose={() => {
+            setShowBetModal(false);
+            setBetPreset(null);
+          }}
           onSubmit={handleBetSubmit}
           onAutomationStateChange={setBetModalState}
         />

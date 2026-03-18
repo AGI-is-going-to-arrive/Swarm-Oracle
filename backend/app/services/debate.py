@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.models import (
     Debate,
+    DebateCounterplay,
     DebatePhase,
     DebatePrediction,
     DebatePredictionKind,
@@ -81,7 +82,27 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
                 .order_by(DebateTurn.sequence.asc())
             ).all()
         )
-        return _serialize_debate(debate, turns)
+        predictions = list(
+            session.exec(
+                select(DebatePrediction)
+                .where(DebatePrediction.debate_id == debate_id)
+                .order_by(DebatePrediction.created_at.asc())
+            ).all()
+        )
+        counterplays = list(
+            session.exec(
+                select(DebateCounterplay)
+                .where(DebateCounterplay.debate_id == debate_id)
+                .order_by(DebateCounterplay.created_at.asc())
+            ).all()
+        )
+        snapshot = _serialize_debate(debate, turns)
+        snapshot["counterplay"] = _build_counterplay_result(
+            predictions,
+            debate,
+            counterplays=counterplays,
+        )
+        return snapshot
 
 
 def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
@@ -104,6 +125,13 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
                 .order_by(DebatePrediction.created_at.asc())
             ).all()
         )
+        counterplays = list(
+            session.exec(
+                select(DebateCounterplay)
+                .where(DebateCounterplay.debate_id == debate_id)
+                .order_by(DebateCounterplay.created_at.asc())
+            ).all()
+        )
         snapshot = _serialize_debate(debate, turns)
         snapshot["result"] = {
             "winner": debate.winner,
@@ -115,6 +143,11 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             "judge_summary": debate.judge_summary,
             "replay": _build_replay_digest(turns),
         }
+        snapshot["counterplay"] = _build_counterplay_result(
+            predictions,
+            debate,
+            counterplays=counterplays,
+        )
         snapshot["predictions"] = [_serialize_prediction(prediction) for prediction in predictions]
         return snapshot
 
@@ -395,6 +428,19 @@ def _finalize_debate(debate_id: str, plan: DebatePlan) -> Debate:
         debate.judge_summary = turns[-1].content if turns else ""
         debate.updated_at = _now()
         session.add(debate)
+
+        counterplays = list(
+            session.exec(
+                select(DebateCounterplay).where(DebateCounterplay.debate_id == debate_id)
+            ).all()
+        )
+        for counterplay in counterplays:
+            if counterplay.kind == DebatePredictionKind.WINNER:
+                counterplay.outcome = "hit" if counterplay.target_value == debate.winner else "miss"
+            else:
+                counterplay.outcome = "hit" if counterplay.target_value == debate.verdict_tone else "miss"
+            session.add(counterplay)
+
         session.commit()
         session.refresh(debate)
 
@@ -478,10 +524,75 @@ def _serialize_prediction(prediction: DebatePrediction) -> dict[str, Any]:
         "confidence": prediction.confidence,
         "user_id": prediction.user_id,
         "user_name": prediction.user_name,
+        "is_counterplay": prediction.is_counterplay,
+        "counterplay_phase": prediction.counterplay_phase.value if prediction.counterplay_phase else None,
+        "counterplay_variant": prediction.counterplay_variant,
         "score": prediction.score,
         "score_reason": prediction.score_reason,
         "created_at": prediction.created_at.isoformat(),
         "scored_at": prediction.scored_at.isoformat() if prediction.scored_at else None,
+    }
+
+
+def _build_counterplay_result(
+    predictions: list[DebatePrediction],
+    debate: Debate,
+    *,
+    counterplays: list[DebateCounterplay] | None = None,
+) -> dict[str, Any] | None:
+    explicit = sorted(counterplays or [], key=lambda item: item.created_at, reverse=True)
+    if explicit:
+        latest = explicit[0]
+        outcome = latest.outcome
+        if outcome is None and debate.status == DebateStatus.DONE:
+            if latest.kind == DebatePredictionKind.WINNER:
+                outcome = "hit" if latest.target_value == debate.winner else "miss"
+            else:
+                outcome = "hit" if latest.target_value == debate.verdict_tone else "miss"
+        return {
+            "debate_id": latest.debate_id,
+            "kind": latest.kind.value,
+            "target_value": latest.target_value,
+            "confidence": latest.confidence,
+            "phase": latest.phase.value,
+            "variant": latest.variant,
+            "outcome": outcome,
+            "user_name": latest.user_name,
+            "created_at": latest.created_at.isoformat(),
+        }
+
+    counterplay_predictions = [
+        prediction
+        for prediction in predictions
+        if prediction.is_counterplay
+        and prediction.counterplay_phase is not None
+        and prediction.counterplay_variant is not None
+    ]
+    if not counterplay_predictions:
+        return None
+
+    latest_prediction = sorted(
+        counterplay_predictions,
+        key=lambda prediction: prediction.created_at,
+        reverse=True,
+    )[0]
+    outcome = None
+    if debate.status == DebateStatus.DONE:
+        if latest_prediction.kind == DebatePredictionKind.WINNER:
+            outcome = "hit" if latest_prediction.target_value == debate.winner else "miss"
+        else:
+            outcome = "hit" if latest_prediction.target_value == debate.verdict_tone else "miss"
+
+    return {
+        "debate_id": latest_prediction.debate_id,
+        "kind": latest_prediction.kind.value,
+        "target_value": latest_prediction.target_value,
+        "confidence": latest_prediction.confidence,
+        "phase": latest_prediction.counterplay_phase.value,
+        "variant": latest_prediction.counterplay_variant,
+        "outcome": outcome,
+        "user_name": latest_prediction.user_name,
+        "created_at": latest_prediction.created_at.isoformat(),
     }
 
 
