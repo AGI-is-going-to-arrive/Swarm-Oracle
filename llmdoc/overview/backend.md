@@ -38,7 +38,7 @@ models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
-config.py ──► pydantic-settings (Settings singleton)
+config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录)
 alembic/ ──► Alembic 数据库迁移框架
 ```
 
@@ -167,12 +167,14 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键函数**:
   - `finalize_scenario_campaign(...)` — 对已完成 scenario 做一次性结算；同一 scenario 对同一导演幂等，若绑定到不同导演则抛 `CampaignConflictError`
   - `calculate_campaign_score_delta(...)` — 按 archive grade / profile resonance / bet / daily challenge 规则计算积分增量
+  - `get_scenario_campaign_summary(scenario_id)` — 读取单局已落库的 campaign 摘要；供 `ResultView` 在本地档案缺失时回填关键字段
   - `get_campaign_profile_summary(user_id)` — 读取导演总览
   - `list_campaign_mastery_summaries(user_id)` — 按 `campaign_score` 列出题材 mastery
   - `list_campaign_badge_summaries(user_id)` — 列出已解锁 badge
   - `get_daily_challenge_summary(user_id, profile_id, local_date, timezone_offset_minutes)` — 返回指定题材在调用方本地日期上的 daily challenge 完成态
 - **数据写入**: 会更新 `DirectorProfile`、`ProfileMastery`，并写入不可变的 `ScenarioCampaignLog`
 - **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
+- **单局摘要**: scenario summary 会返回 `profile_id / archive_grade / profile_resonance / betting_hit / most_used_card / completed_daily_challenge / campaign_score_delta / finalized_at`
 - **时区归一**: `daily-status` 查询现在会把 SQLite round-trip 回来的 naive UTC 时间先按 UTC 归一，再换算调用方本地日期，避免跨时区同日完成态误判
 - **时间序列化**: `profile / mastery / badges / daily-status` 响应里的时间字段统一输出带 `+00:00` 的 UTC ISO 字符串
 - **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
@@ -237,13 +239,14 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
 | 端点 | 方法 | 描述 |
 |------|------|------|
+| `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单局 campaign 摘要；若该 scenario 尚未 finalize，则返回 `404` |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态；内部会先把 SQLite round-trip 的 naive UTC 时间按 UTC 归一后再做本地日期换算 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
-> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
 
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
@@ -302,7 +305,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-后端本轮真实全量回归结果为 **815 passed**。本轮又补跑了 `test_card_events.py / test_gameplay_contract_sync.py`（**24 passed**）、`test_campaign_service.py / test_campaign_api.py`（**9 passed**）和 `test_predictions.py`（**17 passed**）；分别覆盖 Track B2 shared contract 收口、campaign `daily-status` 时区归一修复与 prediction 测试 warning 清理。Track D 的 `test_debate_api.py / test_debate_service.py` 仍处于当前通过基线。
+后端本轮真实全量回归结果为 **815 passed**。最近又补跑了 `test_card_events.py / test_gameplay_contract_sync.py`（**24 passed**）、`test_predictions.py`（**17 passed**），以及这次文档同步重新验证的 `test_config.py / test_campaign_api.py / test_campaign_service.py`（**14 passed**）；分别覆盖 shared contract、prediction 评分、`campaign scenario summary` 路由和 backend-root 路径归一。Track D 的 `test_debate_api.py / test_debate_service.py` 仍处于当前通过基线。
 
 覆盖重心：
 
@@ -318,8 +321,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - Campaign / shared contract 定向回归：
   - `test_campaign_api.py`
   - `test_campaign_service.py`
+  - `test_config.py`
   - `test_gameplay_contract_sync.py`
-  - 覆盖 `campaign` router / service 的 finalize 流程、幂等返回、`daily-status` 查询，以及 `card_events.py` 与 `shared/gameplay_contract.v1.json` 的同步约束
+  - 覆盖 `campaign` router / service 的 finalize 流程、幂等返回、`daily-status` 查询、`scenario summary` 路由、backend-root 路径归一，以及 `card_events.py` 与 `shared/gameplay_contract.v1.json` 的同步约束
 - E2E 样本契约回归：
   - `test_e2e_sample_matrix.py`
   - 校验 `frontend/output/e2e/sample_matrix.json` 与 `sample_matrix_variants.json` 的 `scene_theme` 和当前 `select_scene(question)` 保持一致，避免旧样本主题漂移

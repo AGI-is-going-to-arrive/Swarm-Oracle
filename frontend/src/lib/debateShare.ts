@@ -13,12 +13,12 @@ export interface DebateShareContext {
 
 export type DebateSharePlatform = 'xiaohongshu' | 'weibo' | 'zhihu' | 'reddit' | 'x';
 
-const PLATFORM_PREFIX: Record<DebateSharePlatform, string> = {
-  xiaohongshu: 'share.platform_xiaohongshu',
-  weibo: 'share.platform_weibo',
-  zhihu: 'share.platform_zhihu',
-  reddit: 'share.platform_reddit',
-  x: 'share.platform_x',
+export const DEBATE_SHARE_PLATFORM_META: Record<DebateSharePlatform, { labelKey: string; icon: string }> = {
+  xiaohongshu: { labelKey: 'share.platform_xiaohongshu', icon: '📕' },
+  weibo: { labelKey: 'share.platform_weibo', icon: '🔴' },
+  zhihu: { labelKey: 'share.platform_zhihu', icon: '💙' },
+  reddit: { labelKey: 'share.platform_reddit', icon: '🟠' },
+  x: { labelKey: 'share.platform_x', icon: '𝕏' },
 };
 
 export function buildDebateShareCopy(
@@ -26,9 +26,10 @@ export function buildDebateShareCopy(
   context: DebateShareContext,
   t: TFunction,
 ): string {
-  const platformLabel = t(PLATFORM_PREFIX[platform]);
+  const platformMeta = DEBATE_SHARE_PLATFORM_META[platform];
+  const platformLabel = t(platformMeta.labelKey);
   return [
-    `${platformLabel} · ${t('debate.share_title')}`,
+    `${platformMeta.icon} ${platformLabel} · ${t('debate.share_title')}`,
     context.motion,
     `${t('debate.result_winner')}: ${context.winnerLabel}`,
     `${t('debate.result_scoreline')}: ${context.propositionScore} : ${context.oppositionScore}`,

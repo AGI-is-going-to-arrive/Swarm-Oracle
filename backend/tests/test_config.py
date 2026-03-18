@@ -1,7 +1,5 @@
 """Tests for app.config — Settings loading."""
 
-import os
-
 
 def test_settings_defaults():
     """Settings should have sensible defaults."""
@@ -38,3 +36,15 @@ def test_settings_cors_origins():
     s = Settings()
     assert isinstance(s.CORS_ORIGINS, list)
     assert len(s.CORS_ORIGINS) > 0
+
+
+def test_settings_normalize_relative_local_paths(monkeypatch):
+    """Relative local paths should resolve against backend root, not cwd."""
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./relative-dev.db")
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", "./relative-chroma")
+
+    from app.config import BACKEND_ROOT, Settings
+
+    s = Settings()
+    assert s.DATABASE_URL == f"sqlite:///{(BACKEND_ROOT / 'relative-dev.db').resolve()}"
+    assert s.CHROMA_PERSIST_DIR == str((BACKEND_ROOT / "relative-chroma").resolve())

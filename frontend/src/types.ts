@@ -115,6 +115,18 @@ export interface CampaignFinalizeResult {
   badges: CampaignBadge[];
 }
 
+export interface CampaignScenarioSummary {
+  scenario_id: string;
+  profile_id: string;
+  archive_grade: string;
+  profile_resonance: 'signature' | 'aligned' | 'offbeat';
+  betting_hit?: boolean | null;
+  most_used_card?: string | null;
+  completed_daily_challenge: boolean;
+  campaign_score_delta: number;
+  finalized_at?: string | null;
+}
+
 export interface CampaignDailyChallengeStatus {
   user_id: string;
   profile_id: string;

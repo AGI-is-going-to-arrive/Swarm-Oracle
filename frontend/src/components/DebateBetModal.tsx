@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -11,12 +11,14 @@ interface DebateBetModalProps {
   loading?: boolean;
   onClose: () => void;
   onSubmit: (payload: { kind: DebatePredictionKind; targetValue: string; confidence: number }) => Promise<void>;
+  onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
 
 export function DebateBetModal({
   loading = false,
   onClose,
   onSubmit,
+  onAutomationStateChange,
 }: DebateBetModalProps) {
   const { t } = useTranslation();
   const [kind, setKind] = useState<DebatePredictionKind>('winner');
@@ -24,9 +26,29 @@ export function DebateBetModal({
   const [confidence, setConfidence] = useState<number>(0.7);
   const [error, setError] = useState<string>('');
 
-  const options = kind === 'winner'
-    ? ['proposition', 'opposition']
-    : ['order', 'balance', 'rupture'];
+  const options = useMemo(
+    () => (kind === 'winner'
+      ? ['proposition', 'opposition']
+      : ['order', 'balance', 'rupture']),
+    [kind],
+  );
+
+  useEffect(() => {
+    onAutomationStateChange?.({
+      kind: 'debate_bet_modal',
+      selected_kind: kind,
+      selected_target: targetValue,
+      target_options: options,
+      confidence,
+      confidence_percent: Math.round(confidence * 100),
+      submit_disabled: loading,
+      error: error || null,
+    });
+
+    return () => {
+      onAutomationStateChange?.(null);
+    };
+  }, [confidence, error, kind, loading, onAutomationStateChange, options, targetValue]);
 
   const handleSubmit = async () => {
     setError('');
@@ -72,6 +94,9 @@ export function DebateBetModal({
                 {t('debate.bet_kind_tone')}
               </button>
             </div>
+            <p className="debate-rule-copy">
+              {kind === 'winner' ? t('debate.bet_kind_winner_hint') : t('debate.bet_kind_tone_hint')}
+            </p>
           </div>
 
           <div className="debate-modal__group">

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -10,7 +11,7 @@ from sqlmodel import Session
 
 from app.api.helpers import schedule_background_task
 from app.api.ws import WSManager
-from app.models import Debate, DebatePrediction, DebatePredictionKind, DebateStatus
+from app.models import Debate, DebatePhase, DebatePrediction, DebatePredictionKind, DebateStatus
 from app.models.database import get_engine
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.debate import (
@@ -22,6 +23,7 @@ from app.services.debate import (
 
 router = APIRouter(tags=["debate"])
 debate_ws_manager = WSManager()
+DEBATE_START_DELAY_SECONDS = 5.0
 
 _PREDICTION_OPTIONS = {
     DebatePredictionKind.WINNER: {"proposition", "opposition"},
@@ -85,8 +87,13 @@ class DebatePredictionRequest(BaseModel):
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
+
+    async def _delayed_run() -> None:
+        await asyncio.sleep(DEBATE_START_DELAY_SECONDS)
+        await run_debate_background(debate.id, ws_callback=debate_ws_manager.broadcast)
+
     schedule_background_task(
-        run_debate_background(debate.id, ws_callback=debate_ws_manager.broadcast)
+        _delayed_run()
     )
     payload = load_debate_snapshot(debate.id)
     if payload is None:
@@ -109,6 +116,8 @@ async def get_debate_result(debate_id: str) -> dict[str, Any]:
         debate = session.get(Debate, debate_id)
         if debate is None:
             raise HTTPException(404, "Debate not found")
+        if debate.status == DebateStatus.ERROR:
+            raise HTTPException(500, "Debate ended with an error")
         if debate.status != DebateStatus.DONE:
             raise HTTPException(409, "Debate result is not ready yet")
     payload = load_debate_result_payload(debate_id)
@@ -130,6 +139,8 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
             raise HTTPException(404, "Debate not found")
         if debate.status == DebateStatus.DONE:
             raise HTTPException(400, "Debate already completed — predictions are closed")
+        if debate.current_phase in {DebatePhase.CLOSING, DebatePhase.VERDICT}:
+            raise HTTPException(400, "Predictions lock once closing arguments begin")
 
         prediction = DebatePrediction(
             debate_id=debate_id,

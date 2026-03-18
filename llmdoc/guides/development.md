@@ -24,6 +24,7 @@ uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --reload -
 ```
 
 - 这样可以避免因为 cwd / `PYTHONPATH` 污染，误导入别的工作区后端。
+- 当前 `app.config.Settings` 还会把默认 `.env`、`DATABASE_URL` 与 `CHROMA_PERSIST_DIR` 统一锚到 `backend/` 根目录；即使你在 repo root 启动，也不会再误命中另一份 SQLite / Chroma 数据目录。
 
 ### Frontend
 
@@ -35,10 +36,14 @@ npm install && npm run dev
 
 ### 配置环境变量
 
+本地直接启动 backend 时，默认读取 `backend/.env`：
+
 ```bash
-cp .env.example .env
-# 编辑 .env 设置 LLM_RESPONSES_URL / LLM_API_KEY
+cp .env.example backend/.env
+# 编辑 backend/.env 设置 LLM_RESPONSES_URL / LLM_API_KEY
 ```
+
+- `docker compose` 仍使用仓库根目录 `.env`，不要把这两处混在一起。
 
 ## 测试
 
@@ -62,6 +67,15 @@ cd backend
 ```
 
 - 本轮已真实执行后端全量回归，结果为 **815 passed**。
+- 本次文档同步前重新执行了与 campaign/config 收口直接相关的定向回归：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_config.py tests/test_campaign_api.py tests/test_campaign_service.py -q
+```
+
+- 结果：**14 passed**
 
 ### Frontend 测试
 
@@ -72,7 +86,24 @@ npm test
 ```
 
 - 本轮已真实执行 `npm test`，前端全量回归结果为 **175 passed**。
-- 本轮也已真实执行 `npm run build`，结果通过。
+- 本次文档同步前重新执行了与本轮前端文档变更直接相关的定向回归：
+
+```bash
+cd frontend
+npm test -- --run src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx
+```
+
+- 结果：
+  - `vitest`：**12 passed**
+- 本次文档同步还重新执行了：
+
+```bash
+cd frontend
+npm run build
+```
+
+- 结果：
+  - 当前失败；错误集中在 `ResultView.tsx / ResultView.test.tsx / SimulationView.test.tsx` 的 TypeScript 类型检查，因此这里不再继续把 build 写成“通过”
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -82,8 +113,10 @@ npm test
   - Theater 顶部会显示“当前截取目标”，方便区分 `Panel` 和 `Canvas`。
   - DOM 截图会在 `html2canvas` 遇到 `oklch()` 解析失败时自动回退到颜色归一化 + `foreignObject SVG` 路径，`panel / canvas / modal` 三模式都可返回图片。
   - `SimulationView` 额外暴露 `window.capture_game_screenshot(mode)`，黑盒客户端可显式请求 `panel|canvas|modal`。
+  - `SimulationView` 的自动化摘要现还会带 `page.controls.capture_result_kind`，可直接区分 `gif` 与 `gif_fallback_png`。
   - 下载前会按文件扩展名归一化成标准 `image/png` / `image/gif`，减少“文件下好了但系统不认”的情况。
   - 分享文案现在会在前端补一层题材档案前缀；如需复测分享链路，优先从结果页的 `📱 生成文案` 入口进入。
+  - `ResultView` 的 `archive_summary` 现还会输出 `profile_id / profile_resonance / completed_daily_challenge`，方便核对 backend summary 兜底是否生效。
   - 场景主题对齐规则现已收敛：`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，当前 Theater 场景池已扩到 30 个主题，补上 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体；`generic` 现有独立主题 `switchboard_forum / 轮值议堂`，并可命中 `switchboard_forum_variant`。
   - 固定回归输入集已落盘：
     - `frontend/output/e2e/sample_matrix.json`
@@ -102,19 +135,29 @@ npm test
   - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
   - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/<DIR>`
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
+  - `capture-modes` case 现在会额外落盘 `predictionModalBytes / gameplayModalBytes`
   - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
   - 若 `sample_matrix.json` 里的历史 `scenario_id` 缺失，suite 会按 theme/runtime fallback 题面自动重建场景，而不是直接失败
   - 若历史样本的 `scene_theme` 已与当前 `select_scene(question)` 漂移，matrix 也会自动 runtime fallback 重建
+  - `replay` corner case 现在会等到 `playback_mode = replay` 且 `theater_ready = true` 才判定恢复完成
   - `generic` matrix smoke 已可在无旧 DB 快照时依赖 runtime fallback 重跑
   - 当前 Track C 主工件目录：
     - `frontend/output/e2e/20260317-track-c/matrix/`
     - `frontend/output/e2e/20260317-track-c/corners/`
     - `frontend/output/e2e/20260317-track-c/mobile/`
     - `frontend/output/e2e/20260317-track-c/variants/`
-  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/20260318-post-b2-full/result.json`
+  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/20260318-post-db-path-fix-full/result.json`
+  - ResultView backend summary smoke 工件：`frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - 如需在长时间实现过程中持续盯进度，可用心跳脚本：
+
+```bash
+node scripts/codex-heartbeat.mjs --interval 30 --label implement-tail --log-file /tmp/upgrade-test-heartbeat.log
+```
+
+  - 该脚本会定时汇总当前 `git status`、最新 `frontend/output/e2e/**/result.json` 与 `progress.md` 最新段落；不带 `--interval` 时可单次输出，也支持 `--json`。
 
 ### 前端本地玩法状态
 

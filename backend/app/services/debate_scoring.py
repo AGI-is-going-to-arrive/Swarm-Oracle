@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 
 from app.models import DebatePhase, DebateSide
+from app.services.debate_prompts import infer_debate_profile
 
 DEBATE_DIMENSIONS = ("coherence", "evidence", "adaptability", "impact")
 SIDE_KEYS = ("proposition", "opposition")
@@ -28,6 +29,15 @@ _RISK_RE = re.compile(
 _RUPTURE_RE = re.compile(
     r"war|collapse|revolution|ban|purge|终结|崩溃|革命|禁令|清洗"
 )
+
+_PROFILE_DIMENSION_BIAS: dict[str, dict[str, int]] = {
+    "law": {"coherence": 1, "evidence": 2, "adaptability": 0, "impact": 0},
+    "governance": {"coherence": 1, "evidence": 0, "adaptability": 1, "impact": 0},
+    "trade": {"coherence": 0, "evidence": 0, "adaptability": 1, "impact": 1},
+    "faith": {"coherence": 1, "evidence": 0, "adaptability": 0, "impact": 1},
+    "ecology": {"coherence": 0, "evidence": 1, "adaptability": 0, "impact": 1},
+    "war": {"coherence": 0, "evidence": 0, "adaptability": 1, "impact": 2},
+}
 
 
 @dataclass(frozen=True)
@@ -69,13 +79,27 @@ def _dimension_bias(question: str, dimension: str) -> int:
     return structural_bias
 
 
+def _profile_dimension_bias(profile_id: str, question: str, dimension: str) -> int:
+    upside, risk = _question_signal(question)
+    signal = 1 if upside > risk else -1 if risk > upside else 0
+    weight = _PROFILE_DIMENSION_BIAS.get(profile_id, {}).get(dimension, 0)
+    if signal == 0 or weight == 0:
+        return 0
+    return signal * weight
+
+
 def build_debate_plan(question: str) -> DebatePlan:
+    profile_id = infer_debate_profile(question)
     breakdown: dict[str, dict[str, int]] = {}
     totals = {"proposition": 0, "opposition": 0}
 
     for dimension in DEBATE_DIMENSIONS:
         base = 3
-        swing = _stable_int(f"{question}:{dimension}:swing", -1, 1) + _dimension_bias(question, dimension)
+        swing = (
+            _stable_int(f"{question}:{dimension}:swing", -1, 1)
+            + _dimension_bias(question, dimension)
+            + _profile_dimension_bias(profile_id, question, dimension)
+        )
         proposition = _clamp(base + max(swing, 0), 1, 5)
         opposition = _clamp(base + max(-swing, 0), 1, 5)
         if proposition == opposition:
@@ -104,9 +128,14 @@ def build_debate_plan(question: str) -> DebatePlan:
     winner = "proposition" if score["proposition"] > score["opposition"] else "opposition"
     margin = abs(score["proposition"] - score["opposition"])
 
+    upside, risk = _question_signal(question)
     if margin <= 5:
         verdict_tone = "balance"
-    elif _RUPTURE_RE.search(question.lower()) or (winner == "proposition" and margin >= 15):
+    elif (
+        _RUPTURE_RE.search(question.lower())
+        or (profile_id in {"war", "ecology"} and risk >= upside and margin >= 10)
+        or (winner == "proposition" and margin >= 15)
+    ):
         verdict_tone = "rupture"
     else:
         verdict_tone = "order"

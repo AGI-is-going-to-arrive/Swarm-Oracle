@@ -11,12 +11,14 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const cleanedUp = useRef(false);
+  const connectTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
 
   const connect = useCallback(() => {
     if (!debateId || !ready) return;
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
 
+    connectTimerRef.current = null;
     cleanedUp.current = false;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws/debate/${debateId}`);
@@ -70,14 +72,17 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       wsRef.current = null;
-      if (!cleanedUp.current && reconnectCount.current < MAX_RECONNECTS) {
+      if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
         const delay = Math.min(
           BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1),
           MAX_RECONNECT_DELAY,
         );
+        if (reconnectTimerRef.current) {
+          window.clearTimeout(reconnectTimerRef.current);
+        }
         reconnectTimerRef.current = window.setTimeout(connect, delay);
       }
     };
@@ -89,11 +94,16 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
   }, [debateId, ready]);
 
   useEffect(() => {
-    window.setTimeout(connect, 0);
+    connectTimerRef.current = window.setTimeout(connect, 0);
     return () => {
       cleanedUp.current = true;
+      if (connectTimerRef.current) {
+        window.clearTimeout(connectTimerRef.current);
+        connectTimerRef.current = null;
+      }
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
       if (wsRef.current) {
         wsRef.current.close(1000, 'Debate component unmounted');

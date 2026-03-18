@@ -18,6 +18,12 @@ vi.mock('react-i18next', () => ({
       if (key === 'home.campaign_next_unlock') {
         return `${options?.count} points to next unlock`;
       }
+      if (key === 'result.archive_bet_miss') {
+        return 'Bet Missed';
+      }
+      if (key === 'result.archive_resonance_aligned') {
+        return 'Direction aligned';
+      }
       return key;
     },
     i18n: { language: 'en' },
@@ -59,6 +65,7 @@ vi.mock('../api/client', () => ({
   exportScenario: vi.fn(async () => '# export'),
   scorePredictions: vi.fn(async () => ({ scored: 0 })),
   finalizeCampaign: finalizeCampaignMock,
+  getCampaignScenarioSummary: vi.fn(async () => null),
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -116,7 +123,11 @@ vi.mock('../lib/archiveSummary', () => ({
 
 vi.mock('../components/gameplayCards', () => ({
   getGameplayBadgeSrc: vi.fn(() => '/badge.png'),
-  getGameplayCardDefinition: vi.fn(() => ({ labelZh: '卡牌', labelEn: 'Card' })),
+  getGameplayCardDefinition: vi.fn((cardId: string) => (
+    cardId === 'public_hearing'
+      ? { labelZh: '公开听证', labelEn: 'Public Hearing' }
+      : { labelZh: '卡牌', labelEn: 'Card' }
+  )),
   getGameplayProfileLabel: vi.fn(() => 'Law'),
   getGameplayProfileSignatureHooks: vi.fn(() => ['Judicial review']),
   getGameplaySignatureArcState: vi.fn(() => null),
@@ -256,6 +267,72 @@ describe('ResultView campaign summary', () => {
       expect(finalizeCampaignMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
         completed_daily_challenge: true,
       }));
+    });
+  });
+
+  it('falls back to backend campaign scenario summary when local archive data is empty', async () => {
+    const emptyMeta = {
+      director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: { bets: [] },
+      archive: {
+        branchSnapshots: [],
+        keyMoments: [],
+        profileId: undefined,
+        dominantBranchTitle: 'Archive Branch',
+        dominantTone: 'order',
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'C',
+        directorStyleTag: null,
+        profileResonance: null,
+      },
+    };
+
+    const { getCampaignScenarioSummary } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue(emptyMeta);
+    vi.mocked(getCampaignScenarioSummary).mockResolvedValue({
+      scenario_id: 'scenario-1',
+      profile_id: 'law',
+      archive_grade: 'A',
+      profile_resonance: 'aligned',
+      betting_hit: false,
+      most_used_card: 'public_hearing',
+      completed_daily_challenge: true,
+      campaign_score_delta: 4,
+      finalized_at: '2026-03-18T00:00:00Z',
+    });
+    finalizeCampaignMock.mockRejectedValue(new Error('API 409: already finalized elsewhere'));
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Public Hearing')).toBeInTheDocument();
+    expect(screen.getByText('Bet Missed')).toBeInTheDocument();
+    expect(screen.getByText('A')).toBeInTheDocument();
+    expect(screen.getByText('Direction aligned')).toBeInTheDocument();
+    expect(screen.getByText('result.archive_daily_challenge')).toBeInTheDocument();
+    expect(screen.getByText('Law · result.archive_completed')).toBeInTheDocument();
+    expect(screen.queryByText('result.archive_director_points')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.archive_summary).toMatchObject({
+        archive_grade: 'A',
+        profile_id: 'law',
+        profile_resonance: 'aligned',
+        completed_daily_challenge: true,
+      });
     });
   });
 });

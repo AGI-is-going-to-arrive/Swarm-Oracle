@@ -1,15 +1,54 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DebateResultView } from './DebateResultView';
 
 const getDebateResultMock = vi.fn();
+const captureElementDataUrlMock = vi.fn();
+
+function buildPayload() {
+  return {
+    id: 'debate-1',
+    question: 'Should AI run every city?',
+    motion: 'Motion',
+    language: 'en',
+    profile_id: 'governance',
+    scene_theme: 'civic_chamber',
+    status: 'done',
+    current_phase: 'verdict',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    participants: [
+      { side: 'proposition', name: 'Proposition', role: 'Governance Vanguard' },
+      { side: 'opposition', name: 'Opposition', role: 'Governance Skeptic' },
+      { side: 'judge', name: 'Judge', role: 'Structured Arbiter' },
+    ],
+    score: { proposition: 80, opposition: 72, audience_meter: 8 },
+    turns: [],
+    available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+    result_ready: true,
+    result: {
+      winner: 'proposition',
+      verdict_tone: 'order',
+      score: { proposition: 80, opposition: 72, audience_meter: 8 },
+      breakdown: {
+        coherence: { proposition: 4, opposition: 3 },
+      },
+      best_argument: 'Best argument',
+      best_rebuttal: 'Best rebuttal',
+      judge_summary: 'Judge summary',
+      replay: [],
+    },
+    predictions: [],
+  };
+}
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en' },
+    i18n: { language: 'en', changeLanguage: vi.fn() },
   }),
 }));
 
@@ -17,42 +56,20 @@ vi.mock('../api/client', () => ({
   getDebateResult: (...args: unknown[]) => getDebateResultMock(...args),
 }));
 
+vi.mock('../hooks/useScreenCapture', () => ({
+  captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
+}));
+
 describe('DebateResultView', () => {
-  it('renders verdict and exposes automation payload', async () => {
-    getDebateResultMock.mockResolvedValue({
-      id: 'debate-1',
-      question: 'Should AI run every city?',
-      motion: 'Motion',
-      language: 'en',
-      profile_id: 'governance',
-      scene_theme: 'civic_chamber',
-      status: 'done',
-      current_phase: 'verdict',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      participants: [
-        { side: 'proposition', name: 'Proposition', role: 'Governance Vanguard' },
-        { side: 'opposition', name: 'Opposition', role: 'Governance Skeptic' },
-        { side: 'judge', name: 'Judge', role: 'Structured Arbiter' },
-      ],
-      score: { proposition: 80, opposition: 72, audience_meter: 8 },
-      turns: [],
-      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
-      result_ready: true,
-      result: {
-        winner: 'proposition',
-        verdict_tone: 'order',
-        score: { proposition: 80, opposition: 72, audience_meter: 8 },
-        breakdown: {
-          coherence: { proposition: 4, opposition: 3 },
-        },
-        best_argument: 'Best argument',
-        best_rebuttal: 'Best rebuttal',
-        judge_summary: 'Judge summary',
-        replay: [],
-      },
-      predictions: [],
-    });
+  beforeEach(() => {
+    getDebateResultMock.mockReset();
+    captureElementDataUrlMock.mockReset();
+  });
+
+  it('renders verdict and exposes automation payload plus capture hooks', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+    captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,debate');
 
     render(
       <MemoryRouter initialEntries={['/debate/debate-1/result']}>
@@ -64,11 +81,68 @@ describe('DebateResultView', () => {
 
     expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
 
+    await act(async () => {
+      await (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(48);
+    });
+
+    const noModalShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('modal');
+    expect(noModalShot).toBeNull();
+
+    const panelShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('panel');
+    expect(panelShot).toBe('data:image/png;base64,debate');
+    expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-shell', 'element');
+
+    await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
+    expect(await screen.findByText('debate.share_title')).toBeInTheDocument();
+
+    const modalShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('modal');
+    expect(modalShot).toBe('data:image/png;base64,debate');
+    expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-modal--share', 'element');
+
     await waitFor(() => {
       const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.kind).toBe('debate_result');
       expect(payload?.page?.result?.winner).toBe('proposition');
     });
+  });
+
+  it('retries result polling after API 409 and eventually renders', async () => {
+    vi.useFakeTimers();
+    getDebateResultMock
+      .mockRejectedValueOnce(new Error('API 409: Debate result is not ready yet'))
+      .mockResolvedValue(buildPayload());
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getDebateResultMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getDebateResultMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    vi.useRealTimers();
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(getDebateResultMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

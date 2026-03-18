@@ -73,6 +73,19 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert badges.status_code == 200
     assert len(badges.json()) == 3
 
+    scenario_summary = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
+    assert scenario_summary.status_code == 200
+    scenario_summary_data = scenario_summary.json()
+    assert scenario_summary_data["scenario_id"] == scenario_id
+    assert scenario_summary_data["profile_id"] == "governance"
+    assert scenario_summary_data["archive_grade"] == "S"
+    assert scenario_summary_data["profile_resonance"] == "signature"
+    assert scenario_summary_data["betting_hit"] is True
+    assert scenario_summary_data["most_used_card"] == "civilization_debate"
+    assert scenario_summary_data["completed_daily_challenge"] is True
+    assert scenario_summary_data["campaign_score_delta"] == 9
+    assert scenario_summary_data["finalized_at"] is not None
+
 
 def test_finalize_endpoint_is_idempotent(client: TestClient):
     scenario_id = _seed_completed_scenario()
@@ -160,3 +173,8 @@ def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient)
     )
     assert daily.status_code == 200
     assert daily.json()["completed"] is False
+
+
+def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
+    response = client.get("/api/campaign/scenario/missing-scenario/summary")
+    assert response.status_code == 404

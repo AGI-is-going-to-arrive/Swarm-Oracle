@@ -7,7 +7,7 @@ import type {
   InterventionPayload, InterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
-  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary,
+  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary,
 } from '../types';
 
 const BASE = '/api';
@@ -298,6 +298,12 @@ export async function getCampaignMastery(userId: string): Promise<CampaignMaster
 
 export async function getCampaignBadges(userId: string): Promise<CampaignBadge[]> {
   return request(`/campaign/profile/${userId}/badges`);
+}
+
+export async function getCampaignScenarioSummary(
+  scenarioId: string,
+): Promise<CampaignScenarioSummary> {
+  return request(`/campaign/scenario/${scenarioId}/summary`);
 }
 
 export async function getCampaignDailyChallengeStatus(

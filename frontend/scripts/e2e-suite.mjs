@@ -38,6 +38,23 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+function writeDataUrlFile(filePath, dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
+    throw new Error(`Expected a data URL for ${filePath}`);
+  }
+  const [, base64 = ""] = dataUrl.split(",", 2);
+  if (!base64) {
+    throw new Error(`Data URL for ${filePath} is missing base64 payload`);
+  }
+  fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+}
+
+function getDataUrlByteLength(dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return 0;
+  const [, base64 = ""] = dataUrl.split(",", 2);
+  return base64 ? Buffer.from(base64, "base64").length : 0;
+}
+
 function getSceneThemeMismatch(sample, resolvedScenario) {
   if (!sample.scene_theme) return null;
   if (!resolvedScenario.sceneTheme) return null;
@@ -191,12 +208,71 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+async function readTheaterHookStatus(page) {
+  return page.evaluate(() => ({
+    hasRender: typeof window.render_game_to_text === "function",
+    hasAdvance: typeof window.advanceTime === "function",
+    hasCapture: typeof window.capture_game_screenshot === "function",
+  }));
+}
+
+async function waitForCompletedReplayAutomationReady(page, timeout = 20000) {
+  const start = Date.now();
+  let lastPayload = null;
+  let lastHookStatus = null;
+
+  while (Date.now() - start < timeout) {
+    lastPayload = await readAutomation(page);
+    lastHookStatus = await readTheaterHookStatus(page);
+
+    if (
+      lastPayload?.page?.kind === "simulation"
+      && lastPayload?.simulation?.viewMode === "theater"
+      && lastPayload.page?.replay_state?.available === true
+      && lastHookStatus?.hasAdvance === true
+      && lastHookStatus?.hasCapture === true
+      && lastHookStatus?.hasRender === true
+      && typeof lastPayload?.scene?.scene === "string"
+    ) {
+      return {
+        payload: lastPayload,
+        hookStatus: lastHookStatus,
+      };
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `Timed out waiting for completed replay automation hooks; last kind=${lastPayload?.page?.kind ?? null}, viewMode=${lastPayload?.simulation?.viewMode ?? null}, scene=${JSON.stringify(lastPayload?.scene ?? null)}, replay_state=${JSON.stringify(lastPayload?.page?.replay_state ?? null)}, hooks=${JSON.stringify(lastHookStatus)}`,
+  );
+}
+
 async function advanceAutomationTime(page, ms) {
   await page.evaluate(async (deltaMs) => {
     if (typeof window.advanceTime === "function") {
       await window.advanceTime(deltaMs);
     }
   }, ms);
+}
+
+function isCompletedReplayTheaterReady(payload) {
+  if (
+    payload?.page?.kind !== "simulation"
+    || payload?.page?.replay_state?.available !== true
+  ) {
+    return false;
+  }
+
+  if (payload.page?.replay_state?.theater_ready === true) {
+    return true;
+  }
+
+  return Boolean(
+    payload.scene?.scene
+    && payload.scene.scene !== "BootScene"
+    && payload.scene.scene !== "TitleScene",
+  );
 }
 
 async function saveScreenshot(page, filePath) {
@@ -410,30 +486,19 @@ async function runReplayFlow(page, {
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    const automationReady = await waitForCompletedReplayAutomationReady(page, 20000);
     const replayStart = Date.now();
-    let payload = null;
-    while (Date.now() - replayStart < 40000) {
+    let payload = automationReady.payload;
+    while (Date.now() - replayStart < 60000) {
       await advanceAutomationTime(page, 500);
       payload = await readAutomation(page);
-      if (
-        payload?.page?.kind === "simulation"
-        && payload.page?.replay_state?.available
-        && payload.scene?.scene
-        && payload.scene.scene !== "BootScene"
-        && payload.scene.scene !== "TitleScene"
-      ) {
+      if (isCompletedReplayTheaterReady(payload)) {
         break;
       }
       await page.waitForTimeout(250);
     }
 
-    if (
-      payload?.page?.kind
-      && payload.page?.replay_state?.available
-      && payload.scene?.scene
-      && payload.scene.scene !== "BootScene"
-      && payload.scene.scene !== "TitleScene"
-    ) {
+    if (isCompletedReplayTheaterReady(payload)) {
       await advanceAutomationTime(page, 600);
       await page.waitForTimeout(1200);
       await page.evaluate(() => window.scrollTo(0, 0));
@@ -442,7 +507,7 @@ async function runReplayFlow(page, {
     }
 
     lastError = new Error(
-      `Timed out waiting for completed replay state for ${scenarioId}; last scene=${payload?.scene?.scene ?? "unknown"} (attempt ${attempt}/2)`,
+      `Timed out waiting for completed replay scene bootstrap for ${scenarioId}; theater_ready=${payload?.page?.replay_state?.theater_ready ?? null}, last scene=${payload?.scene?.scene ?? "unknown"}, hooks=${JSON.stringify(automationReady.hookStatus)} (attempt ${attempt}/2)`,
     );
     if (attempt < 2) {
       console.warn(`[replay] ${lastError.message} — retrying with a fresh page load`);
@@ -678,8 +743,11 @@ async function runReplayCornerCase(page, {
 
   const replayed = await waitForAutomation(
     page,
-    (payload) => payload.page?.replay_state?.playback_mode === "replay",
-    10000,
+    (payload) => (
+      payload.page?.replay_state?.playback_mode === "replay"
+      && payload.page?.replay_state?.theater_ready === true
+    ),
+    15000,
     "replay mode restore",
   );
   writeJson(path.join(outputDir, "replay-corner.json"), {
@@ -691,6 +759,148 @@ async function runReplayCornerCase(page, {
   return {
     skipped: skipped.page?.replay_state ?? null,
     replayed: replayed.page?.replay_state ?? null,
+  };
+}
+
+async function runCaptureModesCase(page, {
+  baseUrl,
+  outputDir,
+  question,
+}) {
+  ensureDir(outputDir);
+  const scenario = await createScenarioViaApi(baseUrl, {
+    question,
+    rounds: 1,
+    numAgents: 3,
+    visualizationEnabled: true,
+  });
+
+  await page.goto(`${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.kind === "simulation",
+    60000,
+    "capture simulation shell",
+  );
+
+  const settleStart = Date.now();
+  let simulation = null;
+  while (Date.now() - settleStart < 30000) {
+    await advanceAutomationTime(page, 500);
+    simulation = await readAutomation(page);
+    if (
+      simulation?.page?.kind === "simulation"
+      && simulation.page?.controls?.can_open_prediction
+      && simulation.page?.controls?.can_preview_gameplay_cards
+      && simulation.scene?.scene
+      && simulation.scene.scene !== "BootScene"
+      && simulation.scene.scene !== "TitleScene"
+    ) {
+      break;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  if (
+    simulation?.page?.kind !== "simulation"
+    || !simulation.page?.controls?.can_open_prediction
+    || !simulation.page?.controls?.can_preview_gameplay_cards
+    || !simulation.scene?.scene
+    || simulation.scene.scene === "BootScene"
+    || simulation.scene.scene === "TitleScene"
+  ) {
+    throw new Error(`Timed out waiting for capture-ready Theater scene for ${scenario.id}`);
+  }
+
+  const beforeOpen = await page.evaluate(async () => ({
+    panel: await window.capture_game_screenshot?.("panel") ?? null,
+    canvas: await window.capture_game_screenshot?.("canvas") ?? null,
+    modal: await window.capture_game_screenshot?.("modal") ?? null,
+    automation: window.render_game_to_text?.() ?? null,
+  }));
+
+  if (!beforeOpen.panel || !beforeOpen.canvas || beforeOpen.modal !== null) {
+    throw new Error(`Capture hooks did not return expected panel/canvas/modal values for ${scenario.id}`);
+  }
+
+  writeDataUrlFile(path.join(outputDir, "panel.png"), beforeOpen.panel);
+  writeDataUrlFile(path.join(outputDir, "canvas.png"), beforeOpen.canvas);
+
+  await page.getByRole("button", { name: /预测|predict/i }).click();
+  const predictionOpen = await waitForAutomation(
+    page,
+    (payload) => payload.page?.controls?.active_modal === "prediction",
+    10000,
+    "prediction modal for capture",
+  );
+  await advanceAutomationTime(page, 250);
+  await page.waitForTimeout(300);
+  const predictionModalShot = await page.evaluate(async () => (
+    await window.capture_game_screenshot?.("modal") ?? null
+  ));
+
+  if (!predictionModalShot) {
+    throw new Error(`Modal capture returned null after opening prediction modal for ${scenario.id}`);
+  }
+
+  writeDataUrlFile(path.join(outputDir, "prediction-modal.png"), predictionModalShot);
+  await saveScreenshot(page, path.join(outputDir, "prediction-modal-open.png"));
+  writeJson(path.join(outputDir, "prediction-modal-open.json"), predictionOpen);
+
+  await page.keyboard.press("Escape");
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.controls?.active_modal === null,
+    10000,
+    "prediction modal close",
+  );
+
+  await page.getByRole("button", { name: /Gameplay Cards|玩法卡/i }).click();
+  const gameplayOpen = await waitForAutomation(
+    page,
+    (payload) => payload.page?.controls?.active_modal === "gameplay_cards",
+    10000,
+    "gameplay cards modal for capture",
+  );
+  await advanceAutomationTime(page, 250);
+  await page.waitForTimeout(300);
+  const gameplayModalShot = await page.evaluate(async () => (
+    await window.capture_game_screenshot?.("modal") ?? null
+  ));
+
+  if (!gameplayModalShot) {
+    throw new Error(`Modal capture returned null after opening gameplay cards modal for ${scenario.id}`);
+  }
+
+  writeDataUrlFile(path.join(outputDir, "gameplay-modal.png"), gameplayModalShot);
+  await saveScreenshot(page, path.join(outputDir, "gameplay-modal-open.png"));
+  writeJson(path.join(outputDir, "gameplay-modal-open.json"), gameplayOpen);
+  await saveScreenshot(page, path.join(outputDir, "capture-ui.png"));
+  writeJson(path.join(outputDir, "capture-modes.json"), {
+    scenarioId: scenario.id,
+    beforeOpen: {
+      panelBytes: getDataUrlByteLength(beforeOpen.panel),
+      canvasBytes: getDataUrlByteLength(beforeOpen.canvas),
+      modal: beforeOpen.modal,
+      automation: beforeOpen.automation ? JSON.parse(beforeOpen.automation) : null,
+    },
+    predictionModal: {
+      modalBytes: getDataUrlByteLength(predictionModalShot),
+      controls: predictionOpen.page?.controls ?? null,
+    },
+    gameplayModal: {
+      modalBytes: getDataUrlByteLength(gameplayModalShot),
+      controls: gameplayOpen.page?.controls ?? null,
+    },
+  });
+
+  return {
+    scenarioId: scenario.id,
+    panelBytes: getDataUrlByteLength(beforeOpen.panel),
+    canvasBytes: getDataUrlByteLength(beforeOpen.canvas),
+    predictionModalBytes: getDataUrlByteLength(predictionModalShot),
+    gameplayModalBytes: getDataUrlByteLength(gameplayModalShot),
+    activeModal: gameplayOpen.page?.controls?.active_modal ?? null,
   };
 }
 
@@ -1155,7 +1365,7 @@ async function runCornersSuite(args) {
     });
     const lawShareSample = await resolveMatrixScenario(args.baseUrl, {
       theme: "law",
-      scenario_id: "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+      scenario_id: "ded5cdd5-251d-4606-8ee3-8e1418d31cbb",
     });
 
     cases.branch_prediction = await runPredictionVariant(page, {
@@ -1204,6 +1414,12 @@ async function runCornersSuite(args) {
       baseUrl: args.baseUrl,
       scenarioId: governanceReplaySample.scenarioId,
       outputDir: path.join(outputDir, "replay-skip-switch"),
+    });
+
+    cases.capture_modes = await runCaptureModesCase(page, {
+      baseUrl: args.baseUrl,
+      outputDir: path.join(outputDir, "capture-modes"),
+      question: "如果算法治理城市的 Theater 推演正在进行，截图面板、画布和预测弹窗会分别呈现什么？",
     });
 
     cases.share_context = await runShareContextCase(page, {
@@ -1265,6 +1481,7 @@ async function runMobileSuite(args) {
     await saveScreenshot(page, path.join(args.outputDir, "mobile-home.png"));
 
     await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    await waitForCompletedReplayAutomationReady(page, 20000);
     let theater = await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "simulation",
@@ -1296,6 +1513,7 @@ async function runMobileSuite(args) {
       if (attempt < 2) {
         console.warn(`[mobile] scene not ready (last=${lastSceneName ?? "null"}) — retrying with fresh page load`);
         await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+        await waitForCompletedReplayAutomationReady(page, 20000);
         theater = await waitForAutomation(
           page,
           (payload) => payload.page?.kind === "simulation",

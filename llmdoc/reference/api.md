@@ -44,6 +44,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 结算单局导演生涯进度；同一 `scenario_id` 对同一导演档案重复提交为幂等返回，响应内会带 `already_finalized` | `{"user_id": "...", "user_name?": "匿名导演", "profile_id": "...", "archive_grade?": "C", "profile_resonance?": "offbeat", "betting_hit?": true, "bet_count?": 0, "most_used_card?": "...", "completed_daily_challenge?": false}` | CampaignFinalizeResponse |
+| `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单个 scenario 已落库的 campaign 摘要；供结果页在本地 `scenarioMeta` 缺失时做跨设备兜底 | — | CampaignScenarioSummaryResponse |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
@@ -54,6 +55,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `404 Not Found`：目标场景不存在，或命中旧日志但关联导演档案不存在。
 > - `409 Conflict`：该场景已被另一位导演档案结算。
 > - `400 Bad Request`：场景尚未完成，或 `user_id / profile_id / archive_grade / profile_resonance / bet_count` 等请求字段不合法。
+>
+> `GET /api/campaign/scenario/{scenario_id}/summary` 的边界行为：
+> - `200 OK`：该 scenario 已有 finalized campaign log。
+> - `404 Not Found`：该 scenario 还没有 campaign log，或对应摘要不存在。
 >
 > `GET /api/campaign/profile/{user_id}`、`/mastery`、`/badges`、`/daily-status` 在导演档案不存在时不再返回 `404 Not Found`：
 > - `profile` 返回空摘要（`total_runs = 0`）
@@ -79,7 +84,18 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `profile_resonance`
 > - `campaign_score_delta`
 >
-> 当前前端 `ResultView` 会把 `finalize` 的 `404 / 409` 识别为边界态，只显示提示文案，不阻断主结果页展示；其他 `finalize` 错误仍按普通错误展示。
+> `CampaignScenarioSummaryResponse` 当前包含：
+> - `scenario_id`
+> - `profile_id`
+> - `archive_grade`
+> - `profile_resonance`
+> - `betting_hit`
+> - `most_used_card`
+> - `completed_daily_challenge`
+> - `campaign_score_delta`
+> - `finalized_at`
+>
+> 当前前端 `ResultView` 会并行请求 `summary`；当本地 `scenarioMeta.archive` 缺字段时，会用它兜底 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`。`finalize` 的 `404 / 409` 仍会被识别为边界态，只显示提示文案，不阻断主结果页展示；其他 `finalize` 错误按普通错误展示。
 
 ### Health & Observability
 

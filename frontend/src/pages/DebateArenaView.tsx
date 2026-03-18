@@ -9,6 +9,7 @@ import { DebateScoreCard } from '../components/DebateScoreCard';
 import { DebateStageRibbon } from '../components/DebateStageRibbon';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
+  getDebateDimensionLabel,
   getDebatePhaseLabel,
   getDebateSideLabel,
 } from '../lib/debateLabels';
@@ -40,9 +41,11 @@ export function DebateArenaView() {
   const [selectedPhase, setSelectedPhase] = useState<string>('opening');
   const [showBetModal, setShowBetModal] = useState(false);
   const [betSubmitting, setBetSubmitting] = useState(false);
+  const [betModalState, setBetModalState] = useState<Record<string, unknown> | null>(null);
   const [betNotice, setBetNotice] = useState('');
   const [captureNotice, setCaptureNotice] = useState('');
   const [autoReveal, setAutoReveal] = useState(true);
+  const [phaseLocked, setPhaseLocked] = useState(false);
   const revealRef = useRef(0);
 
   const { status: captureStatus, captureScreenshot } = useScreenCapture({
@@ -53,6 +56,14 @@ export function DebateArenaView() {
     if (!id) return;
     void loadDebate(id);
   }, [id, loadDebate]);
+
+  useEffect(() => {
+    if (!debate?.language) return;
+    const targetLanguage = debate.language === 'zh' ? 'zh' : 'en';
+    if (!i18n.language.startsWith(targetLanguage)) {
+      void i18n.changeLanguage(targetLanguage);
+    }
+  }, [debate?.language, i18n]);
 
   useDebateWS(id, Boolean(id));
 
@@ -94,20 +105,86 @@ export function DebateArenaView() {
   );
 
   useEffect(() => {
-    setSelectedPhase(currentPhase);
-  }, [currentPhase]);
+    if (!phaseLocked) {
+      setSelectedPhase(currentPhase);
+    }
+  }, [currentPhase, phaseLocked]);
+
+  const currentPhaseIndex = useMemo(
+    () => ['opening', 'crossfire', 'rebuttal', 'closing', 'verdict'].indexOf(currentPhase),
+    [currentPhase],
+  );
+  const canBetNow = Boolean(debate && !debate.result_ready && currentPhaseIndex < 3);
+
+  const phaseScoreDelta = useMemo(
+    () => stageTurns.reduce(
+      (acc, turn) => ({
+        proposition: acc.proposition + (turn.score_delta?.proposition ?? 0),
+        opposition: acc.opposition + (turn.score_delta?.opposition ?? 0),
+      }),
+      { proposition: 0, opposition: 0 },
+    ),
+    [stageTurns],
+  );
+
+  const watchedDimension = useMemo(() => {
+    switch (selectedPhase) {
+      case 'opening':
+        return 'coherence';
+      case 'crossfire':
+        return 'evidence';
+      case 'rebuttal':
+        return 'adaptability';
+      case 'closing':
+      case 'verdict':
+        return 'impact';
+      default:
+        return 'coherence';
+    }
+  }, [selectedPhase]);
+
+  const clashCopy = useMemo(() => t(`debate.clash_${selectedPhase}`), [selectedPhase, t]);
+  const phaseLeaderLabel = useMemo(() => {
+    if (phaseScoreDelta.proposition === phaseScoreDelta.opposition) {
+      return t('debate.phase_balance');
+    }
+    return phaseScoreDelta.proposition > phaseScoreDelta.opposition
+      ? getDebateSideLabel(t, 'proposition')
+      : getDebateSideLabel(t, 'opposition');
+  }, [phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
+  const phasePressureCopy = useMemo(() => {
+    const swing = Math.abs(phaseScoreDelta.proposition - phaseScoreDelta.opposition);
+    if (swing === 0) {
+      return t('debate.pressure_even');
+    }
+    return t('debate.pressure_edge', { side: phaseLeaderLabel, value: swing });
+  }, [phaseLeaderLabel, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
+  const betWindowLabel = canBetNow ? t('debate.bet_window_open') : t('debate.bet_window_locked');
 
   const themeLabel = getTheaterThemeLabel(debate?.scene_theme, isZh);
   const themeAsset = debate?.scene_theme ? getThemeAssetPath(debate.scene_theme as never) : null;
 
   useEffect(() => {
+    if (!canBetNow && showBetModal) {
+      setShowBetModal(false);
+    }
+  }, [canBetNow, showBetModal]);
+
+  useEffect(() => {
     const win = window as AutomationWindow;
+    const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
+      if (mode === 'modal') {
+        if (!showBetModal) return null;
+        return captureElementDataUrl('.debate-modal', 'element');
+      }
+      return captureElementDataUrl('.debate-shell', 'element');
+    };
     win.advanceTime = async (ms: number) => {
       const steps = Math.max(1, Math.floor(ms / REVEAL_INTERVAL_MS));
       setAutoReveal(false);
       setRevealCount((current) => Math.min(debate?.turns.length ?? current, current + steps));
     };
-    win.capture_game_screenshot = async () => captureElementDataUrl('.debate-shell', 'element');
+    win.capture_game_screenshot = capture;
     win.render_game_to_text = () => stringifyAutomationPayload(
       {
         question: debate?.question ?? null,
@@ -131,11 +208,19 @@ export function DebateArenaView() {
         route: window.location.pathname,
         kind: 'debate',
         phase: currentPhase,
+        selected_phase: selectedPhase,
+        is_phase_locked: phaseLocked,
+        unlocked_phases: unlockedPhases,
         controls: {
-          can_open_prediction: !debate?.result_ready,
+          can_open_prediction: canBetNow,
           can_view_result: Boolean(debate?.result_ready),
           can_capture_screenshot: captureStatus === 'idle',
           capture_mode: 'panel',
+          active_modal: showBetModal ? 'bet' : null,
+          show_bet_modal: showBetModal,
+          bet_submitting: betSubmitting,
+          auto_reveal: autoReveal,
+          modal_state: betModalState,
         },
         debate: debate ? {
           motion: debate.motion,
@@ -143,6 +228,10 @@ export function DebateArenaView() {
           opposition: { score: debate.score.opposition },
           judge: { summary_ready: debate.result_ready },
           visible_quotes: visibleTurns.slice(-3).map((turn) => turn.content),
+          bet_window_open: canBetNow,
+          stage_turn_count: stageTurns.length,
+          phase_delta: phaseScoreDelta,
+          watched_dimension: watchedDimension,
         } : null,
       },
     );
@@ -150,16 +239,36 @@ export function DebateArenaView() {
     return () => {
       if (win.render_game_to_text) delete win.render_game_to_text;
       if (win.advanceTime) delete win.advanceTime;
-      if (win.capture_game_screenshot) delete win.capture_game_screenshot;
+      if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [captureStatus, currentPhase, debate, error, revealCount, status, visibleTurns]);
+  }, [
+    autoReveal,
+    betSubmitting,
+    betModalState,
+    canBetNow,
+    captureStatus,
+    currentPhase,
+    debate,
+    error,
+    phaseLocked,
+    phaseScoreDelta,
+    revealCount,
+    selectedPhase,
+    showBetModal,
+    stageTurns.length,
+    status,
+    t,
+    unlockedPhases,
+    visibleTurns,
+    watchedDimension,
+  ]);
 
   const handleBetSubmit = async (payload: {
     kind: 'winner' | 'verdict_tone';
     targetValue: string;
     confidence: number;
   }) => {
-    if (!id) return;
+    if (!id || !canBetNow) return;
     setBetSubmitting(true);
     try {
       await predictDebate(id, {
@@ -212,9 +321,12 @@ export function DebateArenaView() {
             </div>
 
             <DebateStageRibbon
-              activePhase={currentPhase}
+              activePhase={selectedPhase}
               unlockedPhases={unlockedPhases}
-              onSelect={(phase) => setSelectedPhase(phase)}
+              onSelect={(phase) => {
+                setSelectedPhase(phase);
+                setPhaseLocked(phase !== currentPhase);
+              }}
             />
 
             <div className="debate-hero__bottom">
@@ -229,7 +341,12 @@ export function DebateArenaView() {
                   {t('debate.back_home')}
                 </button>
                 {!debate?.result_ready && (
-                  <button type="button" className="btn btn-ghost" onClick={() => setShowBetModal(true)}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setShowBetModal(true)}
+                    disabled={!canBetNow}
+                  >
                     {t('debate.open_bet')}
                   </button>
                 )}
@@ -249,6 +366,22 @@ export function DebateArenaView() {
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         {error && <p className="debate-modal__error">{error}</p>}
+        <div className="debate-mobile-rail" aria-label={t('debate.mobile_primary_actions')}>
+          {!debate?.result_ready ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowBetModal(true)}
+              disabled={!canBetNow}
+            >
+              {t('debate.open_bet')}
+            </button>
+          ) : (
+            <button type="button" className="btn btn-primary" onClick={() => navigate(`/debate/${id}/result`)}>
+              {t('debate.view_result')}
+            </button>
+          )}
+        </div>
 
         <div className="debate-layout">
           <div className="debate-main">
@@ -297,13 +430,26 @@ export function DebateArenaView() {
                 <h2>{t('debate.feed_title')}</h2>
                 <div className="debate-controls">
                   <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
-                    {t('debate.auto_reveal')}: {autoReveal ? 'On' : 'Off'}
+                    {t('debate.auto_reveal')}: {t(autoReveal ? 'debate.state_on' : 'debate.state_off')}
                   </button>
+                  {phaseLocked && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setPhaseLocked(false);
+                        setSelectedPhase(currentPhase);
+                      }}
+                    >
+                      {t('debate.return_to_live')}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-ghost"
                     onClick={() => {
                       setAutoReveal(false);
+                      setPhaseLocked(false);
                       setRevealCount(debate?.turns.length ?? 0);
                       setSelectedPhase('verdict');
                     }}
@@ -335,6 +481,40 @@ export function DebateArenaView() {
           <aside className="debate-side">
             <section className="debate-panel">
               <div className="debate-panel__header">
+                <h3>{t('debate.strategy_title')}</h3>
+                <span className="debate-phase-chip">{betWindowLabel}</span>
+              </div>
+              <div className="debate-panel__body">
+                <div className="debate-turn-list">
+                  <article className="debate-turn-card">
+                    <div className="debate-turn-card__meta">
+                      <strong>{t('debate.strategy_current_clash')}</strong>
+                      <span>{getDebatePhaseLabel(t, selectedPhase)}</span>
+                    </div>
+                    <p className="debate-rule-copy">{clashCopy}</p>
+                  </article>
+                  <article className="debate-turn-card">
+                    <div className="debate-turn-card__meta">
+                      <strong>{t('debate.strategy_pressure')}</strong>
+                      <span>{phaseLeaderLabel}</span>
+                    </div>
+                    <p className="debate-rule-copy">{phasePressureCopy}</p>
+                  </article>
+                  <article className="debate-turn-card">
+                    <div className="debate-turn-card__meta">
+                      <strong>{t('debate.strategy_watchlist')}</strong>
+                      <span>{getDebateDimensionLabel(t, watchedDimension)}</span>
+                    </div>
+                    <p className="debate-rule-copy">
+                      {canBetNow ? t('debate.watchlist_open') : t('debate.watchlist_locked')}
+                    </p>
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <section className="debate-panel">
+              <div className="debate-panel__header">
                 <h3>{t('debate.rules_title')}</h3>
               </div>
               <div className="debate-panel__body">
@@ -350,6 +530,7 @@ export function DebateArenaView() {
           loading={betSubmitting}
           onClose={() => setShowBetModal(false)}
           onSubmit={handleBetSubmit}
+          onAutomationStateChange={setBetModalState}
         />
       )}
     </div>

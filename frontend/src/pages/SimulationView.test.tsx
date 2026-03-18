@@ -12,6 +12,8 @@ const captureScreenshotMock = vi.fn();
 const captureGIFMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
+let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
+let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
 
 const mockStore = {
   scenario: {
@@ -83,7 +85,8 @@ vi.mock('../hooks/useScreenCapture', () => ({
   captureCompositeElementDataUrl: (...args: unknown[]) => captureCompositeElementDataUrlMock(...args),
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
   useScreenCapture: () => ({
-    status: 'idle',
+    status: mockCaptureStatus,
+    lastCaptureKind: mockLastCaptureKind,
     captureScreenshot: captureScreenshotMock,
     captureGIF: captureGIFMock,
   }),
@@ -158,6 +161,8 @@ describe('SimulationView replay automation output', () => {
     captureGIFMock.mockReset();
     captureCompositeElementDataUrlMock.mockReset();
     captureElementDataUrlMock.mockReset();
+    mockCaptureStatus = 'idle';
+    mockLastCaptureKind = null;
     captureCompositeElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     mockStore.status = 'done';
@@ -219,6 +224,7 @@ describe('SimulationView replay automation output', () => {
       expect(payload?.page?.controls?.can_capture_modal).toBe(false);
       expect(payload?.page?.replay_state).toMatchObject({
         enabled: true,
+        theater_ready: true,
         phase: 'complete',
         playback_mode: 'replay',
         selected_branch_id: 'b1',
@@ -242,6 +248,31 @@ describe('SimulationView replay automation output', () => {
 
     expect(await screen.findByTestId('timeline-compact')).toBeInTheDocument();
     expect(screen.getByText('timeline-result-marker')).toBeInTheDocument();
+  });
+
+  it('shows explicit fallback feedback when GIF recording degrades to PNG', async () => {
+    mockCaptureStatus = 'done';
+    mockLastCaptureKind = 'gif_fallback_png';
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText((_, element) => (
+      element?.classList.contains('capture-status')
+      && (element.textContent?.includes('game.gif_fallback_saved') ?? false)
+    ))).toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.capture_status).toBe('done');
+      expect(payload?.page?.controls?.capture_result_kind).toBe('gif_fallback_png');
+    });
   });
 
   it('updates replay_state for descendant branch replays with ancestor context', async () => {

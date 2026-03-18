@@ -20,6 +20,7 @@ export interface AutomationSceneState {
 export interface AutomationReplayState {
   available?: boolean;
   enabled?: boolean;
+  theater_ready?: boolean;
   phase?: 'idle' | 'playing' | 'settled' | 'complete';
   playback_mode: 'replay' | 'skip';
   replay_speed: number;

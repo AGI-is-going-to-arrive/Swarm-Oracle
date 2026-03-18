@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -61,7 +62,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       key === 'debate.audience_meter' ? `Audience meter ${options?.value}` : key,
-    i18n: { language: 'en' },
+    i18n: { language: 'en', changeLanguage: vi.fn() },
   }),
 }));
 
@@ -105,7 +106,7 @@ describe('DebateArenaView', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('button', { name: 'debate.view_result' })).toBeInTheDocument();
+    expect((await screen.findAllByRole('button', { name: 'debate.view_result' })).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(3000);
@@ -117,5 +118,39 @@ describe('DebateArenaView', () => {
       expect(payload?.page?.kind).toBe('debate');
       expect(payload?.page?.debate?.visible_quotes).toContain('Verdict issued.');
     });
+  });
+
+  it('captures panel and bet modal surfaces through automation hook', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'debate.place_bet' })).toBeInTheDocument();
+
+    const panelShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('panel');
+    expect(panelShot).toBe('data:image/png;base64,fake');
+    expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-shell', 'element');
+
+    const noModalShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('modal');
+    expect(noModalShot).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'debate.place_bet' }));
+    expect(await screen.findByText('debate.bet_title')).toBeInTheDocument();
+
+    const modalShot = await (window as Window & {
+      capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
+    }).capture_game_screenshot?.('modal');
+    expect(modalShot).toBe('data:image/png;base64,fake');
+    expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-modal', 'element');
   });
 });

@@ -2,6 +2,8 @@
 
 所有配置通过环境变量或 `.env` 文件加载（pydantic-settings）。
 
+> 本地后端默认读取 `backend/.env`。`docker compose` 仍使用仓库根目录 `.env`。
+
 ## LLM 配置
 
 | 变量 | 类型 | 默认值 | 描述 |
@@ -39,8 +41,14 @@
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `DATABASE_URL` | str | `sqlite:///./swarmoracle.db` | SQLite数据库路径 |
-| `CHROMA_PERSIST_DIR` | str | `./chroma_data` | ChromaDB持久化目录 |
+| `DATABASE_URL` | str | `sqlite:///<backend-root>/swarmoracle.db` | SQLite 数据库路径；默认锚到 `backend/` 根目录 |
+| `CHROMA_PERSIST_DIR` | str | `<backend-root>/chroma_data` | ChromaDB 持久化目录；默认锚到 `backend/` 根目录 |
+
+> 当前实现会把相对本地路径统一解析到 `backend/` 根目录：
+> - `DATABASE_URL=sqlite:///./relative-dev.db` → `sqlite:///<backend-root>/relative-dev.db`
+> - `CHROMA_PERSIST_DIR=./relative-chroma` → `<backend-root>/relative-chroma`
+>
+> 这样本地直接在 repo root、`backend/` 目录，或通过 `uvicorn --app-dir ...` 启动时，都不会再因为 cwd 不同命中不同 SQLite / Chroma 数据目录。`test_config.py` 已覆盖这条行为。
 
 ## 服务器
 

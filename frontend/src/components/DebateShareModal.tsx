@@ -1,21 +1,42 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { buildDebateShareCopy, type DebateShareContext, type DebateSharePlatform } from '../lib/debateShare';
+import {
+  buildDebateShareCopy,
+  DEBATE_SHARE_PLATFORM_META,
+  type DebateShareContext,
+  type DebateSharePlatform,
+} from '../lib/debateShare';
 
 const PLATFORMS: DebateSharePlatform[] = ['xiaohongshu', 'weibo', 'zhihu', 'reddit', 'x'];
 
 interface DebateShareModalProps {
   context: DebateShareContext;
   onClose: () => void;
+  onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
 
-export function DebateShareModal({ context, onClose }: DebateShareModalProps) {
+export function DebateShareModal({ context, onClose, onAutomationStateChange }: DebateShareModalProps) {
   const { t } = useTranslation();
   const [platform, setPlatform] = useState<DebateSharePlatform>('xiaohongshu');
   const [copied, setCopied] = useState(false);
 
   const copy = buildDebateShareCopy(platform, context, t);
+
+  useEffect(() => {
+    onAutomationStateChange?.({
+      kind: 'debate_share_modal',
+      active_platform: platform,
+      copied,
+      has_copy: Boolean(copy),
+      copy_length: copy.length,
+      available_platforms: PLATFORMS,
+    });
+
+    return () => {
+      onAutomationStateChange?.(null);
+    };
+  }, [copied, copy, onAutomationStateChange, platform]);
 
   const handleCopy = async () => {
     try {
@@ -46,7 +67,7 @@ export function DebateShareModal({ context, onClose }: DebateShareModalProps) {
                 className={`mode-btn ${platform === option ? 'mode-btn--active' : ''}`}
                 onClick={() => setPlatform(option)}
               >
-                {t(`share.platform_${option}`)}
+                {DEBATE_SHARE_PLATFORM_META[option].icon} {t(DEBATE_SHARE_PLATFORM_META[option].labelKey)}
               </button>
             ))}
           </div>

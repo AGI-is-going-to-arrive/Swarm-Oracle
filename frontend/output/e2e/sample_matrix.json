@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-03-17",
+  "generated_at": "2026-03-18",
   "base_url": "http://127.0.0.1:18928",
   "samples": [
     {
@@ -20,10 +20,10 @@
     {
       "theme": "law",
       "question": "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？",
-      "scenario_id": "1e4eb90d-95d5-4851-8141-c571dc0dd9ab",
+      "scenario_id": "ded5cdd5-251d-4606-8ee3-8e1418d31cbb",
       "scene_theme": "law_court",
       "profile_label_zh": "法律红线",
-      "completed_branch_count": 15,
+      "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
         "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-replay-proof/state-0.json",
@@ -35,10 +35,10 @@
     {
       "theme": "trade",
       "question": "如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？",
-      "scenario_id": "5be95c28-b726-4ba8-a74f-482f637d128c",
+      "scenario_id": "1b822c42-d290-4a2c-a5e6-978b57b20a6e",
       "scene_theme": "trade_harbor",
       "profile_label_zh": "贸易绞盘",
-      "completed_branch_count": 15,
+      "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
         "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-replay-proof/state-0.json",
@@ -50,10 +50,10 @@
     {
       "theme": "ecology",
       "question": "如果跨大陆淡水供应在十年内枯竭，会发生什么？",
-      "scenario_id": "fda52830-e300-4a4b-840f-75e4fa003f4c",
+      "scenario_id": "5060e360-44dc-4aec-80cd-aef5c16f8551",
       "scene_theme": "ecology_wasteland",
       "profile_label_zh": "生态阈值",
-      "completed_branch_count": 15,
+      "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
         "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-replay-proof/state-0.json",
@@ -65,10 +65,10 @@
     {
       "theme": "war",
       "question": "如果世界大战在高度自动化军备时代再次爆发？",
-      "scenario_id": "f867f9e0-f4ca-4cdb-976e-493614ae2248",
+      "scenario_id": "a4838aca-0a0b-45c4-b8e6-2178a67389f9",
       "scene_theme": "war_command",
       "profile_label_zh": "战争抉择",
-      "completed_branch_count": 13,
+      "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
         "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-replay-proof/state-0.json",
@@ -80,10 +80,10 @@
     {
       "theme": "faith",
       "question": "如果一则神谕成为整个奇幻王国唯一合法的统治依据，并引发异端审判、祭司联盟分裂与圣谕改写，会发生什么？",
-      "scenario_id": "b87e3668-3189-4e80-8f2a-03ca016f659d",
+      "scenario_id": "d93041cf-c639-42eb-965c-767669e3be3f",
       "scene_theme": "faith_temple",
       "profile_label_zh": "神权号角",
-      "completed_branch_count": 15,
+      "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
         "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-replay-proof/state-0.json",

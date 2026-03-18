@@ -13,6 +13,7 @@ from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_campaign_profile_summary,
+    get_scenario_campaign_summary,
     list_campaign_badge_summaries,
     list_campaign_mastery_summaries,
 )
@@ -147,6 +148,18 @@ class CampaignFinalizeResponse(BaseModel):
     newly_unlocked_badges: list[CampaignBadgeResponse]
 
 
+class CampaignScenarioSummaryResponse(BaseModel):
+    scenario_id: str
+    profile_id: str
+    archive_grade: str
+    profile_resonance: str
+    betting_hit: bool | None = None
+    most_used_card: str | None = None
+    completed_daily_challenge: bool
+    campaign_score_delta: int
+    finalized_at: str | None = None
+
+
 @router.get("/profile/{user_id}", response_model=CampaignProfileResponse)
 async def get_profile(user_id: str) -> CampaignProfileResponse:
     profile = get_campaign_profile_summary(user_id)
@@ -163,6 +176,19 @@ async def get_mastery(user_id: str) -> list[CampaignMasteryResponse]:
 async def get_badges(user_id: str) -> list[CampaignBadgeResponse]:
     badges = list_campaign_badge_summaries(user_id)
     return [CampaignBadgeResponse(**badge) for badge in badges]
+
+
+@router.get(
+    "/scenario/{scenario_id}/summary",
+    response_model=CampaignScenarioSummaryResponse,
+)
+async def get_scenario_summary(scenario_id: str) -> CampaignScenarioSummaryResponse:
+    try:
+        summary = get_scenario_campaign_summary(scenario_id)
+    except CampaignNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    return CampaignScenarioSummaryResponse(**summary)
 
 
 @router.get(

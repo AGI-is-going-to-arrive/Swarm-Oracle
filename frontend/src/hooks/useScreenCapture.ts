@@ -8,6 +8,7 @@ import { useCallback, useRef, useState } from 'react';
 import gifWorkerUrl from 'gif.js/dist/gif.worker.js?url';
 
 export type CaptureStatus = 'idle' | 'capturing' | 'recording' | 'done' | 'error';
+export type CaptureResultKind = 'screenshot_png' | 'gif' | 'gif_fallback_png';
 
 interface UseScreenCaptureOptions {
   /** Selector for the target element (default: '.theater-panel') */
@@ -32,6 +33,8 @@ interface UseScreenCaptureReturn {
   status: CaptureStatus;
   /** Last captured blob URL (screenshot or GIF) */
   blobUrl: string | null;
+  /** Last completed capture output type */
+  lastCaptureKind: CaptureResultKind | null;
   /** Capture a screenshot and trigger download */
   captureScreenshot: (options?: CaptureRequestOptions) => Promise<void>;
   /** Record a GIF and trigger download */
@@ -464,9 +467,11 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
 
   const [status, setStatus] = useState<CaptureStatus>('idle');
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [lastCaptureKind, setLastCaptureKind] = useState<CaptureResultKind | null>(null);
   const recordingRef = useRef(false);
 
   const captureScreenshot = useCallback(async (options?: CaptureRequestOptions) => {
+    setLastCaptureKind(null);
     setStatus('capturing');
     try {
       const targetSelector = options?.selector ?? selector;
@@ -484,6 +489,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
       const downloadFile = `swarmoracle_${timestamp()}.png`;
       const url = downloadBlob(await normalizeDownloadBlob(blob, downloadFile), downloadFile);
       setBlobUrl(url);
+      setLastCaptureKind('screenshot_png');
       setStatus('done');
       // Reset after 2s
       setTimeout(() => setStatus('idle'), 2000);
@@ -497,6 +503,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
   const captureGIF = useCallback(async (options?: CaptureRequestOptions) => {
     if (recordingRef.current) return;
     recordingRef.current = true;
+    setLastCaptureKind(null);
     setStatus('recording');
 
     try {
@@ -550,6 +557,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
         const downloadFile = `swarmoracle_${timestamp()}.gif`;
         const url = downloadBlob(await normalizeDownloadBlob(gifBlob, downloadFile), downloadFile);
         setBlobUrl(url);
+        setLastCaptureKind('gif');
       } catch (gifErr) {
         console.warn('[useScreenCapture] GIF render fell back to PNG frame:', gifErr);
         // GIF.js unavailable or worker/render failed — download the last frame as a fallback
@@ -557,6 +565,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
           const downloadFile = `swarmoracle_${timestamp()}_frame.png`;
           const url = downloadBlob(await normalizeDownloadBlob(frames[frames.length - 1], downloadFile), downloadFile);
           setBlobUrl(url);
+          setLastCaptureKind('gif_fallback_png');
         } else {
           setStatus('error');
           setTimeout(() => setStatus('idle'), 2000);
@@ -575,5 +584,5 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
     }
   }, [selector, gifDuration, gifFrameInterval]);
 
-  return { status, blobUrl, captureScreenshot, captureGIF };
+  return { status, blobUrl, lastCaptureKind, captureScreenshot, captureGIF };
 }

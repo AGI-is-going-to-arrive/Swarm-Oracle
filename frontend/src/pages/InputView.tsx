@@ -312,6 +312,10 @@ export function InputView() {
     setIsSubmitting(true);
     try {
       const debate = await createDebate(trimmed);
+      const targetLanguage = debate.language === 'zh' ? 'zh' : 'en';
+      if (!i18n.language.startsWith(targetLanguage)) {
+        await i18n.changeLanguage(targetLanguage);
+      }
       navigate(`/debate/${debate.id}`);
     } catch {
       setIsSubmitting(false);

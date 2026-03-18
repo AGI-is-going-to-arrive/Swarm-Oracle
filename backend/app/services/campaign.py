@@ -279,6 +279,20 @@ def _build_badge_summary(badge: DirectorBadgeUnlock) -> dict[str, Any]:
     }
 
 
+def _build_scenario_campaign_summary(log: ScenarioCampaignLog) -> dict[str, Any]:
+    return {
+        "scenario_id": log.scenario_id,
+        "profile_id": log.profile_id,
+        "archive_grade": log.archive_grade,
+        "profile_resonance": log.profile_resonance,
+        "betting_hit": log.betting_hit,
+        "most_used_card": log.most_used_card,
+        "completed_daily_challenge": log.completed_daily_challenge,
+        "campaign_score_delta": log.campaign_score_delta,
+        "finalized_at": _serialize_datetime(log.created_at),
+    }
+
+
 def _parse_local_date(value: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -568,6 +582,18 @@ def get_campaign_profile_summary(user_id: str) -> dict[str, Any] | None:
             return _build_empty_profile_summary(user_id)
         last_daily_log = _get_last_daily_challenge_log(session, profile.id)
         return _build_profile_summary(profile, last_daily_log=last_daily_log)
+
+
+def get_scenario_campaign_summary(scenario_id: str) -> dict[str, Any]:
+    """Return the finalized campaign summary for one scenario."""
+    engine = get_engine()
+    with Session(engine) as session:
+        log = session.exec(
+            select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
+        ).first()
+        if log is None:
+            raise CampaignNotFoundError("Scenario campaign summary not found")
+        return _build_scenario_campaign_summary(log)
 
 
 def list_campaign_mastery_summaries(user_id: str) -> list[dict[str, Any]] | None:

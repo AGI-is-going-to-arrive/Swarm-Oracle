@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { getDebateResult } from '../api/client';
 import { DebateShareModal } from '../components/DebateShareModal';
 import { DebateScoreCard } from '../components/DebateScoreCard';
+import { captureElementDataUrl } from '../hooks/useScreenCapture';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
   getDebateDimensionLabel,
@@ -31,6 +32,7 @@ export function DebateResultView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showShare, setShowShare] = useState(false);
+  const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -45,7 +47,7 @@ export function DebateResultView() {
         setError('');
         setLoading(false);
       } catch (nextError) {
-        const message = nextError instanceof Error ? nextError.message : 'Failed to load debate result';
+        const message = nextError instanceof Error ? nextError.message : t('debate.result_load_failed');
         if (message.includes('API 409:')) {
           timer = window.setTimeout(() => void load(), 1200);
           return;
@@ -62,7 +64,7 @@ export function DebateResultView() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, t]);
 
   const shareContext = useMemo(() => {
     if (!payload) return null;
@@ -79,7 +81,33 @@ export function DebateResultView() {
   }, [payload, t]);
 
   useEffect(() => {
+    if (!payload?.language) return;
+    const targetLanguage = payload.language === 'zh' ? 'zh' : 'en';
+    if (!i18n.language.startsWith(targetLanguage)) {
+      void i18n.changeLanguage(targetLanguage);
+    }
+  }, [i18n, payload?.language]);
+
+  useEffect(() => {
     const win = window as AutomationWindow;
+    const advance = async (ms: number) => {
+      const frames = Math.max(1, Math.round(Math.max(0, ms) / (1000 / 60)));
+      for (let index = 0; index < frames; index += 1) {
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => resolve());
+        });
+      }
+    };
+    const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
+      if (mode === 'modal') {
+        if (!showShare) return null;
+        return captureElementDataUrl('.debate-modal--share', 'element');
+      }
+      return captureElementDataUrl('.debate-shell', 'element');
+    };
+
+    win.advanceTime = advance;
+    win.capture_game_screenshot = capture;
     win.render_game_to_text = () => stringifyAutomationPayload(
       {
         question: payload?.question ?? null,
@@ -106,6 +134,9 @@ export function DebateResultView() {
         controls: {
           can_open_share_modal: Boolean(payload),
           can_go_back_live: Boolean(payload),
+          active_modal: showShare ? 'share' : null,
+          show_share_modal: showShare,
+          modal_state: shareModalState,
         },
         result: payload ? {
           winner: payload.result.winner,
@@ -117,8 +148,10 @@ export function DebateResultView() {
     );
     return () => {
       if (win.render_game_to_text) delete win.render_game_to_text;
+      if (win.advanceTime === advance) delete win.advanceTime;
+      if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [error, loading, payload]);
+  }, [error, loading, payload, shareModalState, showShare]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -128,7 +161,7 @@ export function DebateResultView() {
     return (
       <div className="debate-shell">
         <div className="debate-shell__inner">
-          <p className="debate-modal__error">{error || 'Missing debate result'}</p>
+          <p className="debate-modal__error">{error || t('debate.result_missing')}</p>
           <button type="button" className="btn btn-primary" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
             {t('debate.back_home')}
           </button>
@@ -331,7 +364,11 @@ export function DebateResultView() {
       </div>
 
       {showShare && shareContext && (
-        <DebateShareModal context={shareContext} onClose={() => setShowShare(false)} />
+        <DebateShareModal
+          context={shareContext}
+          onClose={() => setShowShare(false)}
+          onAutomationStateChange={setShareModalState}
+        />
       )}
     </div>
   );

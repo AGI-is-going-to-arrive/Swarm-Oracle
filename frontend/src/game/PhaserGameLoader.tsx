@@ -10,9 +10,17 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import './game.css';
 
-const LazyPhaserGame = lazy(() =>
-  import('./PhaserGame').then((mod) => ({ default: mod.PhaserGame }))
-);
+const loadPhaserGame = () =>
+  import('./PhaserGame').then((mod) => ({ default: mod.PhaserGame }));
+
+const LazyPhaserGame = lazy(loadPhaserGame);
+
+export function preloadPhaserGame() {
+  if (typeof navigator !== 'undefined' && /\bjsdom\b/i.test(navigator.userAgent)) {
+    return;
+  }
+  void loadPhaserGame();
+}
 
 function GameSkeleton() {
   const { t } = useTranslation();

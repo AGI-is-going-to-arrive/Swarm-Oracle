@@ -30,6 +30,7 @@ const LazyBranchDetailModal = lazy(() => import('../components/BranchDetailModal
 const LazyPredictionModal = lazy(() => import('../components/PredictionModal'));
 const LazyGameplayCardsModal = lazy(() => import('../components/GameplayCardsModal'));
 import { PhaserGameLoader } from '../game';
+import { preloadPhaserGame } from '../game/PhaserGameLoader';
 import {
   buildReplayBranchOptions,
   filterReplayMessages,
@@ -135,7 +136,7 @@ export function SimulationView() {
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
 
   // Phase 3 Batch 3: Screen capture
-  const { status: captureStatus, captureScreenshot, captureGIF } = useScreenCapture({
+  const { status: captureStatus, lastCaptureKind, captureScreenshot, captureGIF } = useScreenCapture({
     selector: '.phaser-game-container',
   });
   const lastTheaterSceneSignature = useRef<string | null>(null);
@@ -162,6 +163,12 @@ export function SimulationView() {
     () => buildReplayBranchOptions(branches, messages),
     [branches, messages],
   );
+
+  useEffect(() => {
+    if (viewMode !== 'theater' && !visualizationEnabled) return;
+    preloadPhaserGame();
+  }, [viewMode, visualizationEnabled]);
+
   const replayRounds = useMemo(
     () => getReplayRounds(messages, branches, selectedReplayBranchId),
     [branches, messages, selectedReplayBranchId],
@@ -304,6 +311,7 @@ export function SimulationView() {
           can_toggle_sidebar: true,
           panel_collapsed: panelCollapsed,
           capture_status: captureStatus,
+          capture_result_kind: lastCaptureKind,
           active_modal:
             showPrediction ? 'prediction'
             : showGameplayCards ? 'gameplay_cards'
@@ -489,10 +497,21 @@ export function SimulationView() {
     ? theaterSceneState.bubbles.filter((bubble) => bubble && typeof bubble === 'object').length
     : 0;
   const canUseReplayControls = viewMode === 'theater' && isSimulationComplete && messages.length > 0;
+  const isReplayTheaterReady = Boolean(
+    canUseReplayControls
+    && theaterSceneState?.scene
+    && theaterSceneState.scene !== 'BootScene'
+    && theaterSceneState.scene !== 'TitleScene',
+  );
   const displayedReplayRound = canUseReplayControls
     ? (selectedReplayRound ?? currentRound)
     : currentRound;
   const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
+  const captureDoneLabel = lastCaptureKind === 'gif'
+    ? t('game.gif_saved')
+    : lastCaptureKind === 'gif_fallback_png'
+      ? t('game.gif_fallback_saved')
+      : t('game.screenshot_saved');
   const captureModeDescription = captureMode === 'panel'
     ? t('game.capture_mode_panel_desc')
     : captureMode === 'canvas'
@@ -517,6 +536,7 @@ export function SimulationView() {
       available: true,
       phase: runtimeReplayState?.phase ?? (playbackMode === 'skip' ? 'settled' : 'idle'),
       enabled: canUseReplayControls,
+      theater_ready: isReplayTheaterReady,
       playback_mode: playbackMode,
       replay_speed: replaySpeed,
       selected_branch_id: selectedReplayBranchId,
@@ -540,6 +560,7 @@ export function SimulationView() {
     replaySpeed,
     selectedReplayBranchId,
     selectedReplayRound,
+    isReplayTheaterReady,
     theaterBubbleCount,
     theaterSceneState,
   ]);
@@ -580,6 +601,7 @@ export function SimulationView() {
           can_toggle_sidebar: true,
           panel_collapsed: panelCollapsed,
           capture_status: captureStatus,
+          capture_result_kind: lastCaptureKind,
           active_modal:
             showPrediction ? 'prediction'
             : showGameplayCards ? 'gameplay_cards'
@@ -839,8 +861,10 @@ export function SimulationView() {
                     🎬 {captureStatus === 'recording' ? t('game.gif_recording') : t('game.gif_btn')}
                   </button>
                   {captureStatus === 'done' && (
-                    <span className="capture-status capture-status--done">
-                      ✅ {t('game.screenshot_saved')}
+                    <span
+                      className={`capture-status ${lastCaptureKind === 'gif_fallback_png' ? 'capture-status--fallback' : 'capture-status--done'}`}
+                    >
+                      {lastCaptureKind === 'gif_fallback_png' ? '⚠️' : '✅'} {captureDoneLabel}
                     </span>
                   )}
                 </div>

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 import app.api.debate as debate_api
 from app.main import app
+from app.models import Debate, DebatePhase, DebateStatus
+from app.models.database import get_engine
 from app.services.debate import create_debate_record, run_debate_background
 
 
@@ -84,3 +87,42 @@ def test_predict_rejects_invalid_target_value(client: TestClient):
     )
 
     assert resp.status_code == 422
+
+
+def test_predict_rejects_when_closing_arguments_have_started(client: TestClient):
+    debate = create_debate_record("Should a wartime cabinet publish every mobilization debt before the next offensive?")
+
+    with Session(get_engine()) as session:
+        stored = session.get(Debate, debate.id)
+        assert stored is not None
+        stored.current_phase = DebatePhase.CLOSING
+        session.add(stored)
+        session.commit()
+
+    resp = client.post(
+        f"/api/debate/{debate.id}/predict",
+        json={
+            "kind": "winner",
+            "target_value": "proposition",
+            "confidence": 0.6,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "closing arguments" in resp.json()["detail"]
+
+
+def test_get_result_distinguishes_error_terminal_state(client: TestClient):
+    debate = create_debate_record("Should every emergency tribunal expose its failed ruling chain?")
+
+    with Session(get_engine()) as session:
+        stored = session.get(Debate, debate.id)
+        assert stored is not None
+        stored.status = DebateStatus.ERROR
+        session.add(stored)
+        session.commit()
+
+    resp = client.get(f"/api/debate/{debate.id}/result")
+
+    assert resp.status_code == 500
+    assert "ended with an error" in resp.json()["detail"]

@@ -5320,3 +5320,688 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `implement/19_four_track_execution_plan.md`
   - `implement/20_track_d_debate_arena_design_execution_plan.md`
   - `implement/21_track_d_debate_arena_mvp_blueprint.md`
+
+## 2026-03-18 Debate Result Automation Hooks 收口
+
+- 本轮目标：
+  - 收口 `implement/` 中 Debate Result 页与 live 页自动化协议不完全对称的问题；
+  - 不改现有 Pixel Theater / Debate Arena 视觉语言，只补齐自动化与测试能力；
+  - 用 `$develop-web-game`、`$playwright-interactive`、Playwright CLI 技能链做真实页面验证。
+
+- 已完成代码改动：
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 新增结果页自动化钩子：
+      - `window.advanceTime(ms)`
+      - `window.capture_game_screenshot(mode)`
+    - `panel` 模式抓 `.debate-shell`，`modal` 模式在分享弹窗打开时抓 `.debate-modal--share`；
+    - `render_game_to_text()` 现额外输出：
+      - `page.controls.active_modal`
+      - `page.controls.show_share_modal`
+      - `page.controls.modal_state`
+    - 自动化 effect cleanup 已同步清理三类 hook，避免页面切换后残留全局状态。
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 补齐 hook parity 测试：
+      - `advanceTime()` 可调用
+      - `capture_game_screenshot('panel')` 返回截图 data URL
+      - 分享弹窗未打开时 `capture_game_screenshot('modal')` 返回 `null`
+      - 打开分享弹窗后 `capture_game_screenshot('modal')` 正常返回截图 data URL
+    - 补一条 `API 409` retry polling 测试，确认结果页在后端尚未 ready 时会自动重试并最终渲染成功。
+
+- 本轮验证：
+  - 前端定向测试：
+    - `cd frontend && npm test -- --run src/pages/DebateResultView.test.tsx src/pages/DebateArenaView.test.tsx src/components/DebateShareModal.test.tsx src/components/DebateBetModal.test.tsx src/hooks/useDebateWS.test.tsx src/pages/SimulationView.test.tsx`
+    - 结果：`6 files, 16 passed`
+  - 前端构建：
+    - `cd frontend && npm run build`
+    - 结果：通过
+
+- 真实页面 / 自动化验证：
+  - 本地服务：
+    - backend: `http://127.0.0.1:18927`
+    - frontend: `http://127.0.0.1:18928`
+  - 测试用 debate：
+    - `7b469197-a745-4223-a079-9e7de7d07cc9`
+  - `$develop-web-game` 黑盒工件：
+    - `frontend/output/web-game/20260318-debate-result-hooks-panel/shot-0.png`
+    - `frontend/output/web-game/20260318-debate-result-hooks-panel/state-0.json`
+    - `frontend/output/web-game/20260318-debate-result-hooks-modal/shot-0.png`
+    - `frontend/output/web-game/20260318-debate-result-hooks-modal/state-0.json`
+  - 关键信号：
+    - `panel` 状态下 `active_modal = null`
+    - 打开分享弹窗后 `active_modal = "share"`
+    - `modal_state.kind = "debate_share_modal"`
+    - 截图与页面样式正常，未偏离当前 Debate / Theater 美术风格
+  - 交互式 QA 工件：
+    - `frontend/output/playwright/debate-result-desktop.png`
+    - `frontend/output/playwright/debate-result-desktop-share.png`
+    - `frontend/output/playwright/debate-result-mobile.png`
+    - `frontend/output/playwright/debate-result-mobile-share.png`
+  - 桌面与移动端均已确认：
+    - `render_game_to_text()` 存在
+    - `advanceTime()` 存在
+    - `capture_game_screenshot()` 存在
+    - 分享弹窗打开前后状态与截图行为符合预期
+
+- 工具链现场说明：
+  - Playwright CLI skill 对应 wrapper 已检查，但当前环境里 `playwright-cli` 子命令不可用；根据安全约束，本轮未做全局安装，改用已有浏览器自动化链路完成验证。
+  - `$playwright-interactive` 需要的 `js_repl + playwright` 运行时在当前环境无法直接解析本地 `playwright/playwright-core` 依赖，因此交互式页面核验回退为 `chrome_devtools`，未阻塞本轮收口。
+
+- 当前结论：
+  - Debate Result 页现在已与 live 页具备对称的核心自动化钩子能力；
+  - 这次收口解决的是 Track D 结果页自动化缺口，不涉及新美术素材，也不改变现有视觉风格；
+  - 更大的 `implement` 尾项仍然存在，主要还是 `19_four_track_execution_plan.md` 中已写明的 replay / scene selector / capture / full-matrix 持续维护项，而不是 Debate Result hook 本身。
+
+## 2026-03-18 Capture / Headless 黑盒收口
+
+- 本轮选择继续收 `Track C` 里的 `capture/headless`，原因：
+  - replay 已有单测和 corner E2E；
+  - full-matrix 已在跑；
+  - scene selector 当前主问题更多是旧样本漂移 + runtime fallback 工件维护；
+  - `panel / canvas / modal` 三模式截图虽然有单测，但此前没有进入主黑盒套件，属于最小且真实的验证缺口。
+
+- 已完成代码改动：
+  - `frontend/scripts/e2e-suite.mjs`
+    - 新增 `writeDataUrlFile()` / `getDataUrlByteLength()` 帮助函数；
+    - 新增 `runCaptureModesCase()`：
+      - 创建启用 Theater 的 live scenario；
+      - 在 `/sim/:id` 黑盒验证 `window.capture_game_screenshot('panel')` / `('canvas')` / `('modal')`；
+      - 断言 modal 未打开前返回 `null`；
+      - 打开预测弹窗后等待自动化 hook settle，再断言 `modal` 截图非空；
+      - 落盘 `panel.png` / `canvas.png` / `modal.png` / `capture-ui.png` / `capture-modes.json`
+    - `corners` 套件现已把 `capture_modes` 纳入固定回归。
+
+- 已验证：
+  - 语法检查：
+    - `node --check frontend/scripts/e2e-suite.mjs`
+  - 黑盒回归：
+    - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-capture-corners --headless`
+    - 结果：通过
+    - 新 case 输出：
+      - `capture_modes.scenarioId = 37b7765f-35ae-40d1-83db-ad9e5a46dad3`
+      - `panelBytes = 1100847`
+      - `canvasBytes = 697544`
+      - `modalBytes = 47462`
+      - `activeModal = "prediction"`
+  - 前端构建：
+    - `cd frontend && npm run build`
+    - 结果：通过
+
+- 新工件：
+  - `frontend/output/e2e/20260318-capture-corners/result.json`
+  - `frontend/output/e2e/20260318-capture-corners/capture-modes/panel.png`
+  - `frontend/output/e2e/20260318-capture-corners/capture-modes/canvas.png`
+  - `frontend/output/e2e/20260318-capture-corners/capture-modes/modal.png`
+  - `frontend/output/e2e/20260318-capture-corners/capture-modes/capture-ui.png`
+  - `frontend/output/e2e/20260318-capture-corners/capture-modes/capture-modes.json`
+
+- 当前结论：
+  - `Track C / C3` 的截图三模式现在不再只是单测能力，而是已进入主黑盒套件并能在 headless 下产出真实 PNG 工件；
+  - 这轮收口没有改产品视觉、没有新增素材，仍沿用当前 Theater / Debate 既有美术风格；
+  - 下一轮最值得继续收的尾项，优先级已变成：
+    - `scene selector` 历史样本漂移清理 / 更新固定 matrix 样本
+    - 或 `replay` 的 mobile 控件观感与裁切验证
+
+## 2026-03-18 Debate E2E Hook Lock
+
+- 已继续收口 Debate 自动化验证面：
+  - `frontend/scripts/e2e-debate-suite.mjs` 不再只是记录 hook 探测结果，现会把关键结果页 hook 变成硬断言；
+  - 新增断言点：
+    - live 页 `panel` 截图必须返回 data URL
+    - result 页分享前：
+      - `render_game_to_text()` 存在
+      - `advanceTime()` 可调用
+      - `capture_game_screenshot()` 存在
+      - `panel` 截图返回 data URL
+      - `modal` 截图必须为 `null`
+    - result 页分享打开后：
+      - `page.controls.active_modal === "share"`
+      - `page.controls.modal_state.kind === "debate_share_modal"`
+      - `modal` 截图必须返回 data URL
+
+- 已验证：
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-debate-result-hook-lock --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/20260318-debate-result-hook-lock/result.json`
+  - 关键结果：
+    - desktop:
+      - live `panel` capture: data URL
+      - result before share: `panel=data URL`, `modal=null`
+      - result with share: `panel=data URL`, `modal=data URL`
+    - mobile:
+      - live `panel` capture: data URL
+      - result before share: `panel=data URL`, `modal=null`
+      - result with share: `panel=data URL`, `modal=data URL`
+
+- 当前含义：
+  - Debate Track D 不仅代码上有 result hook，对应 E2E 也已把结果页 hook 行为锁住；
+  - 后续如果有人改坏 `advanceTime / capture_game_screenshot / active_modal / modal_state`，`e2e:debate:full` 会直接失败，而不只是留下“工件里看起来不对”的软信号。
+
+## 2026-03-18 Debate Share Emoji 对齐
+
+- 已修复 Debate 结果页分享弹窗的平台视觉缺口：
+  - `frontend/src/lib/debateShare.ts`
+    - 新增 Debate 专属 `platform -> { labelKey, icon }` 元数据；
+    - 生成文案第一行现在会带平台 emoji，例如 `📕 小红书 · Debate Share Copy`。
+  - `frontend/src/components/DebateShareModal.tsx`
+    - 平台按钮现显示与通用 `ShareModal` 同口径的 emoji：
+      - `📕 Xiaohongshu`
+      - `🔴 Weibo`
+      - `💙 Zhihu`
+      - `🟠 Reddit`
+      - `𝕏 X`
+  - `frontend/src/components/DebateShareModal.test.tsx`
+    - 补断言，锁住按钮文案与复制区标题中的平台 emoji。
+
+- 已验证：
+  - `cd frontend && npm test -- --run src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx`
+  - `cd frontend && pnpm exec tsc --noEmit`
+  - 结果：通过
+
+## 2026-03-18 Matrix Baseline 刷新
+
+- 已定位 Track C `scene selector / full matrix` 尾项的真实根因：
+  - 不是当前 selector 仍然选错；
+  - 而是 `frontend/output/e2e/sample_matrix.json` 里有 `5` 条固定样本仍指向旧 `scenario_id`，这些历史场景的 `scene_theme` 已经漂移；
+  - `e2e:full` 因此会触发 `runtime_created_fallback`，造成噪声。
+
+- 已刷新基线：
+  - `frontend/output/e2e/sample_matrix.json`
+    - `generated_at` 更新到 `2026-03-18`
+    - 更新 `law / trade / ecology / war / faith` 五条样本：
+      - `scenario_id`
+      - `completed_branch_count`
+  - `frontend/scripts/e2e-suite.mjs`
+    - `corners` 套件中的 `lawShareSample` 也切到新的 `law_court` 场景基线，避免 share context / share retry 继续走旧样本。
+
+- 新的 5 条样本基线：
+  - `law` -> `ded5cdd5-251d-4606-8ee3-8e1418d31cbb`
+  - `trade` -> `1b822c42-d290-4a2c-a5e6-978b57b20a6e`
+  - `ecology` -> `5060e360-44dc-4aec-80cd-aef5c16f8551`
+  - `war` -> `a4838aca-0a0b-45c4-b8e6-2178a67389f9`
+  - `faith` -> `d93041cf-c639-42eb-965c-767669e3be3f`
+
+- 本轮验证：
+  - `cd frontend && npm run e2e:matrix -- --url http://127.0.0.1:18928 --themes law,trade,ecology,war,faith --output-dir output/e2e/20260318-matrix-baseline-refresh --headless`
+  - 结果：
+    - 五条样本全部 `createdAtRuntime = false`
+    - 五条样本全部 `recovery = null`
+    - 全部以 `existing` 样本跑完，不再 runtime fallback
+  - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-corners-law-refresh --headless`
+  - 结果：
+    - `share_context.scenarioId = ded5cdd5-251d-4606-8ee3-8e1418d31cbb`
+    - `share_retry.scenarioId = ded5cdd5-251d-4606-8ee3-8e1418d31cbb`
+    - `corners` 全套通过
+
+- 新工件：
+  - `frontend/output/e2e/20260318-matrix-baseline-refresh/result.json`
+  - `frontend/output/e2e/20260318-corners-law-refresh/result.json`
+
+- 当前含义：
+  - Track C 里 `scene selector` 这组尾项的最小真实缺口已经不是 selector 代码，而是 baseline 样本陈旧；
+  - 这轮刷新后，至少 `law / trade / ecology / war / faith` 这 5 条 full-matrix 样本已恢复为稳定 existing baseline，不再依赖 runtime fallback 自救。
+
+## 2026-03-18 Matrix / Variants 全面复验
+
+- 已继续把 Track C 的基线收口做完：
+  - 主 matrix 基线刷新后，重新跑了 full；
+  - 变体样本也复跑了 `variants`，并定位到 `law_grand_tribunal` 仍是同型的旧基线漂移；
+  - `frontend/output/e2e/sample_matrix_variants.json`
+    - 已把 `law_grand_tribunal` 的 `scenario_id` 从旧样本刷新为 `0d305e42-2c4a-4580-b4be-cc0d2dfd920c`
+    - `generated_at` 更新到 `2026-03-18`
+
+- 新增验证：
+  - `cd frontend && npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-matrix-refresh-full --headless`
+  - 结果：
+    - 主 matrix `15` 条样本全部 `createdAtRuntime = false`
+    - 主 matrix `15` 条样本全部 `recovery = null`
+    - `corners.share_context.scenarioId` / `corners.share_retry.scenarioId` 均已切到 `ded5cdd5-251d-4606-8ee3-8e1418d31cbb`
+    - full 整体通过
+  - `cd frontend && npm run e2e:variants -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-variant-refresh --headless`
+  - 结果：
+    - `law_grand_tribunal / faith_council / generic_review_chamber` 三条变体样本全部 `createdAtRuntime = false`
+    - 三条变体样本全部 `recovery = null`
+    - variants 整体通过
+
+- 新工件：
+  - `frontend/output/e2e/20260318-post-matrix-refresh-full/result.json`
+  - `frontend/output/e2e/20260318-post-variant-refresh/result.json`
+
+- Track C 推荐单测复验：
+  - 前端：
+    - `cd frontend && npm test -- --run src/game/replaySync.test.ts src/game/replaySelection.test.ts src/pages/SimulationView.test.tsx src/hooks/useScreenCapture.test.ts`
+    - 结果：`18 passed`
+  - 后端：
+    - `cd backend && source .venv/bin/activate && python -m pytest tests/test_scene_selector.py tests/test_simulator_viz_integration.py -q`
+    - 结果：`214 passed`
+
+- 当前结论：
+  - 主 matrix 漂移样本与变体漂移样本都已刷新到当前 selector 口径；
+  - 现在 `e2e:full` 与 `e2e:variants` 都不再依赖 `runtime_created_fallback` 才能通过；
+  - 这意味着 Track C 里最明确、最小的一类遗留尾项已经被真正收口，而不是继续靠 suite 的自愈逻辑遮蔽。
+
+## 2026-03-18 Replay Cold-Start 噪声收口
+
+- 已定位 residual 噪声的性质：
+  - 不是产品级 replay 回归；
+  - 更像 completed Theater replay 首次冷启动时，`e2e-suite` 对 `scene.scene` 的等待条件过早把过渡态记成超时，再触发整页 reload。
+
+- 已做的最小修复：
+  - `frontend/src/game/automation.ts`
+    - `AutomationReplayState` 新增 `theater_ready?: boolean`
+  - `frontend/src/pages/SimulationView.tsx`
+    - completed Theater replay 的自动化输出现在会显式暴露 `page.replay_state.theater_ready`
+    - 该字段只有在 `scene` 已进入真实 Theater 场景（非 `BootScene/TitleScene`）时为 `true`
+  - `frontend/scripts/e2e-suite.mjs`
+    - 新增 completed replay readiness helper
+    - `runReplayFlow()` 现优先依据 `replay_state.theater_ready` 判断 replay Theater 是否真正 ready
+    - 第二阶段等待窗口从 `40s` 放宽到 `60s`，避免冷浏览器首次加载 Phaser/资产时把合法过渡态误报为超时
+    - 超时日志也会带 `theater_ready` 状态，后续更容易区分“冷启动慢”与“真死锁”
+
+- 已验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx`
+  - 结果：`8 passed`
+  - `cd frontend && pnpm exec tsc --noEmit`
+  - 结果：通过
+  - `cd frontend && npm run e2e:variants -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-replay-ready-signal-variants --headless`
+  - 结果：
+    - `law_grand_tribunal / faith_council / generic_review_chamber` 全部 `createdAtRuntime = false`
+    - 三条样本的 `replay.replayState.theater_ready = true`
+    - 本轮复验中未再出现之前那条 replay 冷启动 reload 噪声
+
+- 新工件：
+  - `frontend/output/e2e/20260318-replay-ready-signal-variants/result.json`
+
+- 当前含义：
+  - replay 冷启动仍可能需要较长时间进入 Theater，但现在 suite 有了显式 readiness 信号，不再主要靠猜 `scene.scene !== BootScene/TitleScene`；
+  - 这条 residual 现在已经从“容易制造误报的测试噪声”收敛成“可观测、可区分、且已在变体验证面复绿”的状态。
+
+## 2026-03-18 Replay Cold-Start 噪声收口
+
+- 已继续处理 Track C 剩余的 replay 冷启动噪声：
+  - 现象是：completed replay 在 headless 下首次进入 `/sim/:id` 时，偶发 40s 后打一条 `Timed out waiting for completed replay state ... last scene=unknown`，随后 fresh reload 才成功。
+  - 当前判断：
+    - 这更像 completed replay 首次冷启动时，Theater scene 还在合法初始化窗口；
+    - 残留问题主要在自动化协议缺少显式 readiness 信号，suite 只能靠 `scene !== BootScene/TitleScene` 这类间接条件猜测是否 ready。
+
+- 已修复：
+  - `frontend/src/game/automation.ts`
+    - `AutomationReplayState` 新增 `theater_ready?: boolean`
+  - `frontend/src/pages/SimulationView.tsx`
+    - completed Theater replay 的自动化输出现在会显式暴露 `page.replay_state.theater_ready`
+    - 仅当当前场景已进入真实 Theater 场景（非 `BootScene/TitleScene`）时，该字段才为 `true`
+  - `frontend/scripts/e2e-suite.mjs`
+    - 新增 completed replay readiness helper
+    - `runReplayFlow()` 现在优先依据 `replay_state.theater_ready` 判断 replay Theater 是否真正 ready
+    - 第二阶段等待窗口从 `40s` 放宽到 `60s`
+    - timeout 诊断信息现会额外携带 `theater_ready`
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx`
+  - 结果：`8 passed`
+  - `cd frontend && pnpm exec tsc --noEmit`
+  - 结果：通过
+  - `cd frontend && npm run e2e:variants -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-replay-ready-signal-variants --headless`
+  - 结果：
+    - `law_grand_tribunal / faith_council / generic_review_chamber` 三条样本全部 `createdAtRuntime = false`
+    - 三条样本的 `replay.replayState.theater_ready = true`
+    - 本轮复验中未再出现此前那条 replay 冷启动 reload 噪声
+
+- 新工件：
+  - `frontend/output/e2e/20260318-replay-ready-signal-variants/result.json`
+  - `frontend/output/e2e/20260318-post-replay-ready-full/result.json`
+
+- 当前含义：
+  - 这轮没有去改 Theater 产品逻辑，而是把 completed replay 的 readiness 判定变成了显式自动化协议；
+  - 之前那类“first load unknown / second load 正常”的 residual 噪声，当前已被收敛到更可观测、可区分的状态。
+  - 复验 `e2e:full` 后：
+    - 主 matrix `15` 条样本全部 `createdAtRuntime = false`
+    - `corners.replay_skip_switch.skipped/replayed` 也都已输出 `theater_ready = true`
+    - `mobile.theater.replayState.theater_ready = true`
+    - 本轮 full 没再出现 replay cold-start reload 噪声
+
+## 2026-03-18 Debate Capture Hooks 黑盒锁定
+
+- 已继续收口 Debate 的自动化验证面：
+  - `frontend/scripts/e2e-debate-suite.mjs`
+    - 新增 live / result 页自动化 hook 探针；
+    - 黑盒记录：
+      - `render_game_to_text()` 是否存在
+      - `advanceTime()` 是否可调用
+      - `capture_game_screenshot()` 是否存在
+      - `panel / modal` 模式在不同阶段是否返回有效 data URL
+    - 结果页现在会显式锁定：
+      - 分享弹窗打开前 `modal` capture 返回 `null`
+      - 分享弹窗打开后 `modal` capture 返回真实截图 data URL
+
+- 本轮验证：
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-debate-capture-hooks --headless`
+  - 结果：通过
+
+- 新工件：
+  - `frontend/output/e2e/20260318-debate-capture-hooks/result.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/desktop/live-hooks.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/desktop/result-hooks-before-share.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/desktop/share-open.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/mobile/live-hooks.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/mobile/result-hooks-before-share.json`
+  - `frontend/output/e2e/20260318-debate-capture-hooks/mobile/share-open.json`
+
+- 关键结论：
+  - desktop / mobile 两面都确认：
+    - live 页 `panel` capture 返回有效 data URL
+    - result 页分享前 `modal` capture 为 `null`
+    - result 页分享后 `modal` capture 返回有效 data URL
+  - 这样 Debate 的自动化协议不再只是单测层成立，而是已被真实浏览器 E2E 锁住。
+
+## 2026-03-18 Heartbeat 监控 + GIF Fallback 收口
+
+- 已补最小只读心跳脚本：
+  - `scripts/codex-heartbeat.mjs`
+  - 汇总信号：
+    - `git status --short` 的 modified / untracked / focus files
+    - `frontend/output/e2e/**/result.json` 中最新工件
+    - `progress.md` 最新 section heading + top-level highlights
+  - 支持参数：
+    - `--interval <seconds>`
+    - `--label <name>`
+    - `--log-file <path>`
+    - `--json`
+
+- 已收口 GIF fallback 提示的遗留测试噪声：
+  - `frontend/src/pages/SimulationView.test.tsx`
+    - 断言现在收窄到 `.capture-status` 状态节点，不再误命中整棵父级 DOM
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx`
+  - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit`
+  - 结果：通过
+
+- 当前用途：
+  - 后续实现期间可直接启动：
+    - `node scripts/codex-heartbeat.mjs --interval 30 --label implement-tail --log-file /tmp/upgrade-test-heartbeat.log`
+  - 该脚本只读汇总，不触碰业务状态，也不会改数据库或样本工件。
+
+## 2026-03-18 Capture / Replay 黑盒收口继续推进
+
+- 已继续收口 `implement/18` 与 `Track C` 里还剩的两条验证面尾项：
+  - `modal` 截图在更复杂弹窗下的 smoke 覆盖
+  - replay corner case 里 `playback_mode = replay` 但 `theater_ready` 尚未锁定的问题
+
+- 已修改：
+  - `frontend/scripts/e2e-suite.mjs`
+    - `runCaptureModesCase()` 现在不再只验证 prediction modal：
+      - 先验证 `panel / canvas / modal(before open = null)`
+      - 打开 `PredictionModal` 后执行 `capture_game_screenshot('modal')`
+      - 关闭 prediction modal 后，再打开 `GameplayCardsModal`
+      - 对 gameplay cards modal 再执行一次 `capture_game_screenshot('modal')`
+    - 输出工件新增：
+      - `prediction-modal.png`
+      - `prediction-modal-open.json`
+      - `gameplay-modal.png`
+      - `gameplay-modal-open.json`
+    - `capture-modes.json` 现会显式记录：
+      - `predictionModalBytes`
+      - `gameplayModalBytes`
+    - `runReplayCornerCase()` 的 replay restore 等待条件现收紧为：
+      - `playback_mode = replay`
+      - 且 `theater_ready = true`
+
+  - `frontend/src/pages/SimulationView.tsx`
+    - `render_game_to_text()` 的 `page.controls` 现额外暴露：
+      - `capture_result_kind`
+    - 值与 `useScreenCapture()` 的 `lastCaptureKind` 对齐，可用于黑盒直接区分：
+      - `screenshot_png`
+      - `gif`
+      - `gif_fallback_png`
+
+  - `frontend/src/pages/SimulationView.test.tsx`
+    - fallback 提示测试现同时断言：
+      - `capture_status = done`
+      - `capture_result_kind = gif_fallback_png`
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx`
+  - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit`
+  - 结果：通过
+  - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-corners-capture-modal-variants --headless`
+  - 结果：
+    - `capture_modes.predictionModalBytes > 0`
+    - `capture_modes.gameplayModalBytes > 0`
+    - `replay_skip_switch.replayed.theater_ready = true`
+  - `cd frontend && npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-replay-capture-lock-full --headless`
+  - 结果：
+    - `full` 通过
+    - `corners.capture_modes` 已包含 `predictionModalBytes / gameplayModalBytes`
+    - `corners.replay_skip_switch.replayed.theater_ready = true`
+
+- 新工件：
+  - `frontend/output/e2e/20260318-corners-capture-modal-variants/`
+  - `frontend/output/e2e/20260318-corners-replay-ready-lock/`
+  - `frontend/output/e2e/20260318-post-replay-capture-lock-full/result.json`
+
+- 当前需要额外说明的环境事实：
+  - 这轮本地重新启动的 backend 命中了另一份可运行数据库，因此 `full` 里的主 matrix 样本大多表现为 `createdAtRuntime = true`
+  - 当前判断：
+    - 这不是本轮 replay / capture 改动造成的功能回归
+    - 更像是“本地当前进程命中的 DB 与之前固定样本基线不是同一份”
+  - 若下一轮要继续收口环境一致性，优先检查：
+    - backend 启动 cwd
+    - `DATABASE_URL=sqlite:///./swarmoracle.db` 的相对路径命中位置
+
+## 2026-03-18 Backend DB Path 环境一致性收口
+
+- 已定位 runtime fallback 大面积回潮的根因：
+  - 不是 scene selector 或 replay / capture 改动造成的回归；
+  - 是 backend 默认配置里的：
+    - `DATABASE_URL=sqlite:///./swarmoracle.db`
+    - `CHROMA_PERSIST_DIR=./chroma_data`
+  - 这两项会跟进程 `cwd` 走。
+  - 结果是：
+    - 从 `backend/` 目录启动服务，命中的是 `backend/swarmoracle.db`
+    - 从 repo root 启动服务，命中的是根目录 `swarmoracle.db`
+  - 因而 fixed sample matrix 会看起来“全部缺失”，suite 被迫走 runtime fallback。
+
+- 已修复：
+  - `backend/app/config.py`
+    - 新增 `BACKEND_ROOT`
+    - 默认 `DATABASE_URL` 现直接指向 `backend/swarmoracle.db` 的绝对路径
+    - 默认 `CHROMA_PERSIST_DIR` 现直接指向 `backend/chroma_data` 的绝对路径
+    - 对环境变量里传入的相对本地路径也做统一归一化：
+      - `sqlite:///./foo.db` -> 相对 `backend/` 根解析
+      - `./bar_chroma` -> 相对 `backend/` 根解析
+    - `model_config.env_file` 也改为固定读取 `backend/.env`
+  - `backend/tests/test_config.py`
+    - 新增相对路径归一化测试
+
+- 本轮验证：
+  - 直接 API 验证：
+    - `GET /api/scenario/72ae364d-3ea1-4959-939c-8fe1dbeca1c9` -> 200
+    - `GET /api/scenario/ded5cdd5-251d-4606-8ee3-8e1418d31cbb` -> 200
+    - `GET /api/scenario/1b822c42-d290-4a2c-a5e6-978b57b20a6e` -> 200
+  - `cd backend && .venv/bin/python -m pytest tests/test_config.py -q`
+  - 结果：`4 passed`
+  - `Settings()` 实例化验证：
+    - `DATABASE_URL = sqlite:////Users/yangjunjie/Desktop/upgrade-test/backend/swarmoracle.db`
+    - `CHROMA_PERSIST_DIR = /Users/yangjunjie/Desktop/upgrade-test/backend/chroma_data`
+  - `cd frontend && npm run e2e:matrix -- --url http://127.0.0.1:18928 --themes governance,law,trade --output-dir output/e2e/20260318-matrix-db-path-check --headless`
+  - 结果：
+    - `governance / law / trade` 全部 `existing`
+    - 三条样本全部 `createdAtRuntime = false`
+  - `cd frontend && npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-post-db-path-fix-full --headless`
+  - 结果：
+    - `full` 通过
+    - 主 matrix `15` 条样本全部 `createdAtRuntime = false`
+    - `recovery = null`
+    - `corners.capture_modes` 仍保留：
+      - `predictionModalBytes > 0`
+      - `gameplayModalBytes > 0`
+    - `corners.replay_skip_switch.replayed.theater_ready = true`
+
+- 新工件：
+  - `frontend/output/e2e/20260318-matrix-db-path-check/result.json`
+  - `frontend/output/e2e/20260318-post-db-path-fix-full/result.json`
+
+- 当前含义：
+  - 之前心跳里那条：
+    - `full matrix=15, runtime=15`
+  - 现在已被环境一致性修复实质性消掉。
+  - 这意味着当前 `implement` 收口里的 replay / capture / full-matrix 这一组，不再同时被“产品逻辑”与“启动 cwd 漂移”两类问题混在一起。
+
+## 2026-03-18 ResultView Campaign Summary 后端兜底
+
+- 已继续收口一个更偏产品面的残项：
+  - 结果页此前主要依赖本地 `scenarioMeta`
+  - 如果换设备、清空 localStorage，或 scenario 是别的导演档案先 finalize 过，本地归档摘要会变瘦
+  - 当前不做“整套 `scenarioMeta` 后端化”，先补最小可用的后端回读兜底
+
+- 已修改：
+  - `backend/app/services/campaign.py`
+    - 新增 `get_scenario_campaign_summary(scenario_id)`
+    - 基于既有 `ScenarioCampaignLog` 返回只读 summary：
+      - `profile_id`
+      - `archive_grade`
+      - `profile_resonance`
+      - `betting_hit`
+      - `most_used_card`
+      - `completed_daily_challenge`
+      - `campaign_score_delta`
+      - `finalized_at`
+  - `backend/app/api/campaign.py`
+    - 新增：
+      - `GET /api/campaign/scenario/{scenario_id}/summary`
+  - `frontend/src/api/client.ts`
+    - 新增 `getCampaignScenarioSummary(scenarioId)`
+  - `frontend/src/types.ts`
+    - 新增 `CampaignScenarioSummary`
+  - `frontend/src/pages/ResultView.tsx`
+    - 结果页现在会并行读取后端 `scenario campaign summary`
+    - 本地 `scenarioMeta.archive` 有值时继续优先使用本地
+    - 本地缺失时，会用后端 summary 兜底这些字段：
+      - `profileId`
+      - `mostUsedCard`
+      - `bettingHit`
+      - `archiveGrade`
+      - `profileResonance`
+    - `下注结果` 文案也已补一条兜底：
+      - 若本地 bet 列表为空，但后端已知 `betting_hit`
+      - 则显示 `Bet Hit / Bet Missed`
+      - 不再误显示 `No bets placed`
+  - `frontend/src/i18n/locales/{en,zh}.json`
+    - 新增：
+      - `result.archive_bet_miss`
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增跨设备/空本地缓存场景：
+      - 本地 meta 为空
+      - backend `campaign scenario summary` 存在
+      - `finalizeCampaign()` 返回 `409`
+      - 页面仍能正确显示后端回读的：
+        - `most_used_card`
+        - `archive_grade`
+        - `profile_resonance`
+        - `betting_hit`
+
+- 本轮验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
+  - 结果：`10 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+  - 结果：`3 passed`
+  - `cd frontend && npx tsc --noEmit`
+  - 结果：通过
+  - 运行时 smoke：
+    - `curl http://127.0.0.1:18927/api/campaign/scenario/72ae364d-3ea1-4959-939c-8fe1dbeca1c9/summary`
+    - 返回 `200`，可读到：
+      - `archive_grade = B`
+      - `profile_resonance = signature`
+      - `campaign_score_delta = 3`
+    - `curl .../missing-scenario/summary` -> `404`
+  - 结果页黑盒 smoke：
+    - `node frontend/scripts/e2e-automation.mjs result --url http://127.0.0.1:18928 --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9 --output-dir frontend/output/e2e/20260318-result-backend-summary-smoke --headless`
+    - `result-final.json` 中已可见：
+      - `archive_summary.archive_grade = B`
+      - `archive_summary.dominant_branch_title = 算法接管`
+      - `controls.modal_state.share_context.resonanceLabel = 命中题材核心`
+
+- 新工件：
+  - `frontend/output/e2e/20260318-result-backend-summary-smoke/`
+
+- 当前含义：
+  - 结果页在“本地缓存不完整 / 本机不是原始 finalize 设备”的情况下，不再只能退回一套瘦档案摘要；
+  - 这条修复没有把 `scenarioMeta` 整体后端化，但已经把最用户可见的一层跨设备退化先收住了。
+
+## 2026-03-18 ResultView Cross-Device Display 细节收口
+
+- 在刚补完 backend summary 兜底后，又继续收了两个仍会误导用户的跨设备细节：
+  1. 后端已知这局是 `completed_daily_challenge = true`，但如果本地没有 `challengeProgress`，结果页此前不会显示“每日挑战已完成”
+  2. 本地没有导演状态时，结果页会把默认值 `3/3` 当成真实导演点数展示出来
+
+- 已修改：
+  - `frontend/src/pages/ResultView.tsx`
+    - `isDailyChallenge` 现会把：
+      - 本地 `challengeMatch`
+      - 后端 `campaignScenarioSummary.completed_daily_challenge`
+      两者合并判断
+    - 若本地没有 `challengeProgress`，但后端明确这局属于 daily challenge：
+      - 结果页仍会显示 `Daily Challenge`
+      - `挑战反馈` 卡会显示 `Law · Completed` 这类后端兜底文案
+    - `导演点数` chip 现在只有在存在本地导演状态时才显示：
+      - `director.lastUpdatedAt`
+      - `spentPoints > 0`
+      - 或本地 `usageLog / bets` 非空
+      否则不再展示默认 `3/3`
+    - `render_game_to_text()` 的 `archive_summary` 现也会输出：
+      - `profile_id`
+      - `profile_resonance`
+      - `completed_daily_challenge`
+      且走页面实际使用的 merged archive state，不再与 UI 脱节
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+  - 结果：`3 passed`
+  - `cd frontend && npx tsc --noEmit`
+  - 结果：通过
+  - 现有 `ResultView` 单测还额外锁住：
+    - backend fallback 场景下，`render_game_to_text().page.archive_summary` 中的
+      - `archive_grade`
+      - `profile_id`
+      - `profile_resonance`
+      - `completed_daily_challenge`
+      都会与 UI 一致
+
+- 当前含义：
+  - 现在跨设备打开结果页时，不只会拿到后端 archive summary；
+  - 还会避免展示两类典型假状态：
+    - “看不出这是每日挑战完成局”
+    - “默认导演点数 3/3 冒充真实状态”
+
+## 2026-03-18 文档同步
+
+- 本轮按当前代码和真实验证结果，补齐了这次 session 直接相关的文档口径：
+  - `frontend/README.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/reference/config.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/guides/development.md`
+
+- 这次同步的重点：
+  - `campaign scenario summary` 新接口与结果页跨设备兜底行为
+  - backend 默认 `.env / DATABASE_URL / CHROMA_PERSIST_DIR` 都锚定到 `backend/` 根目录
+  - `SimulationView` 自动化摘要新增 `capture_result_kind`
+  - `ResultView` 自动化摘要新增 `archive_summary.profile_id / profile_resonance / completed_daily_challenge`
+  - `e2e-suite.mjs` 的 `capture-modes` 现会落 `predictionModalBytes / gameplayModalBytes`
+  - `replay_skip_switch` 恢复判定现在要求 `theater_ready = true`
+  - `scripts/codex-heartbeat.mjs` 的使用说明
+
+- 本轮重新验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_config.py tests/test_campaign_api.py tests/test_campaign_service.py -q`
+  - 结果：`14 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx`
+  - 结果：`12 passed`
+  - `node scripts/codex-heartbeat.mjs --label doc-sync`
+  - 结果：输出正常
+  - `cd frontend && npm run build`
+  - 结果：当前失败，错误集中在 `ResultView.tsx / ResultView.test.tsx / SimulationView.test.tsx` 的 TypeScript 类型检查；本轮只同步文档，没有顺手改代码

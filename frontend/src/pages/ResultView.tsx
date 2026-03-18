@@ -9,6 +9,7 @@ import {
   exportScenario,
   finalizeCampaign,
   getAgents,
+  getCampaignScenarioSummary,
   getScenario,
   getStory,
   listPredictions,
@@ -40,7 +41,14 @@ import {
   getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
-import type { AgentInfo, CampaignFinalizeResult, PredictionInfo, Scenario, StoryData } from '../types';
+import type {
+  AgentInfo,
+  CampaignFinalizeResult,
+  CampaignScenarioSummary,
+  PredictionInfo,
+  Scenario,
+  StoryData,
+} from '../types';
 import ShareModal from '../components/ShareModal';
 import './ResultView.css';
 
@@ -137,9 +145,16 @@ export default function ResultView() {
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState('');
   const [campaignSummary, setCampaignSummary] = useState<CampaignFinalizeResult | null>(null);
+  const [campaignScenarioSummary, setCampaignScenarioSummary] = useState<CampaignScenarioSummary | null>(null);
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
   const hasUnscored = predictions.some((p) => p.score == null);
+  const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
+  const isDailyChallenge = Boolean(
+    challengeMatch
+    || campaignScenarioSummary?.completed_daily_challenge,
+  );
+  const challengeProgress = challengeMatch?.progress ?? null;
 
   useEffect(() => {
     if (!id) return;
@@ -149,17 +164,19 @@ export default function ResultView() {
     const load = async () => {
       try {
         // Fetch story and scenario in parallel, handle prediction API failure gracefully
-        const [story, agentList, scenario, preds] = await Promise.all([
+        const [story, agentList, scenario, preds, persistedCampaignSummary] = await Promise.all([
           getStory(id),
           getAgents(id),
           getScenario(id),
           listPredictions(id).catch(() => [] as PredictionInfo[]),
+          getCampaignScenarioSummary(id).catch(() => null),
         ]);
         if (cancelled) return;
 
         setScenario(scenario);
         setAgents(agentList);
         setPredictions(preds);
+        setCampaignScenarioSummary(persistedCampaignSummary);
 
         if (scenario.status !== 'done') {
           retryTimer = window.setTimeout(() => {
@@ -229,6 +246,19 @@ export default function ResultView() {
         });
         if (!cancelled) {
           setCampaignSummary(campaign);
+          if (campaign) {
+            setCampaignScenarioSummary({
+              scenario_id: id,
+              profile_id: profile.id,
+              archive_grade: archiveSummary.archiveGrade,
+              profile_resonance: archiveSummary.profileResonance,
+              betting_hit: archiveSummary.bettingHit ?? null,
+              most_used_card: archiveSummary.mostUsedCard ?? null,
+              completed_daily_challenge: isDailyChallenge,
+              campaign_score_delta: campaign.campaign_score_delta,
+              finalized_at: null,
+            });
+          }
         }
       } catch (err) {
         if (cancelled) return;
@@ -244,6 +274,7 @@ export default function ResultView() {
     setError('');
     setStoryData(null);
     setCampaignSummary(null);
+    setCampaignScenarioSummary(null);
     setCampaignError('');
     setCampaignNotice('');
     void load();
@@ -253,82 +284,6 @@ export default function ResultView() {
       if (retryTimer) window.clearTimeout(retryTimer);
     };
   }, [directorIdentity.userId, directorIdentity.userName, id, isZh]);
-
-  useEffect(() => {
-    const win = window as AutomationWindow;
-    const render = () => stringifyAutomationPayload(
-      {
-        question: storyData?.question ?? null,
-        status: loading ? 'loading' : error ? 'error' : 'done',
-        currentRound: 0,
-        totalRounds: null,
-        viewMode: 'classic',
-        visualizationEnabled: false,
-        isSimulationComplete: !loading && !error,
-        messageCount: 0,
-        agentCount: agents.length,
-        branchCount: storyData?.branches.length ?? 0,
-      },
-      null,
-      {
-        route: window.location.pathname,
-        kind: 'result',
-        loading,
-        error: error || null,
-        question: storyData?.question ?? null,
-        branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
-        predictions_count: predictions.length,
-        has_unscored: hasUnscored,
-        archive_summary: storyData && id
-          ? (() => {
-              const currentMeta = loadScenarioMeta(id);
-              return {
-                most_used_card: currentMeta.archive.mostUsedCard ?? null,
-                betting_hit: currentMeta.archive.bettingHit ?? null,
-                archive_grade: currentMeta.archive.archiveGrade ?? null,
-                dominant_branch_title: currentMeta.archive.dominantBranchTitle ?? null,
-                dominant_tone: currentMeta.archive.dominantTone ?? null,
-              };
-            })()
-          : null,
-        campaign_summary: campaignSummary
-          ? {
-              already_finalized: campaignSummary.already_finalized,
-              campaign_score_delta: campaignSummary.campaign_score_delta,
-              level: campaignSummary.mastery.level,
-              score_to_next_level: campaignSummary.mastery.score_to_next_level,
-              badge_count: campaignSummary.badges.length,
-              newly_unlocked_badges: campaignSummary.newly_unlocked_badges.map((badge) => badge.badge_id),
-            }
-          : null,
-        controls: {
-          can_go_back_to_simulation: true,
-          can_export_markdown: !exporting,
-          can_open_share_modal: true,
-          can_open_leaderboard: true,
-          can_score_predictions: hasUnscored && !scoring,
-          active_modal: showShare ? 'share' : null,
-          modal_state: showShare ? shareAutomation : null,
-          expanded_branch_id: expandedBranch,
-        },
-        branches: (storyData?.branches ?? []).slice(0, 8).map((branch) => ({
-          id: branch.id,
-          title: branch.title,
-          probability: branch.probability,
-          has_story: Boolean(branch.story),
-          can_expand_story: Boolean(branch.story && branch.story.length > 150),
-          expanded: expandedBranch === branch.id,
-        })),
-      },
-    );
-
-    win.render_game_to_text = render;
-    return () => {
-      if (win.render_game_to_text === render) {
-        delete win.render_game_to_text;
-      }
-    };
-  }, [agents.length, campaignSummary, error, expandedBranch, exporting, hasUnscored, loading, predictions, scoring, shareAutomation, showShare, storyData]);
 
   const handleExport = async () => {
     if (!id || exporting) return;
@@ -370,7 +325,41 @@ export default function ResultView() {
   };
 
   const branches = storyData?.branches ?? [];
-  const scenarioMeta = id ? loadScenarioMeta(id) : null;
+  const storedScenarioMeta = id ? loadScenarioMeta(id) : null;
+  const inferredProfile = useMemo(
+    () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
+    [scenario],
+  );
+  const scenarioMeta = useMemo(() => {
+    if (!storedScenarioMeta) return null;
+
+    return {
+      ...storedScenarioMeta,
+      archive: {
+        ...storedScenarioMeta.archive,
+        profileId:
+          storedScenarioMeta.archive.profileId
+          ?? campaignScenarioSummary?.profile_id
+          ?? inferredProfile?.id,
+        mostUsedCard:
+          campaignScenarioSummary?.most_used_card
+          ?? storedScenarioMeta.archive.mostUsedCard
+          ?? null,
+        bettingHit:
+          campaignScenarioSummary?.betting_hit
+          ?? storedScenarioMeta.archive.bettingHit
+          ?? null,
+        archiveGrade:
+          campaignScenarioSummary?.archive_grade
+          ?? storedScenarioMeta.archive.archiveGrade
+          ?? null,
+        profileResonance:
+          campaignScenarioSummary?.profile_resonance
+          ?? storedScenarioMeta.archive.profileResonance
+          ?? null,
+      },
+    };
+  }, [campaignScenarioSummary, inferredProfile?.id, storedScenarioMeta]);
   const gameplayProfileLabel =
     scenarioMeta?.archive.profileId
       ? getGameplayProfileLabel(scenarioMeta.archive.profileId, isZh)
@@ -383,9 +372,12 @@ export default function ResultView() {
       ? branches.find((branch) => branch.title === scenarioMeta.archive.dominantBranchTitle) ?? null
       : null
   ), [branches, scenarioMeta?.archive.dominantBranchTitle]);
-  const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
-  const isDailyChallenge = Boolean(challengeMatch);
-  const challengeProgress = challengeMatch?.progress ?? null;
+  const hasLocalDirectorState = Boolean(
+    scenarioMeta?.director.lastUpdatedAt
+    || (scenarioMeta?.director.spentPoints ?? 0) > 0
+    || (scenarioMeta?.cards.usageLog.length ?? 0) > 0
+    || (scenarioMeta?.betting.bets.length ?? 0) > 0,
+  );
   const profileResonanceLabel = scenarioMeta?.archive.profileResonance
     ? t(`result.archive_resonance_${scenarioMeta.archive.profileResonance}`)
     : t('result.archive_unset');
@@ -444,6 +436,82 @@ export default function ResultView() {
   const hitBetCount = localBetOutcomes.filter((entry) => entry.outcome === 'hit').length;
   const resolvedBetCount = localBetOutcomes.filter((entry) => entry.outcome !== 'pending').length;
 
+  useEffect(() => {
+    const win = window as AutomationWindow;
+    const render = () => stringifyAutomationPayload(
+      {
+        question: storyData?.question ?? null,
+        status: loading ? 'loading' : error ? 'error' : 'done',
+        currentRound: 0,
+        totalRounds: null,
+        viewMode: 'classic',
+        visualizationEnabled: false,
+        isSimulationComplete: !loading && !error,
+        messageCount: 0,
+        agentCount: agents.length,
+        branchCount: storyData?.branches.length ?? 0,
+      },
+      null,
+      {
+        route: window.location.pathname,
+        kind: 'result',
+        loading,
+        error: error || null,
+        question: storyData?.question ?? null,
+        branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
+        predictions_count: predictions.length,
+        has_unscored: hasUnscored,
+        archive_summary: storyData && scenarioMeta
+          ? {
+              most_used_card: scenarioMeta.archive.mostUsedCard ?? null,
+              betting_hit: scenarioMeta.archive.bettingHit ?? null,
+              archive_grade: scenarioMeta.archive.archiveGrade ?? null,
+              dominant_branch_title: scenarioMeta.archive.dominantBranchTitle ?? null,
+              dominant_tone: scenarioMeta.archive.dominantTone ?? null,
+              profile_id: scenarioMeta.archive.profileId ?? null,
+              profile_resonance: scenarioMeta.archive.profileResonance ?? null,
+              completed_daily_challenge: isDailyChallenge,
+            }
+          : null,
+        campaign_summary: campaignSummary
+          ? {
+              already_finalized: campaignSummary.already_finalized,
+              campaign_score_delta: campaignSummary.campaign_score_delta,
+              level: campaignSummary.mastery.level,
+              score_to_next_level: campaignSummary.mastery.score_to_next_level,
+              badge_count: campaignSummary.badges.length,
+              newly_unlocked_badges: campaignSummary.newly_unlocked_badges.map((badge) => badge.badge_id),
+            }
+          : null,
+        controls: {
+          can_go_back_to_simulation: true,
+          can_export_markdown: !exporting,
+          can_open_share_modal: true,
+          can_open_leaderboard: true,
+          can_score_predictions: hasUnscored && !scoring,
+          active_modal: showShare ? 'share' : null,
+          modal_state: showShare ? shareAutomation : null,
+          expanded_branch_id: expandedBranch,
+        },
+        branches: (storyData?.branches ?? []).slice(0, 8).map((branch) => ({
+          id: branch.id,
+          title: branch.title,
+          probability: branch.probability,
+          has_story: Boolean(branch.story),
+          can_expand_story: Boolean(branch.story && branch.story.length > 150),
+          expanded: expandedBranch === branch.id,
+        })),
+      },
+    );
+
+    win.render_game_to_text = render;
+    return () => {
+      if (win.render_game_to_text === render) {
+        delete win.render_game_to_text;
+      }
+    };
+  }, [agents.length, campaignSummary, error, expandedBranch, exporting, hasUnscored, isDailyChallenge, loading, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData]);
+
   if (loading) {
     return (
       <div className="result-view">
@@ -473,11 +541,17 @@ export default function ResultView() {
       : getGameplayCardDefinition(scenarioMeta.archive.mostUsedCard).labelEn)
     : t('result.archive_no_cards');
   const bettingHitLabel =
-    !scenarioMeta || scenarioMeta.betting.bets.length === 0
+    !scenarioMeta
       ? t('result.archive_no_bets')
-      : resolvedBetCount === 0
-        ? t('result.archive_pending')
-        : t('result.archive_hit_ratio', { hit: hitBetCount, total: scenarioMeta.betting.bets.length });
+      : scenarioMeta.betting.bets.length > 0
+        ? resolvedBetCount === 0
+          ? t('result.archive_pending')
+          : t('result.archive_hit_ratio', { hit: hitBetCount, total: scenarioMeta.betting.bets.length })
+        : scenarioMeta.archive.bettingHit == null
+          ? t('result.archive_no_bets')
+          : scenarioMeta.archive.bettingHit
+            ? t('result.archive_bet_hit')
+            : t('result.archive_bet_miss');
   const dominantToneLabel = scenarioMeta?.archive.dominantTone
     ? getEndingToneLabel(scenarioMeta.archive.dominantTone, isZh)
     : t('result.archive_unset');
@@ -701,12 +775,14 @@ export default function ResultView() {
                 <span>{t('result.archive_daily_challenge')}</span>
               </span>
             )}
-            <span className="archive-chip">
-              {t('result.archive_director_points', {
-                remaining: scenarioMeta.director.remainingPoints,
-                max: scenarioMeta.director.maxPoints,
-              })}
-            </span>
+            {hasLocalDirectorState && (
+              <span className="archive-chip">
+                {t('result.archive_director_points', {
+                  remaining: scenarioMeta.director.remainingPoints,
+                  max: scenarioMeta.director.maxPoints,
+                })}
+              </span>
+            )}
             {scenarioMeta.archive.bettingHit === true && (
               <span className="archive-chip archive-chip--winner">
                 <img src={getGameplayBadgeSrc('bet_winner')} alt="" aria-hidden="true" />
@@ -777,6 +853,8 @@ export default function ResultView() {
               <strong>
                 {challengeProgress
                   ? `${challengeProgress.completed ? t('result.archive_completed') : t('result.archive_in_progress')} · ${challengeFeedbackLabel ?? t('result.archive_cards_used', { count: challengeProgress.usedCards.length })}`
+                  : isDailyChallenge
+                    ? `${gameplayProfileLabel ? `${gameplayProfileLabel} · ` : ''}${t('result.archive_completed')}`
                   : t('result.archive_regular_run')}
               </strong>
             </div>

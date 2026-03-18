@@ -466,6 +466,9 @@
 .capture-status--done {
   color: #4caf50;
 }
+.capture-status--fallback {
+  color: #c8841a;
+}
 
 @media (max-width: 900px) {
   .theater-panel__status {
