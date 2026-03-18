@@ -180,8 +180,37 @@ export interface ScenarioGameplayCardsState {
   usage_log: ScenarioGameplayCardUsage[];
 }
 
+export interface ScenarioGameplayBet {
+  bet_id: string;
+  kind: 'branch_winner' | 'ending_tone' | 'profile_resonance';
+  target_id?: string | null;
+  target_label: string;
+  confidence: number;
+  user_name?: string | null;
+  placed_at_round: number;
+  placed_at: string;
+  resolved: boolean;
+}
+
+export interface ScenarioGameplayBettingState {
+  bets: ScenarioGameplayBet[];
+}
+
+export interface ScenarioGameplayArchiveBranchSnapshot {
+  branch_id: string;
+  title: string;
+  probability: number;
+}
+
+export interface ScenarioGameplayArchiveState {
+  key_moments: string[];
+  branch_snapshots: ScenarioGameplayArchiveBranchSnapshot[];
+}
+
 export interface ScenarioGameplayState {
   cards: ScenarioGameplayCardsState;
+  betting: ScenarioGameplayBettingState;
+  archive: ScenarioGameplayArchiveState;
 }
 
 export interface ScenarioGameplayStateResponse extends ScenarioGameplayState {

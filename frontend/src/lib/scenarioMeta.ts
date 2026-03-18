@@ -103,6 +103,53 @@ interface RootStore {
 
 export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
 
+const GAMEPLAY_MOMENT_PREFIX = 'event';
+
+export interface ParsedScenarioMoment {
+  kind: 'card' | 'bet' | 'commitment';
+  round: number;
+  value: string;
+}
+
+function encodeScenarioMomentValue(value: string): string {
+  return encodeURIComponent(value.trim());
+}
+
+function decodeScenarioMomentValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function buildCardUsageMoment(round: number, cardId: GameplayCardId): string {
+  return `${GAMEPLAY_MOMENT_PREFIX}:card:${Math.max(1, round)}:${cardId}`;
+}
+
+export function buildBetMoment(round: number, targetLabel: string): string {
+  return `${GAMEPLAY_MOMENT_PREFIX}:bet:${Math.max(1, round)}:${encodeScenarioMomentValue(targetLabel)}`;
+}
+
+export function buildCommitmentMoment(round: number, branchTitle: string): string {
+  return `${GAMEPLAY_MOMENT_PREFIX}:commitment:${Math.max(1, round)}:${encodeScenarioMomentValue(branchTitle)}`;
+}
+
+export function parseScenarioMoment(raw: string): ParsedScenarioMoment | null {
+  const match = raw.match(/^event:(card|bet|commitment):(\d+):(.*)$/);
+  if (!match) return null;
+
+  const [, kind, roundText, encodedValue] = match;
+  const round = Number.parseInt(roundText, 10);
+  if (!Number.isFinite(round) || round < 1) return null;
+
+  return {
+    kind: kind as ParsedScenarioMoment['kind'],
+    round,
+    value: decodeScenarioMomentValue(encodedValue),
+  };
+}
+
 function createDefaultCommitmentState(): BranchCommitmentState {
   return {
     active: false,
@@ -265,7 +312,7 @@ export function applyCardUsage(scenarioId: string, usage: CardUsageInput): Scena
         ...current.archive,
         profileId: usage.profileId,
         updatedAt: usage.usedAt,
-        keyMoments: [...current.archive.keyMoments, `R${usage.round} 使用了 ${usage.cardId}`],
+        keyMoments: [...current.archive.keyMoments, buildCardUsageMoment(usage.round, usage.cardId)],
       },
     };
   });
@@ -280,7 +327,7 @@ export function placeBet(scenarioId: string, bet: StructuredBetRecord): Scenario
     archive: {
       ...current.archive,
       updatedAt: bet.placedAt,
-      keyMoments: [...current.archive.keyMoments, `R${bet.placedAtRound} 下了 ${bet.targetLabel}`],
+      keyMoments: [...current.archive.keyMoments, buildBetMoment(bet.placedAtRound, bet.targetLabel)],
     },
   }));
 }
@@ -352,7 +399,7 @@ export function setBranchCommitment(
       updatedAt: new Date().toISOString(),
       keyMoments: [
         ...current.archive.keyMoments,
-        `R${payload.currentRound} 承诺世界线 ${payload.branchTitle}`,
+        buildCommitmentMoment(payload.currentRound, payload.branchTitle),
       ],
     },
   }));

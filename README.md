@@ -13,7 +13,7 @@
 | **Real-time WebSocket** | 实时观看 agent 发言流 |
 | **Hierarchical Agents** | Leader-Worker 分层架构，支持千人规模模拟 |
 | **Prediction Leaderboard** | 用户竞猜 + LLM 评分 + 排行榜 |
-| **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响，结果页可逐条查看命中状态 |
+| **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响；下注提交成功后会立刻回写后端 `gameplay_state`，结果页可逐条查看命中状态 |
 | **Gameplay Cards** | 14 张玩法卡以导演级事件注入当前世界线；除原有推进卡外，现已补进 `审计清算 / 情报反噬 / 民意回摆 / 停火委员会` 4 张反制卡。玩法卡弹窗会给出题材专属三段式连锁事件、常驻 `风险 / 资源` 轨道、当前承诺 worldline 的默认目标分支，以及 profile-specific 的打法提示 |
 | **Theme Registry & Asset Manifest** | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 frame / badge 素材统一收进单一注册表；`generic` 现有独立 `gameplay_card_frame_generic` 卡框 |
 | **Expanded Runtime Sprite Pool** | 25 张角色 sprite 已进入运行时清单；本轮新接入 `alchemist / assassin / bard / knight / monk / thief / witch` 7 张精灵，前后端 persona/role 映射也已同步收口 |
@@ -21,7 +21,7 @@
 | **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status` API，首页会把 daily challenge 的后端真值与本地缓存合并显示，结果页会展示本局 campaign 进展 |
 | **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前 `counterplay` 已由后端显式返回到 live snapshot / result payload / WS，结果页与分享文案都会显示这次反制是否命中 |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
-| **Gameplay State Authority** | 主模式 `cards.usageLog` 已后端化到 `Scenario.gameplay_state_json`；前端现在会优先从远端 `usage_log` 重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`。当前仍未完全收口的是 `betting.bets` 和部分 archive raw 细节 |
+| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Asset Provenance** | `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json` sidecar；较新的 Debate 资产保留完整生成记录，较早的 legacy 资产会标记为 backfilled provenance。这里的 backfill 只表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
 | **Platform Scope** | 当前交付形态是浏览器优先的 Web 应用；主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari 的主模式状态回读；桌面/移动浏览器视口也已做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
@@ -151,6 +151,12 @@ cd frontend && npm run e2e:full
   - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `frontend`：`npm run build` → 通过
   - 黑盒：`e2e-suite.mjs corners`（含 `gameplay_state_roundtrip`）→ 通过
+- 本次 session 围绕主模式 cross-device gameplay raw state 收口又补跑：
+  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py` → **19 passed**
+  - 前端：`scenarioGameplayState / PredictionModal / SimulationView / ResultView` 定向回归 → **26 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
+  - 黑盒：`e2e-suite.mjs corners / cross-browser / safari` → 通过
 - 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
 - `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若超时或失败，会自动回退到 Chromium CDP 截图
 - `scripts/e2e-suite.mjs` 的 `corners` 现已补：
@@ -158,7 +164,11 @@ cd frontend && npm run e2e:full
   - `gameplay_state_roundtrip`
   - 结果 JSON 会直接带：
     - `simulationDirector`
+    - `simulationBetting`
     - `resultArchiveSummary`
+    - `resultBetList`
+    - `resultKeyMoments`
+    - `resultBranchSnapshots`
     - `directorGoalsCard`
     - `commitmentCard`
     - `mostUsedCard`
@@ -170,6 +180,11 @@ cd frontend && npm run e2e:full
   - `frontend/output/e2e/20260317-track-c/variants/`
 - 本轮重新验证通过的主模式 full smoke 工件：`frontend/output/e2e/20260318-post-director-goals-full/result.json`
 - 本轮重新验证通过的主模式 corners 工件：`frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`
+- 本次 cross-device state 收口工件：
+  - `frontend/output/e2e/20260319-cross-device-state-corners/result.json`
+  - `frontend/output/e2e/20260319-cross-device-state-cross-browser/result.json`
+  - `frontend/output/e2e/20260319-cross-device-state-safari/result.json`
+  - `frontend/output/e2e/20260319-cross-device-state-safari-panel/result.json`
 - 本轮重新验证通过的 Debate full 工件：`frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
 - 本轮额外复验通过的主模式 full 工件：`frontend/output/e2e/20260318-codex-audit-main-full/result.json`
 - 本轮额外复验通过的 Debate full 工件：`frontend/output/e2e/20260318-codex-audit-debate-full-rerun/result.json`
@@ -181,6 +196,7 @@ cd frontend && npm run e2e:full
   - `frontend/output/web-game/20260319-post-cross-browser-client/state-0.json`
   - `frontend/output/web-game/20260319-post-cross-browser-client/shot-0.png`
 - `scripts/e2e-debate-suite.mjs` 现支持 `--width / --height / --question / --profile-hint`，可直接补移动端新视口或指定 Debate 主题工件
+- Safari 默认 session screenshot 偶尔仍会拍到空白 Theater 画布；若需要核对 HUD / 面板可见性，可额外启用 `SWARM_SAFARI_PANEL_CAPTURE=1` 产出 panel capture 工件
 - 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 
 ## License

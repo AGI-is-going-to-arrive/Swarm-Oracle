@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
-import type { BranchInfo, ScenarioDirectorState } from '../types';
+import type { BranchInfo, ScenarioDirectorState, ScenarioGameplayState } from '../types';
 
 const navigateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
@@ -42,6 +42,12 @@ const emptyDirectorState: ScenarioDirectorState = {
   },
 };
 
+const emptyGameplayState: ScenarioGameplayState = {
+  cards: { usage_log: [] },
+  betting: { bets: [] },
+  archive: { key_moments: [], branch_snapshots: [] },
+};
+
 const mockStore = {
   scenario: {
     id: 'scenario-1',
@@ -57,6 +63,7 @@ const mockStore = {
     hierarchical: false,
     visualization_enabled: true,
     director_state: emptyDirectorState,
+    gameplay_state: emptyGameplayState,
   },
   agents: [
     { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -248,6 +255,7 @@ describe('SimulationView replay automation output', () => {
       }),
     });
     mockStore.scenario.director_state = emptyDirectorState;
+    mockStore.scenario.gameplay_state = emptyGameplayState;
   });
 
   it('publishes replay_state inside render_game_to_text', async () => {
@@ -279,6 +287,89 @@ describe('SimulationView replay automation output', () => {
         available_rounds: [1],
         filtered_message_count: 1,
         batch_count: 1,
+      });
+    });
+  });
+
+  it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+          cooldowns: {},
+          cards: { usageLog: [] },
+          betting: {
+            bets: [
+              {
+                betId: 'bet-1',
+                kind: 'branch_winner',
+                targetId: 'b1',
+                targetLabel: '永世帝国',
+                confidence: 0.8,
+                placedAtRound: 2,
+                placedAt: '2026-03-19T03:00:00Z',
+                resolved: false,
+              },
+            ],
+          },
+          commitment: {
+            active: false,
+            branchId: null,
+            branchTitle: null,
+            committedAtRound: null,
+            committedAt: null,
+            outcome: null,
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [{ branchId: 'b1', title: '永世帝国', probability: 1 }],
+            keyMoments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+          },
+        },
+      },
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(upsertScenarioGameplayStateMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
+        betting: {
+          bets: [
+            expect.objectContaining({
+              bet_id: 'bet-1',
+              target_label: '永世帝国',
+            }),
+          ],
+        },
+        archive: {
+          key_moments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+          branch_snapshots: [
+            expect.objectContaining({
+              branch_id: 'b1',
+              title: '永世帝国',
+            }),
+          ],
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.betting).toMatchObject({
+        bet_count: 1,
+        key_moment_count: 1,
       });
     });
   });
@@ -707,6 +798,61 @@ describe('SimulationView replay automation output', () => {
           branch_title: '历史拐点',
           outcome: 'pending',
         },
+      });
+    });
+  });
+
+  it('publishes backend betting readback inside render_game_to_text', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 2;
+    mockStore.scenario.gameplay_state = {
+      cards: { usage_log: [] },
+      betting: {
+        bets: [
+          {
+            bet_id: 'bet-1',
+            kind: 'branch_winner',
+            target_id: 'b1',
+            target_label: '永世帝国',
+            confidence: 0.66,
+            user_name: 'Remote Director',
+            placed_at_round: 2,
+            placed_at: '2026-03-19T00:02:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      archive: {
+        key_moments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+        branch_snapshots: [
+          {
+            branch_id: 'b1',
+            title: '永世帝国',
+            probability: 1,
+          },
+        ],
+      },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.betting).toMatchObject({
+        bet_count: 1,
+        key_moment_count: 1,
+      });
+      expect(payload?.page?.betting?.bets?.[0]).toMatchObject({
+        bet_id: 'bet-1',
+        target_label: '永世帝国',
       });
     });
   });

@@ -17,7 +17,7 @@ import {
   type ProfileResonanceId,
   type StructuredBetKind,
 } from '../lib/predictionBetting';
-import { loadScenarioMeta, placeBet } from '../lib/scenarioMeta';
+import { loadScenarioMeta, placeBet, type ScenarioMeta } from '../lib/scenarioMeta';
 import type { BranchInfo } from '../types';
 import './PredictionModal.css';
 
@@ -29,6 +29,7 @@ interface Props {
   sceneTheme?: string | null;
   currentRound?: number;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+  onPlacedBet?: (nextMeta: ScenarioMeta) => void | Promise<void>;
 }
 
 export default function PredictionModal({
@@ -39,6 +40,7 @@ export default function PredictionModal({
   sceneTheme,
   currentRound = 1,
   onAutomationStateChange,
+  onPlacedBet,
 }: Props) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
@@ -154,9 +156,9 @@ export default function PredictionModal({
       if (trimmedName) {
         updateDirectorName(trimmedName);
       }
-      placeBet(scenarioId, {
+      const nextMeta = placeBet(scenarioId, {
         betId: crypto.randomUUID(),
-      kind: betKind,
+        kind: betKind,
         targetId:
           betKind === 'branch_winner'
             ? targetBranchId
@@ -170,6 +172,7 @@ export default function PredictionModal({
         placedAt: new Date().toISOString(),
         resolved: false,
       });
+      await onPlacedBet?.(nextMeta);
       setStatus('success');
       closeTimerRef.current = setTimeout(() => onClose(), 1200);
     } catch (err) {

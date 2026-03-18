@@ -272,6 +272,9 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
     assert initial.status_code == 200
     assert initial.json()["cards"]["usage_log"] == []
+    assert initial.json()["betting"]["bets"] == []
+    assert initial.json()["archive"]["key_moments"] == []
+    assert initial.json()["archive"]["branch_snapshots"] == []
 
     update = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
@@ -290,13 +293,44 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
                     },
                 ],
             },
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "bet-1",
+                        "kind": "branch_winner",
+                        "target_id": "branch-1",
+                        "target_label": "Judicial Review",
+                        "confidence": 0.65,
+                        "user_name": "API QA",
+                        "placed_at_round": 2,
+                        "placed_at": "2026-03-19T01:00:30Z",
+                        "resolved": False,
+                    },
+                ],
+            },
+            "archive": {
+                "key_moments": [
+                    "Opened the ruling to public scrutiny.",
+                ],
+                "branch_snapshots": [
+                    {
+                        "branch_id": "branch-1",
+                        "title": "Judicial Review",
+                        "probability": 0.91,
+                    },
+                ],
+            },
         },
     )
     assert update.status_code == 200
     update_data = update.json()
     assert update_data["cards"]["usage_log"][0]["card_id"] == "public_hearing"
+    assert update_data["betting"]["bets"][0]["bet_id"] == "bet-1"
+    assert update_data["archive"]["key_moments"] == ["Opened the ruling to public scrutiny."]
 
     scenario = client.get(f"/api/scenario/{scenario_id}")
     assert scenario.status_code == 200
     scenario_data = scenario.json()
     assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"
+    assert scenario_data["gameplay_state"]["betting"]["bets"][0]["target_label"] == "Judicial Review"
+    assert scenario_data["gameplay_state"]["archive"]["branch_snapshots"][0]["branch_id"] == "branch-1"

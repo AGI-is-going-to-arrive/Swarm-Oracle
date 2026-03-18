@@ -187,6 +187,8 @@
       "archive_cards_section": "Card Log",
       "archive_bets_section": "Bet Log",
       "archive_moments_section": "Key Records",
+      "archive_branches_section": "Branch Snapshots",
+      "archive_branch_probability": "{{percent}}%",
       "archive_unset": "Uncatalogued",
       "archive_no_cards": "No cards used",
       "archive_pending": "Pending",

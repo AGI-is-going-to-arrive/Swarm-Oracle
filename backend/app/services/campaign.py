@@ -23,6 +23,7 @@ ARCHIVE_GRADE_ORDER = {"C": 0, "B": 1, "A": 2, "S": 3}
 VALID_ARCHIVE_GRADES = set(ARCHIVE_GRADE_ORDER)
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
 VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
+VALID_GAMEPLAY_BET_KINDS = {"branch_winner", "ending_tone", "profile_resonance"}
 LEVEL_SCORE_STEP = 5
 BADGE_IDS = ("daily_challenge", "archive_record", "bet_winner")
 
@@ -46,6 +47,13 @@ DEFAULT_SCENARIO_DIRECTOR_STATE = {
 DEFAULT_SCENARIO_GAMEPLAY_STATE = {
     "cards": {
         "usage_log": [],
+    },
+    "betting": {
+        "bets": [],
+    },
+    "archive": {
+        "key_moments": [],
+        "branch_snapshots": [],
     },
 }
 
@@ -236,28 +244,137 @@ def _normalize_usage_log_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _normalize_bet_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    bet_id = str(entry.get("bet_id", "")).strip()
+    kind = str(entry.get("kind", "")).strip()
+    target_label = str(entry.get("target_label", "")).strip()
+    placed_at = str(entry.get("placed_at", "")).strip()
+
+    if not bet_id or not target_label or not placed_at or kind not in VALID_GAMEPLAY_BET_KINDS:
+        return None
+
+    target_id = (
+        str(entry["target_id"]).strip()
+        if entry.get("target_id") is not None
+        else None
+    ) or None
+    user_name = (
+        str(entry["user_name"]).strip()
+        if entry.get("user_name") is not None
+        else None
+    ) or None
+
+    try:
+        confidence = float(entry.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    try:
+        placed_at_round = max(1, int(entry.get("placed_at_round", 1)))
+    except (TypeError, ValueError):
+        placed_at_round = 1
+
+    return {
+        "bet_id": bet_id,
+        "kind": kind,
+        "target_id": target_id,
+        "target_label": target_label,
+        "confidence": confidence,
+        "user_name": user_name,
+        "placed_at_round": placed_at_round,
+        "placed_at": placed_at,
+        "resolved": bool(entry.get("resolved")),
+    }
+
+
+def _normalize_archive_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+    state = deepcopy(DEFAULT_SCENARIO_GAMEPLAY_STATE["archive"])
+    if not isinstance(payload, dict):
+        return state
+
+    key_moments: list[str] = []
+    seen_key_moments: set[str] = set()
+    for moment in payload.get("key_moments") or []:
+        if not isinstance(moment, str):
+            continue
+        trimmed = moment.strip()
+        if not trimmed or trimmed in seen_key_moments:
+            continue
+        seen_key_moments.add(trimmed)
+        key_moments.append(trimmed)
+
+    branch_snapshots: list[dict[str, Any]] = []
+    seen_branch_ids: dict[str, int] = {}
+    for raw_snapshot in payload.get("branch_snapshots") or []:
+        if not isinstance(raw_snapshot, dict):
+            continue
+        branch_id = str(raw_snapshot.get("branch_id", "")).strip()
+        title = str(raw_snapshot.get("title", "")).strip()
+        if not branch_id or not title:
+            continue
+        try:
+            probability = float(raw_snapshot.get("probability", 0))
+        except (TypeError, ValueError):
+            probability = 0.0
+        snapshot = {
+            "branch_id": branch_id,
+            "title": title,
+            "probability": max(0.0, probability),
+        }
+        if branch_id in seen_branch_ids:
+            branch_snapshots[seen_branch_ids[branch_id]] = snapshot
+            continue
+        seen_branch_ids[branch_id] = len(branch_snapshots)
+        branch_snapshots.append(snapshot)
+
+    branch_snapshots.sort(
+        key=lambda item: (-item["probability"], item["title"], item["branch_id"])
+    )
+
+    state["key_moments"] = key_moments
+    state["branch_snapshots"] = branch_snapshots
+    return state
+
+
 def normalize_scenario_gameplay_state(payload: dict[str, Any] | None) -> dict[str, Any]:
     state = get_default_scenario_gameplay_state()
     if not isinstance(payload, dict):
         return state
 
     raw_cards = payload.get("cards")
-    if not isinstance(raw_cards, dict):
-        return state
+    if isinstance(raw_cards, dict):
+        usage_log: list[dict[str, Any]] = []
+        for entry in raw_cards.get("usage_log") or []:
+            if not isinstance(entry, dict):
+                continue
+            normalized = _normalize_usage_log_entry(entry)
+            if normalized is None:
+                continue
+            usage_log.append(normalized)
 
-    usage_log: list[dict[str, Any]] = []
-    for entry in raw_cards.get("usage_log") or []:
-        if not isinstance(entry, dict):
-            continue
-        normalized = _normalize_usage_log_entry(entry)
-        if normalized is None:
-            continue
-        usage_log.append(normalized)
+        usage_log.sort(key=lambda item: (item["round"], item["used_at"], item["card_id"]))
+        state["cards"] = {
+            "usage_log": usage_log,
+        }
 
-    usage_log.sort(key=lambda item: (item["round"], item["used_at"], item["card_id"]))
-    state["cards"] = {
-        "usage_log": usage_log,
-    }
+    raw_betting = payload.get("betting")
+    if isinstance(raw_betting, dict):
+        bets: list[dict[str, Any]] = []
+        for entry in raw_betting.get("bets") or []:
+            if not isinstance(entry, dict):
+                continue
+            normalized = _normalize_bet_entry(entry)
+            if normalized is None:
+                continue
+            bets.append(normalized)
+
+        bets.sort(key=lambda item: (item["placed_at_round"], item["placed_at"], item["bet_id"]))
+        state["betting"] = {
+            "bets": bets,
+        }
+
+    state["archive"] = _normalize_archive_state(payload.get("archive"))
     return state
 
 

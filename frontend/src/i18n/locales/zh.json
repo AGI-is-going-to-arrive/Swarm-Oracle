@@ -187,6 +187,8 @@
       "archive_cards_section": "玩法记录",
       "archive_bets_section": "下注记录",
       "archive_moments_section": "关键记录",
+      "archive_branches_section": "世界线快照",
+      "archive_branch_probability": "{{percent}}%",
       "archive_unset": "未归档",
       "archive_no_cards": "未出牌",
       "archive_pending": "未判定",

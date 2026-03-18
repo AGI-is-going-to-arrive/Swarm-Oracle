@@ -380,6 +380,9 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
 
     default_state = get_scenario_gameplay_state(scenario_id)
     assert default_state["cards"]["usage_log"] == []
+    assert default_state["betting"]["bets"] == []
+    assert default_state["archive"]["key_moments"] == []
+    assert default_state["archive"]["branch_snapshots"] == []
 
     saved_state = save_scenario_gameplay_state(
         scenario_id,
@@ -408,12 +411,52 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
                     },
                 ],
             },
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "bet-1",
+                        "kind": "branch_winner",
+                        "target_id": "branch-1",
+                        "target_label": "Judicial Review",
+                        "confidence": 0.7,
+                        "user_name": "Campaign QA",
+                        "placed_at_round": 2,
+                        "placed_at": "2026-03-19T01:00:30Z",
+                        "resolved": False,
+                    },
+                ],
+            },
+            "archive": {
+                "key_moments": [
+                    "Opened a public hearing.",
+                    "Forced the audit trail into the open.",
+                ],
+                "branch_snapshots": [
+                    {
+                        "branch_id": "branch-1",
+                        "title": "Judicial Review",
+                        "probability": 0.82,
+                    },
+                ],
+            },
         },
     )
 
     assert [entry["card_id"] for entry in saved_state["cards"]["usage_log"]] == [
         "public_hearing",
         "audit_reckoning",
+    ]
+    assert saved_state["betting"]["bets"][0]["bet_id"] == "bet-1"
+    assert saved_state["archive"]["key_moments"] == [
+        "Opened a public hearing.",
+        "Forced the audit trail into the open.",
+    ]
+    assert saved_state["archive"]["branch_snapshots"] == [
+        {
+            "branch_id": "branch-1",
+            "title": "Judicial Review",
+            "probability": 0.82,
+        },
     ]
 
     loaded_state = get_scenario_gameplay_state(scenario_id)

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PredictionModal from './PredictionModal';
 
@@ -16,6 +16,19 @@ vi.mock('../api/client', () => ({
 }));
 
 describe('PredictionModal automation callback', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+      },
+    });
+  });
+
   it('reports text and confidence changes', async () => {
     const user = userEvent.setup();
     const onAutomationStateChange = vi.fn();
@@ -104,5 +117,37 @@ describe('PredictionModal automation callback', () => {
         && content.includes('Direction Aligned')
       )),
     ).toBeInTheDocument();
+  });
+
+  it('calls onPlacedBet with the updated gameplay meta after a successful submission', async () => {
+    const user = userEvent.setup();
+    const onPlacedBet = vi.fn();
+    const { submitPrediction } = await import('../api/client');
+    vi.mocked(submitPrediction).mockResolvedValue({
+      id: 'prediction-1',
+      scenario_id: 'scenario-1',
+      user_name: 'Test Director',
+      prediction_text: 'Structured bet',
+      confidence: 0.7,
+      score: null,
+      score_reason: null,
+      created_at: '2026-03-19T00:00:00Z',
+    });
+
+    render(
+      <PredictionModal
+        scenarioId="scenario-1"
+        onClose={() => {}}
+        onPlacedBet={onPlacedBet}
+      />,
+    );
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'I think this branch will hold.');
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledTimes(1);
+    expect(onPlacedBet).toHaveBeenCalledTimes(1);
+    expect(onPlacedBet.mock.calls[0][0].betting.bets).toHaveLength(1);
+    expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetLabel).toBeTruthy();
   });
 });

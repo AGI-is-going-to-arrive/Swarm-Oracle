@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/campaign", tags=["campaign"])
 VALID_ARCHIVE_GRADES = {"S", "A", "B", "C"}
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
 VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
+VALID_GAMEPLAY_BET_KINDS = {"branch_winner", "ending_tone", "profile_resonance"}
 
 
 class CampaignProfileResponse(BaseModel):
@@ -344,8 +345,103 @@ class ScenarioGameplayCardsStateResponse(BaseModel):
     usage_log: list[ScenarioGameplayCardUsageResponse] = Field(default_factory=list)
 
 
+class ScenarioGameplayBetResponse(BaseModel):
+    bet_id: str
+    kind: str
+    target_id: str | None = None
+    target_label: str
+    confidence: float = 0
+    user_name: str | None = None
+    placed_at_round: int
+    placed_at: str
+    resolved: bool = False
+
+    @field_validator("bet_id", "target_label", "placed_at")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field cannot be empty")
+        return normalized
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized not in VALID_GAMEPLAY_BET_KINDS:
+            raise ValueError(f"kind must be one of {sorted(VALID_GAMEPLAY_BET_KINDS)}")
+        return normalized
+
+    @field_validator("target_id", "user_name")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: float) -> float:
+        if value < 0 or value > 1:
+            raise ValueError("confidence must be between 0 and 1")
+        return value
+
+    @field_validator("placed_at_round")
+    @classmethod
+    def validate_placed_at_round(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("placed_at_round must be >= 1")
+        return value
+
+
+class ScenarioGameplayBettingStateResponse(BaseModel):
+    bets: list[ScenarioGameplayBetResponse] = Field(default_factory=list)
+
+
+class ScenarioGameplayArchiveBranchSnapshotResponse(BaseModel):
+    branch_id: str
+    title: str
+    probability: float = 0
+
+    @field_validator("branch_id", "title")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field cannot be empty")
+        return normalized
+
+    @field_validator("probability")
+    @classmethod
+    def validate_probability(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("probability must be >= 0")
+        return value
+
+
+class ScenarioGameplayArchiveStateResponse(BaseModel):
+    key_moments: list[str] = Field(default_factory=list)
+    branch_snapshots: list[ScenarioGameplayArchiveBranchSnapshotResponse] = Field(default_factory=list)
+
+    @field_validator("key_moments")
+    @classmethod
+    def normalize_key_moments(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for moment in value:
+            trimmed = moment.strip()
+            if not trimmed or trimmed in seen:
+                continue
+            seen.add(trimmed)
+            normalized.append(trimmed)
+        return normalized
+
+
 class ScenarioGameplayStateRequest(BaseModel):
     cards: ScenarioGameplayCardsStateResponse = Field(default_factory=ScenarioGameplayCardsStateResponse)
+    betting: ScenarioGameplayBettingStateResponse = Field(default_factory=ScenarioGameplayBettingStateResponse)
+    archive: ScenarioGameplayArchiveStateResponse = Field(default_factory=ScenarioGameplayArchiveStateResponse)
 
 
 class ScenarioGameplayStateResponse(ScenarioGameplayStateRequest):

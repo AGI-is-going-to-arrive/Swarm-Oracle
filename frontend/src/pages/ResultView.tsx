@@ -24,7 +24,12 @@ import {
   markChallengeCompleted,
 } from '../lib/dailyChallenge';
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
-import { ensureScenarioObjectives, loadScenarioMeta, updateArchive } from '../lib/scenarioMeta';
+import {
+  ensureScenarioObjectives,
+  loadScenarioMeta,
+  parseScenarioMoment,
+  updateArchive,
+} from '../lib/scenarioMeta';
 import {
   applyScenarioDirectorState,
   hasMeaningfulScenarioDirectorState,
@@ -33,6 +38,7 @@ import {
 } from '../lib/scenarioDirectorState';
 import {
   applyScenarioGameplayState,
+  areScenarioGameplayStatesEquivalent,
   hasMeaningfulScenarioGameplayState,
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
@@ -144,6 +150,40 @@ function getCampaignBoundaryMessage(kind: 'missing' | 'conflict', isZh: boolean)
     : 'This archived run already belongs to another director profile, so it will not be counted again on this device.';
 }
 
+function buildStoryKeyMoments(story: StoryData): string[] {
+  return Array.from(new Set(
+    story.branches
+      .flatMap((branch) => branch.key_moments ?? [])
+      .map((moment) => moment.trim())
+      .filter(Boolean),
+  ));
+}
+
+function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
+  const parsed = parseScenarioMoment(moment);
+  if (!parsed) return moment;
+
+  if (parsed.kind === 'card') {
+    const definition = getGameplayCardDefinition(
+      parsed.value as Parameters<typeof getGameplayCardDefinition>[0],
+    );
+    const label = isZh ? definition.labelZh : definition.labelEn;
+    return isZh
+      ? `R${parsed.round} 使用 ${label}`
+      : `R${parsed.round} played ${label}`;
+  }
+
+  if (parsed.kind === 'bet') {
+    return isZh
+      ? `R${parsed.round} 下了 ${parsed.value}`
+      : `R${parsed.round} placed a bet on ${parsed.value}`;
+  }
+
+  return isZh
+    ? `R${parsed.round} 承诺世界线 ${parsed.value}`
+    : `R${parsed.round} committed to ${parsed.value}`;
+}
+
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -222,15 +262,27 @@ export default function ResultView() {
         if (hasMeaningfulScenarioGameplayState(remoteGameplayState)) {
           applyScenarioGameplayState(id, remoteGameplayState as NonNullable<typeof remoteGameplayState>);
         }
+        const currentMeta = loadScenarioMeta(id);
+        const storyKeyMoments = buildStoryKeyMoments(story);
+        const storyBranchSnapshots = story.branches.map((branch) => ({
+          branchId: branch.id,
+          title: branch.title,
+          probability: branch.probability,
+        }));
         let nextMeta = updateArchive(id, {
           question: scenario.question,
           sceneTheme: scenario.scene_theme,
           profileId: profile.id,
-          branchSnapshots: story.branches.map((branch) => ({
-            branchId: branch.id,
-            title: branch.title,
-            probability: branch.probability,
-          })),
+          keyMoments: Array.from(new Set([
+            ...currentMeta.archive.keyMoments,
+            ...storyKeyMoments,
+          ])),
+          branchSnapshots: Array.from(
+            new Map(
+              [...currentMeta.archive.branchSnapshots, ...storyBranchSnapshots]
+                .map((snapshot) => [snapshot.branchId, snapshot]),
+            ).values(),
+          ),
         });
         if (nextMeta.objectives.goals.length === 0) {
           const objectiveArc = getGameplaySignatureArcState(
@@ -261,10 +313,9 @@ export default function ResultView() {
         const mergedGameplayState = scenarioMetaToGameplayState(
           mergeScenarioMetaWithGameplayState(nextMeta, remoteGameplayState),
         );
-        const remoteGameplayCount = remoteGameplayState?.cards?.usage_log?.length ?? 0;
         if (
           hasMeaningfulScenarioGameplayState(mergedGameplayState)
-          && mergedGameplayState.cards.usage_log.length > remoteGameplayCount
+          && !areScenarioGameplayStatesEquivalent(mergedGameplayState, remoteGameplayState)
         ) {
           try {
             await upsertScenarioGameplayState(id, mergedGameplayState);
@@ -630,6 +681,10 @@ export default function ResultView() {
       outcome: resolveStructuredBetOutcome(bet, betOutcomeContext),
     })) ?? []
   ), [betOutcomeContext, scenarioMeta?.betting.bets]);
+  const formattedArchiveKeyMoments = useMemo(
+    () => scenarioMeta?.archive.keyMoments.map((moment) => formatArchiveKeyMoment(moment, isZh)) ?? [],
+    [isZh, scenarioMeta?.archive.keyMoments],
+  );
   const newlyUnlockedBadges = useMemo(() => (
     campaignSummary?.newly_unlocked_badges.map((badge) => ({
       badge,
@@ -689,6 +744,20 @@ export default function ResultView() {
               completed_daily_challenge: isDailyChallenge,
             }
           : null,
+        result_bet_list: localBetOutcomes.map(({ bet, outcome }) => ({
+          bet_id: bet.betId,
+          kind: bet.kind,
+          target_label: bet.targetLabel,
+          placed_at_round: bet.placedAtRound,
+          confidence: bet.confidence,
+          outcome,
+        })),
+        result_key_moments: formattedArchiveKeyMoments,
+        result_branch_snapshots: scenarioMeta?.archive.branchSnapshots.map((snapshot) => ({
+          branch_id: snapshot.branchId,
+          title: snapshot.title,
+          probability: snapshot.probability,
+        })) ?? [],
         campaign_summary: campaignSummary
           ? {
               already_finalized: campaignSummary.already_finalized,
@@ -726,7 +795,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, hasUnscored, isDailyChallenge, loading, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, isDailyChallenge, loading, localBetOutcomes, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
 
   if (loading) {
     return (
@@ -1149,10 +1218,24 @@ export default function ResultView() {
             <div className="result-archive__section">
               <h3>{t('result.archive_moments_section')}</h3>
               <ul className="archive-moments">
-                {scenarioMeta.archive.keyMoments.map((moment, index) => (
+                {formattedArchiveKeyMoments.map((moment, index) => (
                   <li key={`${moment}-${index}`}>{moment}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {scenarioMeta.archive.branchSnapshots.length > 0 && (
+            <div className="result-archive__section">
+              <h3>{t('result.archive_branches_section')}</h3>
+              <div className="archive-list">
+                {scenarioMeta.archive.branchSnapshots.map((snapshot) => (
+                  <div key={snapshot.branchId} className="archive-item">
+                    <strong>{snapshot.title}</strong>
+                    <span>{t('result.archive_branch_probability', { percent: Math.round(snapshot.probability * 100) })}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </section>

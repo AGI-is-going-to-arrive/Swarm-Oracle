@@ -171,7 +171,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `save_scenario_director_state(scenario_id, director_state)` — 写入单局 goals / commitment 权威态
   - `get_scenario_gameplay_state(scenario_id)` — 读取单局玩法层权威态
   - `save_scenario_gameplay_state(scenario_id, gameplay_state)` — 写入单局玩法层权威态
-  - `normalize_scenario_gameplay_state(payload)` — 规范化 `cards.usage_log`
+  - `normalize_scenario_gameplay_state(payload)` — 规范化 `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots`
   - `get_scenario_campaign_summary(scenario_id)` — 读取单局已落库的 campaign 摘要；供 `ResultView` 在本地档案缺失时回填关键字段
   - `get_campaign_profile_summary(user_id)` — 读取导演总览
   - `list_campaign_mastery_summaries(user_id)` — 按 `campaign_score` 列出题材 mastery
@@ -184,9 +184,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - goals / commitment 当前落在 `Scenario.director_state_json`
   - live/result 前端会优先读取这一份
 - **gameplay state**:
-  - 主模式 `cards.usageLog` 当前落在 `Scenario.gameplay_state_json`
+  - 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 当前都落在 `Scenario.gameplay_state_json`
   - 前端会基于远端 `usage_log` 重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`
-  - `betting.bets` 与部分 archive raw 细节仍未完全进入这条后端 authority 链
+  - 这次只是扩现有 JSON 列契约，没有新增 DB column，也没有新增 Alembic migration
 - **时区归一**: `daily-status` 查询现在会把 SQLite round-trip 回来的 naive UTC 时间先按 UTC 归一，再换算调用方本地日期，避免跨时区同日完成态误判
 - **时间序列化**: `profile / mastery / badges / daily-status` 响应里的时间字段统一输出带 `+00:00` 的 UTC ISO 字符串
 - **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
@@ -227,7 +227,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate |
-| `GET /scenario/{id}` | GET | 获取场景详情；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state` 与 `gameplay_state`，供前端直开 `/sim/:id` 时恢复 Theater 状态、导演层权威态与主模式 usage log 权威态；前端玩法系统（结构化下注/玩法卡/档案/每日挑战）仍复用现有场景与 prediction/intervention API，不要求一次性把整套本地玩法状态都后端化 |
+| `GET /scenario/{id}` | GET | 获取场景详情；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state` 与 `gameplay_state`，供前端直开 `/sim/:id` 时恢复 Theater 状态、导演层权威态，以及主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 权威态 |
 | `GET /scenario/{id}/branches` | GET | 获取分支列表 |
 | `GET /scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） |
 | `GET /scenario/{id}/story` | GET | 获取叙事结果；若尚无 completed branches，会回退返回该场景现有 branches，并为根分支补 placeholder title |
@@ -255,8 +255,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单局 campaign 摘要；若该 scenario 尚未 finalize，则返回 `404` |
 | `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单局 goals / commitment 权威态；若该 scenario 已存在但尚未写入，会返回安全默认值 |
 | `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单局 goals / commitment 权威态；当前只覆盖这批导演层状态，不负责主模式 `cards.usageLog` 之外的玩法状态 |
-| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单局玩法层权威态；当前已包含主模式 `cards.usageLog` |
-| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单局玩法层权威态；当前主要用于主模式 `cards.usageLog` 的跨设备同步 |
+| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单局玩法层权威态；当前已包含主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` |
+| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单局玩法层权威态；当前用于主模式整套 gameplay raw state 的跨设备同步 |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
@@ -324,7 +324,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
+仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
 
 覆盖重心：
 

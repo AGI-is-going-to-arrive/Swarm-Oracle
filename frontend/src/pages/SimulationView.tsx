@@ -32,6 +32,7 @@ import {
 } from '../lib/scenarioDirectorState';
 import {
   applyScenarioGameplayState,
+  areScenarioGameplayStatesEquivalent,
   hasMeaningfulScenarioGameplayState,
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
@@ -317,9 +318,8 @@ export function SimulationView() {
     if (!id || !storedScenarioMeta) return;
     const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
-    const remoteCount = backendGameplayState?.cards?.usage_log?.length ?? 0;
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
-    if (mergedState.cards.usage_log.length <= remoteCount) return;
+    if (areScenarioGameplayStatesEquivalent(mergedState, backendGameplayState)) return;
     void persistGameplayState(mergedMeta);
   }, [backendGameplayState, id, persistGameplayState, storedScenarioMeta]);
 
@@ -498,6 +498,20 @@ export function SimulationView() {
                 outcome: scenarioMeta.commitment.outcome,
               }
               : { active: false },
+          }
+          : null,
+        betting: scenarioMeta
+          ? {
+            bet_count: scenarioMeta.betting.bets.length,
+            bets: scenarioMeta.betting.bets.slice(0, 5).map((bet) => ({
+              bet_id: bet.betId,
+              kind: bet.kind,
+              target_label: bet.targetLabel,
+              placed_at_round: bet.placedAtRound,
+              confidence: bet.confidence,
+              resolved: bet.resolved,
+            })),
+            key_moment_count: scenarioMeta.archive.keyMoments.length,
           }
           : null,
         controls: {
@@ -727,6 +741,10 @@ export function SimulationView() {
     refreshLocalMeta();
     await persistGameplayState(nextMeta);
   }, [persistGameplayState, refreshLocalMeta]);
+  const handlePlacedBet = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+    refreshLocalMeta();
+    await persistGameplayState(nextMeta);
+  }, [persistGameplayState, refreshLocalMeta]);
   const handleCommitBranch = useCallback(() => {
     if (!id || !commitmentDraftBranchId) return;
     const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
@@ -849,6 +867,20 @@ export function SimulationView() {
                 outcome: scenarioMeta.commitment.outcome,
               }
               : { active: false },
+          }
+          : null,
+        betting: scenarioMeta
+          ? {
+            bet_count: scenarioMeta.betting.bets.length,
+            bets: scenarioMeta.betting.bets.slice(0, 5).map((bet) => ({
+              bet_id: bet.betId,
+              kind: bet.kind,
+              target_label: bet.targetLabel,
+              placed_at_round: bet.placedAtRound,
+              confidence: bet.confidence,
+              resolved: bet.resolved,
+            })),
+            key_moment_count: scenarioMeta.archive.keyMoments.length,
           }
           : null,
         controls: {
@@ -1382,6 +1414,7 @@ export function SimulationView() {
             sceneTheme={scenario?.scene_theme}
             currentRound={Math.max(currentRound, 1)}
             onAutomationStateChange={setPredictionAutomation}
+            onPlacedBet={handlePlacedBet}
             onClose={handlePredictionClose}
           />
         </Suspense>

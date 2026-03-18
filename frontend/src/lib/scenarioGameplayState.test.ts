@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { mergeScenarioMetaWithGameplayState, scenarioMetaToGameplayState } from './scenarioGameplayState';
+import {
+  areScenarioGameplayStatesEquivalent,
+  mergeScenarioMetaWithGameplayState,
+  scenarioMetaToGameplayState,
+} from './scenarioGameplayState';
 import { loadScenarioMeta, type ScenarioMeta } from './scenarioMeta';
 
 describe('scenarioGameplayState helpers', () => {
@@ -52,6 +56,13 @@ describe('scenarioGameplayState helpers', () => {
           },
         ],
       },
+      betting: {
+        bets: [],
+      },
+      archive: {
+        key_moments: [],
+        branch_snapshots: [],
+      },
     });
   });
 
@@ -82,9 +93,36 @@ describe('scenarioGameplayState helpers', () => {
           },
         ],
       },
+      betting: {
+        bets: [
+          {
+            bet_id: 'bet-1',
+            kind: 'branch_winner',
+            target_id: 'branch-1',
+            target_label: 'Open Hearing',
+            confidence: 0.72,
+            user_name: 'Remote Director',
+            placed_at_round: 2,
+            placed_at: '2026-03-19T00:01:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      archive: {
+        key_moments: ['Remote key moment'],
+        branch_snapshots: [
+          {
+            branch_id: 'branch-1',
+            title: 'Open Hearing',
+            probability: 0.75,
+          },
+        ],
+      },
     });
 
     expect(merged.cards.usageLog).toHaveLength(2);
+    expect(merged.betting.bets).toHaveLength(1);
+    expect(merged.betting.bets[0].betId).toBe('bet-1');
     expect(merged.director.remainingPoints).toBe(1);
     expect(merged.director.spentPoints).toBe(2);
     expect(merged.cooldowns.public_hearing?.lastUsedRound).toBe(2);
@@ -92,5 +130,79 @@ describe('scenarioGameplayState helpers', () => {
     expect(merged.archive.profileId).toBe('law');
     expect(merged.archive.counterplayCardCount).toBe(2);
     expect(merged.archive.lastCounterplayCard).toBe('audit_reckoning');
+    expect(merged.archive.keyMoments).toContain('Remote key moment');
+    expect(merged.archive.branchSnapshots).toEqual([
+      {
+        branchId: 'branch-1',
+        title: 'Open Hearing',
+        probability: 0.75,
+      },
+    ]);
+  });
+
+  it('round-trips betting and archive raw state without losing usage-derived data', () => {
+    const meta = loadScenarioMeta('scenario-raw-roundtrip');
+    const nextMeta: ScenarioMeta = {
+      ...meta,
+      cards: {
+        usageLog: [
+          {
+            cardId: 'public_hearing',
+            profileId: 'law',
+            branchId: 'branch-1',
+            branchTitle: 'Open Hearing',
+            round: 2,
+            cost: 1,
+            directive: 'Expose the hidden exception clause.',
+            usedAt: '2026-03-19T00:00:00Z',
+          },
+        ],
+      },
+      betting: {
+        bets: [
+          {
+            betId: 'bet-1',
+            kind: 'branch_winner',
+            targetId: 'branch-1',
+            targetLabel: 'Open Hearing',
+            confidence: 0.7,
+            userName: 'Archivist',
+            placedAtRound: 2,
+            placedAt: '2026-03-19T00:01:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      archive: {
+        ...meta.archive,
+        keyMoments: ['event:bet:2:Open%20Hearing'],
+        branchSnapshots: [
+          {
+            branchId: 'branch-1',
+            title: 'Open Hearing',
+            probability: 0.75,
+          },
+        ],
+      },
+    };
+
+    const payload = scenarioMetaToGameplayState(nextMeta);
+    expect(payload.betting.bets).toHaveLength(1);
+    expect(payload.archive.key_moments).toContain('event:bet:2:Open%20Hearing');
+    expect(payload.archive.branch_snapshots[0]).toMatchObject({
+      branch_id: 'branch-1',
+      title: 'Open Hearing',
+    });
+
+    const merged = mergeScenarioMetaWithGameplayState(meta, payload);
+    expect(merged.betting.bets[0].betId).toBe('bet-1');
+    expect(merged.archive.branchSnapshots[0].branchId).toBe('branch-1');
+    expect(merged.archive.keyMoments).toContain('event:bet:2:Open%20Hearing');
+    expect(merged.archive.keyMoments.some((moment) => moment.includes('public_hearing'))).toBe(true);
+    expect(areScenarioGameplayStatesEquivalent(payload, scenarioMetaToGameplayState(merged))).toBe(false);
+    expect(scenarioMetaToGameplayState(merged).archive.key_moments).toEqual(expect.arrayContaining([
+      'event:bet:2:Open%20Hearing',
+      'event:card:2:public_hearing',
+    ]));
   });
 });

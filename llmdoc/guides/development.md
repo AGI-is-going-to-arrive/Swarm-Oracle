@@ -102,6 +102,15 @@ python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q
 ```
 
 - 结果：**11 passed**
+- 本次 session 围绕主模式 cross-device `gameplay_state` 收口又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q
+```
+
+- 结果：**19 passed**
 
 ### Frontend 测试
 
@@ -194,6 +203,31 @@ npm run build
 - 结果：
   - `vitest`：**12 passed**
   - `npm run build`：通过
+- 本次 session 围绕主模式 cross-device `gameplay_state` 收口又补跑了：
+
+```bash
+cd frontend
+npm test -- --run \
+  src/lib/scenarioGameplayState.test.ts \
+  src/components/PredictionModal.test.tsx \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-cross-device-state-corners --headless
+npm run e2e:cross-browser -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-cross-device-state-cross-browser --headless
+npm run e2e:safari -- --url http://127.0.0.1:18928 --webdriver-url http://127.0.0.1:4444 --output-dir output/e2e/20260319-cross-device-state-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9
+SWARM_SAFARI_PANEL_CAPTURE=1 npm run e2e:safari -- --url http://127.0.0.1:18928 --webdriver-url http://127.0.0.1:4444 --output-dir output/e2e/20260319-cross-device-state-safari-panel --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9
+```
+
+- 结果：
+  - `vitest`：**26 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `e2e-suite.mjs corners`：通过
+  - `e2e-suite.mjs cross-browser`：通过
+  - `e2e-suite.mjs safari`：通过
+  - `SWARM_SAFARI_PANEL_CAPTURE=1` Safari follow-up：通过
 - 本轮还重新执行了：
 
 ```bash
@@ -279,11 +313,17 @@ safaridriver -p 4444
     - `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
   - 本次 `gameplay_state_roundtrip` corners 工件：
     - `frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`
+  - 本次 cross-device `gameplay_state` 收口工件：
+    - `frontend/output/e2e/20260319-cross-device-state-corners/`
+    - `frontend/output/e2e/20260319-cross-device-state-cross-browser/`
+    - `frontend/output/e2e/20260319-cross-device-state-safari/`
+    - `frontend/output/e2e/20260319-cross-device-state-safari-panel/`
   - Firefox / WebKit 官方 cross-browser smoke：
     - `frontend/output/e2e/20260319-official-cross-browser/result.json`
   - Safari 官方 smoke：
     - `frontend/output/e2e/20260319-official-safari-v5/result.json`
     - Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染；当前正式入口默认走稳定的 session screenshot，`panel capture` 仅保留为可选实验开关
+    - 本次还额外验证了 `SWARM_SAFARI_PANEL_CAPTURE=1`：当默认 session screenshot 出现空白时，`panel capture` 仍可取到 HUD / 面板画面
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
   - Debate 额外补充工件：

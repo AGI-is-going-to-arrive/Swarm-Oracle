@@ -858,6 +858,50 @@ async function runGameplayStateRoundtripCase(page, {
         },
       ],
     },
+    betting: {
+      bets: [
+        {
+          bet_id: "bet-1",
+          kind: "branch_winner",
+          target_id: "gameplay-branch-1",
+          target_label: "算法接管",
+          confidence: 0.78,
+          user_name: "E2E Bet One",
+          placed_at_round: 2,
+          placed_at: "2026-03-19T02:01:30Z",
+          resolved: false,
+        },
+        {
+          bet_id: "bet-2",
+          kind: "ending_tone",
+          target_id: "order",
+          target_label: "秩序整合",
+          confidence: 0.64,
+          user_name: "E2E Bet Two",
+          placed_at_round: 3,
+          placed_at: "2026-03-19T02:02:30Z",
+          resolved: false,
+        },
+      ],
+    },
+    archive: {
+      key_moments: [
+        "Round 1 public oversight opens.",
+        "Round 3 audit reckoning lands.",
+      ],
+      branch_snapshots: [
+        {
+          branch_id: "gameplay-branch-1",
+          title: "算法接管",
+          probability: 0.72,
+        },
+        {
+          branch_id: "gameplay-branch-2",
+          title: "法庭回摆",
+          probability: 0.28,
+        },
+      ],
+    },
   };
 
   await putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState);
@@ -870,6 +914,8 @@ async function runGameplayStateRoundtripCase(page, {
       payload.page?.kind === "simulation"
       && payload.page?.director?.system_tracks?.risk_value === 1
       && payload.page?.director?.system_tracks?.resource_value === 3
+      && payload.page?.betting?.bet_count === 2
+      && payload.page?.betting?.key_moment_count >= 2
     ),
     30000,
     "gameplay state simulation readback",
@@ -887,6 +933,9 @@ async function runGameplayStateRoundtripCase(page, {
       && payload.page?.archive_summary?.most_used_card === "public_hearing"
       && payload.page?.archive_summary?.counterplay_card_count === 3
       && payload.page?.archive_summary?.last_counterplay_card === "audit_reckoning"
+      && (payload.page?.result_bet_list?.length ?? 0) === 2
+      && (payload.page?.result_key_moments?.length ?? 0) >= 2
+      && (payload.page?.result_branch_snapshots?.length ?? 0) >= 2
     ),
     40000,
     "gameplay state result readback",
@@ -902,7 +951,11 @@ async function runGameplayStateRoundtripCase(page, {
   return {
     scenarioId,
     simulationDirector: simulation.page?.director ?? null,
+    simulationBetting: simulation.page?.betting ?? null,
     resultArchiveSummary: result.page?.archive_summary ?? null,
+    resultBetList: result.page?.result_bet_list ?? [],
+    resultKeyMoments: result.page?.result_key_moments ?? [],
+    resultBranchSnapshots: result.page?.result_branch_snapshots ?? [],
     mostUsedCard: mostUsedCard ?? null,
     counterplayCard: counterplayCard ?? null,
   };

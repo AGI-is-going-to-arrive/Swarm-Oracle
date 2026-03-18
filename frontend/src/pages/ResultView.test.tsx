@@ -152,6 +152,16 @@ vi.mock('../lib/scenarioMeta', () => {
   return {
     loadScenarioMeta: vi.fn(() => meta),
     ensureScenarioObjectives: vi.fn(() => meta),
+    parseScenarioMoment: vi.fn((raw: string) => {
+      const match = raw.match(/^event:(card|bet|commitment):(\d+):(.*)$/);
+      if (!match) return null;
+      const [, kind, roundText, encodedValue] = match;
+      return {
+        kind,
+        round: Number.parseInt(roundText, 10),
+        value: decodeURIComponent(encodedValue),
+      };
+    }),
     updateArchive: vi.fn(() => meta),
     updateScenarioMeta: vi.fn((_scenarioId: string, updater: (current: ScenarioMeta) => ScenarioMeta) => updater(meta)),
   };
@@ -410,6 +420,160 @@ describe('ResultView campaign summary', () => {
     });
   });
 
+  it('renders backend gameplay raw state when localStorage is empty', async () => {
+    const emptyMeta: ScenarioMeta = {
+      director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: { bets: [] },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [],
+        keyMoments: [],
+        profileId: undefined,
+        dominantBranchTitle: 'Archive Branch',
+        dominantTone: 'order',
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'C',
+        directorStyleTag: null,
+        profileResonance: null,
+      },
+    };
+
+    const { getScenario } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue(emptyMeta);
+    vi.mocked(getScenario).mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      director_state: {
+        objectives: {
+          generated_for_question: null,
+          generated_for_profile: null,
+          goals: [],
+          last_updated_at: null,
+        },
+        commitment: {
+          active: false,
+          branch_id: null,
+          branch_title: null,
+          committed_at_round: null,
+          committed_at: null,
+          outcome: null,
+        },
+      },
+      gameplay_state: {
+        cards: {
+          usage_log: [],
+        },
+        betting: {
+          bets: [
+            {
+              bet_id: 'bet-1',
+              kind: 'branch_winner',
+              target_id: 'branch-1',
+              target_label: 'Archive Branch',
+              confidence: 0.71,
+              user_name: 'Remote Director',
+              placed_at_round: 2,
+              placed_at: '2026-03-19T00:02:00Z',
+              resolved: false,
+            },
+          ],
+        },
+        archive: {
+          key_moments: ['Remote key moment'],
+          branch_snapshots: [
+            {
+              branch_id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+            },
+          ],
+        },
+      },
+    });
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 3,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 1,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 3,
+        level: 1,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 5,
+        score_to_next_level: 2,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findAllByText('Archive Branch')).not.toHaveLength(0);
+    expect(screen.getByText('Remote key moment')).toBeInTheDocument();
+    expect(screen.getByText('result.archive_branches_section')).toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.result_bet_list).toHaveLength(1);
+      expect(payload?.page?.result_key_moments).toContain('Remote key moment');
+      expect(payload?.page?.result_branch_snapshots).toEqual([
+        {
+          branch_id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+        },
+      ]);
+    });
+  });
+
   it('prefers backend director state when local commitment is empty', async () => {
     const { getScenario } = await import('../api/client');
     const { loadScenarioMeta } = await import('../lib/scenarioMeta');
@@ -534,5 +698,117 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByText('Worldline Commitment')).toBeInTheDocument();
     expect(screen.getByText('No commitment')).toBeInTheDocument();
     expect(screen.getAllByText('Archive Branch').length).toBeGreaterThan(1);
+  });
+
+  it('renders betting logs, formatted key moments, and branch snapshots from gameplay raw state', async () => {
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+    vi.mocked(loadScenarioMeta).mockReturnValue({
+      director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: {
+        bets: [
+          {
+            betId: 'bet-1',
+            kind: 'branch_winner',
+            targetId: 'branch-1',
+            targetLabel: 'Archive Branch',
+            confidence: 0.65,
+            placedAtRound: 2,
+            placedAt: '2026-03-19T03:00:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [{ branchId: 'branch-1', title: 'Archive Branch', probability: 1 }],
+        keyMoments: ['event:bet:2:Archive%20Branch', 'Moment 1'],
+        profileId: 'law',
+        dominantBranchTitle: 'Archive Branch',
+        dominantTone: 'order',
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'A',
+        directorStyleTag: 'quiet_observer',
+        profileResonance: 'aligned',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    });
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 2,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 1,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 2,
+        level: 1,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 5,
+        score_to_next_level: 3,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText('Archive Branch')).length).toBeGreaterThan(0);
+    expect(screen.getByText('R2 placed a bet on Archive Branch')).toBeInTheDocument();
+    expect(screen.getByText('result.archive_branches_section')).toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.result_bet_list).toEqual([
+        expect.objectContaining({
+          bet_id: 'bet-1',
+          target_label: 'Archive Branch',
+        }),
+      ]);
+      expect(payload?.page?.result_key_moments).toContain('R2 placed a bet on Archive Branch');
+      expect(payload?.page?.result_branch_snapshots).toEqual([
+        expect.objectContaining({
+          branch_id: 'branch-1',
+          title: 'Archive Branch',
+        }),
+      ]);
+    });
   });
 });

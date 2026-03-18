@@ -218,6 +218,55 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
 - `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
 
+## 2026-03-19 Cross-Device Gameplay State Closure
+
+- 目标：完成 `implement/22_cross_device_state_closure_plan.md` 中剩余的 cross-device state 收口，把主模式 `gameplay_state` 从仅 `cards.usage_log` 扩展为：
+  - `cards.usage_log`
+  - `betting.bets`
+  - `archive.key_moments`
+  - `archive.branch_snapshots`
+- 后端已完成：
+  - `backend/app/services/campaign.py` 增加 `betting/archive` 默认结构与规范化。
+  - `backend/app/api/campaign.py` 扩展 gameplay-state 的 request/response models。
+  - `backend/tests/test_campaign_service.py` / `backend/tests/test_campaign_api.py` 补 roundtrip 与 `/api/scenario/{id}` 回读断言。
+  - 本次没有新增 Alembic migration，因为仅扩展现有 JSON 列契约，没有新增 DB 列。
+- 前端已完成：
+  - `frontend/src/types.ts` / `frontend/src/lib/scenarioGameplayState.ts` 收口完整 gameplay raw state。
+  - `frontend/src/components/PredictionModal.tsx` 提交下注后会立刻把新 meta 回传父层并回写后端。
+  - `frontend/src/pages/SimulationView.tsx` 现在会在 automation payload 中输出 `page.betting`，并以完整 gameplay signature 而非仅 `usage_log.length` 判断是否需要 backfill。
+  - `frontend/src/pages/ResultView.tsx` 会合并远端 betting/archive raw，并在 `render_game_to_text()` 中输出：
+    - `result_bet_list`
+    - `result_key_moments`
+    - `result_branch_snapshots`
+  - 结果页新增了 branch snapshots 区块；新增文案已进 `frontend/src/i18n/locales/en.json` 和 `frontend/src/i18n/locales/zh.json`。
+- i18n 处理：
+  - 本地生成的 archive key moments 改为稳定的 event string，再在结果页按当前语言格式化显示，避免把硬编码中文直接当 authority 跨设备传播。
+- 定向验证已通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
+  - 结果：`19 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts src/components/PredictionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+  - 结果：`26 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+- E2E 工件：
+  - `frontend/output/e2e/20260319-cross-device-state-corners`
+    - `gameplay_state_roundtrip` 现已包含：
+      - `simulationBetting`
+      - `resultBetList`
+      - `resultKeyMoments`
+      - `resultBranchSnapshots`
+  - `frontend/output/e2e/20260319-cross-device-state-cross-browser`
+  - `frontend/output/e2e/20260319-cross-device-state-safari`
+  - `frontend/output/e2e/20260319-cross-device-state-safari-panel`
+- Safari 备注：
+  - 默认 `safari-sim.png` 仍可能出现空白 session screenshot。
+  - 开启 `SWARM_SAFARI_PANEL_CAPTURE=1` 后，`safari-sim.png` 能稳定拍到 HUD/导演态，但 Theater 画布区域仍发黑，更像 Safari/WebKit 对该取证路径的既有限制，不是本轮 raw-state 收口引入的新回归。
+- 这轮没有做：
+  - README / llmdoc 正式同步。
+  - 如果要继续同步文档，按仓库要求需要用户明确确认：`使用 recorder agent 更新项目文档`。
+
 ## 2026-03-18 Audit + E2E Revalidation
 
 - 已重新读取 `llmdoc/index.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`README.md`、`implement/19_four_track_execution_plan.md`、`implement/20_track_d_debate_arena_design_execution_plan.md`、`progress.md`。
