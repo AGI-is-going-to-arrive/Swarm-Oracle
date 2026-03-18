@@ -8,7 +8,10 @@ import { useTranslation } from 'react-i18next';
 
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
-import { upsertScenarioDirectorState } from '../api/client';
+import {
+  upsertScenarioDirectorState,
+  upsertScenarioGameplayState,
+} from '../api/client';
 import {
   captureCompositeElementDataUrl,
   captureElementDataUrl,
@@ -22,10 +25,17 @@ import {
   setBranchCommitment,
 } from '../lib/scenarioMeta';
 import {
+  applyScenarioDirectorState,
   hasMeaningfulScenarioDirectorState,
   mergeScenarioMetaWithDirectorState,
   scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
+import {
+  applyScenarioGameplayState,
+  hasMeaningfulScenarioGameplayState,
+  mergeScenarioMetaWithGameplayState,
+  scenarioMetaToGameplayState,
+} from '../lib/scenarioGameplayState';
 import {
   getGameplayCardDefinition,
   getGameplaySignatureArcState,
@@ -65,7 +75,11 @@ import {
 } from '../game/automation';
 import { HudOverlay } from '../game/HudOverlay';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
-import type { BranchInfo, ScenarioDirectorState } from '../types';
+import type {
+  BranchInfo,
+  ScenarioDirectorState,
+  ScenarioGameplayState,
+} from '../types';
 import './SimulationView.css';
 
 const THEATER_SCENE_LABELS = {
@@ -155,6 +169,7 @@ export function SimulationView() {
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
   const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(null);
+  const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(null);
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
@@ -174,12 +189,12 @@ export function SimulationView() {
     [id, localMetaRevision],
   );
   const scenarioMeta = useMemo(
-    () => (
-      storedScenarioMeta
-        ? mergeScenarioMetaWithDirectorState(storedScenarioMeta, backendDirectorState)
-        : null
-    ),
-    [backendDirectorState, storedScenarioMeta],
+    () => {
+      if (!storedScenarioMeta) return null;
+      const gameplayMerged = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
+      return mergeScenarioMetaWithDirectorState(gameplayMerged, backendDirectorState);
+    },
+    [backendDirectorState, backendGameplayState, storedScenarioMeta],
   );
   const gameplayProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
@@ -253,6 +268,22 @@ export function SimulationView() {
     setBackendDirectorState(scenario?.director_state ?? null);
   }, [scenario?.director_state]);
 
+  useEffect(() => {
+    setBackendGameplayState(scenario?.gameplay_state ?? null);
+  }, [scenario?.gameplay_state]);
+
+  useEffect(() => {
+    if (!id || !hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
+    applyScenarioDirectorState(id, backendDirectorState as ScenarioDirectorState);
+    refreshLocalMeta();
+  }, [backendDirectorState, id, refreshLocalMeta]);
+
+  useEffect(() => {
+    if (!id || !hasMeaningfulScenarioGameplayState(backendGameplayState)) return;
+    applyScenarioGameplayState(id, backendGameplayState as ScenarioGameplayState);
+    refreshLocalMeta();
+  }, [backendGameplayState, id, refreshLocalMeta]);
+
   const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id) return;
     const nextState = scenarioMetaToDirectorState(nextMeta);
@@ -264,12 +295,33 @@ export function SimulationView() {
     }
   }, [id]);
 
+  const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+    if (!id) return;
+    const nextState = scenarioMetaToGameplayState(nextMeta);
+    setBackendGameplayState(nextState);
+    try {
+      await upsertScenarioGameplayState(id, nextState);
+    } catch (err) {
+      console.warn('[GameplayState] Failed to persist backend state', err);
+    }
+  }, [id]);
+
   useEffect(() => {
     if (!id || !storedScenarioMeta) return;
     if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
     if (hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
     void persistDirectorState(storedScenarioMeta);
   }, [backendDirectorState, id, persistDirectorState, storedScenarioMeta]);
+
+  useEffect(() => {
+    if (!id || !storedScenarioMeta) return;
+    const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
+    const mergedState = scenarioMetaToGameplayState(mergedMeta);
+    const remoteCount = backendGameplayState?.cards?.usage_log?.length ?? 0;
+    if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
+    if (mergedState.cards.usage_log.length <= remoteCount) return;
+    void persistGameplayState(mergedMeta);
+  }, [backendGameplayState, id, persistGameplayState, storedScenarioMeta]);
 
   useEffect(() => {
     if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
@@ -303,9 +355,8 @@ export function SimulationView() {
   const timelineRoundMarkers = useMemo(() => {
     if (!scenario?.total_rounds) return [];
 
-    const meta = id ? loadScenarioMeta(id) : null;
-    const cardUsage = meta?.cards.usageLog ?? [];
-    const bets = meta?.betting.bets ?? [];
+    const cardUsage = scenarioMeta?.cards.usageLog ?? [];
+    const bets = scenarioMeta?.betting.bets ?? [];
     const completedEndings = branches.filter((branch) => branch.status === 'COMPLETED');
 
     return Array.from({ length: scenario.total_rounds }, (_, index) => {
@@ -339,7 +390,7 @@ export function SimulationView() {
             : [],
       };
     });
-  }, [branches, id, isSimulationComplete, isZh, replayRounds, scenario?.total_rounds, selectedReplayRound]);
+  }, [branches, isSimulationComplete, isZh, replayRounds, scenario?.total_rounds, scenarioMeta?.betting.bets, scenarioMeta?.cards.usageLog, selectedReplayRound]);
 
   // Load scenario data if navigated directly
   useEffect(() => {
@@ -672,6 +723,10 @@ export function SimulationView() {
     setGameplayAutomation(null);
     refreshLocalMeta();
   }, [refreshLocalMeta]);
+  const handleGameplayApplied = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+    refreshLocalMeta();
+    await persistGameplayState(nextMeta);
+  }, [persistGameplayState, refreshLocalMeta]);
   const handleCommitBranch = useCallback(() => {
     if (!id || !commitmentDraftBranchId) return;
     const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
@@ -1140,7 +1195,7 @@ export function SimulationView() {
                         className={`director-goal director-goal--${objective.status}`}
                       >
                         <strong>{objective.title}</strong>
-                        <span>{objective.detail}</span>
+                        <span className="director-goal__detail">{objective.detail}</span>
                         <small>{objective.progress}</small>
                       </div>
                     ))}
@@ -1191,6 +1246,20 @@ export function SimulationView() {
                   </div>
                 </div>
               )}
+              <div className="theater-panel__game-wrapper">
+                <HudOverlay
+                  canPredict={!isSimulationComplete}
+                  onOpenPrediction={!isSimulationComplete ? () => setShowPrediction(true) : undefined}
+                >
+                  <PhaserGameLoader
+                    key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
+                    replaySpeed={replaySpeed}
+                    playbackMode={playbackMode}
+                    playbackBranchId={selectedReplayBranchId}
+                    playbackRound={selectedReplayRound}
+                  />
+                </HudOverlay>
+              </div>
               {canUseReplayControls && replayBranchOptions.length > 0 && (
                 <div className="theater-panel__filters">
                   <label className="theater-select">
@@ -1234,20 +1303,6 @@ export function SimulationView() {
                   </Suspense>
                 </div>
               )}
-              <div className="theater-panel__game-wrapper">
-                <HudOverlay
-                  canPredict={!isSimulationComplete}
-                  onOpenPrediction={!isSimulationComplete ? () => setShowPrediction(true) : undefined}
-                >
-                  <PhaserGameLoader
-                    key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
-                    replaySpeed={replaySpeed}
-                    playbackMode={playbackMode}
-                    playbackBranchId={selectedReplayBranchId}
-                    playbackRound={selectedReplayRound}
-                  />
-                </HudOverlay>
-              </div>
             </div>
           </div>
         ) : (
@@ -1336,6 +1391,7 @@ export function SimulationView() {
         <Suspense fallback={null}>
           <LazyGameplayCardsModal
             scenarioId={id}
+            initialMeta={scenarioMeta}
             branches={branches}
             agents={agents}
             question={scenario?.question ?? ''}
@@ -1343,6 +1399,7 @@ export function SimulationView() {
             currentRound={Math.max(currentRound, 1)}
             readOnly={!canUseGameplayCards}
             disabledReason={!canUseGameplayCards ? t('sim.warmup.cards_preview') : null}
+            onApplied={handleGameplayApplied}
             onAutomationStateChange={setGameplayAutomation}
             onClose={handleGameplayCardsClose}
           />

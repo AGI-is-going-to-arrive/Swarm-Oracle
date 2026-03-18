@@ -1,7 +1,7 @@
 # SwarmOracle — 实现文档索引
 
 > 汇总自多个开发对话的所有项目文档  
-> 最后更新: 2026-03-18
+> 最后更新: 2026-03-19
 
 ---
 
@@ -29,6 +29,7 @@
 | 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | 四轨路线的执行与落地状态文档；已同步 `Track A` 最小闭环、`Track B2` shared contract 收口、`Track C` 工件基线，以及 `Track D Debate Arena` 已实现事实、测试与 E2E 工件 | 当前会话 |
 | 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | Debate Arena 的设计基线 + 2026-03-18 落地偏差记录；覆盖当前真实 API、前端拆分、i18n、跨平台、自动化钩子、测试与 E2E 工件 | 当前会话 |
 | 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | Debate Arena MVP 的产品/美术/代码蓝图及其已实现状态同步；包含 live/result、押注、分享、自动化钩子与现有 skill-based QA 工件 | 当前会话 |
+| 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | 下一次执行“完全跨设备一致”最后一段的操作手册；已按当前真实状态同步 `gameplay_state`、Safari 正式 smoke 与剩余 `betting.bets / archive raw` 边界 | 当前会话 |
 
 ---
 
@@ -65,6 +66,10 @@
 - ✅ **Phase 3 游戏化打磨**: 标题画面 + 6种结局 + MiniMap + 竞猜面板 + 排行榜 + 截图/GIF导出
 - ✅ **Phase 4 开源准备**: Weather 粒子对象池 + 视口裁剪 + ASSET_CREDITS 106 个 runtime + source 资产条目 + 32 项新测试 + tsc 零错误
 - ✅ **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布场景无遮挡
+- ✅ 主模式 `gameplay_state` authority 第一段：`cards.usageLog` 已后端化，前端会基于远端 `usage_log` 重算导演点数、卡牌冷却、`most_used_card` 与反制轨迹摘要
+- ✅ Safari 正式 smoke：`npm run e2e:safari` 已实跑通过，不再只是临时脚本
+- ✅ 7 张原库存 sprite 已接入 runtime：`alchemist / assassin / bard / knight / monk / thief / witch`
+- ✅ Theater 可读性修复：舞台优先布局、上下信息条压缩、气泡文字放大与清晰化
 
 ### 待完成
 - ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
@@ -78,8 +83,8 @@
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 当前已后端化到 `Scenario.director_state_json`；前端 `scenarioMeta` 继续保留为 points / cooldowns / usageLog / bets / archive 的本地缓存层，不应再把 goals / commitment 理解成“只保存在前端本地”
-- ℹ️ 主模式 director-state 已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari smoke；Safari 若开启翻译插件，截图会被浏览器/插件浮层污染，但功能链路本身已验证通过
+- ℹ️ `director goals / worldline commitment` 当前已后端化到 `Scenario.director_state_json`；主模式 `cards.usageLog` 也已后端化到 `Scenario.gameplay_state_json`。当前仍未完全收口的是 `betting.bets` 与部分 archive raw 细节
+- ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
 

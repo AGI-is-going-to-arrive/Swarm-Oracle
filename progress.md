@@ -6717,6 +6717,272 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `cd frontend && npm run build`
   - 结果：通过
 
+## 2026-03-19 Main Gameplay State + Safari + Theater Size
+
+- 主模式 `cards.usageLog` 已后端化到 `Scenario.gameplay_state_json`：
+  - 后端新增：
+    - `backend/alembic/versions/007_add_gameplay_state_to_scenario.py`
+    - `Scenario.gameplay_state_json`
+    - `GET /api/campaign/scenario/{id}/gameplay-state`
+    - `PUT /api/campaign/scenario/{id}/gameplay-state`
+  - `GET /api/scenario/{id}` 现在也会带 `gameplay_state`
+  - 前端新增：
+    - `frontend/src/lib/scenarioGameplayState.ts`
+    - `frontend/src/lib/scenarioGameplayState.test.ts`
+  - `SimulationView / ResultView / GameplayCardsModal` 现在会：
+    - 优先吃远端 `usage_log`
+    - 从它重算导演点数、冷却、`most_used_card`、`counterplay_card_count`、`last_counterplay_card`
+    - 在远端为空时把本地 usage log 回填后端
+- 真实链路验证：
+  - 新建 law 题材场景后，实际从玩法卡弹窗打出 `public_hearing`
+  - 后端 `GET /api/campaign/scenario/{id}/gameplay-state` 已返回：
+    - `usage_log[0].card_id = public_hearing`
+    - `profile_id = law`
+    - `cost = 1`
+  - 说明新 usage 已从前端成功落库，而不是只会回读旧局数据
+- Safari 正式入口已实跑通过：
+  - 本机 `safaridriver -p 4444` + `npm run e2e:safari`
+  - 工件：
+    - `frontend/output/e2e/20260319-official-safari-v5/result.json`
+    - `frontend/output/e2e/20260319-official-safari-v5/safari-result.png`
+    - `frontend/output/e2e/20260319-official-safari-v5/safari-sim.png`
+  - 当前默认仍走稳定的 session screenshot
+  - `panel capture` 只保留为可选实验开关：
+    - `SWARM_SAFARI_PANEL_CAPTURE=1`
+- 玩法/美术层本轮已补：
+  - runtime 角色精灵新增接入：
+    - `sprite_alchemist`
+    - `sprite_assassin`
+    - `sprite_bard`
+    - `sprite_knight`
+    - `sprite_monk`
+    - `sprite_thief`
+    - `sprite_witch`
+  - 改动点：
+    - `frontend/src/lib/themeRegistry.ts`
+    - `frontend/src/game/scenes/BootScene.ts`
+    - `frontend/src/game/managers/VizSynthesizer.ts`
+    - `backend/app/visualization/persona_mapper.py`
+  - profile 战术层已补：
+    - `frontend/src/components/gameplayCards.ts`
+    - 新增 `PROFILE_STRATEGY_RULES`
+    - 新增 `getGameplayProfileTacticalState()`
+    - `GameplayCardsModal` 现会显示题材打法说明，并把它带进卡牌 prompt
+- Theater 可读性修复：
+  - 用户真实截图问题：
+    - 场景占比仍偏小
+    - 场景内气泡文字不够一目了然
+  - 本轮已做：
+    - `SimulationView.css`
+      - 左侧舞台优先、右栏固定窄宽
+      - 压缩顶部导演区与底部 replay 区
+      - 导演目标改成桌面双列
+    - `SimulationView.tsx`
+      - 把 `game-wrapper` 提前到 replay filters / timeline 之前
+    - `game.css`
+      - 压缩 `theater-panel` / `hud-bar`
+      - 降低 scanline alpha
+      - compact timeline 隐藏二级 stats
+    - `WorldScene.ts`
+      - bubble font `13px -> 15px`
+      - `wordWrap.width -> 208`
+      - `lineSpacing -> 6`
+      - `BUBBLE_TEXT_RESOLUTION -> 4`
+      - `pad -> 10`
+      - `BUBBLE_SPACING -> 54`
+      - 补轻量 `stroke + shadow`
+- 本轮验证：
+  - 后端：
+    - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`
+    - 结果：`80 passed`
+  - 前端定向：
+    - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts src/components/gameplayCards.test.ts src/game/managers/VizSynthesizer.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`66 passed`
+    - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx src/components/TimelineBar.test.tsx`
+    - 结果：`12 passed`
+  - 构建：
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - 结果：通过
+  - 正式 E2E：
+    - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18929 --output-dir output/e2e/20260319-post-gameplay-state-corners --headless`
+    - 结果：通过
+    - 当前结果 JSON 已包含：
+      - `cases.gameplay_state_roundtrip`
+      - `mostUsedCard`
+      - `counterplayCard`
+
+## 2026-03-19 Official Cross-Browser E2E Productization
+
+- 已把临时 director-state smoke 正式并进 `frontend/scripts/e2e-suite.mjs`：
+  - 新增 mode：
+    - `cross-browser`
+    - `safari`
+  - `parseArgs()` 现支持：
+    - `--scenario-id`
+    - `--browsers`
+    - `--webdriver-url`
+- 已把 npm 正式入口补进 `frontend/package.json`：
+  - `npm run e2e:cross-browser`
+  - `npm run e2e:safari`
+- 截图策略已按浏览器能力分流：
+  - Chromium 继续保留 `page.screenshot + CDP fallback`
+  - Firefox / WebKit 仅走原生 `page.screenshot` / `locator.screenshot`
+  - Safari 维持 WebDriver session screenshot，不强塞进 Chromium 路径
+- 本轮真实验证：
+  - `cd frontend && npm run e2e:cross-browser -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-official-cross-browser --headless`
+    - 结果：通过
+    - 工件：
+      - `frontend/output/e2e/20260319-official-cross-browser/result.json`
+      - `frontend/output/e2e/20260319-official-cross-browser/firefox-sim.png`
+      - `frontend/output/e2e/20260319-official-cross-browser/firefox-archive.png`
+      - `frontend/output/e2e/20260319-official-cross-browser/webkit-sim.png`
+      - `frontend/output/e2e/20260319-official-cross-browser/webkit-archive.png`
+  - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-cross-browser-corners --headless`
+    - 结果：通过
+    - 说明主 Chromium `corners` 入口未被本次脚本改动带坏
+  - `cd frontend && npm run build`
+    - 结果：通过
+- 额外黑盒检查：
+  - 使用 `develop-web-game` 风格客户端对 `/sim/72ae364d-3ea1-4959-939c-8fe1dbeca1c9` 跑了一次状态抓取
+  - 工件：
+    - `frontend/output/web-game/20260319-post-cross-browser-client/state-0.json`
+    - `frontend/output/web-game/20260319-post-cross-browser-client/shot-0.png`
+  - 结果确认：
+    - `render_game_to_text()` 可正常返回 `director / replay_state / scene`
+    - 截图可见 Theater HUD 与 Director Goals，不是空画布
+- 额外实时 QA：
+  - 用 `playwright-interactive` 持久会话直开 `result/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+  - 确认 `render_game_to_text()` 在活页状态下仍返回：
+    - `page.kind = result`
+    - `archive_summary.commitment_outcome = hit`
+    - `archive_summary.risk_value = 1`
+    - `archive_summary.resource_value = 2`
+- Safari 环境边界：
+  - 本机当前 `http://127.0.0.1:4444/status` 不可达，说明 Safari WebDriver 服务没开
+  - 因此本轮只验证了 `e2e:safari` 入口已正式收编到主脚本，未在当前宿主机上实跑
+  - Safari 仍应视为 opt-in smoke，而不是默认 `e2e:full` 成员
+
+## 2026-03-19 Authority Audit Notes
+
+- 本轮未继续扩大改动面去做主模式剩余玩法状态后端化，原因是那条链路会跨前端 modal、页面 merge、后端 API/schema 与测试，改动文件数会明显再上升。
+- 已确认的真实状态：
+  - 后端 authoritative：
+    - `goals`
+    - `worldline commitment`
+  - 仍主要本地 `scenarioMeta`：
+    - 导演点数
+    - 卡牌冷却
+    - `cards.usageLog`
+    - `betting.bets`
+    - 部分 archive raw detail
+- 当前最小、最值得优先下沉的下一刀仍是：
+  - `cards.usageLog`
+  - 因为它能反推 director points / cooldowns / signature arc / risk-resource / mostUsedCard / counterplay markers
+- 下一位 agent 若继续：
+  1. 先决定是扩现有 `director_state_json`，还是新增独立 `gameplay_state_json`
+  2. 若追求更干净的 authority 边界，优先新增独立 gameplay raw state，而不是继续把 raw logs 塞进 `director_state`
+  3. 先下沉 `cards.usageLog`，再下沉 `betting.bets`
+
+## 2026-03-19 Gameplay State Authority + Safari Closure
+
+- 主模式 `usageLog` authority 链路本轮已真正接通：
+  - 后端：
+    - `Scenario.gameplay_state_json`
+    - `GET/PUT /api/campaign/scenario/{id}/gameplay-state`
+    - `GET /api/scenario/{id}` 回包已带 `gameplay_state`
+  - 前端：
+    - `scenarioGameplayState.ts` 负责
+      - `scenarioMeta -> gameplay_state` 映射
+      - `gameplay_state + local scenarioMeta` union merge
+      - 基于 `usageLog` 重算 director points / cooldowns / counterplay archive 派生字段
+    - `SimulationView` 现在会：
+      - 读 `scenario.gameplay_state`
+      - 应用到本地 `scenarioMeta`
+      - 若本地 log 比后端多，自动 backfill 到后端
+    - `ResultView` 现在也会：
+      - 读 `scenario.gameplay_state`
+      - 在结果页清空本地缓存后仍可回读 `most_used_card / counterplay_card_count / last_counterplay_card`
+- 本轮新增测试：
+  - backend：
+    - `tests/test_campaign_service.py`
+      - gameplay state defaults + round-trip
+    - `tests/test_campaign_api.py`
+      - gameplay state endpoint round-trip + scenario readback
+  - frontend：
+    - `src/lib/scenarioGameplayState.test.ts`
+      - payload 序列化
+      - union merge + director/cooldown 派生
+    - `SimulationView.test.tsx / ResultView.test.tsx / GameplayCardsModal.test.tsx`
+      - mock 对齐 `upsertScenarioGameplayState`
+- 本轮验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`
+    - `80 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts src/components/gameplayCards.test.ts src/game/managers/VizSynthesizer.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx`
+    - `67 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - 通过
+
+## 2026-03-19 Gameplay Diversity + Sprite Runtime
+
+- 玩法层并不只是文档建议，本轮工作树里已经把 profile-specific 战术层接入真实 UI：
+  - `frontend/src/components/gameplayCards.ts`
+    - `PROFILE_STRATEGY_RULES`
+    - `getGameplayProfileTacticalState()`
+    - `getRecommendedGameplayCards()` 已按 `opening / pressure / committed` 三态切换 focus cards
+  - `GameplayCardsModal` 已显示：
+    - 战术标签
+    - tactical note
+    - focus cards 驱动的推荐逻辑
+- 角色精灵接入现状已收口到运行时：
+  - `themeRegistry.ts`
+    - `CHARACTER_SPRITE_KEYS` 现包含：
+      - `sprite_alchemist`
+      - `sprite_assassin`
+      - `sprite_bard`
+      - `sprite_knight`
+      - `sprite_monk`
+      - `sprite_thief`
+      - `sprite_witch`
+  - `BootScene.ts`
+    - 已为上述新精灵补 fallback 颜色
+  - `VizSynthesizer.ts`
+    - 已把新角色关键词接进前端 completed replay 合成路径
+  - `backend/app/visualization/persona_mapper.py`
+    - 已把新角色关键词接进 live 模式 sprite assignment
+- 本轮同步修正了测试口径，使其匹配新的角色映射优先级与战术推荐首卡。
+
+## 2026-03-19 Safari Official Smoke
+
+- 本机 `safaridriver` 可用，但默认 `4444` 端口状态不稳定；本轮直接改用 `5555` 跑正式入口。
+- 实跑命令：
+  - `cd frontend && npm run e2e:safari -- --url http://127.0.0.1:18928 --webdriver-url http://127.0.0.1:5555 --output-dir output/e2e/20260319-official-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+- 结果：通过
+- 工件：
+  - `frontend/output/e2e/20260319-official-safari/result.json`
+  - `frontend/output/e2e/20260319-official-safari/safari-sim.png`
+  - `frontend/output/e2e/20260319-official-safari/safari-result.png`
+- 视觉观察：
+  - 本轮结果页截图干净，没有翻译插件浮层污染
+  - Safari 正式入口已从“存在但未实跑”升级为“当前机器上已实跑通过”
+
+## 2026-03-19 New Corners Artifact
+
+- `frontend/scripts/e2e-suite.mjs corners` 已新增：
+  - `gameplay_state_roundtrip`
+- 实跑命令：
+  - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-gameplay-state-corners-v2 --headless`
+- 结果：通过
+- 新工件：
+  - `frontend/output/e2e/20260319-post-gameplay-state-corners-v2/gameplay-state-roundtrip/simulation.json`
+  - `frontend/output/e2e/20260319-post-gameplay-state-corners-v2/gameplay-state-roundtrip/result.json`
+  - `frontend/output/e2e/20260319-post-gameplay-state-corners-v2/gameplay-state-roundtrip/archive-cards.json`
+  - `frontend/output/e2e/20260319-post-gameplay-state-corners-v2/result.json`
+- 本轮 case 已证明：
+  - 先写后端 `gameplay_state`
+  - 再清空 `localStorage`
+  - `/sim` 仍能回读 system tracks
+  - `/result` 仍能回读 `most_used_card / counterplay_card_count / last_counterplay_card`
+
 ## 2026-03-18 Debate Live Snapshot + WS Counterplay
 
 - 已继续把 Debate counterplay 从“结果页后端化”推进到“live + result 全链路显式 payload”：

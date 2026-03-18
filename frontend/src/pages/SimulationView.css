@@ -305,7 +305,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 10px 0 12px;
+  margin: 6px 0 8px;
 }
 
 .theater-panel__warmup {
@@ -366,9 +366,9 @@
 
 .theater-panel__director {
   display: grid;
-  gap: 10px;
-  margin: 0 0 12px;
-  padding: 12px 14px;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: linear-gradient(180deg, rgba(18, 16, 38, 0.88), rgba(12, 10, 29, 0.88));
@@ -380,33 +380,42 @@
   gap: 8px;
   align-items: center;
   color: rgba(245, 243, 255, 0.92);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
 }
 
 .theater-panel__director-goals {
   display: grid;
   gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .director-goal {
   display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+  gap: 3px;
+  padding: 7px 9px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
   color: rgba(245, 243, 255, 0.82);
-  font-size: 0.76rem;
-  line-height: 1.45;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .director-goal strong {
   color: rgba(255, 247, 252, 0.98);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
 }
 
+.director-goal__detail,
 .director-goal small {
   color: rgba(245, 243, 255, 0.68);
+}
+
+.director-goal__detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .director-goal--completed {
@@ -433,12 +442,12 @@
 
 .theater-panel__timeline {
   width: 100%;
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   z-index: 1;
 }
 
 .theater-panel__timeline .timeline-bar {
-  padding: 8px 12px 10px;
+  padding: 6px 10px 8px;
   border: 1px solid rgba(108, 92, 231, 0.24);
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(20, 18, 43, 0.96), rgba(12, 10, 29, 0.96));
@@ -467,13 +476,13 @@
 .theater-select {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 5px 8px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 16, 38, 0.72);
   color: rgba(245, 243, 255, 0.9);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
 }
 
@@ -483,20 +492,20 @@
   color: inherit;
   font: inherit;
   outline: none;
-  min-width: 110px;
+  min-width: 96px;
 }
 
 .theater-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  padding: 5px 10px;
+  padding: 4px 8px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(18, 16, 38, 0.72);
   color: rgba(245, 243, 255, 0.9);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   backdrop-filter: blur(8px);
@@ -551,6 +560,10 @@
   .theater-panel__director {
     gap: 8px;
     padding: 10px 12px;
+  }
+
+  .theater-panel__director-goals {
+    grid-template-columns: 1fr;
   }
 
   .capture-mode-feedback {
@@ -676,22 +689,24 @@
   background: var(--gbc-dark, #0d0d2b);
 }
 
-/* ── Theater layout ratio: 65% canvas / 35% panel ─────── */
+/* ── Theater layout ratio: prioritize the stage, keep the sidebar bounded ─────── */
 .simulation-view--theater .sim-content__tree {
-  flex: 0 0 65%;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
 }
 .simulation-view--theater .sim-content__panel {
-  flex: 0 0 35%;
-  width: auto;
-  min-width: 220px;
+  flex: 0 0 clamp(270px, 24vw, 320px);
+  width: clamp(270px, 24vw, 320px);
+  min-width: 270px;
   min-height: 0;
-  max-width: none;
+  max-width: 320px;
 }
 .simulation-view--theater .sim-content__panel--collapsed {
   flex: 0 0 0;
+  width: 0;
   min-width: 0;
+  max-width: 0;
 }
 
 .simulation-view--theater.simulation-view--replay-ready {

@@ -264,3 +264,39 @@ def test_director_state_endpoint_rejects_incomplete_active_commitment(client: Te
     )
 
     assert response.status_code == 422
+
+
+def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay state api")
+
+    initial = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
+    assert initial.status_code == 200
+    assert initial.json()["cards"]["usage_log"] == []
+
+    update = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json={
+            "cards": {
+                "usage_log": [
+                    {
+                        "card_id": "public_hearing",
+                        "profile_id": "law",
+                        "branch_id": "branch-1",
+                        "branch_title": "Judicial Review",
+                        "round": 2,
+                        "cost": 1,
+                        "directive": "Open the ruling to public scrutiny.",
+                        "used_at": "2026-03-19T01:00:00Z",
+                    },
+                ],
+            },
+        },
+    )
+    assert update.status_code == 200
+    update_data = update.json()
+    assert update_data["cards"]["usage_log"][0]["card_id"] == "public_hearing"
+
+    scenario = client.get(f"/api/scenario/{scenario_id}")
+    assert scenario.status_code == 200
+    scenario_data = scenario.json()
+    assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"

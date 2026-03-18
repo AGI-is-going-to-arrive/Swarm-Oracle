@@ -14,8 +14,12 @@ const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
 let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
 let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
-const { upsertScenarioDirectorStateMock } = vi.hoisted(() => ({
+const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock } = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
+    scenario_id: scenarioId,
+    ...(payload as Record<string, unknown>),
+  })),
+  upsertScenarioGameplayStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
   })),
@@ -107,6 +111,7 @@ vi.mock('../hooks/useSimulationWS', () => ({
 
 vi.mock('../api/client', () => ({
   upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
+  upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
 }));
 
 vi.mock('../hooks/useScreenCapture', () => ({
@@ -204,6 +209,7 @@ describe('SimulationView replay automation output', () => {
     captureCompositeElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     upsertScenarioDirectorStateMock.mockClear();
+    upsertScenarioGameplayStateMock.mockClear();
     mockStore.status = 'done';
     mockStore.isSimulationComplete = true;
     mockStore.visualizationEnabled = true;

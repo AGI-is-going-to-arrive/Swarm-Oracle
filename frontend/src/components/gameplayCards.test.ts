@@ -15,6 +15,7 @@ import {
   getSuggestedSourceBranchId,
   getDefaultGameplayTargetBranch,
   getGameplayCardDirectivePreview,
+  getGameplayProfileTacticalState,
   inferGameplayProfile,
   isCounterplayCard,
 } from './gameplayCards';
@@ -250,6 +251,23 @@ describe('gameplayCards helpers', () => {
     expect(isCounterplayCard(recommended[0])).toBe(true);
   });
 
+  it('surfaces a profile-specific tactical note for law pressure states', () => {
+    const tacticalState = getGameplayProfileTacticalState(
+      'law',
+      [
+        { cardId: 'forbidden_ritual', profileId: 'law', round: 1 },
+        { cardId: 'mandate_surge', profileId: 'law', round: 2 },
+      ],
+      { active: false },
+      true,
+    );
+
+    expect(tacticalState.mode).toBe('pressure');
+    expect(tacticalState.label).toBe('程序冻结');
+    expect(tacticalState.focusCards).toContain('audit_reckoning');
+    expect(tacticalState.note).toContain('例外条款');
+  });
+
   it('computes scenario-level system tracks with commitment pressure', () => {
     const tracks = getScenarioSystemTrackState(
       'governance',
@@ -312,7 +330,7 @@ describe('gameplayCards helpers', () => {
   });
 
   it('provides recommended cards and profile label', () => {
-    expect(getRecommendedGameplayCards('governance')[0]).toBe('civilization_debate');
+    expect(getRecommendedGameplayCards('governance')[0]).toBe('public_hearing');
     expect(getRecommendedGameplayCards('governance')).toContain('backchannel_pact');
     expect(getRecommendedGameplayCards('law')).toContain('mandate_surge');
     expect(getRecommendedGameplayCards('law')).toContain('public_hearing');
@@ -336,6 +354,19 @@ describe('gameplayCards helpers', () => {
     expect(getGameplayCardDirectivePreview('trade', 'mandate_surge', true)).toContain('抵制浪潮');
     expect(getGameplayCardDirectivePreview('trade', 'backchannel_pact', true)).toContain('密约');
     expect(getGameplayCardDirectivePreview('ecology', 'evacuation_order', true)).toContain('撤离');
+  });
+
+  it('differentiates opening recommendations between trade and ecology', () => {
+    expect(getRecommendedGameplayCards('trade').slice(0, 3)).toEqual([
+      'backchannel_pact',
+      'spy_infiltrate',
+      'intel_blowback',
+    ]);
+    expect(getRecommendedGameplayCards('ecology').slice(0, 3)).toEqual([
+      'resource_triage',
+      'evacuation_order',
+      'public_hearing',
+    ]);
   });
 
   it('suggests agents based on stance for debate', () => {

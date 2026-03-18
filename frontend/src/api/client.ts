@@ -8,7 +8,7 @@ import type {
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary,
-  ScenarioDirectorState, ScenarioDirectorStateResponse,
+  ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
 
 const BASE = '/api';
@@ -318,6 +318,16 @@ export async function upsertScenarioDirectorState(
   payload: ScenarioDirectorState,
 ): Promise<ScenarioDirectorStateResponse> {
   return request(`/campaign/scenario/${scenarioId}/director-state`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function upsertScenarioGameplayState(
+  scenarioId: string,
+  payload: ScenarioGameplayState,
+): Promise<ScenarioGameplayStateResponse> {
+  return request(`/campaign/scenario/${scenarioId}/gameplay-state`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });

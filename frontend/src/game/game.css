@@ -78,8 +78,8 @@
     0deg,
     transparent,
     transparent 1px,
-    rgba(0, 0, 0, 0.06) 1px,
-    rgba(0, 0, 0, 0.06) 2px
+    rgba(0, 0, 0, 0.03) 1px,
+    rgba(0, 0, 0, 0.03) 2px
   );
   border-radius: 4px;
   z-index: 2;
@@ -203,10 +203,10 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: flex-start;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 8px;
+  padding: 12px 16px;
   background: var(--gbc-deep, #06061a);
   position: relative;
   overflow: hidden;
@@ -252,10 +252,10 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   font-family: 'Courier New', monospace;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: rgba(var(--gbc-gold-rgb), 0.7);
   letter-spacing: 3px;
@@ -288,6 +288,7 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+  gap: 6px;
   z-index: 1;
   position: relative;
 }
@@ -298,11 +299,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 14px;
+  padding: 5px 12px;
   background: var(--gbc-dark, #0d0d2b);
   border: 2px solid rgba(var(--gbc-accent-rgb), 0.3);
   font-family: 'Courier New', monospace;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--gbc-text-dim, #6a6a9a);
   width: 100%;
   box-sizing: border-box;
@@ -326,7 +327,7 @@
 }
 
 .hud-bar__title {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--gbc-gold);
   letter-spacing: 1.5px;
@@ -345,7 +346,7 @@
 }
 
 .hud-entry {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
   transition: transform 0.15s ease;

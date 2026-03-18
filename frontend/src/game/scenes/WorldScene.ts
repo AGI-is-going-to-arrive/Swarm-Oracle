@@ -118,7 +118,7 @@ const BUBBLE_STYLES: Record<string, { bg: number; bgAlpha: number; borderColor: 
 };
 const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.neutral;
 const BUBBLE_TEXT_FONT_STACK = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-const BUBBLE_TEXT_RESOLUTION = 3;
+const BUBBLE_TEXT_RESOLUTION = 4;
 
 // ── Day/Night Tints ─────────────────────────────────────
 const TIME_TINTS: Record<string, { color: number; alpha: number }> = {
@@ -864,7 +864,7 @@ export class WorldScene extends Phaser.Scene {
     // ── Anti-overlap: compute Y offset to avoid stacking ──
     // Base bubble Y is relative to agent container (local coords)
     let bubbleLocalY = -55;
-    const BUBBLE_SPACING = 46;
+    const BUBBLE_SPACING = 54;
     const MAX_STACK = 5;
 
     // Check if any other agent's bubble is nearby in world space
@@ -895,13 +895,23 @@ export class WorldScene extends Phaser.Scene {
     const style = (emotion && BUBBLE_STYLES[emotion]) ? BUBBLE_STYLES[emotion] : DEFAULT_BUBBLE_STYLE;
 
     const bubbleTextStyle = {
-      fontSize: '13px',
+      fontSize: '15px',
       color: '#1f2335',
       fontFamily: BUBBLE_TEXT_FONT_STACK,
-      fontStyle: '600',
+      fontStyle: '700',
       align: 'center' as const,
-      lineSpacing: 4,
-      wordWrap: { width: 168, useAdvancedWrap: true },
+      lineSpacing: 6,
+      wordWrap: { width: 208, useAdvancedWrap: true },
+      stroke: '#f7f2ff',
+      strokeThickness: 2,
+      shadow: {
+        offsetX: 0,
+        offsetY: 1,
+        color: 'rgba(8, 10, 22, 0.35)',
+        blur: 0,
+        stroke: false,
+        fill: true,
+      },
     };
 
     // B4: Typewriter — start with empty text, reveal char by char
@@ -913,7 +923,7 @@ export class WorldScene extends Phaser.Scene {
     const bounds = measureText.getBounds();
     measureText.destroy();
 
-    const pad = 8;
+    const pad = 10;
 
     // Bubble background with emotion-specific fill
     const bg = this.add.graphics();
@@ -935,7 +945,7 @@ export class WorldScene extends Phaser.Scene {
         bounds.width / 2 + pad + 2, -(bounds.height / 2 + pad) - 2,
         style.indicator,
         {
-          fontSize: '11px',
+          fontSize: '12px',
           color: `#${style.borderColor.toString(16).padStart(6, '0')}`,
           fontFamily: 'monospace',
           fontStyle: 'bold',

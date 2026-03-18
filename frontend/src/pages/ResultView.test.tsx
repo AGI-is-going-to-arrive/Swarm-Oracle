@@ -9,10 +9,15 @@ const {
   finalizeCampaignMock,
   findChallengeProgressByScenarioIdMock,
   upsertScenarioDirectorStateMock,
+  upsertScenarioGameplayStateMock,
 } = vi.hoisted(() => ({
   finalizeCampaignMock: vi.fn(),
   findChallengeProgressByScenarioIdMock: vi.fn(),
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
+    scenario_id: scenarioId,
+    ...(payload as Record<string, unknown>),
+  })),
+  upsertScenarioGameplayStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
   })),
@@ -92,6 +97,7 @@ vi.mock('../api/client', () => ({
   finalizeCampaign: finalizeCampaignMock,
   getCampaignScenarioSummary: vi.fn(async () => null),
   upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
+  upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({

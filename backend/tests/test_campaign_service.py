@@ -18,7 +18,9 @@ from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_scenario_director_state,
+    get_scenario_gameplay_state,
     save_scenario_director_state,
+    save_scenario_gameplay_state,
 )
 
 
@@ -371,3 +373,48 @@ def test_scenario_director_state_normalizes_inactive_commitment_to_default():
         "committed_at": None,
         "outcome": None,
     }
+
+
+def test_scenario_gameplay_state_defaults_and_round_trip():
+    scenario_id = _seed_completed_scenario("gameplay state round trip")
+
+    default_state = get_scenario_gameplay_state(scenario_id)
+    assert default_state["cards"]["usage_log"] == []
+
+    saved_state = save_scenario_gameplay_state(
+        scenario_id,
+        {
+            "cards": {
+                "usage_log": [
+                    {
+                        "card_id": "public_hearing",
+                        "profile_id": "law",
+                        "branch_id": "branch-1",
+                        "branch_title": "Judicial Review",
+                        "round": 2,
+                        "cost": 1,
+                        "directive": "Open the algorithmic ruling to a public hearing.",
+                        "used_at": "2026-03-19T01:00:00Z",
+                    },
+                    {
+                        "card_id": "audit_reckoning",
+                        "profile_id": "law",
+                        "branch_id": "branch-1",
+                        "branch_title": "Judicial Review",
+                        "round": 3,
+                        "cost": 1,
+                        "directive": "Force a counter-audit against emergency decrees.",
+                        "used_at": "2026-03-19T01:01:00Z",
+                    },
+                ],
+            },
+        },
+    )
+
+    assert [entry["card_id"] for entry in saved_state["cards"]["usage_log"]] == [
+        "public_hearing",
+        "audit_reckoning",
+    ]
+
+    loaded_state = get_scenario_gameplay_state(scenario_id)
+    assert loaded_state == saved_state

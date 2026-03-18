@@ -2,13 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json");
+const DEFAULT_SAFARI_WEBDRIVER_URL = process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444";
+const DEFAULT_DIRECTOR_STATE_SCENARIO_ID = "72ae364d-3ea1-4959-939c-8fe1dbeca1c9";
+const SAFARI_PANEL_CAPTURE_ENABLED = process.env.SWARM_SAFARI_PANEL_CAPTURE === "1";
 const MATRIX_SCENARIO_FALLBACKS = {
   governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
   law: { question: "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？", rounds: 1, numAgents: 3 },
@@ -82,6 +85,9 @@ function parseArgs(argv) {
     baseUrl: DEFAULT_BASE_URL,
     sampleMatrixPath: DEFAULT_MATRIX_PATH,
     outputDir: "",
+    scenarioId: process.env.SWARM_SCENARIO_ID || DEFAULT_DIRECTOR_STATE_SCENARIO_ID,
+    webdriverUrl: DEFAULT_SAFARI_WEBDRIVER_URL,
+    browsers: [],
     themes: [],
     headless: process.env.HEADLESS === "1",
   };
@@ -101,13 +107,22 @@ function parseArgs(argv) {
     } else if (arg === "--themes" && next) {
       args.themes = next.split(",").map((theme) => theme.trim()).filter(Boolean);
       i += 1;
+    } else if (arg === "--scenario-id" && next) {
+      args.scenarioId = next;
+      i += 1;
+    } else if (arg === "--webdriver-url" && next) {
+      args.webdriverUrl = next;
+      i += 1;
+    } else if (arg === "--browsers" && next) {
+      args.browsers = next.split(",").map((browser) => browser.trim()).filter(Boolean);
+      i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     }
   }
 
-  if (!["matrix", "corners", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|mobile|full> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--headless]");
+  if (!["matrix", "corners", "mobile", "cross-browser", "safari", "full"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-suite.mjs <matrix|corners|mobile|cross-browser|safari|full> [--url URL] [--sample-matrix PATH] [--output-dir DIR] [--themes governance,law] [--scenario-id ID] [--browsers firefox,webkit] [--webdriver-url URL] [--headless]");
   }
 
   return args;
@@ -160,14 +175,45 @@ function buildLaunchCandidates(headless) {
   return candidates;
 }
 
-async function launchBrowser(headless) {
+function getBrowserType(browserName) {
+  if (browserName === "chromium") return chromium;
+  if (browserName === "firefox") return firefox;
+  if (browserName === "webkit") return webkit;
+  throw new Error(`Unsupported Playwright browser: ${browserName}`);
+}
+
+function buildBrowserLaunchCandidates(browserName, headless) {
+  if (browserName === "firefox") {
+    return [
+      {
+        id: "firefox-default",
+        options: { headless },
+      },
+    ];
+  }
+
+  if (browserName === "webkit") {
+    return [
+      {
+        id: "webkit-default",
+        options: { headless },
+      },
+    ];
+  }
+
+  return buildLaunchCandidates(headless);
+}
+
+async function launchBrowser(headless, browserName = "chromium") {
+  const browserType = getBrowserType(browserName);
   const attempts = [];
-  for (const candidate of buildLaunchCandidates(headless)) {
+  for (const candidate of buildBrowserLaunchCandidates(browserName, headless)) {
     try {
-      const browser = await chromium.launch(candidate.options);
+      const browser = await browserType.launch(candidate.options);
       return {
         browser,
         launchProfile: {
+          browserName,
           id: candidate.id,
           requestedHeadless: headless,
           actualHeadless: candidate.options.headless !== false,
@@ -178,6 +224,7 @@ async function launchBrowser(headless) {
       };
     } catch (error) {
       attempts.push({
+        browserName,
         id: candidate.id,
         actualHeadless: candidate.options.headless !== false,
         channel: candidate.options.channel ?? null,
@@ -275,10 +322,20 @@ function isCompletedReplayTheaterReady(payload) {
   );
 }
 
-async function saveScreenshot(page, filePath) {
+async function saveScreenshot(page, filePath, options = {}) {
+  const browserName = page.context().browser()?.browserType().name() ?? "chromium";
   try {
-    await page.screenshot({ path: filePath, type: "png", scale: "css", timeout: 15_000 });
+    await page.screenshot({
+      path: filePath,
+      type: "png",
+      scale: "css",
+      timeout: 15_000,
+      ...options,
+    });
   } catch (error) {
+    if (browserName !== "chromium") {
+      throw error;
+    }
     const primaryError = error instanceof Error ? error.message : String(error);
     console.warn(`[screenshot] falling back to CDP capture for ${path.basename(filePath)}: ${primaryError}`);
     try {
@@ -296,6 +353,14 @@ async function saveScreenshot(page, filePath) {
       );
     }
   }
+}
+
+async function saveLocatorScreenshot(locator, filePath) {
+  await locator.screenshot({
+    path: filePath,
+    type: "png",
+    timeout: 15_000,
+  });
 }
 
 async function setRangeValue(page, selector, value) {
@@ -364,6 +429,18 @@ async function putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState
   });
   if (!response.ok) {
     throw new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${await response.text()}`);
+  }
+  return response.json();
+}
+
+async function putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState) {
+  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/gameplay-state`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(gameplayState),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save gameplay state for ${scenarioId}: ${response.status} ${await response.text()}`);
   }
   return response.json();
 }
@@ -738,6 +815,399 @@ async function runDirectorStateRoundtripCase(page, {
     directorGoalsCard: directorGoalsCard ?? null,
     commitmentCard: commitmentCard ?? null,
   };
+}
+
+async function runGameplayStateRoundtripCase(page, {
+  baseUrl,
+  scenarioId,
+  outputDir,
+}) {
+  ensureDir(outputDir);
+  const gameplayState = {
+    cards: {
+      usage_log: [
+        {
+          card_id: "public_hearing",
+          profile_id: "governance",
+          branch_id: "gameplay-branch-1",
+          branch_title: "算法接管",
+          round: 1,
+          cost: 1,
+          directive: "Force a public audit trail for the ruling stack.",
+          used_at: "2026-03-19T02:00:00Z",
+        },
+        {
+          card_id: "public_hearing",
+          profile_id: "governance",
+          branch_id: "gameplay-branch-1",
+          branch_title: "算法接管",
+          round: 2,
+          cost: 1,
+          directive: "Re-open the legality hearing before emergency powers expand.",
+          used_at: "2026-03-19T02:01:00Z",
+        },
+        {
+          card_id: "audit_reckoning",
+          profile_id: "governance",
+          branch_id: "gameplay-branch-1",
+          branch_title: "算法接管",
+          round: 3,
+          cost: 1,
+          directive: "Trigger a full audit against exception chains.",
+          used_at: "2026-03-19T02:02:00Z",
+        },
+      ],
+    },
+  };
+
+  await putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState);
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const simulation = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.page?.director?.system_tracks?.risk_value === 1
+      && payload.page?.director?.system_tracks?.resource_value === 3
+    ),
+    30000,
+    "gameplay state simulation readback",
+  );
+  writeJson(path.join(outputDir, "simulation.json"), simulation);
+  await saveScreenshot(page, path.join(outputDir, "simulation.png"));
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const result = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "result"
+      && payload.page?.loading === false
+      && payload.page?.archive_summary?.most_used_card === "public_hearing"
+      && payload.page?.archive_summary?.counterplay_card_count === 3
+      && payload.page?.archive_summary?.last_counterplay_card === "audit_reckoning"
+    ),
+    40000,
+    "gameplay state result readback",
+  );
+  const archiveCards = await extractResultArchiveCards(page);
+  writeJson(path.join(outputDir, "result.json"), result);
+  writeJson(path.join(outputDir, "archive-cards.json"), archiveCards);
+  await saveScreenshot(page, path.join(outputDir, "result.png"));
+
+  const mostUsedCard = archiveCards.find((card) => /most used card|最常用玩法卡/i.test(card.label ?? ""));
+  const counterplayCard = archiveCards.find((card) => /counterplay|反制轨迹/i.test(card.label ?? ""));
+
+  return {
+    scenarioId,
+    simulationDirector: simulation.page?.director ?? null,
+    resultArchiveSummary: result.page?.archive_summary ?? null,
+    mostUsedCard: mostUsedCard ?? null,
+    counterplayCard: counterplayCard ?? null,
+  };
+}
+
+function getDirectorStateScenarioSample(args) {
+  return {
+    theme: "governance",
+    scenario_id: args.scenarioId || DEFAULT_DIRECTOR_STATE_SCENARIO_ID,
+    question: MATRIX_SCENARIO_FALLBACKS.governance.question,
+  };
+}
+
+async function runDirectorStateBrowserReadback(page, {
+  baseUrl,
+  scenarioId,
+  outputDir,
+  browserName,
+}) {
+  ensureDir(outputDir);
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const simulation = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.page?.director?.objective_count === 2
+      && payload.page?.director?.commitment?.active === true
+    ),
+    30000,
+    `${browserName} simulation director state`,
+  );
+  await saveScreenshot(page, path.join(outputDir, `${browserName}-sim.png`), { fullPage: true });
+
+  await clearOriginStorage(page, baseUrl);
+  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  const result = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "result"
+      && payload.page?.loading === false
+      && payload.page?.archive_summary?.commitment_outcome === "hit"
+    ),
+    40000,
+    `${browserName} result director state`,
+  );
+  await saveLocatorScreenshot(
+    page.locator(".result-archive"),
+    path.join(outputDir, `${browserName}-archive.png`),
+  );
+
+  const summary = {
+    simulationDirector: simulation.page?.director ?? null,
+    resultArchiveSummary: result.page?.archive_summary ?? null,
+  };
+  writeJson(path.join(outputDir, `${browserName}.json`), summary);
+  return summary;
+}
+
+async function runCrossBrowserDirectorStateSuite(args) {
+  const browsers = args.browsers.length > 0
+    ? args.browsers
+    : ["firefox", "webkit"];
+  const supportedBrowsers = browsers.filter((browserName) => ["firefox", "webkit"].includes(browserName));
+  if (supportedBrowsers.length === 0) {
+    throw new Error("cross-browser mode requires at least one of: firefox, webkit");
+  }
+
+  const sample = await resolveMatrixScenario(args.baseUrl, getDirectorStateScenarioSample(args));
+  const runs = {};
+
+  for (const browserName of supportedBrowsers) {
+    const { browser, launchProfile } = await launchBrowser(args.headless, browserName);
+    writeJson(path.join(args.outputDir, `${browserName}-browser-launch.json`), launchProfile);
+    const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+    const page = await context.newPage();
+    try {
+      runs[browserName] = await runDirectorStateBrowserReadback(page, {
+        baseUrl: args.baseUrl,
+        scenarioId: sample.scenarioId,
+        outputDir: args.outputDir,
+        browserName,
+      });
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  }
+
+  return {
+    mode: "cross-browser",
+    scenarioId: sample.scenarioId,
+    requestedScenarioId: sample.requestedScenarioId,
+    browsers: runs,
+  };
+}
+
+async function wdRequest(webdriverUrl, pathname, init) {
+  const response = await fetch(`${webdriverUrl}${pathname}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`WebDriver ${response.status}: ${text}`);
+  }
+  if (data?.value?.error) {
+    throw new Error(`WebDriver session error: ${data.value.message || data.value.error}`);
+  }
+  return data?.value;
+}
+
+async function createSafariSession(webdriverUrl) {
+  const value = await wdRequest(webdriverUrl, "/session", {
+    method: "POST",
+    body: JSON.stringify({
+      capabilities: {
+        alwaysMatch: {
+          browserName: "safari",
+          "safari:automaticInspection": false,
+        },
+      },
+    }),
+  });
+  return {
+    sessionId: value.sessionId || value["sessionId"] || value.capabilities?.sessionId || null,
+    capabilities: value.capabilities ?? null,
+  };
+}
+
+async function deleteSafariSession(webdriverUrl, sessionId) {
+  try {
+    await fetch(`${webdriverUrl}/session/${sessionId}`, { method: "DELETE" });
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+async function executeSafariScript(webdriverUrl, sessionId, script, args = []) {
+  return wdRequest(webdriverUrl, `/session/${sessionId}/execute/sync`, {
+    method: "POST",
+    body: JSON.stringify({ script, args }),
+  });
+}
+
+async function executeSafariAsyncScript(webdriverUrl, sessionId, script, args = []) {
+  return wdRequest(webdriverUrl, `/session/${sessionId}/execute/async`, {
+    method: "POST",
+    body: JSON.stringify({ script, args }),
+  });
+}
+
+async function navigateSafari(webdriverUrl, sessionId, url) {
+  await wdRequest(webdriverUrl, `/session/${sessionId}/url`, {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+async function saveSafariSessionScreenshot(webdriverUrl, sessionId, filePath) {
+  const base64 = await wdRequest(webdriverUrl, `/session/${sessionId}/screenshot`, { method: "GET" });
+  fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+}
+
+async function saveSafariPanelScreenshot(webdriverUrl, sessionId, filePath) {
+  try {
+    const dataUrl = await executeSafariAsyncScript(
+      webdriverUrl,
+      sessionId,
+      `
+        const done = arguments[arguments.length - 1];
+        if (typeof window.capture_game_screenshot !== 'function') {
+          done(null);
+          return;
+        }
+        window.capture_game_screenshot('panel')
+          .then((value) => done(value))
+          .catch(() => done(null));
+      `,
+    );
+
+    if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
+      writeDataUrlFile(filePath, dataUrl);
+      return true;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[safari] panel capture fallback for ${path.basename(filePath)}: ${message}`);
+  }
+  return false;
+}
+
+async function clearSafariOriginStorage(webdriverUrl, sessionId, baseUrl) {
+  await navigateSafari(webdriverUrl, sessionId, baseUrl);
+  await executeSafariScript(
+    webdriverUrl,
+    sessionId,
+    `
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+      return true;
+    `,
+  );
+}
+
+async function waitForSafariAutomation(webdriverUrl, sessionId, predicate, timeoutMs, label) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const raw = await executeSafariScript(
+      webdriverUrl,
+      sessionId,
+      "return window.render_game_to_text ? window.render_game_to_text() : null;",
+    );
+    const payload = raw ? JSON.parse(raw) : null;
+    if (payload && predicate(payload)) {
+      return payload;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function runSafariDirectorStateSuite(args) {
+  const sample = await resolveMatrixScenario(args.baseUrl, getDirectorStateScenarioSample(args));
+  const created = await createSafariSession(args.webdriverUrl);
+  const sessionId = created.sessionId;
+  if (!sessionId) {
+    throw new Error("Safari WebDriver did not return a session id");
+  }
+
+  try {
+    await clearSafariOriginStorage(args.webdriverUrl, sessionId, args.baseUrl);
+    await navigateSafari(args.webdriverUrl, sessionId, `${args.baseUrl}/sim/${sample.scenarioId}`);
+    const simulation = await waitForSafariAutomation(
+      args.webdriverUrl,
+      sessionId,
+      (payload) => (
+        payload.page?.kind === "simulation"
+        && payload.page?.director?.objective_count === 2
+        && payload.page?.director?.commitment?.active === true
+      ),
+      30000,
+      "Safari simulation director state",
+    );
+    if (
+      !SAFARI_PANEL_CAPTURE_ENABLED
+      || !(await saveSafariPanelScreenshot(
+        args.webdriverUrl,
+        sessionId,
+        path.join(args.outputDir, "safari-sim.png"),
+      ))
+    ) {
+      await saveSafariSessionScreenshot(
+        args.webdriverUrl,
+        sessionId,
+        path.join(args.outputDir, "safari-sim.png"),
+      );
+    }
+
+    await clearSafariOriginStorage(args.webdriverUrl, sessionId, args.baseUrl);
+    await navigateSafari(args.webdriverUrl, sessionId, `${args.baseUrl}/result/${sample.scenarioId}`);
+    const result = await waitForSafariAutomation(
+      args.webdriverUrl,
+      sessionId,
+      (payload) => (
+        payload.page?.kind === "result"
+        && payload.page?.loading === false
+        && payload.page?.archive_summary?.commitment_outcome === "hit"
+      ),
+      40000,
+      "Safari result director state",
+    );
+    await executeSafariScript(
+      args.webdriverUrl,
+      sessionId,
+      `
+        const archive = document.querySelector('.result-archive');
+        if (archive) archive.scrollIntoView({ block: 'start' });
+        return true;
+      `,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    await saveSafariSessionScreenshot(
+      args.webdriverUrl,
+      sessionId,
+      path.join(args.outputDir, "safari-result.png"),
+    );
+
+    return {
+      mode: "safari",
+      scenarioId: sample.scenarioId,
+      requestedScenarioId: sample.requestedScenarioId,
+      webdriverUrl: args.webdriverUrl,
+      capabilities: created.capabilities,
+      simulationDirector: simulation.page?.director ?? null,
+      resultArchiveSummary: result.page?.archive_summary ?? null,
+    };
+  } finally {
+    await deleteSafariSession(args.webdriverUrl, sessionId);
+  }
 }
 
 async function runPredictionVariant(page, {
@@ -1577,6 +2047,12 @@ async function runCornersSuite(args) {
       outputDir: path.join(outputDir, "director-state-roundtrip"),
     });
 
+    cases.gameplay_state_roundtrip = await runGameplayStateRoundtripCase(page, {
+      baseUrl: args.baseUrl,
+      scenarioId: governanceReplaySample.scenarioId,
+      outputDir: path.join(outputDir, "gameplay-state-roundtrip"),
+    });
+
     cases.capture_modes = await runCaptureModesCase(page, {
       baseUrl: args.baseUrl,
       outputDir: path.join(outputDir, "capture-modes"),
@@ -1737,6 +2213,10 @@ async function main() {
     result = await runCornersSuite(args);
   } else if (args.mode === "mobile") {
     result = await runMobileSuite(args);
+  } else if (args.mode === "cross-browser") {
+    result = await runCrossBrowserDirectorStateSuite(args);
+  } else if (args.mode === "safari") {
+    result = await runSafariDirectorStateSuite(args);
   } else {
     const matrixDir = path.join(outputDir, "matrix");
     const cornersDir = path.join(outputDir, "corners");

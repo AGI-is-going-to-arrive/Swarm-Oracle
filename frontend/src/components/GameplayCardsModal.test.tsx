@@ -13,6 +13,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   intervene: vi.fn(),
+  upsertScenarioGameplayState: vi.fn(),
 }));
 
 vi.mock('../game', () => ({

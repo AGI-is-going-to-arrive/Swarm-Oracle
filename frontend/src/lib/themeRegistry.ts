@@ -25,7 +25,9 @@ export const CHARACTER_SPRITE_KEYS = [
   'sprite_farmer', 'sprite_priest', 'sprite_rebel', 'sprite_diplomat',
   'sprite_villager', 'sprite_spy', 'sprite_explorer', 'sprite_scientist',
   'sprite_general', 'sprite_artist', 'sprite_engineer', 'sprite_noble',
-  'sprite_healer', 'sprite_default',
+  'sprite_healer', 'sprite_alchemist', 'sprite_assassin', 'sprite_bard',
+  'sprite_knight', 'sprite_monk', 'sprite_thief', 'sprite_witch',
+  'sprite_default',
 ] as const;
 
 export const ENDING_ASSET_KEYS = [

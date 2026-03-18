@@ -55,6 +55,16 @@ describe('VizSynthesizer — mapRoleToSpriteId', () => {
     expect(mapRoleToSpriteId('doctor', 'House')).toBe('sprite_healer');
     expect(mapRoleToSpriteId('commander', 'Shepard')).toBe('sprite_general');
   });
+
+  it('maps newly activated runtime sprites', () => {
+    expect(mapRoleToSpriteId('knight', 'Roland')).toBe('sprite_knight');
+    expect(mapRoleToSpriteId('alchemist', 'Paracelsus')).toBe('sprite_alchemist');
+    expect(mapRoleToSpriteId('assassin', 'Noor')).toBe('sprite_assassin');
+    expect(mapRoleToSpriteId('thief', 'Silk')).toBe('sprite_thief');
+    expect(mapRoleToSpriteId('bard', 'Lyra')).toBe('sprite_bard');
+    expect(mapRoleToSpriteId('monk', 'Tenzin')).toBe('sprite_monk');
+    expect(mapRoleToSpriteId('witch', 'Mora')).toBe('sprite_witch');
+  });
 });
 
 // ── inferSceneTheme ──────────────────────────────────────

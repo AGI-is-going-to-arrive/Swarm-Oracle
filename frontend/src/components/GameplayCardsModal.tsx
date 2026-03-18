@@ -24,6 +24,7 @@ import {
   getGameplayProfileDescription,
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
+  getGameplayProfileTacticalState,
   getGameplayProfileSignatureHooks,
   getScenarioSystemTrackState,
   getGameplaySignatureArcState,
@@ -40,6 +41,7 @@ import './GameplayCardsModal.css';
 
 interface Props {
   scenarioId: string;
+  initialMeta?: ScenarioMeta | null;
   branches: BranchInfo[];
   agents: AgentInfo[];
   question: string;
@@ -47,12 +49,14 @@ interface Props {
   currentRound?: number;
   readOnly?: boolean;
   disabledReason?: string | null;
+  onApplied?: (nextMeta: ScenarioMeta) => void | Promise<void>;
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
 
 export default function GameplayCardsModal({
   scenarioId,
+  initialMeta = null,
   branches,
   agents,
   question,
@@ -60,6 +64,7 @@ export default function GameplayCardsModal({
   currentRound = 1,
   readOnly = false,
   disabledReason = null,
+  onApplied,
   onClose,
   onAutomationStateChange,
 }: Props) {
@@ -69,7 +74,7 @@ export default function GameplayCardsModal({
     () => inferGameplayProfile(question, sceneTheme),
     [question, sceneTheme],
   );
-  const [meta, setMeta] = useState<ScenarioMeta>(() => loadScenarioMeta(scenarioId));
+  const [meta, setMeta] = useState<ScenarioMeta>(() => initialMeta ?? loadScenarioMeta(scenarioId));
   const recommendedCards = useMemo(
     () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog, meta.commitment),
     [gameplayProfile.id, meta.cards.usageLog, meta.commitment],
@@ -88,6 +93,10 @@ export default function GameplayCardsModal({
   );
   const systemTracks = useMemo(
     () => getScenarioSystemTrackState(gameplayProfile.id, meta.cards.usageLog, meta.commitment, isZh),
+    [gameplayProfile.id, isZh, meta.cards.usageLog, meta.commitment],
+  );
+  const tacticalState = useMemo(
+    () => getGameplayProfileTacticalState(gameplayProfile.id, meta.cards.usageLog, meta.commitment, isZh),
     [gameplayProfile.id, isZh, meta.cards.usageLog, meta.commitment],
   );
   const activeBranches = useMemo(
@@ -156,8 +165,8 @@ export default function GameplayCardsModal({
   }, [activeBranches, targetBranchId]);
 
   useEffect(() => {
-    setMeta(loadScenarioMeta(scenarioId));
-  }, [scenarioId]);
+    setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
+  }, [initialMeta, scenarioId]);
 
   useEffect(() => {
     setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? defaultCardId));
@@ -219,6 +228,8 @@ export default function GameplayCardsModal({
       status,
       read_only: readOnly,
       error: errorMsg || null,
+      tactical_mode: tacticalState.mode,
+      tactical_note: tacticalState.note,
     });
   }, [
     cardId,
@@ -241,6 +252,8 @@ export default function GameplayCardsModal({
     status,
     systemTracks.resourceValue,
     systemTracks.riskValue,
+    tacticalState.mode,
+    tacticalState.note,
     targetBranchId,
   ]);
 
@@ -318,6 +331,7 @@ export default function GameplayCardsModal({
       signatureArcLabel: signatureArcState.label,
       signatureArcProgress: signatureArcProgressText,
       systemTrackSummary,
+      profileDoctrine: tacticalState.note,
       isZh,
     });
 
@@ -333,17 +347,17 @@ export default function GameplayCardsModal({
         card_name_zh: cardDef.labelZh,
       });
 
-      setMeta(
-        applyCardUsage(scenarioId, {
-          cardId,
-          profileId: gameplayProfile.id,
-          branchId: targetBranch.id,
-          branchTitle: targetBranch.title,
-          round: normalizedCurrentRound,
-          directive: customDirective,
-          usedAt: new Date().toISOString(),
-        }),
-      );
+      const nextMeta = applyCardUsage(scenarioId, {
+        cardId,
+        profileId: gameplayProfile.id,
+        branchId: targetBranch.id,
+        branchTitle: targetBranch.title,
+        round: normalizedCurrentRound,
+        directive: customDirective,
+        usedAt: new Date().toISOString(),
+      });
+      setMeta(nextMeta);
+      await onApplied?.(nextMeta);
 
       setStatus('success');
       closeTimerRef.current = setTimeout(() => onClose(), 1200);
@@ -415,6 +429,12 @@ export default function GameplayCardsModal({
                 <strong>{meta.commitment.branchTitle}</strong>
               </>
             )}
+            <br />
+            {isZh ? '当前打法' : 'Current play pattern'}
+            {': '}
+            <strong>{tacticalState.label}</strong>
+            {' · '}
+            {tacticalState.note}
           </p>
           {readOnly && (
             <p className="gameplay-modal__preview-note">

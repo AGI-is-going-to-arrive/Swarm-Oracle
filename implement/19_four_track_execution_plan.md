@@ -58,7 +58,7 @@
 后续要继续做深，主要还卡在三类问题：
 
 1. 玩法状态仍有相当一部分停留在前端本地持久化，缺少更完整的跨设备、跨会话、可积累后端生涯层。
-2. 新增的导演目标 / worldline 承诺当前已经进入后端 `director_state` 权威态；但导演点数、卡牌冷却、usage log、下注与部分档案细节仍主要依赖本地 `scenarioMeta` 缓存。
+2. 新增的导演目标 / worldline 承诺当前已经进入后端 `director_state` 权威态；主模式 `cards.usageLog` 也已进入后端 `gameplay_state` 权威态。当前还没完全收口的是 `betting.bets` 和部分档案 raw 细节。
 3. replay、scene selector、capture/headless、全题材 E2E 虽已补强，但继续扩系统仍会先扩大验证面。
 
 因此本执行文档采用四轨路线：

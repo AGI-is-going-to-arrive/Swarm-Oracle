@@ -15,10 +15,12 @@ from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_campaign_profile_summary,
+    get_scenario_gameplay_state,
     get_scenario_director_state,
     get_scenario_campaign_summary,
     list_campaign_badge_summaries,
     list_campaign_mastery_summaries,
+    save_scenario_gameplay_state,
     save_scenario_director_state,
 )
 
@@ -300,6 +302,56 @@ class ScenarioDirectorStateResponse(ScenarioDirectorStateRequest):
     scenario_id: str
 
 
+class ScenarioGameplayCardUsageResponse(BaseModel):
+    card_id: str
+    profile_id: str
+    branch_id: str
+    branch_title: str
+    round: int
+    cost: int = 0
+    directive: str = ""
+    used_at: str
+
+    @field_validator("card_id", "profile_id", "branch_id", "branch_title", "used_at")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Field cannot be empty")
+        return normalized
+
+    @field_validator("directive")
+    @classmethod
+    def normalize_directive(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("round")
+    @classmethod
+    def validate_round(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("round must be >= 1")
+        return value
+
+    @field_validator("cost")
+    @classmethod
+    def validate_cost(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("cost must be >= 0")
+        return value
+
+
+class ScenarioGameplayCardsStateResponse(BaseModel):
+    usage_log: list[ScenarioGameplayCardUsageResponse] = Field(default_factory=list)
+
+
+class ScenarioGameplayStateRequest(BaseModel):
+    cards: ScenarioGameplayCardsStateResponse = Field(default_factory=ScenarioGameplayCardsStateResponse)
+
+
+class ScenarioGameplayStateResponse(ScenarioGameplayStateRequest):
+    scenario_id: str
+
+
 @router.get("/profile/{user_id}", response_model=CampaignProfileResponse)
 async def get_profile(user_id: str) -> CampaignProfileResponse:
     profile = get_campaign_profile_summary(user_id)
@@ -360,6 +412,37 @@ async def put_director_state(
         raise HTTPException(400, str(exc)) from exc
 
     return ScenarioDirectorStateResponse(scenario_id=scenario_id, **state)
+
+
+@router.get(
+    "/scenario/{scenario_id}/gameplay-state",
+    response_model=ScenarioGameplayStateResponse,
+)
+async def get_gameplay_state(scenario_id: str) -> ScenarioGameplayStateResponse:
+    try:
+        state = get_scenario_gameplay_state(scenario_id)
+    except CampaignNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    return ScenarioGameplayStateResponse(scenario_id=scenario_id, **state)
+
+
+@router.put(
+    "/scenario/{scenario_id}/gameplay-state",
+    response_model=ScenarioGameplayStateResponse,
+)
+async def put_gameplay_state(
+    scenario_id: str,
+    req: ScenarioGameplayStateRequest,
+) -> ScenarioGameplayStateResponse:
+    try:
+        state = save_scenario_gameplay_state(scenario_id, req.model_dump())
+    except CampaignNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except CampaignError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return ScenarioGameplayStateResponse(scenario_id=scenario_id, **state)
 
 
 @router.get(

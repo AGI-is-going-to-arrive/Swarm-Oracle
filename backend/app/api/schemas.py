@@ -99,6 +99,7 @@ class ScenarioResponse(BaseModel):
     visualization_enabled: bool = False
     scene_theme: str | None = None
     director_state: dict | None = None
+    gameplay_state: dict | None = None
 
 
 class StoryBranch(BaseModel):

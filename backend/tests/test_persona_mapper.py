@@ -38,6 +38,14 @@ class TestAssignSprite:
             ("temple priest", "sprite_priest"),
             ("rebel leader", "sprite_king"),  # 'leader' appears first in SPRITE_MAP → matches king
             ("skilled diplomat", "sprite_diplomat"),
+            ("orbital knight commander", "sprite_general"),
+            ("rogue assassin courier", "sprite_assassin"),
+            ("smuggler thief broker", "sprite_thief"),
+            ("temple monk chronicler", "sprite_monk"),
+            ("court alchemist", "sprite_alchemist"),
+            ("storm witch oracle", "sprite_witch"),
+            ("travelling bard", "sprite_bard"),
+            ("frontier scientist", "sprite_scientist"),
         ],
     )
     def test_english_keywords(self, persona, expected):
@@ -50,13 +58,21 @@ class TestAssignSprite:
         [
             ("伟大的领袖", "sprite_king"),
             ("皇帝陛下", "sprite_king"),
-            ("将军", "sprite_warrior"),
+            ("将军", "sprite_general"),
             ("著名学者", "sprite_scholar"),
             ("大商人", "sprite_merchant"),
             ("贫苦农民", "sprite_farmer"),
-            ("僧侣", "sprite_priest"),
+            ("僧侣", "sprite_monk"),
             ("叛军首领", "sprite_rebel"),
             ("外交官", "sprite_diplomat"),
+            ("轨道骑士", "sprite_knight"),
+            ("宫廷炼金术士", "sprite_alchemist"),
+            ("流浪刺客", "sprite_assassin"),
+            ("黑市走私者", "sprite_thief"),
+            ("吟游诗人", "sprite_bard"),
+            ("山中修士", "sprite_monk"),
+            ("女巫预言者", "sprite_witch"),
+            ("年轻科学家", "sprite_scientist"),
         ],
     )
     def test_chinese_keywords(self, persona, expected):

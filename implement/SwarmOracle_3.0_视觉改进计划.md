@@ -10,10 +10,12 @@
 > - 截图 / GIF 下载链路已加固为标准 `PNG / GIF` 下载。
 > - 2026-03-19 补充同步：
 >   - 导演目标 / worldline 承诺已后端化到 `Scenario.director_state_json`，不再只是前端本地态。
->   - 当前定向验证口径：后端 `65 passed + 17 passed`，前端 `60 passed + 21 passed`。
->   - 当前主模式 director-state 黑盒工件位于 `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`。
->   - 当前跨浏览器工件位于 `frontend/output/e2e/20260319-director-state-cross-browser/result.json` 与 `frontend/output/e2e/20260319-director-state-safari/result.json`。
->   - WebKit 下结果页因果档案顶部大图白块已修复；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染。
+>   - 主模式 `cards.usageLog` 已后端化到 `Scenario.gameplay_state_json`，前端会基于远端 `usage_log` 重算导演点数、卡牌冷却与反制轨迹摘要。
+>   - 当前定向验证口径：后端 `80 passed`，前端 `66 passed`，Theater 可读性定向 `12 passed`。
+>   - 当前主模式 `gameplay_state_roundtrip` 黑盒工件位于 `frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`。
+>   - 当前官方跨浏览器工件位于 `frontend/output/e2e/20260319-official-cross-browser/result.json` 与 `frontend/output/e2e/20260319-official-safari-v5/result.json`。
+>   - WebKit 下结果页因果档案顶部大图白块已修复；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染，但官方 `e2e:safari` 已实跑通过。
+>   - Theater 又做了一轮可读性收口：舞台优先、上下 chrome 压缩、气泡文字放大并加清晰化描边。
 
 ## 问题诊断
 
@@ -92,7 +94,7 @@
 
 #### [MODIFY] SimulationView.tsx ✅
 
-- ✅ 调整布局比例：Theater 模式画布占 65%，Agent 面板收窄至 35%
+- ✅ 调整布局比例：Theater 当前改为“舞台优先”，右栏收成固定窄宽，`game-wrapper` 会优先出现在 replay filters / timeline 前
 - ✅ 画布区域自适应容器尺寸（去除 max-width 960px）
 - ✅ Agent 面板改为浮层（Theater 模式默认折叠）
 - ✅ 新增 `simulation-view--theater` CSS 类，GBC 暗色主题全覆写
@@ -100,7 +102,7 @@
 #### [MODIFY] game.css ✅
 
 - ✅ 像素风边框（border-radius 12px → 4px，双层 box-shadow）
-- ✅ CRT 扫描线增强（2px 间距 + 0.06 不透明度）
+- ✅ CRT 扫描线增强（当前已回调到更轻的覆盖强度，避免压住小字号文字）
 - ✅ Power LED 指示灯 + 呼吸动画
 - ✅ HUD bar 统一 GBC 暗色调 + tabular-nums
 - ✅ Bet bar 脉冲动画 + rank 变化闪光

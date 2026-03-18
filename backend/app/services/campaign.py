@@ -43,6 +43,12 @@ DEFAULT_SCENARIO_DIRECTOR_STATE = {
     },
 }
 
+DEFAULT_SCENARIO_GAMEPLAY_STATE = {
+    "cards": {
+        "usage_log": [],
+    },
+}
+
 
 class CampaignError(Exception):
     """Base campaign error."""
@@ -189,6 +195,68 @@ def normalize_scenario_director_state(payload: dict[str, Any] | None) -> dict[st
         "committed_at_round": committed_at_round,
         "committed_at": raw_commitment.get("committed_at"),
         "outcome": _normalize_commitment_outcome(str(outcome) if outcome is not None else None),
+    }
+    return state
+
+
+def get_default_scenario_gameplay_state() -> dict[str, Any]:
+    return deepcopy(DEFAULT_SCENARIO_GAMEPLAY_STATE)
+
+
+def _normalize_usage_log_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    card_id = str(entry.get("card_id", "")).strip()
+    profile_id = str(entry.get("profile_id", "")).strip()
+    branch_id = str(entry.get("branch_id", "")).strip()
+    branch_title = str(entry.get("branch_title", "")).strip()
+    directive = str(entry.get("directive", "")).strip()
+    used_at = str(entry.get("used_at", "")).strip()
+
+    if not card_id or not profile_id or not branch_id or not branch_title or not used_at:
+        return None
+
+    try:
+        round_number = max(1, int(entry.get("round", 1)))
+    except (TypeError, ValueError):
+        round_number = 1
+
+    try:
+        cost = max(0, int(entry.get("cost", 0)))
+    except (TypeError, ValueError):
+        cost = 0
+
+    return {
+        "card_id": card_id,
+        "profile_id": profile_id,
+        "branch_id": branch_id,
+        "branch_title": branch_title,
+        "round": round_number,
+        "cost": cost,
+        "directive": directive,
+        "used_at": used_at,
+    }
+
+
+def normalize_scenario_gameplay_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+    state = get_default_scenario_gameplay_state()
+    if not isinstance(payload, dict):
+        return state
+
+    raw_cards = payload.get("cards")
+    if not isinstance(raw_cards, dict):
+        return state
+
+    usage_log: list[dict[str, Any]] = []
+    for entry in raw_cards.get("usage_log") or []:
+        if not isinstance(entry, dict):
+            continue
+        normalized = _normalize_usage_log_entry(entry)
+        if normalized is None:
+            continue
+        usage_log.append(normalized)
+
+    usage_log.sort(key=lambda item: (item["round"], item["used_at"], item["card_id"]))
+    state["cards"] = {
+        "usage_log": usage_log,
     }
     return state
 
@@ -754,6 +822,34 @@ def save_scenario_director_state(
         session.commit()
         session.refresh(scenario)
         return normalize_scenario_director_state(scenario.director_state_json)
+
+
+def get_scenario_gameplay_state(scenario_id: str) -> dict[str, Any]:
+    """Return the persisted per-scenario gameplay state or a safe default."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise CampaignNotFoundError("Scenario not found")
+        return normalize_scenario_gameplay_state(scenario.gameplay_state_json)
+
+
+def save_scenario_gameplay_state(
+    scenario_id: str,
+    gameplay_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist the authoritative per-scenario gameplay state."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise CampaignNotFoundError("Scenario not found")
+
+        scenario.gameplay_state_json = normalize_scenario_gameplay_state(gameplay_state)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        return normalize_scenario_gameplay_state(scenario.gameplay_state_json)
 
 
 def get_scenario_campaign_summary(scenario_id: str) -> dict[str, Any]:

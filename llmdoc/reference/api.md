@@ -9,7 +9,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": ""}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
-| `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`agents[]`、`branches[]`、`messages[]`） |
+| `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`） |
 | `GET /api/scenario/{id}/branches` | GET | 获取分支列表 | — | BranchInfo[] |
 | `GET /api/scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） | — | AgentInfo[] |
 | `GET /api/scenario/{id}/story` | GET | 获取叙事结果 | — | StoryData |
@@ -47,6 +47,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单个 scenario 已落库的 campaign 摘要；供结果页在本地 `scenarioMeta` 缺失时做跨设备兜底 | — | CampaignScenarioSummaryResponse |
 | `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单个 scenario 的导演层权威态；当前只包含 goals / commitment | — | ScenarioDirectorStateResponse |
 | `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单个 scenario 的导演层权威态；当前只覆盖 goals / commitment | `{"objectives": {"generated_for_question?": "...", "generated_for_profile?": "...", "goals": [...]}, "commitment": {"active": true, "branch_id?": "...", "branch_title?": "...", "committed_at_round?": 2, "committed_at?": "...", "outcome?": "pending"}}` | ScenarioDirectorStateResponse |
+| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单个 scenario 的玩法层权威态；当前已包含 `cards.usage_log` | — | ScenarioGameplayStateResponse |
+| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单个 scenario 的玩法层权威态；当前主要用于主模式 `cards.usageLog` 的跨设备同步 | `{"cards": {"usage_log": [{"card_id": "...", "profile_id": "...", "branch_id": "...", "branch_title": "...", "round": 3, "cost": 1, "directive": "...", "used_at": "..."}]}}` | ScenarioGameplayStateResponse |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
@@ -113,7 +115,32 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `commitment.committed_at`
 > - `commitment.outcome`
 >
-> 当前前端 `SimulationView` / `ResultView` 会优先读取 `director-state`；`ResultView` 同时并行请求 `summary`。当本地 `scenarioMeta.archive` 缺字段时，会用 `summary` 兜底 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`；当 goals / commitment 缺失时，会以后端 `director-state` 为准。`finalize` 的 `404 / 409` 仍会被识别为边界态，只显示提示文案，不阻断主结果页展示；其他 `finalize` 错误按普通错误展示。
+> `ScenarioGameplayStateResponse` 当前包含：
+> - `scenario_id`
+> - `cards.usage_log[]`
+>   - `card_id`
+>   - `profile_id`
+>   - `branch_id`
+>   - `branch_title`
+>   - `round`
+>   - `cost`
+>   - `directive`
+>   - `used_at`
+>
+> 当前前端 `SimulationView` / `ResultView` 会优先读取：
+> - `director-state`
+> - `gameplay-state`
+> - `summary`
+>
+> 其中：
+> - goals / commitment 以后端 `director-state` 为准
+> - 主模式 `cards.usageLog` 以后端 `gameplay-state` 为准
+> - 导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count`、`last_counterplay_card` 会由前端基于远端 `usage_log` 重算
+> - `summary` 继续兜底 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`
+>
+> 当前仍未完全后端化的是：
+> - `betting.bets`
+> - 部分 archive raw 细节
 
 ### Health & Observability
 

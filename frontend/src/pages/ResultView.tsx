@@ -9,12 +9,13 @@ import {
   exportScenario,
   finalizeCampaign,
   getAgents,
-  getCampaignScenarioSummary,
-  getScenario,
-  getStory,
-  listPredictions,
-  scorePredictions,
-  upsertScenarioDirectorState,
+    getCampaignScenarioSummary,
+    getScenario,
+    getStory,
+    listPredictions,
+    scorePredictions,
+    upsertScenarioDirectorState,
+    upsertScenarioGameplayState,
 } from '../api/client';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { getDirectorIdentity } from '../lib/directorIdentity';
@@ -30,6 +31,12 @@ import {
   mergeScenarioMetaWithDirectorState,
   scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
+import {
+  applyScenarioGameplayState,
+  hasMeaningfulScenarioGameplayState,
+  mergeScenarioMetaWithGameplayState,
+  scenarioMetaToGameplayState,
+} from '../lib/scenarioGameplayState';
 import {
   buildDefaultDirectorObjectives,
   countCompletedObjectives,
@@ -208,8 +215,12 @@ export default function ResultView() {
         const isDailyChallenge = Boolean(challengeMatch);
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
         const remoteDirectorState = scenario.director_state ?? null;
+        const remoteGameplayState = scenario.gameplay_state ?? null;
         if (hasMeaningfulScenarioDirectorState(remoteDirectorState)) {
           applyScenarioDirectorState(id, remoteDirectorState as NonNullable<typeof remoteDirectorState>);
+        }
+        if (hasMeaningfulScenarioGameplayState(remoteGameplayState)) {
+          applyScenarioGameplayState(id, remoteGameplayState as NonNullable<typeof remoteGameplayState>);
         }
         let nextMeta = updateArchive(id, {
           question: scenario.question,
@@ -245,6 +256,20 @@ export default function ResultView() {
             await upsertScenarioDirectorState(id, scenarioMetaToDirectorState(nextMeta));
           } catch (err) {
             console.warn('[DirectorState] Failed to backfill backend state from result view', err);
+          }
+        }
+        const mergedGameplayState = scenarioMetaToGameplayState(
+          mergeScenarioMetaWithGameplayState(nextMeta, remoteGameplayState),
+        );
+        const remoteGameplayCount = remoteGameplayState?.cards?.usage_log?.length ?? 0;
+        if (
+          hasMeaningfulScenarioGameplayState(mergedGameplayState)
+          && mergedGameplayState.cards.usage_log.length > remoteGameplayCount
+        ) {
+          try {
+            await upsertScenarioGameplayState(id, mergedGameplayState);
+          } catch (err) {
+            console.warn('[GameplayState] Failed to backfill backend state from result view', err);
           }
         }
         const objectiveMeta = loadScenarioMeta(id);
@@ -410,8 +435,12 @@ export default function ResultView() {
   const scenarioMeta = useMemo(() => {
     if (!storedScenarioMeta) return null;
 
-    const baseMeta = mergeScenarioMetaWithDirectorState(
+    const gameplayMerged = mergeScenarioMetaWithGameplayState(
       storedScenarioMeta,
+      scenario?.gameplay_state ?? null,
+    );
+    const baseMeta = mergeScenarioMetaWithDirectorState(
+      gameplayMerged,
       scenario?.director_state ?? null,
     );
 
@@ -459,7 +488,7 @@ export default function ResultView() {
           ?? null,
       },
     };
-  }, [campaignScenarioSummary, inferredProfile?.id, scenario?.director_state, storedScenarioMeta]);
+  }, [campaignScenarioSummary, inferredProfile?.id, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
   const gameplayProfileLabel =
     scenarioMeta?.archive.profileId
       ? getGameplayProfileLabel(

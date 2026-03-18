@@ -69,6 +69,7 @@ export interface GameplayCardPromptInput {
   signatureArcLabel?: string;
   signatureArcProgress?: string;
   systemTrackSummary?: string;
+  profileDoctrine?: string;
   isZh: boolean;
 }
 
@@ -94,6 +95,22 @@ interface GameplayProfileHeuristics {
   primaryRoleKeywords?: string[];
   secondaryRoleKeywords?: string[];
   sourceBranchKeywords?: string[];
+}
+
+type GameplayTacticalMode = 'opening' | 'pressure' | 'committed';
+
+interface GameplayTacticalPreset {
+  labelZh: string;
+  labelEn: string;
+  noteZh: string;
+  noteEn: string;
+  focusCards: GameplayCardId[];
+}
+
+interface GameplayProfileStrategyDefinition {
+  opening: GameplayTacticalPreset;
+  pressure: GameplayTacticalPreset;
+  committed: GameplayTacticalPreset;
 }
 
 interface GameplayUsageLike {
@@ -184,6 +201,285 @@ const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuri
     primaryRoleKeywords: ['避难', 'survival', 'doctor', 'security', 'scout', 'commander'],
     secondaryRoleKeywords: ['社区', '粮', 'worker', 'medic', 'mayor'],
     sourceBranchKeywords: ['饥荒', '瘟疫', '撤离', 'famine', 'plague', 'retreat', 'collapse'],
+  },
+};
+
+const PROFILE_STRATEGY_RULES: Record<GameplayProfileId, GameplayProfileStrategyDefinition> = {
+  governance: {
+    opening: {
+      labelZh: '合法性推进',
+      labelEn: 'Legitimacy Push',
+      noteZh: '先摊开程序与民意，再决定谁能拿走最后否决权。',
+      noteEn: 'Surface procedure and legitimacy first, then decide who gets the final veto.',
+      focusCards: ['public_hearing', 'mandate_surge', 'human_takeover'],
+    },
+    pressure: {
+      labelZh: '审计回拉',
+      labelEn: 'Audit Pullback',
+      noteZh: '高压时优先公开账本、责任链和回摆民意，别让黑箱继续扩张。',
+      noteEn: 'Under pressure, expose ledgers, accountability chains, and mandate snapback before the black box expands.',
+      focusCards: ['audit_reckoning', 'mandate_snapback', 'public_hearing'],
+    },
+    committed: {
+      labelZh: '主线锁定',
+      labelEn: 'Worldline Lock',
+      noteZh: '承诺后继续用听证和民意冲击把主线叙事钉住。',
+      noteEn: 'After commitment, keep the main line pinned through hearings and public mandate shocks.',
+      focusCards: ['public_hearing', 'mandate_surge', 'audit_reckoning'],
+    },
+  },
+  war: {
+    opening: {
+      labelZh: '火线拉扯',
+      labelEn: 'Frontline Tug',
+      noteZh: '优先制造停火窗口和情报错位，让前线与后方目标脱钩。',
+      noteEn: 'Open by creating ceasefire windows and intelligence asymmetry so front and rear objectives diverge.',
+      focusCards: ['ceasefire_committee', 'intel_blowback', 'mandate_surge'],
+    },
+    pressure: {
+      labelZh: '止损优先',
+      labelEn: 'Loss Control',
+      noteZh: '战局过热时先控补给与停火，不要让分支只剩单向升级。',
+      noteEn: 'When the branch overheats, stabilize supply and ceasefire lanes before escalation becomes one-way.',
+      focusCards: ['ceasefire_committee', 'resource_triage', 'intel_blowback'],
+    },
+    committed: {
+      labelZh: '战线钉住',
+      labelEn: 'Front Hold',
+      noteZh: '承诺后继续围绕停火、反间与配给重新排阵。',
+      noteEn: 'After commitment, keep reshaping the branch around ceasefire, counter-intelligence, and rationing.',
+      focusCards: ['ceasefire_committee', 'intel_blowback', 'resource_triage'],
+    },
+  },
+  empire: {
+    opening: {
+      labelZh: '宫廷操盘',
+      labelEn: 'Court Maneuver',
+      noteZh: '优先拆穿密约和血统叙事，再决定是收权还是放权。',
+      noteEn: 'Expose hidden pacts and succession narratives before choosing centralization or concession.',
+      focusCards: ['backchannel_pact', 'public_hearing', 'human_takeover'],
+    },
+    pressure: {
+      labelZh: '王朝止血',
+      labelEn: 'Dynastic Bleed Control',
+      noteZh: '危机抬头时先审计藩属、军团与财政，不要只靠权威宣示硬压。',
+      noteEn: 'As pressure rises, audit provinces, legions, and treasuries instead of relying on pure authority signaling.',
+      focusCards: ['audit_reckoning', 'mandate_snapback', 'backchannel_pact'],
+    },
+    committed: {
+      labelZh: '正统维稳',
+      labelEn: 'Orthodoxy Hold',
+      noteZh: '承诺后继续围绕宫廷密约、听证和人治接管稳住主线。',
+      noteEn: 'After commitment, keep the worldline steady through court pacts, hearings, and direct human intervention.',
+      focusCards: ['backchannel_pact', 'public_hearing', 'human_takeover'],
+    },
+  },
+  industry: {
+    opening: {
+      labelZh: '产能调度',
+      labelEn: 'Throughput Tuning',
+      noteZh: '先重排产能和资源走向，再决定是否公开冲突。',
+      noteEn: 'Re-route throughput and resource flow first, then decide whether to surface conflict publicly.',
+      focusCards: ['resource_triage', 'backchannel_pact', 'mandate_surge'],
+    },
+    pressure: {
+      labelZh: '系统排障',
+      labelEn: 'System Triage',
+      noteZh: '能源和物流吃紧时先保关键节点，再处理舆论反弹。',
+      noteEn: 'When energy and logistics tighten, protect critical nodes first, then handle the backlash.',
+      focusCards: ['resource_triage', 'audit_reckoning', 'evacuation_order'],
+    },
+    committed: {
+      labelZh: '供应链锁线',
+      labelEn: 'Supply Lock',
+      noteZh: '承诺后继续围绕配给、隐性交易和人工接管稳住主线。',
+      noteEn: 'After commitment, keep the line stable through rationing, off-book deals, and direct takeovers.',
+      focusCards: ['resource_triage', 'backchannel_pact', 'human_takeover'],
+    },
+  },
+  trade: {
+    opening: {
+      labelZh: '筹码交易',
+      labelEn: 'Leverage Trade',
+      noteZh: '优先做港口、关税和护航筹码交换，而不是立刻公开摊牌。',
+      noteEn: 'Lead with ports, tariffs, and convoy leverage instead of going public immediately.',
+      focusCards: ['backchannel_pact', 'spy_infiltrate', 'intel_blowback'],
+    },
+    pressure: {
+      labelZh: '市场灭火',
+      labelEn: 'Market Firebreak',
+      noteZh: '市场失衡时先切断坏情报与黑箱交易，再决定公开听证。',
+      noteEn: 'When markets seize up, cut poisoned intel and opaque deals before opening the hearing.',
+      focusCards: ['intel_blowback', 'audit_reckoning', 'public_hearing'],
+    },
+    committed: {
+      labelZh: '商路钉住',
+      labelEn: 'Route Lock',
+      noteZh: '承诺后继续围绕密约、听证和情报反噬控制航线叙事。',
+      noteEn: 'After commitment, keep the branch on-route through pacts, hearings, and intel blowback.',
+      focusCards: ['backchannel_pact', 'public_hearing', 'intel_blowback'],
+    },
+  },
+  law: {
+    opening: {
+      labelZh: '程序立场',
+      labelEn: 'Procedural Posture',
+      noteZh: '优先把证据、判例和程序红线摆上桌，再决定谁能越权。',
+      noteEn: 'Put evidence, precedent, and procedural red lines on the table before anyone overreaches.',
+      focusCards: ['public_hearing', 'audit_reckoning', 'human_takeover'],
+    },
+    pressure: {
+      labelZh: '程序冻结',
+      labelEn: 'Procedure Freeze',
+      noteZh: '局势过热时先冻结例外条款和黑箱裁量，再让各方重新举证。',
+      noteEn: 'When the branch overheats, freeze emergency exceptions and black-box discretion, then force everyone back to evidence.',
+      focusCards: ['audit_reckoning', 'public_hearing', 'mandate_snapback'],
+    },
+    committed: {
+      labelZh: '判例锁链',
+      labelEn: 'Precedent Chain',
+      noteZh: '承诺后继续用听证、程序接管和审计把主线钉成可执行判例。',
+      noteEn: 'After commitment, keep the worldline enforceable through hearings, procedural takeovers, and audit.',
+      focusCards: ['public_hearing', 'human_takeover', 'audit_reckoning'],
+    },
+  },
+  faith: {
+    opening: {
+      labelZh: '教义试探',
+      labelEn: 'Doctrine Probe',
+      noteZh: '先测试神谕、仪式和密约之间的张力，再决定要不要公开断裂。',
+      noteEn: 'Probe the tension between prophecy, ritual, and secret bargains before making the schism public.',
+      focusCards: ['forbidden_ritual', 'backchannel_pact', 'mandate_surge'],
+    },
+    pressure: {
+      labelZh: '教团止裂',
+      labelEn: 'Schism Control',
+      noteZh: '当信众失控时先回摆民意和责任链，避免禁术把分支直接点燃。',
+      noteEn: 'When the faithful destabilize, pull back with public mandate and accountability before the rite ignites the branch.',
+      focusCards: ['mandate_snapback', 'audit_reckoning', 'ceasefire_committee'],
+    },
+    committed: {
+      labelZh: '神谕锁定',
+      labelEn: 'Prophecy Lock',
+      noteZh: '承诺后持续用禁术、密约和回摆维持教义主线。',
+      noteEn: 'After commitment, keep the prophecy line stable through rites, secret pacts, and snapback control.',
+      focusCards: ['forbidden_ritual', 'backchannel_pact', 'mandate_snapback'],
+    },
+  },
+  ecology: {
+    opening: {
+      labelZh: '阈值调度',
+      labelEn: 'Threshold Dispatch',
+      noteZh: '优先决定水、迁徙和防疫配给，别让分支先陷入抽象争论。',
+      noteEn: 'Prioritize water, migration, and containment allocation before the branch drifts into abstraction.',
+      focusCards: ['resource_triage', 'evacuation_order', 'public_hearing'],
+    },
+    pressure: {
+      labelZh: '生存止跌',
+      labelEn: 'Survival Brake',
+      noteZh: '生态崩压时先保命与撤离，再用公开听证处理正当性争议。',
+      noteEn: 'Under ecological collapse, secure survival and evacuation first, then litigate legitimacy in public.',
+      focusCards: ['evacuation_order', 'resource_triage', 'ceasefire_committee'],
+    },
+    committed: {
+      labelZh: '走廊守住',
+      labelEn: 'Corridor Hold',
+      noteZh: '承诺后继续围绕迁徙走廊、配给和停火窗口守住主线。',
+      noteEn: 'After commitment, keep the line anchored around migration corridors, rationing, and ceasefire windows.',
+      focusCards: ['resource_triage', 'evacuation_order', 'ceasefire_committee'],
+    },
+  },
+  frontier: {
+    opening: {
+      labelZh: '边疆试探',
+      labelEn: 'Frontier Probe',
+      noteZh: '优先制造轨道信号、自治筹码和补给窗口，而不是直接宣布新秩序。',
+      noteEn: 'Open with orbital signals, autonomy leverage, and supply windows before declaring a new order.',
+      focusCards: ['spacetime_rift', 'resource_triage', 'human_takeover'],
+    },
+    pressure: {
+      labelZh: '生命维持',
+      labelEn: 'Life Support Hold',
+      noteZh: '生命维持线紧绷时先撤离、分诊和切断错误情报。',
+      noteEn: 'When life support tightens, prioritize evacuation, triage, and severing bad intelligence.',
+      focusCards: ['evacuation_order', 'resource_triage', 'intel_blowback'],
+    },
+    committed: {
+      labelZh: '自治主线',
+      labelEn: 'Autonomy Track',
+      noteZh: '承诺后继续围绕裂隙信号、接管与配给把自治主线钉住。',
+      noteEn: 'After commitment, keep the autonomy line stable through rift signals, takeovers, and rationing.',
+      focusCards: ['spacetime_rift', 'human_takeover', 'resource_triage'],
+    },
+  },
+  mythic: {
+    opening: {
+      labelZh: '秘仪试压',
+      labelEn: 'Arcane Probe',
+      noteZh: '先试探禁术、盟约和舞台叙事，再决定是否公开裂开秩序。',
+      noteEn: 'Probe rites, pacts, and ritual theater first before openly rupturing the order.',
+      focusCards: ['forbidden_ritual', 'backchannel_pact', 'civilization_debate'],
+    },
+    pressure: {
+      labelZh: '反噬管理',
+      labelEn: 'Backlash Control',
+      noteZh: '当代价失控时，优先回摆民意与错误情报，别连续叠禁术。',
+      noteEn: 'When the costs spiral, stabilize public mandate and bad intelligence before stacking more rites.',
+      focusCards: ['mandate_snapback', 'intel_blowback', 'public_hearing'],
+    },
+    committed: {
+      labelZh: '预言锁线',
+      labelEn: 'Prophecy Rail',
+      noteZh: '承诺后继续用禁术、辩论和密约维持预言主线的仪式感。',
+      noteEn: 'After commitment, keep the prophecy rail alive through rites, debate, and clandestine bargains.',
+      focusCards: ['forbidden_ritual', 'civilization_debate', 'backchannel_pact'],
+    },
+  },
+  survival: {
+    opening: {
+      labelZh: '保命优先',
+      labelEn: 'Survival First',
+      noteZh: '先决定谁能活、谁先走、哪些管线必须让路，再谈宏观叙事。',
+      noteEn: 'Decide who lives, who moves first, and which lifelines get priority before debating grand strategy.',
+      focusCards: ['resource_triage', 'evacuation_order', 'human_takeover'],
+    },
+    pressure: {
+      labelZh: '极限止损',
+      labelEn: 'Critical Loss Control',
+      noteZh: '快撑不住时优先撤离、停火和切断错误链路，别让分支直接崩盘。',
+      noteEn: 'When the branch is close to collapse, prioritize evacuation, ceasefire, and severing bad chains.',
+      focusCards: ['evacuation_order', 'ceasefire_committee', 'intel_blowback'],
+    },
+    committed: {
+      labelZh: '避难主线',
+      labelEn: 'Refuge Hold',
+      noteZh: '承诺后继续围绕撤离、分诊和人工接管守住避难主线。',
+      noteEn: 'After commitment, keep the refuge line stable through evacuation, triage, and direct intervention.',
+      focusCards: ['evacuation_order', 'resource_triage', 'human_takeover'],
+    },
+  },
+  generic: {
+    opening: {
+      labelZh: '试探重心',
+      labelEn: 'Center Probe',
+      noteZh: '先用公开听证和辩论制造新的重心，再决定要不要走暗线。',
+      noteEn: 'Use hearings and debate to create a new center of gravity before moving off-book.',
+      focusCards: ['public_hearing', 'civilization_debate', 'backchannel_pact'],
+    },
+    pressure: {
+      labelZh: '回摆纠偏',
+      labelEn: 'Correction Loop',
+      noteZh: '当分支失控时优先回摆民意、审计责任，再决定是否升级反制。',
+      noteEn: 'When the branch loses shape, pull back through mandate and audit before escalating the counterplay.',
+      focusCards: ['mandate_snapback', 'audit_reckoning', 'intel_blowback'],
+    },
+    committed: {
+      labelZh: '主线维持',
+      labelEn: 'Line Maintenance',
+      noteZh: '承诺后继续围绕听证、密约和人工接管把主线维持住。',
+      noteEn: 'After commitment, maintain the line through hearings, bargains, and direct intervention.',
+      focusCards: ['public_hearing', 'backchannel_pact', 'human_takeover'],
+    },
   },
 };
 
@@ -363,33 +659,58 @@ export function getScenarioSystemTrackState(
   };
 }
 
+export function getGameplayProfileTacticalState(
+  profileId: GameplayProfileId,
+  usages: GameplayUsageLike[] = [],
+  commitment?: BranchCommitmentLike | null,
+  isZh = true,
+) {
+  const strategy = PROFILE_STRATEGY_RULES[profileId] ?? PROFILE_STRATEGY_RULES.generic;
+  const systemTracks = getScenarioSystemTrackState(profileId, usages, commitment, isZh);
+
+  let mode: GameplayTacticalMode = 'opening';
+  if (systemTracks.riskValue >= 4 || systemTracks.resourceValue <= 2) {
+    mode = 'pressure';
+  } else if (commitment?.active) {
+    mode = 'committed';
+  }
+
+  const preset = strategy[mode];
+  return {
+    mode,
+    label: isZh ? preset.labelZh : preset.labelEn,
+    note: isZh ? preset.noteZh : preset.noteEn,
+    focusCards: preset.focusCards,
+  };
+}
+
 export function getRecommendedGameplayCards(
   profileId: GameplayProfileId,
   usages: GameplayUsageLike[] = [],
   commitment?: BranchCommitmentLike | null,
 ): GameplayCardId[] {
   const cards = [...gameplayProfiles[profileId].recommendedCards];
-  if (usages.length === 0) {
-    return commitment?.active
-      ? [
-        'public_hearing',
-        ...cards.filter((cardId) => cardId !== 'public_hearing'),
-      ]
-      : cards;
-  }
   const arcState = getGameplaySignatureArcState(profileId, usages, true);
   const systemTracks = getScenarioSystemTrackState(profileId, usages, commitment, true);
+  const tacticalState = getGameplayProfileTacticalState(profileId, usages, commitment, true);
   const counterplayCards = Array.from(COUNTERPLAY_CARD_IDS);
   const priorities: GameplayCardId[] = [];
 
-  if (systemTracks.counterplayRecommended) {
-    priorities.push(...counterplayCards);
+  priorities.push(...tacticalState.focusCards);
+  if (usages.length === 0 && cards.length > 0) {
+    priorities.push(cards[0]);
   }
   if (arcState.nextCardId) {
     priorities.push(arcState.nextCardId);
   }
   if (commitment?.active) {
-    priorities.push('public_hearing');
+    priorities.push(...PROFILE_STRATEGY_RULES[profileId].committed.focusCards);
+  }
+  if (systemTracks.counterplayRecommended) {
+    priorities.push(
+      ...counterplayCards.filter((cardId) => tacticalState.focusCards.includes(cardId)),
+      ...counterplayCards,
+    );
   }
 
   return [
@@ -413,6 +734,7 @@ function buildSignatureArcContextLines(
   signatureArcLabel?: string,
   signatureArcProgress?: string,
   systemTrackSummary?: string,
+  profileDoctrine?: string,
 ): string[] {
   const lines: string[] = [];
   if (signatureArcLabel) {
@@ -423,6 +745,9 @@ function buildSignatureArcContextLines(
   }
   if (systemTrackSummary) {
     lines.push(isZh ? `情势轨道：${systemTrackSummary}` : `System tracks: ${systemTrackSummary}`);
+  }
+  if (profileDoctrine) {
+    lines.push(isZh ? `当前打法：${profileDoctrine}` : `Current play pattern: ${profileDoctrine}`);
   }
   return lines;
 }
@@ -619,6 +944,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
     signatureArcLabel,
     signatureArcProgress,
     systemTrackSummary,
+    profileDoctrine,
     isZh,
   } = input;
 
@@ -651,7 +977,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
     ...(card.requiresSourceBranch
       ? [isZh ? `信息来源分支：${sourceBranchLabel}` : `Source branch: ${sourceBranchLabel}`]
       : []),
-    ...buildSignatureArcContextLines(isZh, signatureArcLabel, signatureArcProgress, systemTrackSummary),
+    ...buildSignatureArcContextLines(isZh, signatureArcLabel, signatureArcProgress, systemTrackSummary, profileDoctrine),
     ...promptLines,
   ].join('\n');
 }

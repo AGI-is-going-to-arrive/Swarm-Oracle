@@ -16,7 +16,10 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.parser import parse_question
-from app.services.campaign import normalize_scenario_director_state
+from app.services.campaign import (
+    normalize_scenario_director_state,
+    normalize_scenario_gameplay_state,
+)
 from app.services.simulator import run_simulation
 from app.api.schemas import ScenarioResponse
 
@@ -358,4 +361,5 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             visualization_enabled=s.visualization_enabled,
             scene_theme=s.scene_theme,
             director_state=normalize_scenario_director_state(s.director_state_json),
+            gameplay_state=normalize_scenario_gameplay_state(s.gameplay_state_json),
         )

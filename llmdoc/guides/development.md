@@ -84,6 +84,15 @@ python -m pytest \
 ```
 
 - 结果：**65 passed**
+- 本次 session 围绕主模式 `gameplay_state` authority + sprite 映射又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q
+```
+
+- 结果：**80 passed**
 - 本次 session 围绕 Debate `counterplay` 又补跑了：
 
 ```bash
@@ -125,6 +134,20 @@ npm test -- --run \
 
 - 结果：
   - `vitest`：**60 passed**
+- 本次 session 围绕主模式 `gameplay_state` authority + 玩法/素材分化又补跑了：
+
+```bash
+cd frontend
+npm test -- --run \
+  src/lib/scenarioGameplayState.test.ts \
+  src/components/gameplayCards.test.ts \
+  src/game/managers/VizSynthesizer.test.ts \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx
+```
+
+- 结果：
+  - `vitest`：**66 passed**
 - 本次 session 围绕 Debate `counterplay` 又补跑了：
 
 ```bash
@@ -160,6 +183,17 @@ npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/2026
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过
   - `e2e-suite.mjs corners`：通过
+- 本次 session 围绕 Theater 可读性修复又补跑了：
+
+```bash
+cd frontend
+npm test -- --run src/pages/SimulationView.test.tsx src/components/TimelineBar.test.tsx
+npm run build
+```
+
+- 结果：
+  - `vitest`：**12 passed**
+  - `npm run build`：通过
 - 本轮还重新执行了：
 
 ```bash
@@ -208,6 +242,8 @@ node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 43
   - `npm run e2e:matrix`
   - `npm run e2e:variants`
   - `npm run e2e:corners`
+  - `npm run e2e:cross-browser`
+  - `npm run e2e:safari`
   - `npm run e2e:full`
   - `npm run e2e:debate:desktop`
   - `npm run e2e:debate:mobile`
@@ -218,6 +254,11 @@ node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 43
   - `node scripts/e2e-suite.mjs mobile --headless --output-dir <DIR>`
   - `node scripts/e2e-suite.mjs full --headless --output-dir <DIR>`
   - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/<DIR>`
+  - Safari 正式 smoke 需要先起本机驱动服务：
+
+```bash
+safaridriver -p 4444
+```
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
   - `capture-modes` case 现在会额外落盘 `predictionModalBytes / gameplayModalBytes`
   - `scripts/e2e-suite.mjs` 的截图现在会先走带 `timeout` 的 Playwright `page.screenshot()`；任意截图失败都会回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
@@ -236,11 +277,13 @@ node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 43
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
   - 本次 director-state corners 工件：
     - `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
-  - Firefox / WebKit director-state smoke：
-    - `frontend/output/e2e/20260319-director-state-cross-browser/result.json`
-  - Safari director-state smoke：
-    - `frontend/output/e2e/20260319-director-state-safari/result.json`
-    - Safari 若开启翻译插件，截图可能被浏览器/插件浮层污染；本轮在关闭插件后重新复跑，结果页截图已恢复正常
+  - 本次 `gameplay_state_roundtrip` corners 工件：
+    - `frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`
+  - Firefox / WebKit 官方 cross-browser smoke：
+    - `frontend/output/e2e/20260319-official-cross-browser/result.json`
+  - Safari 官方 smoke：
+    - `frontend/output/e2e/20260319-official-safari-v5/result.json`
+    - Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染；当前正式入口默认走稳定的 session screenshot，`panel capture` 仅保留为可选实验开关
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
   - Debate 额外补充工件：

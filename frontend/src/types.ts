@@ -17,6 +17,7 @@ export interface Scenario {
   hierarchical: boolean;  // P3-A
   messages?: AgentMessage[];  // Historical messages from DB
   director_state?: ScenarioDirectorState | null;
+  gameplay_state?: ScenarioGameplayState | null;
 }
 
 export interface AgentInfo {
@@ -161,6 +162,29 @@ export interface ScenarioDirectorState {
 }
 
 export interface ScenarioDirectorStateResponse extends ScenarioDirectorState {
+  scenario_id: string;
+}
+
+export interface ScenarioGameplayCardUsage {
+  card_id: string;
+  profile_id: string;
+  branch_id: string;
+  branch_title: string;
+  round: number;
+  cost: number;
+  directive: string;
+  used_at: string;
+}
+
+export interface ScenarioGameplayCardsState {
+  usage_log: ScenarioGameplayCardUsage[];
+}
+
+export interface ScenarioGameplayState {
+  cards: ScenarioGameplayCardsState;
+}
+
+export interface ScenarioGameplayStateResponse extends ScenarioGameplayState {
   scenario_id: string;
 }
 
