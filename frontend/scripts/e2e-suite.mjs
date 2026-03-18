@@ -277,19 +277,24 @@ function isCompletedReplayTheaterReady(payload) {
 
 async function saveScreenshot(page, filePath) {
   try {
-    await page.screenshot({ path: filePath, type: "png", scale: "css" });
+    await page.screenshot({ path: filePath, type: "png", scale: "css", timeout: 15_000 });
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("waiting for fonts to load")) {
-      throw error;
+    const primaryError = error instanceof Error ? error.message : String(error);
+    console.warn(`[screenshot] falling back to CDP capture for ${path.basename(filePath)}: ${primaryError}`);
+    try {
+      const cdpSession = await page.context().newCDPSession(page);
+      const { data } = await cdpSession.send("Page.captureScreenshot", {
+        format: "png",
+        fromSurface: true,
+        captureBeyondViewport: false,
+      });
+      fs.writeFileSync(filePath, Buffer.from(data, "base64"));
+    } catch (fallbackError) {
+      const fallbackDetail = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(
+        `Failed to capture screenshot for ${filePath}: primary=${primaryError}; fallback=${fallbackDetail}`,
+      );
     }
-
-    const cdpSession = await page.context().newCDPSession(page);
-    const { data } = await cdpSession.send("Page.captureScreenshot", {
-      format: "png",
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    fs.writeFileSync(filePath, Buffer.from(data, "base64"));
   }
 }
 
@@ -1212,6 +1217,8 @@ async function runHistoryDeleteLastPageCase(page, {
       10000,
       "history pagination fallback after delete",
     );
+    await page.locator(".history-delete-modal").waitFor({ state: "detached", timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(150);
 
     writeJson(path.join(outputDir, "history-delete-last-page.json"), {
       beforeDelete: lastPage.page,

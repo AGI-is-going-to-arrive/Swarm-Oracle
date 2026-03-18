@@ -115,16 +115,21 @@ cd frontend && npm run e2e:full
 
 - 本轮已验证的后端全量回归：**815 passed**
 - 后端定向回归：`test_card_events.py / test_gameplay_contract_sync.py = 24 passed`，`test_campaign_service.py / test_campaign_api.py = 9 passed`，`test_predictions.py = 17 passed`
-- 当前前端主回归：**175 passed**
+- 当前前端主回归：**179 passed**
+- 本轮已重新执行 `npm run build`，结果为通过
 - 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
-- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若卡在字体加载，会自动回退到 Chromium CDP 截图
+- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若超时或失败，会自动回退到 Chromium CDP 截图
 - 当前 Track C 主工件目录：
   - `frontend/output/e2e/20260317-track-c/matrix/`
   - `frontend/output/e2e/20260317-track-c/corners/`
   - `frontend/output/e2e/20260317-track-c/mobile/`
   - `frontend/output/e2e/20260317-track-c/variants/`
-- 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/20260318-post-b2-full/result.json`
-- Debate 专项完整黑盒结果：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+- 当前仓库内可见且本轮重新验证通过的 full smoke 工件：`frontend/output/e2e/20260318-codex-full-smoke/result.json`
+- Debate 专项完整黑盒基线：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+- 本轮新增 Debate 工件：
+  - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+  - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
+- `scripts/e2e-debate-suite.mjs` 现支持 `--width / --height / --question / --profile-hint`，可直接补移动端新视口或指定 Debate 主题工件
 - 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 
 ## License

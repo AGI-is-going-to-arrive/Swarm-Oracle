@@ -85,16 +85,16 @@ npm install
 npm test
 ```
 
-- 本轮已真实执行 `npm test`，前端全量回归结果为 **175 passed**。
+- 本轮已真实执行 `npm test`，前端全量回归结果为 **179 passed**。
 - 本次文档同步前重新执行了与本轮前端文档变更直接相关的定向回归：
 
 ```bash
 cd frontend
-npm test -- --run src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx
+npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx
 ```
 
 - 结果：
-  - `vitest`：**12 passed**
+  - `vitest`：**14 passed**
 - 本次文档同步还重新执行了：
 
 ```bash
@@ -103,7 +103,7 @@ npm run build
 ```
 
 - 结果：
-  - 当前失败；错误集中在 `ResultView.tsx / ResultView.test.tsx / SimulationView.test.tsx` 的 TypeScript 类型检查，因此这里不再继续把 build 写成“通过”
+  - 已恢复通过
 - 自动化调试辅助：
   - 关键页面暴露 `window.render_game_to_text()`，可输出页面/场景摘要供 E2E 或调试读取。
   - `SimulationView` / `ResultView` 的输出包含控件摘要，Prediction / GameplayCards / Share modal 还会输出内部状态摘要。
@@ -136,7 +136,8 @@ npm run build
   - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/<DIR>`
   - `scripts/e2e-suite.mjs` 现在会在输出目录落盘 `browser-launch.json`，方便判断本次实际命中的浏览器启动 profile
   - `capture-modes` case 现在会额外落盘 `predictionModalBytes / gameplayModalBytes`
-  - 若 Playwright 在截图时卡在字体加载，suite 会自动回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
+  - `scripts/e2e-suite.mjs` 的截图现在会先走带 `timeout` 的 Playwright `page.screenshot()`；任意截图失败都会回退到 Chromium CDP 截图，避免整套黑盒回归因截图超时中止
+  - `history-delete-last-page` case 现在会在最终截图前等待删除弹窗真正脱离 DOM，减少删除后重排阶段的挂起风险
   - 若 `sample_matrix.json` 里的历史 `scenario_id` 缺失，suite 会按 theme/runtime fallback 题面自动重建场景，而不是直接失败
   - 若历史样本的 `scene_theme` 已与当前 `select_scene(question)` 漂移，matrix 也会自动 runtime fallback 重建
   - `replay` corner case 现在会等到 `playback_mode = replay` 且 `theater_ready = true` 才判定恢复完成
@@ -146,11 +147,20 @@ npm run build
     - `frontend/output/e2e/20260317-track-c/corners/`
     - `frontend/output/e2e/20260317-track-c/mobile/`
     - `frontend/output/e2e/20260317-track-c/variants/`
-  - 当前仓库内可见的 full 黑盒结果：`frontend/output/e2e/20260318-post-db-path-fix-full/result.json`
+  - 本轮 full smoke 工件：`frontend/output/e2e/20260318-codex-full-smoke/result.json`
   - ResultView backend summary smoke 工件：`frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
   - `generic` 主题单独 smoke 结果：`frontend/output/e2e/matrix-generic-smoke-switchboard-20260317/result.json`
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
+  - Debate 额外补充工件：
+    - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+    - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
+  - `scripts/e2e-debate-suite.mjs` 现在支持：
+
+```bash
+node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 430 --height 932 --output-dir output/e2e/<DIR>
+node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --profile-hint governance --question 'Should every major city budget be re-approved by a rotating external review board?' --output-dir output/e2e/<DIR>
+```
   - 如需在长时间实现过程中持续盯进度，可用心跳脚本：
 
 ```bash

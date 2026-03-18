@@ -343,7 +343,7 @@ export function DebateArenaView() {
                 {!debate?.result_ready && (
                   <button
                     type="button"
-                    className="btn btn-ghost"
+                    className="btn btn-ghost debate-primary-cta debate-primary-cta--hero"
                     onClick={() => setShowBetModal(true)}
                     disabled={!canBetNow}
                   >
@@ -354,7 +354,11 @@ export function DebateArenaView() {
                   {t('debate.capture_panel')}
                 </button>
                 {debate?.result_ready && (
-                  <button type="button" className="btn btn-primary" onClick={() => navigate(`/debate/${id}/result`)}>
+                  <button
+                    type="button"
+                    className="btn btn-primary debate-primary-cta debate-primary-cta--hero"
+                    onClick={() => navigate(`/debate/${id}/result`)}
+                  >
                     {t('debate.view_result')}
                   </button>
                 )}
@@ -370,14 +374,18 @@ export function DebateArenaView() {
           {!debate?.result_ready ? (
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary debate-primary-cta debate-primary-cta--rail"
               onClick={() => setShowBetModal(true)}
               disabled={!canBetNow}
             >
               {t('debate.open_bet')}
             </button>
           ) : (
-            <button type="button" className="btn btn-primary" onClick={() => navigate(`/debate/${id}/result`)}>
+            <button
+              type="button"
+              className="btn btn-primary debate-primary-cta debate-primary-cta--rail"
+              onClick={() => navigate(`/debate/${id}/result`)}
+            >
               {t('debate.view_result')}
             </button>
           )}

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ScenarioMeta } from '../lib/scenarioMeta';
 import ResultView from './ResultView';
 
 const { finalizeCampaignMock, findChallengeProgressByScenarioIdMock } = vi.hoisted(() => ({
@@ -271,7 +272,7 @@ describe('ResultView campaign summary', () => {
   });
 
   it('falls back to backend campaign scenario summary when local archive data is empty', async () => {
-    const emptyMeta = {
+    const emptyMeta: ScenarioMeta = {
       director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
       cooldowns: {},
       cards: { usageLog: [] },

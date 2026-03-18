@@ -362,10 +362,16 @@ export default function ResultView() {
   }, [campaignScenarioSummary, inferredProfile?.id, storedScenarioMeta]);
   const gameplayProfileLabel =
     scenarioMeta?.archive.profileId
-      ? getGameplayProfileLabel(scenarioMeta.archive.profileId, isZh)
+      ? getGameplayProfileLabel(
+          scenarioMeta.archive.profileId as Parameters<typeof getGameplayProfileLabel>[0],
+          isZh,
+        )
       : null;
   const gameplayProfileHooks = scenarioMeta?.archive.profileId
-    ? getGameplayProfileSignatureHooks(scenarioMeta.archive.profileId, isZh)
+    ? getGameplayProfileSignatureHooks(
+        scenarioMeta.archive.profileId as Parameters<typeof getGameplayProfileSignatureHooks>[0],
+        isZh,
+      )
     : [];
   const dominantBranch = useMemo(() => (
     scenarioMeta?.archive.dominantBranchTitle
@@ -392,7 +398,11 @@ export default function ResultView() {
     : null;
   const signatureArcState = useMemo(() => (
     scenarioMeta?.archive.profileId
-      ? getGameplaySignatureArcState(scenarioMeta.archive.profileId, scenarioMeta.cards.usageLog, isZh)
+      ? getGameplaySignatureArcState(
+          scenarioMeta.archive.profileId as Parameters<typeof getGameplaySignatureArcState>[0],
+          scenarioMeta.cards.usageLog,
+          isZh,
+        )
       : null
   ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog]);
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
@@ -537,8 +547,12 @@ export default function ResultView() {
 
   const mostUsedCardLabel = scenarioMeta?.archive.mostUsedCard
     ? (isZh
-      ? getGameplayCardDefinition(scenarioMeta.archive.mostUsedCard).labelZh
-      : getGameplayCardDefinition(scenarioMeta.archive.mostUsedCard).labelEn)
+      ? getGameplayCardDefinition(
+          scenarioMeta.archive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
+        ).labelZh
+      : getGameplayCardDefinition(
+          scenarioMeta.archive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
+        ).labelEn)
     : t('result.archive_no_cards');
   const bettingHitLabel =
     !scenarioMeta

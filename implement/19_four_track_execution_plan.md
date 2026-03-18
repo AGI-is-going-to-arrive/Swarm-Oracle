@@ -34,7 +34,7 @@
   - 已不再处于“设计冻结”
   - 已有独立 Debate domain：`backend/app/models/debate.py`、`backend/app/api/debate.py`、`backend/app/services/debate*.py`
   - 前端已有 `DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
-  - 已有真实工件：`frontend/output/e2e/20260318-post-b2-debate-full/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
+  - 已有真实工件：`frontend/output/e2e/20260318-post-b2-debate-full/`、`frontend/output/e2e/20260318-debate-mobile-430x932-v2/`、`frontend/output/e2e/20260318-debate-civic-v2/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
 
 后文保留的设计型条目主要作为归档设计基线；若与当前实现冲突，以本节同步状态为准。
 
@@ -726,6 +726,8 @@ node .tmp-playwright/web_game_playwright_client.mjs \
   - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
   - `frontend/output/web-game/20260317-debate-arena-signoff/`
   - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+  - 本轮补充移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+  - 本轮补充 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
 
 ### 5.6 剩余增量方向
 
@@ -813,7 +815,7 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### 测试
 
-- 前端全量回归：`175 passed`
+- 前端全量回归：`179 passed`
 - 后端全量回归：`815 passed`
 - 本轮 B2 定向回归：
   - 前端：`26 passed`
@@ -825,12 +827,16 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ### E2E
 
-- full 主链路：
-  - `frontend/output/e2e/20260318-post-b2-full/result.json`
+- full 主链路 smoke：
+  - `frontend/output/e2e/20260318-codex-full-smoke/result.json`
 - Debate full：
   - `frontend/output/e2e/20260318-post-b2-debate-full/result.json`
 - Debate desktop smoke：
   - `frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+- Debate mobile `430x932`：
+  - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+- Debate civic：
+  - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
 
 ### develop-web-game
 

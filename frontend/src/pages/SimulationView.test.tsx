@@ -262,9 +262,9 @@ describe('SimulationView replay automation output', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText((_, element) => (
+    expect(await screen.findByText((_, element) => Boolean(
       element?.classList.contains('capture-status')
-      && (element.textContent?.includes('game.gif_fallback_saved') ?? false)
+      && element.textContent?.includes('game.gif_fallback_saved'),
     ))).toBeInTheDocument();
 
     await waitFor(() => {

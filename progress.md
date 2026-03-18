@@ -259,6 +259,146 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 
 ## 2026-03-17 Track D / Phase D2-D3
 
+## 2026-03-18 Implement Audit + Debate QA
+
+- 已重新读取并对齐：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `implement/19_four_track_execution_plan.md`
+  - `implement/20_track_d_debate_arena_design_execution_plan.md`
+  - `implement/21_track_d_debate_arena_mvp_blueprint.md`
+- 已并行完成三条只读审计：
+  - 后端 Debate domain：主闭环已实现，缺口主要在 WS/API 边界测试不足。
+  - 前端 Debate live/result/i18n/automation：主功能已实现，但文档对 `canvas` capture、E2E 覆盖面、部分资产接线有夸大。
+  - 文档/工件漂移：`implement/20` 资产命名过时；跨平台验收口径（尤其 `430x932`）高于现有工件；部分 PNG 缺 `.meta.json` provenance。
+
+### 2026-03-18 运行态验证
+
+- 已启动：
+  - backend: `uvicorn --app-dir /Users/yangjunjie/Desktop/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927`
+  - frontend: `npm run dev -- --host 127.0.0.1 --port 18928`
+- Debate 定向回归通过：
+  - `backend/.venv/bin/python -m pytest backend/tests/test_debate_service.py backend/tests/test_debate_api.py -q`
+  - 结果：`10 passed`
+- Debate 黑盒回归通过：
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-debate-full`
+  - 结果：desktop/mobile 都完成 `live -> bet -> result -> share`，`render_game_to_text / advanceTime / capture_game_screenshot` 三钩子均可用。
+- `develop-web-game` 客户端单独复核通过：
+  - `cd frontend && node .tmp-playwright/web_game_playwright_client.mjs --url http://127.0.0.1:18928/debate/<id> ...`
+  - 输出：`frontend/output/web-game/20260318-codex-debate-live/{shot-0,shot-1,state-0,state-1}`
+- `playwright-interactive`/Playwright 人工复核结论：
+  - 修复前，移动端 Debate live/result 同屏存在两个可见“查看判词”CTA。
+  - 修复后，移动端只剩一个可见 CTA。
+
+### 2026-03-18 修复
+
+- 已修复移动端 Debate 重复主 CTA：
+  - `frontend/src/pages/DebateArenaView.tsx`
+  - `frontend/src/pages/DebateArena.css`
+  - 方案：为 hero CTA / mobile rail CTA 分配独立 class，并在移动端只保留 rail CTA。
+- 已修复前端 build 漂移：
+  - `frontend/src/pages/ResultView.tsx`
+  - `frontend/src/pages/ResultView.test.tsx`
+  - `frontend/src/pages/SimulationView.test.tsx`
+  - `frontend/src/pages/DebateArenaView.test.tsx`
+  - 方案：收口 type drift、更新测试用旧文案/旧状态假设。
+
+### 2026-03-18 修复后验证
+
+- `cd frontend && npm run build`
+  - 结果：通过
+- `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx`
+  - 结果：`14 passed`
+- `playwright-interactive` 复核：
+  - 移动端 `查看判词` 可见按钮数量：`1`
+
+### 当前仍需继续查/补
+
+- `npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260318-codex-full`
+  - matrix 与 corners 大部分工件成功写出，但在 `corners/history-delete-last-page` 之后未继续写 `mobile/` 工件，也未产出最终汇总；本轮判定存在挂起风险并手动停止。
+- 建议下一轮优先处理：
+  1. 排查 `scripts/e2e-suite.mjs full` 在 `corners -> mobile` 切换后的挂起点，重点看 `history-delete-last-page` / `mobile` 首个 wait 条件。
+  2. 为 Debate 增补 `430x932` 移动端工件，避免跨平台文档继续高估。
+  3. 若要把 Debate 继续称为“多主题已验收”，补 `debate_arena_civic` 的真实 E2E 工件。
+  4. 补齐生成素材 `.meta.json`，避免 provenance 文档继续漂移。
+
+## 2026-03-18 E2E Script Hardening + Debate Coverage Add-on
+
+- 已修复 `frontend/scripts/e2e-suite.mjs` 的截图鲁棒性：
+  - `saveScreenshot()` 现在为普通 Playwright 截图增加 `timeout: 15000`
+  - 任何截图失败都会回退到 CDP `Page.captureScreenshot`，不再只认 `waiting for fonts to load`
+  - `history-delete-last-page` 在截图前会等 `.history-delete-modal` 真正从 DOM 脱离，减少删除后重排阶段的截图挂起
+- 已验证短链路 full 可完整跑通：
+  - `cd frontend && node scripts/e2e-suite.mjs full --url http://127.0.0.1:18928 --themes governance --output-dir output/e2e/20260318-codex-full-smoke`
+  - 结果：`matrix + corners + mobile` 全部完成并产出 [result.json]
+- 说明：此前“full 挂起”的最可能原因已被收敛到 `corners/history-delete-last-page` 尾部截图；这次 smoke 证明串联路径已恢复可返回。
+
+- 已增强 `frontend/scripts/e2e-debate-suite.mjs`：
+  - 新增 CLI 参数：
+    - `--width`
+    - `--height`
+    - `--question`
+    - `--profile-hint`
+  - 目的：在不改页面/后端的前提下补 Debate 跨平台和主题工件
+
+### 2026-03-18 新增 Debate 工件
+
+- 430x932 移动端 Debate 工件：
+  - 命令：
+    - `cd frontend && node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 430 --height 932 --output-dir output/e2e/20260318-debate-mobile-430x932-v2`
+  - 结果：
+    - `viewport = 430x932`
+    - `scene = debate_arena_judicial`
+    - live/result/share 三段工件已落盘
+
+- civic 主题 Debate 工件：
+  - 命令：
+    - `cd frontend && node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --profile-hint governance --question 'Should every major city budget be re-approved by a rotating external review board?' --output-dir output/e2e/20260318-debate-civic-v2`
+  - 结果：
+    - `scene = debate_arena_civic`
+    - live/result/share 三段工件已落盘
+
+### 2026-03-18 当前状态更新
+
+- 先前建议的三项里，已有两项补齐：
+  1. `e2e-suite.mjs full` 串联挂起：已通过 smoke 修复验证
+  2. Debate `430x932`：已补工件
+  3. Debate `civic`：已补工件
+
+- 仍可继续做但本轮未完成：
+  - 把新工件路径同步回 `implement/20`、`implement/21`、`llmdoc`
+  - 统一 `.meta.json` provenance 覆盖率
+
+## 2026-03-18 Docs Sync
+
+- 已按真实代码和本轮真实验证结果同步以下文档：
+  - `README.md`
+  - `implement/README.md`
+  - `implement/19_four_track_execution_plan.md`
+  - `implement/20_track_d_debate_arena_design_execution_plan.md`
+  - `implement/21_track_d_debate_arena_mvp_blueprint.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+- 已同步的关键事实：
+  - 前端全量回归现为 `179 passed`
+  - `npm run build` 已恢复通过
+  - `e2e-suite.mjs` 截图链路现为 `timeout + CDP fallback`
+  - `history-delete-last-page` 最终截图前会等待删除 modal detached
+  - `full smoke` 工件：`frontend/output/e2e/20260318-codex-full-smoke/result.json`
+  - Debate 新工件：
+    - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+    - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
+  - Debate 专项脚本现支持：
+    - `--width`
+    - `--height`
+    - `--question`
+    - `--profile-hint`
+  - `implement/20` 的过时 Debate 资产名已改成真实文件名
+  - 移动端 Debate 当前同屏只保留一个主 CTA
+
 - 已完成前端 Debate Arena 最小闭环：
   - 路由：
     - `frontend/src/App.tsx`

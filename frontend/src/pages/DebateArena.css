@@ -446,6 +446,10 @@
   display: none;
 }
 
+.debate-primary-cta--rail {
+  display: inline-flex;
+}
+
 .debate-summary-card {
   display: grid;
   gap: 14px;
@@ -697,6 +701,10 @@
     min-height: 52px;
     pointer-events: auto;
     box-shadow: 0 18px 36px rgba(23, 19, 18, 0.24);
+  }
+
+  .debate-primary-cta--hero {
+    display: none;
   }
 }
 

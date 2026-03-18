@@ -67,6 +67,8 @@
   - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`
   - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
   - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+  - 本轮补充移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+  - 本轮补充 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
 
 ---
 
@@ -286,16 +288,16 @@ Track D 必须满足以下不变式：
 frontend/public/assets/scenes/
 ├── debate_arena_civic.png
 ├── debate_arena_judicial.png
-└── debate_arena_mythic.png
+└── debate_arena_forum.png
 
 frontend/public/assets/ui/generated/
-├── debate_score_panel.png
-├── debate_verdict_seal.png
-├── debate_team_badge_pro.png
-├── debate_team_badge_con.png
-├── debate_team_badge_judge.png
-├── debate_phase_banner.png
-└── debate_argument_meter.png
+├── debate_stage_banner.png
+├── debate_verdict_panel.png
+├── debate_score_meter.png
+├── debate_badge_proposition.png
+├── debate_badge_opposition.png
+├── debate_badge_judge.png
+└── debate_quote_frame.png
 ```
 
 ### 4.4 资产生成建议
@@ -324,7 +326,7 @@ two podiums facing each other, central judge dais, dramatic but readable composi
 优先级建议：
 
 1. 先用现有 `law_court_variant / civic_chamber / switchboard_forum_variant` 组合出 MVP
-2. 再补 1 套通用 `debate_score_panel`
+2. 再补 1 套通用 `debate_verdict_panel / debate_stage_banner / debate_score_meter`
 3. 最后补 2-3 张专用 debate arena scene
 
 这样最符合“小步快跑 + 保持同一美术语言”。
@@ -639,8 +641,7 @@ Track D 文档阶段结束后，后续实现必须以这些标准签收。
 
 ### 8.3 跨平台验收
 
-- desktop `1600x900`
-- desktop `1280x800`
+- desktop `1440x960`
 - mobile `390x844`
 - mobile `430x932`
 
@@ -653,7 +654,9 @@ Track D 文档阶段结束后，后续实现必须以这些标准签收。
 ### 8.4 真实工件要求
 
 - 至少 3 组 debate 主题工件
+  - 当前仓库内已补到：`debate_arena_forum / debate_arena_judicial / debate_arena_civic`
 - 至少 2 组移动端工件
+  - 当前仓库内已补到：`390x844` 与 `430x932`
 - 至少 1 组英文工件
 - 至少 1 组 `develop-web-game` 工件
 - 至少 1 组 `playwright-interactive` 复核截图

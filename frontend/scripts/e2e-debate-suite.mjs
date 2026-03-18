@@ -61,6 +61,10 @@ function parseArgs(argv) {
     baseUrl: DEFAULT_BASE_URL,
     outputDir: "",
     headless: process.env.HEADLESS === "1",
+    width: null,
+    height: null,
+    question: "",
+    profileHint: "",
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -72,6 +76,18 @@ function parseArgs(argv) {
     } else if (arg === "--output-dir" && next) {
       args.outputDir = resolveFrontendPath(next);
       i += 1;
+    } else if (arg === "--width" && next) {
+      args.width = Number(next);
+      i += 1;
+    } else if (arg === "--height" && next) {
+      args.height = Number(next);
+      i += 1;
+    } else if (arg === "--question" && next) {
+      args.question = next;
+      i += 1;
+    } else if (arg === "--profile-hint" && next) {
+      args.profileHint = next;
+      i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     }
@@ -81,6 +97,10 @@ function parseArgs(argv) {
     throw new Error(
       "Usage: node scripts/e2e-debate-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--headless]",
     );
+  }
+
+  if ((args.width != null && !Number.isFinite(args.width)) || (args.height != null && !Number.isFinite(args.height))) {
+    throw new Error("--width/--height must be numeric when provided");
   }
 
   return args;
@@ -349,21 +369,34 @@ function assertDebateAutomationHooks(label, hooks, expectations = {}) {
   }
 }
 
-function buildSurfaceConfig(mode) {
+function buildSurfaceConfig(args, mode) {
+  const baseCase = mode === "mobile" ? MOBILE_CASE : DESKTOP_CASE;
+  const caseConfig = {
+    ...baseCase,
+    question: args.question || baseCase.question,
+    ...(args.profileHint ? { profileHint: args.profileHint } : {}),
+  };
+
   if (mode === "mobile") {
     return {
-      viewport: { width: 390, height: 844 },
+      viewport: {
+        width: args.width ?? 390,
+        height: args.height ?? 844,
+      },
       isMobile: true,
       hasTouch: true,
-      caseConfig: MOBILE_CASE,
+      caseConfig,
     };
   }
 
   return {
-    viewport: { width: 1440, height: 960 },
+    viewport: {
+      width: args.width ?? 1440,
+      height: args.height ?? 960,
+    },
     isMobile: false,
     hasTouch: false,
-    caseConfig: DESKTOP_CASE,
+    caseConfig,
   };
 }
 
@@ -600,13 +633,17 @@ async function runDebateFlow(page, {
   baseUrl,
   outputDir,
   mode,
+  surfaceConfig,
 }) {
   ensureDir(outputDir);
 
-  const { caseConfig } = buildSurfaceConfig(mode);
+  const { caseConfig } = surfaceConfig;
   await setLanguage(page, baseUrl, caseConfig.locale);
 
-  const created = await createDebateViaApi(baseUrl, { question: caseConfig.question });
+  const created = await createDebateViaApi(baseUrl, {
+    question: caseConfig.question,
+    profileHint: caseConfig.profileHint,
+  });
   const debateId = created.id;
 
   await page.goto(`${baseUrl}/debate/${debateId}`, { waitUntil: "domcontentloaded" });
@@ -740,7 +777,7 @@ async function runSurface(args, mode) {
   ensureDir(outputDir);
   writeJson(path.join(outputDir, "browser-launch.json"), launchProfile);
 
-  const surfaceConfig = buildSurfaceConfig(mode);
+  const surfaceConfig = buildSurfaceConfig(args, mode);
   const page = await browser.newPage({
     viewport: surfaceConfig.viewport,
     isMobile: surfaceConfig.isMobile,
@@ -752,9 +789,11 @@ async function runSurface(args, mode) {
       baseUrl: args.baseUrl,
       outputDir,
       mode,
+      surfaceConfig,
     });
     return {
       launchProfile,
+      viewport: surfaceConfig.viewport,
       ...result,
     };
   } finally {

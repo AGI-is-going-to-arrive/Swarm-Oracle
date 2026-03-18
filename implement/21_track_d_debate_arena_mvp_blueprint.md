@@ -38,6 +38,8 @@
 - 已落地的验证面
   - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
   - 本轮 desktop smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
+  - 本轮移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
+  - 本轮 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
   - develop-web-game 工件：`frontend/output/web-game/20260317-debate-arena-signoff/`
 
 ---
@@ -597,7 +599,7 @@ frontend/src/
 查看胜方、最佳论点、分享弹窗
 ~~~
 
-必须覆盖：
+当前仓库里的 Debate 专项自动化，已真实覆盖：
 
 - desktop
 - mobile
@@ -606,7 +608,7 @@ frontend/src/
 - 正方胜出
 - 反方胜出
 - share modal
-- replay
+- live -> bet -> result -> share 主路径
 
 ### 8.4 Skill-based QA
 
@@ -646,6 +648,18 @@ Playwright CLI Skill：
 
 - 当本机 wrapper 稳定时，作为 CI 前的轻量浏览器回归入口
 - 跑 debate-smoke 和 debate-mobile-smoke
+
+当前可直接复用的新参数：
+
+- `--width`
+- `--height`
+- `--question`
+- `--profile-hint`
+
+这样可直接补：
+
+- `430x932` 移动端工件
+- 指定 `governance -> debate_arena_civic` 的主题工件
 
 ### 8.5 最值得先写的自动化钩子
 
@@ -740,6 +754,7 @@ Playwright CLI Skill：
 - 结果页能显示胜方、最佳论点、维度评分和分享文案
 - 中英界面都可用，没有明显硬编码串语言
 - desktop、mobile 都有真实截图和状态 JSON 双证据
+  - 当前仓库里已补到 `390x844` 和 `430x932` 两组移动端工件
 - develop-web-game 能稳定产出 shot/state 工件
 - playwright-interactive 能完成桌面和移动复核
 
