@@ -1,150 +1,105 @@
 # SwarmOracle — 实现文档索引
 
-> 汇总自多个开发对话的所有项目文档  
+> 汇总自多个开发对话的所有项目文档
 > 最后更新: 2026-03-20
+>
+> 读取规则：
+> - 当前产品范围、交付状态与签收口径以仓库根 `README.md` 和 `llmdoc/*` 为准。
+> - 本目录主要保存实现归档、设计基线、历史快照和研究记录。
+> - `progress.md` 负责保留逐轮发现/修复/复验流水，不作为当前真值。
 
 ---
 
 ## 📁 文档目录
 
-| # | 文件 | 内容 | 来源会话 |
-|---|------|------|----------|
-| 01 | [架构设计](01_architecture_design.md) | 系统架构、数据模型、API 设计、前端组件、技术栈、MVP 计划、关键决策 | 后端测试 |
-| 02 | [后端测试结果](02_backend_test_results.md) | 135 个测试通过、3 个 Critical Bug 修复、Deprecation 修复、全面 Review 修复 | 后端测试 + 全面 Review |
-| 03 | [Week 1-3 代码审查](03_week1_3_code_review.md) | 108 个测试通过、10 个 Bug 修复（前后端）、新测试覆盖 | 代码审查与测试 |
-| 04 | [Week 4 代码审查](04_week4_code_review.md) | 142 个测试通过、8 个 Bug 修复、Live E2E 测试 | 代码审查与修复 |
-| 05 | [Week 4 实现计划](05_week4_implementation_plan.md) | Intervention API、ResultView、InterventionModal、Docker、文档 | 代码审查与修复 |
-| 06 | [前端代码审查](06_frontend_code_review.md) | 17 个 Bug 修复（CSS、动画、路由、颜色）、构建验证 | 前端 Bug 修复 |
-| 07 | [实时流式 + UX 改进](07_realtime_streaming_ux.md) | 修复 JSON 乱码、轮数滑块(3-40)、分支描述 | 当前会话 |
-| 09 | [多 Agent 上下文分析](09_multi_agent_context_analysis.md) | 前沿技术全景、五种范式对比、SwarmOracle 接入方案 | 上下文研究 |
-| 10 | [上下文优化可行性](10_context_optimization_feasibility.md) | 三阶段可行性评估、代码逐行分析、Phase 1-3 改动量评估 | 优化分析 |
-| 11 | [**后续优化路线图**](11_optimization_roadmap.md) | 已改为 P0-P9 路线的归档收口版；用于说明哪些旧 roadmap 已全部落地、哪些正文口径已过时 | Benchmark 矩阵 |
-| 12 | — | **Phase 1 像素化可视化**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件 + 225 tests | 可视化 Review |
-| 13 | — | **Phase 2 推理可视化**: 天气/昼夜 + 阵营标记 + 气泡变体 + 粒子特效 + 11场景全覆盖 | Phase 2 实现 |
-| 14 | — | **Phase 3 游戏化 UI**: 标题画面 + 6种结局 + MiniMap/BetPanel/Leaderboard HUD + 截图/GIF导出 | Phase 3 实现 |
-| 15 | — | **Phase 1-3 Code Review 修复**: P0 内存泄漏 + P1 事件监听器 + P2 关键词优先级/卡牌概率 + P3 防御性守卫, 7 修复 5 文件 | Code Review |
-| 16 | — | **Phase 4 开源准备**: Weather 对象池(120) + 视口裁剪(40px) + ASSET_CREDITS 106 个 runtime + source 资产条目 + WorldScene/EndingScene 32 新测试 | Phase 4 实现 |
-| 17 | — | **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布无遮挡 | HUD 迁移 |
-| 18 | [下一轮玩法/美术/回放执行文档](18_next_session_gameplay_art_replay_plan.md) | 下一次对话可直接复用的执行 briefing：玩法系统、Vertex 生图、Theater 回放、验收标准；已同步本轮真实落地状态 | 当前会话 |
-| 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | 四轨路线的执行与落地状态文档；已同步 `Track A` 最小闭环、`Track B2` shared contract 收口、`Track C` 工件基线，以及 `Track D Debate Arena` 已实现事实、测试与 E2E 工件 | 当前会话 |
-| 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | Debate Arena 的设计基线 + 2026-03-18 落地偏差记录；覆盖当前真实 API、前端拆分、i18n、跨平台、自动化钩子、测试与 E2E 工件 | 当前会话 |
-| 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | Debate Arena MVP 的产品/美术/代码蓝图及其已实现状态同步；包含 live/result、押注、分享、自动化钩子与现有 skill-based QA 工件 | 当前会话 |
-| 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | 已改为跨设备状态 authority 收口报告；记录 `director_state / gameplay_state` 最终形态、验证结果与剩余边界 | 当前会话 |
+| # | 文件 | 状态 | 内容 | 来源会话 |
+|---|------|------|------|----------|
+| 01 | [架构设计](01_architecture_design.md) | historical snapshot | 初版系统架构、MVP 计划与早期技术选型；含历史性的 Tauri/原生壳设想 | 后端测试 |
+| 02 | [后端测试结果](02_backend_test_results.md) | historical snapshot | 阶段性后端测试与 Bug 修复记录 | 后端测试 + 全面 Review |
+| 03 | [Week 1-3 代码审查](03_week1_3_code_review.md) | historical snapshot | Week 1-3 阶段性 code review 与测试快照 | 代码审查与测试 |
+| 04 | [Week 4 代码审查](04_week4_code_review.md) | historical snapshot | Week 4 阶段性 code review 与修复记录 | 代码审查与修复 |
+| 05 | [Week 4 实现计划](05_week4_implementation_plan.md) | historical snapshot | 已完成事项对应的历史实施计划 | 代码审查与修复 |
+| 06 | [前端代码审查](06_frontend_code_review.md) | historical snapshot | 阶段性前端审查与修复记录 | 前端 Bug 修复 |
+| 07 | [实时流式 + UX 改进](07_realtime_streaming_ux.md) | historical snapshot | 单轮功能修复快照 | 当前会话 |
+| 09 | [多 Agent 上下文分析](09_multi_agent_context_analysis.md) | historical snapshot | 研究型分析文档，保留上下文工程方案思路 | 上下文研究 |
+| 10 | [上下文优化可行性](10_context_optimization_feasibility.md) | historical snapshot | 实施前可行性评估与风险分析 | 优化分析 |
+| 11 | [**后续优化路线图**](11_optimization_roadmap.md) | active archive | P0-P9 路线的归档收口版；用于说明哪些旧 roadmap 已完成、哪些口径已过时 | Benchmark 矩阵 |
+| 12 | — | merged into current docs | Phase 1 像素化可视化事实已并入 `README.md` / `llmdoc/*` | 可视化 Review |
+| 13 | — | merged into current docs | Phase 2 推理可视化事实已并入 `README.md` / `llmdoc/*` | Phase 2 实现 |
+| 14 | — | merged into current docs | Phase 3 游戏化 UI 事实已并入 `README.md` / `llmdoc/*` | Phase 3 实现 |
+| 15 | — | merged into current docs | Phase 1-3 Code Review 修复事实已并入当前真值文档 | Code Review |
+| 16 | — | merged into current docs | Phase 4 开源准备事实已并入 `README.md` / `ASSET_CREDITS.md` / `llmdoc/*` | Phase 4 实现 |
+| 17 | — | merged into current docs | Phase 5 HUD 迁移事实已并入 `README.md` / `llmdoc/*` | HUD 迁移 |
+| 18 | [下一轮玩法/美术/回放执行文档](18_next_session_gameplay_art_replay_plan.md) | superseded archive | 早期玩法/美术/回放执行思路；正文已改平，但不再作为当前执行入口 | 当前会话 |
+| 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | active archive | 四轨设计基线与当前已落地范围；正文里的计划段按历史拆解阅读 | 当前会话 |
+| 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | active archive | Debate Arena 设计基线与实现状态同步；不再按待开发清单阅读 | 当前会话 |
+| 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | active archive | Debate Arena 蓝图与验收参考；phase 拆解按历史设计基线阅读 | 当前会话 |
+| 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | active archive | 跨设备状态 authority 收口报告 | 当前会话 |
+
+---
+
+## 📚 状态说明
+
+- `current truth`
+  - 不在本目录内维护；请优先阅读仓库根 `README.md`、`llmdoc/overview/project.md`、`llmdoc/guides/development.md`。
+- `active archive`
+  - `11 / 19 / 20 / 21 / 22`
+  - 这些文件保留当前设计基线或收口报告，但正文里若仍含计划段，按文件顶部状态说明阅读。
+- `historical snapshot`
+  - `01 / 02 / 03 / 04 / 05 / 06 / 07 / 09 / 10`
+  - 用于保留当时的架构、修复、code review 或研究记录。
+- `outdated memo`
+  - `18`
+  - 存在明确的旧数量、旧 authority 或旧 TODO 口径，不能直接当当前真值使用。
+- `missing standalone files`
+  - `12-17` 当前没有独立 Markdown；相关事实已被合并进 `README.md`、`llmdoc/*` 和本索引。
 
 ---
 
 ## 📊 开发进度总览
 
-### 已完成
-- ✅ 后端核心（解析 → 模拟 → 叙事三阶段）
-- ✅ REST API + WebSocket 实时推送
-- ✅ 前端核心（InputView → SimulationView → BranchTree）
-- ✅ 蝴蝶效应干预功能（回溯 + 多点 + 模板）
-- ✅ ResultView 多结局对比
-- ✅ 后端历史全量基线仍记录为 **815 passed**
-- ✅ 前端历史全量基线仍记录为 **179 passed**（Vitest）
-- ✅ 中英双语 i18n
-- ✅ 实时 Agent 消息推送（per-agent 即时推送）
-- ✅ 用户可选推演轮数（滑块 3-40）
-- ✅ Blackboard 共享空间 + L2 向量记忆
-- ✅ 分层代理架构（P3-A，千人规模）
-- ✅ 排行榜 / 竞猜社交层（P3-B）
-- ✅ 场景管理 + 导出 + BYOK（P4）
-- ✅ Fork 抑制 + 叙事改进（P5）
-- ✅ 社交媒体文案生成（P6）
-- ✅ 可收起侧边栏 + 分支讨论卡片 + Agent 消息过滤（P7）
-- ✅ 代码审查加固 + CSS 兼容性（P8）
-- ✅ 语言检测 + 全局语言切换器（P9）
-- ✅ API 层拆分重构（scenarios → 5 模块）(P0-1)
-- ✅ N+1 查询优化（LEFT JOIN）(P0-2)
-- ✅ LLM 重试 + 指数退避 (P1-3)
-- ✅ Alembic 数据库迁移框架 (P1-4)
-- ✅ Prometheus 可观测性 (`/metrics`) (P3-9)
-- ✅ 前端测试框架 (Vitest) (P2-6) — 历史全量基线 **179 passed**；本轮围绕玩法卡 / Debate / i18n / 自动化摘要的定向回归为 **60 passed**
-- ✅ 批量 SQL 删除优化 (P2-7)
-- ✅ **Phase 2 推理可视化**: 天气/昼夜系统 + 阵营标记 + 气泡变体 + 粒子特效 + 30 个语义场景主题（含 law/faith/generic 变体）
-- ✅ **Phase 3 游戏化打磨**: 标题画面 + 6种结局 + MiniMap + 竞猜面板 + 排行榜 + 截图/GIF导出
-- ✅ **Phase 4 开源准备**: Weather 粒子对象池 + 视口裁剪 + ASSET_CREDITS 106 个 runtime + source 资产条目 + 32 项新测试 + tsc 零错误
-- ✅ **Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas 迁移至 React HudOverlay.tsx，画布场景无遮挡
-- ✅ 主模式 `gameplay_state` authority 第一段：`cards.usageLog` 已后端化，前端会基于远端 `usage_log` 重算导演点数、卡牌冷却、`most_used_card` 与反制轨迹摘要
-- ✅ Safari 正式 smoke：`npm run e2e:safari` 已实跑通过，不再只是临时脚本
-- ✅ 7 张原库存 sprite 已接入 runtime：`alchemist / assassin / bard / knight / monk / thief / witch`
-- ✅ Theater 可读性修复：舞台优先布局、上下信息条压缩、气泡文字放大与清晰化
+### 当前结论
 
-### 本轮已收口
-- ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
-- ✅ 前端代码分割优化（SimulationView 业务块已拆小）
-- ✅ Theater / 截图链路第二轮懒加载收口：`PhaserGameLoader` 也已移到 Theater 动态边界；`useScreenCapture` 现只保留轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
-- ✅ Theater 首次进入成本继续收口：`BootScene` 当前只预载首屏初始 theme + 角色 sprite；后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载，`bet_panel / leaderboard / title_screen / minimap_frame` 不再是 Theater 首次进入硬依赖
-- ✅ capture 链路第三轮拆包：screenshot / GIF runtime 继续拆分，构建产物已从单块 `capture-vendor` 收口到 `capture-html / capture-gif / screenCaptureGifRuntime`
-- ✅ Docker Compose 一键部署（已完成真实容器 smoke）
-- ✅ Director Campaign / 导演生涯最小闭环（A1 已落地，首页与结果页可见）
-- ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
-- ✅ 12 个题材画像全量 E2E / 工件补齐（主 12 profile + 3 条 variant matrix + mobile 双证据）
-- ✅ AI 辩论竞技场 MVP（独立 Debate domain + `/api/debate` / `/ws/debate/{id}` + live/result 页 + 结构化押注 + share + automation hooks + desktop/mobile E2E）
-- ✅ Debate `counterplay` 最小闭环（可提示、可一键提交、后端显式返回到 live snapshot / result payload / WS、结果页与 share 会显示命中/未中；当前 payload 还会带 `phase_score / explanation`，并进入 replay digest 与 judge summary）
-- ✅ LLM 治理与 provider policy 第一段收口（全局并发闸门 / pending 配额 / provider 熔断 + provider policy 贯通 createScenario / createDebate / social copy / scorePredictions）
-- ✅ Director Campaign Lite 增量（`weekly-summary` API + 首页 `weekly challenge / director growth` + 结果页分享 challenge 链接）
-- ✅ Debate Arena 文案增强（回合文案 `LLM 优先、deterministic fallback` + live `phase cue / feed focus` + 更具体的 judge summary）
-- ✅ Debate Arena 裁决解释增强（结果 payload 现带 `judge_rationale / supporting_turns`；share copy 会带 1-2 条关键引文；`debate:desktop` 与 `debate:full` 黑盒现都会显式断言 `supporting_turns.length >= 1`）
-- ✅ Portable replay 闭环（主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 现都有 replay 页面；主模式优先走后端 `ReplayArtifact` 短 `share id`，失败时回退 token；三条 replay 页当前都支持“导入为本地运行”）
-- ✅ Debate 终局裁决升级（后端现会优先读取 judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，结果 payload 会显式带 `adjudication_mode`；失败时退回 deterministic fallback）
-- ✅ `scenarioMeta` 兼容层继续瘦身：`SimulationView` 不再把后端 authority 反向 apply 到 localStorage；`ResultView` 不再用本地 meta 回填后端 authority；`PredictionModal` 改为优先读取父层传入的当前 meta
-- ✅ `ResultView` 进一步收口：结果页派生出的 archive/objectives 现改为纯内存态，不再把结果页读路径写回本地 `scenarioMeta`
-- ✅ 本次 bundle / authority 收口回归已通过：`vitest` 定向 **32 passed**、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，并已实跑：
-  - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
-  - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
-  - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
-- ✅ `release:signoff` 收口入口已接入 `frontend/package.json`，本 session 已实跑：
-  - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
-  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`（含 Safari）
-  - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`（首页首包收口后复跑）
-- ✅ `release:signoff` 当前已升级为更完整的收口入口：默认会先跑 backend targeted `pytest` 与 `assets:provenance:check`，再继续 `tsc / build / corners / cross-browser / debate:full`；本 session 又实跑：
-  - `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
-  - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`（含 Safari）
-- ✅ 本次 session 又补了发布收口基础设施：`release-signoff` 现在会在 output root 增量写 `summary.json`，并新增 backend `/metrics` 可达性检查；Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
-- ✅ 仓库已补 CI 守门链路：`.github/workflows/ci.yml` 当前会并行跑 backend targeted `pytest`（含 `tests/test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`，并新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
-- ✅ 仓库已补完整签收 workflow：`.github/workflows/release-signoff.yml` 当前提供 nightly + 手动触发的 full signoff，会先做 `LLM_RESPONSES_URL / LLM_API_KEY` 预检，再起本地 backend/frontend、安装 Playwright 浏览器并上传工件
-- ✅ 本次 session 围绕发布收口基础设施的真实验证：
-  - backend targeted `pytest`：**81 passed**
-  - frontend targeted `vitest`：**79 passed**
-  - `frontend/output/e2e/post-fix-debate-desktop/`：Debate desktop 黑盒通过
-  - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
-  - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
-- ✅ 本次 session 又补了 `metrics + signoff` 收口：
-  - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
-  - live `/metrics`：`200 text/plain`
-  - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
-  - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
-- ✅ 首页首包继续收口：`InputView` 当前只读取轻量题材摘要（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；本次定向回归 `InputView / SimulationView / ResultView` 为 **24 passed**
-- ✅ 本次 session 又补了 Theater 首次进入 / capture 收口：
-  - `sceneAssetPlan / PhaserGameLoader / useScreenCapture / EndingScene / WorldScene / SimulationView` → **59 passed**
-  - `npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `npm run build` → 通过
-  - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run` → 通过
+- 在当前 `browser-first Web` 作用域内，项目已达到 `release-candidate / signoff-ready` 状态。
+- 这一目录页只保留高层结论；细节请按文件状态继续下钻到 `11 / 19 / 20 / 21 / 22` 或仓库根 `README.md`、`llmdoc/*`。
+
+### 已并入当前基线
+
+- 后端核心链路已完成：解析 → 模拟 → 叙事、REST / WebSocket、场景管理、干预、导出、社交文案、预测与排行榜。
+- 前端核心链路已完成：`InputView → SimulationView → ResultView → HistoryView → LeaderboardView`。
+- Pixel Theater 已完成并长期收口：Phase 1-5、语义场景池、HUD 迁移、可读性修复、按需加载与截图/GIF 分流。
+- 主模式玩法层已完成：14 张玩法卡、结构化押注、因果档案、daily/weekly challenge、Replay / Import。
+- 主模式 authority 已完成：`director_state_json / gameplay_state_json` 为后端真值，`scenarioMeta` 仅保留兼容/缓存层职责。
+- Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`。
+- 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`。
+
+### 当前验证口径
+
+- Historical full baseline：
+  - backend `815 passed`
+  - frontend `179 passed`
+- Current targeted verification：
+  - backend targeted set `82 passed`
+  - frontend targeted set `79 passed`
+- Current release signoff：
+  - `frontend/output/e2e/20260320-codex-live-signoff/summary.json`
 
 ### 当前边界
-- ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但当前已去掉 `ResultView` authority 回填、结果页派生 archive/objectives 的本地写回，以及 `PredictionModal` 的本地直读，主要保留缓存/兼容、派生字段和 replay payload
-- ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
-- ℹ️ 首页首包现在已经脱离深层玩法策略表，截图/GIF runtime 也已拆成 `capture-html / capture-gif`；但当前最大剩余构建目标仍是 `phaser`，继续做性能专项时，优先级仍应放在 Theater 引擎 chunk，而不是再回头重做首页题材摘要链路
-- ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
-- ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
-- ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前已升级为 `LLM hybrid` 优先、deterministic fallback；结果 payload 会显式带 `adjudication_mode`
-- ℹ️ `分享挑战` 仍然只是“分享开局配置”；但主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 当前已经有可复盘 replay 链路，并且支持把 replay 导入为本地真实运行
 
-### 已完成 Sprint
-- ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试
-- ✅ **Sprint 11.1 — Phase 1 Code Review 修复**: viz_push 死代码消除 + ending_type 3级映射 + Worker viz 事件 + EventBridge 单测, 4 问题修复, 22 新测试
-- ✅ **Sprint 11.2 — Phase 2 推理可视化 + Phase 3 游戏化打磨**: 天气/昼夜 + 阵营 + 气泡变体 + 粒子 + 标题画面 + 6种结局 + Mini Map + 竞猜面板 + 排行榜 + 截图/GIF导出, 22 i18n keys × 2
-- ✅ **Sprint 11.3 — Phase 1-3 Code Review 修复**: P0 WorldScene 内存泄漏 + P1 事件监听器泄漏 + P2 scene_selector 关键词优先级/卡牌概率偏差 + P3 stance clamp/zero guard, 7 修复 5 文件, 212 tests 回归通过
-- ✅ **Sprint 11.4 — Phase 4 开源准备**: Weather 对象池(120) + 视口裁剪(40px) + ASSET_CREDITS(106 个 runtime + source 资产条目) + WorldScene.test.ts(18) + EndingScene.test.ts(14), tsc 零错误
-- ✅ **Sprint 11.5 — Phase 5 HUD 迁移**: 排行榜/竞猜面板从 Phaser canvas → React HudOverlay.tsx, WorldScene.ts HUD 代码全删除, game.css 新增 hud-bar 样式
+- 当前交付形态仍是浏览器优先的 Web 应用；`跨平台` 指桌面/移动浏览器响应式与视口 E2E，不代表原生客户端壳已交付。
+- Safari 属于可选附加验证，不在默认 full signoff 合同内；其截图仍可能受浏览器/插件浮层污染。
+- `scenarioMeta` 仍存在，但已经不是跨设备 authority；它主要保留兼容、缓存、派生字段和 replay payload 输入职责。
+- 当前最主要的增量空间是 Theater 包体、首次进入成本、Safari/WebKit 取证边界，以及更细的玩法/视觉 polish，而不是核心功能缺失。
 
-### 累计修复的 Bug
-- 🔴 Critical: 13 个（+3 可视化）
-- 🟡 High: 9 个（+1 Review: Worker viz 缺失）
-- 🟠 Medium: 24 个（+2 可视化 +2 Review: ending_type + viz_push 死代码）
-- 🟢 Low: 18 个（+2 可视化 +1 Review: EventBridge 无测试）
-- 🔧 测试修复: 8 个
-- **总计: 83 个问题全部已修复**（含 P0-P3 Code Review 5 个 + Phase 1 可视化 7 个 + Phase 1 Review 4 个 + Phase 1-3 Review 7 个）
+### 推荐下钻顺序
+
+1. `11_optimization_roadmap.md`
+   看旧 roadmap 的归档收口。
+2. `19_four_track_execution_plan.md`
+   看四轨设计基线与当前已落地范围。
+3. `20_track_d_debate_arena_design_execution_plan.md`
+   看 Debate Arena 设计基线。
+4. `21_track_d_debate_arena_mvp_blueprint.md`
+   看 Debate MVP 蓝图与验收参考。
+5. `22_cross_device_state_closure_plan.md`
+   看 authority 收口与剩余边界。

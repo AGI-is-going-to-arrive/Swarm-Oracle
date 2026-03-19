@@ -1,5 +1,9 @@
 # 多 Agent 系统上下文管理：前沿技术全景 × SwarmOracle 接入方案
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留研究与方案分析记录，不代表当前实现状态；若与当前代码不一致，以 `llmdoc/*` 和 `README.md` 为准。
+
 > 综合学术界 + 工业界 2025-2026 最新进展，结合 SwarmOracle 现有架构给出可落地方案
 
 ---
@@ -20,10 +24,10 @@ graph TD
 
 | 环节 | 代码位置 | 上下文负担 |
 |------|---------|-----------|
-| 每轮消息收集 | [simulator.py#_gather_agent_messages](file:///Users/yangjunjie/Desktop/test/backend/app/services/simulator.py#L231) | 全部 Agent 响应汇入 Orchestrator |
-| 分歧检测 | [simulator.py#_detect_fork](file:///Users/yangjunjie/Desktop/test/backend/app/services/simulator.py#L324) | 最近 3 轮全部消息 |
-| 记忆压缩 | [memory.py#compress_rounds](file:///Users/yangjunjie/Desktop/test/backend/app/services/memory.py#L25) | 每 N 轮暴力压缩 25:1 |
-| Agent 上下文 | [memory.py#build_agent_context](file:///Users/yangjunjie/Desktop/test/backend/app/services/memory.py#L61) | ~2300 tokens/Agent/轮 |
+| 每轮消息收集 | `backend/app/services/simulator.py` 的 `_gather_agent_messages` | 全部 Agent 响应汇入 Orchestrator |
+| 分歧检测 | `backend/app/services/simulator.py` 的 `_detect_fork` | 最近 3 轮全部消息 |
+| 记忆压缩 | `backend/app/services/memory.py` 的 `compress_rounds` | 每 N 轮暴力压缩 25:1 |
+| Agent 上下文 | `backend/app/services/memory.py` 的 `build_agent_context` | ~2300 tokens/Agent/轮 |
 
 **核心瓶颈**：20 Agent x 10 轮 = Orchestrator 处理 200+ 条消息，压缩导致 95% 细节丢失。
 
@@ -181,7 +185,7 @@ graph TB
 
 > **设计原则**：所有 Agent 必须看到**同一份共享上下文**。不做按角色过滤，保持群体讨论的涌现性和跨领域启发。
 
-改造 [memory.py](file:///Users/yangjunjie/Desktop/test/backend/app/services/memory.py) 的 `compress_rounds` 压缩质量：
+改造 `backend/app/services/memory.py` 的 `compress_rounds` 压缩质量：
 
 ```python
 # 当前: 暴力压缩为 2-3 句摘要 -> 95% 细节丢失

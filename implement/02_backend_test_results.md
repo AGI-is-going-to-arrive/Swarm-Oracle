@@ -1,5 +1,9 @@
 # SwarmOracle Backend — 测试结果与 Bug 修复
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留阶段性后端测试与修复记录，不代表当前测试基线或当前签收口径。
+
 > 对应会话: 后端测试 (00e5bf8e) + 全面 Review (1d1e9bd0)
 
 ## 测试总结
@@ -79,4 +83,3 @@
 - ✅ 非预期类型 key_moments 容错
 - ✅ max_rounds=0 边界
 - ✅ pending_interventions 清理
-

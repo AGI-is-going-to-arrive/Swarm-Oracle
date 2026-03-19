@@ -1,5 +1,9 @@
 # 上下文优化方案可行性分析
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留实施前可行性分析，不代表当前实现状态；其中旧工作区链接或早期假设不应被视为当前真值。
+
 > 基于 SwarmOracle 全量代码审查后的逐行评估
 
 ---
@@ -31,7 +35,7 @@ parse_question()
 
 ### Phase 1: 结构化压缩 + 全局态势简报 -- OK 完全可行
 
-**改动范围**：仅 [memory.py](file:///Users/yangjunjie/Desktop/test/backend/app/services/memory.py) 的压缩 prompt
+**改动范围**：仅 `backend/app/services/memory.py` 的压缩 prompt
 
 #### 当前代码的关键约束：
 

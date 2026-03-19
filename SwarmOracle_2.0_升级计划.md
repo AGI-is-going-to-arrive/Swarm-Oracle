@@ -1,5 +1,9 @@
 # SwarmOracle 2.0 升级计划
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留 2.0 阶段的历史规划与设计说明，不代表当前功能、测试、资产数量或交付范围真值。当前请以 `README.md`、`implement/README.md`、`llmdoc/*`、`frontend/public/assets/ASSET_CREDITS.md` 为准。
+
 > **核心定位**：What-If 推理引擎 + 像素文明可视化层
 >
 > 本质：SwarmOracle 的多 Agent "What-If" 推理不变，但推演过程以像素世界形态呈现，而非纯文字报告。
@@ -9,7 +13,7 @@
 > - 结构化下注现支持：押世界线 / 押结局倾向 / 押题材回响。
 > - 玩法卡 prompt 已提升为导演级 override，要求后续轮次持续响应。
 > - 完成态 Theater 现在使用内嵌 compact TimelineBar 与图标 marker，不再把主剧场挤出首屏。
-> - 当前主回归：后端 `708 passed`，前端 `128 passed`。
+> - 阶段性回归快照（历史口径）：后端 `708 passed`，前端 `128 passed`。当前发布判断请以仓库根 `README.md` 与 `llmdoc/guides/development.md` 为准。
 
 ---
 

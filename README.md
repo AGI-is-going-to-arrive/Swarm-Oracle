@@ -1,99 +1,86 @@
 # 🔮 SwarmOracle
 
-> AI "What-If" Prediction Playground — 提出一个历史/假设性问题，AI agents 实时辩论并探索分支时间线。
+> AI "What-If" Prediction Playground。输入一个历史或假设性问题，系统用多 Agent 推演、分支时间线、Pixel Theater 和结构化押注把结果可视化出来。
+
+## 当前状态
+
+- 当前交付形态是浏览器优先的 Web 应用。
+- `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+- 当前 `HEAD` 已通过一轮完整 `release:signoff`，工件位于 `frontend/output/e2e/20260320-codex-live-signoff/summary.json`。
+
+## Documentation Contract
+
+1. `README.md`
+   负责产品范围、快速上手和当前交付状态。
+2. `llmdoc/overview/*.md`
+   负责代码结构与模块真值。
+3. `llmdoc/guides/development.md`
+   负责开发、测试和签收命令。
+4. `implement/README.md`
+   负责实现文档索引，并标记哪些是归档基线、历史快照或已过时备忘。
+5. `progress.md`
+   负责保留逐轮发现、修复和复验流水，不作为当前真值。
 
 ## Features
 
 | 功能 | 描述 |
 |------|------|
-| **Multi-Agent Simulation** | AI 角色带有 persona、立场、情绪进行辩论 |
-| **Branching Timelines** | 决策产生平行分支，附概率追踪 |
-| **Butterfly Effect** | 实时注入干预改变模拟走向（回溯 + 多点 + 模板） |
-| **Multi-Ending Comparison** | 跨分支比较结局、洞察、关键时刻 |
-| **Real-time WebSocket** | 实时观看 agent 发言流 |
-| **Hierarchical Agents** | Leader-Worker 分层架构，支持千人规模模拟 |
-| **Prediction Leaderboard** | 用户竞猜 + LLM 评分 + 排行榜 |
-| **Structured Betting 2.x** | 支持押世界线 / 押结局倾向 / 押题材回响；下注提交成功后会立刻回写后端 `gameplay_state`，结果页可逐条查看命中状态 |
-| **Gameplay Cards** | 14 张玩法卡以导演级事件注入当前世界线；除原有推进卡外，现已补进 `审计清算 / 情报反噬 / 民意回摆 / 停火委员会` 4 张反制卡。玩法卡弹窗会给出题材专属三段式连锁事件、常驻 `风险 / 资源` 轨道、当前承诺 worldline 的默认目标分支，以及 profile-specific 的打法提示 |
-| **Theme Registry & Asset Manifest** | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 frame / badge 素材统一收进单一注册表；`generic` 现有独立 `gameplay_card_frame_generic` 卡框 |
-| **Expanded Runtime Sprite Pool** | 25 张角色 sprite 已进入运行时清单；本轮新接入 `alchemist / assassin / bard / knight / monk / thief / witch` 7 张精灵，前后端 persona/role 映射也已同步收口 |
-| **Semantic Scene Pool** | 当前 registry 共有 33 个主题条目：30 张 Theater 语义背景 + 3 张 Debate 专属背景；`law / faith / generic` 已补进 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体，Debate 另有 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张专用背景 |
-| **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status/weekly-summary` API；首页会同时显示 daily challenge 真值、本周赛道和导演成长概览，结果页可直接复制分享挑战链接 |
-| **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页除 `judge summary` 外还会返回结构化 `judge_rationale`、`supporting_turns` 与 `adjudication_mode`；终局裁决当前会优先读取 LLM judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，失败时再退回 deterministic 规划；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；`counterplay` 除了 `phase_score / explanation`，还会显式改写对应阶段 commentary |
-| **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
-| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细；本 session 又把 `ResultView` 的派生 archive/objectives 改成纯内存态，不再把结果页读路径回写到本地 `scenarioMeta` |
-| **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；`PhaserGameLoader` 本身已在 Theater 动态边界，且当前会跳过隐藏页面、`prefers-reduced-data`、`saveData` 与 `2g/slow-2g` 场景下的无谓预热；`BootScene` 当前只预载首屏初始 theme + 角色 sprite，后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载；截图链路也继续拆成 screenshot / GIF 两条 runtime，构建产物从单块 `capture-vendor` 收口到 `capture-html / capture-gif`，避免只截图时顺手加载 GIF 依赖；首页题材 `label / hooks / badge` 现在也改走轻量摘要 helper，不再直接把整份玩法策略表挂进 landing route |
-| **Portable Replay & Import** | 主模式与 Debate 现在都有可复盘分享页：主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时回退到本地 token；Debate 结果页支持 `/debate/replay/result?replay=...`。三条 replay 页默认都是只读，但当前都支持一键“导入为本地运行”，落成真实本地 scenario / debate 记录 |
-| **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
-| **Asset Provenance** | `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json` sidecar；较新的 Debate 资产保留完整生成记录，较早的 legacy 资产会标记为 backfilled provenance。这里的 backfill 只表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
-| **Platform Scope** | 当前交付形态是浏览器优先的 Web 应用；主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari 的主模式状态回读；桌面/移动浏览器视口也已做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
-| **Responsive Scenario Startup** | 创建场景后立即返回 `simulating` 占位状态，并附带 provisional root branch；后台继续解析并填充 Agent / 分支 |
-| **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
-| **Intervention Templates** | 预设干预模板（自然灾害、技术突破等） |
-| **BYOK** | 用户自带 OpenAI 兼容 API Key / URL / Model；当前 provider policy 已贯通到创建场景、社交文案、预测评分和 Debate 创建入口 |
-| **LLM Runtime Guard** | 后端现在有进程内全局 LLM 并发闸门、pending 上限、用户级 pending 配额与 provider 熔断；用户题面、干预文本和评分/分享输入也会按 `UNTRUSTED DATA` 口径注入，减少坏 JSON 与提示词注入带来的链路抖动 |
-| **Social Media Copy** | 一键生成小红书 / 微博 / 知乎 / Reddit / X 文案 |
-| **Language Detection** | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
-| **Codebase Modularization** | API 层拆分为 5 个独立模块（schemas/helpers/interventions/social/scenarios） |
-| **N+1 Query Optimization** | LEFT JOIN 消除逐条查询，保留已删除 agent 消息完整性 |
-| **LLM Retry with Backoff** | 429/5xx 自动重试 3 次，指数退避 1s→2s→4s |
-| **Alembic Migrations** | 数据库版本化迁移框架 |
-| **Pixel Art Visualization** | 像素风可视化：事件映射 + 精灵分配 + 场景主题 + 卡牌事件 (Phase 1) |
-| **Prometheus Observability** | `/metrics` 端点会返回 Prometheus 文本；安装 instrumentator 时暴露完整请求延迟、计数、活跃模拟指标，缺依赖时也会回退到最小文本输出而不是 `404` |
-| **i18n** | 中英文全局切换器 |
+| Multi-Agent Simulation | 多 Agent 基于 persona、立场、情绪进行推演 |
+| Branching Timelines | 生成平行分支与概率追踪 |
+| Butterfly Effect | 支持实时干预、回溯干预和批量干预 |
+| Pixel Theater | Phaser 驱动的像素剧场，可视化角色、场景、气泡和结局 |
+| Structured Betting | 支持押世界线、押结局倾向、押题材回响 |
+| Gameplay Cards | 14 张玩法卡，包括 10 张导演卡和 4 张反制卡 |
+| Director Campaign | 导演目标、风险/资源轨道、worldline 承诺、成长与徽章 |
+| Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
+| Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
+| i18n | 中英文界面与输入语言联动输出 |
+| BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断 |
+| Observability | `/metrics` 暴露 Prometheus 文本指标，依赖缺失时仍有最小回退文本 |
 
 ## Architecture
 
-```
-┌────────────┐           ┌────────────────┐
-│  Frontend  │ ◄──WS──►  │    Backend     │
-│  React/TS  │ ◄─REST──► │ FastAPI/Python │
-│  Vite+Nginx│           │ SQLite+Chroma  │
-└────────────┘           └────────┬───────┘
-                                  │
-                          ┌───────▼───────┐
-                          │  LLM Provider │
-                          │ (OpenAI-compat)│
-                          └───────────────┘
+```text
+Frontend (React + TypeScript + Vite)
+  ├─ Classic branch tree / Result / History / Leaderboard
+  ├─ Pixel Theater (Phaser)
+  └─ Replay / Share / E2E automation hooks
+
+Backend (FastAPI + SQLModel + SQLite + ChromaDB)
+  ├─ Scenario simulation
+  ├─ Campaign authority (`director_state_json`, `gameplay_state_json`)
+  ├─ Debate domain
+  └─ Prediction / leaderboard / social copy / metrics
 ```
 
 ## Quick Start
 
-### Docker (recommended)
+### Docker
 
 ```bash
-cp .env.example .env   # 配置 LLM_RESPONSES_URL / LLM_API_KEY
+cp .env.example .env
 docker compose up --build
-# → Frontend: http://localhost:18928
-# → Backend:  http://localhost:18927
 ```
 
-If your LLM service is running on the host machine instead of inside Docker,
-set `LLM_RESPONSES_URL` to `http://host.docker.internal:8318/v1/chat/completions`
-before `docker compose up --build`. On Linux, replace it with an actual host-reachable address.
+- Frontend: `http://localhost:18928`
+- Backend: `http://localhost:18927`
 
 ### Local Development
 
 ```bash
-# Backend
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 18927
-
-# Frontend (separate terminal)
-cd frontend
-npm install && npm run dev
-# → http://localhost:18928
 ```
 
-Scenario creation now returns immediately with a placeholder scenario in `simulating`.
-The UI enters `/sim/:id` right away, then fills agents / branches asynchronously
-through polling + WebSocket updates.
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
 ## Configuration
-
-Copy `.env.example` to `.env` and configure:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -101,242 +88,54 @@ Copy `.env.example` to `.env` and configure:
 | `LLM_API_KEY` | API key | `sk-12345678` |
 | `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
 | `MAX_AGENTS` | Max agents per scenario | `100` |
-| `MAX_ROUNDS` | Max simulation rounds | `40` |
-| `MAX_BRANCHES` | Max parallel branches | `8` |
-| `DEFAULT_NUM_AGENTS` | Default agent count | `20` |
-| `DEFAULT_ROUNDS` | Default simulation rounds | `10` |
+| `MAX_ROUNDS` | Max rounds | `40` |
 
-## Testing
+本地直接启动 backend 时读取 `backend/.env`；`docker compose` 读取仓库根目录 `.env`。
+
+## Testing And Signoff
 
 ```bash
 cd backend
-.venv/bin/python -m pytest tests/ -v
-
-# Frontend tests
-cd frontend && npm install && npm test
-
-# Release signoff（需先有可访问的 backend/frontend，默认是 127.0.0.1:18927 / 127.0.0.1:18928）
-cd frontend && npm run release:signoff -- --headless
-
-# Matrix / corner-case / full black-box regression
-cd frontend && npm run e2e:matrix
-cd frontend && npm run e2e:variants
-cd frontend && npm run e2e:corners
-cd frontend && npm run e2e:cross-browser
-cd frontend && npm run e2e:safari
-cd frontend && npm run e2e:full
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-- 仓库内历史全量基线仍记录为：后端 **815 passed**、前端 **179 passed**
-- `npm run release:signoff -- --headless` 会顺序执行：
-  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
-  - backend `/metrics` 可达性检查（Prometheus 文本响应）
+```bash
+cd frontend
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run assets:provenance:check
+```
+
+```bash
+cd frontend
+npm run release:signoff -- --headless
+```
+
+- Historical full baseline: backend `815 passed`, frontend `179 passed`.
+- Current targeted verification at `HEAD`: backend `82 passed`, frontend `79 passed`, `tsc`/`build`/assets check passed.
+- Default `release:signoff` contract:
+  - targeted backend `pytest`
+  - backend `/metrics` reachability check
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
   - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
-- `release:signoff` 现在会在输出目录增量写 `summary.json`，每一步都会记录状态、耗时、命令和工件路径；即使中途失败，也会保留已完成步骤与错误信息
-- 如需跳过新增守门项，可传：
-  - `--skip-backend-checks`
-  - `--skip-assets-check`
-- 如果 backend Python 不在默认 `.venv` 路径，可传：
-  - `--backend-python /absolute/path/to/python`
-- 如果 backend 不在默认 `127.0.0.1:18927`，可传：
-  - `--backend-url http://127.0.0.1:18927`
-- 如需调长 Debate 收口等待窗口，可设置：
-  - `SWARM_DEBATE_RESULT_TIMEOUT_MS`
-  - `SWARM_DEBATE_STALL_TIMEOUT_MS`
-  - `SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
-- 默认工件目录为 `frontend/output/e2e/<timestamp>-release-signoff/`
-- 若本机已配置 Safari WebDriver，可追加：
-  - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
-- 当前仓库也已补 CI 守门链路：
-  - `.github/workflows/ci.yml`
-  - 会并行跑 backend targeted `pytest`（含 `test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`
-  - 另新增 `release-signoff-dry-run`：只校验 `release-signoff` 编排与 `summary.json` 合同，不伪造整条链路已通过
-  - 另新增 `debate-signoff-smoke`：在 `DEBATE_USE_LLM=false` 下起本地 backend/frontend，并实跑 `e2e-debate-suite.mjs full` 后上传工件
-  - 本次 session 还新增 `.github/workflows/release-signoff.yml`：夜间 + 手动触发的完整签收链路；会先做 secrets 预检，再起本地 backend/frontend、安装 Playwright 浏览器、执行 `npm run release:signoff -- --headless`，并上传 `summary.json` 与日志工件；缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时会安全跳过，不会伪造绿灯
-- 本次 session 已实跑：
-  - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
-  - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
-- 本次 session 围绕首页首包继续收口又补跑：
-  - `npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx` → **24 passed**
-  - `npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `npm run build` → 通过
-  - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
-- 本次 session 又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py` → **81 passed**
-  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **79 passed**
-  - `frontend`：`npm run build` → 通过
-  - `frontend`：`npm run assets:provenance:check` → 通过
-  - `frontend`：`npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
-  - `frontend`：`npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
-- 本次 session 围绕发布收口基础设施又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py` → **81 passed**
-  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **79 passed**
-  - `frontend`：`node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/post-fix-debate-desktop --headless` → 通过，工件位于 `frontend/output/e2e/post-fix-debate-desktop/`
-  - `frontend`：`node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run` → `summary.json` 落盘通过
-  - `frontend`：`npm run release:signoff -- --headless --output-root output/e2e/post-fix-release-signoff` 已重新启动并确认 `summary.json` 会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
-- 本次 session 又补了 `metrics + signoff` 收口：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py / tests/test_metrics.py` → **82 passed**
-  - live `/metrics`：`200 text/plain`
-  - `frontend`：`node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-audit-signoff-dry-run-v4` → 通过
-  - `frontend`：`node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2` → 通过
-  - 当前最新签收工件：`frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
-- 本次 session 又补了 Theater 首次进入 / capture 收口：
-  - 前端：`src/game/sceneAssetPlan.test.ts / src/game/PhaserGameLoader.test.ts / src/hooks/useScreenCapture.test.ts / src/game/scenes/EndingScene.test.ts / src/game/scenes/WorldScene.test.ts / src/pages/SimulationView.test.tsx` → **59 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - `frontend`：`node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run` → 通过
-  - 当前新增口径：
-    - `BootScene` 不再预载全部 Theater 背景 / ending / 遗留 UI 贴图，只保留首屏初始 theme + 角色 sprite
-    - 后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载
-    - `capture-vendor` 已拆成 `capture-html / capture-gif / screenCaptureGifRuntime`
-- 当前新增口径：
-  - 首页 `InputView` 现在只读取轻量题材摘要（`label / hooks / badge`），不再静态依赖完整玩法策略表
-  - 深层玩法 contract / strategy helper 仍保留在后续路由与导演层链路中
-- 本轮面向当前仓库状态重新复验：
-  - 后端：`test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py` → **65 passed**
-  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **60 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - 资产 provenance：`cd frontend && npm run assets:provenance:check` → 通过
-  - 黑盒：`e2e-suite.mjs full`、`e2e-debate-suite.mjs full`、`e2e-debate-suite.mjs mobile --width 430 --height 932` → 通过
-- 本次 session 围绕 Debate `counterplay` 又补跑：
-  - 后端：`tests/test_debate_api.py / tests/test_debate_service.py` → **11 passed**
-  - 前端：`DebateArenaView / DebateResultView / useDebateWS / DebateShareModal / debateShare / debateCounterplay` → **13 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - Debate desktop 最小黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
-- 本次 session 围绕主模式 director state 后端化又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py` → **17 passed**
-  - 前端：`SimulationView / ResultView / scenarioMeta` 定向回归 → **21 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - 主模式黑盒：`frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
-  - 跨浏览器 smoke：
-    - Firefox / WebKit：`frontend/output/e2e/20260319-official-cross-browser/result.json`
-    - Safari：`frontend/output/e2e/20260319-official-safari-v5/result.json`
-- 本次 session 又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_persona_mapper.py` → **80 passed**
-  - 前端：`scenarioGameplayState / gameplayCards / VizSynthesizer / SimulationView / ResultView` → **66 passed**
-  - 前端：`SimulationView / TimelineBar` → **12 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - 黑盒：`e2e-suite.mjs corners`（含 `gameplay_state_roundtrip`）→ 通过
-- 本次 session 围绕主模式 cross-device gameplay raw state 收口又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py` → **19 passed**
-  - 前端：`scenarioGameplayState / PredictionModal / SimulationView / ResultView` 定向回归 → **26 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - 黑盒：`e2e-suite.mjs corners / cross-browser / safari` → 通过
-- 本次 session 围绕默认模型、LLM 治理、BYOK/provider policy 与长期循环 Lite 又补跑：
-  - 后端：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**
-  - 后端：`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**
-  - 后端：`tests/test_campaign_service.py / tests/test_campaign_api.py` → **21 passed**
-  - 后端：`tests/test_debate_service.py / tests/test_debate_api.py` 最新 Debate 回归 → **12 passed**
-  - 前端：`llmProviderPolicy / ShareModal / InputView / ResultView` → **11 passed**
-  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay` → **8 passed**
-  - 前端：`challengeShare / InputView / ResultView` → **11 passed**
-- 本次 session 围绕前端包体 / `scenarioMeta` 兼容层又补跑：
-  - 前端：`useScreenCapture / PredictionModal / SimulationView / ResultView / DebateArenaView / DebateResultView` → **32 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - 黑盒：`e2e:corners`、`e2e:cross-browser`、`e2e:debate:full` → 通过
-  - 工件：
-    - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
-    - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
-    - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
-- 本次 session 围绕 Debate `judge_rationale / supporting_turns / share copy` 又补跑：
-  - 后端：`tests/test_debate_prompts.py / tests/test_debate_service.py / tests/test_debate_api.py` → **14 passed**
-  - 前端：`debateShare / DebateShareModal / DebateResultView` → **5 passed**
-  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay / DebateBetModal / DebateShareModal / useDebateWS` → **16 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - Debate desktop 黑盒：`frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json` → 通过，`supportingTurnCount = 3`
-  - Debate full 黑盒：`frontend/output/e2e/20260319-debate-supporting-turns-full/result.json` → 通过，desktop / mobile 都满足 `supporting_turns.length >= 1`
-- 本次 session 围绕 Debate `phase_insights / debate_verdict / counterplay -> stage commentary` 又补跑：
-  - 后端：`tests/test_debate_service.py / tests/test_debate_api.py` → **12 passed**
-  - 前端：`debateStore / useDebateWS / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal` → **16 passed**
-  - `frontend`：`npm run build` → 通过
-  - Debate full 黑盒：`frontend/output/e2e/20260319-debate-depth-full-v4/result.json` → 通过
-  - 当前黑盒会显式校验：
-    - `live.overviewCardCount = 3`
-    - `live.roomMapCount = 3`
-    - `live.stageSummaryCount = 5`
-    - `live.serverPhaseInsightCount = 5`
-    - `result.signalCardCount = 4`
-    - `result.phaseSummaryCount = 5`
-    - `result.serverPhaseInsightCount = 5`
-- 本次 session 围绕 Theater 按需加载 + release candidate 收口又补跑：
-  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py` → **34 passed**
-  - 前端：`scenarioGameplayState / PredictionModal / SimulationView / ResultView / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS` → **43 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-  - release 黑盒：
-    - `frontend/output/e2e/20260319-release-corners/`
-    - `frontend/output/e2e/20260319-release-cross-browser/`
-    - `frontend/output/e2e/20260319-release-debate-full/`
-  - 当前构建口径：`phaser` 仍是独立引擎 chunk，但只在 Theater 路径预热；`html2canvas / gif.js / gif.worker` 也保留在截图/GIF 路径上按需加载
-- 本次 session 围绕 replay 短链接 / 只读回放 / 导入本地运行 又补跑：
-  - 后端：`tests/test_api.py` → **77 passed**
-  - 后端：`tests/test_debate_api.py` → **7 passed**
-  - 前端：`SimulationView / ResultView / DebateResultView` + `scenarioReplay / simulationReplay / debateReplay` + `ShareModal / DebateShareModal` → **32 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-- 本次 session 围绕默认模型、LLM 治理、BYOK/provider policy 收口又补跑：
-  - 后端：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**
-  - 后端：`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**
-  - 后端：`tests/test_campaign_service.py / tests/test_campaign_api.py` → **21 passed**
-  - 前端：`llmProviderPolicy / ShareModal / InputView / ResultView` → **11 passed**
-  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay` → **8 passed**
-  - 前端：`challengeShare / InputView / ResultView` → **11 passed**
-  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
-  - `frontend`：`npm run build` → 通过
-- 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
-- `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若超时或失败，会自动回退到 Chromium CDP 截图
-- `scripts/e2e-suite.mjs` 的 `corners` 现已补：
-  - `director_state_roundtrip`
-  - `gameplay_state_roundtrip`
-  - 结果 JSON 会直接带：
-    - `simulationDirector`
-    - `simulationBetting`
-    - `resultArchiveSummary`
-    - `resultBetList`
-    - `resultKeyMoments`
-    - `resultBranchSnapshots`
-    - `directorGoalsCard`
-    - `commitmentCard`
-    - `mostUsedCard`
-    - `counterplayCard`
-- 当前 Track C 主工件目录：
-  - `frontend/output/e2e/20260317-track-c/matrix/`
-  - `frontend/output/e2e/20260317-track-c/corners/`
-  - `frontend/output/e2e/20260317-track-c/mobile/`
-  - `frontend/output/e2e/20260317-track-c/variants/`
-- 本轮重新验证通过的主模式 full smoke 工件：`frontend/output/e2e/20260318-post-director-goals-full/result.json`
-- 本轮重新验证通过的主模式 corners 工件：`frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`
-- 本次 cross-device state 收口工件：
-  - `frontend/output/e2e/20260319-cross-device-state-corners/result.json`
-  - `frontend/output/e2e/20260319-cross-device-state-cross-browser/result.json`
-  - `frontend/output/e2e/20260319-cross-device-state-safari/result.json`
-  - `frontend/output/e2e/20260319-cross-device-state-safari-panel/result.json`
-- 本轮重新验证通过的 Debate full 工件：`frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
-- 本轮额外复验通过的主模式 full 工件：`frontend/output/e2e/20260318-codex-audit-main-full/result.json`
-- 本轮额外复验通过的 Debate full 工件：`frontend/output/e2e/20260318-codex-audit-debate-full-rerun/result.json`
-- 本轮额外复验通过的 Debate `430x932` 工件：`frontend/output/e2e/20260318-codex-audit-debate-mobile-430x932/result.json`
-- 本轮 `develop-web-game` 取证工件：
-  - `frontend/output/web-game/20260318-director-layer-smoke-v2/state-0.json`
-  - `frontend/output/web-game/20260318-director-layer-smoke-v2/shot-0.png`
-- 本轮 `develop-web-game` 补充取证工件：
-  - `frontend/output/web-game/20260319-post-cross-browser-client/state-0.json`
-  - `frontend/output/web-game/20260319-post-cross-browser-client/shot-0.png`
-- `scripts/e2e-debate-suite.mjs` 现支持 `--width / --height / --question / --profile-hint`，可直接补移动端新视口或指定 Debate 主题工件
-- `scripts/e2e-debate-suite.mjs` 当前会在结果页显式校验 `supporting_turns.length >= 1`，并把 `supportingTurns / supportingTurnCount` 写进最终 `result.json`；当前 `result_ready` 与结果页 CTA 等待都已改成 progress-aware，必要时会按 API 进度继续等待并自动刷新结果 CTA；如需调长窗口，可设置 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
-- Safari 默认 session screenshot 偶尔仍会拍到空白 Theater 画布；若需要核对 HUD / 面板可见性，可额外启用 `SWARM_SAFARI_PANEL_CAPTURE=1` 产出 panel capture 工件
-- 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
+- Safari is optional and not part of the default full signoff.
+- Latest passing signoff artifact: `frontend/output/e2e/20260320-codex-live-signoff/summary.json`.
+
+## CI
+
+- `.github/workflows/ci.yml`
+  - targeted backend `pytest`
+  - frontend `assets:provenance:check / build / targeted vitest`
+  - `release-signoff-dry-run`
+  - deterministic `debate-signoff-smoke`
+- `.github/workflows/release-signoff.yml`
+  - nightly + manual full signoff
+  - preflight on `LLM_RESPONSES_URL / LLM_API_KEY`
 
 ## License
 

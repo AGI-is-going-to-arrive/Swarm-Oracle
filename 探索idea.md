@@ -1,13 +1,17 @@
 # SwarmOracle 升级探索 — 深度调研报告
 
-> 基于 MiroFish / paperclip / geo-seo-claude / agency-agents 灵感 + 近 3 个月 GitHub/Reddit/X/TrendShift 趋势分析  
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件是 2026-03-13 的探索性调研，不反映当前实现状态；其中部分推荐方向已落地或已失效。当前请以 `README.md`、`implement/README.md`、`llmdoc/*` 为准。
+
+> 基于 MiroFish / paperclip / geo-seo-claude / agency-agents 灵感 + 近 3 个月 GitHub/Reddit/X/TrendShift 趋势分析
 > 生成时间: 2026-03-13
 
 ---
 
 ## 一、当前项目基线
 
-SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过，功能涵盖：      
+SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过，功能涵盖：
 多 Agent 模拟 → 分支时间线 → 蝴蝶效应干预 → 分层代理（千人） → 排行榜/竞猜 → BYOK → 社交媒体文案 → 语言检测 → Prometheus 可观测性
 
 **核心差异化**：目前市面上没有同时具备「What-If 模拟 + 分支对比 + 用户竞猜」三合一的开源项目。
@@ -53,8 +57,8 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 💎 方向 A：AI 辩论竞技场（推荐指数 ⭐⭐⭐⭐⭐）
 
-**对手**：open-debate (0⭐), Agora (0⭐), llm-debate-arena (3⭐) — **竞争极低**  
-**SwarmOracle 优势**：已有多 Agent + 分支时间线 + 排行榜  
+**对手**：open-debate (0⭐), Agora (0⭐), llm-debate-arena (3⭐) — **竞争极低**
+**SwarmOracle 优势**：已有多 Agent + 分支时间线 + 排行榜
 
 **升级内容**：
 
@@ -73,8 +77,8 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 🏙️ 方向 B：微型 AI 文明模拟器（推荐指数 ⭐⭐⭐⭐⭐）
 
-**对手**：Project Sid (论文级), aphae (0⭐, Godot 游戏) — **无成熟开源竞品**  
-**SwarmOracle 优势**：已有千人分层架构 + Blackboard 共享记忆  
+**对手**：Project Sid (论文级), aphae (0⭐, Godot 游戏) — **无成熟开源竞品**
+**SwarmOracle 优势**：已有千人分层架构 + Blackboard 共享记忆
 
 **升级内容**：
 
@@ -93,8 +97,8 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 🎮 方向 C：LLM 社交推理游戏（推荐指数 ⭐⭐⭐⭐）
 
-**对手**：elimination_game (lechmazur), AImong Us — **竞争极低，多为实验**  
-**SwarmOracle 优势**：已有排行榜 + 社交分享 + Agent 个性化  
+**对手**：elimination_game (lechmazur), AImong Us — **竞争极低，多为实验**
+**SwarmOracle 优势**：已有排行榜 + 社交分享 + Agent 个性化
 
 **升级内容**：
 
@@ -111,8 +115,8 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 📊 方向 D：AI 趋势预测擂台（推荐指数 ⭐⭐⭐⭐）
 
-**对手**：socialpredict (Web3 预测市场) — **视角完全不同**  
-**SwarmOracle 优势**：已有模拟引擎 + 竞猜评分 + 多 Agent 架构  
+**对手**：socialpredict (Web3 预测市场) — **视角完全不同**
+**SwarmOracle 优势**：已有模拟引擎 + 竞猜评分 + 多 Agent 架构
 
 **升级内容**：
 
@@ -130,8 +134,8 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 📖 方向 E：AI 交互叙事引擎（推荐指数 ⭐⭐⭐）
 
-**对手**：FictionX (22⭐), StoryLab (1⭐), SEELE (商业) — **开源竞争低**  
-**SwarmOracle 优势**：已有分支时间线 + 干预系统 + 多结局对比  
+**对手**：FictionX (22⭐), StoryLab (1⭐), SEELE (商业) — **开源竞争低**
+**SwarmOracle 优势**：已有分支时间线 + 干预系统 + 多结局对比
 
 **升级内容**：
 
@@ -157,11 +161,11 @@ SwarmOracle 已完成 **P0-P9 全部 23 项优化**，410 个测试全部通过�
 
 ### 🔥 最佳组合策略
 
-**Phase 1 (2 周)**：在现有 SwarmOracle 基础上增加 **AI 辩论竞技场** 模式 — 开发量最小，已有 Agent/流式/排行榜基础  
-**Phase 2 (4 周)**：升级为 **微型 AI 文明模拟器** — 增加社会动力学面板 + 关系图谱 + 事件系统  
+**Phase 1 (2 周)**：在现有 SwarmOracle 基础上增加 **AI 辩论竞技场** 模式 — 开发量最小，已有 Agent/流式/排行榜基础
+**Phase 2 (4 周)**：升级为 **微型 AI 文明模拟器** — 增加社会动力学面板 + 关系图谱 + 事件系统
 **Phase 3 (2 周)**：叠加 **LLM 社交推理游戏** 模式 — 狼人杀/逆向图灵测试，最大化传播力
 
-**最终产品定位**：**SwarmOracle 2.0 — AI Agent 社会实验室**  
+**最终产品定位**：**SwarmOracle 2.0 — AI Agent 社会实验室**
 > "创建微型社会，出辩题让 AI 辩论，和 AI 玩狼人杀，预测未来趋势 — 一个让你「上帝视角」观察 AI 社会的开源平台"
 
 ---

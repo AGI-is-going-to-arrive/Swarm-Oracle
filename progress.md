@@ -1,5 +1,9 @@
 Original prompt: $develop-web-game  $playwright-interactive  $playwright-interactive 使用以上skills 进行全面的e2e测试 确保该项目所有文档中的改进计划2.0 3.0 是否所有功能都正常实现,并且确实是可玩的? 并且可玩性好
 
+> 文档类型：append-only log
+> 当前真值：否
+> 阅读方式：本文件按时间顺序保留发现、修复与复验全过程；旧问题不代表当前状态。当前范围、实现状态、测试与签收口径请以 `README.md`、`implement/README.md`、`llmdoc/*` 为准。
+
 ## 2026-03-14 QA Log
 
 - 已读取 `llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/overview/backend.md`、`llmdoc/guides/development.md`。
@@ -113,7 +117,7 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 未修改 `EndingScene` 代码；通过定制 Playwright 捕获脚本监听 `viz:ending_play`，确认结局事件确实触发。
   - 已截到两类证据：
     - 结局场景背景图（革命主题）
-    - 延时后的结局卡片层（标题 `✊ 革命之曙光`） 
+    - 延时后的结局卡片层（标题 `✊ 革命之曙光`）
   - 控制台日志包含 `[EndingScene] V3 showing ending: revolution`，说明 WorldScene → EndingScene 的切换链路成立。
 
 - 新增验证：

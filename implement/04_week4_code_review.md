@@ -1,5 +1,9 @@
 # Code Review — SwarmOracle Backend (Week 4)
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留 Week 4 阶段性 code review 结果，不代表当前实现状态或当前签收口径。
+
 > 对应会话: 代码审查与修复 (b1d4e973)
 
 Full audit of all 12+ source files. **8 issues found**, all fixed.

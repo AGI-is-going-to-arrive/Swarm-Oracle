@@ -1,5 +1,9 @@
 # SwarmOracle - Track D AI 辩论竞技场 MVP 蓝图
 
+> 文档类型：active archive
+> 当前真值：部分是
+> 阅读方式：本文件保留 Debate Arena MVP 蓝图与已实现状态。后文中的 phase 拆解与实施顺序主要作为历史设计基线和验收参考，不再按启动期计划解释。
+
 > 目标：记录 Track D Debate Arena MVP 的设计蓝图与已实现状态，而不是继续把它当作候选方向。
 > 范围：产品设计、美术素材、代码开发拆解、测试、code review、E2E 方案。
 > 原则：不偏离项目初衷 What-If 推演引擎 + Pixel Theater + 分支比较 + 下注排行 + 分享。

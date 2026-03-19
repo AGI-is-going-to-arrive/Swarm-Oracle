@@ -1,5 +1,9 @@
 # SwarmOracle Week 4 — 实现计划
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留已完成事项的历史实施计划，不再作为当前执行清单。
+
 > 对应会话: 代码审查与修复 (b1d4e973)
 
 Complete remaining frontend features (AgentPanel, ResultView, InterventionModal), wire the "Butterfly Effect" backend, add Docker Compose deployment, documentation, and comprehensive testing.

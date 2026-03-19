@@ -1,5 +1,8 @@
 # Backend 模块地图
 
+> 文档类型：L0 current-truth
+> 作用：后端模块、authority 结构与关键接口真值。详细验证流水保留在 `progress.md`。
+
 ## 模块依赖关系
 
 ```
@@ -346,15 +349,13 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。再往后本次 session 又补跑了：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**，`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**，`tests/test_campaign_service.py / tests/test_campaign_api.py` 新增 weekly summary 后 → **21 passed**，以及 Debate 最新 LLM 文案/judge summary/counterplay explanation 回归 `tests/test_debate_service.py / tests/test_debate_api.py` → **12 passed**。在当前 session 中，又围绕 Debate `judge_rationale / supporting_turns / 节奏约束 prompt` 补跑了 `tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`，结果为 **14 passed**。本次文档同步对应的最新 Debate 定向回归为 `tests/test_debate_service.py tests/test_debate_api.py -q` → **12 passed**，重点覆盖：
-- `phase_insights[]` 的 `stakes / judge_focus / commentary / confidence_drift`
-- `counterplay` 命中或未中时会改写对应阶段 `phase_insights.commentary`
-- `debate_verdict` 事件链路改为 `DebateResultSummary + phase_insights`
-- 本次 replay share/import session 又补跑了：
-  - `tests/test_api.py` → **77 passed**
-  - `tests/test_debate_api.py` → **7 passed**
+历史全量基线：**815 passed**
 
-本次 session 又补跑了 `tests/test_metrics.py`，并把它并入 release signoff 的 backend targeted `pytest`，最新收口结果为 **82 passed**。同时也真实校验了 `GET /metrics`：当前在依赖齐全时会返回完整 Prometheus 文本指标；若缺少 `prometheus-fastapi-instrumentator`，后端会回退为最小文本指标，不再返回 `404`。当前 `release:signoff` 也已新增 `backend_metrics` 步骤，会直接检查 `/metrics` 返回 `text/plain` 且包含 `# HELP`。LLM retry/backoff 与 Alembic 迁移框架则仍以代码与定向测试为主，尚未在本次 session 补独立的运行时 smoke。
+当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准：
+
+- backend signoff set：**82 passed**
+- `/metrics` live check：`200 text/plain`
+- 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 
 覆盖重心：
 

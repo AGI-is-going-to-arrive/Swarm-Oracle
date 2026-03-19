@@ -1,143 +1,80 @@
 # SwarmOracle Backend
 
-FastAPI + SQLModel backend for the SwarmOracle "What-If" prediction engine.
+> 文档类型：active reference
+> 当前真值：否。产品范围以仓库根 `README.md` 为准；开发与签收命令以 `llmdoc/guides/development.md` 为准。
+
+FastAPI + SQLModel backend for SwarmOracle.
 
 ## Stack
 
-- **FastAPI** — REST API + WebSocket
-- **SQLModel** (SQLite) — ORM / persistence
-- **ChromaDB** — agent memory vector store (L2)
-- **Alembic** — database migrations
-- **Prometheus** — observability metrics
-- **OpenAI-compatible LLM** — scenario parsing, agent simulation, narration
-- **Semantic scene selection** — question-first theme routing for Pixel Theater backgrounds
+- FastAPI
+- SQLModel + SQLite
+- ChromaDB
+- Alembic
+- Prometheus text metrics
+- OpenAI-compatible LLM
 
 ## Quick Start
 
 ```bash
-# Create venv
+cd backend
 python -m venv .venv && source .venv/bin/activate
-
-# Install deps
 pip install -e ".[dev]"
-
-# Copy env
-cp ../.env.example ../.env  # edit LLM_RESPONSES_URL / LLM_API_KEY
-
-# Run
-uvicorn app.main:app --reload --host 0.0.0.0 --port 18927
+cp ../.env.example .env
+uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 ```
 
-If the backend runs in Docker but the LLM server runs on the host machine,
-set `LLM_RESPONSES_URL=http://host.docker.internal:8318/v1/chat/completions`
-in the root `.env` before `docker compose up --build`. On Linux, use an
-actual host-reachable address instead of `host.docker.internal`.
+- 本地直接启动 backend 时读取 `backend/.env`。
+- `docker compose` 读取仓库根目录 `.env`。
+- 若后端在容器内、LLM 服务在宿主机，`LLM_RESPONSES_URL` 应指向宿主机可达地址。
 
 ## API Modules
 
 | Module | File | Description |
 |--------|------|-------------|
-| Scenarios | `api/scenarios.py` | Core CRUD routes |
-| Schemas | `api/schemas.py` | Pydantic request/response models (P0-1) |
-| Helpers | `api/helpers.py` | Background tasks / utility functions (P0-1) |
-| Interventions | `api/interventions.py` | Butterfly Effect intervention routes (P0-1) |
-| Social | `api/social.py` | Social media copy generation routes (P0-1) |
-| Campaign | `api/campaign.py` | Director campaign finalize / profile / mastery / badges / daily-status plus per-scenario `director-state` read/write (Track A / Phase A1 + A3) |
-| Predictions | `api/predictions.py` | Prediction / leaderboard API (P3-B) |
-| WebSocket | `api/ws.py` | Real-time simulation events |
+| Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import |
+| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
+| Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
+| Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
+| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention |
+| Social | `app/api/social.py` | Social media copy generation |
+| WebSocket | `app/api/ws.py` | Scenario real-time events |
 
-## API Endpoints
+## Key Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | App info and process-level health endpoint |
-| `POST` | `/api/health` | Server + LLM health check |
-| `POST` | `/api/health/test` | BYOK-aware LLM connectivity test |
-| `GET` | `/metrics` | Prometheus text metrics (P3-9); full instrumentation when the optional dependency is present, minimal fallback text otherwise |
-| `POST` | `/api/scenario` | Create scenario (parse + start simulation); Theater mode returns a provisional `scene_theme` immediately |
-| `GET` | `/api/scenario/{id}` | Get scenario status, agents, branches, `scene_theme`, top-level `director_state`, and top-level `gameplay_state` |
-| `GET` | `/api/scenario/{id}/branches` | Branch tree |
-| `GET` | `/api/scenario/{id}/story` | Completed branch stories |
-| `GET` | `/api/scenario/{id}/agents` | Agent roster |
-| `POST` | `/api/scenario/import-replay` | Persist a replay snapshot as a local scenario run |
-| `POST` | `/api/scenario/{id}/intervene` | Butterfly Effect intervention |
-| `POST` | `/api/scenario/{id}/intervene/retrospective` | Retrospective intervention |
-| `POST` | `/api/scenario/{id}/intervene/batch` | Batch intervention |
-| `GET` | `/api/scenario/{id}/social/{platform}` | Social media copy generation |
-| `GET` | `/api/scenarios` | List all scenarios |
-| `DELETE` | `/api/scenario/{id}` | Delete scenario (cascade) |
-| `GET` | `/api/scenario/{id}/export` | Export scenario as Markdown |
-| `POST` | `/api/replay-artifact` | Persist a replay payload and return a short share id |
-| `GET` | `/api/replay-artifact/{id}` | Load a replay payload by short share id |
-| `GET` | `/api/intervention-templates` | Preset intervention templates |
-| `POST` | `/api/campaign/scenario/{scenario_id}/finalize` | Finalize director campaign progress for one completed scenario |
-| `GET` | `/api/campaign/scenario/{scenario_id}/director-state` | Get per-scenario director goals / commitment authority state |
-| `PUT` | `/api/campaign/scenario/{scenario_id}/director-state` | Persist per-scenario director goals / commitment authority state |
-| `GET` | `/api/campaign/profile/{user_id}` | Director campaign profile summary |
-| `GET` | `/api/campaign/profile/{user_id}/mastery` | Per-profile mastery list |
-| `GET` | `/api/campaign/profile/{user_id}/badges` | Unlocked campaign badges |
-| `GET` | `/api/campaign/profile/{user_id}/daily-status` | Daily challenge completion status for one profile on the caller's local day |
-| `POST` | `/api/scenario/{id}/predict` | Submit prediction |
-| `GET` | `/api/scenario/{id}/predictions` | List predictions for a scenario |
-| `POST` | `/api/scenario/{id}/score-predictions` | Trigger LLM scoring |
-| `GET` | `/api/leaderboard` | Global prediction leaderboard |
-| `POST` | `/api/debate` | Create Debate Arena and return live snapshot immediately |
-| `GET` | `/api/debate/{id}` | Get Debate live snapshot; now includes top-level `counterplay` when present |
-| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay`, `predictions[]`, structured `judge_rationale`, key `supporting_turns`, and `adjudication_mode` used by the result UI / automation layer |
-| `POST` | `/api/debate/import-replay` | Persist a replay snapshot as a local Debate run |
-| `POST` | `/api/debate/{id}/predict` | Submit Debate structured bet; when `is_counterplay=true`, the backend now records dedicated counterplay metadata and keeps prediction scoring compatible |
-| `WS` | `/ws/scenario/{scenario_id}` | Real-time simulation events |
-| `WS` | `/ws/debate/{debate_id}` | Debate live events (`status / agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict`) |
+| `GET` | `/` | Root info / process-level health |
+| `GET` | `/metrics` | Prometheus text metrics or minimal fallback text |
+| `POST` | `/api/scenario` | Create scenario and return placeholder state immediately |
+| `GET` | `/api/scenario/{id}` | Scenario details with top-level `director_state` and `gameplay_state` |
+| `POST` | `/api/scenario/import-replay` | Import scenario replay as local run |
+| `POST` | `/api/replay-artifact` | Persist replay payload and return short share id |
+| `GET` | `/api/replay-artifact/{id}` | Load replay payload |
+| `POST` | `/api/campaign/scenario/{id}/finalize` | Finalize campaign progress |
+| `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority |
+| `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority |
+| `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
+| `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
+| `POST` | `/api/debate` | Create debate |
+| `GET` | `/api/debate/{id}` | Debate live snapshot |
+| `GET` | `/api/debate/{id}/result` | Debate result payload |
+| `POST` | `/api/debate/import-replay` | Import debate replay as local run |
+| `WS` | `/ws/scenario/{scenario_id}` | Scenario events |
+| `WS` | `/ws/debate/{debate_id}` | Debate events |
 
-## Testing
+## Validation
 
 ```bash
-.venv/bin/python -m pytest tests/ -v
-.venv/bin/python -m pytest tests/ -x -q
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-Historical recorded backend full regression: **798 passed, 2 warnings**
-Command: `.venv/bin/python -m pytest tests/ -q`
-
-Historical recorded backend scene/theme regression: **144 passed**
-Command: `.venv/bin/python -m pytest tests/test_scene_selector.py -q`
-
-Historical recorded campaign / gameplay contract regression: **151 passed**
-Command: `.venv/bin/python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py tests/test_scene_selector.py tests/test_gameplay_contract_sync.py -q`
-
-Historical recorded Track C scene/theme + sample-matrix regression: **146 passed**
-Command: `.venv/bin/python -m pytest tests/test_scene_selector.py tests/test_e2e_sample_matrix.py -q`
-
-Historical recorded Debate counterplay backend regression: **11 passed**
-Command: `.venv/bin/python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
-
-Latest verified director-state backendization regression in this session: **17 passed**
-Command: `.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
-
-Latest verified Debate judge-rationale / supporting-turn regression in this session: **14 passed**
-Command: `.venv/bin/python -m pytest tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`
-
-Latest verified replay share/import regression in this session: **77 passed**
-Command: `.venv/bin/python -m pytest tests/test_api.py -q`
-
-Latest verified Debate replay import regression in this session: **7 passed**
-Command: `.venv/bin/python -m pytest tests/test_debate_api.py -q`
-
-Latest verified backend signoff set in this session: **82 passed**
-Command: `.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
-
-Latest verified `/metrics` check in this session: **200 text/plain**
-Verification: live `GET /metrics` plus `tests/test_metrics.py`
-
-## Database Migrations (Alembic)
-
-```bash
-alembic revision --autogenerate -m "describe change"
-alembic upgrade head
-alembic current
-alembic downgrade -1
-```
+- Historical full baseline: `815 passed`.
+- Current signoff backend set: `82 passed`.
+- Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Environment Variables
 
-See [`.env.example`](../.env.example) for all configuration options.
+See `../.env.example` for the full list.

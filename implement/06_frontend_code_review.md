@@ -1,5 +1,9 @@
 # SwarmOracle Frontend — 全面代码审查报告
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留阶段性前端审查记录，不代表当前实现状态或当前签收口径。
+
 > 对应会话: 前端 Bug 修复 (416d832a)
 
 **范围**: 全部 27 个前端源文件（Week 1–4），覆盖 types, stores, hooks, animations, API, i18n, pages, components.

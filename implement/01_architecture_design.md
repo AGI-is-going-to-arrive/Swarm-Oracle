@@ -1,6 +1,10 @@
 # SwarmOracle — 架构设计与 MVP 开发计划
 
-> 群体预言机 — AI "如果…会怎样" 预测游乐场  
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留初版架构与 MVP 计划快照，其中早期关于 Tauri/原生壳等设想不代表当前范围。当前请以 `README.md`、`implement/README.md`、`llmdoc/*` 为准。
+
+> 群体预言机 — AI "如果…会怎样" 预测游乐场
 > 灵感来源: MiroFish × 游戏化 × 路线 C 混合可视化
 
 ---
@@ -372,7 +376,7 @@ swarmoracle/
   |<-- { type: "status",        |
   |      data: "narrating" } --|
   |<-- { type: "narration" } ---|  分支A 故事
-  |<-- { type: "narration" } ---|  分支B 故事  
+  |<-- { type: "narration" } ---|  分支B 故事
   |<-- { type: "simulation_done"|
   |                             |
 ```

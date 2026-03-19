@@ -1,211 +1,178 @@
 # SwarmOracle 3.0 — 全面视觉改进计划
 
-> 参考项目：[Star-Office-UI](https://github.com/ringhyacinth/Star-Office-UI) — 像素办公室实时 Agent 状态仪表盘
-> 现状分析：2.0 升级计划四个 Phase 均已完成，但实际运行中存在多个美术/视觉/逻辑 bug
->
-> 2026-03-16 状态同步：
-> - 完成态 Theater 的首屏布局已稳定，compact TimelineBar 已直接嵌回面板内。
-> - Timeline marker 已从文本 `F/C/B` 升级为 `fork/card/bet/result` 图标。
-> - 剧场气泡文字已切到更清晰的常规字体栈，保留气泡框像素风。
-> - 截图 / GIF 下载链路已加固为标准 `PNG / GIF` 下载。
-> - 2026-03-19 补充同步：
->   - 导演目标 / worldline 承诺已后端化到 `Scenario.director_state_json`，不再只是前端本地态。
->   - 主模式 `cards.usageLog` 已后端化到 `Scenario.gameplay_state_json`，前端会基于远端 `usage_log` 重算导演点数、卡牌冷却与反制轨迹摘要。
->   - 当前定向验证口径：后端 `80 passed`，前端 `66 passed`，Theater 可读性定向 `12 passed`。
->   - 当前主模式 `gameplay_state_roundtrip` 黑盒工件位于 `frontend/output/e2e/20260319-post-gameplay-state-corners/result.json`。
->   - 当前官方跨浏览器工件位于 `frontend/output/e2e/20260319-official-cross-browser/result.json` 与 `frontend/output/e2e/20260319-official-safari-v5/result.json`。
->   - WebKit 下结果页因果档案顶部大图白块已修复；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染，但官方 `e2e:safari` 已实跑通过。
->   - Theater 又做了一轮可读性收口：舞台优先、上下 chrome 压缩、气泡文字放大并加清晰化描边。
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留 3.0 视觉改进的历史规划与验收基线；正文已改为“已解决问题 + 当前视觉基线 + 仍可继续优化的方向”，不再保留旧的待实施口吻、旧测试数字或已失效的问题清单。当前请以 `README.md`、`implement/README.md`、`llmdoc/*` 为准。
 
-## 问题诊断
+## 1. 文档定位
 
-### 核心问题
+这份文档最初用于推动 3.0 视觉升级。当前它的作用已经变成：
 
-| # | 问题 | 严重度 | 根因 |
-|---|------|--------|------|
-| 1 | **场景不随 What-If 问题动态切换** | 🔴 高 | `VizSynthesizer.inferSceneTheme()` 仅做静态关键词匹配，且后端 `scene_selector.py` 未在实时 WS 流中调用 |
-| 2 | **角色不随问题/persona 动态分配** | 🔴 高 | `persona_mapper.py` 仅在 REST 合成路径调用，WS 实时流未触发 `viz:scene_init` |
-| 3 | **AI 生成的 58 张 PNG 美术质量不佳** | 🟡 中 | Nano Banana 生成的 640×640 PNG 缩放至 32×48 后模糊/失真 |
-| 4 | **修改代码后未通过 Chrome DevTools 实测** | 🟡 中 | 开发流程缺失视觉验收环节 |
-| 5 | **Phaser 场景背景与 UI 美术风格不统一** | 🟡 中 | 场景/角色/UI 分批生成，缺乏统一调色板和风格约束 |
-| 6 | **TitleScene 过于简陋** | 🟡 中 | 仅显示标题文字 + 渐变背景，无动画/交互 |
+- 记录 3.0 视觉线原本想解决什么
+- 说明这些问题今天在当前产品里如何落地
+- 给后续仍想继续做视觉升级的人保留一套不跑偏的设计边界
 
-### Star-Office-UI 可借鉴要素
+因此，后文不再使用“Phase D / E 仍待执行”的语气，而改成：
 
-| 要素 | Star-Office-UI 做法 | SwarmOracle 适配方案 |
-|------|---------------------|---------------------|
-| 像素办公室分区 | 6 种 Agent 状态映射至办公室不同区域 | ✅ 已有立场站队 — 可增加 **区域标签 + 区域背景** |
-| LimeZu 风格精灵 | 使用专业像素角色包（行走动画） | 重新生成更高质量的像素精灵，统一色调 |
-| Phaser 直接渲染 | 原生 Phaser 场景管理 | ✅ 已有，可复用 |
-| 实时状态轮询 | 定时 GET `/status` | ✅ 已有 WebSocket 更优 |
-| 精简页面布局 | 单屏仪表盘，信息密度高 | 改进 SimulationView 布局，画布占主区 |
+1. 原始问题今天的处理结果
+2. 当前视觉系统已经固定下来的基线
+3. 未来仍值得做的增量优化
 
----
+## 2. 3.0 原始问题与当前处理结果
 
-## 阶段规划
+### 2.1 动态场景与角色选择
 
-### Phase A: 动态场景 & 角色选择修复 (核心功能) ✅
+原始目标：
 
-> 解决问题 #1/#2 — 让竞技场根据用户问题动态选择场景和角色
+- 场景根据题面动态切换
+- 角色根据 persona / role 动态分配
 
-**结论**: Phase A 功能已全部就绪，经代码审查确认：
+当前状态：
 
-- `simulator.py` 已实现 `viz:scene_init` WS 广播，含动态 `select_scene()` + `assign_sprites_batch()`
-- 前端 `useSimulationWS` 已正确路由 `viz:*` → `EventBridge` → Phaser
-- `VizSynthesizer` 已有完整关键词库 + 中文匹配（11 场景 + 18 角色）
+- 该问题已解决并并入当前产品基线。
+- 后端 `scene_selector` 与前端 `VizSynthesizer` 已按题面语义选择场景。
+- 当前 Theater / Debate 共有 33 个 registry 条目：
+  - 30 个 Theater 语义背景
+  - 3 个 Debate 专属背景
+- 角色 sprite 运行时清单已扩到 25 张，并完成前后端 persona / role 映射收口。
 
----
+### 2.2 美术风格统一
 
-### Phase B: 美术风格全面升级 ✅
+原始目标：
 
-> 解决问题 #3/#5/#6 — 使用 `.agents/skills` 中的技能进行系统级美术优化
+- 解决“背景、角色、UI 风格不统一”
+- 用更清晰的像素美术替换早期粗糙资产
 
-#### B1: 统一风格指南 (使用 `teach-impeccable` skill) ✅
+当前状态：
 
-- ✅ 建立项目级设计语言：16 个 GBC 调色板 CSS custom properties (`game.css`)
-- ✅ 确定像素风格约束：**GBC/GBA 风格**（而非 SNES），4 色或 16 色限制
+- 该问题已解决到“产品可交付”级别。
+- 当前视觉语言已经固定为：
+  - GBC 像素风
+  - 暗色 Theater
+  - 页面仍保持现代可读性
+- 主题、badge、frame、Debate UI 资产都已统一进入 `themeRegistry.ts` 和资产 sidecar 体系。
+- 资产库存与来源说明当前以 `frontend/public/assets/ASSET_CREDITS.md` 为准。
 
-#### B2: 重新生成全部资产 (使用 `colorize` + `bolder` skills) ✅
+### 2.3 TitleScene / WorldScene 视觉增强
 
-- ✅ 重新生成 18 张角色精灵 — 统一 GBC 调色板 + 清晰像素轮廓
-- ✅ 重新生成 11 张场景背景 — 统一大气/光照风格
-- ✅ 重新生成 6 张结局画面 — 更高戏剧性表现力
-- ⏳ 重新生成 9 张 UI 组件 — 延后至 Phase C
+原始目标：
 
-#### B3: TitleScene 重做 (使用 `animate` + `delight` skills) ✅
+- 让 TitleScene 不再过于简陋
+- 提升 WorldScene 的场景表现和可读性
 
-- ✅ 新增打字机效果字幕逐字显示 + 闪烁光标
-- ✅ 点击跳过交互（快速跳转 + 6s 自动过渡回退）
-- ✅ 水平微光扫描线动画（Shimmer Scanline）
-- ⏳ 背景音乐/音效提示 — 延后
+当前状态：
 
-#### B4: WorldScene 视觉增强 (使用 `polish` + `animate` skills) ✅
+- TitleScene 与 WorldScene 的增强已并入当前产品基线：
+  - TitleScene：打字机字幕、点击跳过、扫描线效果
+  - WorldScene：视差、气泡打字机、场景切换过渡
+- Theater 还额外完成了一轮可读性收口：
+  - 舞台优先布局
+  - 上下 chrome 压缩
+  - 气泡字体放大、描边与分辨率提高
 
-- ✅ 鼠标视差滚动（terrain + cloud 图层跟随指针位移）
-- ⏳ 角色精灵 idle 摇摆动画 — 延后
-- ✅ 对话气泡打字机效果（30ms/字逐字显现）
-- ✅ 场景切换垂直擦除过渡（vertical wipe，替代简单闪光）
+### 2.4 Theater 稳定性与视觉验证
 
----
+原始目标：
 
-### Phase C: UI/UX 布局优化 + Theater Mode 完善 ✅
+- 修复 Theater bug
+- 强制每次视觉改动都经过浏览器实测
 
-> 参考 Star-Office-UI 的单屏高信息密度布局
+当前状态：
 
-#### [MODIFY] SimulationView.tsx ✅
+- 这条线已经不是“是否存在验证”，而是“验证是否持续收口”的问题。
+- 当前产品已有：
+  - `render_game_to_text()`
+  - `advanceTime(ms)`
+  - `capture_game_screenshot()`
+  - `e2e:corners / cross-browser / safari / full`
+  - `e2e:debate:*`
+  - `release:signoff`
+- 当前 `HEAD` 已通过一轮完整 `release:signoff`：
+  - 工件：`frontend/output/e2e/20260320-codex-live-signoff/summary.json`
 
-- ✅ 调整布局比例：Theater 当前改为“舞台优先”，右栏收成固定窄宽，`game-wrapper` 会优先出现在 replay filters / timeline 前
-- ✅ 画布区域自适应容器尺寸（去除 max-width 960px）
-- ✅ Agent 面板改为浮层（Theater 模式默认折叠）
-- ✅ 新增 `simulation-view--theater` CSS 类，GBC 暗色主题全覆写
+## 3. 当前视觉系统基线
 
-#### [MODIFY] game.css ✅
+### 3.1 风格基线
 
-- ✅ 像素风边框（border-radius 12px → 4px，双层 box-shadow）
-- ✅ CRT 扫描线增强（当前已回调到更轻的覆盖强度，避免压住小字号文字）
-- ✅ Power LED 指示灯 + 呼吸动画
-- ✅ HUD bar 统一 GBC 暗色调 + tabular-nums
-- ✅ Bet bar 脉冲动画 + rank 变化闪光
+- GBC 调色板统一
+- Pixel Theater 与页面 UI 同属一套视觉语言
+- Debate Arena 不另造一套电竞 UI，而在同一剧场语言内扩展
 
-#### [MODIFY] HudOverlay.tsx ✅
+### 3.2 资产基线
 
-- ✅ 排行榜 rank 变化检测 + 翻牌动画（`hud-entry--animate`）
-- ✅ 阵营 emoji 替换为 SVG 像素方块图标
-- ✅ 统一像素风控件样式 — monospace + GBC 调色板
+- 主题条目：33 个
+- 运行时 sprite：25 张
+- PNG sidecar：62/62 完整
+- Debate 新资产已并入同一 provenance 体系
 
-#### Theater Mode Bug 修复 ✅
+### 3.3 加载与性能基线
 
-- ✅ Bug 1-5: Agent 精灵不可见 / 全部相同 / 灰色背景 / 小地图不更新 / LLM JSON 错误
-- ✅ Bug 6: 气泡不显示 — `synthesizeBubbles()` 改用 `msg.agent_id`（UUID）
-- ✅ Bug 7: Agent 静止 + 气泡重叠 — 添加 idle wander + AABB 抗重叠堆叠
-- ✅ Bug 8: 多轮气泡缺失 — 移除 `synthesizeBubbles` 60 条消息上限，全轮次回放（171 条）
+- Theater 只在用户真正进入 Theater 后再预热 Phaser
+- `BootScene` 当前只预载首屏初始 theme + 角色 sprite
+- `scene_change` 背景与 `EndingScene` 大图按需补载
+- screenshot / GIF runtime 已拆分，避免把 capture 依赖重新拖回首包
 
----
+### 3.4 当前验证基线
 
-### Phase D: 可靠性 & 测试强化
+- Historical full baseline：
+  - backend `815 passed`
+  - frontend `179 passed`
+- Current targeted verification：
+  - backend targeted set `82 passed`
+  - frontend targeted set `79 passed`
+- Current release signoff：
+  - `frontend/output/e2e/20260320-codex-live-signoff/summary.json`
 
-> 解决问题 #4 — 每次修改后必须通过浏览器实测验证
+## 4. 这条线今天还值得继续做什么
 
-#### D1: 自动化视觉验证
+这些工作仍然有价值，但已经属于增量优化，而不是 3.0 核心能力未完成：
 
-- 每个 Phase 完成后使用 Chrome DevTools MCP 打开 `http://localhost:5173`
-- 截图记录每个关键状态（标题画面 → 模拟中 → 结局）
-- 对比截图确认视觉效果符合预期
+### 4.1 包体与首次进入成本
 
-#### D2: 现有测试回归
+- 继续压缩 `phaser` 大包
+- 继续收紧 Theater 首次进入路径
+- 优先优化加载时机，而不是重做页面布局
 
-- 运行 `cd backend && python -m pytest tests/ -q`（708 tests）
-- 运行 `cd frontend && npx vitest run`（128 tests）
+### 4.2 Safari / WebKit 视觉边界
 
-#### 新增前端视觉回归测试
+- 继续处理 Safari / WebKit 截图链路的取证边界
+- 继续把“面板可见性取证”和“画布截图取证”分开维护
 
-- WorldScene 场景主题切换测试
-- Agent 动态生成和精灵分配测试
-- 事件动画触发和清理测试
+### 4.3 主题与资产丰富度
 
----
+- 在不破坏现有 GBC 视觉语言的前提下扩主题
+- 扩新资产时同步 sidecar 和 `ASSET_CREDITS.md`
+- 不再回到“这批资产是否已经接入”的不确定状态
 
-### Phase E: 代码审查 & 优化 (使用 `audit` + `optimize` + `harden` skills)
+### 4.4 自动化视觉签收
 
-- 性能审计：Lighthouse 跑分 + Phaser 帧率监控
-- 可访问性审计：ARIA 标签、键盘导航
-- 错误边界强化：资产加载失败的优雅降级
+- 继续把视觉回归纳入 `release:signoff`
+- 对新的视觉改动，优先补工件和签收路径，而不是只补截图说明
 
----
+## 5. 已失效的旧口径
 
-## 实施优先级
+以下口径不应继续从这份文档里引用：
 
-```
-Phase A (动态选择) ──→ Phase B (美术升级) ──→ Phase C (布局优化)
-         ↓                    ↓                    ↓
-     Phase D (实测)      Phase D (实测)       Phase D (实测)
-                                                    ↓
-                                              Phase E (审计)
-```
+- “当前还有多个核心视觉 bug 未修”
+- “前端是 128 tests / 后端是 708 tests 的当前口径”
+- “Phase D / E 仍然是待执行主计划”
+- 任何把这里的旧问题表继续当作当前待办的读法
 
-| Phase | 预计工时 | 关键技能 |
-|-------|---------|---------|
-| A: 动态场景/角色 | ✅ 已完成 | 后端 WS 集成 |
-| B: 美术全面升级 | ✅ 已完成 | `colorize`, `bolder`, `animate`, `polish` |
-| C: UI/UX 布局 + Theater 完善 | ✅ 已完成 | `frontend-design`, `distill`, Chrome DevTools |
-| D: 实测验证 | 贯穿 | Chrome DevTools MCP |
-| E: 审计优化 | 1 天 | `audit`, `optimize`, `harden` |
+## 6. 设计边界仍然有效的部分
 
----
+虽然本文件不再是当前真值，但以下约束仍然有效：
 
-## Verification Plan
+- 不要把产品拉成独立电竞 UI
+- 不要另起一套与 Theater 割裂的视觉系统
+- 不要为了像素感牺牲信息可读性
+- 新增视觉资产要纳入统一 registry 与 provenance 体系
 
-### 自动化测试
+## 7. 当前结论
 
-```bash
-# 后端回归 (708 tests)
-cd /Users/yangjunjie/Desktop/upgrade-test/backend && python -m pytest tests/ -q
+3.0 视觉线今天已经完成了“从概念升级到当前可交付视觉基线”的目标。
 
-# 前端回归 (128 tests)
-cd /Users/yangjunjie/Desktop/upgrade-test/frontend && npx vitest run
-```
+后续继续做这条线时，重点不再是“把 3.0 做出来”，而是：
 
-### 浏览器视觉验证
-
-- 使用 Chrome DevTools MCP 导航到 `http://localhost:5173`
-- 创建新模拟 → 验证场景自动匹配
-- 验证 Agent 精灵分配与 persona 匹配
-- 截图对比每个场景主题
-- 录制事件动画播放过程
-
-### 用户手动验证
-
-1. 访问首页，输入不同类型的 What-If 问题：
-   - 「如果罗马帝国没有灭亡？」→ 应选择 `ancient_empire` 场景
-   - 「如果人工智能统治世界？」→ 应选择 `scifi_base` 场景
-   - 「如果最高法院拥有暂停所有算法政策的紧急否决权？」→ 应选择 `modern_city` 场景
-   - 「如果一则神谕成为整个奇幻王国唯一合法的统治依据？」→ 应选择 `fantasy_kingdom` 场景
-   - 「如果全球最关键的海峡被一个海上商团永久垄断？」→ 应选择 `desert_outpost` 场景
-   - 「如果跨大陆淡水供应在十年内枯竭？」→ 应选择 `desert_outpost` 场景
-   - 「如果二战没有发生？」→ 应选择 `war_battlefield` 场景
-2. 确认每次 Agent 精灵与 persona 匹配
-3. 确认场景切换动画流畅
-4. 确认标题画面有动画效果
-
-> [!IMPORTANT]
-> 每个 Phase 完成后需通过 Chrome DevTools 实际截图验证，不再允许"盲改"代码。
+- 把当前视觉基线继续打磨得更稳
+- 把性能、Safari 边界和资产覆盖做得更完整
+- 在不破坏现有风格的前提下持续扩展

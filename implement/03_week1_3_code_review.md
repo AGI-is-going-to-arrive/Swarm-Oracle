@@ -1,12 +1,16 @@
 # SwarmOracle Week 1-3 全面 Code Review + 测试
 
+> 文档类型：historical snapshot
+> 当前真值：否
+> 阅读方式：本文件保留阶段性 code review 快照，不代表当前实现状态或当前测试口径。
+
 > 对应会话: 代码审查与测试 (b3b62779)
 
 完成对 SwarmOracle 全部后端（Python/FastAPI）和前端（React/TypeScript）代码的严格审查，修复所有发现的 bug 并补全测试覆盖。
 
 ## 最终结果
 
-✅ **后端测试**: 108/108 通过 (187.67s)  
+✅ **后端测试**: 108/108 通过 (187.67s)
 ✅ **前端 TypeScript 编译**: 0 错误
 
 ---

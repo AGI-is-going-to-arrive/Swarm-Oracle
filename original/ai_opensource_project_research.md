@@ -1,8 +1,12 @@
 # 🧠 AI 开源项目创意深度调研报告
 
-> 基于 MiroFish、Paperclip、geo-seo-claude、agency-agents 深度调研  
-> 结合 X、Reddit、GitHub、Facebook 近 3 个月 AI 讨论趋势  
-> 叠加前次竞品分析的验证结论  
+> 文档类型：reference archive
+> 当前真值：否
+> 阅读方式：本文件仅作外部研究参考，不代表 SwarmOracle 当前路线、范围或交付状态。
+
+> 基于 MiroFish、Paperclip、geo-seo-claude、agency-agents 深度调研
+> 结合 X、Reddit、GitHub、Facebook 近 3 个月 AI 讨论趋势
+> 叠加前次竞品分析的验证结论
 > 日期：2026-03-11
 
 ---
@@ -121,14 +125,14 @@
 
 ### 💡 创意 1: **FateForge — AI "如果…会怎样" 预测游乐场**
 
-> 灵感: MiroFish 的 "让每一个如果都能看见结果" + 游戏化体验  
+> 灵感: MiroFish 的 "让每一个如果都能看见结果" + 游戏化体验
 > 竞争: 🟢 **极低** — 无开源竞品将 "AI 群体模拟预测" 和 "游戏化交互" 结合
 
 #### 核心概念
 
 ```
 不是严肃的政策模拟器，而是一个「AI 预测游乐场」：
-用户扔出一个 "如果…" 问题 → AI Agent 群体自动演化 → 
+用户扔出一个 "如果…" 问题 → AI Agent 群体自动演化 →
 以可视化动画/故事线展示多条平行结局 → 用户可介入干预
 ```
 
@@ -190,13 +194,13 @@
 
 ### 💡 创意 3: **CrisisForge — 品牌舆论危机对抗演练平台**
 
-> 灵感: MiroFish 的 Agent 社交模拟 + Paperclip 的编排 + agency-agents 的角色专精  
+> 灵感: MiroFish 的 Agent 社交模拟 + Paperclip 的编排 + agency-agents 的角色专精
 > 竞争: 🟢 **低** — 前次验证：开源领域无直接竞品
 
 #### 核心定位
 
 ```
-"品牌公关团队的战争游戏" — 
+"品牌公关团队的战争游戏" —
 在 AI 模拟的社交平台上，红队发动舆论攻击，蓝队进行危机应对。
 不是事后分析，而是事前演练。
 ```
@@ -241,7 +245,7 @@
 
 ### 💡 创意 4: **AgentForge — 通用 AI Agent 铸造平台**
 
-> 灵感: agency-agents 的人格模板 + Paperclip 的 ClipMart + MCP/A2A 生态  
+> 灵感: agency-agents 的人格模板 + Paperclip 的 ClipMart + MCP/A2A 生态
 > 竞争: 🟢 **低** — 前次验证通过
 
 #### 核心功能矩阵
@@ -281,7 +285,7 @@ AgentForge = 唯一同时做到:
 
 ### 💡 创意 5: **OmniPulse — AI 跨平台趋势感知 + GEO 雷达**
 
-> 灵感: MiroFish 的 GraphRAG + geo-seo-claude 的多维分析 + 实时趋势需求  
+> 灵感: MiroFish 的 GraphRAG + geo-seo-claude 的多维分析 + 实时趋势需求
 > 竞争: 🟡 **中低** — Google Trends 等只做关键词频率，无 AI 语义 + 无 GEO
 
 #### 核心定位
@@ -296,7 +300,7 @@ AgentForge = 唯一同时做到:
 
 ```
 模块 A: 趋势雷达
-├── 采集: X / Reddit / HN / GitHub / 微博 / YouTube 
+├── 采集: X / Reddit / HN / GitHub / 微博 / YouTube
 ├── 理解: LLM 摘要 + NER + 情感分析
 ├── 关联: GraphRAG 跨平台知识图谱（同一话题多平台表现）
 ├── 检测: 趋势发现 + 异常点 + 预测模型
@@ -345,7 +349,7 @@ AgentForge = 唯一同时做到:
 
 > ❌ **关于放弃 SkillGuard 赛道的决策备注：**
 > 根据你提供的最新信息，安全审计领域已经属于 **强庄盘踞**。像 prompt-security/clawsec 这样的企业级开源套件不仅内置了 SHA256/Ed25519 签名、防篡改监控、NVD 漏洞关联，还能自动回滚。AgentSafety/ClawCare 甚至介入了底层 TypeScript Hook 做运行时沙盒。
-> 
+>
 > 这个赛道的技术壁垒和生态位太高，如果是为了做一个独立的开源项目争取社区爆发，这不是个好选择（费力且很难形成独特认知）。更好的做法是：如果在后续开发其他 Agent 项目时需要安全，直接用 `npx clawhub install clawsec` 即可，若有定制需求直接提 PR 或 Fork。
 
 ### 组合策略
@@ -375,5 +379,5 @@ Phase 2 (4-6 周): 接入完善的多智能体引擎（如轻量化改进的 OAS
 - **项目源码**: [MiroFish](https://github.com/666ghj/MiroFish), [Paperclip](https://github.com/paperclipai/paperclip), [geo-seo-claude](https://github.com/zubair-trabzada/geo-seo-claude), [agency-agents](https://github.com/msitarzewski/agency-agents)
 - **DeepWiki 文档**: [MiroFish DeepWiki](https://deepwiki.com/666ghj/MiroFish), [geo-seo-claude DeepWiki](https://deepwiki.com/zubair-trabzada/geo-seo-claude)
 - **趋势来源**: GitHub Trending, Reddit (r/LocalLLaMA, r/MachineLearning, r/OpenSource), X/Twitter AI 社区, HackerNews, Dev.to
-- **前次竞品分析**: [竞品全景分析](file:///Users/yangjunjie/.gemini/antigravity/brain/f4091c5a-98ec-40cd-9a60-a932986fd61a/competitive_landscape_analysis.md)
+- **前次竞品分析**: 本地历史竞品分析笔记（未随仓库一同保存；如需引用，请在当前仓库内重新整理为可追踪文档）
 - **置信度**: Medium-High — 竞品分析已做两轮交叉验证；趋势数据来自多个独立平台
