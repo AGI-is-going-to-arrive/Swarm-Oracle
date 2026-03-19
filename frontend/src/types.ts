@@ -354,6 +354,21 @@ export interface DebatePrediction {
   scored_at: string | null;
 }
 
+export interface DebatePhaseInsight {
+  phase: DebatePhase;
+  stakes: string;
+  judge_focus: string;
+  commentary: string;
+  pressure_side: 'balanced' | 'proposition' | 'opposition';
+  pressure_margin: number;
+  turn_count: number;
+  confidence_drift: {
+    direction: 'balanced' | 'proposition' | 'opposition';
+    phase_margin: number;
+    cumulative_margin: number;
+  };
+}
+
 export interface DebateResultSummary {
   winner: 'proposition' | 'opposition';
   verdict_tone: DebateVerdictTone;
@@ -383,6 +398,10 @@ export interface DebateResultSummary {
     speaker_name: string;
     quote: string;
   }>;
+}
+
+export interface DebateVerdictEventPayload extends DebateResultSummary {
+  phase_insights?: DebatePhaseInsight[];
 }
 
 export interface DebateCounterplayResult {
@@ -420,6 +439,7 @@ export interface DebateSnapshot {
     winner: string[];
     verdict_tone: string[];
   };
+  phase_insights?: DebatePhaseInsight[];
   counterplay?: DebateCounterplayResult | null;
   result_ready: boolean;
 }
@@ -447,7 +467,7 @@ export type DebateWSEvent =
   | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
   | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
   | { type: 'debate_counterplay'; data: DebateCounterplayResult }
-  | { type: 'debate_verdict'; data: DebateResultSummary };
+  | { type: 'debate_verdict'; data: DebateVerdictEventPayload };
 
 // ── WebSocket Events ─────────────────────────────────────
 

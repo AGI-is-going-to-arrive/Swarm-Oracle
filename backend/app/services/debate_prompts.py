@@ -208,6 +208,12 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
 }
 
 
+def get_debate_profile_style(language: str, profile_id: str) -> dict[str, str]:
+    if language == "zh":
+        return _PROFILE_STYLE_ZH.get(profile_id, _PROFILE_STYLE_ZH["generic"])
+    return _PROFILE_STYLE_EN.get(profile_id, _PROFILE_STYLE_EN["generic"])
+
+
 def normalize_question(question: str, *, max_length: int = 160) -> str:
     compact = _WHITESPACE_RE.sub(" ", question).strip()
     if len(compact) <= max_length:

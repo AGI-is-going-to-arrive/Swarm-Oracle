@@ -57,6 +57,78 @@ const mockDebateStore: {
       winner: ['proposition', 'opposition'],
       verdict_tone: ['order', 'balance', 'rupture'],
     },
+    phase_insights: [
+      {
+        phase: 'opening' as const,
+        stakes: 'Opening stakes',
+        judge_focus: 'Opening focus',
+        commentary: 'Opening commentary',
+        pressure_side: 'balanced' as const,
+        pressure_margin: 0,
+        turn_count: 1,
+        confidence_drift: {
+          direction: 'balanced' as const,
+          phase_margin: 0,
+          cumulative_margin: 0,
+        },
+      },
+      {
+        phase: 'crossfire' as const,
+        stakes: 'Crossfire stakes',
+        judge_focus: 'Crossfire focus',
+        commentary: 'Crossfire commentary',
+        pressure_side: 'proposition' as const,
+        pressure_margin: 3,
+        turn_count: 0,
+        confidence_drift: {
+          direction: 'proposition' as const,
+          phase_margin: 3,
+          cumulative_margin: 3,
+        },
+      },
+      {
+        phase: 'rebuttal' as const,
+        stakes: 'Rebuttal stakes',
+        judge_focus: 'Rebuttal focus',
+        commentary: 'Rebuttal commentary',
+        pressure_side: 'opposition' as const,
+        pressure_margin: 2,
+        turn_count: 0,
+        confidence_drift: {
+          direction: 'opposition' as const,
+          phase_margin: -2,
+          cumulative_margin: 1,
+        },
+      },
+      {
+        phase: 'closing' as const,
+        stakes: 'Closing stakes',
+        judge_focus: 'Closing focus',
+        commentary: 'Closing commentary',
+        pressure_side: 'proposition' as const,
+        pressure_margin: 4,
+        turn_count: 0,
+        confidence_drift: {
+          direction: 'proposition' as const,
+          phase_margin: 4,
+          cumulative_margin: 5,
+        },
+      },
+      {
+        phase: 'verdict' as const,
+        stakes: 'Verdict stakes',
+        judge_focus: 'Verdict focus',
+        commentary: 'Verdict commentary',
+        pressure_side: 'proposition' as const,
+        pressure_margin: 8,
+        turn_count: 1,
+        confidence_drift: {
+          direction: 'proposition' as const,
+          phase_margin: 8,
+          cumulative_margin: 8,
+        },
+      },
+    ],
     result_ready: true,
   },
   status: 'done' as const,
@@ -173,6 +245,10 @@ describe('DebateArenaView', () => {
       expect(payload?.page?.debate?.unlocked_phase_count).toBeGreaterThan(0);
       expect(payload?.page?.debate?.latest_turn_id).toBe('turn-2');
       expect(payload?.page?.controls?.cue_phase).toBe('verdict');
+      expect(payload?.page?.debate?.stage_summaries?.length).toBe(5);
+      expect(payload?.page?.debate?.server_phase_insights?.length).toBe(5);
+      expect(payload?.page?.debate?.room_map?.length).toBe(3);
+      expect(payload?.page?.debate?.overview_cards?.length).toBe(3);
     });
   });
 
@@ -237,6 +313,8 @@ describe('DebateArenaView', () => {
     expect(await screen.findByText('debate.bet_title')).toBeInTheDocument();
     expect(screen.getByTestId('debate-feed-focus')).toBeInTheDocument();
     expect(screen.getByTestId('debate-live-turn')).toBeInTheDocument();
+    expect(screen.getByText('debate.overview_room_title')).toBeInTheDocument();
+    expect(screen.getByText('debate.stage_map_title')).toBeInTheDocument();
 
     const modalShot = await (window as Window & {
       capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;

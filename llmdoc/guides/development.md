@@ -318,6 +318,40 @@ npm run build
   - frontend `vitest`：**16 passed**
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过
+- 本次 session 围绕 Debate `phase_insights / debate_verdict / counterplay -> stage commentary` 又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q
+
+cd frontend
+npm test -- --run \
+  src/stores/debateStore.test.ts \
+  src/hooks/useDebateWS.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/components/DebateBetModal.test.tsx \
+  src/components/DebateShareModal.test.tsx
+npm run build
+npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-debate-depth-full-v4 --headless
+```
+
+- 结果：
+  - backend `pytest`：**12 passed**
+  - frontend `vitest`：**16 passed**
+  - `npm run build`：通过
+  - `e2e:debate:full`：通过
+  - 工件：`frontend/output/e2e/20260319-debate-depth-full-v4/result.json`
+  - 当前黑盒还会显式校验：
+    - `live.overviewCardCount = 3`
+    - `live.roomMapCount = 3`
+    - `live.stageSummaryCount = 5`
+    - `live.serverPhaseInsightCount = 5`
+    - `result.signalCardCount = 4`
+    - `result.phaseSummaryCount = 5`
+    - `result.serverPhaseInsightCount = 5`
+    - `result.supportingTurnCount >= 1`
 - 本轮还重新执行了：
 
 ```bash

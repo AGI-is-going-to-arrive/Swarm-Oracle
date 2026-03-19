@@ -19,6 +19,10 @@ import {
   getDebateSideLabel,
   getDebateVerdictToneLabel,
 } from '../lib/debateLabels';
+import {
+  buildDebatePhaseSummaries,
+  getDebateScoreLeader,
+} from '../lib/debateInsights';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
 import type { DebatePrediction, DebateResultPayload } from '../types';
 import './DebateArena.css';
@@ -95,6 +99,67 @@ export function DebateResultView() {
   );
   const judgeRationale = payload?.result?.judge_rationale ?? null;
   const supportingTurns = judgeRationale?.supporting_turns ?? [];
+  const phaseSummaries = useMemo(
+    () => buildDebatePhaseSummaries(payload?.turns ?? [], payload ? payload.turns.map((turn) => turn.phase) : []),
+    [payload],
+  );
+  const serverPhaseInsights = payload?.phase_insights ?? [];
+  const serverPhaseInsightMap = useMemo(
+    () => new Map(serverPhaseInsights.map((insight) => [insight.phase, insight])),
+    [serverPhaseInsights],
+  );
+  const predictionStats = useMemo(() => {
+    const total = payload?.predictions.length ?? 0;
+    const hitCount = payload?.predictions.filter((prediction) => isPredictionHit(prediction, payload.result)).length ?? 0;
+    return {
+      total,
+      hitCount,
+      hitRate: total > 0 ? Math.round((hitCount / total) * 100) : 0,
+    };
+  }, [payload]);
+  const scoreLeader = useMemo(
+    () => getDebateScoreLeader(payload?.result.score.proposition ?? 0, payload?.result.score.opposition ?? 0),
+    [payload?.result.score.opposition, payload?.result.score.proposition],
+  );
+  const hingeTurn = supportingTurns[0] ?? null;
+  const signalCards = useMemo(() => {
+    if (!payload) return [];
+    const winnerLabel = getDebateSideLabel(t, payload.result.winner);
+    return [
+      {
+        label: t('debate.result_signal_winner'),
+        value: winnerLabel,
+        detail: `${t('debate.result_tone')}: ${getDebateVerdictToneLabel(t, payload.result.verdict_tone)}`,
+      },
+      {
+        label: t('debate.result_signal_hinge'),
+        value: hingeTurn
+          ? `${getDebatePhaseLabel(t, hingeTurn.phase)} · ${hingeTurn.speaker_name}`
+          : t('debate.result_judge_summary'),
+        detail: hingeTurn?.why_it_matters ?? judgeRationale?.swing_factor ?? payload.result.judge_summary,
+      },
+      {
+        label: t('debate.result_signal_predictions'),
+        value: predictionStats.total > 0
+          ? `${predictionStats.hitCount}/${predictionStats.total}`
+          : '0',
+        detail: predictionStats.total > 0
+          ? t('debate.result_predictions_hit_rate', { value: predictionStats.hitRate })
+          : t('debate.result_predictions_empty'),
+      },
+      {
+        label: t('debate.result_signal_counterplay'),
+        value: counterplayOutcome === 'hit'
+          ? t('debate.counterplay_hit')
+          : counterplayOutcome === 'miss'
+            ? t('debate.counterplay_miss')
+            : t('debate.counterplay_unused'),
+        detail: counterplaySummary
+          ?? counterplayExplanation
+          ?? t('debate.result_counterplay_none'),
+      },
+    ];
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, hingeTurn, judgeRationale?.swing_factor, payload, predictionStats.hitCount, predictionStats.hitRate, predictionStats.total, t]);
 
   const shareContext = useMemo(() => {
     if (!payload) return null;
@@ -184,6 +249,7 @@ export function DebateResultView() {
           verdict_tone: payload.result.verdict_tone,
           score: payload.result.score,
           prediction_count: payload.predictions.length,
+          prediction_stats: predictionStats,
           judge_rationale: judgeRationale,
           supporting_turns: supportingTurns.map((turn) => ({
             id: turn.id,
@@ -192,9 +258,13 @@ export function DebateResultView() {
             quote: turn.quote,
             why_it_matters: turn.why_it_matters,
           })),
+          phase_summaries: phaseSummaries,
+          server_phase_insights: serverPhaseInsights,
+          signal_cards: signalCards,
           counterplay_summary: counterplaySummary ?? null,
           counterplay_explanation: counterplayExplanation,
           counterplay_outcome: counterplayOutcome,
+          score_leader: scoreLeader,
         } : null,
       },
     );
@@ -203,7 +273,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, shareModalState, showShare, supportingTurns]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, phaseSummaries, predictionStats, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -272,6 +342,16 @@ export function DebateResultView() {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="debate-situation-grid" aria-label={t('debate.result_signal_winner')}>
+          {signalCards.map((card) => (
+            <article key={card.label} className="debate-situation-card">
+              <span className="debate-situation-card__eyebrow">{card.label}</span>
+              <strong className="debate-situation-card__value">{card.value}</strong>
+              <p className="debate-situation-card__detail">{card.detail}</p>
+            </article>
+          ))}
         </section>
 
         <div className="debate-result-grid">
@@ -421,6 +501,50 @@ export function DebateResultView() {
           <div className="debate-result-stack">
             <section className="debate-panel">
               <div className="debate-panel__header">
+                <h3>{t('debate.result_phase_map')}</h3>
+                <span className="debate-phase-chip">
+                  {scoreLeader.leader === 'balanced'
+                    ? t('debate.phase_balance')
+                    : getDebateSideLabel(t, scoreLeader.leader)}
+                </span>
+              </div>
+              <div className="debate-panel__body">
+                <div className="debate-stage-summary-list">
+                  {phaseSummaries.map((summary) => {
+                    const serverInsight = serverPhaseInsightMap.get(summary.phase);
+                    return (
+                      <article key={summary.phase} className="debate-stage-summary-card">
+                        <div className="debate-stage-summary-card__meta">
+                          <span className="debate-phase-chip">{getDebatePhaseLabel(t, summary.phase)}</span>
+                          <span>{summary.lastSpeakerName ?? t('debate.loading')}</span>
+                        </div>
+                        <strong className="debate-stage-summary-card__value">
+                          {summary.swing === 0
+                            ? t('debate.stage_swing_even')
+                            : t('debate.stage_swing_edge', {
+                              side: summary.leader === 'balanced'
+                                ? t('debate.phase_balance')
+                                : getDebateSideLabel(t, summary.leader),
+                              value: summary.swing,
+                            })}
+                        </strong>
+                        <p className="debate-stage-summary-card__detail">
+                          {summary.turnCount > 0
+                            ? t('debate.stage_turn_count', { count: summary.turnCount })
+                            : t('debate.loading')}
+                        </p>
+                        {serverInsight?.commentary && (
+                          <p className="debate-stage-summary-card__detail">{serverInsight.commentary}</p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+
+            <section className="debate-panel">
+              <div className="debate-panel__header">
                 <h3>{t('debate.result_replay')}</h3>
               </div>
               <div className="debate-panel__body">
@@ -449,15 +573,25 @@ export function DebateResultView() {
                       <article key={prediction.id} className="debate-prediction-card">
                         <div className="debate-prediction-card__meta">
                           <strong>{prediction.user_name}</strong>
-                          <span className="debate-outcome-chip">
-                            {isPredictionHit(prediction, payload.result) ? t('result.bet_status_hit') : t('result.bet_status_miss')}
-                          </span>
+                          <div className="debate-turn-card__tags">
+                            <span className="debate-outcome-chip">
+                              {isPredictionHit(prediction, payload.result) ? t('result.bet_status_hit') : t('result.bet_status_miss')}
+                            </span>
+                            <span className="debate-phase-chip">
+                              {t('debate.result_prediction_confidence', { value: Math.round(prediction.confidence * 100) })}
+                            </span>
+                          </div>
                         </div>
                         <p>
                           {prediction.kind === 'winner'
                             ? `${t('debate.bet_kind_winner')}: ${getDebateSideLabel(t, prediction.target_value as 'proposition' | 'opposition' | 'judge')}`
                             : `${t('debate.bet_kind_tone')}: ${getDebateVerdictToneLabel(t, prediction.target_value)}`}
                         </p>
+                        {prediction.score != null && (
+                          <p className="debate-rule-copy">
+                            {t('debate.score_label')}: {prediction.score}
+                          </p>
+                        )}
                         {prediction.score_reason && (
                           <p className="debate-rule-copy">{prediction.score_reason}</p>
                         )}

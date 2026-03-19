@@ -653,9 +653,29 @@ async function runDebateFlow(page, {
     10000,
     "debate live betting window",
   );
+  if ((live?.page?.debate?.overview_cards?.length ?? 0) < 3) {
+    throw new Error(`debate live overview cards missing: ${JSON.stringify(live?.page?.debate ?? null)}`);
+  }
+  if ((live?.page?.debate?.stage_summaries?.length ?? 0) !== 5) {
+    throw new Error(`debate live stage summaries missing: ${JSON.stringify(live?.page?.debate ?? null)}`);
+  }
+  if ((live?.page?.debate?.room_map?.length ?? 0) !== 3) {
+    throw new Error(`debate live room map missing: ${JSON.stringify(live?.page?.debate ?? null)}`);
+  }
+  if ((live?.page?.debate?.server_phase_insights?.length ?? 0) !== 5) {
+    throw new Error(`debate live server phase insights missing: ${JSON.stringify(live?.page?.debate ?? null)}`);
+  }
   await disableAutoReveal(page);
   const liveHooks = await probeDebateAutomationHooks(page, ["panel"]);
   assertDebateAutomationHooks("debate live hooks", liveHooks, { panel: "data_url" });
+  const liveSurfaceState = await page.evaluate(() => ({
+    has_overview_grid: Boolean(document.querySelector(".debate-situation-grid")),
+    has_room_grid: Boolean(document.querySelector(".debate-room-grid")),
+    has_stage_map: Boolean(document.querySelector(".debate-stage-summary-list")),
+  }));
+  if (!liveSurfaceState.has_overview_grid || !liveSurfaceState.has_room_grid || !liveSurfaceState.has_stage_map) {
+    throw new Error(`debate live surface missing new product depth blocks: ${JSON.stringify(liveSurfaceState)}`);
+  }
   writeJson(path.join(outputDir, "live.json"), live);
   writeJson(path.join(outputDir, "live-hooks.json"), liveHooks);
   if (mode === "mobile") {
@@ -689,11 +709,11 @@ async function runDebateFlow(page, {
   await saveScreenshot(page, path.join(outputDir, "bet-submitted.png"));
 
   await fastForwardDebate(page);
-  await waitForDebateResultReady(baseUrl, debateId, 45000);
+  await waitForDebateResultReady(baseUrl, debateId, 90000);
   const resultReadyPayload = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "debate" && payload.page?.controls?.can_view_result === true,
-    45000,
+    90000,
     "debate result CTA",
   );
   writeJson(path.join(outputDir, "result-ready.json"), resultReadyPayload);
@@ -710,13 +730,38 @@ async function runDebateFlow(page, {
     20000,
     "debate result page",
   );
+  if ((resultInitial?.page?.result?.signal_cards?.length ?? 0) < 4) {
+    throw new Error(`debate result signal cards missing: ${JSON.stringify(resultInitial?.page?.result ?? null)}`);
+  }
+  if ((resultInitial?.page?.result?.phase_summaries?.length ?? 0) !== 5) {
+    throw new Error(`debate result phase summaries missing: ${JSON.stringify(resultInitial?.page?.result ?? null)}`);
+  }
+  if ((resultInitial?.page?.result?.server_phase_insights?.length ?? 0) !== 5) {
+    throw new Error(`debate result server phase insights missing: ${JSON.stringify(resultInitial?.page?.result ?? null)}`);
+  }
+  if ((resultInitial?.page?.result?.prediction_stats?.total ?? null) == null) {
+    throw new Error(`debate result prediction stats missing: ${JSON.stringify(resultInitial?.page?.result ?? null)}`);
+  }
   const resultHooksBeforeShare = await probeDebateAutomationHooks(page, ["panel", "modal"]);
   assertDebateAutomationHooks("debate result hooks before share", resultHooksBeforeShare, {
     panel: "data_url",
     modal: "null",
   });
+  const resultSurfaceState = await page.evaluate(() => ({
+    has_signal_grid: Boolean(document.querySelector(".debate-situation-grid")),
+    has_phase_map: Array.from(document.querySelectorAll(".debate-panel__header h3")).some((node) =>
+      /Phase map|阶段地图/i.test(node.textContent ?? "")
+    ),
+  }));
+  if (!resultSurfaceState.has_signal_grid || !resultSurfaceState.has_phase_map) {
+    throw new Error(`debate result surface missing new product depth blocks: ${JSON.stringify(resultSurfaceState)}`);
+  }
   writeJson(path.join(outputDir, "result-initial.json"), resultInitial);
   writeJson(path.join(outputDir, "result-hooks-before-share.json"), resultHooksBeforeShare);
+  writeJson(path.join(outputDir, "surface-state.json"), {
+    live: liveSurfaceState,
+    result: resultSurfaceState,
+  });
   await saveScreenshot(page, path.join(outputDir, "result-initial.png"));
 
   await clickVisibleEnabledButton(page, "分享结果|Share\\s*Result", {
@@ -759,12 +804,19 @@ async function runDebateFlow(page, {
       route: live?.page?.route ?? null,
       canOpenPrediction: live?.page?.controls?.can_open_prediction ?? false,
       scene: live?.scene?.theme ?? null,
+      overviewCardCount: live?.page?.debate?.overview_cards?.length ?? 0,
+      roomMapCount: live?.page?.debate?.room_map?.length ?? 0,
+      stageSummaryCount: live?.page?.debate?.stage_summaries?.length ?? 0,
+      serverPhaseInsightCount: live?.page?.debate?.server_phase_insights?.length ?? 0,
     },
     result: {
       route: resultInitial?.page?.route ?? null,
       winner: resultInitial?.page?.result?.winner ?? null,
       verdictTone: resultInitial?.page?.result?.verdict_tone ?? null,
       predictionCount: resultInitial?.page?.result?.prediction_count ?? null,
+      signalCardCount: resultInitial?.page?.result?.signal_cards?.length ?? 0,
+      phaseSummaryCount: resultInitial?.page?.result?.phase_summaries?.length ?? 0,
+      serverPhaseInsightCount: resultInitial?.page?.result?.server_phase_insights?.length ?? 0,
       supportingTurns: resultInitial?.page?.result?.supporting_turns ?? [],
       supportingTurnCount: resultInitial?.page?.result?.supporting_turns?.length ?? 0,
     },

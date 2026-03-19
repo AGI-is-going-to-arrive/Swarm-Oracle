@@ -40,6 +40,8 @@ def test_create_debate_returns_immediately_and_schedules_background(client: Test
     assert data["current_phase"] == "opening"
     assert data["available_prediction_options"]["winner"] == ["proposition", "opposition"]
     assert data["scene_theme"] in {"debate_arena_judicial", "debate_arena_civic"}
+    assert len(data["phase_insights"]) == 5
+    assert data["phase_insights"][0]["commentary"]
     assert scheduled["count"] == 1
 
 
@@ -83,6 +85,11 @@ async def test_predict_then_fetch_result(client: TestClient):
     assert payload["counterplay"]["phase_score"]["proposition"] >= 0
     assert payload["counterplay"]["explanation"]
     assert len(payload["predictions"]) == 1
+    assert len(payload["phase_insights"]) == 5
+    assert payload["phase_insights"][0]["stakes"]
+    assert payload["phase_insights"][0]["judge_focus"]
+    assert payload["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}
+    assert "hedge" in payload["phase_insights"][1]["commentary"].lower() or "反制" in payload["phase_insights"][1]["commentary"]
     assert payload["predictions"][0]["is_counterplay"] is True
     assert payload["predictions"][0]["counterplay_phase"] == "crossfire"
     assert payload["predictions"][0]["counterplay_variant"] == "reversal"

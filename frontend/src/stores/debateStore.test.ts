@@ -83,4 +83,56 @@ describe('debateStore', () => {
 
     expect(useDebateStore.getState().debate?.turns.map((turn) => turn.id)).toEqual(['t1', 't2']);
   });
+
+  it('persists phase insights from verdict events', () => {
+    useDebateStore.getState().setDebate({
+      id: 'debate-3',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'live',
+      current_phase: 'closing',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: false,
+    });
+
+    useDebateStore.getState().setVerdict({
+      winner: 'proposition',
+      verdict_tone: 'order',
+      score: { proposition: 80, opposition: 72, audience_meter: 3 },
+      breakdown: {
+        coherence: { proposition: 4, opposition: 3 },
+      },
+      best_argument: 'Best',
+      best_rebuttal: 'Rebuttal',
+      judge_summary: 'Summary',
+      replay: [],
+      phase_insights: [
+        {
+          phase: 'opening',
+          stakes: 'Opening stakes',
+          judge_focus: 'Opening focus',
+          commentary: 'Opening commentary',
+          pressure_side: 'balanced',
+          pressure_margin: 0,
+          turn_count: 2,
+          confidence_drift: {
+            direction: 'balanced',
+            phase_margin: 0,
+            cumulative_margin: 0,
+          },
+        },
+      ],
+    });
+
+    expect(useDebateStore.getState().debate?.phase_insights?.[0]?.commentary).toBe('Opening commentary');
+    expect(useDebateStore.getState().status).toBe('done');
+  });
 });

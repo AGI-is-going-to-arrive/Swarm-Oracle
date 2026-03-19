@@ -155,4 +155,51 @@ describe('useDebateWS', () => {
       target_value: 'opposition',
     }));
   });
+
+  it('forwards debate_verdict phase insights into the store', () => {
+    render(<Harness debateId="debate-5" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_verdict',
+          data: {
+            winner: 'proposition',
+            verdict_tone: 'order',
+            score: { proposition: 80, opposition: 72, audience_meter: 3 },
+            breakdown: { coherence: { proposition: 4, opposition: 3 } },
+            best_argument: 'Best',
+            best_rebuttal: 'Rebuttal',
+            judge_summary: 'Summary',
+            replay: [],
+            phase_insights: [
+              {
+                phase: 'opening',
+                stakes: 'Opening stakes',
+                judge_focus: 'Opening focus',
+                commentary: 'Opening commentary',
+                pressure_side: 'balanced',
+                pressure_margin: 0,
+                turn_count: 2,
+                confidence_drift: {
+                  direction: 'balanced',
+                  phase_margin: 0,
+                  cumulative_margin: 0,
+                },
+              },
+            ],
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setVerdict).toHaveBeenCalledWith(expect.objectContaining({
+      winner: 'proposition',
+      phase_insights: expect.any(Array),
+    }));
+  });
 });

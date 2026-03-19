@@ -20,6 +20,11 @@ import {
   getDebatePhaseLabel,
   getDebateSideLabel,
 } from '../lib/debateLabels';
+import {
+  buildDebatePhaseSummaries,
+  getDebateScoreLeader,
+  type DebateLeader,
+} from '../lib/debateInsights';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
 import {
   captureElementDataUrl,
@@ -32,6 +37,23 @@ import type { DebatePhase } from '../types';
 import './DebateArena.css';
 
 const REVEAL_INTERVAL_MS = 1400;
+
+interface DebateRoomInsight {
+  side: 'proposition' | 'opposition' | 'judge';
+  role: string;
+  statusLabel: string;
+  note: string;
+  sourceLabel: string | null;
+  active: boolean;
+}
+
+function getLeaderLabel(
+  t: ReturnType<typeof useTranslation>['t'],
+  leader: DebateLeader,
+): string {
+  if (leader === 'balanced') return t('debate.phase_balance');
+  return getDebateSideLabel(t, leader);
+}
 
 export function DebateArenaView() {
   const { id } = useParams<{ id: string }>();
@@ -142,6 +164,20 @@ export function DebateArenaView() {
   const latestVisibleTurn = visibleTurns.at(-1) ?? null;
   const latestStageTurn = stageTurns.at(-1) ?? null;
   const phaseUnlockCount = unlockedPhases.length;
+  const phaseSummaries = useMemo(
+    () => buildDebatePhaseSummaries(visibleTurns, unlockedPhases),
+    [unlockedPhases, visibleTurns],
+  );
+  const serverPhaseInsights = debate?.phase_insights ?? [];
+  const serverPhaseInsightMap = useMemo(
+    () => new Map(serverPhaseInsights.map((insight) => [insight.phase, insight])),
+    [serverPhaseInsights],
+  );
+  const selectedPhaseSummary = useMemo(
+    () => phaseSummaries.find((summary) => summary.phase === selectedPhase) ?? null,
+    [phaseSummaries, selectedPhase],
+  );
+  const selectedServerInsight = serverPhaseInsightMap.get(selectedPhase as DebatePhase) ?? null;
 
   useEffect(() => {
     if (!phaseLocked) {
@@ -171,6 +207,10 @@ export function DebateArenaView() {
     () => ['opening', 'crossfire', 'rebuttal', 'closing', 'verdict'].indexOf(currentPhase),
     [currentPhase],
   );
+  const nextPhase = useMemo(() => {
+    const next = DEBATE_PHASE_ORDER[currentPhaseIndex + 1];
+    return next ?? null;
+  }, [currentPhaseIndex]);
   const canBetNow = Boolean(debate && !debate.result_ready && currentPhaseIndex < 3);
 
   const phaseScoreDelta = useMemo(
@@ -182,6 +222,10 @@ export function DebateArenaView() {
       { proposition: 0, opposition: 0 },
     ),
     [stageTurns],
+  );
+  const overallPressure = useMemo(
+    () => getDebateScoreLeader(debate?.score.proposition ?? 0, debate?.score.opposition ?? 0),
+    [debate?.score.opposition, debate?.score.proposition],
   );
 
   const watchedDimension = useMemo(() => {
@@ -283,6 +327,103 @@ export function DebateArenaView() {
     if (!phaseLocked) return isZh ? '直播跟进' : 'Live sync';
     return isZh ? '阶段锁定回看' : 'Phase locked';
   }, [isZh, phaseLocked]);
+  const overallLeaderLabel = useMemo(
+    () => getLeaderLabel(t, overallPressure.leader),
+    [overallPressure.leader, t],
+  );
+  const overallPressureCopy = useMemo(() => {
+    if (overallPressure.leader === 'balanced') {
+      return t('debate.overview_judge_even');
+    }
+    return t('debate.overview_judge_edge', {
+      side: overallLeaderLabel,
+      value: overallPressure.margin,
+    });
+  }, [overallLeaderLabel, overallPressure.leader, overallPressure.margin, t]);
+  const overviewCards = useMemo(
+    () => [
+      {
+        title: t('debate.overview_room_title'),
+        value: stageStateLabel,
+        detail: t('debate.overview_room_detail', {
+          phase: getDebatePhaseLabel(t, selectedPhase),
+          unlocked: phaseUnlockCount,
+          total: DEBATE_PHASE_ORDER.length,
+          count: visibleTurns.length,
+        }),
+      },
+      {
+        title: t('debate.overview_judge_title'),
+        value: overallLeaderLabel,
+        detail: t('debate.overview_judge_detail', {
+          watch: getDebateDimensionLabel(t, watchedDimension),
+          pressure: selectedServerInsight?.judge_focus ?? overallPressureCopy,
+        }),
+      },
+      {
+        title: t('debate.overview_window_title'),
+        value: betWindowLabel,
+        detail: counterplayRecord
+          ? t('debate.overview_window_used_detail')
+          : canBetNow
+            ? t('debate.overview_window_open_detail', {
+              next: nextPhase ? getDebatePhaseLabel(t, nextPhase) : getDebatePhaseLabel(t, currentPhase),
+            })
+            : t('debate.overview_window_locked_detail', {
+              phase: getDebatePhaseLabel(t, currentPhase),
+            }),
+      },
+    ],
+    [
+      betWindowLabel,
+      canBetNow,
+      counterplayRecord,
+      currentPhase,
+      nextPhase,
+      overallLeaderLabel,
+      overallPressureCopy,
+      phaseUnlockCount,
+      selectedServerInsight,
+      selectedPhase,
+      stageStateLabel,
+      t,
+      visibleTurns.length,
+      watchedDimension,
+    ],
+  );
+  const roomInsights = useMemo<DebateRoomInsight[]>(() => {
+    return (debate?.participants ?? []).map((participant) => {
+      const latestPhaseTurn = [...stageTurns].reverse().find((turn) => turn.speaker_side === participant.side);
+      const latestTurn = latestPhaseTurn
+        ?? [...visibleTurns].reverse().find((turn) => turn.speaker_side === participant.side)
+        ?? null;
+
+      let statusLabel = t('debate.room_state_waiting');
+      let note = participant.side === 'judge'
+        ? t('debate.room_quote_judge')
+        : t('debate.room_quote_waiting');
+
+      if (participant.side === 'judge' && debate?.result_ready) {
+        statusLabel = t('debate.room_state_verdict_ready');
+      } else if (latestTurn) {
+        statusLabel = latestTurn.id === latestVisibleTurn?.id
+          ? t('debate.room_state_floor')
+          : participant.side === 'judge'
+            ? t('debate.room_state_listening')
+            : t('debate.room_state_ready');
+        note = latestTurn.content;
+      }
+
+      return {
+        side: participant.side,
+        role: participant.role,
+        statusLabel,
+        note,
+        sourceLabel: latestTurn ? getDebatePhaseLabel(t, latestTurn.phase) : null,
+        active: latestTurn?.id === latestVisibleTurn?.id,
+      };
+    });
+  }, [debate?.participants, debate?.result_ready, latestVisibleTurn?.id, stageTurns, t, visibleTurns]);
 
   const themeLabel = getTheaterThemeLabel(debate?.scene_theme, isZh);
   const themeAsset = debate?.scene_theme ? getThemeAssetPath(debate.scene_theme as never) : null;
@@ -372,6 +513,11 @@ export function DebateArenaView() {
           feed_focus: feedFocusLabel,
           phase_delta: phaseScoreDelta,
           watched_dimension: watchedDimension,
+          server_phase_insights: serverPhaseInsights,
+          room_map: roomInsights,
+          stage_summaries: phaseSummaries,
+          selected_phase_summary: selectedPhaseSummary,
+          overview_cards: overviewCards,
         } : null,
       },
     );
@@ -405,6 +551,11 @@ export function DebateArenaView() {
     watchedDimension,
     counterplayPlan,
     counterplayRecord,
+    overviewCards,
+    phaseSummaries,
+    roomInsights,
+    serverPhaseInsights,
+    selectedPhaseSummary,
   ]);
 
   const persistCounterplay = (payload: {
@@ -597,6 +748,15 @@ export function DebateArenaView() {
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         {error && <p className="debate-modal__error">{error}</p>}
+        <section className="debate-situation-grid" aria-label={t('debate.overview_room_title')}>
+          {overviewCards.map((card) => (
+            <article key={card.title} className="debate-situation-card">
+              <span className="debate-situation-card__eyebrow">{card.title}</span>
+              <strong className="debate-situation-card__value">{card.value}</strong>
+              <p className="debate-situation-card__detail">{card.detail}</p>
+            </article>
+          ))}
+        </section>
         {phaseCueCopy && !debate?.result_ready && (
           <section
             key={phaseCue?.token}
@@ -671,6 +831,24 @@ export function DebateArenaView() {
                     />
                   ))}
                 </div>
+                <div className="debate-room-grid">
+                  {roomInsights.map((insight) => (
+                    <article
+                      key={insight.side}
+                      className={`debate-room-card ${insight.active ? 'debate-room-card--active' : ''}`}
+                    >
+                      <div className="debate-room-card__meta">
+                        <strong>{getDebateSideLabel(t, insight.side)}</strong>
+                        <span className="debate-phase-chip">{insight.statusLabel}</span>
+                      </div>
+                      <p className="debate-room-card__role">{insight.role}</p>
+                      <p className="debate-room-card__note">{insight.note}</p>
+                      {insight.sourceLabel && (
+                        <span className="debate-room-card__source">{insight.sourceLabel}</span>
+                      )}
+                    </article>
+                  ))}
+                </div>
               </div>
             </section>
 
@@ -733,7 +911,24 @@ export function DebateArenaView() {
                       >
                         <div className="debate-turn-card__meta">
                           <strong>{turn.speaker_name}</strong>
-                          <span>{getDebateSideLabel(t, turn.speaker_side)}</span>
+                          <div className="debate-turn-card__tags">
+                            <span>{getDebateSideLabel(t, turn.speaker_side)}</span>
+                            {turn.score_delta && (
+                              <span className="debate-phase-chip">
+                                {(turn.score_delta.proposition ?? 0) === (turn.score_delta.opposition ?? 0)
+                                  ? t('debate.turn_swing_even')
+                                  : t('debate.turn_swing_edge', {
+                                    side: getDebateSideLabel(
+                                      t,
+                                      (turn.score_delta.proposition ?? 0) > (turn.score_delta.opposition ?? 0)
+                                        ? 'proposition'
+                                        : 'opposition',
+                                    ),
+                                    value: Math.abs((turn.score_delta.proposition ?? 0) - (turn.score_delta.opposition ?? 0)),
+                                  })}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <p className="debate-turn-card__content">{turn.content}</p>
                       </article>
@@ -817,6 +1012,56 @@ export function DebateArenaView() {
               </div>
               <div className="debate-panel__body">
                 <p className="debate-rule-copy">{t('debate.rules_body')}</p>
+              </div>
+            </section>
+
+            <section className="debate-panel">
+              <div className="debate-panel__header">
+                <h3>{t('debate.stage_map_title')}</h3>
+                <span className="debate-phase-chip">{getDebatePhaseLabel(t, selectedPhase)}</span>
+              </div>
+              <div className="debate-panel__body">
+                <p className="debate-rule-copy debate-stage-map__intro">{t('debate.stage_map_subtitle')}</p>
+                <div className="debate-stage-summary-list">
+                  {phaseSummaries.map((summary) => {
+                    const statusLabel = !summary.unlocked
+                      ? t('debate.stage_status_waiting')
+                      : summary.phase === currentPhase && !phaseLocked
+                        ? t('debate.stage_status_live')
+                        : summary.phase === selectedPhase && phaseLocked
+                          ? t('debate.stage_status_locked')
+                          : t('debate.stage_status_complete');
+
+                    const swingLabel = summary.swing === 0
+                      ? t('debate.stage_swing_even')
+                      : t('debate.stage_swing_edge', {
+                        side: getLeaderLabel(t, summary.leader),
+                        value: summary.swing,
+                      });
+                    const serverInsight = serverPhaseInsightMap.get(summary.phase);
+
+                    return (
+                      <article
+                        key={summary.phase}
+                        className={`debate-stage-summary-card ${summary.phase === selectedPhase ? 'debate-stage-summary-card--active' : ''}`}
+                      >
+                        <div className="debate-stage-summary-card__meta">
+                          <span className="debate-phase-chip">{getDebatePhaseLabel(t, summary.phase)}</span>
+                          <span>{statusLabel}</span>
+                        </div>
+                        <strong className="debate-stage-summary-card__value">
+                          {summary.turnCount > 0
+                            ? t('debate.stage_turn_count', { count: summary.turnCount })
+                            : t('debate.loading')}
+                        </strong>
+                        <p className="debate-stage-summary-card__detail">{swingLabel}</p>
+                        {serverInsight?.commentary && (
+                          <p className="debate-stage-summary-card__detail">{serverInsight.commentary}</p>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
             </section>
           </aside>

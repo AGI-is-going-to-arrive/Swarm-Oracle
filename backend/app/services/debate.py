@@ -26,6 +26,7 @@ from app.services.debate_prompts import (
     build_turn_generation_prompt,
     build_motion,
     build_turn_copy,
+    get_debate_profile_style,
     infer_debate_profile,
     resolve_debate_language,
     select_debate_scene,
@@ -87,7 +88,9 @@ def _display_value(language: str, kind: DebatePredictionKind, value: str | None)
     }.get(target, target)
 
 
-def _display_phase(language: str, phase: DebatePhase) -> str:
+def _display_phase(language: str, phase: DebatePhase | str) -> str:
+    if isinstance(phase, str):
+        phase = DebatePhase(phase)
     if language == "zh":
         return {
             DebatePhase.OPENING: "开场",
@@ -232,6 +235,215 @@ def _phase_score_for(turns: list[DebateTurn], phase: DebatePhase) -> dict[str, i
         score["proposition"] += turn.score_delta_json.get("proposition", 0)
         score["opposition"] += turn.score_delta_json.get("opposition", 0)
     return score
+
+
+def _plan_phase_score(plan: DebatePlan, phase: DebatePhase) -> dict[str, int]:
+    phase_delta = plan.phase_deltas.get(phase, {})
+    return {
+        "proposition": phase_delta.get("proposition", {}).get("proposition", 0),
+        "opposition": phase_delta.get("opposition", {}).get("opposition", 0),
+    }
+
+
+def _pressure_side_from_score(score: dict[str, int]) -> str:
+    if score["proposition"] == score["opposition"]:
+        return "balanced"
+    return "proposition" if score["proposition"] > score["opposition"] else "opposition"
+
+
+def _signed_margin(score: dict[str, int]) -> int:
+    return score["proposition"] - score["opposition"]
+
+
+def _build_phase_stakes(
+    *,
+    debate: Debate,
+    phase: DebatePhase,
+    style: dict[str, str],
+) -> str:
+    if debate.language == "zh":
+        mapping = {
+            DebatePhase.OPENING: f"这一阶段决定哪一边先把“{style['pro_case']}”与“{style['con_case']}”讲成更可信的世界线。",
+            DebatePhase.CROSSFIRE: f"这里真正的 stakes 是：{style['challenge']}",
+            DebatePhase.REBUTTAL: f"本轮比的是谁能把补丁补进方案里，而不是只把对手打成漏洞清单。优先看 {style['plan']} 是否站得住。",
+            DebatePhase.CLOSING: f"结辩阶段不再拼铺陈，而是拼谁能把 {style['judge_focus']} 压成一句更能落地的判断。",
+            DebatePhase.VERDICT: "裁决阶段要回答的不是谁更会说，而是谁真正把代价、执行权与责任链说清楚了。",
+        }
+        return mapping[phase]
+
+    mapping = {
+        DebatePhase.OPENING: f"This phase decides who frames '{style['pro_case']}' versus '{style['con_case']}' as the more credible worldline first.",
+        DebatePhase.CROSSFIRE: f"The stakes here are simple: {style['challenge']}",
+        DebatePhase.REBUTTAL: f"Rebuttal is about whether a side can actually repair the exposed gap. Watch whether {style['plan']} sounds executable instead of decorative.",
+        DebatePhase.CLOSING: f"Closing is no longer about volume. It is about compressing {style['judge_focus']} into the cleaner final judgment.",
+        DebatePhase.VERDICT: "Verdict answers who made consequence, execution, and accountability feel more real than rhetoric.",
+    }
+    return mapping[phase]
+
+
+def _build_phase_judge_focus(
+    *,
+    debate: Debate,
+    phase: DebatePhase,
+    style: dict[str, str],
+) -> str:
+    if debate.language == "zh":
+        mapping = {
+            DebatePhase.OPENING: f"评委先看谁把题面收进 {style['judge_focus']}，而不是只停在立场口号。",
+            DebatePhase.CROSSFIRE: f"评委此刻最盯的是：{style['challenge']}",
+            DebatePhase.REBUTTAL: f"评委在看谁能把 {style['pressure']} 真正转回到可执行方案，而不是继续空转。",
+            DebatePhase.CLOSING: f"评委关注的是谁把 {style['judge_focus']} 收束成了更稳的终局语气。",
+            DebatePhase.VERDICT: "评委此刻只保留最后的 consequence chain，不再奖励新的表演性发言。",
+        }
+        return mapping[phase]
+
+    mapping = {
+        DebatePhase.OPENING: f"The judge is checking who grounds the motion in {style['judge_focus']} rather than slogan density.",
+        DebatePhase.CROSSFIRE: f"The judge is now watching one thing: {style['challenge']}",
+        DebatePhase.REBUTTAL: f"The judge wants to see who can turn {style['pressure']} back into a workable answer rather than more theatre.",
+        DebatePhase.CLOSING: f"The judge is looking for who compresses {style['judge_focus']} into the steadier final frame.",
+        DebatePhase.VERDICT: "At verdict the judge only keeps the final consequence chain and stops rewarding fresh performance.",
+    }
+    return mapping[phase]
+
+
+def _build_phase_commentary(
+    *,
+    debate: Debate,
+    phase: DebatePhase,
+    pressure_side: str,
+    phase_margin: int,
+    cumulative_margin: int,
+    turn_count: int,
+    style: dict[str, str],
+) -> str:
+    leader_label = (
+        "拉锯"
+        if pressure_side == "balanced" and debate.language == "zh"
+        else "balanced"
+        if pressure_side == "balanced"
+        else _display_value(debate.language, DebatePredictionKind.WINNER, pressure_side)
+    )
+
+    if debate.language == "zh":
+        if turn_count == 0:
+            return f"这一阶段还没真正展开，但评委已经会按“{style['judge_focus']}”这条轴来预判后面会不会锁盘。"
+        if pressure_side == "balanced":
+            return (
+                f"{_display_phase(debate.language, phase)}目前还是拉锯，没有哪一边把分差彻底压开。"
+                f"真正的变化取决于后续谁能先把 {style['challenge']} 讲成无法回避的现实代价。"
+            )
+        return (
+            f"{leader_label}在{_display_phase(debate.language, phase)}这一段先拿到了 {phase_margin} 分优势，"
+            f"累计漂移来到 {abs(cumulative_margin)} 分级别。评委会自然把注意力往“{style['judge_focus']}”更清楚的一边倾斜。"
+        )
+
+    if turn_count == 0:
+        return f"This phase has not opened yet, but the judge is already primed to read it through {style['judge_focus']}."
+    if pressure_side == "balanced":
+        return (
+            f"{_display_phase(debate.language, phase)} is still trading evenly. "
+            f"The next real shift will come from whoever makes {style['challenge']} feel less abstract and more unavoidable."
+        )
+    return (
+        f"{leader_label} took a {phase_margin}-point edge in {_display_phase(debate.language, phase)}, "
+        f"pushing the cumulative drift to {abs(cumulative_margin)}. That naturally tilts the judge toward the side making {style['judge_focus']} easier to execute."
+    )
+
+
+def _build_phase_counterplay_note(
+    *,
+    debate: Debate,
+    counterplay_context: dict[str, Any],
+) -> str:
+    target = _display_value(
+        debate.language,
+        counterplay_context["kind"],
+        counterplay_context["target_value"],
+    )
+    phase_label = _display_phase(debate.language, counterplay_context["phase"])
+    outcome = counterplay_context.get("outcome")
+    if debate.language == "zh":
+        if outcome == "hit":
+            return f"这手反制押注最后命中，说明 {phase_label} 的分歧真的把局势推向了 {target}。"
+        if outcome == "miss":
+            return f"这手反制押注最后未中，说明 {phase_label} 的表面波动没有真的把局势翻到 {target}。"
+        return f"本阶段已经挂出一手押向 {target} 的反制对冲，评委会更敏感地看这条分歧会不会真翻盘。"
+
+    if outcome == "hit":
+        return f"The counterplay hedge ultimately landed, which means the fault line in {phase_label} really did push the room toward {target}."
+    if outcome == "miss":
+        return f"The counterplay hedge ultimately missed, which means the apparent volatility in {phase_label} never truly flipped the room toward {target}."
+    return f"A live counterplay hedge is hanging on {target} in {phase_label}, so the judge is reading this fault line with extra sensitivity."
+
+
+def _build_phase_insights(
+    *,
+    debate: Debate,
+    plan: DebatePlan,
+    turns: list[DebateTurn],
+    counterplay_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    style = get_debate_profile_style(debate.language, debate.profile_id)
+    insights: list[dict[str, Any]] = []
+    cumulative_margin = 0
+    for phase in (
+        DebatePhase.OPENING,
+        DebatePhase.CROSSFIRE,
+        DebatePhase.REBUTTAL,
+        DebatePhase.CLOSING,
+        DebatePhase.VERDICT,
+    ):
+        if phase == DebatePhase.VERDICT:
+            phase_score = {
+                "proposition": debate.score_proposition,
+                "opposition": debate.score_opposition,
+            }
+        else:
+            actual_score = _phase_score_for(turns, phase)
+            planned_score = _plan_phase_score(plan, phase)
+            phase_score = (
+                actual_score
+                if actual_score["proposition"] or actual_score["opposition"]
+                else planned_score
+            )
+            cumulative_margin += _signed_margin(phase_score)
+
+        turn_count = len([turn for turn in turns if turn.phase == phase])
+        if phase == DebatePhase.VERDICT:
+            cumulative_margin = debate.score_proposition - debate.score_opposition
+
+        phase_margin = abs(_signed_margin(phase_score))
+        pressure_side = _pressure_side_from_score(phase_score)
+        insights.append(
+            {
+                "phase": phase.value,
+                "stakes": _build_phase_stakes(debate=debate, phase=phase, style=style),
+                "judge_focus": _build_phase_judge_focus(debate=debate, phase=phase, style=style),
+                "commentary": _build_phase_commentary(
+                    debate=debate,
+                    phase=phase,
+                    pressure_side=pressure_side,
+                    phase_margin=phase_margin,
+                    cumulative_margin=cumulative_margin,
+                    turn_count=turn_count,
+                    style=style,
+                ),
+                "pressure_side": pressure_side,
+                "pressure_margin": phase_margin,
+                "turn_count": turn_count,
+                "confidence_drift": {
+                    "direction": pressure_side,
+                    "phase_margin": _signed_margin(phase_score),
+                    "cumulative_margin": cumulative_margin,
+                },
+            }
+        )
+        if counterplay_context and counterplay_context["phase"] == phase:
+            insights[-1]["commentary"] = (
+                f"{insights[-1]['commentary']} {_build_phase_counterplay_note(debate=debate, counterplay_context=counterplay_context)}"
+            )
+    return insights
 
 
 def _build_judge_summary_fallback(
@@ -762,13 +974,23 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
                 .order_by(DebateCounterplay.created_at.asc())
             ).all()
         )
-        snapshot = _serialize_debate(debate, turns)
-        snapshot["counterplay"] = _build_counterplay_result(
+        counterplay_result = _build_counterplay_result(
             predictions,
             debate,
             turns=turns,
             counterplays=counterplays,
         )
+        snapshot = _serialize_debate(
+            debate,
+            turns,
+            phase_insights=_build_phase_insights(
+                debate=debate,
+                plan=build_debate_plan(debate.question),
+                turns=turns,
+                counterplay_context=counterplay_result,
+            ),
+        )
+        snapshot["counterplay"] = counterplay_result
         return snapshot
 
 
@@ -799,29 +1021,39 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
                 .order_by(DebateCounterplay.created_at.asc())
             ).all()
         )
-        snapshot = _serialize_debate(debate, turns)
         counterplay_result = _build_counterplay_result(
             predictions,
             debate,
             turns=turns,
             counterplays=counterplays,
         )
+        plan = DebatePlan(
+            winner=debate.winner or "proposition",
+            verdict_tone=debate.verdict_tone or "balance",
+            score={
+                "proposition": debate.score_proposition,
+                "opposition": debate.score_opposition,
+            },
+            breakdown=_extract_breakdown_dimensions(debate.breakdown_json),
+            phase_deltas=build_debate_plan(debate.question).phase_deltas,
+            audience_meter=debate.audience_meter,
+        )
+        snapshot = _serialize_debate(
+            debate,
+            turns,
+            phase_insights=_build_phase_insights(
+                debate=debate,
+                plan=plan,
+                turns=turns,
+                counterplay_context=counterplay_result,
+            ),
+        )
         judge_rationale = _extract_judge_rationale(debate.breakdown_json)
         if judge_rationale is not None:
             judge_rationale["supporting_turns"] = _build_supporting_turns(
                 turns=turns,
                 debate=debate,
-                plan=DebatePlan(
-                    winner=debate.winner or "proposition",
-                    verdict_tone=debate.verdict_tone or "balance",
-                    score={
-                        "proposition": debate.score_proposition,
-                        "opposition": debate.score_opposition,
-                    },
-                    breakdown=_extract_breakdown_dimensions(debate.breakdown_json),
-                    phase_deltas=build_debate_plan(debate.question).phase_deltas,
-                    audience_meter=debate.audience_meter,
-                ),
+                plan=plan,
             )
         snapshot["result"] = {
             "winner": debate.winner,
@@ -1011,23 +1243,32 @@ async def run_debate_background(
             quota_key=quota_key,
         )
         finalized = _finalize_debate(debate_id, plan, judge_analysis=judge_analysis)
+        result_payload = load_debate_result_payload(debate_id)
         await ws_callback(
             debate_id,
             {
                 "type": "debate_verdict",
-                "data": {
-                    "winner": finalized.winner,
-                    "verdict_tone": finalized.verdict_tone,
-                    "score": {
-                        "proposition": finalized.score_proposition,
-                        "opposition": finalized.score_opposition,
-                    },
-                    "breakdown": _extract_breakdown_dimensions(finalized.breakdown_json),
-                    "best_argument": finalized.best_argument,
-                    "best_rebuttal": finalized.best_rebuttal,
-                    "judge_summary": finalized.judge_summary,
-                    "judge_rationale": _extract_judge_rationale(finalized.breakdown_json),
-                },
+                "data": (
+                    {
+                        **result_payload["result"],
+                        "phase_insights": result_payload.get("phase_insights", []),
+                    }
+                    if result_payload is not None
+                    else {
+                        "winner": finalized.winner,
+                        "verdict_tone": finalized.verdict_tone,
+                        "score": {
+                            "proposition": finalized.score_proposition,
+                            "opposition": finalized.score_opposition,
+                        },
+                        "breakdown": _extract_breakdown_dimensions(finalized.breakdown_json),
+                        "best_argument": finalized.best_argument,
+                        "best_rebuttal": finalized.best_rebuttal,
+                        "judge_summary": finalized.judge_summary,
+                        "judge_rationale": _extract_judge_rationale(finalized.breakdown_json),
+                        "phase_insights": [],
+                    }
+                ),
             },
         )
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.DONE.value}})
@@ -1265,7 +1506,13 @@ def _mark_debate_error(debate_id: str) -> None:
         session.commit()
 
 
-def _serialize_debate(debate: Debate, turns: list[DebateTurn]) -> dict[str, Any]:
+def _serialize_debate(
+    debate: Debate,
+    turns: list[DebateTurn],
+    *,
+    phase_insights: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    plan = build_debate_plan(debate.question)
     return {
         "id": debate.id,
         "question": debate.question,
@@ -1316,6 +1563,13 @@ def _serialize_debate(debate: Debate, turns: list[DebateTurn]) -> dict[str, Any]
             "winner": ["proposition", "opposition"],
             "verdict_tone": ["order", "balance", "rupture"],
         },
+        "phase_insights": phase_insights
+        if phase_insights is not None
+        else _build_phase_insights(
+            debate=debate,
+            plan=plan,
+            turns=turns,
+        ),
         "result_ready": debate.status == DebateStatus.DONE,
     }
 

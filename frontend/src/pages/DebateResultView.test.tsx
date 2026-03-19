@@ -28,6 +28,78 @@ function buildPayload() {
     score: { proposition: 80, opposition: 72, audience_meter: 8 },
     turns: [],
     available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+    phase_insights: [
+      {
+        phase: 'opening',
+        stakes: 'Opening stakes',
+        judge_focus: 'Opening focus',
+        commentary: 'Opening commentary',
+        pressure_side: 'balanced',
+        pressure_margin: 0,
+        turn_count: 2,
+        confidence_drift: {
+          direction: 'balanced',
+          phase_margin: 0,
+          cumulative_margin: 0,
+        },
+      },
+      {
+        phase: 'crossfire',
+        stakes: 'Crossfire stakes',
+        judge_focus: 'Crossfire focus',
+        commentary: 'Crossfire commentary',
+        pressure_side: 'proposition',
+        pressure_margin: 4,
+        turn_count: 2,
+        confidence_drift: {
+          direction: 'proposition',
+          phase_margin: 4,
+          cumulative_margin: 4,
+        },
+      },
+      {
+        phase: 'rebuttal',
+        stakes: 'Rebuttal stakes',
+        judge_focus: 'Rebuttal focus',
+        commentary: 'Rebuttal commentary',
+        pressure_side: 'balanced',
+        pressure_margin: 0,
+        turn_count: 2,
+        confidence_drift: {
+          direction: 'balanced',
+          phase_margin: 0,
+          cumulative_margin: 4,
+        },
+      },
+      {
+        phase: 'closing',
+        stakes: 'Closing stakes',
+        judge_focus: 'Closing focus',
+        commentary: 'Closing commentary',
+        pressure_side: 'proposition',
+        pressure_margin: 6,
+        turn_count: 2,
+        confidence_drift: {
+          direction: 'proposition',
+          phase_margin: 6,
+          cumulative_margin: 10,
+        },
+      },
+      {
+        phase: 'verdict',
+        stakes: 'Verdict stakes',
+        judge_focus: 'Verdict focus',
+        commentary: 'Verdict commentary',
+        pressure_side: 'proposition',
+        pressure_margin: 8,
+        turn_count: 1,
+        confidence_drift: {
+          direction: 'proposition',
+          phase_margin: 8,
+          cumulative_margin: 8,
+        },
+      },
+    ],
     result_ready: true,
     result: {
       winner: 'proposition',
@@ -73,7 +145,21 @@ function buildPayload() {
       user_name: 'Local Director',
       created_at: new Date().toISOString(),
     },
-    predictions: [],
+    predictions: [
+      {
+        id: 'prediction-1',
+        debate_id: 'debate-1',
+        kind: 'winner',
+        target_value: 'proposition',
+        confidence: 0.8,
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        score: 88,
+        score_reason: 'The bet tracked the late momentum correctly.',
+        created_at: new Date().toISOString(),
+        scored_at: new Date().toISOString(),
+      },
+    ],
   };
 }
 
@@ -168,18 +254,26 @@ describe('DebateResultView', () => {
       expect(payload?.page?.result?.judge_rationale?.winner_reason).toContain('execution logic');
       expect(payload?.page?.result?.supporting_turns?.[0]?.quote).toContain('The cleanest hinge came');
       expect(payload?.page?.result?.supporting_turns?.[0]?.why_it_matters).toContain('winning side');
+      expect(payload?.page?.result?.phase_summaries?.length).toBe(5);
+      expect(payload?.page?.result?.server_phase_insights?.length).toBe(5);
+      expect(payload?.page?.result?.signal_cards?.length).toBe(4);
+      expect(payload?.page?.result?.prediction_stats?.total).toBe(1);
+      expect(payload?.page?.result?.prediction_stats?.hitCount).toBe(1);
       expect(payload?.page?.result?.counterplay_summary).toContain('Counterplay used during Crossfire');
       expect(payload?.page?.result?.counterplay_explanation).toContain('tilted toward Proposition');
       expect(payload?.page?.result?.counterplay_outcome).toBe('miss');
     });
 
-    expect(screen.getByText('Counterplay used during Crossfire → Opposition at 60%.')).toBeInTheDocument();
+    expect(screen.getAllByText('Counterplay used during Crossfire → Opposition at 60%.').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/tilted toward Proposition/).length).toBeGreaterThan(0);
     expect(screen.getByText('Proposition turned the case into execution logic.')).toBeInTheDocument();
     expect(screen.getByText('Proposition kept the cleaner institutional chain from claim to consequence.')).toBeInTheDocument();
     expect(screen.getByText('The cleanest hinge came when Proposition forced the timing question back onto accountability.')).toBeInTheDocument();
-    expect(screen.getByText('This is where the winning side made the verdict feel executable instead of abstract.')).toBeInTheDocument();
-    expect(screen.getByText('debate.counterplay_miss')).toBeInTheDocument();
+    expect(screen.getAllByText('This is where the winning side made the verdict feel executable instead of abstract.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('debate.counterplay_miss').length).toBeGreaterThan(0);
+    expect(screen.getByText('debate.result_phase_map')).toBeInTheDocument();
+    expect(screen.getByText('debate.result_prediction_confidence')).toBeInTheDocument();
+    expect(screen.getByText('The bet tracked the late momentum correctly.')).toBeInTheDocument();
   });
 
   it('retries result polling after API 409 and eventually renders', async () => {

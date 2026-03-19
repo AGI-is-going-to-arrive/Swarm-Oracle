@@ -217,6 +217,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
   - `counterplay` 现在除了 `outcome`，还会返回 `phase_score / explanation`，并被织进 `judge summary` 与 replay digest
+  - live snapshot / result payload 顶层当前还会返回 `phase_insights[]`，每个阶段都有 `stakes / judge_focus / commentary / pressure_margin / confidence_drift`
+  - `counterplay` 当前不只影响顶层摘要；若某阶段命中了对冲，后端会把这条信息直接织进对应阶段的 `phase_insights.commentary`
+  - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
 
@@ -296,8 +299,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前可选透传 `user_id / llm_* / reasoning_effort`，并会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
-| `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` |
-| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
+| `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` 与 `phase_insights[]` |
+| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay` 与 `phase_insights[]`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
 | `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由
@@ -310,7 +313,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `debate_phase_change`
   - `debate_score_update`
   - `debate_counterplay`
-  - `debate_verdict`
+  - `debate_verdict`（当前 payload = `DebateResultSummary + phase_insights`）
 
 ## 模型层 (`app/models/`)
 
@@ -338,7 +341,12 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。再往后本次 session 又补跑了：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**，`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**，`tests/test_campaign_service.py / tests/test_campaign_api.py` 新增 weekly summary 后 → **21 passed**，以及 Debate 最新 LLM 文案/judge summary/counterplay explanation 回归 `tests/test_debate_service.py / tests/test_debate_api.py` → **12 passed**。在当前 session 中，又围绕 Debate `judge_rationale / supporting_turns / 节奏约束 prompt` 补跑了 `tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`，结果为 **14 passed**。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
+仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。再往后本次 session 又补跑了：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**，`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**，`tests/test_campaign_service.py / tests/test_campaign_api.py` 新增 weekly summary 后 → **21 passed**，以及 Debate 最新 LLM 文案/judge summary/counterplay explanation 回归 `tests/test_debate_service.py / tests/test_debate_api.py` → **12 passed**。在当前 session 中，又围绕 Debate `judge_rationale / supporting_turns / 节奏约束 prompt` 补跑了 `tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`，结果为 **14 passed**。本次文档同步对应的最新 Debate 定向回归为 `tests/test_debate_service.py tests/test_debate_api.py -q` → **12 passed**，重点覆盖：
+- `phase_insights[]` 的 `stakes / judge_focus / commentary / confidence_drift`
+- `counterplay` 命中或未中时会改写对应阶段 `phase_insights.commentary`
+- `debate_verdict` 事件链路改为 `DebateResultSummary + phase_insights`
+
+需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
 
 覆盖重心：
 

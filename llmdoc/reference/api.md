@@ -173,8 +173,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "reasoning_effort?": "low"}` | DebateSnapshot |
-| `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot |
-| `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload |
+| `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot（当前顶层还会带 `phase_insights[]`） |
+| `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]`） |
 | `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
 
 > Debate 当前已按真实实现固定为 5 个阶段：
@@ -208,6 +208,22 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `explanation`
 > - `user_name`
 > - `created_at`
+>
+> `GET /api/debate/{id}` 与 `GET /api/debate/{id}/result` 当前还都会在顶层返回 `phase_insights[]`：
+> - `phase`
+> - `stakes`
+> - `judge_focus`
+> - `commentary`
+> - `pressure_side`
+> - `pressure_margin`
+> - `turn_count`
+> - `confidence_drift.direction`
+> - `confidence_drift.phase_margin`
+> - `confidence_drift.cumulative_margin`
+>
+> 当前口径：
+> - `phase_insights` 是后端权威阶段洞察，不是前端猜出来的辅助字段
+> - 若某阶段有 `counterplay`，后端会把这手对冲是否挂出、命中或未中，直接织进对应阶段的 `phase_insights.commentary`
 >
 > `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳；若 Debate 已进入 `ERROR` 终态，则返回 `500`，前端会直接显示终态错误。
 
@@ -247,4 +263,4 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `debate_phase_change` | `{phase}` | S→C | 当前阶段切换 |
 | `debate_score_update` | `{score: {proposition, opposition}, audience_meter}` | S→C | 势能 / 分数更新 |
 | `debate_counterplay` | DebateCounterplayResult | S→C | live counterplay 记录已创建/更新 |
-| `debate_verdict` | DebateResultSummary | S→C | 最终 verdict 就绪 |
+| `debate_verdict` | DebateVerdictEventPayload | S→C | 最终 verdict 就绪；当前 payload = `DebateResultSummary + phase_insights[]` |

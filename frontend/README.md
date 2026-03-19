@@ -31,8 +31,8 @@ npm run dev     # → http://localhost:18928
 | Route | Component | Description |
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
-| `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, and a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window |
-| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language |
+| `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window, plus live room-state cards / room map / stage map that now consume backend `phase_insights` directly |
+| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language; the result surface now also shows signal cards and a phase map backed by the same server `phase_insights` payload as the live room |
 | `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer |
 | `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also reads backend `director_state` first and still falls back to backend campaign scenario summary when local archive metadata is missing, showing objective completion, commitment outcome, and final system-track state |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
@@ -52,7 +52,7 @@ npm run dev     # → http://localhost:18928
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
 - **Director Layer** — Theater goals and worldline commitment now persist through backend `Scenario.director_state_json`; `scenarioMeta` still caches points / cooldowns / card usage / bets / archive details locally so old runs and local-only gameplay state do not break
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
-- **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback
+- **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback; `debate_verdict` now also carries `phase_insights`, so the live room can land the final stage read without waiting for a fresh result fetch
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
 - **ShareModal** — Social media copy generation (小红书/微博/知乎/Reddit/X)
@@ -94,6 +94,19 @@ npm run e2e:debate:full
   - `npm run build` → passed
   - Debate desktop supporting-turn smoke → `frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json`
   - Debate full supporting-turn smoke → `frontend/output/e2e/20260319-debate-supporting-turns-full/result.json`
+- This session also re-ran the Debate phase-insights / verdict-WS / counterplay-to-stage-commentary path:
+  - `python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q` → **12 passed**
+  - `npm test -- --run src/stores/debateStore.test.ts src/hooks/useDebateWS.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx` → **16 passed**
+  - `npm run build` → passed
+  - Debate full black-box run → `frontend/output/e2e/20260319-debate-depth-full-v4/result.json`
+  - The black-box result now explicitly records:
+    - `live.overviewCardCount = 3`
+    - `live.roomMapCount = 3`
+    - `live.stageSummaryCount = 5`
+    - `live.serverPhaseInsightCount = 5`
+    - `result.signalCardCount = 4`
+    - `result.phaseSummaryCount = 5`
+    - `result.serverPhaseInsightCount = 5`
 - This session also re-ran the director-state backendization path:
   - `npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioMeta.test.ts` → **21 passed**
   - `npx tsc --noEmit -p tsconfig.app.json` → passed

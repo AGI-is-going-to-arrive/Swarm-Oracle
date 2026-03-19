@@ -62,6 +62,13 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert snapshot["counterplay"]["explanation"]
     assert snapshot["scene_theme"] == "debate_arena_civic"
     assert len(snapshot["turns"]) == 9
+    assert len(snapshot["phase_insights"]) == 5
+    assert snapshot["phase_insights"][0]["stakes"]
+    assert snapshot["phase_insights"][0]["judge_focus"]
+    assert snapshot["phase_insights"][0]["commentary"]
+    assert snapshot["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}
+    assert snapshot["phase_insights"][1]["commentary"]
+    assert "hedge" in snapshot["phase_insights"][1]["commentary"].lower() or "反制" in snapshot["phase_insights"][1]["commentary"]
     assert result["result"]["winner"] in {"proposition", "opposition"}
     assert result["result"]["verdict_tone"] in {"order", "balance", "rupture"}
     assert result["counterplay"]["debate_id"] == debate.id
@@ -86,6 +93,7 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert result["result"]["judge_rationale"]["dimension_rationales"]["coherence"]
     assert result["result"]["judge_rationale"]["supporting_turns"]
     assert result["result"]["judge_rationale"]["supporting_turns"][0]["quote"]
+    assert "hedge" in result["phase_insights"][1]["commentary"].lower() or "反制" in result["phase_insights"][1]["commentary"]
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
     assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
@@ -205,6 +213,7 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
     assert result is not None
     assert snapshot["turns"][0]["content"] == "LLM turn #1"
     assert snapshot["turns"][-1]["content"] == "LLM turn #9"
+    assert snapshot["phase_insights"][1]["commentary"]
     assert result["result"]["judge_summary"] == "LLM judge summary"
     assert result["result"]["judge_rationale"]["winner_reason"] == "LLM winner reason"
     assert result["result"]["judge_rationale"]["dimension_rationales"]["impact"] == "LLM impact"
