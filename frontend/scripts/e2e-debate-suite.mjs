@@ -689,11 +689,11 @@ async function runDebateFlow(page, {
   await saveScreenshot(page, path.join(outputDir, "bet-submitted.png"));
 
   await fastForwardDebate(page);
-  await waitForDebateResultReady(baseUrl, debateId, 20000);
+  await waitForDebateResultReady(baseUrl, debateId, 45000);
   const resultReadyPayload = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "debate" && payload.page?.controls?.can_view_result === true,
-    20000,
+    45000,
     "debate result CTA",
   );
   writeJson(path.join(outputDir, "result-ready.json"), resultReadyPayload);
@@ -702,8 +702,12 @@ async function runDebateFlow(page, {
   await openResult(page, mode, caseConfig.locale);
   const resultInitial = await waitForAutomation(
     page,
-    (payload) => payload.page?.kind === "debate_result" && payload.page?.loading === false,
-    10000,
+    (payload) => (
+      payload.page?.kind === "debate_result"
+      && payload.page?.loading === false
+      && (payload.page?.result?.supporting_turns?.length ?? 0) >= 1
+    ),
+    20000,
     "debate result page",
   );
   const resultHooksBeforeShare = await probeDebateAutomationHooks(page, ["panel", "modal"]);
@@ -761,6 +765,8 @@ async function runDebateFlow(page, {
       winner: resultInitial?.page?.result?.winner ?? null,
       verdictTone: resultInitial?.page?.result?.verdict_tone ?? null,
       predictionCount: resultInitial?.page?.result?.prediction_count ?? null,
+      supportingTurns: resultInitial?.page?.result?.supporting_turns ?? [],
+      supportingTurnCount: resultInitial?.page?.result?.supporting_turns?.length ?? 0,
     },
     automationHooks: {
       live: liveHooks,

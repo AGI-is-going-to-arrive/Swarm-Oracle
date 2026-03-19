@@ -80,7 +80,7 @@ actual host-reachable address instead of `host.docker.internal`.
 | `GET` | `/api/leaderboard` | Global prediction leaderboard |
 | `POST` | `/api/debate` | Create Debate Arena and return live snapshot immediately |
 | `GET` | `/api/debate/{id}` | Get Debate live snapshot; now includes top-level `counterplay` when present |
-| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay` plus `predictions[]` |
+| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay`, `predictions[]`, structured `judge_rationale`, and key `supporting_turns` used by the result UI / automation layer |
 | `POST` | `/api/debate/{id}/predict` | Submit Debate structured bet; when `is_counterplay=true`, the backend now records dedicated counterplay metadata and keeps prediction scoring compatible |
 | `WS` | `/ws/scenario/{scenario_id}` | Real-time simulation events |
 | `WS` | `/ws/debate/{debate_id}` | Debate live events (`status / agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict`) |
@@ -109,6 +109,9 @@ Command: `.venv/bin/python -m pytest tests/test_debate_api.py tests/test_debate_
 
 Latest verified director-state backendization regression in this session: **17 passed**
 Command: `.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q`
+
+Latest verified Debate judge-rationale / supporting-turn regression in this session: **14 passed**
+Command: `.venv/bin/python -m pytest tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`
 
 ## Database Migrations (Alembic)
 

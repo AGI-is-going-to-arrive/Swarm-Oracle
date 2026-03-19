@@ -288,6 +288,36 @@ npm run build
   - frontend `vitest`：**8 passed**
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过
+- 当前 session 围绕 Debate `judge_rationale / supporting_turns / share copy` 又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q
+
+cd frontend
+npm test -- --run \
+  src/lib/debateShare.test.ts \
+  src/components/DebateShareModal.test.tsx \
+  src/pages/DebateResultView.test.tsx
+npm test -- --run \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/lib/debateShare.test.ts \
+  src/lib/debateCounterplay.test.ts \
+  src/components/DebateBetModal.test.tsx \
+  src/components/DebateShareModal.test.tsx \
+  src/hooks/useDebateWS.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+```
+
+- 结果：
+  - backend `pytest`：**14 passed**
+  - frontend `vitest`：**5 passed**
+  - frontend `vitest`：**16 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
 - 本轮还重新执行了：
 
 ```bash
@@ -386,6 +416,10 @@ safaridriver -p 4444
     - 本次还额外验证了 `SWARM_SAFARI_PANEL_CAPTURE=1`：当默认 session screenshot 出现空白时，`panel capture` 仍可取到 HUD / 面板画面
   - Debate 专项最新成功工件：
     - `frontend/output/e2e/20260318-post-director-goals-debate-full/result.json`
+  - 当前 session 重新验证的 Debate supporting-turn 工件：
+    - `frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json`
+    - `frontend/output/e2e/20260319-debate-supporting-turns-full/result.json`
+    - 这两组工件当前都记录为 `supportingTurnCount = 3`
   - Debate 额外补充工件：
     - `frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
     - `frontend/output/e2e/20260318-debate-civic-v2/result.json`
@@ -395,6 +429,8 @@ safaridriver -p 4444
 node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --width 430 --height 932 --output-dir output/e2e/<DIR>
 node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --profile-hint governance --question 'Should every major city budget be re-approved by a rotating external review board?' --output-dir output/e2e/<DIR>
 ```
+  - Debate 黑盒现在会在结果页显式要求 `supporting_turns.length >= 1`，并把 `supportingTurns / supportingTurnCount` 写进最终 `result.json`
+  - 由于 Debate 的 LLM prompt 变重，黑盒脚本里的 `result_ready` 与结果页等待窗口已经放宽，避免真实慢请求被误判为失败
   - 如需在长时间实现过程中持续盯进度，可用心跳脚本：
 
 ```bash

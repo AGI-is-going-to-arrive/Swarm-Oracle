@@ -83,6 +83,7 @@
 - ✅ LLM 治理与 provider policy 第一段收口（全局并发闸门 / pending 配额 / provider 熔断 + provider policy 贯通 createScenario / createDebate / social copy / scorePredictions）
 - ✅ Director Campaign Lite 增量（`weekly-summary` API + 首页 `weekly challenge / director growth` + 结果页分享 challenge 链接）
 - ✅ Debate Arena 文案增强（回合文案 `LLM 优先、deterministic fallback` + live `phase cue / feed focus` + 更具体的 judge summary）
+- ✅ Debate Arena 裁决解释增强（结果 payload 现带 `judge_rationale / supporting_turns`；share copy 会带 1-2 条关键引文；`debate:desktop` 与 `debate:full` 黑盒现都会显式断言 `supporting_turns.length >= 1`）
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
@@ -90,6 +91,7 @@
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
+- ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前仍是 deterministic；本次增强的是回合文案、结构化裁决理由、关键引文与分享表达
 - ℹ️ 当前分享 challenge 仍是“分享开局配置”，不是 deterministic replay seed；被分享方会按同题同参数再打一遍，而不是复刻同一条已落库世界线
 
 ### 已完成 Sprint

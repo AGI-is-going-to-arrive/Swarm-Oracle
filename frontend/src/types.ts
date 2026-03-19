@@ -362,6 +362,21 @@ export interface DebateResultSummary {
   best_argument: string;
   best_rebuttal: string;
   judge_summary: string;
+  judge_rationale?: {
+    winner_reason?: string | null;
+    loser_gap?: string | null;
+    swing_factor?: string | null;
+    closing_note?: string | null;
+    dimension_rationales?: Record<string, string>;
+    supporting_turns?: Array<{
+      id: string;
+      phase: DebatePhase;
+      speaker_side: DebateSide;
+      speaker_name: string;
+      quote: string;
+      why_it_matters: string;
+    }>;
+  } | null;
   replay: Array<{
     phase: DebatePhase;
     speaker_side: DebateSide;

@@ -39,6 +39,25 @@ function buildPayload() {
       best_argument: 'Best argument',
       best_rebuttal: 'Best rebuttal',
       judge_summary: 'Judge summary',
+      judge_rationale: {
+        winner_reason: 'Proposition turned the case into execution logic.',
+        loser_gap: 'Opposition never converted pressure into a decisive accountability break.',
+        swing_factor: 'Crossfire created the hinge, but the later rounds never fully reversed the board.',
+        closing_note: 'The judge backed the side with the more executable consequence chain.',
+        dimension_rationales: {
+          coherence: 'Proposition kept the cleaner institutional chain from claim to consequence.',
+        },
+        supporting_turns: [
+          {
+            id: 'turn-2',
+            phase: 'crossfire',
+            speaker_side: 'proposition',
+            speaker_name: 'Proposition',
+            quote: 'The cleanest hinge came when Proposition forced the timing question back onto accountability.',
+            why_it_matters: 'This is where the winning side made the verdict feel executable instead of abstract.',
+          },
+        ],
+      },
       replay: [],
     },
     counterplay: {
@@ -146,6 +165,9 @@ describe('DebateResultView', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.kind).toBe('debate_result');
       expect(payload?.page?.result?.winner).toBe('proposition');
+      expect(payload?.page?.result?.judge_rationale?.winner_reason).toContain('execution logic');
+      expect(payload?.page?.result?.supporting_turns?.[0]?.quote).toContain('The cleanest hinge came');
+      expect(payload?.page?.result?.supporting_turns?.[0]?.why_it_matters).toContain('winning side');
       expect(payload?.page?.result?.counterplay_summary).toContain('Counterplay used during Crossfire');
       expect(payload?.page?.result?.counterplay_explanation).toContain('tilted toward Proposition');
       expect(payload?.page?.result?.counterplay_outcome).toBe('miss');
@@ -153,6 +175,10 @@ describe('DebateResultView', () => {
 
     expect(screen.getByText('Counterplay used during Crossfire → Opposition at 60%.')).toBeInTheDocument();
     expect(screen.getAllByText(/tilted toward Proposition/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Proposition turned the case into execution logic.')).toBeInTheDocument();
+    expect(screen.getByText('Proposition kept the cleaner institutional chain from claim to consequence.')).toBeInTheDocument();
+    expect(screen.getByText('The cleanest hinge came when Proposition forced the timing question back onto accountability.')).toBeInTheDocument();
+    expect(screen.getByText('This is where the winning side made the verdict feel executable instead of abstract.')).toBeInTheDocument();
     expect(screen.getByText('debate.counterplay_miss')).toBeInTheDocument();
   });
 

@@ -93,6 +93,8 @@ export function DebateResultView() {
     () => resolveDebateCounterplayOutcome(counterplayRecord, payload?.result),
     [counterplayRecord, payload?.result],
   );
+  const judgeRationale = payload?.result?.judge_rationale ?? null;
+  const supportingTurns = judgeRationale?.supporting_turns ?? [];
 
   const shareContext = useMemo(() => {
     if (!payload) return null;
@@ -107,6 +109,9 @@ export function DebateResultView() {
       oppositionScore: payload.result.score.opposition,
       counterplaySummary,
       counterplayExplanation,
+      supportingTurns: (payload.result.judge_rationale?.supporting_turns ?? []).map((turn) => (
+        `${getDebatePhaseLabel(t, turn.phase)} · ${turn.speaker_name}: ${turn.quote} ${turn.why_it_matters}`
+      )),
       counterplayOutcomeLabel:
         counterplayOutcome === 'hit'
           ? t('debate.counterplay_hit')
@@ -179,6 +184,14 @@ export function DebateResultView() {
           verdict_tone: payload.result.verdict_tone,
           score: payload.result.score,
           prediction_count: payload.predictions.length,
+          judge_rationale: judgeRationale,
+          supporting_turns: supportingTurns.map((turn) => ({
+            id: turn.id,
+            phase: turn.phase,
+            speaker_name: turn.speaker_name,
+            quote: turn.quote,
+            why_it_matters: turn.why_it_matters,
+          })),
           counterplay_summary: counterplaySummary ?? null,
           counterplay_explanation: counterplayExplanation,
           counterplay_outcome: counterplayOutcome,
@@ -190,7 +203,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, loading, payload, shareModalState, showShare]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, shareModalState, showShare, supportingTurns]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -298,6 +311,9 @@ export function DebateResultView() {
                       <strong>{getDebateDimensionLabel(t, dimension)}</strong>
                       <span>{scores.proposition}</span>
                       <span>{scores.opposition}</span>
+                      {judgeRationale?.dimension_rationales?.[dimension] && (
+                        <p className="debate-rule-copy">{judgeRationale.dimension_rationales[dimension]}</p>
+                      )}
                     </article>
                   ))}
                 </div>
@@ -345,6 +361,61 @@ export function DebateResultView() {
                 </div>
               </div>
             </section>
+
+            {judgeRationale && (
+              <section className="debate-panel">
+                <div className="debate-panel__header">
+                  <h2>{t('debate.result_verdict_logic')}</h2>
+                </div>
+                <div className="debate-panel__body">
+                  <div className="debate-turn-list">
+                    {judgeRationale.winner_reason && (
+                      <article className="debate-turn-card">
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.result_winner_reason')}</strong>
+                        </div>
+                        <p className="debate-rule-copy">{judgeRationale.winner_reason}</p>
+                      </article>
+                    )}
+                    {judgeRationale.loser_gap && (
+                      <article className="debate-turn-card">
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.result_loser_gap')}</strong>
+                        </div>
+                        <p className="debate-rule-copy">{judgeRationale.loser_gap}</p>
+                      </article>
+                    )}
+                    {judgeRationale.swing_factor && (
+                      <article className="debate-turn-card">
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.result_swing_factor')}</strong>
+                        </div>
+                        <p className="debate-rule-copy">{judgeRationale.swing_factor}</p>
+                      </article>
+                    )}
+                    {judgeRationale.closing_note && (
+                      <article className="debate-turn-card">
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.result_closing_note')}</strong>
+                        </div>
+                        <p className="debate-rule-copy">{judgeRationale.closing_note}</p>
+                      </article>
+                    )}
+                    {judgeRationale.supporting_turns?.map((turn) => (
+                      <article key={turn.id} className="debate-turn-card">
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.result_supporting_turn')}</strong>
+                          <span className="debate-phase-chip">{getDebatePhaseLabel(t, turn.phase)}</span>
+                          <span>{turn.speaker_name}</span>
+                        </div>
+                        <p className="debate-replay-card__quote">{turn.quote}</p>
+                        <p className="debate-rule-copy">{turn.why_it_matters}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
           </div>
 
           <div className="debate-result-stack">

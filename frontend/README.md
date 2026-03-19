@@ -32,7 +32,7 @@ npm run dev     # → http://localhost:18928
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
 | `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, and a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window |
-| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language |
+| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language |
 | `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer |
 | `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also reads backend `director_state` first and still falls back to backend campaign scenario summary when local archive metadata is missing, showing objective completion, commitment outcome, and final system-track state |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
@@ -47,7 +47,7 @@ npm run dev     # → http://localhost:18928
 - **InterventionModal** — Butterfly Effect user intervention input
 - **GameplayCardsModal** — 14 domain-driven “director cards” that inject high-priority branch events; beyond the original escalation cards, the modal now includes `Audit Reckoning / Intel Blowback / Mandate Snapback / Ceasefire Committee` as counterplay cards, and also shows a profile-specific three-step signature arc plus lightweight `risk / resource` tracks
 - **DebateStageRibbon / DebateMomentumBar / DebateScoreCard** — Debate Arena stage, score, and side-state UI; the momentum HUD is now simplified for readability instead of relying on the old transparent frame overlay
-- **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the bet modal supports counterplay presets, and the share copy now carries both the counterplay summary and the final hit/miss result
+- **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the bet modal supports counterplay presets, and the share copy now carries the counterplay summary, final hit/miss result, plus 1-2 key supporting-turn excerpts from the verdict
 - **themeRegistry.ts** — single source of truth for the 33 Theater / Debate themes, their keyword routing, profile mapping, gameplay frame / badge paths, and Debate-specific UI asset paths
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
 - **Director Layer** — Theater goals and worldline commitment now persist through backend `Scenario.director_state_json`; `scenarioMeta` still caches points / cooldowns / card usage / bets / archive details locally so old runs and local-only gameplay state do not break
@@ -87,6 +87,13 @@ npm run e2e:debate:full
   - `npx tsc --noEmit -p tsconfig.app.json` → passed
   - `npm run build` → passed
   - Debate desktop live/result/share smoke → `frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+- This session also re-ran the Debate judge-rationale / supporting-turn path:
+  - `npm test -- --run src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx` → **5 passed**
+  - `npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx` → **16 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - Debate desktop supporting-turn smoke → `frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json`
+  - Debate full supporting-turn smoke → `frontend/output/e2e/20260319-debate-supporting-turns-full/result.json`
 - This session also re-ran the director-state backendization path:
   - `npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioMeta.test.ts` → **21 passed**
   - `npx tsc --noEmit -p tsconfig.app.json` → passed
@@ -103,7 +110,9 @@ npm run e2e:debate:full
 - Latest full baseline artifact: `frontend/output/e2e/20260318-post-director-goals-full/result.json`
 - ResultView backend-summary smoke artifact: `frontend/output/e2e/20260318-result-backend-summary-smoke-v2/result-final.json`
 - `scripts/e2e-suite.mjs` now writes `browser-launch.json` into the chosen output directory so you can see which browser launch profile actually ran
-- `scripts/e2e-debate-suite.mjs` now provides a Debate-only baseline for `live -> bet -> result -> share`; the latest successful artifact bundle is `frontend/output/e2e/20260318-post-director-goals-debate-full/`
+- `scripts/e2e-debate-suite.mjs` now provides a Debate-only baseline for `live -> bet -> result -> share`; the latest successful artifact bundles are `frontend/output/e2e/20260318-post-director-goals-debate-full/` and `frontend/output/e2e/20260319-debate-supporting-turns-full/`
+- Debate result automation now explicitly requires `supporting_turns.length >= 1`; the final `result.json` also records `supportingTurns` and `supportingTurnCount`
+- Because the richer Debate prompts take longer on real LLM runs, the Debate E2E wait windows were widened so slower but valid responses do not fail black-box runs
 - `scripts/e2e-suite.mjs` and `scripts/e2e-automation.mjs` now normalize `frontend/output/...` arguments to the real frontend root, preventing future runs from writing nested `frontend/frontend/output/...` paths
 - Matrix runs now also recreate samples when an old `scenario_id` resolves to a stale `scene_theme`, not only when the scenario is missing
 - `capture-modes` now records `predictionModalBytes` and `gameplayModalBytes`, and replay recovery waits for `theater_ready === true` before marking the flow healthy again

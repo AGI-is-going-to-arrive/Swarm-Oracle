@@ -43,6 +43,7 @@ describe('DebateShareModal automation callback', () => {
           judgeSummary: 'Judge summary',
           propositionScore: 80,
           oppositionScore: 72,
+          supportingTurns: ['Crossfire · Proposition: The hinge landed here. This is why the verdict stopped feeling abstract.'],
         }}
         onClose={() => {}}
         onAutomationStateChange={onAutomationStateChange}
@@ -62,5 +63,6 @@ describe('DebateShareModal automation callback', () => {
     expect(latestState.copied).toBe(true);
     expect(screen.getByText(/Quick hedge on Opposition at 60%/)).toBeInTheDocument();
     expect(screen.getByText(/Counterplay missed/)).toBeInTheDocument();
+    expect(screen.getByText(/Crossfire · Proposition: The hinge landed here/)).toBeInTheDocument();
   });
 });

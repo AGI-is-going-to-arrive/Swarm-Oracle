@@ -7672,3 +7672,106 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `weekly challenge` / `director growth` / `share challenge` 目前是 Lite，不是赛季系统
   - `share challenge` 共享的是开局配置，不是 deterministic replay seed
   - Debate 胜负 / breakdown / verdict tone 仍是 deterministic 规则；当前升级的是文案与解释层
+
+## 2026-03-19 Debate Judge Rationale + Supporting Turns
+
+- 本轮继续把 Debate 从“只有一句评委摘要”推进到“有结构化裁决理由 + 关键引文”的结果链路：
+  - 后端 `GET /api/debate/{id}/result` 现在除了：
+    - `judge_summary`
+    - `counterplay`
+  - 还会返回：
+    - `judge_rationale`
+      - `winner_reason`
+      - `loser_gap`
+      - `swing_factor`
+      - `closing_note`
+      - `dimension_rationales`
+    - `supporting_turns`
+      - `id / phase / speaker_name / quote / why_it_matters`
+
+- 后端改动：
+  - `backend/app/services/debate.py`
+    - 新增 Debate 结果 payload 的结构化裁决理由组装
+    - `counterplay explanation` 现在优先走 packed breakdown payload，仍保留 deterministic fallback
+    - 结果页 payload 现会带 `supporting_turns`
+  - `backend/app/services/debate_prompts.py`
+    - turn generation prompt 现新增更强的节奏约束：
+      - 至少一条短句
+      - 避免整段都很长
+      - 保留更像现场回击/逼问的语气
+  - `backend/tests/test_debate_prompts.py`
+    - 新增 prompt 约束回归
+
+- 前端改动：
+  - `frontend/src/types.ts`
+    - `DebateResultSummary` 现已补 `judge_rationale`
+    - `judge_rationale` 现可选带 `supporting_turns`
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页现在会渲染：
+      - `winner_reason`
+      - `loser_gap`
+      - `swing_factor`
+      - `closing_note`
+      - `supporting_turns`
+    - `render_game_to_text()` 现在会显式输出：
+      - `page.result.judge_rationale`
+      - `page.result.supporting_turns`
+  - `frontend/src/lib/debateShare.ts`
+    - share copy 现在会带 1-2 条关键引文，而不只是结论句
+  - `frontend/scripts/e2e-debate-suite.mjs`
+    - Debate 黑盒现在会在结果页显式要求：
+      - `supporting_turns.length >= 1`
+    - 最终 `result.json` 现在会写：
+      - `supportingTurns`
+      - `supportingTurnCount`
+    - 由于 Debate 的 LLM prompt 更重，`result_ready` 与结果页等待窗口已放宽，避免真实慢请求被误判为失败
+
+- 本轮新增/更新测试：
+  - 后端：
+    - `backend/tests/test_debate_prompts.py`
+      - 断言中英文 prompt 都保留新的节奏约束文案
+    - `backend/tests/test_debate_service.py`
+      - 断言 `judge_rationale` 与 `supporting_turns` 出现在 result payload
+      - LLM mock 路径也会断言结构化裁决理由被保留
+    - `backend/tests/test_debate_api.py`
+      - 断言 `/api/debate/{id}/result` 返回 `judge_rationale` 与 `supporting_turns`
+  - 前端：
+    - `frontend/src/pages/DebateResultView.test.tsx`
+      - 断言结果页 automation payload 暴露 `judge_rationale / supporting_turns`
+      - 断言页面本身能显示关键引文与“为什么重要”
+    - `frontend/src/lib/debateShare.test.ts`
+      - 断言 share copy 会带 `supporting_turns`
+    - `frontend/src/components/DebateShareModal.test.tsx`
+      - 断言 share modal 会展示关键引文文案
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`
+  - 结果：`14 passed`
+  - `cd frontend && npm test -- --run src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx`
+  - 结果：`5 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx`
+  - 结果：`16 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 结果：通过
+  - `cd frontend && npm run build`
+  - 结果：通过
+
+- 本轮真实 Debate 黑盒取证：
+  - `cd frontend && npm run e2e:debate:desktop -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-debate-supporting-turns-desktop --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json`
+    - 当前记录：`supportingTurnCount = 3`
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-debate-supporting-turns-full --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/20260319-debate-supporting-turns-full/result.json`
+    - 当前记录：
+      - `desktop.supportingTurnCount = 3`
+      - `mobile.supportingTurnCount = 3`
+  - 后端真实运行日志中，`http://127.0.0.1:8318/v1/chat/completions` 在这些黑盒期间被多次命中；说明这轮增强不是只停留在 mock 测试，而是已经在真实 Debate 路径里走到了 LLM
+
+- 当前状态：
+  - Debate 结果页现在不只是给“谁赢了”，还会给“为什么这样判”以及“哪几句最关键”
+  - share copy 现在也能把这场辩论里最关键的 1-2 句带出去
+  - 但胜负 / `verdict_tone` / 分数核心仍然是 deterministic 真值；这轮增强的是表达层、解释层和可观测性，不是把裁决本身交给 LLM

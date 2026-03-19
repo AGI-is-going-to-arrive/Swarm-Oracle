@@ -80,6 +80,12 @@ async def test_run_debate_background_finishes_with_structured_result():
         "adaptability",
         "impact",
     }
+    assert result["result"]["judge_rationale"]["winner_reason"]
+    assert result["result"]["judge_rationale"]["loser_gap"]
+    assert result["result"]["judge_rationale"]["swing_factor"]
+    assert result["result"]["judge_rationale"]["dimension_rationales"]["coherence"]
+    assert result["result"]["judge_rationale"]["supporting_turns"]
+    assert result["result"]["judge_rationale"]["supporting_turns"][0]["quote"]
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
     assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
@@ -167,7 +173,22 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
 
     async def _fake_llm_call_json(*args, **kwargs):
         counter["value"] += 1
-        return {"content": f"LLM turn #{counter['value']}"}
+        if counter["value"] <= 9:
+            return {"content": f"LLM turn #{counter['value']}"}
+        return {
+            "summary": "LLM judge summary",
+            "winner_reason": "LLM winner reason",
+            "loser_gap": "LLM loser gap",
+            "swing_factor": "LLM swing factor",
+            "closing_note": "LLM closing note",
+            "dimension_rationales": {
+                "coherence": "LLM coherence",
+                "evidence": "LLM evidence",
+                "adaptability": "LLM adaptability",
+                "impact": "LLM impact",
+            },
+            "counterplay_explanation": "",
+        }
 
     monkeypatch.setattr(debate_module, "llm_call_json", _fake_llm_call_json)
 
@@ -178,7 +199,13 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
 
     await run_debate_background(debate.id, ws_callback=_push, quota_key="debate-user")
     snapshot = load_debate_snapshot(debate.id)
+    result = load_debate_result_payload(debate.id)
 
     assert snapshot is not None
+    assert result is not None
     assert snapshot["turns"][0]["content"] == "LLM turn #1"
     assert snapshot["turns"][-1]["content"] == "LLM turn #9"
+    assert result["result"]["judge_summary"] == "LLM judge summary"
+    assert result["result"]["judge_rationale"]["winner_reason"] == "LLM winner reason"
+    assert result["result"]["judge_rationale"]["dimension_rationales"]["impact"] == "LLM impact"
+    assert result["result"]["judge_rationale"]["supporting_turns"]

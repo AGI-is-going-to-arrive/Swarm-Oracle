@@ -88,6 +88,9 @@ async def test_predict_then_fetch_result(client: TestClient):
     assert payload["predictions"][0]["counterplay_variant"] == "reversal"
     assert payload["predictions"][0]["score"] is not None
     assert payload["result"]["judge_summary"]
+    assert payload["result"]["judge_rationale"]["winner_reason"]
+    assert payload["result"]["judge_rationale"]["dimension_rationales"]["coherence"]
+    assert payload["result"]["judge_rationale"]["supporting_turns"]
 
 
 def test_predict_rejects_invalid_target_value(client: TestClient):

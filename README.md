@@ -19,7 +19,7 @@
 | **Expanded Runtime Sprite Pool** | 25 张角色 sprite 已进入运行时清单；本轮新接入 `alchemist / assassin / bard / knight / monk / thief / witch` 7 张精灵，前后端 persona/role 映射也已同步收口 |
 | **Semantic Scene Pool** | 当前 registry 共有 33 个主题条目：30 张 Theater 语义背景 + 3 张 Debate 专属背景；`law / faith / generic` 已补进 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体，Debate 另有 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张专用背景 |
 | **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status/weekly-summary` API；首页会同时显示 daily challenge 真值、本周赛道和导演成长概览，结果页可直接复制分享挑战链接 |
-| **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页会显示更像评委总结的 `judge summary`，`counterplay` 也会带命中/未中解释并进入分享文案 |
+| **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页除 `judge summary` 外还会返回结构化 `judge_rationale` 与 `supporting_turns`，分享文案也会带 1-2 条关键引文；胜负 / `verdict_tone` / 分数核心仍保持 deterministic 真值 |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
 | **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
@@ -168,6 +168,14 @@ cd frontend && npm run e2e:full
   - 前端：`challengeShare / InputView / ResultView` → **11 passed**
   - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `frontend`：`npm run build` → 通过
+- 本次 session 围绕 Debate `judge_rationale / supporting_turns / share copy` 又补跑：
+  - 后端：`tests/test_debate_prompts.py / tests/test_debate_service.py / tests/test_debate_api.py` → **14 passed**
+  - 前端：`debateShare / DebateShareModal / DebateResultView` → **5 passed**
+  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay / DebateBetModal / DebateShareModal / useDebateWS` → **16 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
+  - Debate desktop 黑盒：`frontend/output/e2e/20260319-debate-supporting-turns-desktop/result.json` → 通过，`supportingTurnCount = 3`
+  - Debate full 黑盒：`frontend/output/e2e/20260319-debate-supporting-turns-full/result.json` → 通过，desktop / mobile 都满足 `supporting_turns.length >= 1`
 - 本次 session 围绕默认模型、LLM 治理、BYOK/provider policy 收口又补跑：
   - 后端：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**
   - 后端：`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**
@@ -216,6 +224,7 @@ cd frontend && npm run e2e:full
   - `frontend/output/web-game/20260319-post-cross-browser-client/state-0.json`
   - `frontend/output/web-game/20260319-post-cross-browser-client/shot-0.png`
 - `scripts/e2e-debate-suite.mjs` 现支持 `--width / --height / --question / --profile-hint`，可直接补移动端新视口或指定 Debate 主题工件
+- `scripts/e2e-debate-suite.mjs` 当前会在结果页显式校验 `supporting_turns.length >= 1`，并把 `supportingTurns / supportingTurnCount` 写进最终 `result.json`；由于 Debate 的 LLM prompt 更重，`result_ready` 与结果页等待窗口也已放宽，避免真实慢请求被脚本误判为失败
 - Safari 默认 session screenshot 偶尔仍会拍到空白 Theater 画布；若需要核对 HUD / 面板可见性，可额外启用 `SWARM_SAFARI_PANEL_CAPTURE=1` 产出 panel capture 工件
 - 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 

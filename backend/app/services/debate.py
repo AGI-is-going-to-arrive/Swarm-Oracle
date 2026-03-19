@@ -30,7 +30,7 @@ from app.services.debate_prompts import (
     resolve_debate_language,
     select_debate_scene,
 )
-from app.services.debate_scoring import DebatePlan, PHASES_WITH_SPEAKERS, build_debate_plan
+from app.services.debate_scoring import DEBATE_DIMENSIONS, DebatePlan, PHASES_WITH_SPEAKERS, build_debate_plan
 from app.services.llm_client import format_untrusted_text_block, llm_call_json, llm_request_scope
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,21 @@ logger = logging.getLogger(__name__)
 DebateBroadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 _running_debates: set[str] = set()
+
+_DEBATE_DIMENSION_LABELS = {
+    "zh": {
+        "coherence": "论证完整度",
+        "evidence": "证据力度",
+        "adaptability": "应变能力",
+        "impact": "后果冲击",
+    },
+    "en": {
+        "coherence": "coherence",
+        "evidence": "evidence",
+        "adaptability": "adaptability",
+        "impact": "impact",
+    },
+}
 
 
 def _now() -> datetime:
@@ -82,6 +97,93 @@ def _display_phase(language: str, phase: DebatePhase) -> str:
             DebatePhase.VERDICT: "裁决",
         }[phase]
     return phase.value
+
+
+def _dimension_label(language: str, dimension: str) -> str:
+    return _DEBATE_DIMENSION_LABELS["zh" if language == "zh" else "en"].get(dimension, dimension)
+
+
+def _extract_breakdown_dimensions(raw_breakdown: dict[str, Any] | None) -> dict[str, dict[str, int]]:
+    if not isinstance(raw_breakdown, dict):
+        return {}
+
+    source = raw_breakdown.get("dimensions") if isinstance(raw_breakdown.get("dimensions"), dict) else raw_breakdown
+    normalized: dict[str, dict[str, int]] = {}
+    for dimension in DEBATE_DIMENSIONS:
+        scores = source.get(dimension)
+        if not isinstance(scores, dict):
+            continue
+        try:
+            proposition = max(0, int(scores.get("proposition", 0)))
+        except (TypeError, ValueError):
+            proposition = 0
+        try:
+            opposition = max(0, int(scores.get("opposition", 0)))
+        except (TypeError, ValueError):
+            opposition = 0
+        normalized[dimension] = {
+            "proposition": proposition,
+            "opposition": opposition,
+        }
+    return normalized
+
+
+def _extract_judge_rationale(raw_breakdown: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(raw_breakdown, dict):
+        return None
+    source = raw_breakdown.get("judge_rationale")
+    if not isinstance(source, dict):
+        return None
+
+    dimension_rationales: dict[str, str] = {}
+    raw_dimensions = source.get("dimension_rationales")
+    if isinstance(raw_dimensions, dict):
+        for dimension in DEBATE_DIMENSIONS:
+            value = raw_dimensions.get(dimension)
+            if isinstance(value, str) and value.strip():
+                dimension_rationales[dimension] = value.strip()
+
+    rationale = {
+        "winner_reason": str(source.get("winner_reason", "")).strip() or None,
+        "loser_gap": str(source.get("loser_gap", "")).strip() or None,
+        "swing_factor": str(source.get("swing_factor", "")).strip() or None,
+        "closing_note": str(source.get("closing_note", "")).strip() or None,
+        "dimension_rationales": dimension_rationales,
+    }
+    if not any(
+        [
+            rationale["winner_reason"],
+            rationale["loser_gap"],
+            rationale["swing_factor"],
+            rationale["closing_note"],
+            dimension_rationales,
+        ]
+    ):
+        return None
+    return rationale
+
+
+def _extract_counterplay_explanation(raw_breakdown: dict[str, Any] | None) -> str | None:
+    if not isinstance(raw_breakdown, dict):
+        return None
+    value = raw_breakdown.get("counterplay_explanation")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _pack_breakdown_payload(
+    *,
+    dimensions: dict[str, dict[str, int]],
+    judge_rationale: dict[str, Any] | None,
+    counterplay_explanation: str | None,
+) -> dict[str, Any]:
+    return {
+        "dimensions": dimensions,
+        "judge_rationale": judge_rationale or {},
+        "counterplay_explanation": counterplay_explanation or "",
+    }
 
 
 def _polish_generated_turn(
@@ -175,18 +277,172 @@ def _build_judge_summary_fallback(
         hedge_outcome = "hit" if counterplay_context["outcome"] == "hit" else "missed"
         base += (
             f" The counterplay hedge backed {hedge_target} and {hedge_outcome}, which shows how the debate's late direction did or did not break from the visible fault line."
-        )
+    )
     return base[:900]
 
 
-async def _generate_judge_summary(
+def _build_dimension_rationales_fallback(
+    *,
+    debate: Debate,
+    plan: DebatePlan,
+) -> dict[str, str]:
+    loser_side = "opposition" if plan.winner == "proposition" else "proposition"
+    winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
+    loser_label = _display_value(debate.language, DebatePredictionKind.WINNER, loser_side)
+
+    rationales: dict[str, str] = {}
+    for dimension in DEBATE_DIMENSIONS:
+        scores = plan.breakdown.get(dimension, {})
+        winner_score = scores.get(plan.winner, 0)
+        loser_score = scores.get(loser_side, 0)
+        lead = abs(winner_score - loser_score)
+        label = _dimension_label(debate.language, dimension)
+        if debate.language == "zh":
+            if winner_score >= loser_score:
+                rationales[dimension] = (
+                    f"{winner_label}在{label}上领先 {lead} 格，关键在于它把论点推进成了更具体的机制和执行后果。"
+                )
+            else:
+                rationales[dimension] = (
+                    f"{loser_label}在{label}上有过亮点，但这项优势没有延续成最终判词。"
+                )
+        else:
+            if winner_score >= loser_score:
+                rationales[dimension] = (
+                    f"{winner_label} held the edge on {label} by {lead}, mainly by turning claims into a clearer mechanism and consequence chain."
+                )
+            else:
+                rationales[dimension] = (
+                    f"{loser_label} showed flashes on {label}, but never converted that edge into the final verdict."
+                )
+    return rationales
+
+
+def _build_judge_analysis_fallback(
+    *,
+    debate: Debate,
+    plan: DebatePlan,
+    best_argument: str,
+    best_rebuttal: str,
+    counterplay_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    loser_side = "opposition" if plan.winner == "proposition" else "proposition"
+    winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
+    loser_label = _display_value(debate.language, DebatePredictionKind.WINNER, loser_side)
+    tone_label = _display_value(debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone)
+    margin = abs(plan.score["proposition"] - plan.score["opposition"])
+    dimension_rationales = _build_dimension_rationales_fallback(debate=debate, plan=plan)
+    ranked_dimensions = sorted(
+        DEBATE_DIMENSIONS,
+        key=lambda dimension: (
+            plan.breakdown.get(dimension, {}).get(plan.winner, 0)
+            - plan.breakdown.get(dimension, {}).get(loser_side, 0)
+        ),
+        reverse=True,
+    )
+    decisive_dimension = ranked_dimensions[0]
+    decisive_label = _dimension_label(debate.language, decisive_dimension)
+    counterplay_explanation = None
+    if counterplay_context:
+        counterplay_explanation = _build_counterplay_explanation(
+            debate=debate,
+            kind=counterplay_context["kind"],
+            target_value=counterplay_context["target_value"],
+            phase=counterplay_context["phase"],
+            outcome=counterplay_context["outcome"],
+            phase_score=counterplay_context.get("phase_score", {"proposition": 0, "opposition": 0}),
+        )
+
+    if debate.language == "zh":
+        winner_reason = (
+            f"{winner_label}真正赢在{decisive_label}：它把“{best_argument}”这条线推进成了谁承担代价、谁掌握执行权的现实后果。"
+        )
+        loser_gap = (
+            f"{loser_label}并非没有打出压力，但“{best_rebuttal}”这一下没能继续展开成足以改写结论的责任链或执行缺口。"
+        )
+        if counterplay_context:
+            swing_factor = (
+                f"关键转折出现在{_display_phase(debate.language, counterplay_context['phase'])}之后。"
+                f"局面虽然出现过对冲想象，但最后还是收束到“{tone_label}”这条判词。"
+            )
+        else:
+            swing_factor = (
+                f"真正决定胜负的不是单句气势，而是谁在{decisive_label}上持续把分差拉开，并稳住了 {margin} 分级别的终局。"
+            )
+        closing_note = (
+            f"评委最后选的不是更会喊口号的一边，而是更能把“{tone_label}”落成可执行结果的一边。"
+        )
+    else:
+        winner_reason = (
+            f"{winner_label} won on {decisive_label}: it turned '{best_argument}' into a concrete chain of consequence, ownership, and execution."
+        )
+        loser_gap = (
+            f"{loser_label} created pressure, but '{best_rebuttal}' never expanded into the kind of accountability or execution gap that could rewrite the verdict."
+        )
+        if counterplay_context:
+            swing_factor = (
+                f"The decisive turn came after { _display_phase(debate.language, counterplay_context['phase']) }. "
+                f"The room hinted at a hedge, but the debate still closed in a {tone_label} direction."
+            )
+        else:
+            swing_factor = (
+                f"The result turned on sustained edge in {decisive_label}, not one loud exchange, and that edge held through a {margin}-point finish."
+            )
+        closing_note = (
+            f"The judge ultimately backed the side that made the {tone_label} outcome feel more executable rather than more theatrical."
+        )
+
+    return {
+        "summary": _build_judge_summary_fallback(
+            debate=debate,
+            plan=plan,
+            best_argument=best_argument,
+            best_rebuttal=best_rebuttal,
+            counterplay_context=counterplay_context,
+        ),
+        "winner_reason": winner_reason,
+        "loser_gap": loser_gap,
+        "swing_factor": swing_factor,
+        "closing_note": closing_note,
+        "dimension_rationales": dimension_rationales,
+        "counterplay_explanation": counterplay_explanation,
+    }
+
+
+def _coerce_judge_analysis_payload(raw: dict[str, Any], fallback: dict[str, Any], *, language: str) -> dict[str, Any]:
+    dimension_rationales: dict[str, str] = {}
+    raw_dimension_rationales = raw.get("dimension_rationales")
+    if isinstance(raw_dimension_rationales, dict):
+        for dimension in DEBATE_DIMENSIONS:
+            value = raw_dimension_rationales.get(dimension)
+            if isinstance(value, str) and value.strip():
+                dimension_rationales[dimension] = value.strip()
+    for dimension in DEBATE_DIMENSIONS:
+        dimension_rationales.setdefault(dimension, fallback["dimension_rationales"].get(dimension, ""))
+
+    summary = str(raw.get("summary") or raw.get("content") or "").strip()
+    if summary:
+        summary = _polish_generated_turn(summary, language=language, phase=DebatePhase.VERDICT)
+
+    return {
+        "summary": summary or fallback["summary"],
+        "winner_reason": str(raw.get("winner_reason") or "").strip() or fallback["winner_reason"],
+        "loser_gap": str(raw.get("loser_gap") or "").strip() or fallback["loser_gap"],
+        "swing_factor": str(raw.get("swing_factor") or "").strip() or fallback["swing_factor"],
+        "closing_note": str(raw.get("closing_note") or "").strip() or fallback["closing_note"],
+        "dimension_rationales": dimension_rationales,
+        "counterplay_explanation": str(raw.get("counterplay_explanation") or "").strip() or fallback.get("counterplay_explanation"),
+    }
+
+
+async def _generate_judge_analysis(
     *,
     debate_id: str,
     debate: Debate,
     plan: DebatePlan,
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     engine = get_engine()
     with Session(engine) as session:
         turns = list(
@@ -219,17 +475,18 @@ async def _generate_judge_summary(
         fallback=best_argument,
         phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL},
     )
-    fallback = _build_judge_summary_fallback(
+    counterplay_context = _latest_counterplay_context(
+        debate=debate,
+        plan=plan,
+        counterplays=counterplays,
+        predictions=predictions,
+    )
+    fallback = _build_judge_analysis_fallback(
         debate=debate,
         plan=plan,
         best_argument=best_argument,
         best_rebuttal=best_rebuttal,
-        counterplay_context=_latest_counterplay_context(
-            debate=debate,
-            plan=plan,
-            counterplays=counterplays,
-            predictions=predictions,
-        ),
+        counterplay_context=counterplay_context,
     )
 
     if not settings.DEBATE_USE_LLM:
@@ -237,67 +494,70 @@ async def _generate_judge_summary(
 
     winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
     tone_label = _display_value(debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone)
+    highlight_turns = turns[-4:] if len(turns) >= 4 else turns
+    highlight_block = "\n".join(
+        f"- {_display_phase(debate.language, turn.phase)} / {turn.speaker_name}: {turn.content}"
+        for turn in highlight_turns
+    ) or "(none)"
     if debate.language == "zh":
         counterplay_block = ""
-        counterplay_context = _latest_counterplay_context(
-            debate=debate,
-            plan=plan,
-            counterplays=counterplays,
-            predictions=predictions,
-        )
         if counterplay_context:
             counterplay_block = (
                 f"{format_untrusted_text_block('反制押注', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"
             )
         prompt = (
-            "你是 SwarmOracle Debate Arena 的评委总结器。\n"
-            "你要写的是结果页上的评委摘要，不是重复判词标题。\n"
+            "你是 SwarmOracle Debate Arena 的终局评委与解说员。\n"
+            "请输出一份既有判断力、又保留现场感的裁决理由 JSON。\n"
             f"{format_untrusted_text_block('辩题问题', debate.question, max_chars=600)}\n"
             f"{format_untrusted_text_block('正式动议', debate.motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('最佳论点', best_argument, max_chars=500)}\n"
             f"{format_untrusted_text_block('最佳反驳', best_rebuttal, max_chars=500)}\n"
             f"{format_untrusted_text_block('维度 breakdown', str(plan.breakdown), max_chars=1200)}\n"
+            f"{format_untrusted_text_block('关键回合摘录', highlight_block, max_chars=1400)}\n"
             f"{counterplay_block}"
             f"胜方：{winner_label}\n"
             f"判词语气：{tone_label}\n"
             "要求：\n"
-            "- 3-4 句\n"
-            "- 明确提到胜方为什么赢\n"
-            "- 必须分别点到正反双方各一个具体优点/漏洞\n"
-            "- 如果有反制押注，解释它为什么命中或为什么没有改变结局\n"
-            "- 不要空话，不要泛泛地说“双方都很精彩”\n"
-            "- 只输出严格 JSON：{\"content\": \"...\"}\n"
+            "- 语言要像一个真正看完整场辩论的评委，不要写模板腔\n"
+            "- summary 用 3-4 句写整场裁决，必须明确胜方为什么赢\n"
+            "- winner_reason / loser_gap / swing_factor / closing_note 各写 1-2 句\n"
+            "- dimension_rationales 必须覆盖 coherence / evidence / adaptability / impact 四项\n"
+            "- 如果没有反制押注，counterplay_explanation 输出空字符串\n"
+            "- 不要泛泛说“双方都很精彩”，要点到机制、执行后果或责任链\n"
+            "- 只输出严格 JSON："
+            "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
+            "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
+            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\"}\n"
         )
     else:
         counterplay_block = ""
-        counterplay_context = _latest_counterplay_context(
-            debate=debate,
-            plan=plan,
-            counterplays=counterplays,
-            predictions=predictions,
-        )
         if counterplay_context:
             counterplay_block = (
                 f"{format_untrusted_text_block('Counterplay hedge', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"
             )
         prompt = (
-            "You are writing the judge summary for SwarmOracle Debate Arena.\n"
-            "This is the result-page summary, not a generic verdict slogan.\n"
+            "You are the final judge and color commentator for SwarmOracle Debate Arena.\n"
+            "Return a JSON verdict package that sounds like a human judge who actually watched the debate unfold.\n"
             f"{format_untrusted_text_block('Debate question', debate.question, max_chars=600)}\n"
             f"{format_untrusted_text_block('Motion', debate.motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('Best argument', best_argument, max_chars=500)}\n"
             f"{format_untrusted_text_block('Best rebuttal', best_rebuttal, max_chars=500)}\n"
             f"{format_untrusted_text_block('Dimension breakdown', str(plan.breakdown), max_chars=1200)}\n"
+            f"{format_untrusted_text_block('Key turn highlights', highlight_block, max_chars=1400)}\n"
             f"{counterplay_block}"
             f"Winner: {winner_label}\n"
             f"Verdict tone: {tone_label}\n"
             "Requirements:\n"
-            "- 3-4 sentences\n"
-            "- Explain why the winner actually won\n"
-            "- Mention one concrete strength or flaw from each side\n"
-            "- If there is a counterplay hedge, explain why it hit or why it failed to redirect the result\n"
-            "- Avoid generic praise like 'both sides were compelling'\n"
-            "- Output strict JSON only: {\"content\": \"...\"}\n"
+            "- The language should sound like a sharp human judge, not a boilerplate analyst\n"
+            "- summary must be 3-4 sentences and explain why the winner actually won\n"
+            "- winner_reason / loser_gap / swing_factor / closing_note should each be 1-2 sentences\n"
+            "- dimension_rationales must cover coherence / evidence / adaptability / impact\n"
+            "- If no counterplay hedge exists, set counterplay_explanation to an empty string\n"
+            "- Avoid generic praise and point to mechanisms, consequences, or accountability chains\n"
+            "- Output strict JSON only: "
+            "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
+            "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
+            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\"}\n"
         )
 
     try:
@@ -312,16 +572,14 @@ async def _generate_judge_summary(
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
-                fallback_mode="agent_message",
             )
-        content = _polish_generated_turn(
-            str(result.get("content", "") or ""),
+        return _coerce_judge_analysis_payload(
+            result,
+            fallback,
             language=debate.language,
-            phase=DebatePhase.VERDICT,
         )
-        return content or fallback
     except Exception as exc:
-        logger.warning("Judge summary fallback for debate %s: %s", debate_id, exc)
+        logger.warning("Judge analysis fallback for debate %s: %s", debate_id, exc)
         return fallback
 
 
@@ -548,14 +806,32 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             turns=turns,
             counterplays=counterplays,
         )
+        judge_rationale = _extract_judge_rationale(debate.breakdown_json)
+        if judge_rationale is not None:
+            judge_rationale["supporting_turns"] = _build_supporting_turns(
+                turns=turns,
+                debate=debate,
+                plan=DebatePlan(
+                    winner=debate.winner or "proposition",
+                    verdict_tone=debate.verdict_tone or "balance",
+                    score={
+                        "proposition": debate.score_proposition,
+                        "opposition": debate.score_opposition,
+                    },
+                    breakdown=_extract_breakdown_dimensions(debate.breakdown_json),
+                    phase_deltas=build_debate_plan(debate.question).phase_deltas,
+                    audience_meter=debate.audience_meter,
+                ),
+            )
         snapshot["result"] = {
             "winner": debate.winner,
             "verdict_tone": debate.verdict_tone,
             "score": snapshot["score"],
-            "breakdown": debate.breakdown_json or {},
+            "breakdown": _extract_breakdown_dimensions(debate.breakdown_json),
             "best_argument": debate.best_argument,
             "best_rebuttal": debate.best_rebuttal,
             "judge_summary": debate.judge_summary,
+            "judge_rationale": judge_rationale,
             "replay": _build_replay_digest(
                 turns,
                 debate=debate,
@@ -727,14 +1003,14 @@ async def run_debate_background(
             },
         )
 
-        judge_summary = await _generate_judge_summary(
+        judge_analysis = await _generate_judge_analysis(
             debate_id=debate_id,
             debate=debate,
             plan=plan,
             llm_overrides=llm_overrides,
             quota_key=quota_key,
         )
-        finalized = _finalize_debate(debate_id, plan, judge_summary=judge_summary)
+        finalized = _finalize_debate(debate_id, plan, judge_analysis=judge_analysis)
         await ws_callback(
             debate_id,
             {
@@ -746,10 +1022,11 @@ async def run_debate_background(
                         "proposition": finalized.score_proposition,
                         "opposition": finalized.score_opposition,
                     },
-                    "breakdown": finalized.breakdown_json or {},
+                    "breakdown": _extract_breakdown_dimensions(finalized.breakdown_json),
                     "best_argument": finalized.best_argument,
                     "best_rebuttal": finalized.best_rebuttal,
                     "judge_summary": finalized.judge_summary,
+                    "judge_rationale": _extract_judge_rationale(finalized.breakdown_json),
                 },
             },
         )
@@ -905,7 +1182,7 @@ def _update_live_score(*, debate_id: str, proposition: int, opposition: int) -> 
         session.commit()
 
 
-def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_summary: str | None = None) -> Debate:
+def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_analysis: dict[str, Any] | None = None) -> Debate:
     engine = get_engine()
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
@@ -926,7 +1203,6 @@ def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_summary: str | N
         debate.audience_meter = plan.audience_meter
         debate.winner = plan.winner
         debate.verdict_tone = plan.verdict_tone
-        debate.breakdown_json = plan.breakdown
         debate.best_argument = _pick_best_turn(turns, winner_side=plan.winner, fallback="")
         debate.best_rebuttal = _pick_best_turn(
             turns,
@@ -934,7 +1210,27 @@ def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_summary: str | N
             fallback=debate.best_argument,
             phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL},
         )
-        debate.judge_summary = judge_summary or (turns[-1].content if turns else "")
+        latest_counterplay_explanation = None
+        if judge_analysis:
+            latest_counterplay_explanation = str(judge_analysis.get("counterplay_explanation") or "").strip() or None
+        debate.breakdown_json = _pack_breakdown_payload(
+            dimensions=plan.breakdown,
+            judge_rationale=(
+                {
+                    "winner_reason": judge_analysis.get("winner_reason"),
+                    "loser_gap": judge_analysis.get("loser_gap"),
+                    "swing_factor": judge_analysis.get("swing_factor"),
+                    "closing_note": judge_analysis.get("closing_note"),
+                    "dimension_rationales": judge_analysis.get("dimension_rationales") or {},
+                }
+                if judge_analysis else None
+            ),
+            counterplay_explanation=latest_counterplay_explanation,
+        )
+        debate.judge_summary = (
+            str(judge_analysis.get("summary") or "").strip()
+            if judge_analysis else ""
+        ) or (turns[-1].content if turns else "")
         debate.updated_at = _now()
         session.add(debate)
 
@@ -1050,6 +1346,7 @@ def _build_counterplay_result(
     turns: list[DebateTurn],
     counterplays: list[DebateCounterplay] | None = None,
 ) -> dict[str, Any] | None:
+    packed_explanation = _extract_counterplay_explanation(debate.breakdown_json)
     explicit = sorted(counterplays or [], key=lambda item: item.created_at, reverse=True)
     if explicit:
         latest = explicit[0]
@@ -1069,13 +1366,16 @@ def _build_counterplay_result(
             "variant": latest.variant,
             "outcome": outcome,
             "phase_score": phase_score,
-            "explanation": _build_counterplay_explanation(
-                debate=debate,
-                kind=latest.kind,
-                target_value=latest.target_value,
-                phase=latest.phase,
-                outcome=outcome,
-                phase_score=phase_score,
+            "explanation": (
+                packed_explanation
+                or _build_counterplay_explanation(
+                    debate=debate,
+                    kind=latest.kind,
+                    target_value=latest.target_value,
+                    phase=latest.phase,
+                    outcome=outcome,
+                    phase_score=phase_score,
+                )
             ) if outcome else None,
             "user_name": latest.user_name,
             "created_at": latest.created_at.isoformat(),
@@ -1113,13 +1413,16 @@ def _build_counterplay_result(
         "variant": latest_prediction.counterplay_variant,
         "outcome": outcome,
         "phase_score": phase_score,
-        "explanation": _build_counterplay_explanation(
-            debate=debate,
-            kind=latest_prediction.kind,
-            target_value=latest_prediction.target_value,
-            phase=latest_prediction.counterplay_phase,
-            outcome=outcome,
-            phase_score=phase_score,
+        "explanation": (
+            packed_explanation
+            or _build_counterplay_explanation(
+                debate=debate,
+                kind=latest_prediction.kind,
+                target_value=latest_prediction.target_value,
+                phase=latest_prediction.counterplay_phase,
+                outcome=outcome,
+                phase_score=phase_score,
+            )
         ) if outcome else None,
         "user_name": latest_prediction.user_name,
         "created_at": latest_prediction.created_at.isoformat(),
@@ -1159,6 +1462,13 @@ def _latest_counterplay_context(
     counterplays: list[DebateCounterplay],
     predictions: list[DebatePrediction],
 ) -> dict[str, Any] | None:
+    def _plan_phase_score(phase: DebatePhase) -> dict[str, int]:
+        phase_delta = plan.phase_deltas.get(phase, {})
+        return {
+            "proposition": phase_delta.get("proposition", {}).get("proposition", 0),
+            "opposition": phase_delta.get("opposition", {}).get("opposition", 0),
+        }
+
     explicit = sorted(counterplays, key=lambda item: item.created_at, reverse=True)
     if explicit:
         latest = explicit[0]
@@ -1175,6 +1485,7 @@ def _latest_counterplay_context(
             "variant": latest.variant,
             "outcome": outcome,
             "user_name": latest.user_name,
+            "phase_score": _plan_phase_score(latest.phase),
         }
 
     fallback = [
@@ -1198,6 +1509,7 @@ def _latest_counterplay_context(
         "variant": latest_prediction.counterplay_variant,
         "outcome": outcome,
         "user_name": latest_prediction.user_name,
+        "phase_score": _plan_phase_score(latest_prediction.counterplay_phase),
     }
 
 
@@ -1236,6 +1548,102 @@ def _pick_best_turn(
         reverse=True,
     )
     return ranked[0].content
+
+
+def _pick_best_turn_record(
+    turns: list[DebateTurn],
+    *,
+    side: str,
+    phases: set[DebatePhase] | None = None,
+) -> DebateTurn | None:
+    candidates = [
+        turn for turn in turns
+        if turn.speaker_side.value == side
+        and (phases is None or turn.phase in phases)
+    ]
+    if not candidates:
+        return None
+    ranked = sorted(
+        candidates,
+        key=lambda turn: (
+            (turn.score_delta_json or {}).get(side, 0),
+            turn.sequence,
+        ),
+        reverse=True,
+    )
+    return ranked[0]
+
+
+def _supporting_turn_reason(language: str, kind: str, phase: DebatePhase) -> str:
+    phase_label = _display_phase(language, phase)
+    if language == "zh":
+        mapping = {
+            "winner": f"这是胜方最能把论点落到机制和执行后果上的一击，真正把局势往 {phase_label} 的方向推实了。",
+            "pressure": f"这是败方最有威胁的一次施压，说明它并不是没抓到漏洞，只是没能把压力延续成改判。",
+            "swing": f"这一段基本锁住了整场辩论的收束方向，评委后面的判断就是沿着这里的分歧继续放大。",
+            "verdict": "这句裁决把前面所有争点压成了最后的结论，是评委视角下的明确盖棺。",
+        }
+        return mapping.get(kind, "这是评委在复盘时最值得回看的关键一段。")
+    mapping = {
+        "winner": f"This is where the winning side made its clearest mechanism-and-consequence case and pushed the debate firmly through {phase_label}.",
+        "pressure": "This was the losing side's sharpest pressure point, showing it did expose a real weakness even if it failed to flip the verdict.",
+        "swing": "This exchange effectively locked the direction of the debate, and the judge's later reasoning keeps building on it.",
+        "verdict": "This line compresses the whole debate into the judge's final call.",
+    }
+    return mapping.get(kind, "This is one of the turns that matters most when replaying the verdict logic.")
+
+
+def _build_supporting_turns(
+    *,
+    turns: list[DebateTurn],
+    debate: Debate,
+    plan: DebatePlan,
+) -> list[dict[str, Any]]:
+    if not turns:
+        return []
+
+    loser_side = "opposition" if plan.winner == "proposition" else "proposition"
+    winner_turn = _pick_best_turn_record(turns, side=plan.winner)
+    pressure_turn = _pick_best_turn_record(
+        turns,
+        side=loser_side,
+        phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL, DebatePhase.CLOSING},
+    )
+    swing_phase = max(
+        PHASES_WITH_SPEAKERS,
+        key=lambda phase: abs(
+            plan.phase_deltas.get(phase, {}).get("proposition", {}).get("proposition", 0)
+            - plan.phase_deltas.get(phase, {}).get("opposition", {}).get("opposition", 0)
+        ),
+    )
+    swing_turn = _pick_best_turn_record(turns, side=plan.winner, phases={swing_phase})
+    verdict_turn = next((turn for turn in reversed(turns) if turn.phase == DebatePhase.VERDICT), None)
+
+    selected: list[tuple[str, DebateTurn | None]] = [
+        ("winner", winner_turn),
+        ("pressure", pressure_turn),
+        ("swing", swing_turn),
+        ("verdict", verdict_turn),
+    ]
+    supporting_turns: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for kind, turn in selected:
+        if turn is None or turn.id in seen_ids:
+            continue
+        seen_ids.add(turn.id)
+        supporting_turns.append(
+            {
+                "id": turn.id,
+                "phase": turn.phase.value,
+                "speaker_side": turn.speaker_side.value,
+                "speaker_name": turn.speaker_name,
+                "quote": turn.content,
+                "why_it_matters": _supporting_turn_reason(debate.language, kind, turn.phase),
+            }
+        )
+        if len(supporting_turns) >= 3:
+            break
+    return supporting_turns
 
 
 def _audience_meter(score: dict[str, int]) -> int:
