@@ -55,13 +55,13 @@
 - 仍主要依赖 What-If 推演和 prompt 驱动，不是硬规则战棋
 - 当前新增的导演目标 / worldline 承诺 / 反制卡 / 风险资源轨道，属于第一层玩法加深，而不是最终形态
 
-后续要继续做深，主要还卡在三类问题：
+后续若继续做深，当前更准确的约束已经从“核心能力未实现”转为三类增量工作：
 
-1. 玩法状态仍有相当一部分停留在前端本地持久化，缺少更完整的跨设备、跨会话、可积累后端生涯层。
-2. 新增的导演目标 / worldline 承诺当前已经进入后端 `director_state` 权威态；主模式 `cards.usageLog` 也已进入后端 `gameplay_state` 权威态。当前还没完全收口的是 `betting.bets` 和部分档案 raw 细节。
-3. replay、scene selector、capture/headless、全题材 E2E 虽已补强，但继续扩系统仍会先扩大验证面。
+1. `scenarioMeta` 仍保留本地缓存/兼容层。`director_state` 与主模式 `gameplay_state` 已完成 authority 收口，但若继续推进，重点应是继续缩小本地兼容层，而不是再重做 authority 方案。
+2. release signoff 仍需要 clean-room 复验。`corners / cross-browser / debate:full` 已有真实工件，但后续发版前仍应在更干净的运行环境再跑一次，而不是只引用旧工件。
+3. 移动端 Theater 首屏密度、Safari/WebKit 截图限制、前端包体大小仍属于 polish / 工程优化项，不是阻断当前产品闭环的未完成功能。
 
-因此本执行文档采用四轨路线：
+因此本执行文档采用四轨路线作为历史收口基线：
 
 1. `Track A`：先做 `Director Campaign / 导演生涯` 最小闭环。
 2. `Track B`：统一玩法契约，建立单一事实源。
@@ -870,13 +870,21 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 
 ## 10. 文档后的默认下一步
 
-如果下一轮直接进入实现，建议从这里开始：
+这份文档后续不应再把默认下一步写回 `Track A / Phase A1` 一类的旧实施项，因为这些能力已经落地。
 
-`Track A / Phase A1`：
+如果下一轮直接进入实现，更合理的顺序应是：
 
-- 建 campaign 表
-- 写 finalize service
-- 结果页落一次 finalize
-- 前端先显示只读 campaign summary
+1. 先跑 `release signoff`：
+   - `npx tsc --noEmit -p tsconfig.app.json`
+   - `npm run build`
+   - `npm run e2e:corners`
+   - `npm run e2e:cross-browser`
+   - `npm run e2e:debate:full`
+2. 再做文档真值收口，避免“前文已完成、尾部仍是计划态”再次出现。
+3. 若还要继续投入开发，优先做：
+   - `scenarioMeta` 兼容层继续瘦身
+   - mobile Theater 信息密度优化
+   - Safari/WebKit 取证稳定性补强
+   - 前端包体与动态加载边界继续压缩
 
 可选最后一步：`使用 recorder agent 更新项目文档`

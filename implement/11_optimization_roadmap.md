@@ -98,24 +98,26 @@
    - `PhaserGameLoader` 本身也已移到 Theater 动态边界
    - `useScreenCapture` 已拆成轻壳 + `screenCaptureRuntime.ts`
    - `html2canvas / gif.js / gif.worker` 继续保持 capture 时才加载
-   当前 `phaser` 仍是大体积引擎 chunk，`capture-vendor` 也仍是独立 chunk；后续若继续做，只需要继续看是否还要再细拆，不需要把这条线重新当成“尚未开工”。
+   本 session 又补了一层首页首包收口：
+   - 首页题材 `label / hooks / badge` 改走轻量摘要 helper
+   - `InputView` 不再直接 runtime 引完整玩法策略表
+   当前 `phaser` 仍是大体积引擎 chunk，`capture-vendor` 也仍是独立 chunk；首页首包这条线已经继续收紧，后续若继续做，主要目标仍是 Theater 引擎和更深层的异步 chunk，而不是把首页题材摘要重新当成“尚未开工”。
 
 2. 文档真值持续收口。
    需要避免“总表已完成、正文仍停留在计划态”的文档漂移再次出现。
 
 3. 发版 clean-room 验证。
    本 session 已实跑：
-   - `e2e:corners`
-   - `e2e:cross-browser`
-   - `e2e:debate:full`
+   - `release:signoff --headless`
+   - `release:signoff --headless --include-safari`
+   - 首页首包收口后的 `release:signoff --headless`
    工件位于：
-   - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
-   - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
-   - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
+   - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
+   - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
+   - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
    后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
-   - `e2e:corners`
-   - `e2e:cross-browser`
-   - `e2e:debate:full`
+   - `release:signoff --headless`
+   - 如需要 Safari 证据，再追加 `--include-safari`
 
 4. 继续明确产品边界。
    当前交付是浏览器优先 Web，不是原生桌面或原生移动客户端。

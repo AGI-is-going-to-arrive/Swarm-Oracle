@@ -10,7 +10,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 
 | 页面 | 文件 | 描述 |
 |------|------|------|
-| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用 |
+| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；首页现在只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用 |
 | DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证；当前 live 页会优先读取后端显式 `counterplay` snapshot/WS 数据，本地 helper 只做兜底；本轮又补了赛况总览卡、房间席位图、阶段地图，以及后端 `phase_insights` 直出的阶段解读；`debate_verdict` 到来时，这批阶段洞察会直接进 store，而不是等结果页二次拉取 |
 | DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、结构化 `judge_rationale`、`supporting_turns`、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标；当前结果页会优先读取后端显式 `counterplay` 字段，展示反制摘要、命中/未中结果、`explanation`，并继续传给 share copy；share copy 现还会带 1-2 条关键引文；本轮又补了结果信号卡与阶段地图，并优先消费后端顶层 `phase_insights`，所以 live / result 的阶段 stakes、judge focus 和 commentary 现在是同一套口径；同一组件当前还负责 `/debate/replay/result`，会从 replay token 直接 hydrate 结果、显示 `adjudication_mode`，并支持“导入为本地运行” |
 | SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；当前导演层会在 Theater 面板内显示 2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺选择与锁定/取消按钮；这部分 goals / commitment 现在走后端 `director_state` 权威态，主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 都走后端 `gameplay_state` 权威态，本地 `scenarioMeta` 退为缓存/兼容层；结构化下注提交成功后会立刻把新 meta 回传父层并回写后端；本 session 又去掉了把后端 authority 反向 apply 到 localStorage 的镜像链路，页面内只做 authority 优先的内存合并与 replay payload 组装；玩法卡 modal 现会显示题材专属三段式连锁事件、`风险 / 资源` 两条轻量状态，以及 profile-specific 的打法说明；桌面端 Theater 本轮又做了“场景优先”的可读性修复：右栏收成固定窄宽、`game-wrapper` 提前到 replay filters/timeline 前、导演目标改成双列、compact timeline 隐藏二级 stats，气泡文字也同步放大和加清晰化样式；移动端 Theater 头部动作区在窄屏下会自动换行，并把视图切换收成图标胶囊，避免控件裁切；Theater 背景现为 30 个 Theater 语义主题 + 3 个 Debate 专属主题，共 33 个 registry 条目；当前 Phaser 预热只会在用户真正切进 Theater 后再触发，并优先走 idle 时机，避免普通首页 / Classic 路径提前拉取大引擎包；本 session 又把 `PhaserGameLoader` 本身移到 Theater 动态边界；截图自动化摘要现还会带 `capture_result_kind`，便于区分 `gif` 与 `gif_fallback_png`；同一组件当前还负责 `/sim/replay`，replay 模式会关闭 WS、下注、干预和玩法卡写操作，只保留回放 / 截图 / 复制 replay 链接 / 导入为本地运行 |
@@ -156,6 +156,19 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - 题面现同时维护 `question / questionEn`，通过 `getChallengeQuestion()` 按当前 UI 语言返回实际文案
 - `challengeWeekKey()` / `getWeeklyChallenges()` 现可生成 Lite 周赛道，用于首页 weekly challenge 展示
 - `resolveChallengeProgress()` 会把后端 `campaign daily-status` 与本地缓存合并，优先以后端完成态为真；后端在判定 `completed` 时会先把 SQLite round-trip 的 naive UTC `created_at` 归一为 UTC，再按调用方本地日期换算；只有本地已知细节才显示 `usedCards / betPlaced`
+
+### `gameplayProfileSummary.ts` / `gameplayProfileCatalog.ts`
+- 首页题材摘要与玩法题材目录 helper
+- `gameplayProfileSummary.ts`
+  - 只提供 landing route 需要的轻量信息：
+    - `profile label`
+    - `signature hooks`
+    - `badge asset path`
+  - 目的：避免 `InputView` 为了显示首页题材文案而直接把整份玩法策略表带进首屏路径
+- `gameplayProfileCatalog.ts`
+  - 继续承接完整题材目录
+  - 供 `gameplayCards.ts` 等后续玩法链路复用
+  - 这样首页轻量摘要和深层玩法 helper 仍保持同一套题材口径
 
 ## Hooks (`src/hooks/`)
 
@@ -423,6 +436,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | Semantic Scene Pool | Theater 背景已扩到 30 个主题，包含主场景和轻量语义变体；本轮新增 `law_court_variant / faith_temple_variant / switchboard_forum_variant`，generic 现会按题面落到 `switchboard_forum` 或其变体，同一 profile 也可按语义命中不同场景，例如 `governance -> scifi_base/civic_chamber/surveillance_megacity` |
 | Causal Archive | `ResultView` 展示玩法记录、下注记录、关键记录、世界线快照、导演点数、每日挑战标记；新增 `profileResonance`，并把题材档案前缀接进导出/分享结果 |
 | Daily Challenge | `InputView` 每日挑战卡 + `dailyChallenge.ts` 题库/完成状态；挑战池现为 12 条，已补齐 mythic / survival / generic，并会显示题材 hooks 与完成后的题材回响 |
+| Landing Route Summary Split | 首页题材 `label / hooks / badge` 当前改走 `gameplayProfileSummary.ts`，不再直接把整份玩法策略表挂进 landing route；深层玩法 contract / strategy 仍保留在后续路由和导演层链路中 |
 | Branch/Round Replay | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 会直接出现在 Theater 面板内并显示 `fork/card/bet/result` marker |
 
 ### Phase 4 开源准备 + 性能优化
@@ -507,3 +521,15 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
+  - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
+  - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+- 本次 session 又补了首页首包收口：
+  - `src/pages/InputView.test.tsx / src/pages/SimulationView.test.tsx / src/pages/ResultView.test.tsx` → **24 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `npm run build` → 通过
+  - `npm run release:signoff -- --headless` → 通过
+  - 当前新增口径：
+    - `InputView` 不再 chain-import 深层玩法策略表
+    - 首页题材文案、hooks、badge 现在来自 `gameplayProfileSummary.ts`
+    - 深层玩法 contract / strategy helper 仍在后续异步 chunk 中

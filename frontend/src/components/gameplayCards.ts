@@ -2,17 +2,25 @@ import type { AgentInfo, BranchInfo } from '../types';
 import {
   CONTRACT_CARD_SYSTEM_EFFECTS,
   CONTRACT_GAMEPLAY_CARD_DEFS,
-  CONTRACT_GAMEPLAY_PROFILES,
   CONTRACT_SIGNATURE_ARCS,
 } from '../lib/gameplayContract';
 import {
-  GAMEPLAY_BADGE_ASSETS,
+  GAMEPLAY_PROFILE_CATALOG,
+  type GameplayProfileCatalogEntry,
+} from '../lib/gameplayProfileCatalog';
+import {
   GAMEPLAY_PROFILE_FRAME_ASSETS,
   getThemeProfileId,
   type GameplayProfileId,
 } from '../lib/themeRegistry';
 
 export type { GameplayProfileId } from '../lib/themeRegistry';
+export {
+  getGameplayBadgeSrc,
+  getGameplayProfileLabel,
+  getGameplayProfileSignatureHooks,
+} from '../lib/gameplayProfileCatalog';
+export type { GameplayBadgeId } from '../lib/gameplayProfileCatalog';
 
 export type GameplayCardId =
   | 'civilization_debate'
@@ -73,23 +81,10 @@ export interface GameplayCardPromptInput {
   isZh: boolean;
 }
 
-export type GameplayBadgeId =
-  | 'recommended'
-  | 'daily_challenge'
-  | 'archive_record'
-  | 'bet_winner';
-
-interface GameplayProfileDefinition {
-  id: GameplayProfileId;
-  labelZh: string;
-  labelEn: string;
-  descriptionZh: string;
-  descriptionEn: string;
-  signatureHooksZh: string[];
-  signatureHooksEn: string[];
+type GameplayProfileDefinition = Omit<GameplayProfileCatalogEntry, 'recommendedCards' | 'defaultDirectives'> & {
   recommendedCards: GameplayCardId[];
   defaultDirectives: Record<GameplayCardId, { zh: string; en: string }>;
-}
+};
 
 interface GameplayProfileHeuristics {
   primaryRoleKeywords?: string[];
@@ -134,7 +129,7 @@ interface GameplaySignatureArcDefinition {
 }
 
 const gameplayCardDefs = CONTRACT_GAMEPLAY_CARD_DEFS as GameplayCardDefinition[];
-const gameplayProfiles = CONTRACT_GAMEPLAY_PROFILES as Record<GameplayProfileId, GameplayProfileDefinition>;
+const gameplayProfiles = GAMEPLAY_PROFILE_CATALOG as Record<GameplayProfileId, GameplayProfileDefinition>;
 const gameplaySignatureArcs = CONTRACT_SIGNATURE_ARCS as Record<GameplayProfileId, GameplaySignatureArcDefinition>;
 const gameplayCardEffects = CONTRACT_CARD_SYSTEM_EFFECTS as Record<GameplayCardId, { risk: number; resource: number }>;
 const COUNTERPLAY_CARD_IDS = new Set<GameplayCardId>([
@@ -544,19 +539,9 @@ export function inferGameplayProfile(
   return bestProfileId ? gameplayProfiles[bestProfileId] : gameplayProfiles.generic;
 }
 
-export function getGameplayProfileLabel(profileId: GameplayProfileId, isZh: boolean): string {
-  const profile = gameplayProfiles[profileId];
-  return isZh ? profile.labelZh : profile.labelEn;
-}
-
 export function getGameplayProfileDescription(profileId: GameplayProfileId, isZh: boolean): string {
   const profile = gameplayProfiles[profileId];
   return isZh ? profile.descriptionZh : profile.descriptionEn;
-}
-
-export function getGameplayProfileSignatureHooks(profileId: GameplayProfileId, isZh: boolean): string[] {
-  const profile = gameplayProfiles[profileId];
-  return isZh ? profile.signatureHooksZh : profile.signatureHooksEn;
 }
 
 export function getGameplayCardDirectivePreview(
@@ -569,13 +554,6 @@ export function getGameplayCardDirectivePreview(
 
 export function getGameplayProfileFrameSrc(profileId: GameplayProfileId): string {
   return GAMEPLAY_PROFILE_FRAME_ASSETS[profileId];
-}
-
-export function getGameplayBadgeSrc(badgeId: GameplayBadgeId): string {
-  if (badgeId === 'recommended') return GAMEPLAY_BADGE_ASSETS.recommended;
-  if (badgeId === 'daily_challenge') return GAMEPLAY_BADGE_ASSETS.dailyChallenge;
-  if (badgeId === 'archive_record') return GAMEPLAY_BADGE_ASSETS.archiveRecord;
-  return GAMEPLAY_BADGE_ASSETS.betWinner;
 }
 
 export function getGameplaySignatureArc(profileId: GameplayProfileId, isZh: boolean) {

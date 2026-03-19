@@ -121,6 +121,41 @@ npm install
 npm test
 ```
 
+### Release Signoff
+
+在准备对外分享 build、做 release candidate，或重新确认文档口径时，优先跑这条收口链路：
+
+```bash
+cd frontend
+npm run release:signoff -- --headless
+```
+
+- 它会顺序执行：
+  - `npx tsc --noEmit -p tsconfig.app.json`
+  - `npm run build`
+  - `scripts/e2e-suite.mjs corners`
+  - `scripts/e2e-suite.mjs cross-browser`
+  - `scripts/e2e-debate-suite.mjs full`
+- 默认工件目录：`frontend/output/e2e/<timestamp>-release-signoff/`
+- 如果本机 Safari WebDriver 已准备好，可追加：
+
+```bash
+cd frontend
+npm run release:signoff -- \
+  --headless \
+  --include-safari \
+  --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9
+```
+
+- 本次 session 已真实执行：
+  - `npm run release:signoff -- --headless`
+    - 工件：`frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
+  - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+    - 工件：`frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
+  - 首页首包收口后再次执行：
+    - `npm run release:signoff -- --headless`
+    - 工件：`frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+
 - 仓库内历史前端全量基线仍记录为 **179 passed**。
 - 本轮基于当前仓库状态重新执行了定向回归：
 
@@ -291,6 +326,28 @@ npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/
   - 当前新增口径：
     - `PhaserGameLoader` 本身也已移到 Theater 动态边界
     - `useScreenCapture` 现为轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
+- 本次 session 又补了首页首包收口：
+
+```bash
+cd frontend
+npm test -- --run \
+  src/pages/InputView.test.tsx \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run release:signoff -- --headless
+```
+
+- 结果：
+  - `vitest`：**24 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `release:signoff --headless`：通过
+  - 当前新增口径：
+    - 首页 `InputView` 不再静态依赖深层玩法策略表
+    - 题材 `label / hooks / badge` 现在走轻量摘要 helper
+    - 当前最大剩余 chunk 仍是 `phaser`
 - 本次 session 围绕默认模型 / LLM 治理 / BYOK-provider policy 又补跑了：
 
 ```bash

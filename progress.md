@@ -7912,3 +7912,92 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 真正收口的是“何时加载它”：只有 Theater 路径才会预热
   - `html2canvas / gif.js / gif.worker` 也已经留在截图/GIF 路径上按需加载
   - 这轮之后，文档口径已与代码和 release 验证结果对齐
+
+## 2026-03-19 Release Signoff 脚本接入 + 实跑
+
+- 已新增前端收口入口：
+  - `frontend/scripts/release-signoff.mjs`
+  - `frontend/package.json` 新增 `npm run release:signoff`
+- 当前脚本会顺序执行：
+  - `npx tsc --noEmit -p tsconfig.app.json`
+  - `npm run build`
+  - `scripts/e2e-suite.mjs corners`
+  - `scripts/e2e-suite.mjs cross-browser`
+  - `scripts/e2e-debate-suite.mjs full`
+  - 如带 `--include-safari`，再追加 `scripts/e2e-suite.mjs safari`
+- 已先做 dry-run：
+  - `cd frontend && npm run release:signoff -- --dry-run --headless`
+  - 结果：通过，命令串与输出目录拼装正确
+- 已做首轮真实收口：
+  - 运行：
+    - `cd frontend && npm run release:signoff -- --headless`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/corners/result.json`
+    - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/cross-browser/result.json`
+    - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/debate-full/result.json`
+
+## 2026-03-19 Safari-inclusive Release Signoff
+
+- 本机环境确认：
+  - `safaridriver` 二进制可用
+  - 显式启动：`safaridriver -p 4444`
+  - `http://127.0.0.1:4444/status` 返回 `ready: true`
+- 已执行：
+  - `cd frontend && npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+- 结果：通过
+- 工件：
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/corners/result.json`
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/cross-browser/result.json`
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/debate-full/result.json`
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/safari/result.json`
+- Safari 返回的真实能力摘要包含：
+  - `browserName = Safari`
+  - `browserVersion = 26.3.1`
+  - `platformName = macOS`
+- 当前口径：
+  - Safari 现在不再只是“有脚本入口”，而是本 session 已在当前机器上通过 `release:signoff` 正式实跑
+
+## 2026-03-19 Landing Route Summary Split + 文档同步
+
+- 本轮前端包体收口改动：
+  - `frontend/src/lib/gameplayProfileSummary.ts`
+    - 新增首页专用轻量题材摘要 helper，只保留：
+      - `profile label`
+      - `signature hooks`
+      - `badge asset path`
+  - `frontend/src/lib/gameplayProfileCatalog.ts`
+    - 抽出完整题材目录，供 `gameplayCards.ts` 继续复用
+  - `frontend/src/pages/InputView.tsx`
+    - 首页不再直接依赖深层玩法策略表，改读 `gameplayProfileSummary.ts`
+  - `frontend/src/components/gameplayCards.ts`
+    - 改为复用 `gameplayProfileCatalog.ts`
+  - `frontend/src/lib/llmProviderPolicy.ts`
+    - 补了 `localStorage.getItem/setItem/removeItem` 的防御性守卫
+    - 目的：避免测试环境里 mock 不完整时直接报错
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`24 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+  - `cd frontend && npm run release:signoff -- --headless`
+    - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/corners/result.json`
+    - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/cross-browser/result.json`
+    - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/debate-full/result.json`
+- 当前构建口径：
+  - 首页 `InputView` 已不再 chain-import 深层玩法策略表
+  - 首页题材 `label / hooks / badge` 现在来自轻量摘要 helper
+  - 深层玩法 contract / strategy helper 仍保留在后续异步 chunk
+  - 当前最大剩余构建目标仍是 `phaser`
+- 本轮文档同步：
+  - `README.md`
+  - `frontend/README.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/README.md`
+  - `implement/11_optimization_roadmap.md`

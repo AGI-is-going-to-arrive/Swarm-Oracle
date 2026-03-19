@@ -22,8 +22,21 @@ function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 }
 
+function canReadStorage(storage: Storage): storage is Storage & { getItem: (key: string) => string | null } {
+  return typeof storage.getItem === 'function';
+}
+
+function canWriteStorage(storage: Storage): storage is Storage & { setItem: (key: string, value: string) => void } {
+  return typeof storage.setItem === 'function';
+}
+
+function canRemoveFromStorage(storage: Storage): storage is Storage & { removeItem: (key: string) => void } {
+  return typeof storage.removeItem === 'function';
+}
+
 export function loadLlmProviderPolicy(): LlmProviderPolicy {
   if (!canUseStorage()) return { ...EMPTY_POLICY };
+  if (!canReadStorage(window.localStorage)) return { ...EMPTY_POLICY };
 
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -53,9 +66,12 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
 
   const hasContent = Object.values(normalized).some(Boolean);
   if (!hasContent) {
-    window.localStorage.removeItem(STORAGE_KEY);
+    if (canRemoveFromStorage(window.localStorage)) {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
     return;
   }
 
+  if (!canWriteStorage(window.localStorage)) return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
 }

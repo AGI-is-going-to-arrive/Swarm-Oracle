@@ -22,6 +22,7 @@
     "e2e:cross-browser": "node scripts/e2e-suite.mjs cross-browser",
     "e2e:safari": "node scripts/e2e-suite.mjs safari",
     "e2e:full": "node scripts/e2e-suite.mjs full",
+    "release:signoff": "node scripts/release-signoff.mjs",
     "e2e:debate:desktop": "node scripts/e2e-debate-suite.mjs desktop",
     "e2e:debate:mobile": "node scripts/e2e-debate-suite.mjs mobile",
     "e2e:debate:full": "node scripts/e2e-debate-suite.mjs full",

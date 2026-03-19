@@ -92,11 +92,17 @@
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
+- ✅ `release:signoff` 收口入口已接入 `frontend/package.json`，本 session 已实跑：
+  - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
+  - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`（含 Safari）
+  - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`（首页首包收口后复跑）
+- ✅ 首页首包继续收口：`InputView` 当前只读取轻量题材摘要（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；本次定向回归 `InputView / SimulationView / ResultView` 为 **24 passed**
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
 - ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但本轮又去掉了 `ResultView` authority 回填与 `PredictionModal` 的本地直读，当前主要保留缓存/兼容、派生字段和 replay payload
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
+- ℹ️ 首页首包现在已经脱离深层玩法策略表，但当前最大剩余构建目标仍是 `phaser`；继续做性能专项时，优先级仍应放在 Theater 引擎 chunk，而不是再回头重做首页题材摘要链路
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
 - ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前已升级为 `LLM hybrid` 优先、deterministic fallback；结果 payload 会显式带 `adjudication_mode`

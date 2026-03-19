@@ -30,7 +30,7 @@ npm run dev     # → http://localhost:18928
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, daily challenge, quick starts |
+| `/` | `InputView` | Scenario input, daily challenge, quick starts; the landing route now reads a lightweight gameplay-profile summary helper for profile labels / hooks / badges instead of importing the deeper gameplay strategy table at runtime |
 | `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window, plus live room-state cards / room map / stage map that now consume backend `phase_insights` directly |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language; the result surface now also shows signal cards and a phase map backed by the same server `phase_insights` payload as the live room; replay route can hydrate from a token without fetching the live API, shows the current `adjudication_mode`, and can import the replay as a local debate run |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer; this session also removed the old “mirror backend authority back into localStorage” path, so the page now keeps the authority merge in memory and only uses local meta for compatibility / replay payloads; `/sim/replay` is a read-only replay surface that disables WS, prediction, intervention, and gameplay-card writes, but still keeps replay controls, capture, and import-to-local-run |
@@ -50,6 +50,7 @@ npm run dev     # → http://localhost:18928
 - **DebateBetModal / DebateShareModal** — Debate-only structured bet and share surfaces, now with modal-level automation state for E2E; the bet modal supports counterplay presets, and the share copy now carries the counterplay summary, final hit/miss result, plus 1-2 key supporting-turn excerpts from the verdict
 - **themeRegistry.ts** — single source of truth for the 33 Theater / Debate themes, their keyword routing, profile mapping, gameplay frame / badge paths, and Debate-specific UI asset paths
 - **Director Campaign** — ResultView finalizes campaign progress against the backend and now also reads `/api/campaign/scenario/:id/summary` to recover archive-grade / resonance / most-used-card / bet result / daily-challenge fields when local storage is incomplete; InputView merges backend `daily-status` with local cache so the current daily challenge is not judged only by `localStorage`
+- **gameplayProfileSummary.ts / gameplayProfileCatalog.ts** — the landing route now reads only lightweight profile copy (`label / hooks / badge`) while the deeper gameplay contract / strategy helpers stay behind later routes; `gameplayCards.ts` still reuses the shared catalog so labels stay consistent
 - **Director Layer** — Theater goals and worldline commitment now persist through backend `Scenario.director_state_json`; `scenarioMeta` still caches points / cooldowns / card usage / bets / archive details locally so old runs and local-only gameplay state do not break, but it is no longer mirrored from backend authority on every page load
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance; this session it stopped reading local `scenarioMeta` directly for the committed branch and now prefers the parent page’s current merged meta
 - **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback; `debate_verdict` now also carries `phase_insights`, so the live room can land the final stage read without waiting for a fresh result fetch
@@ -69,6 +70,7 @@ Follows the [Impeccable](https://impeccable.style) editorial design system. Supp
 ```bash
 npm install
 npm test          # Vitest + Testing Library
+npm run release:signoff -- --headless
 npm run e2e:matrix
 npm run e2e:variants
 npm run e2e:corners
@@ -145,6 +147,21 @@ npm run e2e:debate:full
   - Current build posture in this pass:
     - `PhaserGameLoader` now ships as its own Theater-only loader chunk
     - `useScreenCapture` is now a light shell, while DOM capture / GIF logic lives in `screenCaptureRuntime`
+- This session also added and exercised the release-signoff entry:
+  - `npm run release:signoff -- --headless` → passed
+    - artifacts: `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
+  - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → passed
+    - artifacts: `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
+- This session also re-ran the landing-route bundle trim:
+  - `npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx` → **24 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - `npm run release:signoff -- --headless` → passed
+    - artifacts: `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+  - Current build posture in this pass:
+    - `InputView` no longer chain-imports the deeper gameplay strategy table at runtime
+    - deeper gameplay logic remains in later async chunks
+    - `phaser` is still the largest remaining bundle target
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`

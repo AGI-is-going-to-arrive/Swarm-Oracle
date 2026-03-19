@@ -37,7 +37,7 @@ import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
-} from '../components/gameplayCards';
+} from '../lib/gameplayProfileSummary';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import type {
   CampaignBadge,
