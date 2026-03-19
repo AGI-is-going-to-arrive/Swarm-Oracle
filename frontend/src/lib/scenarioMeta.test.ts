@@ -5,8 +5,10 @@ import {
   canUseCard,
   clearBranchCommitment,
   ensureScenarioObjectives,
+  ensureScenarioObjectivesInMemory,
   getCardCooldownRemaining,
   loadScenarioMeta,
+  mergeScenarioArchive,
   setBranchCommitment,
 } from './scenarioMeta';
 
@@ -154,5 +156,50 @@ describe('scenarioMeta gameplay card rules', () => {
 
     expect(second.objectives.goals).toHaveLength(1);
     expect(second.objectives.goals[0].id).toBe('goal-1');
+  });
+
+  it('merges archive patches in memory without touching storage helpers', () => {
+    const scenarioId = 'scenario-archive-in-memory';
+    const meta = loadScenarioMeta(scenarioId);
+
+    const next = mergeScenarioArchive(meta, {
+      profileId: 'law',
+      keyMoments: ['Moment 1'],
+      branchSnapshots: [
+        {
+          branchId: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.8,
+        },
+      ],
+    });
+
+    expect(next.archive.profileId).toBe('law');
+    expect(next.archive.keyMoments).toEqual(['Moment 1']);
+    expect(next.archive.branchSnapshots[0].branchId).toBe('branch-1');
+    expect(loadScenarioMeta(scenarioId).archive.keyMoments).toEqual([]);
+  });
+
+  it('ensures objectives in memory without mutating persisted meta', () => {
+    const scenarioId = 'scenario-objectives-in-memory';
+    const meta = loadScenarioMeta(scenarioId);
+
+    const next = ensureScenarioObjectivesInMemory(meta, {
+      question: '如果法院直接冻结算法政策会怎样？',
+      profileId: 'law',
+      goals: [
+        {
+          id: 'goal-memory-1',
+          kind: 'signature_arc_step',
+          targetCardId: 'public_hearing',
+          rewardLabel: 'director_point',
+          createdAt: '2026-03-20T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(next.objectives.goals).toHaveLength(1);
+    expect(next.objectives.goals[0].id).toBe('goal-memory-1');
+    expect(loadScenarioMeta(scenarioId).objectives.goals).toEqual([]);
   });
 });

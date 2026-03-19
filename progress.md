@@ -8001,3 +8001,85 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `llmdoc/guides/development.md`
   - `implement/README.md`
   - `implement/11_optimization_roadmap.md`
+
+## 2026-03-20 Release Signoff 收口升级 + 最小 CI
+
+- 已补 `release:signoff` 收口链路：
+  - `frontend/scripts/release-signoff.mjs`
+  - 默认新增：
+    - backend targeted `pytest`
+    - `npm run assets:provenance:check`
+  - 新参数：
+    - `--skip-backend-checks`
+    - `--skip-assets-check`
+    - `--backend-python <path>`
+- 已补最小 CI：
+  - `.github/workflows/ci.yml`
+  - 当前并行跑：
+    - backend targeted `pytest`
+    - frontend `assets:provenance:check / build / targeted vitest`
+- 定向验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+    - 结果：`81 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts`
+    - 结果：`77 passed`
+  - `cd frontend && npm run build`
+    - 结果：通过
+  - `cd frontend && npm run assets:provenance:check`
+    - 结果：`{"status":"ok"}`
+  - `cd frontend && node scripts/release-signoff.mjs --dry-run --headless`
+    - 结果：通过
+
+## 2026-03-20 ResultView / scenarioMeta 继续收口
+
+- 已改：
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 新增纯内存 helper：
+      - `mergeScenarioArchive()`
+      - `ensureScenarioObjectivesInMemory()`
+  - `frontend/src/pages/ResultView.tsx`
+    - 结果页不再把派生出的 archive/objectives 写回 localStorage
+    - 改为 `derivedScenarioMeta` 内存态承接
+    - 若已有后端 `campaign summary.objective_total_count`，不再强行用默认 objectives 覆盖
+  - `frontend/src/pages/ResultView.test.tsx`
+  - `frontend/src/lib/scenarioMeta.test.ts`
+- 定向验证：
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/ResultView.test.tsx`
+    - 结果：`17 passed`
+  - `cd frontend && npm run build`
+    - 结果：通过
+- 当前口径：
+  - `ResultView` 现在仍会优先读取后端 `director_state / gameplay_state / campaign summary`
+  - 但结果页派生出的 archive/objectives 现在只保留在内存里用于展示与 replay payload
+  - `scenarioMeta` 因此进一步退回到缓存/兼容/replay 输入层
+
+## 2026-03-20 Full Release Signoff 实跑（headless + Safari）
+
+- 先后确认：
+  - `backend/.env` 存在
+  - 本地 backend / frontend 服务默认并未在 `18927 / 18928` 监听
+  - `safaridriver` 二进制可用，但 `4444` 初始未启动
+- 本轮显式启动：
+  - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - `safaridriver -p 4444`
+- 本轮先跑：
+  - `node frontend/scripts/release-signoff.mjs --headless`
+  - 首次失败原因：`127.0.0.1:18928` 无服务监听
+  - 服务补起后再次执行：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
+- 本轮再跑 Safari-inclusive：
+  - `node frontend/scripts/release-signoff.mjs --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/corners/result.json`
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/cross-browser/result.json`
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/debate-full/result.json`
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/safari/result.json`
+  - Safari 截图：
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/safari/safari-sim.png`
+    - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/safari/safari-result.png`
+- 收尾：
+  - 已把临时拉起的 backend / preview / `safaridriver` 全部停掉
+  - 当前 `18927 / 18928 / 4444` 无残留监听进程

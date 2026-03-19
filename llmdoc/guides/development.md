@@ -126,17 +126,35 @@ npm test
 在准备对外分享 build、做 release candidate，或重新确认文档口径时，优先跑这条收口链路：
 
 ```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 18927
+
+cd frontend
+npm run preview -- --host 127.0.0.1 --port 18928
+
+# 另开终端
 cd frontend
 npm run release:signoff -- --headless
 ```
 
 - 它会顺序执行：
+  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
+  - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
 - 默认工件目录：`frontend/output/e2e/<timestamp>-release-signoff/`
+- 可选参数：
+  - `--include-safari --scenario-id <id>`
+  - `--skip-backend-checks`
+  - `--skip-assets-check`
+  - `--backend-python /absolute/path/to/python`
+- 当前仓库已补最小 CI：
+  - `.github/workflows/ci.yml`
+  - 会并行跑 backend targeted `pytest` 与 frontend `assets:provenance:check / build / targeted vitest`
 - 如果本机 Safari WebDriver 已准备好，可追加：
 
 ```bash
@@ -155,6 +173,12 @@ npm run release:signoff -- \
   - 首页首包收口后再次执行：
     - `npm run release:signoff -- --headless`
     - 工件：`frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+  - 本次 session 又补跑升级后的收口链路：
+    - `npm run release:signoff -- --headless`
+    - 工件：`frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
+  - 本次 session 又补跑 Safari-inclusive 收口链路：
+    - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+    - 工件：`frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
 
 - 仓库内历史前端全量基线仍记录为 **179 passed**。
 - 本轮基于当前仓库状态重新执行了定向回归：
@@ -179,6 +203,48 @@ npm test -- --run \
 
 - 结果：
   - `vitest`：**60 passed**
+- 本次 session 又补跑了升级后的最小收口回归：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest \
+  tests/test_campaign_api.py \
+  tests/test_campaign_service.py \
+  tests/test_debate_api.py \
+  tests/test_debate_service.py \
+  tests/test_config.py \
+  tests/test_predictions.py \
+  tests/test_card_events.py \
+  tests/test_gameplay_contract_sync.py -q
+
+cd frontend
+npm test -- --run \
+  src/lib/scenarioMeta.test.ts \
+  src/lib/archiveSummary.test.ts \
+  src/components/gameplayCards.test.ts \
+  src/components/gameplayContract.test.ts \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/components/GameplayCardsModal.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/components/DebateBetModal.test.tsx \
+  src/components/DebateShareModal.test.tsx \
+  src/hooks/useDebateWS.test.tsx \
+  src/i18n/locales.test.ts
+npm run build
+npm run assets:provenance:check
+```
+
+- 结果：
+  - backend `pytest`：**81 passed**
+  - frontend `vitest`：**77 passed**
+  - `npm run build`：通过
+  - `npm run assets:provenance:check`：通过
+- 本次 session 又补跑了 `ResultView` / `scenarioMeta` 收口回归：
+  - `npm test -- --run src/lib/scenarioMeta.test.ts src/pages/ResultView.test.tsx`
+  - 结果：**17 passed**
 - 本次 session 围绕主模式 `gameplay_state` authority + 玩法/素材分化又补跑了：
 
 ```bash

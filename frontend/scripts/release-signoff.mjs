@@ -1,10 +1,31 @@
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
+const REPO_ROOT = path.resolve(FRONTEND_ROOT, "..");
+const BACKEND_ROOT = path.join(REPO_ROOT, "backend");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const BACKEND_SIGNOFF_TESTS = [
+  "tests/test_campaign_api.py",
+  "tests/test_campaign_service.py",
+  "tests/test_debate_api.py",
+  "tests/test_debate_service.py",
+  "tests/test_config.py",
+  "tests/test_predictions.py",
+  "tests/test_card_events.py",
+  "tests/test_gameplay_contract_sync.py",
+];
+
+function getDefaultBackendPython() {
+  if (process.platform === "win32") {
+    return path.join(BACKEND_ROOT, ".venv", "Scripts", "python.exe");
+  }
+
+  return path.join(BACKEND_ROOT, ".venv", "bin", "python");
+}
 
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -22,8 +43,11 @@ function parseArgs(argv) {
     headless: process.env.HEADLESS === "1",
     dryRun: false,
     includeSafari: false,
+    includeBackendChecks: process.env.SWARM_SKIP_BACKEND_CHECKS !== "1",
+    includeAssetsCheck: process.env.SWARM_SKIP_ASSETS_CHECK !== "1",
     webdriverUrl: process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444",
     scenarioId: process.env.SWARM_SCENARIO_ID || "",
+    backendPython: process.env.SWARM_BACKEND_PYTHON || getDefaultBackendPython(),
   };
 
   for (let index = 2; index < argv.length; index += 1) {
@@ -41,15 +65,22 @@ function parseArgs(argv) {
     } else if (arg === "--scenario-id" && next) {
       args.scenarioId = next;
       index += 1;
+    } else if (arg === "--backend-python" && next) {
+      args.backendPython = path.isAbsolute(next) ? next : path.resolve(REPO_ROOT, next);
+      index += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     } else if (arg === "--dry-run") {
       args.dryRun = true;
     } else if (arg === "--include-safari") {
       args.includeSafari = true;
+    } else if (arg === "--skip-backend-checks") {
+      args.includeBackendChecks = false;
+    } else if (arg === "--skip-assets-check") {
+      args.includeAssetsCheck = false;
     } else {
       throw new Error(
-        "Usage: node scripts/release-signoff.mjs [--url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--dry-run]",
+        "Usage: node scripts/release-signoff.mjs [--url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
       );
     }
   }
@@ -67,13 +98,17 @@ function runCommand(command, args, options) {
   if (options.dryRun) return;
 
   const result = spawnSync(command, args, {
-    cwd: FRONTEND_ROOT,
+    cwd: options.cwd ?? FRONTEND_ROOT,
     stdio: "inherit",
     env: {
       ...process.env,
       ...options.env,
     },
   });
+
+  if (result.error) {
+    throw result.error;
+  }
 
   if (result.status !== 0) {
     throw new Error(`Command failed (${result.status ?? "unknown"}): ${rendered}`);
@@ -85,6 +120,15 @@ function buildSuiteArgs(scriptName, mode, baseUrl, outputDir, headless, scenario
   if (headless) args.push("--headless");
   if (scenarioId) args.push("--scenario-id", scenarioId);
   return args;
+}
+
+function ensureBackendPythonExists(pythonPath) {
+  if (fs.existsSync(pythonPath)) return;
+
+  throw new Error(
+    `Backend Python not found: ${pythonPath}\n` +
+      "Create backend/.venv, pass --backend-python PATH, or use --skip-backend-checks.",
+  );
 }
 
 function main() {
@@ -104,12 +148,30 @@ function main() {
   console.log(`- output root: ${args.outputRoot}`);
   console.log(`- headless: ${args.headless ? "true" : "false"}`);
   console.log(`- include safari: ${args.includeSafari ? "true" : "false"}`);
+  console.log(`- backend checks: ${args.includeBackendChecks ? "true" : "false"}`);
+  console.log(`- assets check: ${args.includeAssetsCheck ? "true" : "false"}`);
   if (args.scenarioId) {
     console.log(`- safari scenario id: ${args.scenarioId}`);
+  }
+  if (args.includeBackendChecks) {
+    console.log(`- backend root: ${BACKEND_ROOT}`);
+    console.log(`- backend python: ${args.backendPython}`);
+    ensureBackendPythonExists(args.backendPython);
+  }
+
+  if (args.includeBackendChecks) {
+    runCommand(
+      args.backendPython,
+      ["-m", "pytest", ...BACKEND_SIGNOFF_TESTS, "-q"],
+      { ...args, cwd: BACKEND_ROOT },
+    );
   }
 
   runCommand(npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"], args);
   runCommand(npmCommand, ["run", "build"], args);
+  if (args.includeAssetsCheck) {
+    runCommand(npmCommand, ["run", "assets:provenance:check"], args);
+  }
   runCommand(
     nodeCommand,
     buildSuiteArgs("scripts/e2e-suite.mjs", "corners", args.baseUrl, cornersOutput, args.headless, args.scenarioId),

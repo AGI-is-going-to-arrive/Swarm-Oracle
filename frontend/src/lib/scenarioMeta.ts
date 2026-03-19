@@ -188,6 +188,20 @@ function createDefaultScenarioMeta(): ScenarioMeta {
   };
 }
 
+export function mergeScenarioArchive(
+  meta: ScenarioMeta,
+  patch: Partial<ScenarioArchiveState>,
+): ScenarioMeta {
+  return {
+    ...meta,
+    archive: {
+      ...meta.archive,
+      ...patch,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    },
+  };
+}
+
 function hydrateScenarioMeta(raw: Partial<ScenarioMeta> | null | undefined): ScenarioMeta {
   const base = createDefaultScenarioMeta();
   if (!raw) return base;
@@ -336,14 +350,35 @@ export function updateArchive(
   scenarioId: string,
   patch: Partial<ScenarioArchiveState>,
 ): ScenarioMeta {
-  return updateScenarioMeta(scenarioId, (current) => ({
-    ...current,
-    archive: {
-      ...current.archive,
-      ...patch,
-      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+  return updateScenarioMeta(scenarioId, (current) => mergeScenarioArchive(current, patch));
+}
+
+export function ensureScenarioObjectivesInMemory(
+  meta: ScenarioMeta,
+  payload: {
+    question: string;
+    profileId: GameplayProfileId;
+    goals: DirectorObjectiveRecord[];
+  },
+): ScenarioMeta {
+  const shouldReplaceGoals =
+    meta.objectives.goals.length === 0
+    || meta.objectives.generatedForQuestion !== payload.question
+    || meta.objectives.generatedForProfile !== payload.profileId;
+
+  if (!shouldReplaceGoals) {
+    return meta;
+  }
+
+  return {
+    ...meta,
+    objectives: {
+      generatedForQuestion: payload.question,
+      generatedForProfile: payload.profileId,
+      goals: payload.goals,
+      lastUpdatedAt: new Date().toISOString(),
     },
-  }));
+  };
 }
 
 export function ensureScenarioObjectives(
@@ -354,26 +389,10 @@ export function ensureScenarioObjectives(
     goals: DirectorObjectiveRecord[];
   },
 ): ScenarioMeta {
-  return updateScenarioMeta(scenarioId, (current) => {
-    const shouldReplaceGoals =
-      current.objectives.goals.length === 0
-      || current.objectives.generatedForQuestion !== payload.question
-      || current.objectives.generatedForProfile !== payload.profileId;
-
-    if (!shouldReplaceGoals) {
-      return current;
-    }
-
-    return {
-      ...current,
-      objectives: {
-        generatedForQuestion: payload.question,
-        generatedForProfile: payload.profileId,
-        goals: payload.goals,
-        lastUpdatedAt: new Date().toISOString(),
-      },
-    };
-  });
+  return updateScenarioMeta(
+    scenarioId,
+    (current) => ensureScenarioObjectivesInMemory(current, payload),
+  );
 }
 
 export function setBranchCommitment(

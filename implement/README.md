@@ -1,7 +1,7 @@
 # SwarmOracle — 实现文档索引
 
 > 汇总自多个开发对话的所有项目文档  
-> 最后更新: 2026-03-19
+> 最后更新: 2026-03-20
 
 ---
 
@@ -88,6 +88,7 @@
 - ✅ Portable replay 闭环（主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 现都有 replay 页面；主模式优先走后端 `ReplayArtifact` 短 `share id`，失败时回退 token；三条 replay 页当前都支持“导入为本地运行”）
 - ✅ Debate 终局裁决升级（后端现会优先读取 judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，结果 payload 会显式带 `adjudication_mode`；失败时退回 deterministic fallback）
 - ✅ `scenarioMeta` 兼容层继续瘦身：`SimulationView` 不再把后端 authority 反向 apply 到 localStorage；`ResultView` 不再用本地 meta 回填后端 authority；`PredictionModal` 改为优先读取父层传入的当前 meta
+- ✅ `ResultView` 进一步收口：结果页派生出的 archive/objectives 现改为纯内存态，不再把结果页读路径写回本地 `scenarioMeta`
 - ✅ 本次 bundle / authority 收口回归已通过：`vitest` 定向 **32 passed**、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，并已实跑：
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
   - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
@@ -96,11 +97,15 @@
   - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
   - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`（含 Safari）
   - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`（首页首包收口后复跑）
+- ✅ `release:signoff` 当前已升级为更完整的收口入口：默认会先跑 backend targeted `pytest` 与 `assets:provenance:check`，再继续 `tsc / build / corners / cross-browser / debate:full`；本 session 又实跑：
+  - `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
+  - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`（含 Safari）
+- ✅ 仓库已补最小 CI：`.github/workflows/ci.yml` 当前会并行跑 backend targeted `pytest` 与 frontend `assets:provenance:check / build / targeted vitest`
 - ✅ 首页首包继续收口：`InputView` 当前只读取轻量题材摘要（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；本次定向回归 `InputView / SimulationView / ResultView` 为 **24 passed**
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但本轮又去掉了 `ResultView` authority 回填与 `PredictionModal` 的本地直读，当前主要保留缓存/兼容、派生字段和 replay payload
+- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但当前已去掉 `ResultView` authority 回填、结果页派生 archive/objectives 的本地写回，以及 `PredictionModal` 的本地直读，主要保留缓存/兼容、派生字段和 replay payload
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ 首页首包现在已经脱离深层玩法策略表，但当前最大剩余构建目标仍是 `phaser`；继续做性能专项时，优先级仍应放在 Theater 引擎 chunk，而不是再回头重做首页题材摘要链路
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt

@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Install backend dependencies
+        run: .venv/bin/pip install -e ".[dev]"
+
+      - name: Run targeted backend checks
+        run: |
+          .venv/bin/python -m pytest \
+            tests/test_campaign_api.py \
+            tests/test_campaign_service.py \
+            tests/test_debate_api.py \
+            tests/test_debate_service.py \
+            tests/test_config.py \
+            tests/test_predictions.py \
+            tests/test_card_events.py \
+            tests/test_gameplay_contract_sync.py \
+            -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check asset provenance
+        run: npm run assets:provenance:check
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run targeted frontend checks
+        run: |
+          npm test -- --run \
+            src/lib/scenarioMeta.test.ts \
+            src/lib/archiveSummary.test.ts \
+            src/components/gameplayCards.test.ts \
+            src/components/gameplayContract.test.ts \
+            src/pages/SimulationView.test.tsx \
+            src/pages/ResultView.test.tsx \
+            src/components/GameplayCardsModal.test.tsx \
+            src/pages/DebateArenaView.test.tsx \
+            src/pages/DebateResultView.test.tsx \
+            src/components/DebateBetModal.test.tsx \
+            src/components/DebateShareModal.test.tsx \
+            src/hooks/useDebateWS.test.tsx \
+            src/i18n/locales.test.ts

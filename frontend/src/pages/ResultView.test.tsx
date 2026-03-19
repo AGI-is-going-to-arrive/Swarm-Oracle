@@ -169,7 +169,26 @@ vi.mock('../lib/scenarioMeta', () => {
   };
   return {
     loadScenarioMeta: vi.fn(() => meta),
-    ensureScenarioObjectives: vi.fn(() => meta),
+    ensureScenarioObjectivesInMemory: vi.fn((current: ScenarioMeta, payload: {
+      question: string;
+      profileId: string;
+      goals: ScenarioMeta['objectives']['goals'];
+    }) => ({
+      ...current,
+      objectives: {
+        generatedForQuestion: payload.question,
+        generatedForProfile: payload.profileId as ScenarioMeta['objectives']['generatedForProfile'],
+        goals: payload.goals,
+        lastUpdatedAt: '2026-03-20T00:00:00Z',
+      },
+    })),
+    mergeScenarioArchive: vi.fn((current: ScenarioMeta, patch: Partial<ScenarioMeta['archive']>) => ({
+      ...current,
+      archive: {
+        ...current.archive,
+        ...patch,
+      },
+    })),
     parseScenarioMoment: vi.fn((raw: string) => {
       const match = raw.match(/^event:(card|bet|commitment):(\d+):(.*)$/);
       if (!match) return null;
@@ -180,7 +199,6 @@ vi.mock('../lib/scenarioMeta', () => {
         value: decodeURIComponent(encodedValue),
       };
     }),
-    updateArchive: vi.fn(() => meta),
     updateScenarioMeta: vi.fn((_scenarioId: string, updater: (current: ScenarioMeta) => ScenarioMeta) => updater(meta)),
   };
 });

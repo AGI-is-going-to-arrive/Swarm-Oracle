@@ -21,7 +21,7 @@
 | **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status/weekly-summary` API；首页会同时显示 daily challenge 真值、本周赛道和导演成长概览，结果页可直接复制分享挑战链接 |
 | **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页除 `judge summary` 外还会返回结构化 `judge_rationale`、`supporting_turns` 与 `adjudication_mode`；终局裁决当前会优先读取 LLM judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，失败时再退回 deterministic 规划；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；`counterplay` 除了 `phase_score / explanation`，还会显式改写对应阶段 commentary |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
-| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细；本 session 又去掉了 `ResultView` 用本地 `scenarioMeta` 反向回填后端 authority 的路径 |
+| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细；本 session 又把 `ResultView` 的派生 archive/objectives 改成纯内存态，不再把结果页读路径回写到本地 `scenarioMeta` |
 | **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；本 session 又把 `PhaserGameLoader` 本身移到 Theater 动态边界，并把截图链路拆成 `useScreenCapture` 轻壳 + `screenCaptureRuntime` 按需加载；`html2canvas / gif.js / gif.worker` 继续只在截图/GIF 路径上加载，避免普通首页和 Classic 路径提前拉取这批大依赖；首页题材 `label / hooks / badge` 现在也改走轻量摘要 helper，不再直接把整份玩法策略表挂进 landing route |
 | **Portable Replay & Import** | 主模式与 Debate 现在都有可复盘分享页：主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时回退到本地 token；Debate 结果页支持 `/debate/replay/result?replay=...`。三条 replay 页默认都是只读，但当前都支持一键“导入为本地运行”，落成真实本地 scenario / debate 记录 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
@@ -115,7 +115,7 @@ cd backend
 # Frontend tests
 cd frontend && npm install && npm test
 
-# Release signoff
+# Release signoff（需先有可访问的 backend/frontend，默认是 127.0.0.1:18927 / 127.0.0.1:18928）
 cd frontend && npm run release:signoff -- --headless
 
 # Matrix / corner-case / full black-box regression
@@ -129,14 +129,24 @@ cd frontend && npm run e2e:full
 
 - 仓库内历史全量基线仍记录为：后端 **815 passed**、前端 **179 passed**
 - `npm run release:signoff -- --headless` 会顺序执行：
+  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
+  - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
+- 如需跳过新增守门项，可传：
+  - `--skip-backend-checks`
+  - `--skip-assets-check`
+- 如果 backend Python 不在默认 `.venv` 路径，可传：
+  - `--backend-python /absolute/path/to/python`
 - 默认工件目录为 `frontend/output/e2e/<timestamp>-release-signoff/`
 - 若本机已配置 Safari WebDriver，可追加：
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+- 当前仓库也已补最小 CI：
+  - `.github/workflows/ci.yml`
+  - 会并行跑 backend targeted `pytest`，以及 frontend `assets:provenance:check / build / targeted vitest`
 - 本次 session 已实跑：
   - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
@@ -145,6 +155,13 @@ cd frontend && npm run e2e:full
   - `npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `npm run build` → 通过
   - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+- 本次 session 又补跑：
+  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py` → **81 passed**
+  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **77 passed**
+  - `frontend`：`npm run build` → 通过
+  - `frontend`：`npm run assets:provenance:check` → 通过
+  - `frontend`：`npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
+  - `frontend`：`npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
 - 当前新增口径：
   - 首页 `InputView` 现在只读取轻量题材摘要（`label / hooks / badge`），不再静态依赖完整玩法策略表
   - 深层玩法 contract / strategy helper 仍保留在后续路由与导演层链路中

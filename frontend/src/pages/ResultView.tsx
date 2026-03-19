@@ -29,10 +29,11 @@ import {
 } from '../lib/dailyChallenge';
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
 import {
-  ensureScenarioObjectives,
+  ensureScenarioObjectivesInMemory,
   loadScenarioMeta,
+  mergeScenarioArchive,
   parseScenarioMoment,
-  updateArchive,
+  type ScenarioMeta,
 } from '../lib/scenarioMeta';
 import {
   mergeScenarioMetaWithDirectorState,
@@ -218,6 +219,7 @@ export default function ResultView() {
   const [campaignScenarioSummary, setCampaignScenarioSummary] = useState<CampaignScenarioSummary | null>(null);
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
+  const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
   const isReplayMode = Boolean(replayPayload);
   const hasUnscored = predictions.some((p) => p.score == null);
   const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
@@ -335,7 +337,7 @@ export default function ResultView() {
           title: branch.title,
           probability: branch.probability,
         }));
-        let nextMeta = updateArchive(id, {
+        workingMeta = mergeScenarioArchive(workingMeta, {
           question: scenario.question,
           sceneTheme: scenario.scene_theme,
           profileId: profile.id,
@@ -350,17 +352,16 @@ export default function ResultView() {
             ).values(),
           ),
         });
-        workingMeta = {
-          ...workingMeta,
-          archive: nextMeta.archive,
-        };
-        if (workingMeta.objectives.goals.length === 0) {
+        if (
+          workingMeta.objectives.goals.length === 0
+          && (persistedCampaignSummary?.objective_total_count ?? null) == null
+        ) {
           const objectiveArc = getGameplaySignatureArcState(
             profile.id,
             workingMeta.cards.usageLog,
             isZh,
           );
-          nextMeta = ensureScenarioObjectives(id, {
+          workingMeta = ensureScenarioObjectivesInMemory(workingMeta, {
             question: scenario.question,
             profileId: profile.id,
             goals: buildDefaultDirectorObjectives({
@@ -368,10 +369,6 @@ export default function ResultView() {
               signatureCardId: objectiveArc?.nextCardId ?? null,
             }),
           });
-          workingMeta = mergeScenarioMetaWithDirectorState(
-            mergeScenarioMetaWithGameplayState(nextMeta, remoteGameplayState),
-            remoteDirectorState,
-          );
         }
         const dominantBranchForArchive = [...story.branches].sort((a, b) => b.probability - a.probability)[0] ?? null;
         const evaluatedObjectives = evaluateDirectorObjectives({
@@ -404,11 +401,12 @@ export default function ResultView() {
           objectiveTotalCount: evaluatedObjectives.length,
           commitmentOutcome,
         });
-        const finalMeta = updateArchive(id, {
+        const finalMeta = mergeScenarioArchive(workingMeta, {
           ...archiveSummary,
           riskValue: tracks?.riskValue ?? null,
           resourceValue: tracks?.resourceValue ?? null,
         });
+        setDerivedScenarioMeta(finalMeta);
         if (isDailyChallenge && challengeMatch?.challengeId) {
           markChallengeCompleted(challengeMatch.challengeId, id, {
             resultBranchId: story.branches[0]?.id,
@@ -479,6 +477,7 @@ export default function ResultView() {
     setCampaignScenarioSummary(null);
     setCampaignError('');
     setCampaignNotice('');
+    setDerivedScenarioMeta(null);
     void load();
 
     return () => {
@@ -566,7 +565,7 @@ export default function ResultView() {
   };
 
   const branches = storyData?.branches ?? [];
-  const storedScenarioMeta = replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null);
+  const storedScenarioMeta = derivedScenarioMeta ?? replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null);
   const inferredProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
     [scenario],
