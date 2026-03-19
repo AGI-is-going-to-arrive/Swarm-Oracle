@@ -9,6 +9,7 @@ const REPO_ROOT = path.resolve(FRONTEND_ROOT, "..");
 const BACKEND_ROOT = path.join(REPO_ROOT, "backend");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
+const VALID_DEBATE_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
   "tests/test_campaign_service.py",
@@ -74,6 +75,7 @@ function parseArgs(argv) {
     webdriverUrl: process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444",
     scenarioId: process.env.SWARM_SCENARIO_ID || "",
     backendPython: process.env.SWARM_BACKEND_PYTHON || getDefaultBackendPython(),
+    requireDebateAdjudicationMode: process.env.SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE || "",
   };
 
   for (let index = 2; index < argv.length; index += 1) {
@@ -97,6 +99,9 @@ function parseArgs(argv) {
     } else if (arg === "--backend-python" && next) {
       args.backendPython = path.isAbsolute(next) ? next : path.resolve(REPO_ROOT, next);
       index += 1;
+    } else if (arg === "--require-debate-adjudication-mode" && next) {
+      args.requireDebateAdjudicationMode = next;
+      index += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     } else if (arg === "--dry-run") {
@@ -109,9 +114,18 @@ function parseArgs(argv) {
       args.includeAssetsCheck = false;
     } else {
       throw new Error(
-        "Usage: node scripts/release-signoff.mjs [--url URL] [--backend-url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
+        "Usage: node scripts/release-signoff.mjs [--url URL] [--backend-url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--require-debate-adjudication-mode deterministic|llm_hybrid] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
       );
     }
+  }
+
+  if (
+    args.requireDebateAdjudicationMode
+    && !VALID_DEBATE_ADJUDICATION_MODES.has(args.requireDebateAdjudicationMode)
+  ) {
+    throw new Error(
+      `Unsupported debate adjudication mode requirement: ${args.requireDebateAdjudicationMode}`,
+    );
   }
 
   return args;
@@ -151,6 +165,75 @@ function serializeError(error) {
     message: error.message,
     stack: error.stack ?? null,
   };
+}
+
+function captureCommand(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd ?? FRONTEND_ROOT,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...options.env,
+    },
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return {
+    status: result.status ?? 0,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function readGitMetadata() {
+  try {
+    const repoRoot = captureCommand("git", ["rev-parse", "--show-toplevel"], {
+      cwd: REPO_ROOT,
+    });
+    if (repoRoot.status !== 0) {
+      throw new Error(repoRoot.stderr.trim() || "git rev-parse failed");
+    }
+
+    const commit = captureCommand("git", ["log", "-1", "--format=%H%n%cI%n%s"], {
+      cwd: REPO_ROOT,
+    });
+    if (commit.status !== 0) {
+      throw new Error(commit.stderr.trim() || "git log failed");
+    }
+
+    const branch = captureCommand("git", ["branch", "--show-current"], {
+      cwd: REPO_ROOT,
+    });
+    const worktree = captureCommand("git", ["status", "--short", "--branch"], {
+      cwd: REPO_ROOT,
+    });
+
+    const [commitSha = "", committedAt = "", subject = ""] = commit.stdout.trim().split("\n");
+    const worktreeStatus = worktree.stdout.trim();
+
+    return {
+      available: true,
+      repo_root: repoRoot.stdout.trim(),
+      branch: branch.status === 0 ? branch.stdout.trim() || null : null,
+      commit: {
+        sha: commitSha || null,
+        committed_at: committedAt || null,
+        subject: subject || null,
+      },
+      worktree: {
+        status: worktreeStatus || "clean",
+        dirty: worktreeStatus.split("\n").some((line) => line && !line.startsWith("##")),
+      },
+    };
+  } catch (error) {
+    return {
+      available: false,
+      error: serializeError(error),
+    };
+  }
 }
 
 function writeSummary(outputRoot, summary) {
@@ -218,6 +301,7 @@ function main() {
   const nodeCommand = process.execPath;
 
   const cornersOutput = path.join(args.outputRoot, "corners");
+  const mobileOutput = path.join(args.outputRoot, "mobile");
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
   const debateOutput = path.join(args.outputRoot, "debate-full");
   const safariOutput = path.join(args.outputRoot, "safari");
@@ -233,8 +317,10 @@ function main() {
     include_safari: args.includeSafari,
     include_backend_checks: args.includeBackendChecks,
     include_assets_check: args.includeAssetsCheck,
+    require_debate_adjudication_mode: args.requireDebateAdjudicationMode || null,
     webdriver_url: args.includeSafari ? args.webdriverUrl : null,
     scenario_id: args.scenarioId || null,
+    git: readGitMetadata(),
     steps: [],
     error: null,
   };
@@ -249,6 +335,9 @@ function main() {
   console.log(`- include safari: ${args.includeSafari ? "true" : "false"}`);
   console.log(`- backend checks: ${args.includeBackendChecks ? "true" : "false"}`);
   console.log(`- assets check: ${args.includeAssetsCheck ? "true" : "false"}`);
+  if (args.requireDebateAdjudicationMode) {
+    console.log(`- required debate adjudication mode: ${args.requireDebateAdjudicationMode}`);
+  }
   if (args.scenarioId) {
     console.log(`- safari scenario id: ${args.scenarioId}`);
   }
@@ -297,6 +386,18 @@ function main() {
     runStep(
       summary,
       args,
+      "mobile",
+      nodeCommand,
+      buildSuiteArgs("scripts/e2e-suite.mjs", "mobile", args.baseUrl, mobileOutput, args.headless, args.scenarioId),
+      {
+        artifactDir: mobileOutput,
+        resultFile: path.join(mobileOutput, "result.json"),
+        browserLaunchFile: path.join(mobileOutput, "browser-launch.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
       "cross_browser",
       nodeCommand,
       buildSuiteArgs("scripts/e2e-suite.mjs", "cross-browser", args.baseUrl, crossBrowserOutput, args.headless, args.scenarioId),
@@ -317,6 +418,9 @@ function main() {
         args.baseUrl,
         "--output-dir",
         debateOutput,
+        ...(args.requireDebateAdjudicationMode
+          ? ["--require-adjudication-mode", args.requireDebateAdjudicationMode]
+          : []),
         ...(args.headless ? ["--headless"] : []),
       ],
       {

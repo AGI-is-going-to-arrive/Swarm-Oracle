@@ -301,4 +301,56 @@ describe('InputView campaign progress', () => {
     expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
   });
+
+  it('publishes homepage challenge and growth summaries inside render_game_to_text', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(typeof (window as Window & { render_game_to_text?: () => string }).render_game_to_text).toBe('function');
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText('Lv.2').length).toBeGreaterThan(0);
+    });
+
+    const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    expect(raw).toBeTruthy();
+
+    const payload = JSON.parse(raw ?? '{}');
+    expect(payload.page?.daily_challenge).toMatchObject({
+      challenge_id: 'challenge-1',
+      profile_id: 'governance',
+      question: 'What if AI ruled every city?',
+      hook_count: 2,
+      mastery_level: 2,
+      action_state: 'start',
+      progress_status: 'not_started',
+      completed: false,
+    });
+    expect(payload.page?.weekly_challenge).toMatchObject({
+      week_key: '2026-03-16',
+      challenge_count: 3,
+      total_runs: 2,
+      campaign_score_delta: 6,
+      completed_daily_challenges: 1,
+      top_profile_id: 'governance',
+    });
+    expect(payload.page?.weekly_challenge?.entries).toHaveLength(3);
+    expect(payload.page?.director_growth).toMatchObject({
+      total_runs: 4,
+      badge_count: 2,
+      top_mastery_count: 1,
+      has_hint: false,
+    });
+    expect(payload.page?.director_growth?.top_masteries).toMatchObject([
+      {
+        profile_id: 'governance',
+        level: 2,
+        score_to_next_level: 3,
+      },
+    ]);
+  });
 });

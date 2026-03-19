@@ -2167,7 +2167,31 @@ async function runMobileSuite(args) {
       10000,
       "mobile homepage",
     );
+    const homepageSurface = await page.evaluate(() => ({
+      hasDailyChallengeCard: Boolean(document.querySelector(".daily-challenge-card")),
+      weeklyChallengeCardCount: document.querySelectorAll(".weekly-challenge-card").length,
+      hasGrowthCard: Boolean(document.querySelector(".weekly-challenge-card--growth")),
+    }));
+    if (!homepageSurface.hasDailyChallengeCard) {
+      throw new Error(`mobile homepage missing daily challenge card: ${JSON.stringify(homepageSurface)}`);
+    }
+    if (homepageSurface.weeklyChallengeCardCount < 2 || !homepageSurface.hasGrowthCard) {
+      throw new Error(`mobile homepage missing weekly/growth cards: ${JSON.stringify(homepageSurface)}`);
+    }
+    if (!homepage.page?.daily_challenge?.challenge_id || homepage.page.daily_challenge.hook_count < 1) {
+      throw new Error(`mobile homepage daily challenge summary missing: ${JSON.stringify(homepage.page?.daily_challenge ?? null)}`);
+    }
+    if ((homepage.page?.weekly_challenge?.challenge_count ?? 0) < 3) {
+      throw new Error(`mobile homepage weekly challenge summary missing: ${JSON.stringify(homepage.page?.weekly_challenge ?? null)}`);
+    }
+    if ((homepage.page?.weekly_challenge?.entries?.length ?? 0) < 3) {
+      throw new Error(`mobile homepage weekly challenge entries missing: ${JSON.stringify(homepage.page?.weekly_challenge ?? null)}`);
+    }
+    if (homepage.page?.director_growth?.badge_count == null || homepage.page?.director_growth?.total_runs == null) {
+      throw new Error(`mobile homepage director growth summary missing: ${JSON.stringify(homepage.page?.director_growth ?? null)}`);
+    }
     writeJson(path.join(args.outputDir, "mobile-home.json"), homepage);
+    writeJson(path.join(args.outputDir, "mobile-home-surface.json"), homepageSurface);
     await saveScreenshot(page, path.join(args.outputDir, "mobile-home.png"));
 
     await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
@@ -2241,7 +2265,10 @@ async function runMobileSuite(args) {
       mode: "mobile",
       launchProfile,
       scenarioId: governanceSample.scenarioId,
-      homepage: homepage.page ?? null,
+      homepage: {
+        ...(homepage.page ?? {}),
+        surface: homepageSurface,
+      },
       theater: {
         replayState: theater.page?.replay_state ?? null,
         scene: theater.scene ?? null,

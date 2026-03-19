@@ -84,7 +84,8 @@ jobs:
           LLM_RESPONSES_URL: ${{ secrets.LLM_RESPONSES_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
-          DEBATE_USE_LLM: "false"
+          DEBATE_USE_LLM: "true"
+          SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE: llm_hybrid
           SWARM_URL: http://127.0.0.1:18928
           SWARM_BACKEND_URL: http://127.0.0.1:18927
           SWARM_BACKEND_PYTHON: ${{ github.workspace }}/backend/.venv/bin/python

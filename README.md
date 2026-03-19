@@ -6,7 +6,8 @@
 
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
-- 当前 `HEAD` 已通过一轮完整 `release:signoff`，工件位于 `frontend/output/e2e/20260320-codex-live-signoff/summary.json`。
+- 当前工作树最新一轮完整 `release:signoff` 已通过，工件位于 `frontend/output/e2e/codex-top3-live-signoff/summary.json`。
+- `release:signoff` 的 `summary.json` 现在会记录 git commit / worktree 绑定信息，便于把签收结果和具体代码状态对上。
 
 ## Documentation Contract
 
@@ -112,6 +113,11 @@ cd frontend
 npm run release:signoff -- --headless
 ```
 
+```bash
+cd frontend
+SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless
+```
+
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
 - Current targeted verification at `HEAD`: backend `82 passed`, frontend `79 passed`, `tsc`/`build`/assets check passed.
 - Default `release:signoff` contract:
@@ -121,10 +127,13 @@ npm run release:signoff -- --headless
   - `npm run build`
   - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
+  - `scripts/e2e-suite.mjs mobile`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
+- `summary.json` 现在会记录 git commit / worktree 绑定信息。
+- 如果本地 LLM 链路可用，可以用 `SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid` 强制要求 Debate 结果返回 `adjudication_mode = llm_hybrid`。
 - Safari is optional and not part of the default full signoff.
-- Latest passing signoff artifact: `frontend/output/e2e/20260320-codex-live-signoff/summary.json`.
+- 最新通过工件：`frontend/output/e2e/codex-top3-live-signoff/summary.json`。
 
 ## CI
 
@@ -136,6 +145,7 @@ npm run release:signoff -- --headless
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
   - preflight on `LLM_RESPONSES_URL / LLM_API_KEY`
+  - secrets 可用时，当前 full signoff lane 会要求 Debate `adjudication_mode = llm_hybrid`
 
 ## License
 

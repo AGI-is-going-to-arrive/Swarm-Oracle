@@ -11,6 +11,7 @@ const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_DEBATE_RESULT_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_TIMEOUT_MS", 240000);
 const DEFAULT_DEBATE_STALL_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_STALL_TIMEOUT_MS", 120000);
 const DEFAULT_DEBATE_RESULT_CTA_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS", 120000);
+const VALID_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
 
 const DESKTOP_CASE = {
   id: "desktop-en-trade",
@@ -73,6 +74,7 @@ function parseArgs(argv) {
     height: null,
     question: "",
     profileHint: "",
+    requireAdjudicationMode: process.env.SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE || "",
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -96,6 +98,9 @@ function parseArgs(argv) {
     } else if (arg === "--profile-hint" && next) {
       args.profileHint = next;
       i += 1;
+    } else if (arg === "--require-adjudication-mode" && next) {
+      args.requireAdjudicationMode = next;
+      i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     }
@@ -103,12 +108,16 @@ function parseArgs(argv) {
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
     throw new Error(
-      "Usage: node scripts/e2e-debate-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--headless]",
+      "Usage: node scripts/e2e-debate-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--require-adjudication-mode deterministic|llm_hybrid] [--headless]",
     );
   }
 
   if ((args.width != null && !Number.isFinite(args.width)) || (args.height != null && !Number.isFinite(args.height))) {
     throw new Error("--width/--height must be numeric when provided");
+  }
+
+  if (args.requireAdjudicationMode && !VALID_ADJUDICATION_MODES.has(args.requireAdjudicationMode)) {
+    throw new Error(`Unsupported adjudication mode requirement: ${args.requireAdjudicationMode}`);
   }
 
   return args;
@@ -718,6 +727,7 @@ async function runDebateFlow(page, {
   outputDir,
   mode,
   surfaceConfig,
+  requireAdjudicationMode,
 }) {
   ensureDir(outputDir);
 
@@ -809,6 +819,14 @@ async function runDebateFlow(page, {
     20000,
     "debate result page",
   );
+  if (
+    requireAdjudicationMode
+    && resultInitial?.page?.result?.adjudication_mode !== requireAdjudicationMode
+  ) {
+    throw new Error(
+      `Expected adjudication_mode=${requireAdjudicationMode}, got ${resultInitial?.page?.result?.adjudication_mode ?? "null"}`,
+    );
+  }
   if ((resultInitial?.page?.result?.signal_cards?.length ?? 0) < 4) {
     throw new Error(`debate result signal cards missing: ${JSON.stringify(resultInitial?.page?.result ?? null)}`);
   }
@@ -892,6 +910,7 @@ async function runDebateFlow(page, {
       route: resultInitial?.page?.route ?? null,
       winner: resultInitial?.page?.result?.winner ?? null,
       verdictTone: resultInitial?.page?.result?.verdict_tone ?? null,
+      adjudicationMode: resultInitial?.page?.result?.adjudication_mode ?? null,
       predictionCount: resultInitial?.page?.result?.prediction_count ?? null,
       signalCardCount: resultInitial?.page?.result?.signal_cards?.length ?? 0,
       phaseSummaryCount: resultInitial?.page?.result?.phase_summaries?.length ?? 0,
@@ -904,6 +923,7 @@ async function runDebateFlow(page, {
       resultBeforeShare: resultHooksBeforeShare,
       resultWithShare: resultHooksWithShare,
     },
+    requiredAdjudicationMode: requireAdjudicationMode || null,
     share: shareModalState,
   };
 }
@@ -927,6 +947,7 @@ async function runSurface(args, mode) {
       outputDir,
       mode,
       surfaceConfig,
+      requireAdjudicationMode: args.requireAdjudicationMode || "",
     });
     return {
       launchProfile,

@@ -100,6 +100,13 @@ cd frontend
 npm run release:signoff -- --headless
 ```
 
+如需把 Debate 结果强约束到真 `LLM hybrid` 裁决，可显式加：
+
+```bash
+cd frontend
+SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless
+```
+
 默认合同包含：
 
 - targeted backend `pytest`
@@ -108,8 +115,10 @@ npm run release:signoff -- --headless
 - `npm run build`
 - `npm run assets:provenance:check`
 - `scripts/e2e-suite.mjs corners`
+- `scripts/e2e-suite.mjs mobile`
 - `scripts/e2e-suite.mjs cross-browser`
 - `scripts/e2e-debate-suite.mjs full`
+- output root 的 `summary.json` 会带 git `branch / commit / worktree` 绑定信息
 
 可选项：
 
@@ -117,6 +126,7 @@ npm run release:signoff -- --headless
 - `--skip-backend-checks`
 - `--skip-assets-check`
 - `--backend-python /absolute/path/to/python`
+- `--require-debate-adjudication-mode deterministic|llm_hybrid`
 
 可调超时环境变量：
 
@@ -126,7 +136,7 @@ npm run release:signoff -- --headless
 
 最新通过工件：
 
-- `frontend/output/e2e/20260320-codex-live-signoff/summary.json`
+- `frontend/output/e2e/codex-top3-live-signoff/summary.json`
 
 ## CI
 
@@ -138,6 +148,7 @@ npm run release:signoff -- --headless
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
   - preflight on `LLM_RESPONSES_URL / LLM_API_KEY`
+  - secrets 可用时，当前 full signoff lane 会要求 Debate 返回 `adjudication_mode = llm_hybrid`
 
 ## Docker 部署
 

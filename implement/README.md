@@ -82,7 +82,10 @@
   - backend targeted set `82 passed`
   - frontend targeted set `79 passed`
 - Current release signoff：
-  - `frontend/output/e2e/20260320-codex-live-signoff/summary.json`
+  - `frontend/output/e2e/codex-top3-live-signoff/summary.json`
+  - 这份 `summary.json` 当前会带 git `branch / commit / worktree` 绑定信息
+  - 默认合同当前已包含 `mobile`
+  - Debate full 当前可按要求校验 `adjudication_mode = llm_hybrid`
 
 ### 当前边界
 

@@ -8087,3 +8087,57 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 收尾：
   - 已把临时拉起的 backend / preview / `safaridriver` 全部停掉
   - 当前 `18927 / 18928 / 4444` 无残留监听进程
+
+## 2026-03-20 Release Signoff 证据绑定 + mobile 默认签收 + Debate hybrid 收口
+
+- 已改：
+  - `frontend/scripts/release-signoff.mjs`
+    - 新增 `--require-debate-adjudication-mode deterministic|llm_hybrid`
+    - `summary.json` 当前会写入 git `repo_root / branch / commit / worktree`
+    - 默认合同当前已纳入 `mobile`
+  - `frontend/scripts/e2e-debate-suite.mjs`
+    - 当前可显式要求 Debate 结果返回指定 `adjudication_mode`
+    - 工件会额外写出 `adjudicationMode / requiredAdjudicationMode`
+  - `frontend/scripts/e2e-suite.mjs`
+    - `mobile` suite 当前会显式检查首页 `daily challenge / weekly challenge / director growth` Lite 卡片
+    - 当前会额外落盘 `mobile-home-surface.json`
+  - `frontend/src/pages/InputView.tsx`
+    - `render_game_to_text()` 当前会稳定输出：
+      - `page.daily_challenge`
+      - `page.weekly_challenge`
+      - `page.director_growth`
+  - `frontend/src/pages/InputView.test.tsx`
+  - `.github/workflows/release-signoff.yml`
+    - 当前 full signoff lane 会要求 Debate `adjudication_mode = llm_hybrid`
+
+- 定向验证：
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx`
+    - 结果：`4 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run release:signoff -- --dry-run --headless --output-root output/e2e/codex-top3-default-dry-run`
+    - 结果：通过
+    - 已确认默认合同中包含 `mobile`
+  - `cd frontend && npm run release:signoff -- --dry-run --headless --require-debate-adjudication-mode llm_hybrid --output-root output/e2e/codex-top3-hybrid-dry-run`
+    - 结果：通过
+    - 已确认 Debate 步骤命令会附带 `--require-adjudication-mode llm_hybrid`
+
+- 本次真实签收：
+  - 显式启动：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - 执行：
+    - `cd frontend && SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless --output-root output/e2e/codex-top3-live-signoff`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/codex-top3-live-signoff/summary.json`
+    - `frontend/output/e2e/codex-top3-live-signoff/mobile/result.json`
+    - `frontend/output/e2e/codex-top3-live-signoff/debate-full/result.json`
+  - 本轮确认：
+    - `summary.json` 已记录 git `branch / commit / worktree`
+    - 默认合同中的 `mobile` 通过
+    - Debate desktop / mobile 两端都命中 `adjudicationMode = llm_hybrid`
+
+- 收尾：
+  - 已把本轮临时拉起的 backend / preview 停掉
+  - 当前 `18927 / 18928` 无残留监听进程

@@ -297,6 +297,28 @@ export function InputView() {
     challenge,
     runs: campaignWeeklySummary?.profile_runs?.[challenge.profileId] ?? 0,
   }));
+  const dailyChallengeActionState = todayChallengeProgress?.completed
+    ? 'replay'
+    : todayChallengeProgress
+      ? 'continue'
+      : 'start';
+  const dailyChallengeProgressStatus = todayChallengeProgress?.completed
+    ? 'completed'
+    : todayChallengeProgress
+      ? 'in_progress'
+      : 'not_started';
+  const weeklyChallengeEntries = weeklyChallengeProgress.map(({ challenge, runs }) => ({
+    challenge_id: challenge.id,
+    profile_id: challenge.profileId,
+    profile_label: getGameplayProfileLabel(challenge.profileId, isZh),
+    runs,
+  }));
+  const topMasteryEntries = topMasteries.map((mastery) => ({
+    profile_id: mastery.profile_id,
+    profile_label: getGameplayProfileLabel(mastery.profile_id as never, isZh),
+    level: mastery.level,
+    score_to_next_level: mastery.score_to_next_level ?? null,
+  }));
 
   // Entry animations
   useEffect(() => {
@@ -493,6 +515,38 @@ export function InputView() {
               betting_hit: todayChallengeProgress.bettingHit ?? null,
             }
           : null,
+        daily_challenge: {
+          challenge_id: todayChallenge.id,
+          profile_id: todayChallenge.profileId,
+          question: todayChallengeQuestion,
+          subtitle: isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn,
+          profile_label: challengeProfileLabel,
+          hooks: challengeHooks,
+          hook_count: challengeHooks.length,
+          mastery_level: dailyMastery?.level ?? 0,
+          score_to_next_level: dailyMastery?.score_to_next_level ?? null,
+          action_state: dailyChallengeActionState,
+          progress_status: dailyChallengeProgressStatus,
+          completed: Boolean(todayChallengeProgress?.completed),
+          scenario_id: todayChallengeProgress?.scenarioId ?? null,
+        },
+        weekly_challenge: {
+          week_key: challengeWeekKey(),
+          challenge_count: weeklyChallenges.length,
+          total_runs: campaignWeeklySummary?.total_runs ?? null,
+          campaign_score_delta: campaignWeeklySummary?.campaign_score_delta ?? null,
+          completed_daily_challenges: campaignWeeklySummary?.completed_daily_challenges ?? null,
+          top_profile_id: campaignWeeklySummary?.top_profile_id ?? null,
+          top_profile_label: weeklyTopProfileLabel,
+          entries: weeklyChallengeEntries,
+        },
+        director_growth: {
+          total_runs: campaignProfile?.total_runs ?? 0,
+          badge_count: campaignBadges.length,
+          top_mastery_count: topMasteryEntries.length,
+          has_hint: topMasteryEntries.length === 0,
+          top_masteries: topMasteryEntries,
+        },
         campaign: {
           user_id: directorIdentity.userId,
           total_runs: campaignProfile?.total_runs ?? 0,
@@ -525,10 +579,27 @@ export function InputView() {
     testStatus,
     todayChallengeProgress,
     vizEnabled,
+    todayChallenge.id,
+    todayChallenge.profileId,
+    todayChallenge.subtitleEn,
+    todayChallenge.subtitleZh,
+    todayChallengeQuestion,
+    challengeProfileLabel,
+    challengeHooks,
+    dailyChallengeActionState,
+    dailyChallengeProgressStatus,
+    weeklyChallengeEntries,
+    weeklyChallenges.length,
+    weeklyTopProfileLabel,
+    campaignWeeklySummary?.campaign_score_delta,
+    campaignWeeklySummary?.completed_daily_challenges,
+    campaignWeeklySummary?.top_profile_id,
+    campaignWeeklySummary?.total_runs,
     campaignBadges.length,
     campaignProfile?.total_runs,
     dailyMastery?.level,
     dailyMastery?.score_to_next_level,
+    topMasteryEntries,
     directorIdentity.userId,
   ]);
 

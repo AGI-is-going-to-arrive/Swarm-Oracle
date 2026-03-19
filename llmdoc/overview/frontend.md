@@ -13,7 +13,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 
 | 页面 | 文件 | 描述 |
 |------|------|------|
-| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；首页现在只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用 |
+| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；首页现在只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用；首页 automation 摘要当前还会稳定输出 `daily_challenge / weekly_challenge / director_growth`，方便移动端首页签收 |
 | DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证；当前 live 页会优先读取后端显式 `counterplay` snapshot/WS 数据，本地 helper 只做兜底；本轮又补了赛况总览卡、房间席位图、阶段地图，以及后端 `phase_insights` 直出的阶段解读；`debate_verdict` 到来时，这批阶段洞察会直接进 store，而不是等结果页二次拉取 |
 | DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、结构化 `judge_rationale`、`supporting_turns`、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标；当前结果页会优先读取后端显式 `counterplay` 字段，展示反制摘要、命中/未中结果、`explanation`，并继续传给 share copy；share copy 现还会带 1-2 条关键引文；本轮又补了结果信号卡与阶段地图，并优先消费后端顶层 `phase_insights`，所以 live / result 的阶段 stakes、judge focus 和 commentary 现在是同一套口径；同一组件当前还负责 `/debate/replay/result`，会从 replay token 直接 hydrate 结果、显示 `adjudication_mode`，并支持“导入为本地运行” |
 | SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；当前导演层会在 Theater 面板内显示 2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺选择与锁定/取消按钮；这部分 goals / commitment 现在走后端 `director_state` 权威态，主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 都走后端 `gameplay_state` 权威态，本地 `scenarioMeta` 退为缓存/兼容层；结构化下注提交成功后会立刻把新 meta 回传父层并回写后端；本 session 又去掉了把后端 authority 反向 apply 到 localStorage 的镜像链路，页面内只做 authority 优先的内存合并与 replay payload 组装；玩法卡 modal 现会显示题材专属三段式连锁事件、`风险 / 资源` 两条轻量状态，以及 profile-specific 的打法说明；桌面端 Theater 本轮又做了“场景优先”的可读性修复：右栏收成固定窄宽、`game-wrapper` 提前到 replay filters/timeline 前、导演目标改成双列、compact timeline 隐藏二级 stats，气泡文字也同步放大和加清晰化样式；移动端 Theater 头部动作区在窄屏下会自动换行，并把视图切换收成图标胶囊，避免控件裁切；Theater 背景现为 30 个 Theater 语义主题 + 3 个 Debate 专属主题，共 33 个 registry 条目；当前 Phaser 预热只会在用户真正切进 Theater 后再触发，并优先走 idle 时机；本次又补上了隐藏页面、`prefers-reduced-data`、`saveData` 与 `2g/slow-2g` 场景下的跳过守卫；`BootScene` 当前只预载首屏初始 theme + 角色 sprite，后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载；截图自动化摘要现还会带 `capture_result_kind`，便于区分 `gif` 与 `gif_fallback_png`；同一组件当前还负责 `/sim/replay`，replay 模式会关闭 WS、下注、干预和玩法卡写操作，只保留回放 / 截图 / 复制 replay 链接 / 导入为本地运行 |
@@ -263,6 +263,23 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
 - `render_game_to_text()` 已覆盖 `InputView`、`SimulationView`、`ResultView`、`HistoryView`、`LeaderboardView`、`DebateArenaView`、`DebateResultView`
 - `InputView` 的自动化摘要现会带 `campaign`（`user_id / total_runs / badge_count / daily_profile_level / daily_profile_score_to_next_level`），可直接取证首页 director campaign 进展
 - `InputView` 现在还会把 daily challenge 的后端真值合并进 `page.challenge_progress`，但不会凭空伪造本地未知的卡牌/下注细节
+- `InputView` 当前还会输出：
+  - `page.daily_challenge`
+  - `page.weekly_challenge`
+  - `page.director_growth`
+- `page.daily_challenge` 现包含：
+  - `challenge_id / profile_id / question / subtitle`
+  - `profile_label / hooks / hook_count`
+  - `mastery_level / score_to_next_level`
+  - `action_state / progress_status / completed / scenario_id`
+- `page.weekly_challenge` 现包含：
+  - `week_key / challenge_count`
+  - `total_runs / campaign_score_delta / completed_daily_challenges`
+  - `top_profile_id / top_profile_label`
+  - `entries[]`
+- `page.director_growth` 现包含：
+  - `total_runs / badge_count / top_mastery_count / has_hint`
+  - `top_masteries[]`
 - `SimulationView` / `ResultView` 在输出中带页面级控件摘要（按钮可用性、激活 modal、可展开/可干预分支等）
 - `SimulationView` / `ResultView` / `DebateResultView` 当前还会输出 `replay_source`，用于区分 `api / share id / token`
 - `SimulationView` 的预测弹窗会额外输出表单级状态摘要（文本长度、自信度、提交可用性、错误状态）
@@ -373,7 +390,8 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
     - `frontend/output/e2e/20260318-debate-civic-v2/`
   - `generic` 变体 smoke 取证仍保留在 `frontend/output/e2e/generic-variant-smoke-switchboard-20260317/`（`scenario.json` + `theater.png`）
   - `develop-web-game` 相关 Playwright 工件已存在：运行时脚本位于 `frontend/.tmp-playwright/web_game_playwright_client.mjs`，输出工件位于 `frontend/output/web-game*/` 下的 `shot-*.png` / `state-*.json`
-  - `e2e-suite.mjs` / `e2e-automation.mjs` 现在会把 `frontend/output/...` 这类参数归一化到真正的前端根目录，避免后续再写出 `frontend/frontend/output/...` 嵌套路径
+- `e2e-suite.mjs` / `e2e-automation.mjs` 现在会把 `frontend/output/...` 这类参数归一化到真正的前端根目录，避免后续再写出 `frontend/frontend/output/...` 嵌套路径
+- `mobile` suite 当前会显式检查首页 daily challenge、weekly challenge 与 director growth Lite 卡片是否存在，并把首页 surface 摘要落盘到 `mobile-home-surface.json`
 
 ## 像素化可视化游戏引擎 (`src/game/`) — Phase 1+2+3+4
 
@@ -495,8 +513,10 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - Current targeted frontend set: **79 passed**
   - `npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run assets:provenance:check` 当前通过
 - **发布签收**:
-  - 默认 `release:signoff` 合同由 backend targeted checks、`/metrics`、`tsc`、`build`、assets、`corners`、`cross-browser`、`debate-full` 组成
-  - 最新通过工件：`frontend/output/e2e/20260320-codex-live-signoff/summary.json`
+  - 默认 `release:signoff` 合同由 backend targeted checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 组成
+  - `summary.json` 现会记录 git `branch / commit / worktree` 绑定信息
+  - `release:signoff` / `e2e-debate-suite.mjs` 现支持显式要求 Debate 返回指定 `adjudication_mode`
+  - 最新通过工件：`frontend/output/e2e/codex-top3-live-signoff/summary.json`
   - Safari 为可选附加项，不属于默认 full signoff
 - **部署**:
   - `npm run build` → `dist/`

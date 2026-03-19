@@ -121,10 +121,14 @@
    - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
    本次 session 又补了这条线的收口基础设施：
    - `release:signoff` 现在会在 output root 增量写 `summary.json`
+   - `summary.json` 当前还会附带 git `branch / commit / worktree` 绑定信息
    - `release:signoff` 当前还会额外检查 backend `/metrics`
+   - 默认 `release:signoff` 合同当前已纳入 `mobile`
+   - 首页移动端签收当前会显式检查 `daily challenge / weekly challenge / director growth` Lite 卡片与 automation 摘要
    - Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+   - `release:signoff` / `e2e-debate-suite.mjs` 当前可显式要求 Debate 返回指定 `adjudication_mode`
    - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
-   - `.github/workflows/release-signoff.yml` 新增 nightly + workflow_dispatch 的完整 signoff workflow，并会在缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时安全跳过
+   - `.github/workflows/release-signoff.yml` 新增 nightly + workflow_dispatch 的完整 signoff workflow，并会在缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时安全跳过；secrets 可用时当前要求 Debate `adjudication_mode = llm_hybrid`
    本次真实验证为：
    - backend targeted `pytest`：**81 passed**
    - frontend targeted `vitest`：**79 passed**
@@ -138,6 +142,8 @@
    - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
    - `sceneAssetPlan / PhaserGameLoader / useScreenCapture / EndingScene / WorldScene / SimulationView`：**59 passed**
    - `frontend/output/e2e/current-post-change-dry-run/summary.json`：dry-run 通过
+   - `frontend/src/pages/InputView.test.tsx`：**4 passed**
+   - `frontend/output/e2e/codex-top3-live-signoff/summary.json`：真实 full signoff 通过；默认合同已带 `mobile`，Debate desktop/mobile 都命中 `adjudication_mode = llm_hybrid`
    后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
    - `release:signoff --headless`
    - 如需要 Safari 证据，再追加 `--include-safari`
