@@ -3,12 +3,15 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
 import {
+  createReplayArtifact,
+  getReplayArtifact,
+  importReplayScenario,
   upsertScenarioDirectorState,
   upsertScenarioGameplayState,
 } from '../api/client';
@@ -24,6 +27,7 @@ import {
   loadScenarioMeta,
   setBranchCommitment,
 } from '../lib/scenarioMeta';
+import { copyText } from '../lib/copyText';
 import {
   applyScenarioDirectorState,
   hasMeaningfulScenarioDirectorState,
@@ -81,6 +85,11 @@ import type {
   ScenarioDirectorState,
   ScenarioGameplayState,
 } from '../types';
+import {
+  buildSimulationReplayUrl,
+  readSimulationReplayPayload,
+  type SimulationReplayPayload,
+} from '../lib/simulationReplay';
 import './SimulationView.css';
 
 const THEATER_SCENE_LABELS = {
@@ -113,6 +122,24 @@ const MODAL_CAPTURE_SELECTORS = [
   '.modal-overlay',
 ];
 
+function buildSimulationSnapshot(
+  scenario: NonNullable<ReturnType<typeof useSimulationStore.getState>['scenario']>,
+  agents: ReturnType<typeof useSimulationStore.getState>['agents'],
+  branches: ReturnType<typeof useSimulationStore.getState>['branches'],
+  messages: ReturnType<typeof useSimulationStore.getState>['messages'],
+  directorState: ScenarioDirectorState | null,
+  gameplayState: ScenarioGameplayState | null,
+): typeof scenario {
+  return {
+    ...scenario,
+    agents,
+    branches,
+    messages,
+    director_state: directorState ?? scenario.director_state ?? null,
+    gameplay_state: gameplayState ?? scenario.gameplay_state ?? null,
+  };
+}
+
 function formatTheaterLabel(
   key: string | null | undefined,
   labels: Record<string, { zh: string; en: string }>,
@@ -132,6 +159,9 @@ export function SimulationView() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const replayToken = searchParams.get('replay');
+  const replayShareId = searchParams.get('share');
   const isZh = i18n.language.startsWith('zh');
   const scenario = useSimulationStore((s) => s.scenario);
   const agents = useSimulationStore((s) => s.agents);
@@ -145,6 +175,7 @@ export function SimulationView() {
   const viewMode = useSimulationStore((s) => s.viewMode);
   const currentRound = useSimulationStore((s) => s.currentRound);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
+  const setScenario = useSimulationStore((s) => s.setScenario);
 
   // Intervention modal state
   const [interventionTarget, setInterventionTarget] = useState<{
@@ -171,6 +202,9 @@ export function SimulationView() {
   const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
   const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(null);
   const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(null);
+  const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
+  const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const [importingReplay, setImportingReplay] = useState(false);
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
@@ -185,9 +219,10 @@ export function SimulationView() {
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
   );
+  const isReplayMode = Boolean(replayPayload);
   const storedScenarioMeta = useMemo(
-    () => (id ? loadScenarioMeta(id) : null),
-    [id, localMetaRevision],
+    () => (replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null)),
+    [id, localMetaRevision, replayPayload?.scenarioMeta],
   );
   const scenarioMeta = useMemo(
     () => {
@@ -239,10 +274,11 @@ export function SimulationView() {
     () => countCompletedObjectives(evaluatedObjectives),
     [evaluatedObjectives],
   );
-  const canPreviewGameplayCards = viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
-  const canUseGameplayCards = !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const canPreviewGameplayCards = !isReplayMode && viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
+  const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
   const isWarmupPhase =
-    viewMode === 'theater'
+    !isReplayMode
+    && viewMode === 'theater'
     && !isSimulationComplete
     && status === 'simulating'
     && currentRound === 0;
@@ -257,8 +293,72 @@ export function SimulationView() {
   );
 
   useEffect(() => {
-    if (viewMode !== 'theater' && !visualizationEnabled) return;
-    preloadPhaserGame();
+    let cancelled = false;
+
+    const hydrateReplay = async () => {
+      if (replayShareId) {
+        const artifact = await getReplayArtifact(replayShareId).catch(() => null);
+        if (cancelled || !artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) return;
+        const replay = artifact.payload as unknown as SimulationReplayPayload;
+        setReplayPayload(replay);
+        setScenario(replay.scenario);
+        setBackendDirectorState(replay.scenario.director_state ?? null);
+        setBackendGameplayState(replay.scenario.gameplay_state ?? null);
+        setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
+        setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
+        setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
+        setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
+        setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
+        return;
+      }
+      if (!replayToken) {
+        setReplayPayload(null);
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set('replay', replayToken);
+      const replay = await readSimulationReplayPayload(params);
+      if (cancelled) return;
+      if (!replay) {
+        return;
+      }
+      setReplayPayload(replay);
+      setScenario(replay.scenario);
+      setBackendDirectorState(replay.scenario.director_state ?? null);
+      setBackendGameplayState(replay.scenario.gameplay_state ?? null);
+      setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
+      setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
+      setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
+      setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
+      setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
+    };
+
+    void hydrateReplay();
+    return () => {
+      cancelled = true;
+    };
+  }, [replayShareId, replayToken, setScenario]);
+
+  useEffect(() => {
+    setReplayUrl(isReplayMode ? window.location.href : null);
+  }, [isReplayMode]);
+
+  useEffect(() => {
+    if (viewMode !== 'theater' || !visualizationEnabled) return;
+
+    const preload = () => preloadPhaserGame();
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      const idleId = idleWindow.requestIdleCallback(preload, { timeout: 1000 });
+      return () => idleWindow.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = window.setTimeout(preload, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [viewMode, visualizationEnabled]);
 
   const refreshLocalMeta = useCallback(() => {
@@ -266,27 +366,31 @@ export function SimulationView() {
   }, []);
 
   useEffect(() => {
+    if (isReplayMode) return;
     setBackendDirectorState(scenario?.director_state ?? null);
-  }, [scenario?.director_state]);
+  }, [isReplayMode, scenario?.director_state]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     setBackendGameplayState(scenario?.gameplay_state ?? null);
-  }, [scenario?.gameplay_state]);
+  }, [isReplayMode, scenario?.gameplay_state]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || !hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
     applyScenarioDirectorState(id, backendDirectorState as ScenarioDirectorState);
     refreshLocalMeta();
-  }, [backendDirectorState, id, refreshLocalMeta]);
+  }, [backendDirectorState, id, isReplayMode, refreshLocalMeta]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || !hasMeaningfulScenarioGameplayState(backendGameplayState)) return;
     applyScenarioGameplayState(id, backendGameplayState as ScenarioGameplayState);
     refreshLocalMeta();
-  }, [backendGameplayState, id, refreshLocalMeta]);
+  }, [backendGameplayState, id, isReplayMode, refreshLocalMeta]);
 
   const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    if (!id) return;
+    if (!id || isReplayMode) return;
     const nextState = scenarioMetaToDirectorState(nextMeta);
     setBackendDirectorState(nextState);
     try {
@@ -294,10 +398,10 @@ export function SimulationView() {
     } catch (err) {
       console.warn('[DirectorState] Failed to persist backend state', err);
     }
-  }, [id]);
+  }, [id, isReplayMode]);
 
   const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    if (!id) return;
+    if (!id || isReplayMode) return;
     const nextState = scenarioMetaToGameplayState(nextMeta);
     setBackendGameplayState(nextState);
     try {
@@ -305,25 +409,28 @@ export function SimulationView() {
     } catch (err) {
       console.warn('[GameplayState] Failed to persist backend state', err);
     }
-  }, [id]);
+  }, [id, isReplayMode]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
     if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
     if (hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
     void persistDirectorState(storedScenarioMeta);
-  }, [backendDirectorState, id, persistDirectorState, storedScenarioMeta]);
+  }, [backendDirectorState, id, isReplayMode, persistDirectorState, storedScenarioMeta]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
     const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
     if (areScenarioGameplayStatesEquivalent(mergedState, backendGameplayState)) return;
     void persistGameplayState(mergedMeta);
-  }, [backendGameplayState, id, persistGameplayState, storedScenarioMeta]);
+  }, [backendGameplayState, id, isReplayMode, persistGameplayState, storedScenarioMeta]);
 
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
     if (hasMeaningfulScenarioDirectorState(backendDirectorState ?? scenario.director_state ?? null)) return;
     if (scenarioMeta.objectives.goals.length > 0) return;
@@ -338,7 +445,7 @@ export function SimulationView() {
     });
     refreshLocalMeta();
     void persistDirectorState(nextMeta);
-  }, [backendDirectorState, gameplayProfile, id, persistDirectorState, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
+  }, [backendDirectorState, gameplayProfile, id, isReplayMode, persistDirectorState, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
 
   useEffect(() => {
     if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {
@@ -394,17 +501,19 @@ export function SimulationView() {
 
   // Load scenario data if navigated directly
   useEffect(() => {
+    if (isReplayMode) return;
     if (id && !scenario) {
       loadScenario(id);
     }
-  }, [id, scenario, loadScenario]);
+  }, [id, isReplayMode, scenario, loadScenario]);
 
   // Connect WebSocket only after scenario data is loaded
-  useSimulationWS(id, !!scenario);
+  useSimulationWS(id, !!scenario && !isReplayMode);
 
   // ── Warmup recovery: hydrate missing agents / branches while live WS catches up ──
   const hydrationInFlight = useRef(false);
   useEffect(() => {
+    if (isReplayMode) return;
     if (!id || status === 'idle' || status === 'error' || status === 'parsing') return;
     if (branches.length > 0 && agents.length > 0) return;
 
@@ -436,7 +545,7 @@ export function SimulationView() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [id, status, branches.length, agents.length, loadScenario]);
+  }, [id, isReplayMode, status, branches.length, agents.length, loadScenario]);
 
   useEffect(() => {
     if (branches.length > 0 && agents.length > 0) {
@@ -445,8 +554,9 @@ export function SimulationView() {
   }, [agents.length, branches.length]);
 
   const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
+    if (isReplayMode) return;
     setInterventionTarget({ branchId, branchTitle });
-  }, []);
+  }, [isReplayMode]);
 
   const handleDetail = useCallback((branchId: string) => {
     const branch = branches.find((b) => b.id === branchId);
@@ -474,6 +584,7 @@ export function SimulationView() {
       {
         route: window.location.pathname,
         kind: 'simulation',
+        replay_source: isReplayMode ? 'token' : 'api',
         error: error || null,
         director: scenarioMeta && systemTracks
           ? {
@@ -519,8 +630,9 @@ export function SimulationView() {
           can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canOpenGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCardsNow,
-          can_open_prediction: !isSimulationComplete,
-          can_view_results: isSimulationComplete,
+          can_open_prediction: !isReplayMode && !isSimulationComplete,
+          can_view_results: !isReplayMode && isSimulationComplete,
+          can_copy_replay_link: Boolean(replayUrl || (scenario && storedScenarioMeta)),
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
           can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
           capture_mode: captureMode,
@@ -557,7 +669,7 @@ export function SimulationView() {
           status: branch.status,
           probability: branch.probability,
           can_view_detail: true,
-          can_intervene: !isSimulationComplete && branch.status === 'ACTIVE',
+          can_intervene: !isReplayMode && !isSimulationComplete && branch.status === 'ACTIVE',
         })),
       },
     );
@@ -594,6 +706,8 @@ export function SimulationView() {
     selectedReplayRound,
     theaterSceneState,
     scenario,
+    replayUrl,
+    isReplayMode,
     showGameplayCards,
     showPrediction,
     status,
@@ -673,6 +787,59 @@ export function SimulationView() {
     void captureGIF(options);
   }, [captureGIF, captureMode, resolveCaptureOptions]);
 
+  const handleCopyReplayLink = useCallback(async () => {
+    if (replayUrl) {
+      await copyText(replayUrl);
+      return;
+    }
+    if (!scenario || !storedScenarioMeta) return;
+    const snapshot = buildSimulationSnapshot(
+      scenario,
+      agents,
+      branches,
+      messages,
+      backendDirectorState,
+      backendGameplayState,
+    );
+    const artifact = await createReplayArtifact('simulation_view_v1', {
+      scenario: snapshot,
+      scenarioMeta: storedScenarioMeta,
+      uiState: {
+        selectedReplayBranchId,
+        selectedReplayRound,
+        playbackMode,
+        replaySpeed,
+        panelCollapsed,
+      },
+    }).catch(() => null);
+    const url = artifact
+      ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
+      : await buildSimulationReplayUrl(window.location.origin, {
+        scenario: snapshot,
+        scenarioMeta: storedScenarioMeta,
+        uiState: {
+          selectedReplayBranchId,
+          selectedReplayRound,
+          playbackMode,
+          replaySpeed,
+          panelCollapsed,
+        },
+      });
+    setReplayUrl(url);
+    await copyText(url);
+  }, [agents, backendDirectorState, backendGameplayState, branches, messages, panelCollapsed, playbackMode, replaySpeed, replayUrl, scenario, selectedReplayBranchId, selectedReplayRound, storedScenarioMeta]);
+
+  const handleImportReplay = useCallback(async () => {
+    if (!replayPayload || importingReplay) return;
+    setImportingReplay(true);
+    try {
+      const imported = await importReplayScenario(replayPayload.scenario);
+      navigate(`/sim/${imported.id}`);
+    } finally {
+      setImportingReplay(false);
+    }
+  }, [importingReplay, navigate, replayPayload]);
+
   useEffect(() => {
     if (!isSimulationComplete) {
       setSelectedReplayBranchId(null);
@@ -746,6 +913,7 @@ export function SimulationView() {
     await persistGameplayState(nextMeta);
   }, [persistGameplayState, refreshLocalMeta]);
   const handleCommitBranch = useCallback(() => {
+    if (isReplayMode) return;
     if (!id || !commitmentDraftBranchId) return;
     const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
     if (!branch) return;
@@ -756,13 +924,14 @@ export function SimulationView() {
     });
     refreshLocalMeta();
     void persistDirectorState(nextMeta);
-  }, [activeBranches, commitmentDraftBranchId, currentRound, id, persistDirectorState, refreshLocalMeta]);
+  }, [activeBranches, commitmentDraftBranchId, currentRound, id, isReplayMode, persistDirectorState, refreshLocalMeta]);
   const handleClearCommitment = useCallback(() => {
+    if (isReplayMode) return;
     if (!id) return;
     const nextMeta = clearBranchCommitment(id);
     refreshLocalMeta();
     void persistDirectorState(nextMeta);
-  }, [id, persistDirectorState, refreshLocalMeta]);
+  }, [id, isReplayMode, persistDirectorState, refreshLocalMeta]);
   const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
   const captureDoneLabel = lastCaptureKind === 'gif'
     ? t('game.gif_saved')
@@ -843,6 +1012,7 @@ export function SimulationView() {
       {
         route: window.location.pathname,
         kind: 'simulation',
+        replay_source: isReplayMode ? 'token' : 'api',
         error: error || null,
         director: scenarioMeta && systemTracks
           ? {
@@ -888,8 +1058,9 @@ export function SimulationView() {
           can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canUseGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCards,
-          can_open_prediction: !isSimulationComplete,
-          can_view_results: isSimulationComplete,
+          can_open_prediction: !isReplayMode && !isSimulationComplete,
+          can_view_results: !isReplayMode && isSimulationComplete,
+          can_copy_replay_link: Boolean(replayUrl || (scenario && storedScenarioMeta)),
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
           can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
           capture_mode: captureMode,
@@ -917,7 +1088,7 @@ export function SimulationView() {
           status: branch.status,
           probability: branch.probability,
           can_view_detail: true,
-          can_intervene: !isSimulationComplete && branch.status === 'ACTIVE',
+          can_intervene: !isReplayMode && !isSimulationComplete && branch.status === 'ACTIVE',
         })),
       },
     );
@@ -950,6 +1121,8 @@ export function SimulationView() {
     replayAutomationState,
     scenarioMeta,
     scenario,
+    replayUrl,
+    isReplayMode,
     showGameplayCards,
     showPrediction,
     status,
@@ -1038,16 +1211,36 @@ export function SimulationView() {
             <button
               className="btn btn-ghost"
               onClick={() => setShowPrediction(true)}
+              disabled={isReplayMode}
             >
               {t('sim.predict_btn')}
             </button>
           )}
-          {isSimulationComplete && (
+          {isSimulationComplete && !isReplayMode && (
             <button
               className="btn btn-primary btn--results"
               onClick={() => navigate(`/result/${id}`)}
             >
               {t('sim.status.view_results')}
+            </button>
+          )}
+          {(replayUrl || (scenario && storedScenarioMeta)) && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => void handleCopyReplayLink()}
+            >
+              {t('share.copy_permalink_btn')}
+            </button>
+          )}
+          {isReplayMode && (
+            <button
+              className="btn btn-primary"
+              onClick={() => void handleImportReplay()}
+              disabled={importingReplay}
+            >
+              {importingReplay
+                ? (isZh ? '导入中...' : 'Importing...')
+                : (isZh ? '导入为本地运行' : 'Import as Local Run')}
             </button>
           )}
           {/* V2: Theater mode toggle — only enabled when the scenario has visualization data */}
@@ -1076,6 +1269,12 @@ export function SimulationView() {
           <button className="btn btn-ghost" onClick={() => navigate('/')}>
             {t('sim.status.back')}
           </button>
+        </div>
+      )}
+
+      {isReplayMode && (
+        <div className="sim-error">
+          <p>🔒 {isZh ? '只读回放模式：已关闭实时写操作。' : 'Read-only replay mode: live write actions are disabled.'}</p>
         </div>
       )}
 
@@ -1280,8 +1479,8 @@ export function SimulationView() {
               )}
               <div className="theater-panel__game-wrapper">
                 <HudOverlay
-                  canPredict={!isSimulationComplete}
-                  onOpenPrediction={!isSimulationComplete ? () => setShowPrediction(true) : undefined}
+                    canPredict={!isReplayMode && !isSimulationComplete}
+                    onOpenPrediction={!isReplayMode && !isSimulationComplete ? () => setShowPrediction(true) : undefined}
                 >
                   <PhaserGameLoader
                     key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
@@ -1383,7 +1582,7 @@ export function SimulationView() {
       )}
 
       {/* Intervention Modal */}
-      {interventionTarget && id && (
+      {interventionTarget && id && !isReplayMode && (
         <Suspense fallback={null}>
           <LazyInterventionModal
             scenarioId={id}
@@ -1405,7 +1604,7 @@ export function SimulationView() {
       )}
 
       {/* Prediction Modal (P5-B) */}
-      {showPrediction && id && (
+      {showPrediction && id && !isReplayMode && (
         <Suspense fallback={null}>
           <LazyPredictionModal
             scenarioId={id}
@@ -1420,7 +1619,7 @@ export function SimulationView() {
         </Suspense>
       )}
 
-      {showGameplayCards && id && (
+      {showGameplayCards && id && !isReplayMode && (
         <Suspense fallback={null}>
           <LazyGameplayCardsModal
             scenarioId={id}

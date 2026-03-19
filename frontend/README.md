@@ -32,9 +32,9 @@ npm run dev     # → http://localhost:18928
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, daily challenge, quick starts |
 | `/debate/:id` | `DebateArenaView` | Debate Arena live page with fixed five-phase structure, readable momentum HUD, structured bets, screenshot hooks, mobile bottom CTA, UI language that syncs to `debate.language`, a lightweight counterplay layer that can prefill or directly submit a low-confidence hedge during the open betting window, plus live room-state cards / room map / stage map that now consume backend `phase_insights` directly |
-| `/debate/:id/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language; the result surface now also shows signal cards and a phase map backed by the same server `phase_insights` payload as the live room |
-| `/sim/:id` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer |
-| `/result/:id` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also reads backend `director_state` first and still falls back to backend campaign scenario summary when local archive metadata is missing, showing objective completion, commitment outcome, and final system-track state |
+| `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate verdict page with score breakdown, replay digest, structured `judge_rationale`, key `supporting_turns`, prediction settlement, dedicated share modal, explicit counterplay result panel, and UI language that syncs to the result payload language; the result surface now also shows signal cards and a phase map backed by the same server `phase_insights` payload as the live room; replay route can hydrate from a token without fetching the live API, shows the current `adjudication_mode`, and can import the replay as a local debate run |
+| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation with Classic View / Pixel Theater, semantic scene selection, replay, gameplay cards, prediction entry, screenshot/GIF export, plus a compact director layer for `director goals / risk-resource tracks / worldline commitment`; goals and commitment now read/write backend `director_state` first, while local `scenarioMeta` remains a compatibility/cache layer; `/sim/replay` is a read-only replay surface that disables WS, prediction, intervention, and gameplay-card writes, but still keeps replay controls, capture, and import-to-local-run |
+| `/result/:id` / `/result/replay` | `ResultView` | Multi-ending comparison, archive, campaign progress, prediction results, share/export; now also reads backend `director_state` first and still falls back to backend campaign scenario summary when local archive metadata is missing, showing objective completion, commitment outcome, and final system-track state; `/result/replay` can hydrate from a backend short `share id` or a token fallback, skips `finalizeCampaign()`, and can import the replay as a local scenario run |
 | `/history` | `HistoryView` | Scenario history, filtering, pagination, safe deletion |
 | `/leaderboard` | `LeaderboardView` | Global prediction leaderboard |
 
@@ -53,9 +53,11 @@ npm run dev     # → http://localhost:18928
 - **Director Layer** — Theater goals and worldline commitment now persist through backend `Scenario.director_state_json`; `scenarioMeta` still caches points / cooldowns / card usage / bets / archive details locally so old runs and local-only gameplay state do not break
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance
 - **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback; `debate_verdict` now also carries `phase_insights`, so the live room can land the final stage read without waiting for a fresh result fetch
+- **Replay Helpers** — `scenarioReplay.ts / simulationReplay.ts / debateReplay.ts` now back the replay share flow; main mode prefers backend short `share id` via `ReplayArtifact`, token remains the fallback path, and replay pages can be imported into real local runs
+- **PhaserGameLoader / useScreenCapture** — Theater engine and capture stack stay behind the Theater/capture path: `SimulationView` now only preloads Phaser after the user actually enters Theater, while `html2canvas`, `gif.js`, and `gif.worker` stay dynamically imported behind screenshot/GIF actions
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
-- **ShareModal** — Social media copy generation (小红书/微博/知乎/Reddit/X)
+- **ShareModal** — Social media copy generation (小红书/微博/知乎/Reddit/X); the envelope now carries replay permalink context when available
 - **LanguageSwitcher** — Global language toggle (EN/ZH), fixed bottom-right
 
 ## Design
@@ -87,6 +89,13 @@ npm run e2e:debate:full
   - `npx tsc --noEmit -p tsconfig.app.json` → passed
   - `npm run build` → passed
   - Debate desktop live/result/share smoke → `frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+- This session also re-ran replay share/import coverage:
+  - `npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx` → **21 passed**
+  - `npm test -- --run src/pages/DebateResultView.test.tsx` → **3 passed**
+  - `npm test -- --run src/lib/scenarioReplay.test.ts src/lib/simulationReplay.test.ts src/lib/debateReplay.test.ts` → **6 passed**
+  - `npm test -- --run src/components/ShareModal.test.tsx src/components/DebateShareModal.test.tsx` → **2 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
 - This session also re-ran the Debate judge-rationale / supporting-turn path:
   - `npm test -- --run src/lib/debateShare.test.ts src/components/DebateShareModal.test.tsx src/pages/DebateResultView.test.tsx` → **5 passed**
   - `npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx` → **16 passed**
@@ -114,6 +123,18 @@ npm run e2e:debate:full
   - Main-mode corners with `director_state_roundtrip` → `frontend/output/e2e/20260319-post-director-state-corners-v2/result.json`
   - Firefox / WebKit cross-browser smoke → `frontend/output/e2e/20260319-director-state-cross-browser/result.json`
   - Safari smoke → `frontend/output/e2e/20260319-director-state-safari/result.json`
+- This session also re-ran the Theater load-gating + release-candidate path:
+  - `npm test -- --run src/lib/scenarioGameplayState.test.ts src/components/PredictionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx` → **43 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - Release artifacts:
+    - `frontend/output/e2e/20260319-release-corners/`
+    - `frontend/output/e2e/20260319-release-cross-browser/`
+    - `frontend/output/e2e/20260319-release-debate-full/`
+  - Current build posture:
+    - Phaser still ships as a standalone engine chunk
+    - it is now preloaded only after the user actually enters Theater
+    - `html2canvas / gif.js / gif.worker` remain on-demand capture dependencies instead of default-route baggage
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`

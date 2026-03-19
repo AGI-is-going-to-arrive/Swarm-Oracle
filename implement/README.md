@@ -18,7 +18,7 @@
 | 07 | [实时流式 + UX 改进](07_realtime_streaming_ux.md) | 修复 JSON 乱码、轮数滑块(3-40)、分支描述 | 当前会话 |
 | 09 | [多 Agent 上下文分析](09_multi_agent_context_analysis.md) | 前沿技术全景、五种范式对比、SwarmOracle 接入方案 | 上下文研究 |
 | 10 | [上下文优化可行性](10_context_optimization_feasibility.md) | 三阶段可行性评估、代码逐行分析、Phase 1-3 改动量评估 | 优化分析 |
-| 11 | [**后续优化路线图**](11_optimization_roadmap.md) | P0-P9 优化计划、开发/Review/测试方案、598 次 E2E 实测数据、Sprint 排期 | Benchmark 矩阵 |
+| 11 | [**后续优化路线图**](11_optimization_roadmap.md) | 已改为 P0-P9 路线的归档收口版；用于说明哪些旧 roadmap 已全部落地、哪些正文口径已过时 | Benchmark 矩阵 |
 | 12 | — | **Phase 1 像素化可视化**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件 + 225 tests | 可视化 Review |
 | 13 | — | **Phase 2 推理可视化**: 天气/昼夜 + 阵营标记 + 气泡变体 + 粒子特效 + 11场景全覆盖 | Phase 2 实现 |
 | 14 | — | **Phase 3 游戏化 UI**: 标题画面 + 6种结局 + MiniMap/BetPanel/Leaderboard HUD + 截图/GIF导出 | Phase 3 实现 |
@@ -29,7 +29,7 @@
 | 19 | [四轨优化执行文档](19_four_track_execution_plan.md) | 四轨路线的执行与落地状态文档；已同步 `Track A` 最小闭环、`Track B2` shared contract 收口、`Track C` 工件基线，以及 `Track D Debate Arena` 已实现事实、测试与 E2E 工件 | 当前会话 |
 | 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | Debate Arena 的设计基线 + 2026-03-18 落地偏差记录；覆盖当前真实 API、前端拆分、i18n、跨平台、自动化钩子、测试与 E2E 工件 | 当前会话 |
 | 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | Debate Arena MVP 的产品/美术/代码蓝图及其已实现状态同步；包含 live/result、押注、分享、自动化钩子与现有 skill-based QA 工件 | 当前会话 |
-| 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | 下一次执行“完全跨设备一致”最后一段的操作手册；已按当前真实状态同步 `gameplay_state`、Safari 正式 smoke 与剩余 `betting.bets / archive raw` 边界 | 当前会话 |
+| 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | 已改为跨设备状态 authority 收口报告；记录 `director_state / gameplay_state` 最终形态、验证结果与剩余边界 | 当前会话 |
 
 ---
 
@@ -71,7 +71,7 @@
 - ✅ 7 张原库存 sprite 已接入 runtime：`alchemist / assassin / bard / knight / monk / thief / witch`
 - ✅ Theater 可读性修复：舞台优先布局、上下信息条压缩、气泡文字放大与清晰化
 
-### 待完成
+### 本轮已收口
 - ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
 - ✅ 前端代码分割优化（SimulationView 业务块已拆小）
 - ✅ Docker Compose 一键部署（已完成真实容器 smoke）
@@ -84,6 +84,8 @@
 - ✅ Director Campaign Lite 增量（`weekly-summary` API + 首页 `weekly challenge / director growth` + 结果页分享 challenge 链接）
 - ✅ Debate Arena 文案增强（回合文案 `LLM 优先、deterministic fallback` + live `phase cue / feed focus` + 更具体的 judge summary）
 - ✅ Debate Arena 裁决解释增强（结果 payload 现带 `judge_rationale / supporting_turns`；share copy 会带 1-2 条关键引文；`debate:desktop` 与 `debate:full` 黑盒现都会显式断言 `supporting_turns.length >= 1`）
+- ✅ Portable replay 闭环（主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 现都有 replay 页面；主模式优先走后端 `ReplayArtifact` 短 `share id`，失败时回退 token；三条 replay 页当前都支持“导入为本地运行”）
+- ✅ Debate 终局裁决升级（后端现会优先读取 judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，结果 payload 会显式带 `adjudication_mode`；失败时退回 deterministic fallback）
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
@@ -91,8 +93,8 @@
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
-- ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前仍是 deterministic；本次增强的是回合文案、结构化裁决理由、关键引文与分享表达
-- ℹ️ 当前分享 challenge 仍是“分享开局配置”，不是 deterministic replay seed；被分享方会按同题同参数再打一遍，而不是复刻同一条已落库世界线
+- ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前已升级为 `LLM hybrid` 优先、deterministic fallback；结果 payload 会显式带 `adjudication_mode`
+- ℹ️ `分享挑战` 仍然只是“分享开局配置”；但主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 当前已经有可复盘 replay 链路，并且支持把 replay 导入为本地真实运行
 
 ### 已完成 Sprint
 - ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试

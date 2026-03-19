@@ -229,6 +229,40 @@ SWARM_SAFARI_PANEL_CAPTURE=1 npm run e2e:safari -- --url http://127.0.0.1:18928 
   - `e2e-suite.mjs cross-browser`：通过
   - `e2e-suite.mjs safari`：通过
   - `SWARM_SAFARI_PANEL_CAPTURE=1` Safari follow-up：通过
+- 本次 session 围绕 Theater 按需加载 + release candidate 收口又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py -q
+
+cd frontend
+npm test -- --run \
+  src/lib/scenarioGameplayState.test.ts \
+  src/components/PredictionModal.test.tsx \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/components/DebateBetModal.test.tsx \
+  src/components/DebateShareModal.test.tsx \
+  src/hooks/useDebateWS.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-corners --headless
+npm run e2e:cross-browser -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-cross-browser --headless
+npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-debate-full --headless
+```
+
+- 结果：
+  - backend `pytest`：**34 passed**
+  - frontend `vitest`：**43 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `e2e:corners`：通过
+  - `e2e:cross-browser`：通过
+  - `e2e:debate:full`：通过
+  - 当前构建口径：Phaser 仍是单独的大引擎 chunk，但现在只会在用户真正切进 Theater 后再预热；`html2canvas / gif.js / gif.worker` 也保留在截图路径按需加载，不再作为默认入口的必经依赖
 - 本次 session 围绕默认模型 / LLM 治理 / BYOK-provider policy 又补跑了：
 
 ```bash
@@ -559,6 +593,35 @@ export GOOGLE_API_KEY="..."
 - `conftest.py` 现为每个 pytest case 创建独立临时 SQLite 数据库，并在前后显式释放 engine
 - `asyncio_mode = "auto"` — 自动检测async测试
 - LLM调用全部通过 `unittest.mock.AsyncMock` 模拟
+
+## 本次文档同步补充验证
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_api.py tests/test_debate_api.py -q
+
+cd frontend
+npm test -- --run \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/lib/scenarioReplay.test.ts \
+  src/lib/simulationReplay.test.ts \
+  src/lib/debateReplay.test.ts \
+  src/components/ShareModal.test.tsx \
+  src/components/DebateShareModal.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+```
+
+- 结果：
+  - backend `pytest`：`tests/test_api.py` → **77 passed**
+  - backend `pytest`：`tests/test_debate_api.py` → **7 passed**
+  - frontend `vitest`：`SimulationView / ResultView / DebateResultView` → **24 passed**
+  - frontend `vitest`：`scenarioReplay / simulationReplay / debateReplay / ShareModal / DebateShareModal` → **8 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
 
 ## Docker 部署
 

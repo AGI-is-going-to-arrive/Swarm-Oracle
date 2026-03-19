@@ -5,7 +5,6 @@
  * Gracefully degrades if dependencies are unavailable.
  */
 import { useCallback, useRef, useState } from 'react';
-import gifWorkerUrl from 'gif.js/dist/gif.worker.js?url';
 
 export type CaptureStatus = 'idle' | 'capturing' | 'recording' | 'done' | 'error';
 export type CaptureResultKind = 'screenshot_png' | 'gif' | 'gif_fallback_png';
@@ -43,11 +42,24 @@ interface UseScreenCaptureReturn {
 
 const GIF_RENDER_TIMEOUT_MS = 10000;
 let html2canvasLoader: Promise<typeof import('html2canvas')> | null = null;
+let gifModuleLoader: Promise<typeof import('gif.js')> | null = null;
+let gifWorkerUrlLoader: Promise<string> | null = null;
 
 async function loadHtml2Canvas() {
   html2canvasLoader ??= import('html2canvas');
   const module = await html2canvasLoader;
   return module.default;
+}
+
+async function loadGifRenderer() {
+  gifModuleLoader ??= import('gif.js');
+  const module = await gifModuleLoader;
+  return module.default;
+}
+
+async function loadGifWorkerUrl() {
+  gifWorkerUrlLoader ??= import('gif.js/dist/gif.worker.js?url').then((module) => module.default);
+  return gifWorkerUrlLoader;
 }
 
 async function settleFrames() {
@@ -530,7 +542,10 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
 
       // Try to use GIF.js if available, otherwise fall back to downloading individual frames
       try {
-        const GIF = (await import('gif.js')).default;
+        const [GIF, gifWorkerUrl] = await Promise.all([
+          loadGifRenderer(),
+          loadGifWorkerUrl(),
+        ]);
         const gif = new GIF({
           workers: 2,
           quality: 10,

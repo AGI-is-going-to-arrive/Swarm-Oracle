@@ -7775,3 +7775,140 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - Debate 结果页现在不只是给“谁赢了”，还会给“为什么这样判”以及“哪几句最关键”
   - share copy 现在也能把这场辩论里最关键的 1-2 句带出去
   - 但胜负 / `verdict_tone` / 分数核心仍然是 deterministic 真值；这轮增强的是表达层、解释层和可观测性，不是把裁决本身交给 LLM
+
+## 2026-03-19 replay 短链接 / 导入本地运行 / Debate hybrid adjudication
+
+- 本轮核心改动：
+  - Debate 终局裁决已升级为 `LLM hybrid`
+    - 后端会优先读取 judge analysis 里的 `adjudication` scorecard
+    - 与原 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`
+    - 结果 payload 现显式带 `adjudication_mode`
+    - 若 LLM 不可用或输出无效，会退回 deterministic fallback
+  - 主模式 replay 当前已拆成两条真实链路：
+    - `ResultView`：`/result/replay?share=...`
+    - `SimulationView`：`/sim/replay?share=...`
+    - 主模式优先走后端 `ReplayArtifact` 短 `share id`
+    - 后端短链失败时，前端仍可回退到本地 token
+  - Debate replay 当前使用：
+    - `/debate/replay/result?replay=...`
+  - 三条 replay 页当前都支持：
+    - 只读回放
+    - 复制 replay permalink
+    - `导入为本地运行`
+
+- 后端改动：
+  - `backend/app/models/database.py`
+    - 新增 `ReplayArtifact`
+  - `backend/app/api/scenarios.py`
+    - 新增 `POST /api/replay-artifact`
+    - 新增 `GET /api/replay-artifact/{id}`
+    - 新增 `POST /api/scenario/import-replay`
+  - `backend/app/api/debate.py`
+    - 新增 `POST /api/debate/import-replay`
+  - `backend/app/services/debate.py`
+    - 新增 `adjudication` 解析与 `LLM hybrid` 混合裁决逻辑
+    - result payload / verdict 事件当前都会带 `adjudication_mode`
+
+- 前端改动：
+  - `frontend/src/pages/ResultView.tsx`
+    - replay 页优先读后端短 `share id`
+    - replay 模式跳过 `finalizeCampaign()` 与 authority 回写
+    - 支持导入为本地 scenario
+  - `frontend/src/pages/SimulationView.tsx`
+    - replay 模式关闭 WS、下注、干预、玩法卡写操作
+    - 保留回放 / 截图 / 复制 replay 链接 / 导入为本地 scenario
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 当前会显示 `adjudication_mode`
+    - replay 模式支持导入为本地 Debate
+  - 新增 helper：
+    - `frontend/src/lib/scenarioReplay.ts`
+    - `frontend/src/lib/simulationReplay.ts`
+    - `frontend/src/lib/debateReplay.ts`
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -q`
+    - 结果：`77 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py -q`
+    - 结果：`7 passed`
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`21 passed`
+  - `cd frontend && npm test -- --run src/pages/DebateResultView.test.tsx`
+    - 结果：`3 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioReplay.test.ts src/lib/simulationReplay.test.ts src/lib/debateReplay.test.ts`
+    - 结果：`6 passed`
+  - `cd frontend && npm test -- --run src/components/ShareModal.test.tsx src/components/DebateShareModal.test.tsx`
+    - 结果：`2 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+
+- 当前口径：
+  - `分享挑战` 仍然只是分享开局配置
+  - 但主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 当前都已经有真正的 replay 链路
+  - replay 当前是“快照回放 + 可导入本地真实运行”，不是继续跑旧 live 会话
+
+## 2026-03-19 Theater 按需加载 + 文档真值收口 + release candidate 复验
+
+- 本轮前端代码收口：
+  - `frontend/src/hooks/useScreenCapture.ts`
+    - `gif.js` 与 `gif.worker` 都改成按需动态导入
+    - 截图/GIF 依赖不再因为只是进入 Simulation / Debate 页面就提前静态进入默认入口链路
+  - `frontend/src/pages/SimulationView.tsx`
+    - `preloadPhaserGame()` 现在只会在用户真正切进 Theater 时触发
+    - 预热优先走 `requestIdleCallback`，回退到 `setTimeout`
+    - 普通首页 / Classic 路径不再主动预热 Phaser
+  - `frontend/vite.config.ts`
+    - 当前构建明确接受“Phaser 是独立按需引擎 chunk”的现实
+    - `npm run build` 已通过，当前不再对这块按需引擎包抛默认 oversized chunk warning
+
+- 本轮文档收口：
+  - `implement/11_optimization_roadmap.md`
+    - 已从旧 roadmap 改成归档收口版，不再把旧正文误读成待办
+  - `implement/22_cross_device_state_closure_plan.md`
+    - 已从“下一次执行手册”改成收口报告
+  - `implement/README.md`
+    - 已同步这两份文档的最新定位
+  - 同步更新：
+    - `README.md`
+    - `frontend/README.md`
+    - `llmdoc/overview/frontend.md`
+    - `llmdoc/overview/project.md`
+    - `llmdoc/guides/development.md`
+
+- 本轮临时产物清理：
+  - 已把明确的临时目录移出仓库到：
+    - `/tmp/upgrade-test-release-clean-20260319-221243`
+  - 本轮移出的目录：
+    - `backend/pytest-of-yangjunjie`
+    - `frontend/dist-manifest`
+    - `frontend/dist-capture-test`
+    - `frontend/frontend`
+  - `swarmoracle.db` 与未跟踪源码/笔记文件未动
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py -q`
+    - 结果：`34 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts src/components/PredictionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx`
+    - 结果：`43 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+  - `cd frontend && npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-corners --headless`
+    - 结果：通过
+  - `cd frontend && npm run e2e:cross-browser -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-cross-browser --headless`
+    - 结果：通过
+  - `cd frontend && npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-release-debate-full --headless`
+    - 结果：通过
+
+- 本轮 release candidate 工件：
+  - `frontend/output/e2e/20260319-release-corners/`
+  - `frontend/output/e2e/20260319-release-cross-browser/`
+  - `frontend/output/e2e/20260319-release-debate-full/`
+
+- 当前口径：
+  - `phaser` 仍然是独立的大引擎 chunk，这一轮没有试图伪装成“小包”
+  - 真正收口的是“何时加载它”：只有 Theater 路径才会预热
+  - `html2canvas / gif.js / gif.worker` 也已经留在截图/GIF 路径上按需加载
+  - 这轮之后，文档口径已与代码和 release 验证结果对齐

@@ -5,6 +5,10 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
+    // Phaser remains a single large engine asset, but it is now isolated behind
+    // route + Theater-only lazy loading. Keep warnings focused on chunks that
+    // are unexpectedly large in the eager path.
+    chunkSizeWarningLimit: 1300,
     rollupOptions: {
       output: {
         manualChunks(id) {
