@@ -82,7 +82,7 @@
   - frontend `179 passed`
 - Current targeted verification：
   - backend targeted set `82 passed`
-  - frontend targeted set `99 passed`
+  - frontend targeted set `100 passed`
 - Current release signoff：
   - `frontend/output/e2e/current-head-signoff/summary.json`
   - 这份 `summary.json` 当前会带 git `branch / commit / worktree` 绑定信息

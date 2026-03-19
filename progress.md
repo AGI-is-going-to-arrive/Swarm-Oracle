@@ -8260,3 +8260,59 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 收尾：
   - 已把本轮临时拉起的 backend / preview 停掉
   - 当前 `18927 / 18928` 无残留监听进程
+
+## 2026-03-20 ResultView partial-remote 收口 + clean HEAD 签收
+
+- 已改：
+  - `frontend/src/pages/ResultView.tsx`
+    - 结果页 authority 合并改成“按远端显式提供的 gameplay 分区做选择性清空”
+    - 当远端只回 `archive.key_moments` / `branch_snapshots` 这类 partial payload 时，不再把本地 `usageLog / bets / profileId / mostUsedCard` 一起清空
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增 partial remote authority 回归用例
+    - 结果页相关 mock 也已补齐 `CARD_RULES / buildCardUsageMoment / isCounterplayCard`
+  - `README.md`
+  - `implement/README.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/project.md`
+    - 文档口径同步到：
+      - `InterventionModal` 已闭环 `即时 / 回溯 / 批量`
+      - `ResultView` 远端 authority 优先，partial remote 不会误清空无关本地兼容字段
+      - 最新 clean-head 签收工件为 `current-head-signoff`
+      - 当前扩展前端 targeted set 为 `100 passed`
+
+- 定向验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx src/components/InterventionModal.test.tsx src/stores/simulationStore.test.ts`
+    - 结果：`42 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts`
+    - 结果：`100 passed`
+
+- 提交：
+  - `git commit -m "feat: finalize intervention flows and result authority sync"`
+  - 提交 SHA：`f498bacf75b9c3378a4de471be1455950ccf98df`
+
+- clean HEAD 真实签收：
+  - 显式启动：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - 执行：
+    - `cd frontend && SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless --output-root output/e2e/current-head-signoff`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/current-head-signoff/summary.json`
+    - `frontend/output/e2e/current-head-signoff/mobile/result.json`
+    - `frontend/output/e2e/current-head-signoff/debate-full/result.json`
+  - 本轮确认：
+    - backend targeted `pytest`：`82 passed`
+    - `summary.json` 绑定 commit `f498bacf75b9c3378a4de471be1455950ccf98df`
+    - `summary.json` 当前为 `dirty: false`
+    - `corners / mobile / cross-browser / debate-full` 全部通过
+    - Debate desktop / mobile 两端都命中 `adjudicationMode = llm_hybrid`
+
+- 收尾：
+  - 已把本轮临时拉起的 backend / preview 停掉
+  - 当前 `18927 / 18928` 无残留监听进程
