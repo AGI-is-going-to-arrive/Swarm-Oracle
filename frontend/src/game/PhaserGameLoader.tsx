@@ -15,8 +15,61 @@ const loadPhaserGame = () =>
 
 const LazyPhaserGame = lazy(loadPhaserGame);
 
+interface NavigatorConnectionLike {
+  saveData?: boolean;
+  effectiveType?: string;
+}
+
+interface NavigatorLike {
+  userAgent?: string;
+  connection?: NavigatorConnectionLike;
+}
+
+interface PhaserPreloadEnvironmentLike {
+  visibilityState?: DocumentVisibilityState | 'hidden' | 'visible' | 'prerender';
+  prefersReducedData?: boolean;
+}
+
+export function shouldPreloadPhaserGame(
+  targetNavigator: NavigatorLike | undefined,
+  environment: PhaserPreloadEnvironmentLike = {},
+): boolean {
+  if (!targetNavigator) return false;
+  if (/\bjsdom\b/i.test(targetNavigator.userAgent ?? '')) {
+    return false;
+  }
+  if (environment.visibilityState && environment.visibilityState !== 'visible') {
+    return false;
+  }
+  if (environment.prefersReducedData) {
+    return false;
+  }
+
+  const connection = targetNavigator.connection;
+  if (connection?.saveData) {
+    return false;
+  }
+
+  const effectiveType = connection?.effectiveType?.toLowerCase();
+  if (effectiveType === 'slow-2g' || effectiveType === '2g') {
+    return false;
+  }
+
+  return true;
+}
+
 export function preloadPhaserGame() {
-  if (typeof navigator !== 'undefined' && /\bjsdom\b/i.test(navigator.userAgent)) {
+  const prefersReducedData = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-data: reduce)').matches;
+  const visibilityState = typeof document !== 'undefined'
+    ? document.visibilityState
+    : undefined;
+
+  if (!shouldPreloadPhaserGame(
+    typeof navigator === 'undefined' ? undefined : navigator,
+    { visibilityState, prefersReducedData },
+  )) {
     return;
   }
   void loadPhaserGame();

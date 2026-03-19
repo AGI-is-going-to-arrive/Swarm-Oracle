@@ -15,6 +15,11 @@
 import Phaser from 'phaser';
 import i18next from 'i18next';
 import { EventBridge, dispatchVizEvent } from '../managers/EventBridge';
+import {
+  getSceneTextureKey,
+  getThemeAssetPath,
+  isSceneThemeId,
+} from '../../lib/themeRegistry';
 
 interface AgentSpriteData {
   agent_id: string;
@@ -161,6 +166,7 @@ export class WorldScene extends Phaser.Scene {
   // Phase 4: Object pools for performance
   private weatherPool: Phaser.GameObjects.Graphics[] = [];
   private bubblePool: Phaser.GameObjects.Container[] = [];
+  private pendingSceneTextureLoads: Set<string> = new Set();
 
   // Phase 3: MiniMap HUD
   private minimapContainer: Phaser.GameObjects.Container | null = null;
@@ -211,9 +217,9 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale;
-    const initialTheme = this.registry.get('initialSceneTheme') as string | undefined;
-    if (initialTheme) {
-      this.sceneTheme = initialTheme;
+    const registryTheme = this.registry.get('initialSceneTheme') as string | undefined;
+    if (registryTheme) {
+      this.sceneTheme = registryTheme;
     }
 
     // Hook Phaser lifecycle: auto-cleanup on scene stop/restart
@@ -221,6 +227,14 @@ export class WorldScene extends Phaser.Scene {
 
     // Draw procedural background
     this.drawBackground(width, height);
+    const requestedTheme = this.sceneTheme;
+    if (isSceneThemeId(requestedTheme) && !this.textures.exists(getSceneTextureKey(requestedTheme))) {
+      this.ensureSceneTexture(requestedTheme, () => {
+        if (!this.sys.isActive() || this.sceneTheme !== requestedTheme) return;
+        const palette = THEME_PALETTES[this.sceneTheme] || DEFAULT_PALETTE;
+        this.applyThemeSwap(this.sceneTheme, getSceneTextureKey(requestedTheme), palette, width, height);
+      });
+    }
 
     // Phase 3: Draw MiniMap HUD (bottom-right floating overlay)
     this.drawMinimap(width, height);
@@ -469,7 +483,7 @@ export class WorldScene extends Phaser.Scene {
   private transitionTheme(newTheme: string): void {
     const palette = THEME_PALETTES[newTheme] || DEFAULT_PALETTE;
     const { width, height } = this.scale;
-    const texKey = `scene_${newTheme}`;
+    const texKey = isSceneThemeId(newTheme) ? getSceneTextureKey(newTheme) : `scene_${newTheme}`;
 
     // B4: Vertical wipe transition (black curtain slides down then back up)
     this.isThemeTransitioning = true;
@@ -487,6 +501,10 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         // Swap scene content while hidden
         this.applyThemeSwap(newTheme, texKey, palette, width, height);
+        this.ensureSceneTexture(newTheme, () => {
+          if (!this.sys.isActive() || this.sceneTheme !== newTheme) return;
+          this.applyThemeSwap(newTheme, texKey, palette, this.scale.width, this.scale.height);
+        });
 
         // Wipe back up to reveal
         this.tweens.add({
@@ -505,6 +523,44 @@ export class WorldScene extends Phaser.Scene {
 
     this.sceneTheme = newTheme;
     console.log(`[WorldScene] Theme transitioned to: ${newTheme}`);
+  }
+
+  private ensureSceneTexture(themeId: string, onReady?: () => void): void {
+    if (!isSceneThemeId(themeId)) return;
+
+    const texKey = getSceneTextureKey(themeId);
+    if (this.textures.exists(texKey)) {
+      onReady?.();
+      return;
+    }
+    if (this.pendingSceneTextureLoads.has(texKey)) {
+      return;
+    }
+
+    this.pendingSceneTextureLoads.add(texKey);
+
+    const cleanup = () => {
+      this.pendingSceneTextureLoads.delete(texKey);
+      this.load.off(`filecomplete-image-${texKey}`, handleFileComplete);
+      this.load.off(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    };
+
+    const handleFileComplete = () => {
+      cleanup();
+      onReady?.();
+    };
+
+    const handleLoadError = (file: Phaser.Loader.File) => {
+      if (file.key !== texKey) return;
+      cleanup();
+    };
+
+    this.load.once(`filecomplete-image-${texKey}`, handleFileComplete);
+    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    this.load.image(texKey, getThemeAssetPath(themeId));
+    if (!this.load.isLoading()) {
+      this.load.start();
+    }
   }
 
   /** Apply the actual theme swap (background + label). */

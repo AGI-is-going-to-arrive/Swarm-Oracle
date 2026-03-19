@@ -2,25 +2,20 @@
  * BootScene — Phaser entry point scene.
  *
  * Responsible for:
- * 1. Preloading pixel art character sprites, scene backgrounds, endings, and UI assets
+ * 1. Preloading the first-view Theater assets needed to avoid a blank first scene
  * 2. Falling back to procedural generation if any asset fails to load
  * 3. Transitioning to TitleScene once assets are ready
  */
 import Phaser from 'phaser';
 import {
   CHARACTER_SPRITE_KEYS,
-  ENDING_ASSET_KEYS,
   getSceneTextureKey,
   getThemeAssetPath,
-  SCENE_THEME_IDS,
-  UI_ASSET_KEYS,
 } from '../../lib/themeRegistry';
+import { getBootScenePreloadThemes } from '../sceneAssetPlan';
 
 /** All sprite keys that the game expects to be registered as textures. */
 const SPRITE_KEYS = CHARACTER_SPRITE_KEYS;
-const SCENE_KEYS = SCENE_THEME_IDS;
-const ENDING_KEYS = ENDING_ASSET_KEYS;
-const UI_KEYS = UI_ASSET_KEYS;
 
 /** Fallback color per sprite role (used when PNG fails to load). */
 const SPRITE_FALLBACK: Record<string, { body: number; accent: number }> = {
@@ -54,12 +49,15 @@ const SPRITE_FALLBACK: Record<string, { body: number; accent: number }> = {
 export class BootScene extends Phaser.Scene {
   private failedSprites: Set<string> = new Set();
   private failedScenes: Set<string> = new Set();
+  private bootSceneKeys = getBootScenePreloadThemes(undefined);
 
   constructor() {
     super({ key: 'BootScene' });
   }
 
   preload(): void {
+    this.bootSceneKeys = getBootScenePreloadThemes(this.registry.get('initialSceneTheme') as string | undefined);
+
     // ── Loading bar ──────────────────────────────────────
     const { width, height } = this.scale;
     const barW = width * 0.4;
@@ -81,12 +79,11 @@ export class BootScene extends Phaser.Scene {
       if (SPRITE_KEYS.includes(key as typeof SPRITE_KEYS[number])) {
         this.failedSprites.add(key);
       } else {
-        const failedTheme = SCENE_KEYS.find((themeId) => getSceneTextureKey(themeId) === key);
+        const failedTheme = this.bootSceneKeys.find((themeId) => getSceneTextureKey(themeId) === key);
         if (failedTheme) {
           this.failedScenes.add(failedTheme);
         }
       }
-      // Endings and UI assets silently degrade — no fallback needed
     });
 
     // ── Load character PNGs ──────────────────────────────
@@ -95,18 +92,8 @@ export class BootScene extends Phaser.Scene {
     }
 
     // ── Load scene background PNGs ───────────────────────
-    for (const key of SCENE_KEYS) {
+    for (const key of this.bootSceneKeys) {
       this.load.image(getSceneTextureKey(key), getThemeAssetPath(key));
-    }
-
-    // ── Phase 3: Load ending scene backgrounds ──────────
-    for (const key of ENDING_KEYS) {
-      this.load.image(`ending_${key}`, `/assets/endings/${key}.png`);
-    }
-
-    // ── Phase 3: Load UI assets ─────────────────────────
-    for (const key of UI_KEYS) {
-      this.load.image(key, `/assets/ui/${key}.png`);
     }
   }
 
@@ -129,10 +116,9 @@ export class BootScene extends Phaser.Scene {
       g.destroy();
     }
 
-    const totalBase = SPRITE_KEYS.length + SCENE_KEYS.length;
-    const totalP3 = ENDING_KEYS.length + UI_KEYS.length;
-    const loaded = totalBase + totalP3 - this.failedSprites.size - this.failedScenes.size;
-    console.log(`[BootScene] ${loaded}/${totalBase + totalP3} assets loaded, ${this.failedSprites.size} sprite fallbacks, ${this.failedScenes.size} scene fallbacks`);
+    const totalBootAssets = SPRITE_KEYS.length + this.bootSceneKeys.length;
+    const loaded = totalBootAssets - this.failedSprites.size - this.failedScenes.size;
+    console.log(`[BootScene] ${loaded}/${totalBootAssets} first-view assets loaded, ${this.failedSprites.size} sprite fallbacks, ${this.failedScenes.size} scene fallbacks`);
 
     // Phase 3: Route to TitleScene first, then TitleScene → WorldScene
     this.scene.start('TitleScene');

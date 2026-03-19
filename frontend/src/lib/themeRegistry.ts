@@ -33,6 +33,7 @@ export const CHARACTER_SPRITE_KEYS = [
 export const ENDING_ASSET_KEYS = [
   'prosperity', 'peace', 'war', 'ruin', 'tyranny', 'revolution',
 ] as const;
+export type EndingAssetId = typeof ENDING_ASSET_KEYS[number];
 
 export const UI_ASSET_KEYS = [
   'title_screen', 'minimap_frame', 'bet_panel', 'leaderboard',
@@ -829,12 +830,28 @@ export type SceneThemeId = keyof typeof THEME_REGISTRY;
 
 export const SCENE_THEME_IDS = Object.keys(THEME_REGISTRY) as SceneThemeId[];
 
+export function isSceneThemeId(themeId: string): themeId is SceneThemeId {
+  return SCENE_THEME_IDS.includes(themeId as SceneThemeId);
+}
+
 export function getSceneTextureKey(themeId: SceneThemeId): string {
   return `scene_${themeId}`;
 }
 
 export function getThemeAssetPath(themeId: SceneThemeId): string {
   return THEME_REGISTRY[themeId].assetPath;
+}
+
+export function isEndingAssetId(endingId: string): endingId is EndingAssetId {
+  return ENDING_ASSET_KEYS.includes(endingId as EndingAssetId);
+}
+
+export function getEndingTextureKey(endingId: EndingAssetId): string {
+  return `ending_${endingId}`;
+}
+
+export function getEndingAssetPath(endingId: EndingAssetId): string {
+  return `/assets/endings/${endingId}.png`;
 }
 
 export function getThemeProfileId(themeId: string | null | undefined): GameplayProfileId | null {

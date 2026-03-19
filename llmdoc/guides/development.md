@@ -164,6 +164,7 @@ npm run release:signoff -- --headless
   - 当前 backend targeted `pytest` 已包含 `tests/test_metrics.py`
   - 本次 session 新增 `release-signoff-dry-run`，用于校验 `release-signoff` 的步骤合同与 `summary.json` 落盘
   - `debate-signoff-smoke` 保持不变：在 `DEBATE_USE_LLM=false` 下起本地 backend/frontend，并实跑 `e2e-debate-suite.mjs full` 后上传工件
+  - 本次 session 又新增 `.github/workflows/release-signoff.yml`：夜间 + 手动触发的完整 signoff；会先检查 `LLM_RESPONSES_URL / LLM_API_KEY`，通过后再起本地 backend/frontend、安装 Playwright 浏览器、执行 `npm run release:signoff -- --headless` 并上传工件
 - 如果本机 Safari WebDriver 已准备好，可追加：
 
 ```bash
@@ -203,6 +204,12 @@ npm run release:signoff -- \
     - `node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run`：`summary.json` 落盘通过
     - `npm run release:signoff -- --headless --output-root output/e2e/current-audit-release-signoff-v2`：通过
     - 工件：`frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
+  - 本次 session 围绕 Theater 首次进入 / capture 收口又补跑：
+    - `npm test -- --run src/game/sceneAssetPlan.test.ts src/game/PhaserGameLoader.test.ts src/hooks/useScreenCapture.test.ts src/game/scenes/EndingScene.test.ts src/game/scenes/WorldScene.test.ts src/pages/SimulationView.test.tsx`：**59 passed**
+    - `npx tsc --noEmit -p tsconfig.app.json`：通过
+    - `npm run build`：通过
+    - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run`：通过
+    - 工件：`frontend/output/e2e/current-post-change-dry-run/summary.json`
 
 - 仓库内历史前端全量基线仍记录为 **179 passed**。
 - 本轮基于当前仓库状态重新执行了定向回归：
@@ -416,6 +423,8 @@ npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/
   - 当前新增口径：
     - `PhaserGameLoader` 本身也已移到 Theater 动态边界
     - `useScreenCapture` 现为轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
+    - 本次 session 又把 screenshot / GIF runtime 继续拆成两条动态链路，构建产物从单块 `capture-vendor` 收口到 `capture-html / capture-gif`
+    - `BootScene` 当前只预载首屏初始 theme + 角色 sprite，后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载
 - 本次 session 又补了首页首包收口：
 
 ```bash

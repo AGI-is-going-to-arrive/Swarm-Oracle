@@ -98,10 +98,14 @@
    - `PhaserGameLoader` 本身也已移到 Theater 动态边界
    - `useScreenCapture` 已拆成轻壳 + `screenCaptureRuntime.ts`
    - `html2canvas / gif.js / gif.worker` 继续保持 capture 时才加载
+   本次 session 又补了第三层收口：
+   - screenshot / GIF runtime 继续拆分，构建产物从单块 `capture-vendor` 收口到 `capture-html / capture-gif / screenCaptureGifRuntime`
+   - `BootScene` 当前只预载首屏初始 theme + 角色 sprite
+   - 后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载
    本 session 又补了一层首页首包收口：
    - 首页题材 `label / hooks / badge` 改走轻量摘要 helper
    - `InputView` 不再直接 runtime 引完整玩法策略表
-   当前 `phaser` 仍是大体积引擎 chunk，`capture-vendor` 也仍是独立 chunk；首页首包这条线已经继续收紧，后续若继续做，主要目标仍是 Theater 引擎和更深层的异步 chunk，而不是把首页题材摘要重新当成“尚未开工”。
+   当前 `phaser` 仍是大体积引擎 chunk；`capture-vendor` 已经拆掉，但首页首包这条线已经继续收紧，后续若继续做，主要目标仍是 Theater 引擎和更深层的异步 chunk，而不是把首页题材摘要重新当成“尚未开工”。
 
 2. 文档真值持续收口。
    需要避免“总表已完成、正文仍停留在计划态”的文档漂移再次出现。
@@ -120,6 +124,7 @@
    - `release:signoff` 当前还会额外检查 backend `/metrics`
    - Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
    - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
+   - `.github/workflows/release-signoff.yml` 新增 nightly + workflow_dispatch 的完整 signoff workflow，并会在缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时安全跳过
    本次真实验证为：
    - backend targeted `pytest`：**81 passed**
    - frontend targeted `vitest`：**79 passed**
@@ -131,6 +136,8 @@
    - live `/metrics`：`200 text/plain`
    - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
    - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
+   - `sceneAssetPlan / PhaserGameLoader / useScreenCapture / EndingScene / WorldScene / SimulationView`：**59 passed**
+   - `frontend/output/e2e/current-post-change-dry-run/summary.json`：dry-run 通过
    后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
    - `release:signoff --headless`
    - 如需要 Safari 证据，再追加 `--include-safari`

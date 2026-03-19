@@ -37,10 +37,16 @@ interface UseScreenCaptureReturn {
 }
 
 let runtimeLoader: Promise<typeof import('./screenCaptureRuntime')> | null = null;
+let gifRuntimeLoader: Promise<typeof import('./screenCaptureGifRuntime')> | null = null;
 
 async function loadScreenCaptureRuntime() {
   runtimeLoader ??= import('./screenCaptureRuntime');
   return runtimeLoader;
+}
+
+async function loadGifCaptureRuntime() {
+  gifRuntimeLoader ??= import('./screenCaptureGifRuntime');
+  return gifRuntimeLoader;
 }
 
 export async function canvasToBlobWithFallback(
@@ -112,9 +118,12 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
     setStatus('recording');
 
     try {
-      const runtime = await loadScreenCaptureRuntime();
+      const [runtime, gifRuntime] = await Promise.all([
+        loadScreenCaptureRuntime(),
+        loadGifCaptureRuntime(),
+      ]);
       const targetSelector = requestOptions?.selector ?? selector;
-      const capture = await runtime.recordGifCapture(targetSelector, gifDuration, gifFrameInterval);
+      const capture = await gifRuntime.recordGifCapture(targetSelector, gifDuration, gifFrameInterval);
       if (!capture) {
         setStatus('error');
         window.setTimeout(() => setStatus('idle'), 2000);

@@ -55,7 +55,7 @@ npm run dev     # → http://localhost:18928
 - **PredictionModal** — structured bets for branch winner / ending tone / theme resonance; this session it stopped reading local `scenarioMeta` directly for the committed branch and now prefers the parent page’s current merged meta
 - **Debate Arena** — separate Track D mode using its own backend domain and frontend store/hook (`debateStore`, `useDebateWS`) rather than extending the main scenario state; live snapshot / result payload / WS now all expose explicit `counterplay` data, while local helper state remains only as a fallback; `debate_verdict` now also carries `phase_insights`, so the live room can land the final stage read without waiting for a fresh result fetch
 - **Replay Helpers** — `scenarioReplay.ts / simulationReplay.ts / debateReplay.ts` now back the replay share flow; main mode prefers backend short `share id` via `ReplayArtifact`, token remains the fallback path, and replay pages can be imported into real local runs
-- **PhaserGameLoader / useScreenCapture** — Theater engine and capture stack stay behind the Theater/capture path: `SimulationView` now only preloads Phaser after the user actually enters Theater, `PhaserGameLoader` itself is also lazy-loaded at the Theater boundary, and `useScreenCapture` now loads a separate `screenCaptureRuntime` only when a screenshot/GIF action actually runs
+- **PhaserGameLoader / useScreenCapture** — Theater engine and capture stack stay behind the Theater/capture path: `SimulationView` now only preloads Phaser after the user actually enters Theater, `PhaserGameLoader` itself is also lazy-loaded at the Theater boundary, Phaser preload now skips hidden / reduced-data / `saveData` / `2g` conditions, `BootScene` only preloads the first-view theme plus runtime sprites, later `scene_change` backgrounds and ending backdrops are loaded on demand, and `useScreenCapture` now keeps screenshot and GIF runtime paths split so a screenshot-only action no longer pulls the GIF renderer by default
 - **TimelineBar** — compact replay timeline with fork/card/bet/result markers
 - **ResultView** — Ending cards, probability bars, expandable stories, insights
 - **ShareModal** — Social media copy generation (小红书/微博/知乎/Reddit/X); the envelope now carries replay permalink context when available
@@ -108,6 +108,11 @@ npm run e2e:debate:full
   - frontend `assets:provenance:check / build / targeted vitest`
   - `release-signoff-dry-run` to validate the signoff orchestration and `summary.json` contract
   - deterministic `debate-signoff-smoke` (`DEBATE_USE_LLM=false`, local backend/frontend, `e2e-debate-suite.mjs full`, artifact upload)
+- Repo now also has `.github/workflows/release-signoff.yml`:
+  - nightly + manual full signoff
+  - secrets preflight for `LLM_RESPONSES_URL / LLM_API_KEY`
+  - local backend/frontend boot + Playwright browser install + `npm run release:signoff -- --headless`
+  - artifact upload for `summary.json` and backend/frontend logs
 - This doc-sync pass re-ran:
   - `npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx` → **49 passed**
   - `npm run build` → passed
@@ -215,6 +220,16 @@ npm run e2e:debate:full
     - artifacts: `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`
   - `node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2` → passed
     - artifacts: `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
+- This session also re-ran the Theater first-enter / capture split path:
+  - `npm test -- --run src/game/sceneAssetPlan.test.ts src/game/PhaserGameLoader.test.ts src/hooks/useScreenCapture.test.ts src/game/scenes/EndingScene.test.ts src/game/scenes/WorldScene.test.ts src/pages/SimulationView.test.tsx` → **59 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `npm run build` → passed
+  - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run` → passed
+    - artifacts: `frontend/output/e2e/current-post-change-dry-run/summary.json`
+  - Current build posture in this pass:
+    - `BootScene` now preloads only the first-view Theater theme plus runtime sprites
+    - later `scene_change` backgrounds and ending backdrops are loaded on demand
+    - `capture-vendor` is now split into `capture-html / capture-gif / screenCaptureGifRuntime`
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`

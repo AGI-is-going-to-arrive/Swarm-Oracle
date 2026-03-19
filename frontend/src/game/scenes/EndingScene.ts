@@ -13,6 +13,7 @@
  */
 import Phaser from 'phaser';
 import i18next from 'i18next';
+import { getEndingTextureRequest } from '../sceneAssetPlan';
 
 /** Maps ending_type (positive/negative/neutral) → specific ending_id. */
 const ENDING_TYPE_MAP: Record<string, string[]> = {
@@ -103,6 +104,8 @@ export class EndingScene extends Phaser.Scene {
   private currentEndingId = 'revolution';
   private currentTitle = '';
   private currentStorySummary = '';
+  private backgroundImage: Phaser.GameObjects.Image | null = null;
+  private pendingEndingTextureLoads: Set<string> = new Set();
 
   constructor() {
     super({ key: 'EndingScene' });
@@ -133,21 +136,11 @@ export class EndingScene extends Phaser.Scene {
 
     // ── 2. Ending background image ──────────────────────
     if (this.textures.exists(config.textureKey)) {
-      const bgImage = this.add.image(width / 2, height / 2, config.textureKey);
-      bgImage.setDisplaySize(width, height);
-      bgImage.setDepth(1);
-      bgImage.setAlpha(0);
-
-      // Slow zoom-in effect (Ken Burns)
-      bgImage.setScale(1.05);
-      this.tweens.add({
-        targets: bgImage,
-        alpha: 0.85,
-        scaleX: 1.0,
-        scaleY: 1.0,
-        duration: 3000,
-        ease: 'Power2',
-        delay: 400,
+      this.attachEndingBackground(config.textureKey, width, height);
+    } else {
+      this.ensureEndingTextureLoaded(endingId, () => {
+        if (!this.sys.isActive() || this.currentEndingId !== endingId) return;
+        this.attachEndingBackground(config.textureKey, width, height);
       });
     }
 
@@ -303,6 +296,66 @@ export class EndingScene extends Phaser.Scene {
     this.cameras.main.fadeIn(800, 0, 0, 0);
 
     console.log(`[EndingScene] V3 showing ending: ${endingId}`);
+  }
+
+  private attachEndingBackground(textureKey: string, width: number, height: number): void {
+    if (this.backgroundImage) {
+      this.backgroundImage.destroy();
+      this.backgroundImage = null;
+    }
+
+    this.backgroundImage = this.add.image(width / 2, height / 2, textureKey);
+    this.backgroundImage.setDisplaySize(width, height);
+    this.backgroundImage.setDepth(1);
+    this.backgroundImage.setAlpha(0);
+    this.backgroundImage.setScale(1.05);
+
+    this.tweens.add({
+      targets: this.backgroundImage,
+      alpha: 0.85,
+      scaleX: 1.0,
+      scaleY: 1.0,
+      duration: 3000,
+      ease: 'Power2',
+      delay: 400,
+    });
+  }
+
+  private ensureEndingTextureLoaded(endingId: string, onReady?: () => void): void {
+    const request = getEndingTextureRequest(endingId);
+    if (!request) return;
+    if (this.textures.exists(request.textureKey)) {
+      onReady?.();
+      return;
+    }
+    if (this.pendingEndingTextureLoads.has(request.textureKey)) {
+      return;
+    }
+
+    this.pendingEndingTextureLoads.add(request.textureKey);
+
+    const cleanup = () => {
+      this.pendingEndingTextureLoads.delete(request.textureKey);
+      this.load.off(`filecomplete-image-${request.textureKey}`, handleFileComplete);
+      this.load.off(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    };
+
+    const handleFileComplete = () => {
+      cleanup();
+      onReady?.();
+    };
+
+    const handleLoadError = (file: Phaser.Loader.File) => {
+      if (file.key !== request.textureKey) return;
+      cleanup();
+    };
+
+    this.load.once(`filecomplete-image-${request.textureKey}`, handleFileComplete);
+    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    this.load.image(request.textureKey, request.assetPath);
+    if (!this.load.isLoading()) {
+      this.load.start();
+    }
   }
 
   /** Resolve ending_type → specific ending_id. */

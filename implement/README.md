@@ -75,6 +75,8 @@
 - ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
 - ✅ 前端代码分割优化（SimulationView 业务块已拆小）
 - ✅ Theater / 截图链路第二轮懒加载收口：`PhaserGameLoader` 也已移到 Theater 动态边界；`useScreenCapture` 现只保留轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
+- ✅ Theater 首次进入成本继续收口：`BootScene` 当前只预载首屏初始 theme + 角色 sprite；后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载，`bet_panel / leaderboard / title_screen / minimap_frame` 不再是 Theater 首次进入硬依赖
+- ✅ capture 链路第三轮拆包：screenshot / GIF runtime 继续拆分，构建产物已从单块 `capture-vendor` 收口到 `capture-html / capture-gif / screenCaptureGifRuntime`
 - ✅ Docker Compose 一键部署（已完成真实容器 smoke）
 - ✅ Director Campaign / 导演生涯最小闭环（A1 已落地，首页与结果页可见）
 - ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
@@ -102,6 +104,7 @@
   - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`（含 Safari）
 - ✅ 本次 session 又补了发布收口基础设施：`release-signoff` 现在会在 output root 增量写 `summary.json`，并新增 backend `/metrics` 可达性检查；Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - ✅ 仓库已补 CI 守门链路：`.github/workflows/ci.yml` 当前会并行跑 backend targeted `pytest`（含 `tests/test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`，并新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
+- ✅ 仓库已补完整签收 workflow：`.github/workflows/release-signoff.yml` 当前提供 nightly + 手动触发的 full signoff，会先做 `LLM_RESPONSES_URL / LLM_API_KEY` 预检，再起本地 backend/frontend、安装 Playwright 浏览器并上传工件
 - ✅ 本次 session 围绕发布收口基础设施的真实验证：
   - backend targeted `pytest`：**81 passed**
   - frontend targeted `vitest`：**79 passed**
@@ -114,12 +117,17 @@
   - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
   - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
 - ✅ 首页首包继续收口：`InputView` 当前只读取轻量题材摘要（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；本次定向回归 `InputView / SimulationView / ResultView` 为 **24 passed**
+- ✅ 本次 session 又补了 Theater 首次进入 / capture 收口：
+  - `sceneAssetPlan / PhaserGameLoader / useScreenCapture / EndingScene / WorldScene / SimulationView` → **59 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `npm run build` → 通过
+  - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run` → 通过
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
 - ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但当前已去掉 `ResultView` authority 回填、结果页派生 archive/objectives 的本地写回，以及 `PredictionModal` 的本地直读，主要保留缓存/兼容、派生字段和 replay payload
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
-- ℹ️ 首页首包现在已经脱离深层玩法策略表，但当前最大剩余构建目标仍是 `phaser`；继续做性能专项时，优先级仍应放在 Theater 引擎 chunk，而不是再回头重做首页题材摘要链路
+- ℹ️ 首页首包现在已经脱离深层玩法策略表，截图/GIF runtime 也已拆成 `capture-html / capture-gif`；但当前最大剩余构建目标仍是 `phaser`，继续做性能专项时，优先级仍应放在 Theater 引擎 chunk，而不是再回头重做首页题材摘要链路
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
 - ℹ️ Debate 胜负 / `verdict_tone` / 分数核心当前已升级为 `LLM hybrid` 优先、deterministic fallback；结果 payload 会显式带 `adjudication_mode`

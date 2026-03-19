@@ -22,7 +22,7 @@
 | **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页除 `judge summary` 外还会返回结构化 `judge_rationale`、`supporting_turns` 与 `adjudication_mode`；终局裁决当前会优先读取 LLM judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，失败时再退回 deterministic 规划；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；`counterplay` 除了 `phase_score / explanation`，还会显式改写对应阶段 commentary |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
 | **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细；本 session 又把 `ResultView` 的派生 archive/objectives 改成纯内存态，不再把结果页读路径回写到本地 `scenarioMeta` |
-| **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；本 session 又把 `PhaserGameLoader` 本身移到 Theater 动态边界，并把截图链路拆成 `useScreenCapture` 轻壳 + `screenCaptureRuntime` 按需加载；`html2canvas / gif.js / gif.worker` 继续只在截图/GIF 路径上加载，避免普通首页和 Classic 路径提前拉取这批大依赖；首页题材 `label / hooks / badge` 现在也改走轻量摘要 helper，不再直接把整份玩法策略表挂进 landing route |
+| **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；`PhaserGameLoader` 本身已在 Theater 动态边界，且当前会跳过隐藏页面、`prefers-reduced-data`、`saveData` 与 `2g/slow-2g` 场景下的无谓预热；`BootScene` 当前只预载首屏初始 theme + 角色 sprite，后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载；截图链路也继续拆成 screenshot / GIF 两条 runtime，构建产物从单块 `capture-vendor` 收口到 `capture-html / capture-gif`，避免只截图时顺手加载 GIF 依赖；首页题材 `label / hooks / badge` 现在也改走轻量摘要 helper，不再直接把整份玩法策略表挂进 landing route |
 | **Portable Replay & Import** | 主模式与 Debate 现在都有可复盘分享页：主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时回退到本地 token；Debate 结果页支持 `/debate/replay/result?replay=...`。三条 replay 页默认都是只读，但当前都支持一键“导入为本地运行”，落成真实本地 scenario / debate 记录 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Asset Provenance** | `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json` sidecar；较新的 Debate 资产保留完整生成记录，较早的 legacy 资产会标记为 backfilled provenance。这里的 backfill 只表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
@@ -157,6 +157,7 @@ cd frontend && npm run e2e:full
   - 会并行跑 backend targeted `pytest`（含 `test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`
   - 另新增 `release-signoff-dry-run`：只校验 `release-signoff` 编排与 `summary.json` 合同，不伪造整条链路已通过
   - 另新增 `debate-signoff-smoke`：在 `DEBATE_USE_LLM=false` 下起本地 backend/frontend，并实跑 `e2e-debate-suite.mjs full` 后上传工件
+  - 本次 session 还新增 `.github/workflows/release-signoff.yml`：夜间 + 手动触发的完整签收链路；会先做 secrets 预检，再起本地 backend/frontend、安装 Playwright 浏览器、执行 `npm run release:signoff -- --headless`，并上传 `summary.json` 与日志工件；缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时会安全跳过，不会伪造绿灯
 - 本次 session 已实跑：
   - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
@@ -184,6 +185,15 @@ cd frontend && npm run e2e:full
   - `frontend`：`node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-audit-signoff-dry-run-v4` → 通过
   - `frontend`：`node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2` → 通过
   - 当前最新签收工件：`frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
+- 本次 session 又补了 Theater 首次进入 / capture 收口：
+  - 前端：`src/game/sceneAssetPlan.test.ts / src/game/PhaserGameLoader.test.ts / src/hooks/useScreenCapture.test.ts / src/game/scenes/EndingScene.test.ts / src/game/scenes/WorldScene.test.ts / src/pages/SimulationView.test.tsx` → **59 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
+  - `frontend`：`node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-post-change-dry-run` → 通过
+  - 当前新增口径：
+    - `BootScene` 不再预载全部 Theater 背景 / ending / 遗留 UI 贴图，只保留首屏初始 theme + 角色 sprite
+    - 后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载
+    - `capture-vendor` 已拆成 `capture-html / capture-gif / screenCaptureGifRuntime`
 - 当前新增口径：
   - 首页 `InputView` 现在只读取轻量题材摘要（`label / hooks / badge`），不再静态依赖完整玩法策略表
   - 深层玩法 contract / strategy helper 仍保留在后续路由与导演层链路中
