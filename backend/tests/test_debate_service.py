@@ -177,26 +177,36 @@ def test_create_debate_record_keeps_scene_compatible_with_existing_debate_assets
 async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monkeypatch):
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
 
-    counter = {"value": 0}
+    counter = {"turns": 0}
 
-    async def _fake_llm_call_json(*args, **kwargs):
-        counter["value"] += 1
-        if counter["value"] <= 9:
-            return {"content": f"LLM turn #{counter['value']}"}
-        return {
-            "summary": "LLM judge summary",
-            "winner_reason": "LLM winner reason",
-            "loser_gap": "LLM loser gap",
-            "swing_factor": "LLM swing factor",
-            "closing_note": "LLM closing note",
-            "dimension_rationales": {
-                "coherence": "LLM coherence",
-                "evidence": "LLM evidence",
-                "adaptability": "LLM adaptability",
-                "impact": "LLM impact",
-            },
-            "counterplay_explanation": "",
-        }
+    async def _fake_llm_call_json(prompt, *args, **kwargs):
+        if "JSON verdict package" in prompt or "裁决理由 JSON" in prompt:
+            return {
+                "summary": "LLM judge summary",
+                "winner_reason": "LLM winner reason",
+                "loser_gap": "LLM loser gap",
+                "swing_factor": "LLM swing factor",
+                "closing_note": "LLM closing note",
+                "dimension_rationales": {
+                    "coherence": "LLM coherence",
+                    "evidence": "LLM evidence",
+                    "adaptability": "LLM adaptability",
+                    "impact": "LLM impact",
+                },
+                "counterplay_explanation": "",
+                "adjudication": {
+                    "winner": "opposition",
+                    "verdict_tone": "rupture",
+                    "dimensions": {
+                        "coherence": {"proposition": 1, "opposition": 5},
+                        "evidence": {"proposition": 2, "opposition": 5},
+                        "adaptability": {"proposition": 2, "opposition": 4},
+                        "impact": {"proposition": 1, "opposition": 5},
+                    },
+                },
+            }
+        counter["turns"] += 1
+        return {"content": f"LLM turn #{counter['turns']}"}
 
     monkeypatch.setattr(debate_module, "llm_call_json", _fake_llm_call_json)
 
@@ -218,3 +228,6 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
     assert result["result"]["judge_rationale"]["winner_reason"] == "LLM winner reason"
     assert result["result"]["judge_rationale"]["dimension_rationales"]["impact"] == "LLM impact"
     assert result["result"]["judge_rationale"]["supporting_turns"]
+    assert result["result"]["winner"] == "opposition"
+    assert result["result"]["verdict_tone"] == "rupture"
+    assert result["result"]["adjudication_mode"] == "llm_hybrid"

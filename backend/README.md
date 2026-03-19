@@ -55,10 +55,11 @@ actual host-reachable address instead of `host.docker.internal`.
 | `POST` | `/api/health/test` | BYOK-aware LLM connectivity test |
 | `GET` | `/metrics` | Prometheus metrics (P3-9) |
 | `POST` | `/api/scenario` | Create scenario (parse + start simulation); Theater mode returns a provisional `scene_theme` immediately |
-| `GET` | `/api/scenario/{id}` | Get scenario status, agents, branches, `scene_theme`, and top-level `director_state` |
+| `GET` | `/api/scenario/{id}` | Get scenario status, agents, branches, `scene_theme`, top-level `director_state`, and top-level `gameplay_state` |
 | `GET` | `/api/scenario/{id}/branches` | Branch tree |
 | `GET` | `/api/scenario/{id}/story` | Completed branch stories |
 | `GET` | `/api/scenario/{id}/agents` | Agent roster |
+| `POST` | `/api/scenario/import-replay` | Persist a replay snapshot as a local scenario run |
 | `POST` | `/api/scenario/{id}/intervene` | Butterfly Effect intervention |
 | `POST` | `/api/scenario/{id}/intervene/retrospective` | Retrospective intervention |
 | `POST` | `/api/scenario/{id}/intervene/batch` | Batch intervention |
@@ -66,6 +67,8 @@ actual host-reachable address instead of `host.docker.internal`.
 | `GET` | `/api/scenarios` | List all scenarios |
 | `DELETE` | `/api/scenario/{id}` | Delete scenario (cascade) |
 | `GET` | `/api/scenario/{id}/export` | Export scenario as Markdown |
+| `POST` | `/api/replay-artifact` | Persist a replay payload and return a short share id |
+| `GET` | `/api/replay-artifact/{id}` | Load a replay payload by short share id |
 | `GET` | `/api/intervention-templates` | Preset intervention templates |
 | `POST` | `/api/campaign/scenario/{scenario_id}/finalize` | Finalize director campaign progress for one completed scenario |
 | `GET` | `/api/campaign/scenario/{scenario_id}/director-state` | Get per-scenario director goals / commitment authority state |
@@ -80,7 +83,8 @@ actual host-reachable address instead of `host.docker.internal`.
 | `GET` | `/api/leaderboard` | Global prediction leaderboard |
 | `POST` | `/api/debate` | Create Debate Arena and return live snapshot immediately |
 | `GET` | `/api/debate/{id}` | Get Debate live snapshot; now includes top-level `counterplay` when present |
-| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay`, `predictions[]`, structured `judge_rationale`, and key `supporting_turns` used by the result UI / automation layer |
+| `GET` | `/api/debate/{id}/result` | Get Debate result payload; includes top-level `counterplay`, `predictions[]`, structured `judge_rationale`, key `supporting_turns`, and `adjudication_mode` used by the result UI / automation layer |
+| `POST` | `/api/debate/import-replay` | Persist a replay snapshot as a local Debate run |
 | `POST` | `/api/debate/{id}/predict` | Submit Debate structured bet; when `is_counterplay=true`, the backend now records dedicated counterplay metadata and keeps prediction scoring compatible |
 | `WS` | `/ws/scenario/{scenario_id}` | Real-time simulation events |
 | `WS` | `/ws/debate/{debate_id}` | Debate live events (`status / agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict`) |
@@ -112,6 +116,12 @@ Command: `.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campa
 
 Latest verified Debate judge-rationale / supporting-turn regression in this session: **14 passed**
 Command: `.venv/bin/python -m pytest tests/test_debate_prompts.py tests/test_debate_service.py tests/test_debate_api.py -q`
+
+Latest verified replay share/import regression in this session: **77 passed**
+Command: `.venv/bin/python -m pytest tests/test_api.py -q`
+
+Latest verified Debate replay import regression in this session: **7 passed**
+Command: `.venv/bin/python -m pytest tests/test_debate_api.py -q`
 
 ## Database Migrations (Alembic)
 

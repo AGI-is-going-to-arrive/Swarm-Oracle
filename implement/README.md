@@ -74,6 +74,7 @@
 ### 本轮已收口
 - ✅ 完整 E2E 脚本与近期通过工件（本轮已重跑 main `full`、Debate `full`、Debate `430x932`）
 - ✅ 前端代码分割优化（SimulationView 业务块已拆小）
+- ✅ Theater / 截图链路第二轮懒加载收口：`PhaserGameLoader` 也已移到 Theater 动态边界；`useScreenCapture` 现只保留轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
 - ✅ Docker Compose 一键部署（已完成真实容器 smoke）
 - ✅ Director Campaign / 导演生涯最小闭环（A1 已落地，首页与结果页可见）
 - ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
@@ -86,10 +87,15 @@
 - ✅ Debate Arena 裁决解释增强（结果 payload 现带 `judge_rationale / supporting_turns`；share copy 会带 1-2 条关键引文；`debate:desktop` 与 `debate:full` 黑盒现都会显式断言 `supporting_turns.length >= 1`）
 - ✅ Portable replay 闭环（主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 现都有 replay 页面；主模式优先走后端 `ReplayArtifact` 短 `share id`，失败时回退 token；三条 replay 页当前都支持“导入为本地运行”）
 - ✅ Debate 终局裁决升级（后端现会优先读取 judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，结果 payload 会显式带 `adjudication_mode`；失败时退回 deterministic fallback）
+- ✅ `scenarioMeta` 兼容层继续瘦身：`SimulationView` 不再把后端 authority 反向 apply 到 localStorage；`ResultView` 不再用本地 meta 回填后端 authority；`PredictionModal` 改为优先读取父层传入的当前 meta
+- ✅ 本次 bundle / authority 收口回归已通过：`vitest` 定向 **32 passed**、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，并已实跑：
+  - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
+  - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
+  - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 退为缓存/兼容层
+- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 仍存在，但本轮又去掉了 `ResultView` authority 回填与 `PredictionModal` 的本地直读，当前主要保留缓存/兼容、派生字段和 replay payload
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统

@@ -33,7 +33,7 @@ api/ws.py ──► WebSocket Manager (内联)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
@@ -204,7 +204,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
 - **职责**:
-  - `debate.py`：独立 Debate Arena 运行、turn 落库、LLM 回合生成、结构化 judge analysis、verdict 结算、prediction 评分、counterplay 显式 payload
+  - `debate.py`：独立 Debate Arena 运行、turn 落库、LLM 回合生成、结构化 judge analysis、`LLM hybrid` verdict 结算、prediction 评分、counterplay 显式 payload
   - `debate_prompts.py`：deterministic motion / cast / 语义锚点文案与 LLM turn prompt builder
   - `debate_scoring.py`：winner / verdict tone / breakdown / phase delta 规划
 - **关键行为**:
@@ -212,7 +212,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
   - prediction 只支持 `winner` 与 `verdict_tone`
   - `counterplay` 当前已提升成 Debate 域内的显式记录：提交时会同时写 `DebatePrediction + DebateCounterplay`，live snapshot / result payload / WS 会优先读独立 `DebateCounterplay`，仅在缺失时回退到旧的 prediction metadata
-  - 当前胜负 / breakdown / verdict tone 仍走 deterministic 规则，但回合文案、`judge summary` 与结构化 `judge_rationale` 已升级为 **LLM 优先、deterministic fallback**
+  - 当前终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；结果 payload 当前会显式带 `adjudication_mode`，若 LLM 不可用或输出无效则退回 deterministic fallback
   - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 语义锚点，同时会生成更强的 LLM prompt，要求回应上一轮、避免套话，并压缩长句、保留更像现场回击的节奏
   - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
@@ -244,6 +244,7 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate |
 | `GET /scenario/{id}` | GET | 获取场景详情；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state` 与 `gameplay_state`，供前端直开 `/sim/:id` 时恢复 Theater 状态、导演层权威态，以及主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 权威态 |
+| `POST /scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario；当前给 `/result/replay` 与 `/sim/replay` 的“导入为本地运行”按钮使用 |
 | `GET /scenario/{id}/branches` | GET | 获取分支列表 |
 | `GET /scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） |
 | `GET /scenario/{id}/story` | GET | 获取叙事结果；若尚无 completed branches，会回退返回该场景现有 branches，并为根分支补 placeholder title |
@@ -251,6 +252,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /scenarios` | GET | 场景列表（分页+状态筛选，JOIN优化 P0-2）(P4-A) |
 | `DELETE /scenario/{id}` | DELETE | 删除场景（批量 SQL DELETE P2-7 + Leaderboard + ChromaDB 清理）(P4-A) |
 | `GET /scenario/{id}/export` | GET | 导出场景 Markdown (P4-C) |
+| `POST /replay-artifact` | POST | 持久化 replay payload，返回短 `share id`；当前主模式优先用它生成 `/result/replay?share=...` 与 `/sim/replay?share=...` |
+| `GET /replay-artifact/{id}` | GET | 读取 replay payload；供 replay 页面 hydrate |
 | `GET /intervention-templates` | GET | 干预模板列表 (P4-D) |
 
 ### `interventions.py` — 干预路由
@@ -300,7 +303,8 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前可选透传 `user_id / llm_* / reasoning_effort`，并会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` 与 `phase_insights[]` |
-| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay` 与 `phase_insights[]`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
+| `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay`、`phase_insights[]` 与 `adjudication_mode`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
+| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用 |
 | `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由
@@ -336,6 +340,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `DebateTurn` | id, debate_id, sequence, phase, speaker_side, speaker_name, content, score_delta_json | belongs_to: Debate |
 | `DebatePrediction` | id, debate_id, kind, target_value, confidence, score, is_counterplay, counterplay_phase, counterplay_variant | belongs_to: Debate |
 | `DebateCounterplay` | id, debate_id, prediction_id, kind, target_value, confidence, phase, variant, outcome | belongs_to: Debate |
+| `ReplayArtifact` | id, kind, payload_json, created_at | 短链接 replay payload 存储 |
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
@@ -345,6 +350,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - `phase_insights[]` 的 `stakes / judge_focus / commentary / confidence_drift`
 - `counterplay` 命中或未中时会改写对应阶段 `phase_insights.commentary`
 - `debate_verdict` 事件链路改为 `DebateResultSummary + phase_insights`
+- 本次 replay share/import session 又补跑了：
+  - `tests/test_api.py` → **77 passed**
+  - `tests/test_debate_api.py` → **7 passed**
 
 需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
 

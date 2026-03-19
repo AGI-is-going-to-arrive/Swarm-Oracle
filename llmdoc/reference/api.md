@@ -10,6 +10,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": ""}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
 | `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`） |
+| `POST /api/scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario | `{"scenario": ScenarioSnapshot}` | ScenarioResponse |
 | `GET /api/scenario/{id}/branches` | GET | 获取分支列表 | — | BranchInfo[] |
 | `GET /api/scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） | — | AgentInfo[] |
 | `GET /api/scenario/{id}/story` | GET | 获取叙事结果 | — | StoryData |
@@ -27,6 +28,17 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
 | `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；推荐走 `POST`，这样 provider policy 不会出现在 URL 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
+
+### Replay 分享
+
+| 端点 | 方法 | 描述 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| `POST /api/replay-artifact` | POST | 持久化 replay payload，返回短 `share id` | `{"kind": "scenario_result_v1|simulation_view_v1", "payload": {...}}` | `{"id", "kind", "created_at"}` |
+| `GET /api/replay-artifact/{id}` | GET | 读取 replay payload | — | `{"id", "kind", "payload", "created_at"}` |
+
+> 当前口径：
+> - 主模式 `ResultView / SimulationView` 优先使用 `ReplayArtifact` 生成 `/result/replay?share=...` 与 `/sim/replay?share=...`
+> - 如果后端短链创建失败，前端会回退到本地 token
 
 ### Predictions & Leaderboard (P3-B)
 
@@ -174,7 +186,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "reasoning_effort?": "low"}` | DebateSnapshot |
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot（当前顶层还会带 `phase_insights[]`） |
-| `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]`） |
+| `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]` 与 `adjudication_mode`） |
+| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate | `{"debate": DebateResultPayload}` | DebateSnapshot |
 | `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
 
 > Debate 当前已按真实实现固定为 5 个阶段：
@@ -184,7 +197,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `closing`
 > - `verdict`
 >
-> 当前 Debate 的**胜负 / breakdown / verdict tone** 仍走 deterministic 规划；但**回合文案与 judge summary** 已升级为 `LLM 优先、deterministic fallback`。如果 `DEBATE_USE_LLM = false` 或上游暂时不可用，会自动退回到 deterministic 文案。
+> 当前 Debate 的终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；如果 `DEBATE_USE_LLM = false`、上游暂时不可用，或 LLM 返回坏结构，会退回 deterministic fallback。当前结果 payload 会显式带 `adjudication_mode`。
 >
 > prediction 只支持两类：
 > - `winner`

@@ -372,6 +372,7 @@ export interface DebatePhaseInsight {
 export interface DebateResultSummary {
   winner: 'proposition' | 'opposition';
   verdict_tone: DebateVerdictTone;
+  adjudication_mode?: 'deterministic' | 'llm_hybrid';
   score: DebateScore;
   breakdown: Record<string, { proposition: number; opposition: number }>;
   best_argument: string;

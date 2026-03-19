@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { copyText } from '../lib/copyText';
 import {
   buildDebateShareCopy,
   DEBATE_SHARE_PLATFORM_META,
@@ -20,6 +21,7 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
   const { t } = useTranslation();
   const [platform, setPlatform] = useState<DebateSharePlatform>('xiaohongshu');
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const copy = buildDebateShareCopy(platform, context, t);
 
@@ -28,23 +30,36 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
       kind: 'debate_share_modal',
       active_platform: platform,
       copied,
+      link_copied: linkCopied,
       has_copy: Boolean(copy),
       copy_length: copy.length,
+      permalink_url: context.permalinkUrl ?? null,
       available_platforms: PLATFORMS,
     });
 
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [copied, copy, onAutomationStateChange, platform]);
+  }, [context.permalinkUrl, copied, copy, linkCopied, onAutomationStateChange, platform]);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(copy);
+      await copyText(copy);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!context.permalinkUrl) return;
+    try {
+      await copyText(context.permalinkUrl);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 1500);
+    } catch {
+      setLinkCopied(false);
     }
   };
 
@@ -78,6 +93,11 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             {t('common.close')}
           </button>
+          {context.permalinkUrl && (
+            <button type="button" className="btn btn-ghost" onClick={handleCopyLink}>
+              {linkCopied ? t('share.permalink_copied') : t('share.copy_permalink_btn')}
+            </button>
+          )}
           <button type="button" className="btn btn-primary" onClick={handleCopy}>
             {copied ? t('share.copied') : t('share.copy_btn')}
           </button>

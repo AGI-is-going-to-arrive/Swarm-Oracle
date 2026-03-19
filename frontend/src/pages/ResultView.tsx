@@ -3,23 +3,25 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   exportScenario,
+  createReplayArtifact,
   finalizeCampaign,
   getAgents,
-    getCampaignScenarioSummary,
-    getScenario,
-    getStory,
-    listPredictions,
-    scorePredictions,
-    upsertScenarioDirectorState,
-    upsertScenarioGameplayState,
+  getCampaignScenarioSummary,
+  getReplayArtifact,
+  getScenario,
+  importReplayScenario,
+  getStory,
+  listPredictions,
+  scorePredictions,
 } from '../api/client';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { buildSharedChallengeUrl } from '../lib/challengeShare';
+import { copyText } from '../lib/copyText';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
   findChallengeProgressByScenarioId,
@@ -33,17 +35,10 @@ import {
   updateArchive,
 } from '../lib/scenarioMeta';
 import {
-  applyScenarioDirectorState,
-  hasMeaningfulScenarioDirectorState,
   mergeScenarioMetaWithDirectorState,
-  scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
 import {
-  applyScenarioGameplayState,
-  areScenarioGameplayStatesEquivalent,
-  hasMeaningfulScenarioGameplayState,
   mergeScenarioMetaWithGameplayState,
-  scenarioMetaToGameplayState,
 } from '../lib/scenarioGameplayState';
 import {
   buildDefaultDirectorObjectives,
@@ -69,6 +64,11 @@ import {
   getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
+import {
+  buildScenarioReplayUrl,
+  readScenarioReplayPayload,
+  type ScenarioResultReplayPayload,
+} from '../lib/scenarioReplay';
 import type {
   AgentInfo,
   CampaignFinalizeResult,
@@ -189,6 +189,9 @@ function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const replayToken = searchParams.get('replay');
+  const replayShareId = searchParams.get('share');
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
@@ -204,27 +207,89 @@ export default function ResultView() {
   const [exportError, setExportError] = useState('');
   const [showShare, setShowShare] = useState(false);
   const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
+  const [permalinkCopied, setPermalinkCopied] = useState(false);
+  const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const [replayPayload, setReplayPayload] = useState<ScenarioResultReplayPayload | null>(null);
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
+  const [importingReplay, setImportingReplay] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState('');
   const [campaignSummary, setCampaignSummary] = useState<CampaignFinalizeResult | null>(null);
   const [campaignScenarioSummary, setCampaignScenarioSummary] = useState<CampaignScenarioSummary | null>(null);
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
+  const isReplayMode = Boolean(replayPayload);
   const hasUnscored = predictions.some((p) => p.score == null);
   const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
+  const replayInvalidMessage = isZh
+    ? '这个回放链接无效或内容不完整。'
+    : 'This replay link is invalid or incomplete.';
+  const loadResultErrorMessage = isZh
+    ? '加载结果失败'
+    : 'Failed to load results';
   const isDailyChallenge = Boolean(
     challengeMatch
-    || campaignScenarioSummary?.completed_daily_challenge,
+    || campaignScenarioSummary?.completed_daily_challenge
+    || replayPayload?.isDailyChallenge,
   );
   const challengeProgress = challengeMatch?.progress ?? null;
 
   useEffect(() => {
-    if (!id) return;
     let cancelled = false;
     let retryTimer: number | null = null;
 
     const load = async () => {
+      if (replayShareId) {
+        const artifact = await getReplayArtifact(replayShareId).catch(() => null);
+        if (cancelled) return;
+        if (!artifact || artifact.kind !== 'scenario_result_v1' || !artifact.payload) {
+          setError(replayInvalidMessage);
+          setLoading(false);
+          return;
+        }
+        const replay = artifact.payload as unknown as ScenarioResultReplayPayload;
+        setReplayPayload(replay);
+        setStoryData(replay.storyData);
+        setScenario(replay.scenario);
+        setAgents(replay.agents);
+        setPredictions(replay.predictions);
+        setCampaignSummary(replay.campaignSummary ?? null);
+        setCampaignScenarioSummary(replay.campaignScenarioSummary ?? null);
+        setCampaignError('');
+        setCampaignNotice('');
+        setLoading(false);
+        return;
+      }
+      if (replayToken) {
+        const replayParams = new URLSearchParams();
+        replayParams.set('replay', replayToken);
+        const replay = await readScenarioReplayPayload(replayParams);
+        if (cancelled) return;
+        if (!replay) {
+          setError(replayInvalidMessage);
+          setLoading(false);
+          return;
+        }
+        setReplayPayload(replay);
+        setStoryData(replay.storyData);
+        setScenario(replay.scenario);
+        setAgents(replay.agents);
+        setPredictions(replay.predictions);
+        setCampaignSummary(replay.campaignSummary ?? null);
+        setCampaignScenarioSummary(replay.campaignScenarioSummary ?? null);
+        setCampaignError('');
+        setCampaignNotice('');
+        setLoading(false);
+        return;
+      }
+
+      setReplayPayload(null);
+      if (!id) {
+        setError(loadResultErrorMessage);
+        setLoading(false);
+        return;
+      }
+
       try {
         // Fetch story and scenario in parallel, handle prediction API failure gracefully
         const [story, agentList, scenario, preds, persistedCampaignSummary] = await Promise.all([
@@ -259,13 +324,11 @@ export default function ResultView() {
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
         const remoteDirectorState = scenario.director_state ?? null;
         const remoteGameplayState = scenario.gameplay_state ?? null;
-        if (hasMeaningfulScenarioDirectorState(remoteDirectorState)) {
-          applyScenarioDirectorState(id, remoteDirectorState as NonNullable<typeof remoteDirectorState>);
-        }
-        if (hasMeaningfulScenarioGameplayState(remoteGameplayState)) {
-          applyScenarioGameplayState(id, remoteGameplayState as NonNullable<typeof remoteGameplayState>);
-        }
-        const currentMeta = loadScenarioMeta(id);
+        const localMeta = loadScenarioMeta(id);
+        let workingMeta = mergeScenarioMetaWithDirectorState(
+          mergeScenarioMetaWithGameplayState(localMeta, remoteGameplayState),
+          remoteDirectorState,
+        );
         const storyKeyMoments = buildStoryKeyMoments(story);
         const storyBranchSnapshots = story.branches.map((branch) => ({
           branchId: branch.id,
@@ -277,23 +340,27 @@ export default function ResultView() {
           sceneTheme: scenario.scene_theme,
           profileId: profile.id,
           keyMoments: Array.from(new Set([
-            ...currentMeta.archive.keyMoments,
+            ...workingMeta.archive.keyMoments,
             ...storyKeyMoments,
           ])),
           branchSnapshots: Array.from(
             new Map(
-              [...currentMeta.archive.branchSnapshots, ...storyBranchSnapshots]
+              [...workingMeta.archive.branchSnapshots, ...storyBranchSnapshots]
                 .map((snapshot) => [snapshot.branchId, snapshot]),
             ).values(),
           ),
         });
-        if (nextMeta.objectives.goals.length === 0) {
+        workingMeta = {
+          ...workingMeta,
+          archive: nextMeta.archive,
+        };
+        if (workingMeta.objectives.goals.length === 0) {
           const objectiveArc = getGameplaySignatureArcState(
             profile.id,
-            nextMeta.cards.usageLog,
+            workingMeta.cards.usageLog,
             isZh,
           );
-          ensureScenarioObjectives(id, {
+          nextMeta = ensureScenarioObjectives(id, {
             question: scenario.question,
             profileId: profile.id,
             goals: buildDefaultDirectorObjectives({
@@ -301,57 +368,36 @@ export default function ResultView() {
               signatureCardId: objectiveArc?.nextCardId ?? null,
             }),
           });
-          nextMeta = loadScenarioMeta(id);
+          workingMeta = mergeScenarioMetaWithDirectorState(
+            mergeScenarioMetaWithGameplayState(nextMeta, remoteGameplayState),
+            remoteDirectorState,
+          );
         }
-        if (
-          !hasMeaningfulScenarioDirectorState(remoteDirectorState)
-          && hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(nextMeta))
-        ) {
-          try {
-            await upsertScenarioDirectorState(id, scenarioMetaToDirectorState(nextMeta));
-          } catch (err) {
-            console.warn('[DirectorState] Failed to backfill backend state from result view', err);
-          }
-        }
-        const mergedGameplayState = scenarioMetaToGameplayState(
-          mergeScenarioMetaWithGameplayState(nextMeta, remoteGameplayState),
-        );
-        if (
-          hasMeaningfulScenarioGameplayState(mergedGameplayState)
-          && !areScenarioGameplayStatesEquivalent(mergedGameplayState, remoteGameplayState)
-        ) {
-          try {
-            await upsertScenarioGameplayState(id, mergedGameplayState);
-          } catch (err) {
-            console.warn('[GameplayState] Failed to backfill backend state from result view', err);
-          }
-        }
-        const objectiveMeta = loadScenarioMeta(id);
         const dominantBranchForArchive = [...story.branches].sort((a, b) => b.probability - a.probability)[0] ?? null;
         const evaluatedObjectives = evaluateDirectorObjectives({
-          objectives: objectiveMeta.objectives.goals,
-          meta: objectiveMeta,
+          objectives: workingMeta.objectives.goals,
+          meta: workingMeta,
           dominantBranch: dominantBranchForArchive,
           isZh,
           isFinal: true,
         });
         const completedObjectiveCount = countCompletedObjectives(evaluatedObjectives);
-        const commitmentOutcome = !objectiveMeta.commitment.active
+        const commitmentOutcome = !workingMeta.commitment.active
           ? null
-          : dominantBranchForArchive?.id === objectiveMeta.commitment.branchId
+          : dominantBranchForArchive?.id === workingMeta.commitment.branchId
             ? 'hit'
             : 'miss';
         const tracks = getScenarioSystemTrackState(
           profile.id,
-          objectiveMeta.cards.usageLog,
-          objectiveMeta.commitment,
+          workingMeta.cards.usageLog,
+          workingMeta.commitment,
           isZh,
         );
         const archiveSummary = buildArchiveSummary({
           branches: story.branches,
-          usages: objectiveMeta.cards.usageLog,
-          bets: objectiveMeta.betting.bets,
-          keyMomentCount: objectiveMeta.archive.keyMoments.length,
+          usages: workingMeta.cards.usageLog,
+          bets: workingMeta.betting.bets,
+          keyMomentCount: workingMeta.archive.keyMoments.length,
           isDailyChallenge,
           profileId: profile.id,
           objectiveCompletedCount: completedObjectiveCount,
@@ -439,10 +485,10 @@ export default function ResultView() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [directorIdentity.userId, directorIdentity.userName, id, isZh]);
+  }, [directorIdentity.userId, directorIdentity.userName, id, isZh, loadResultErrorMessage, replayInvalidMessage, replayShareId, replayToken]);
 
   const handleExport = async () => {
-    if (!id || exporting) return;
+    if (!id || exporting || isReplayMode) return;
     setExporting(true);
     setExportError('');
     try {
@@ -465,7 +511,7 @@ export default function ResultView() {
   };
 
   const handleScore = async () => {
-    if (!id || scoring) return;
+    if (!id || scoring || isReplayMode) return;
     setScoring(true);
     setScoreError('');
     try {
@@ -496,23 +542,31 @@ export default function ResultView() {
       visualizationEnabled: scenario.visualization_enabled ?? false,
       profileId: inferGameplayProfile(scenario.question, scenario.scene_theme)?.id ?? null,
     });
-
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = url;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
+    await copyText(url);
     setChallengeLinkCopied(true);
     window.setTimeout(() => setChallengeLinkCopied(false), 2000);
   };
 
+  const handleCopyPermalink = async () => {
+    if (!replayUrl) return;
+    await copyText(replayUrl);
+    setPermalinkCopied(true);
+    window.setTimeout(() => setPermalinkCopied(false), 2000);
+  };
+
+  const handleImportReplay = async () => {
+    if (!replayPayload || importingReplay) return;
+    setImportingReplay(true);
+    try {
+      const imported = await importReplayScenario(replayPayload.scenario);
+      navigate(`/sim/${imported.id}`);
+    } finally {
+      setImportingReplay(false);
+    }
+  };
+
   const branches = storyData?.branches ?? [];
-  const storedScenarioMeta = id ? loadScenarioMeta(id) : null;
+  const storedScenarioMeta = replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null);
   const inferredProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
     [scenario],
@@ -668,6 +722,47 @@ export default function ResultView() {
       : t('result.archive_counterplay_count', {
           count: scenarioMeta.archive.counterplayCardCount ?? 0,
         });
+  const replaySnapshot = useMemo<ScenarioResultReplayPayload | null>(() => {
+    if (!scenario || !storyData || !scenarioMeta) return null;
+    return {
+      scenario,
+      storyData,
+      agents,
+      predictions,
+      scenarioMeta,
+      campaignScenarioSummary,
+      campaignSummary,
+      isDailyChallenge,
+    };
+  }, [agents, campaignScenarioSummary, campaignSummary, isDailyChallenge, predictions, scenario, scenarioMeta, storyData]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const buildReplay = async () => {
+      if (isReplayMode) {
+        setReplayUrl(window.location.href);
+        return;
+      }
+      if (!replaySnapshot) {
+        setReplayUrl(null);
+        return;
+      }
+      const artifact = await createReplayArtifact('scenario_result_v1', replaySnapshot as unknown as Record<string, unknown>).catch(() => null);
+      const url = artifact
+        ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
+        : await buildScenarioReplayUrl(window.location.origin, replaySnapshot);
+      if (!cancelled) {
+        setReplayUrl(url);
+      }
+    };
+
+    void buildReplay();
+    return () => {
+      cancelled = true;
+    };
+  }, [isReplayMode, replaySnapshot]);
+
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
     profileLabel: gameplayProfileLabel,
@@ -683,6 +778,7 @@ export default function ResultView() {
       scenarioMeta?.commitment.active && scenarioMeta.commitment.branchTitle
         ? `${commitmentOutcomeLabel} · ${scenarioMeta.commitment.branchTitle}`
         : null,
+    permalinkUrl: replayUrl,
   }), [
     storyData?.question,
     gameplayProfileLabel,
@@ -696,6 +792,7 @@ export default function ResultView() {
     counterplaySummaryLabel,
     lastCounterplayCardLabel,
     commitmentOutcomeLabel,
+    replayUrl,
     t,
   ]);
   const betOutcomeContext = useMemo(() => ({
@@ -747,6 +844,7 @@ export default function ResultView() {
       {
         route: window.location.pathname,
         kind: 'result',
+        replay_source: isReplayMode ? 'token' : 'api',
         loading,
         error: error || null,
         question: storyData?.question ?? null,
@@ -803,11 +901,11 @@ export default function ResultView() {
             }
           : null,
         controls: {
-          can_go_back_to_simulation: true,
-          can_export_markdown: !exporting,
-          can_open_share_modal: true,
+          can_go_back_to_simulation: !isReplayMode && Boolean(id),
+          can_export_markdown: !exporting && !isReplayMode,
+          can_open_share_modal: !isReplayMode && Boolean(replayUrl),
           can_open_leaderboard: true,
-          can_score_predictions: hasUnscored && !scoring,
+          can_score_predictions: hasUnscored && !scoring && !isReplayMode,
           active_modal: showShare ? 'share' : null,
           modal_state: showShare ? shareAutomation : null,
           expanded_branch_id: expandedBranch,
@@ -829,7 +927,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, isDailyChallenge, loading, localBetOutcomes, predictions, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
 
   if (loading) {
     return (
@@ -885,7 +983,7 @@ export default function ResultView() {
       <header className="result-header">
         <button
           className="btn btn-ghost result-back"
-          onClick={() => navigate(`/sim/${id}`)}
+          onClick={() => navigate(!isReplayMode && id ? `/sim/${id}` : '/')}
         >
           {t('result.back')}
         </button>
@@ -908,9 +1006,28 @@ export default function ResultView() {
           <button
             className="btn"
             onClick={() => setShowShare(true)}
+            disabled={isReplayMode || !replayUrl}
           >
             {t('result.share_btn')}
           </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void handleCopyPermalink()}
+            disabled={!replayUrl}
+          >
+            {permalinkCopied ? t('result.permalink_copied') : t('result.copy_permalink_btn')}
+          </button>
+          {isReplayMode && (
+            <button
+              className="btn btn-primary"
+              onClick={() => void handleImportReplay()}
+              disabled={importingReplay}
+            >
+              {importingReplay
+                ? (isZh ? '导入中...' : 'Importing...')
+                : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+            </button>
+          )}
           <button
             className="btn btn-ghost"
             onClick={() => void handleShareChallenge()}
@@ -1351,7 +1468,7 @@ export default function ResultView() {
       )}
 
       {/* Share Modal (P6) */}
-      {showShare && id && (
+      {showShare && id && !isReplayMode && (
         <ShareModal
           scenarioId={id}
           shareContext={shareFlavorContext}

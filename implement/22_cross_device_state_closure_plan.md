@@ -100,6 +100,9 @@
   - `usage_log / bets / key_moments / branch_snapshots` merge/backfill
 - `PredictionModal` 在下注成功后立即回写后端 authority
 - `SimulationView` 与 `ResultView` 优先读取远端 `gameplay_state`
+- `SimulationView` 当前不再把后端 `director_state / gameplay_state` 反向 apply 到 localStorage；页面内只做 authority 优先的内存合并与 replay payload 组装
+- `ResultView` 当前不再用本地 `scenarioMeta` 回填后端 `director_state / gameplay_state`；结果页只把远端 authority 与本地 archive/兼容字段合并用于展示
+- `PredictionModal` 当前优先读取父层传入的 `initialMeta.commitment`，不再自己直读本地 `scenarioMeta`
 - 结果页在无本地缓存时仍可恢复：
   - bet list
   - key moments
@@ -163,6 +166,23 @@ npm test -- --run \
 
 ```bash
 cd frontend
+npm test -- --run \
+  src/hooks/useScreenCapture.test.ts \
+  src/components/PredictionModal.test.tsx \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx
+```
+
+结果：
+
+- `32 passed`
+
+已通过：
+
+```bash
+cd frontend
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 ```
@@ -175,6 +195,9 @@ npm run build
 - `frontend/output/e2e/20260319-cross-device-state-cross-browser/`
 - `frontend/output/e2e/20260319-cross-device-state-safari/`
 - `frontend/output/e2e/20260319-cross-device-state-safari-panel/`
+- `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
+- `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
+- `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
 
 其中 `corners` 的 `gameplay_state_roundtrip` 已显式覆盖：
 
@@ -196,7 +219,11 @@ npm run build
 这条线已完成，但仍有几个边界需要诚实保留：
 
 1. `scenarioMeta` 仍然存在。
-   它现在是兼容层，不是 authority；短期内不会被完全删除。
+   它现在是兼容层，不是 authority；本 session 又去掉了 `ResultView` 的 authority 回填和 `PredictionModal` 的本地直读。当前主要保留：
+   - 本地缓存
+   - 派生字段
+   - 旧局兼容
+   - replay payload
 
 2. Safari 取证仍有浏览器限制。
    `panel capture` 可稳定拍到 HUD / 导演态，但 Theater 画布在某些路径下仍可能发黑，这更像 Safari/WebKit 的截图限制，不是 authority 收口回归。

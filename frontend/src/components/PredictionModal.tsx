@@ -17,12 +17,13 @@ import {
   type ProfileResonanceId,
   type StructuredBetKind,
 } from '../lib/predictionBetting';
-import { loadScenarioMeta, placeBet, type ScenarioMeta } from '../lib/scenarioMeta';
+import { placeBet, type ScenarioMeta } from '../lib/scenarioMeta';
 import type { BranchInfo } from '../types';
 import './PredictionModal.css';
 
 interface Props {
   scenarioId: string;
+  initialMeta?: ScenarioMeta | null;
   onClose: () => void;
   branches?: BranchInfo[];
   question?: string;
@@ -34,6 +35,7 @@ interface Props {
 
 export default function PredictionModal({
   scenarioId,
+  initialMeta = null,
   onClose,
   branches = [],
   question,
@@ -48,7 +50,7 @@ export default function PredictionModal({
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const branchOptions = getStructuredBetOptions(branches);
-  const committedBranchId = loadScenarioMeta(scenarioId).commitment.branchId ?? '';
+  const committedBranchId = initialMeta?.commitment.branchId ?? '';
   const [targetBranchId, setTargetBranchId] = useState(
     branchOptions.some((branch) => branch.id === committedBranchId)
       ? committedBranchId

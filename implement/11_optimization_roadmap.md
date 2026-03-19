@@ -94,13 +94,25 @@
 这些不是旧 `P0-P9` 的尾项，而是新一轮工程优化：
 
 1. 前端包体与加载时机继续优化。
-   当前 `phaser` 仍是大体积引擎 chunk，应继续保持按需加载，并避免把截图/录制依赖拖进首页。
+   本 session 已补上第二层边界：
+   - `PhaserGameLoader` 本身也已移到 Theater 动态边界
+   - `useScreenCapture` 已拆成轻壳 + `screenCaptureRuntime.ts`
+   - `html2canvas / gif.js / gif.worker` 继续保持 capture 时才加载
+   当前 `phaser` 仍是大体积引擎 chunk，`capture-vendor` 也仍是独立 chunk；后续若继续做，只需要继续看是否还要再细拆，不需要把这条线重新当成“尚未开工”。
 
 2. 文档真值持续收口。
    需要避免“总表已完成、正文仍停留在计划态”的文档漂移再次出现。
 
 3. 发版 clean-room 验证。
-   应在清理生成物后，用相对干净的工作区重跑：
+   本 session 已实跑：
+   - `e2e:corners`
+   - `e2e:cross-browser`
+   - `e2e:debate:full`
+   工件位于：
+   - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
+   - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
+   - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
+   后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
    - `e2e:corners`
    - `e2e:cross-browser`
    - `e2e:debate:full`

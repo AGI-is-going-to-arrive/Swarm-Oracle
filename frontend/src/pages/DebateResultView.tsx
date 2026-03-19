@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { getDebateResult } from '../api/client';
+import { getDebateResult, importReplayDebate } from '../api/client';
 import { DebateShareModal } from '../components/DebateShareModal';
 import { DebateScoreCard } from '../components/DebateScoreCard';
 import { captureElementDataUrl } from '../hooks/useScreenCapture';
@@ -23,6 +23,7 @@ import {
   buildDebatePhaseSummaries,
   getDebateScoreLeader,
 } from '../lib/debateInsights';
+import { buildDebateReplayUrl, readDebateReplayPayload } from '../lib/debateReplay';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
 import type { DebatePrediction, DebateResultPayload } from '../types';
 import './DebateArena.css';
@@ -35,6 +36,7 @@ function isPredictionHit(prediction: DebatePrediction, result: DebateResultPaylo
 export function DebateResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
@@ -43,9 +45,25 @@ export function DebateResultView() {
   const [error, setError] = useState('');
   const [showShare, setShowShare] = useState(false);
   const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
+  const [importingReplay, setImportingReplay] = useState(false);
+  const replayPayload = useMemo(
+    () => readDebateReplayPayload(searchParams),
+    [searchParams],
+  );
+  const isReplayMode = Boolean(replayPayload);
 
   useEffect(() => {
-    if (!id) return;
+    if (replayPayload) {
+      setPayload(replayPayload);
+      setError('');
+      setLoading(false);
+      return;
+    }
+    if (!id) {
+      setError(t('debate.result_missing'));
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     let timer: number | null = null;
 
@@ -74,7 +92,7 @@ export function DebateResultView() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [id, t]);
+  }, [id, replayPayload, t]);
 
   const localCounterplayRecord = useMemo(
     () => (id ? loadDebateCounterplay(id) : null),
@@ -92,6 +110,12 @@ export function DebateResultView() {
     () => getDebateCounterplaySummary(counterplayRecord, t),
     [counterplayRecord, t],
   );
+  const adjudicationModeLabel = useMemo(() => {
+    const mode = payload?.result.adjudication_mode ?? 'deterministic';
+    return mode === 'llm_hybrid'
+      ? t('debate.adjudication_llm_hybrid')
+      : t('debate.adjudication_deterministic');
+  }, [payload?.result.adjudication_mode, t]);
   const counterplayExplanation = payload?.counterplay?.explanation ?? null;
   const counterplayOutcome = useMemo(
     () => resolveDebateCounterplayOutcome(counterplayRecord, payload?.result),
@@ -183,8 +207,20 @@ export function DebateResultView() {
           : counterplayOutcome === 'miss'
             ? t('debate.counterplay_miss')
             : null,
+      permalinkUrl: buildDebateReplayUrl(window.location.origin, payload),
     };
   }, [counterplayExplanation, counterplayOutcome, counterplaySummary, payload, t]);
+
+  const handleImportReplay = async () => {
+    if (!replayPayload || importingReplay) return;
+    setImportingReplay(true);
+    try {
+      const imported = await importReplayDebate(replayPayload);
+      navigate(`/debate/${imported.id}/result`);
+    } finally {
+      setImportingReplay(false);
+    }
+  };
 
   useEffect(() => {
     if (!payload?.language) return;
@@ -237,6 +273,7 @@ export function DebateResultView() {
         kind: 'debate_result',
         loading,
         error: error || null,
+        replay_source: replayPayload ? 'token' : 'api',
         controls: {
           can_open_share_modal: Boolean(payload),
           can_go_back_live: Boolean(payload),
@@ -247,6 +284,7 @@ export function DebateResultView() {
         result: payload ? {
           winner: payload.result.winner,
           verdict_tone: payload.result.verdict_tone,
+          adjudication_mode: payload.result.adjudication_mode ?? 'deterministic',
           score: payload.result.score,
           prediction_count: payload.predictions.length,
           prediction_stats: predictionStats,
@@ -273,7 +311,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, phaseSummaries, predictionStats, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, phaseSummaries, predictionStats, replayPayload, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -316,6 +354,9 @@ export function DebateResultView() {
               <p className="debate-hero__subtitle">
                 {t('debate.result_tone')}: {getDebateVerdictToneLabel(t, payload.result.verdict_tone)}
               </p>
+              <p className="debate-hero__subtitle">
+                {t('debate.result_adjudication')}: {adjudicationModeLabel}
+              </p>
               <p className="debate-hero__motion">
                 <strong>{t('debate.motion_label')}:</strong> {payload.motion}
               </p>
@@ -336,6 +377,13 @@ export function DebateResultView() {
                 <button type="button" className="btn btn-ghost" onClick={() => navigate(`/debate/${id}`)}>
                   {t('sim.status.back')}
                 </button>
+                {isReplayMode && (
+                  <button type="button" className="btn btn-ghost" onClick={() => void handleImportReplay()} disabled={importingReplay}>
+                    {importingReplay
+                      ? (isZh ? '导入中...' : 'Importing...')
+                      : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+                  </button>
+                )}
                 <button type="button" className="btn btn-primary" onClick={() => setShowShare(true)}>
                   {t('debate.open_share')}
                 </button>

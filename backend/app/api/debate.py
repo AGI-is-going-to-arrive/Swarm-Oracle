@@ -11,7 +11,7 @@ from sqlmodel import Session
 
 from app.api.helpers import schedule_background_task
 from app.api.ws import WSManager
-from app.models import Debate, DebatePhase, DebatePrediction, DebatePredictionKind, DebateStatus
+from app.models import Debate, DebatePhase, DebatePrediction, DebatePredictionKind, DebateSide, DebateStatus, DebateTurn
 from app.models import DebateCounterplay
 from app.models.database import get_engine
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
@@ -123,6 +123,10 @@ class DebatePredictionRequest(BaseModel):
         return self
 
 
+class ImportReplayDebateRequest(BaseModel):
+    debate: dict[str, Any]
+
+
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
@@ -151,6 +155,147 @@ async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     if payload is None:
         raise HTTPException(500, "Failed to load newly created debate")
     return payload
+
+
+@router.post("/api/debate/import-replay")
+async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]:
+    payload = req.debate if isinstance(req.debate, dict) else {}
+    question = str(payload.get("question", "")).strip()
+    motion = str(payload.get("motion", "")).strip()
+    if not question or not motion:
+        raise HTTPException(422, "Replay debate is missing question or motion")
+
+    participants = payload.get("participants") if isinstance(payload.get("participants"), list) else []
+
+    def _participant(side: str) -> dict[str, Any]:
+        for item in participants:
+            if isinstance(item, dict) and item.get("side") == side:
+                return item
+        return {}
+
+    proposition = _participant("proposition")
+    opposition = _participant("opposition")
+    judge = _participant("judge")
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    score = result.get("score") if isinstance(result.get("score"), dict) else payload.get("score") if isinstance(payload.get("score"), dict) else {}
+    counterplay = payload.get("counterplay") if isinstance(payload.get("counterplay"), dict) else None
+    rationale = result.get("judge_rationale") if isinstance(result.get("judge_rationale"), dict) else {}
+
+    engine = get_engine()
+    with Session(engine) as session:
+        debate = Debate(
+            question=question,
+            motion=motion,
+            language=str(payload.get("language", "en")).strip() or "en",
+            profile_id=str(payload.get("profile_id", "generic")).strip() or "generic",
+            scene_theme=str(payload.get("scene_theme", "debate_arena_forum")).strip() or "debate_arena_forum",
+            status=DebateStatus.DONE,
+            current_phase=DebatePhase.VERDICT,
+            proposition_name=str(proposition.get("name", "Proposition")).strip() or "Proposition",
+            proposition_role=str(proposition.get("role", "")).strip(),
+            opposition_name=str(opposition.get("name", "Opposition")).strip() or "Opposition",
+            opposition_role=str(opposition.get("role", "")).strip(),
+            judge_name=str(judge.get("name", "Judge")).strip() or "Judge",
+            judge_role=str(judge.get("role", "")).strip(),
+            score_proposition=int(score.get("proposition", 0) or 0),
+            score_opposition=int(score.get("opposition", 0) or 0),
+            audience_meter=int(score.get("audience_meter", 0) or 0),
+            winner=str(result.get("winner", "proposition")).strip() or "proposition",
+            verdict_tone=str(result.get("verdict_tone", "balance")).strip() or "balance",
+            best_argument=str(result.get("best_argument", "")).strip(),
+            best_rebuttal=str(result.get("best_rebuttal", "")).strip(),
+            judge_summary=str(result.get("judge_summary", "")).strip(),
+            breakdown_json={
+                "dimensions": result.get("breakdown") if isinstance(result.get("breakdown"), dict) else {},
+                "judge_rationale": {
+                    "winner_reason": rationale.get("winner_reason"),
+                    "loser_gap": rationale.get("loser_gap"),
+                    "swing_factor": rationale.get("swing_factor"),
+                    "closing_note": rationale.get("closing_note"),
+                    "dimension_rationales": rationale.get("dimension_rationales") if isinstance(rationale.get("dimension_rationales"), dict) else {},
+                },
+                "counterplay_explanation": counterplay.get("explanation") if counterplay else "",
+                "metadata": {
+                    "adjudication_mode": str(result.get("adjudication_mode", "deterministic")).strip() or "deterministic",
+                },
+            },
+        )
+        session.add(debate)
+        session.flush()
+        debate_id = debate.id
+
+        for raw_turn in payload.get("turns") or []:
+            if not isinstance(raw_turn, dict):
+                continue
+            try:
+                phase = DebatePhase(str(raw_turn.get("phase", DebatePhase.OPENING.value)))
+                side = DebateSide(str(raw_turn.get("speaker_side", DebateSide.PROPOSITION.value)))
+            except ValueError:
+                continue
+            session.add(
+                DebateTurn(
+                    debate_id=debate.id,
+                    sequence=int(raw_turn.get("sequence", 1) or 1),
+                    phase=phase,
+                    speaker_side=side,
+                    speaker_name=str(raw_turn.get("speaker_name", "")).strip() or "Speaker",
+                    content=str(raw_turn.get("content", "")).strip(),
+                    score_delta_json=raw_turn.get("score_delta") if isinstance(raw_turn.get("score_delta"), dict) else None,
+                )
+            )
+
+        for raw_prediction in payload.get("predictions") or []:
+            if not isinstance(raw_prediction, dict):
+                continue
+            try:
+                kind = DebatePredictionKind(str(raw_prediction.get("kind", DebatePredictionKind.WINNER.value)))
+            except ValueError:
+                continue
+            counterplay_phase = raw_prediction.get("counterplay_phase")
+            session.add(
+                DebatePrediction(
+                    debate_id=debate.id,
+                    kind=kind,
+                    target_value=str(raw_prediction.get("target_value", "")).strip(),
+                    confidence=float(raw_prediction.get("confidence", 0.5) or 0.5),
+                    user_id=str(raw_prediction.get("user_id", "anonymous")).strip() or "anonymous",
+                    user_name=str(raw_prediction.get("user_name", "Anonymous Director")).strip() or "Anonymous Director",
+                    is_counterplay=bool(raw_prediction.get("is_counterplay")),
+                    counterplay_phase=DebatePhase(str(counterplay_phase)) if counterplay_phase else None,
+                    counterplay_variant=str(raw_prediction.get("counterplay_variant", "")).strip() or None,
+                    score=raw_prediction.get("score"),
+                    score_reason=str(raw_prediction.get("score_reason", "")).strip() or None,
+                )
+            )
+
+        if counterplay:
+            try:
+                kind = DebatePredictionKind(str(counterplay.get("kind", DebatePredictionKind.WINNER.value)))
+                phase = DebatePhase(str(counterplay.get("phase", DebatePhase.CROSSFIRE.value)))
+            except ValueError:
+                kind = None
+                phase = None
+            if kind and phase:
+                session.add(
+                    DebateCounterplay(
+                        debate_id=debate.id,
+                        kind=kind,
+                        target_value=str(counterplay.get("target_value", "")).strip(),
+                        confidence=float(counterplay.get("confidence", 0.5) or 0.5),
+                        phase=phase,
+                        variant=str(counterplay.get("variant", "balanced")).strip() or "balanced",
+                        outcome=str(counterplay.get("outcome", "")).strip() or None,
+                        user_id="imported-replay",
+                        user_name=str(counterplay.get("user_name", "Imported Replay")).strip() or "Imported Replay",
+                    )
+                )
+
+        session.commit()
+
+    result_payload = load_debate_snapshot(debate_id)
+    if result_payload is None:
+        raise HTTPException(500, "Failed to load imported replay debate")
+    return result_payload
 
 
 @router.get("/api/debate/{debate_id}")

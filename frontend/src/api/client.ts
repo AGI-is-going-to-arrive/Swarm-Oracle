@@ -147,6 +147,14 @@ export async function getDebateResult(id: string): Promise<DebateResultPayload> 
   return request(`/debate/${id}/result`);
 }
 
+/** POST /api/debate/import-replay — persist a replay snapshot as a local debate run */
+export async function importReplayDebate(debate: DebateResultPayload): Promise<DebateSnapshot> {
+  return request('/debate/import-replay', {
+    method: 'POST',
+    body: JSON.stringify({ debate }),
+  });
+}
+
 /** POST /api/debate/:id/predict — submit a debate bet */
 export async function predictDebate(
   debateId: string,
@@ -170,6 +178,30 @@ export async function predictDebate(
 /** GET /api/scenario/:id — get scenario status + agents + branches */
 export async function getScenario(id: string): Promise<Scenario> {
   return request(`/scenario/${id}`);
+}
+
+/** POST /api/scenario/import-replay — persist a replay snapshot as a local scenario */
+export async function importReplayScenario(scenario: Scenario): Promise<Scenario> {
+  return request('/scenario/import-replay', {
+    method: 'POST',
+    body: JSON.stringify({ scenario }),
+  });
+}
+
+export async function createReplayArtifact(
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<{ id: string; kind: string; created_at: string }> {
+  return request('/replay-artifact', {
+    method: 'POST',
+    body: JSON.stringify({ kind, payload }),
+  });
+}
+
+export async function getReplayArtifact(
+  artifactId: string,
+): Promise<{ id: string; kind: string; payload: Record<string, unknown>; created_at: string }> {
+  return request(`/replay-artifact/${artifactId}`);
 }
 
 /** GET /api/scenario/:id/branches — get branch tree */

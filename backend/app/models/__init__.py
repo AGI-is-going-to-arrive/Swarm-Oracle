@@ -1,5 +1,5 @@
 from .database import (
-    Scenario, Agent, Branch, Round, AgentMessage, InterventionLog,
+    Scenario, Agent, Branch, Round, AgentMessage, InterventionLog, ReplayArtifact,
     ScenarioStatus, AgentTier, BranchStatus, init_db,
 )
 from .agent_group import AgentGroup, AgentGroupMember
@@ -17,7 +17,7 @@ from .debate import (
 from .predictions import Prediction, Leaderboard
 
 __all__ = [
-    "Scenario", "Agent", "Branch", "Round", "AgentMessage", "InterventionLog",
+    "Scenario", "Agent", "Branch", "Round", "AgentMessage", "InterventionLog", "ReplayArtifact",
     "ScenarioStatus", "AgentTier", "BranchStatus",
     "AgentGroup", "AgentGroupMember",
     "DirectorProfile", "ProfileMastery", "DirectorBadgeUnlock", "ScenarioCampaignLog",

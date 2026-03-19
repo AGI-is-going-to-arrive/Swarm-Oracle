@@ -65,6 +65,7 @@ describe('ShareModal automation callback', () => {
           profileLabel: '贸易绞盘',
           profileHooks: ['关税杠杆', '港口封锁'],
           resonanceLabel: '命中题材核心',
+          permalinkUrl: 'https://example.com/result/scenario-1',
         }}
         onClose={() => {}}
         onAutomationStateChange={onAutomationStateChange}
@@ -82,6 +83,7 @@ describe('ShareModal automation callback', () => {
     expect(screen.getByText('命中题材核心')).toBeInTheDocument();
     expect(screen.getByText('关税杠杆')).toBeInTheDocument();
     expect(screen.getByText(/生成好的文案/)).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/example\.com\/result\/scenario-1/)).toBeInTheDocument();
     expect(generateSocialCopyMock).toHaveBeenCalledWith('scenario-1', 'xiaohongshu', {
       llmApiKey: 'sk-test',
       llmBaseUrl: 'https://example.com/v1/chat/completions',

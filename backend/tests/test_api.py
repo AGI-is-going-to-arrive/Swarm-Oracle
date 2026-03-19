@@ -231,6 +231,95 @@ class TestScenarioEndpoints:
         assert data["total_rounds"] == 7
         assert scheduled["count"] == 1
 
+    def test_import_replay_scenario_persists_snapshot(self, client):
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "id": "snapshot-scenario-1",
+                "question": "Imported replay question",
+                "status": "done",
+                "created_at": "2026-03-19T00:00:00Z",
+                "total_rounds": 2,
+                "mode": "blackboard",
+                "visualization_enabled": True,
+                "scene_theme": "law_court",
+                "hierarchical": False,
+                "groups": [],
+                "director_state": {
+                    "objectives": {
+                        "generated_for_question": None,
+                        "generated_for_profile": None,
+                        "goals": [],
+                        "last_updated_at": None,
+                    },
+                    "commitment": {
+                        "active": False,
+                        "branch_id": None,
+                        "branch_title": None,
+                        "committed_at_round": None,
+                        "committed_at": None,
+                        "outcome": None,
+                    },
+                },
+                "gameplay_state": {
+                    "cards": {"usage_log": []},
+                    "betting": {"bets": []},
+                    "archive": {"key_moments": [], "branch_snapshots": []},
+                },
+                "agents": [
+                    {
+                        "id": "agent-1",
+                        "name": "Archivist",
+                        "role": "Recorder",
+                        "tier": "CORE",
+                        "stance": "",
+                        "emotion": "calm",
+                    },
+                ],
+                "branches": [
+                    {
+                        "id": "branch-1",
+                        "title": "Imported Branch",
+                        "description": "",
+                        "probability": 1.0,
+                        "status": "COMPLETED",
+                        "parent_branch_id": None,
+                        "fork_reason": "",
+                        "story": "Imported story",
+                        "insight": "Imported insight",
+                    },
+                ],
+                "messages": [
+                    {
+                        "agent": "Archivist",
+                        "agent_id": "agent-1",
+                        "message": "Imported message",
+                        "emotion": "calm",
+                        "branch": "branch-1",
+                        "round": 1,
+                    },
+                ],
+                "parsed_context": {
+                    "simulation_rounds": 2,
+                    "mode": "blackboard",
+                    "hierarchical": False,
+                },
+            },
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] != "snapshot-scenario-1"
+        assert data["question"] == "Imported replay question"
+        assert data["status"] == "done"
+        assert data["visualization_enabled"] is True
+        assert data["scene_theme"] == "law_court"
+        assert len(data["agents"]) == 1
+        assert data["agents"][0]["name"] == "Archivist"
+        assert len(data["branches"]) == 1
+        assert data["branches"][0]["title"] == "Imported Branch"
+        assert len(data["messages"]) == 1
+        assert data["messages"][0]["message"] == "Imported message"
+
     def test_get_nonexistent_scenario(self, client):
         """Should return 404 for unknown scenario."""
         resp = client.get("/api/scenario/nonexistent-id")

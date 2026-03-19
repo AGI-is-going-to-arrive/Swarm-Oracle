@@ -55,6 +55,9 @@ _DEBATE_DIMENSION_LABELS = {
     },
 }
 
+_VALID_DEBATE_WINNERS = {"proposition", "opposition"}
+_VALID_VERDICT_TONES = {"order", "balance", "rupture"}
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -176,17 +179,174 @@ def _extract_counterplay_explanation(raw_breakdown: dict[str, Any] | None) -> st
     return cleaned or None
 
 
+def _extract_breakdown_metadata(raw_breakdown: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(raw_breakdown, dict):
+        return {}
+    metadata = raw_breakdown.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    return metadata
+
+
 def _pack_breakdown_payload(
     *,
     dimensions: dict[str, dict[str, int]],
     judge_rationale: dict[str, Any] | None,
     counterplay_explanation: str | None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "dimensions": dimensions,
         "judge_rationale": judge_rationale or {},
         "counterplay_explanation": counterplay_explanation or "",
+        "metadata": metadata or {},
     }
+
+
+def _coerce_dimension_score(value: Any) -> int | None:
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(5, score))
+
+
+def _coerce_llm_adjudication(raw: dict[str, Any]) -> dict[str, Any] | None:
+    source = raw.get("adjudication")
+    if not isinstance(source, dict):
+        return None
+
+    winner_raw = str(source.get("winner") or "").strip().lower()
+    winner = winner_raw if winner_raw in _VALID_DEBATE_WINNERS else None
+    verdict_tone_raw = str(source.get("verdict_tone") or "").strip().lower()
+    verdict_tone = verdict_tone_raw if verdict_tone_raw in _VALID_VERDICT_TONES else None
+
+    raw_dimensions = source.get("dimensions")
+    dimensions: dict[str, dict[str, int]] = {}
+    if isinstance(raw_dimensions, dict):
+        for dimension in DEBATE_DIMENSIONS:
+            scores = raw_dimensions.get(dimension)
+            if not isinstance(scores, dict):
+                continue
+            proposition = _coerce_dimension_score(scores.get("proposition"))
+            opposition = _coerce_dimension_score(scores.get("opposition"))
+            if proposition is None or opposition is None:
+                continue
+            dimensions[dimension] = {
+                "proposition": proposition,
+                "opposition": opposition,
+            }
+
+    if len(dimensions) != len(DEBATE_DIMENSIONS) and winner is None and verdict_tone is None:
+        return None
+
+    return {
+        "winner": winner,
+        "verdict_tone": verdict_tone,
+        "dimensions": dimensions,
+    }
+
+
+def _build_hybrid_plan(
+    base_plan: DebatePlan,
+    adjudication: dict[str, Any] | None,
+) -> tuple[DebatePlan, str]:
+    if not adjudication:
+        return base_plan, "deterministic"
+
+    llm_dimensions = adjudication.get("dimensions") if isinstance(adjudication, dict) else None
+    if not isinstance(llm_dimensions, dict) or len(llm_dimensions) != len(DEBATE_DIMENSIONS):
+        return base_plan, "deterministic"
+
+    breakdown: dict[str, dict[str, int]] = {}
+    totals = {"proposition": 0, "opposition": 0}
+    adjudicated_winner = adjudication.get("winner")
+    adjudicated_tone = adjudication.get("verdict_tone")
+
+    for dimension in DEBATE_DIMENSIONS:
+        base_scores = base_plan.breakdown[dimension]
+        llm_scores = llm_dimensions.get(dimension)
+        if not isinstance(llm_scores, dict):
+            llm_scores = base_scores
+
+        proposition = _coerce_dimension_score(llm_scores.get("proposition"))
+        opposition = _coerce_dimension_score(llm_scores.get("opposition"))
+        if proposition is None or opposition is None:
+            proposition = base_scores["proposition"]
+            opposition = base_scores["opposition"]
+
+        blended_proposition = max(
+            1,
+            min(5, round((base_scores["proposition"] * 2 + proposition * 3) / 5)),
+        )
+        blended_opposition = max(
+            1,
+            min(5, round((base_scores["opposition"] * 2 + opposition * 3) / 5)),
+        )
+
+        if blended_proposition == blended_opposition:
+            if proposition != opposition:
+                if proposition > opposition:
+                    blended_proposition = min(5, blended_proposition + 1)
+                else:
+                    blended_opposition = min(5, blended_opposition + 1)
+            elif base_scores["proposition"] != base_scores["opposition"]:
+                if base_scores["proposition"] > base_scores["opposition"]:
+                    blended_proposition = min(5, blended_proposition + 1)
+                else:
+                    blended_opposition = min(5, blended_opposition + 1)
+            elif adjudicated_winner == "proposition":
+                blended_proposition = min(5, blended_proposition + 1)
+            else:
+                blended_opposition = min(5, blended_opposition + 1)
+
+        breakdown[dimension] = {
+            "proposition": blended_proposition,
+            "opposition": blended_opposition,
+        }
+        totals["proposition"] += blended_proposition
+        totals["opposition"] += blended_opposition
+
+    score = {
+        "proposition": totals["proposition"] * 5,
+        "opposition": totals["opposition"] * 5,
+    }
+    if score["proposition"] == score["opposition"]:
+        if adjudicated_winner == "opposition":
+            score["opposition"] += 5
+        else:
+            score["proposition"] += 5
+
+    winner = "proposition" if score["proposition"] > score["opposition"] else "opposition"
+    verdict_tone = adjudicated_tone if adjudicated_tone in _VALID_VERDICT_TONES else base_plan.verdict_tone
+
+    return (
+        DebatePlan(
+            winner=winner,
+            verdict_tone=verdict_tone,
+            score=score,
+            breakdown=breakdown,
+            phase_deltas=base_plan.phase_deltas,
+            audience_meter=_audience_meter(score),
+        ),
+        "llm_hybrid",
+    )
+
+
+def _plan_from_persisted_debate(debate: Debate) -> DebatePlan:
+    persisted_breakdown = _extract_breakdown_dimensions(debate.breakdown_json)
+    base_plan = build_debate_plan(debate.question)
+    return DebatePlan(
+        winner=debate.winner or base_plan.winner,
+        verdict_tone=debate.verdict_tone or base_plan.verdict_tone,
+        score={
+            "proposition": debate.score_proposition,
+            "opposition": debate.score_opposition,
+        },
+        breakdown=persisted_breakdown or base_plan.breakdown,
+        phase_deltas=base_plan.phase_deltas,
+        audience_meter=debate.audience_meter,
+    )
 
 
 def _polish_generated_turn(
@@ -618,6 +778,7 @@ def _build_judge_analysis_fallback(
         "closing_note": closing_note,
         "dimension_rationales": dimension_rationales,
         "counterplay_explanation": counterplay_explanation,
+        "adjudication": None,
     }
 
 
@@ -644,6 +805,7 @@ def _coerce_judge_analysis_payload(raw: dict[str, Any], fallback: dict[str, Any]
         "closing_note": str(raw.get("closing_note") or "").strip() or fallback["closing_note"],
         "dimension_rationales": dimension_rationales,
         "counterplay_explanation": str(raw.get("counterplay_explanation") or "").strip() or fallback.get("counterplay_explanation"),
+        "adjudication": _coerce_llm_adjudication(raw),
     }
 
 
@@ -734,12 +896,20 @@ async def _generate_judge_analysis(
             "- summary 用 3-4 句写整场裁决，必须明确胜方为什么赢\n"
             "- winner_reason / loser_gap / swing_factor / closing_note 各写 1-2 句\n"
             "- dimension_rationales 必须覆盖 coherence / evidence / adaptability / impact 四项\n"
+            "- adjudication.winner 必须是 proposition 或 opposition\n"
+            "- adjudication.verdict_tone 必须是 order / balance / rupture 之一\n"
+            "- adjudication.dimensions 必须覆盖四个维度，每边都给 1-5 的整数分\n"
             "- 如果没有反制押注，counterplay_explanation 输出空字符串\n"
             "- 不要泛泛说“双方都很精彩”，要点到机制、执行后果或责任链\n"
             "- 只输出严格 JSON："
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
             "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
-            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\"}\n"
+            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\","
+            "\"adjudication\":{\"winner\":\"proposition\",\"verdict_tone\":\"balance\","
+            "\"dimensions\":{\"coherence\":{\"proposition\":4,\"opposition\":3},"
+            "\"evidence\":{\"proposition\":3,\"opposition\":4},"
+            "\"adaptability\":{\"proposition\":4,\"opposition\":3},"
+            "\"impact\":{\"proposition\":5,\"opposition\":4}}}}\n"
         )
     else:
         counterplay_block = ""
@@ -764,12 +934,20 @@ async def _generate_judge_analysis(
             "- summary must be 3-4 sentences and explain why the winner actually won\n"
             "- winner_reason / loser_gap / swing_factor / closing_note should each be 1-2 sentences\n"
             "- dimension_rationales must cover coherence / evidence / adaptability / impact\n"
+            "- adjudication.winner must be proposition or opposition\n"
+            "- adjudication.verdict_tone must be one of order / balance / rupture\n"
+            "- adjudication.dimensions must cover all four dimensions with integer scores from 1-5 for both sides\n"
             "- If no counterplay hedge exists, set counterplay_explanation to an empty string\n"
             "- Avoid generic praise and point to mechanisms, consequences, or accountability chains\n"
             "- Output strict JSON only: "
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
             "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
-            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\"}\n"
+            "\"adaptability\":\"...\",\"impact\":\"...\"},\"counterplay_explanation\":\"...\","
+            "\"adjudication\":{\"winner\":\"proposition\",\"verdict_tone\":\"balance\","
+            "\"dimensions\":{\"coherence\":{\"proposition\":4,\"opposition\":3},"
+            "\"evidence\":{\"proposition\":3,\"opposition\":4},"
+            "\"adaptability\":{\"proposition\":4,\"opposition\":3},"
+            "\"impact\":{\"proposition\":5,\"opposition\":4}}}}\n"
         )
 
     try:
@@ -980,12 +1158,13 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
             turns=turns,
             counterplays=counterplays,
         )
+        plan = _plan_from_persisted_debate(debate) if debate.status == DebateStatus.DONE else build_debate_plan(debate.question)
         snapshot = _serialize_debate(
             debate,
             turns,
             phase_insights=_build_phase_insights(
                 debate=debate,
-                plan=build_debate_plan(debate.question),
+                plan=plan,
                 turns=turns,
                 counterplay_context=counterplay_result,
             ),
@@ -1027,17 +1206,7 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             turns=turns,
             counterplays=counterplays,
         )
-        plan = DebatePlan(
-            winner=debate.winner or "proposition",
-            verdict_tone=debate.verdict_tone or "balance",
-            score={
-                "proposition": debate.score_proposition,
-                "opposition": debate.score_opposition,
-            },
-            breakdown=_extract_breakdown_dimensions(debate.breakdown_json),
-            phase_deltas=build_debate_plan(debate.question).phase_deltas,
-            audience_meter=debate.audience_meter,
-        )
+        plan = _plan_from_persisted_debate(debate)
         snapshot = _serialize_debate(
             debate,
             turns,
@@ -1055,6 +1224,9 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
                 debate=debate,
                 plan=plan,
             )
+        adjudication_mode = str(
+            _extract_breakdown_metadata(debate.breakdown_json).get("adjudication_mode") or "deterministic"
+        )
         snapshot["result"] = {
             "winner": debate.winner,
             "verdict_tone": debate.verdict_tone,
@@ -1064,6 +1236,7 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             "best_rebuttal": debate.best_rebuttal,
             "judge_summary": debate.judge_summary,
             "judge_rationale": judge_rationale,
+            "adjudication_mode": adjudication_mode,
             "replay": _build_replay_digest(
                 turns,
                 debate=debate,
@@ -1180,12 +1353,24 @@ async def run_debate_background(
                 sequence += 1
                 await asyncio.sleep(0)
 
+        judge_analysis = await _generate_judge_analysis(
+            debate_id=debate_id,
+            debate=debate,
+            plan=plan,
+            llm_overrides=llm_overrides,
+            quota_key=quota_key,
+        )
+        final_plan, adjudication_mode = _build_hybrid_plan(
+            plan,
+            judge_analysis.get("adjudication"),
+        )
+
         phase = DebatePhase.VERDICT
         side = DebateSide.JUDGE
         speaker_name = debate.judge_name
         content = await _generate_turn_content(
             debate=debate,
-            plan=plan,
+            plan=final_plan,
             phase=phase,
             side=side,
             speaker_name=speaker_name,
@@ -1235,14 +1420,12 @@ async def run_debate_background(
             },
         )
 
-        judge_analysis = await _generate_judge_analysis(
-            debate_id=debate_id,
-            debate=debate,
-            plan=plan,
-            llm_overrides=llm_overrides,
-            quota_key=quota_key,
+        finalized = _finalize_debate(
+            debate_id,
+            final_plan,
+            judge_analysis=judge_analysis,
+            adjudication_mode=adjudication_mode,
         )
-        finalized = _finalize_debate(debate_id, plan, judge_analysis=judge_analysis)
         result_payload = load_debate_result_payload(debate_id)
         await ws_callback(
             debate_id,
@@ -1266,6 +1449,10 @@ async def run_debate_background(
                         "best_rebuttal": finalized.best_rebuttal,
                         "judge_summary": finalized.judge_summary,
                         "judge_rationale": _extract_judge_rationale(finalized.breakdown_json),
+                        "adjudication_mode": str(
+                            _extract_breakdown_metadata(finalized.breakdown_json).get("adjudication_mode")
+                            or "deterministic"
+                        ),
                         "phase_insights": [],
                     }
                 ),
@@ -1423,7 +1610,13 @@ def _update_live_score(*, debate_id: str, proposition: int, opposition: int) -> 
         session.commit()
 
 
-def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_analysis: dict[str, Any] | None = None) -> Debate:
+def _finalize_debate(
+    debate_id: str,
+    plan: DebatePlan,
+    *,
+    judge_analysis: dict[str, Any] | None = None,
+    adjudication_mode: str = "deterministic",
+) -> Debate:
     engine = get_engine()
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
@@ -1467,6 +1660,9 @@ def _finalize_debate(debate_id: str, plan: DebatePlan, *, judge_analysis: dict[s
                 if judge_analysis else None
             ),
             counterplay_explanation=latest_counterplay_explanation,
+            metadata={
+                "adjudication_mode": adjudication_mode,
+            },
         )
         debate.judge_summary = (
             str(judge_analysis.get("summary") or "").strip()

@@ -12,15 +12,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session, select
 from sqlalchemy import delete as sa_delete, func as sa_func
 
 from app.config import settings
 from app.models import (
     Agent, AgentTier, Branch, BranchStatus, InterventionLog, Round, AgentMessage,
-    Scenario, ScenarioStatus, AgentGroup, AgentGroupMember,
+    Scenario, ScenarioStatus, AgentGroup, AgentGroupMember, ReplayArtifact,
     Prediction, Leaderboard,
 )
 from app.models.database import get_engine
@@ -39,8 +41,48 @@ router = APIRouter(prefix="/api")
 _CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 
 
+class ImportReplayScenarioRequest(BaseModel):
+    scenario: dict[str, Any]
+
+
+class CreateReplayArtifactRequest(BaseModel):
+    kind: str
+    payload: dict[str, Any]
+
+
 def _placeholder_root_title(question: str) -> str:
     return "初始世界线" if _CJK_RE.search(question) else "Initial Branch"
+
+
+def _coerce_scenario_status(value: str | None) -> ScenarioStatus:
+    normalized = (value or "").strip().lower()
+    if normalized in {status.value for status in ScenarioStatus}:
+        return ScenarioStatus(normalized)
+    return ScenarioStatus.DONE
+
+
+def _coerce_branch_status(value: str | None) -> BranchStatus:
+    normalized = (value or "").strip().upper()
+    if normalized in {status.value for status in BranchStatus}:
+        return BranchStatus(normalized)
+    return BranchStatus.COMPLETED
+
+
+def _coerce_agent_tier(value: str | None) -> AgentTier:
+    normalized = (value or "").strip().upper()
+    if normalized in {tier.value for tier in AgentTier}:
+        return AgentTier(normalized)
+    return AgentTier.IMPORTANT
+
+
+def _coerce_int(value: Any, default: int = 0, *, minimum: int | None = None) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    return parsed
 
 
 # ── Health Endpoints ─────────────────────────────────────
@@ -152,6 +194,224 @@ async def create_scenario(req: CreateScenarioRequest):
     result.hierarchical = use_hierarchical
     result.visualization_enabled = viz_enabled
     return result
+
+
+@router.post("/scenario/import-replay", response_model=ScenarioResponse)
+async def import_replay_scenario(req: ImportReplayScenarioRequest):
+    """Persist a replay snapshot as a real local scenario run."""
+    snapshot = req.scenario if isinstance(req.scenario, dict) else {}
+    question = str(snapshot.get("question", "")).strip()
+    if not question:
+        raise HTTPException(422, "Replay snapshot is missing question")
+
+    engine = get_engine()
+    parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}
+    messages = snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
+    if not parsed_context.get("simulation_rounds"):
+        max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)
+        if max_round > 0:
+            parsed_context = {
+                **parsed_context,
+                "simulation_rounds": max_round,
+            }
+
+    with Session(engine) as session:
+        scenario = Scenario(
+            question=question,
+            parsed_context=parsed_context or None,
+            director_state_json=snapshot.get("director_state") if isinstance(snapshot.get("director_state"), dict) else None,
+            gameplay_state_json=snapshot.get("gameplay_state") if isinstance(snapshot.get("gameplay_state"), dict) else None,
+            status=_coerce_scenario_status(snapshot.get("status")),
+            user_id=str(snapshot.get("user_id", "")).strip() or None,
+            visualization_enabled=bool(snapshot.get("visualization_enabled")),
+            scene_theme=str(snapshot.get("scene_theme", "")).strip() or None,
+        )
+        session.add(scenario)
+        session.flush()
+        scenario_id = scenario.id
+
+        group_id_map: dict[str, str] = {}
+        for raw_group in snapshot.get("groups") or []:
+            if not isinstance(raw_group, dict):
+                continue
+            original_group_id = str(raw_group.get("id", "")).strip()
+            group = AgentGroup(
+                scenario_id=scenario.id,
+                name=str(raw_group.get("name", "")).strip() or "Imported Group",
+                parent_group_id=None,
+                leader_agent_id=None,
+                member_count=_coerce_int(raw_group.get("member_count"), 0, minimum=0),
+            )
+            session.add(group)
+            session.flush()
+            if original_group_id:
+                group_id_map[original_group_id] = group.id
+
+        agent_id_map: dict[str, str] = {}
+        pending_group_members: list[tuple[str, str, bool]] = []
+        for raw_agent in snapshot.get("agents") or []:
+            if not isinstance(raw_agent, dict):
+                continue
+            original_agent_id = str(raw_agent.get("id", "")).strip()
+            group_id = str(raw_agent.get("group_id", "")).strip()
+            agent = Agent(
+                scenario_id=scenario.id,
+                name=str(raw_agent.get("name", "")).strip() or "Imported Agent",
+                role=str(raw_agent.get("role", "")).strip(),
+                persona=str(raw_agent.get("persona", "")).strip(),
+                tier=_coerce_agent_tier(raw_agent.get("tier")),
+                stance=str(raw_agent.get("stance", "")).strip(),
+                emotion=str(raw_agent.get("emotion", "")).strip() or "neutral",
+                group_id=group_id_map.get(group_id) if group_id else None,
+            )
+            session.add(agent)
+            session.flush()
+            if original_agent_id:
+                agent_id_map[original_agent_id] = agent.id
+            if group_id and group_id in group_id_map:
+                pending_group_members.append((group_id_map[group_id], agent.id, False))
+
+        branch_id_map: dict[str, str] = {}
+        pending_parent_links: list[tuple[str, str]] = []
+        for raw_branch in snapshot.get("branches") or []:
+            if not isinstance(raw_branch, dict):
+                continue
+            original_branch_id = str(raw_branch.get("id", "")).strip()
+            parent_branch_id = str(raw_branch.get("parent_branch_id", "")).strip()
+            branch = Branch(
+                scenario_id=scenario.id,
+                parent_branch_id=None,
+                fork_round=_coerce_int(raw_branch.get("fork_round"), 0, minimum=0),
+                fork_reason=str(raw_branch.get("fork_reason", "")).strip(),
+                title=str(raw_branch.get("title", "")).strip() or "Imported Branch",
+                description=str(raw_branch.get("description", "")).strip(),
+                summary=str(raw_branch.get("summary", "")).strip(),
+                story=str(raw_branch.get("story", "")).strip(),
+                insight=str(raw_branch.get("insight", "")).strip(),
+                probability=float(raw_branch.get("probability", 1.0) or 1.0),
+                status=_coerce_branch_status(raw_branch.get("status")),
+            )
+            session.add(branch)
+            session.flush()
+            if original_branch_id:
+                branch_id_map[original_branch_id] = branch.id
+            if parent_branch_id:
+                pending_parent_links.append((branch.id, parent_branch_id))
+
+        for branch_db_id, parent_original_id in pending_parent_links:
+            branch = session.get(Branch, branch_db_id)
+            if branch is None:
+                continue
+            branch.parent_branch_id = branch_id_map.get(parent_original_id)
+            session.add(branch)
+
+        for raw_group in snapshot.get("groups") or []:
+            if not isinstance(raw_group, dict):
+                continue
+            original_group_id = str(raw_group.get("id", "")).strip()
+            leader_original_id = str(raw_group.get("leader_agent_id", "")).strip()
+            mapped_group_id = group_id_map.get(original_group_id)
+            if not mapped_group_id:
+                continue
+            group = session.get(AgentGroup, mapped_group_id)
+            if group is None:
+                continue
+            if leader_original_id:
+                group.leader_agent_id = agent_id_map.get(leader_original_id)
+            session.add(group)
+
+        for group_id, agent_id, is_leader in pending_group_members:
+            session.add(AgentGroupMember(group_id=group_id, agent_id=agent_id, is_leader=is_leader))
+
+        round_lookup: dict[tuple[str, int], str] = {}
+        for raw_message in messages:
+            if not isinstance(raw_message, dict):
+                continue
+            original_branch_id = str(raw_message.get("branch", "")).strip()
+            mapped_branch_id = branch_id_map.get(original_branch_id)
+            if not mapped_branch_id:
+                continue
+            round_number = _coerce_int(raw_message.get("round"), 1, minimum=1)
+            round_key = (mapped_branch_id, round_number)
+            round_id = round_lookup.get(round_key)
+            if round_id is None:
+                round_row = Round(branch_id=mapped_branch_id, round_number=round_number)
+                session.add(round_row)
+                session.flush()
+                round_lookup[round_key] = round_row.id
+                round_id = round_row.id
+
+            original_agent_id = str(raw_message.get("agent_id", "")).strip()
+            mapped_agent_id = agent_id_map.get(original_agent_id)
+            if not mapped_agent_id:
+                agent_name = str(raw_message.get("agent", "")).strip()
+                mapped_agent_id = next(
+                    (
+                        agent.id
+                        for agent in session.exec(select(Agent).where(Agent.scenario_id == scenario.id)).all()
+                        if agent.name == agent_name
+                    ),
+                    None,
+                )
+            if not mapped_agent_id:
+                continue
+
+            session.add(
+                AgentMessage(
+                    round_id=round_id,
+                    agent_id=mapped_agent_id,
+                    content=str(raw_message.get("message", "")).strip(),
+                    emotion=str(raw_message.get("emotion", "")).strip() or "neutral",
+                )
+            )
+
+        session.commit()
+
+    result = load_scenario_response(engine, scenario_id)
+    if not result:
+        raise HTTPException(500, "Failed to load imported replay scenario")
+    return result
+
+
+@router.post("/replay-artifact")
+async def create_replay_artifact(req: CreateReplayArtifactRequest):
+    kind = req.kind.strip()
+    if not kind:
+        raise HTTPException(422, "Replay artifact kind is required")
+
+    payload_size = len(str(req.payload))
+    if payload_size > 2_000_000:
+        raise HTTPException(413, "Replay artifact payload too large")
+
+    engine = get_engine()
+    with Session(engine) as session:
+        artifact = ReplayArtifact(
+            kind=kind,
+            payload_json=req.payload,
+        )
+        session.add(artifact)
+        session.commit()
+        session.refresh(artifact)
+        return {
+            "id": artifact.id,
+            "kind": artifact.kind,
+            "created_at": artifact.created_at.isoformat(),
+        }
+
+
+@router.get("/replay-artifact/{artifact_id}")
+async def get_replay_artifact(artifact_id: str):
+    engine = get_engine()
+    with Session(engine) as session:
+        artifact = session.get(ReplayArtifact, artifact_id)
+        if artifact is None:
+            raise HTTPException(404, "Replay artifact not found")
+        return {
+            "id": artifact.id,
+            "kind": artifact.kind,
+            "payload": artifact.payload_json,
+            "created_at": artifact.created_at.isoformat(),
+        }
 
 
 @router.get("/scenario/{scenario_id}", response_model=ScenarioResponse)

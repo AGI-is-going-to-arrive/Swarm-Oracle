@@ -13,6 +13,7 @@ export interface DebateShareContext {
   counterplayExplanation?: string | null;
   counterplayOutcomeLabel?: string | null;
   supportingTurns?: string[];
+  permalinkUrl?: string | null;
 }
 
 export type DebateSharePlatform = 'xiaohongshu' | 'weibo' | 'zhihu' | 'reddit' | 'x';
@@ -55,5 +56,6 @@ export function buildDebateShareCopy(
     `${t('debate.result_best_rebuttal')}: ${context.bestRebuttal}`,
     `${t('debate.result_judge_summary')}: ${context.judgeSummary}`,
     ...supportingTurns.map((turn, index) => `${t('debate.result_supporting_turn')} ${index + 1}: ${turn}`),
+    ...(context.permalinkUrl ? [`${t('share.permalink_label')}: ${context.permalinkUrl}`] : []),
   ].join('\n');
 }

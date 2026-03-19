@@ -111,6 +111,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       viewMode: s.visualization_enabled ? 'theater' : 'classic',
       messages: (s.messages || []) as AgentMessage[],
       status: s.status as SimulationState['status'],
+      currentRound: Math.max(0, ...((s.messages || []).map((message) => message.round ?? 0))),
       isSimulationComplete: s.status === 'done',
       error: null,
     }),
@@ -128,6 +129,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         viewMode: s.visualization_enabled ? 'theater' : 'classic',
         messages: (s.messages || []) as AgentMessage[],
         status: s.status as SimulationState['status'],
+        currentRound: Math.max(0, ...((s.messages || []).map((message) => message.round ?? 0))),
         isSimulationComplete: s.status === 'done',
         error: null,
       });

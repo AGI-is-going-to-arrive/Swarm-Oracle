@@ -7,6 +7,7 @@ export interface ShareFlavorContext {
   dominantBranchTitle?: string | null;
   counterplaySummary?: string | null;
   commitmentSummary?: string | null;
+  permalinkUrl?: string | null;
 }
 
 function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[] {
@@ -18,6 +19,7 @@ function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[]
   const dominantBranch = context.dominantBranchTitle?.trim();
   const counterplay = context.counterplaySummary?.trim();
   const commitment = context.commitmentSummary?.trim();
+  const permalinkUrl = context.permalinkUrl?.trim();
 
   if (profile || resonance) {
     lines.push(
@@ -61,6 +63,14 @@ function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[]
       isZh
         ? `世界线承诺：${commitment}`
         : `Worldline commitment: ${commitment}`,
+    );
+  }
+
+  if (permalinkUrl) {
+    lines.push(
+      isZh
+        ? `固定链接：${permalinkUrl}`
+        : `Permalink: ${permalinkUrl}`,
     );
   }
 

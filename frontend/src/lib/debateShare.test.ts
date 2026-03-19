@@ -40,4 +40,21 @@ describe('debateShare helpers', () => {
 
     expect(result).toContain('debate.result_supporting_turn 1: Crossfire · Proposition: The hinge came when Proposition forced the audit question back onto accountability.');
   });
+
+  it('includes permalink when present', () => {
+    const t = ((key: string) => key) as never;
+    const result = buildDebateShareCopy('xiaohongshu', {
+      motion: 'Motion',
+      winnerLabel: 'Proposition',
+      toneLabel: 'Order',
+      bestArgument: 'Best argument',
+      bestRebuttal: 'Best rebuttal',
+      judgeSummary: 'Judge summary',
+      propositionScore: 85,
+      oppositionScore: 75,
+      permalinkUrl: 'https://example.com/debate/debate-1/result',
+    }, t);
+
+    expect(result).toContain('share.permalink_label: https://example.com/debate/debate-1/result');
+  });
 });

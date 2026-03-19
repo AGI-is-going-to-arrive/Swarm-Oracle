@@ -263,6 +263,34 @@ npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/
   - `e2e:cross-browser`：通过
   - `e2e:debate:full`：通过
   - 当前构建口径：Phaser 仍是单独的大引擎 chunk，但现在只会在用户真正切进 Theater 后再预热；`html2canvas / gif.js / gif.worker` 也保留在截图路径按需加载，不再作为默认入口的必经依赖
+- 本次 session 围绕前端包体 / `scenarioMeta` 兼容层又补跑了：
+
+```bash
+cd frontend
+npm test -- --run \
+  src/hooks/useScreenCapture.test.ts \
+  src/components/PredictionModal.test.tsx \
+  src/pages/SimulationView.test.tsx \
+  src/pages/ResultView.test.tsx \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run e2e:corners -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-bundle-scenariometa-corners --headless
+npm run e2e:cross-browser -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-bundle-scenariometa-cross-browser --headless
+npm run e2e:debate:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/20260319-post-bundle-scenariometa-debate-full --headless
+```
+
+- 结果：
+  - `vitest`：**32 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `e2e:corners`：通过
+  - `e2e:cross-browser`：通过
+  - `e2e:debate:full`：通过
+  - 当前新增口径：
+    - `PhaserGameLoader` 本身也已移到 Theater 动态边界
+    - `useScreenCapture` 现为轻壳，真实 DOM capture / GIF 逻辑已拆到 `screenCaptureRuntime.ts`
 - 本次 session 围绕默认模型 / LLM 治理 / BYOK-provider policy 又补跑了：
 
 ```bash

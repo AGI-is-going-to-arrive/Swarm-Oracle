@@ -44,6 +44,7 @@ describe('DebateShareModal automation callback', () => {
           propositionScore: 80,
           oppositionScore: 72,
           supportingTurns: ['Crossfire · Proposition: The hinge landed here. This is why the verdict stopped feeling abstract.'],
+          permalinkUrl: 'https://example.com/debate/debate-1/result',
         }}
         onClose={() => {}}
         onAutomationStateChange={onAutomationStateChange}
@@ -61,8 +62,10 @@ describe('DebateShareModal automation callback', () => {
     expect(latestState.has_copy).toBe(true);
     expect(latestState.copy_length).toBeGreaterThan(0);
     expect(latestState.copied).toBe(true);
+    expect(latestState.permalink_url).toBe('https://example.com/debate/debate-1/result');
     expect(screen.getByText(/Quick hedge on Opposition at 60%/)).toBeInTheDocument();
     expect(screen.getByText(/Counterplay missed/)).toBeInTheDocument();
     expect(screen.getByText(/Crossfire · Proposition: The hinge landed here/)).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/example\.com\/debate\/debate-1\/result/)).toBeInTheDocument();
   });
 });

@@ -34,10 +34,13 @@ export default function App() {
       <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/" element={<InputView />} />
+          <Route path="/sim/replay" element={<SimulationView />} />
           <Route path="/sim/:id" element={<SimulationView />} />
           <Route path="/debate/:id" element={<DebateArenaView />} />
           <Route path="/debate/:id/result" element={<DebateResultView />} />
+          <Route path="/debate/replay/result" element={<DebateResultView />} />
           <Route path="/result/:id" element={<ResultView />} />
+          <Route path="/result/replay" element={<ResultView />} />
           <Route path="/history" element={<HistoryView />} />
           <Route path="/leaderboard" element={<LeaderboardView />} />
           <Route path="*" element={<Navigate to="/" replace />} />

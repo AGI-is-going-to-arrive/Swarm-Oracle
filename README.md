@@ -21,8 +21,8 @@
 | **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status/weekly-summary` API；首页会同时显示 daily challenge 真值、本周赛道和导演成长概览，结果页可直接复制分享挑战链接 |
 | **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页除 `judge summary` 外还会返回结构化 `judge_rationale`、`supporting_turns` 与 `adjudication_mode`；终局裁决当前会优先读取 LLM judge analysis 里的 `adjudication` scorecard 做 `LLM hybrid` 混合裁决，失败时再退回 deterministic 规划；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；`counterplay` 除了 `phase_score / explanation`，还会显式改写对应阶段 commentary |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
-| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细 |
-| **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；截图链路中的 `html2canvas / gif.js / gif.worker` 也都保留在截图/GIF 路径上按需加载，避免普通首页和 Classic 路径提前拉取这批大依赖 |
+| **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细；本 session 又去掉了 `ResultView` 用本地 `scenarioMeta` 反向回填后端 authority 的路径 |
+| **On-Demand Theater Loading** | Pixel Theater 现在只会在用户真正切进 Theater 后再预热 Phaser；本 session 又把 `PhaserGameLoader` 本身移到 Theater 动态边界，并把截图链路拆成 `useScreenCapture` 轻壳 + `screenCaptureRuntime` 按需加载；`html2canvas / gif.js / gif.worker` 继续只在截图/GIF 路径上加载，避免普通首页和 Classic 路径提前拉取这批大依赖 |
 | **Portable Replay & Import** | 主模式与 Debate 现在都有可复盘分享页：主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时回退到本地 token；Debate 结果页支持 `/debate/replay/result?replay=...`。三条 replay 页默认都是只读，但当前都支持一键“导入为本地运行”，落成真实本地 scenario / debate 记录 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
 | **Asset Provenance** | `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下当前 62 张 PNG 都已有同名 `.meta.json` sidecar；较新的 Debate 资产保留完整生成记录，较早的 legacy 资产会标记为 backfilled provenance。这里的 backfill 只表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
@@ -168,8 +168,15 @@ cd frontend && npm run e2e:full
   - 前端：`llmProviderPolicy / ShareModal / InputView / ResultView` → **11 passed**
   - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay` → **8 passed**
   - 前端：`challengeShare / InputView / ResultView` → **11 passed**
+- 本次 session 围绕前端包体 / `scenarioMeta` 兼容层又补跑：
+  - 前端：`useScreenCapture / PredictionModal / SimulationView / ResultView / DebateArenaView / DebateResultView` → **32 passed**
   - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `frontend`：`npm run build` → 通过
+  - 黑盒：`e2e:corners`、`e2e:cross-browser`、`e2e:debate:full` → 通过
+  - 工件：
+    - `frontend/output/e2e/20260319-post-bundle-scenariometa-corners/`
+    - `frontend/output/e2e/20260319-post-bundle-scenariometa-cross-browser/`
+    - `frontend/output/e2e/20260319-post-bundle-scenariometa-debate-full/`
 - 本次 session 围绕 Debate `judge_rationale / supporting_turns / share copy` 又补跑：
   - 后端：`tests/test_debate_prompts.py / tests/test_debate_service.py / tests/test_debate_api.py` → **14 passed**
   - 前端：`debateShare / DebateShareModal / DebateResultView` → **5 passed**

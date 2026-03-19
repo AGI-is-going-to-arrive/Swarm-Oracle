@@ -4,11 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DebateResultView } from './DebateResultView';
+import { encodeDebateReplayToken } from '../lib/debateReplay';
+import type { DebateResultPayload } from '../types';
 
 const getDebateResultMock = vi.fn();
+const importReplayDebateMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
 
-function buildPayload() {
+function buildPayload(): DebateResultPayload {
   return {
     id: 'debate-1',
     question: 'Should AI run every city?',
@@ -108,6 +111,7 @@ function buildPayload() {
       breakdown: {
         coherence: { proposition: 4, opposition: 3 },
       },
+      adjudication_mode: 'llm_hybrid',
       best_argument: 'Best argument',
       best_rebuttal: 'Best rebuttal',
       judge_summary: 'Judge summary',
@@ -172,6 +176,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   getDebateResult: (...args: unknown[]) => getDebateResultMock(...args),
+  importReplayDebate: (...args: unknown[]) => importReplayDebateMock(...args),
 }));
 
 vi.mock('../hooks/useScreenCapture', () => ({
@@ -204,6 +209,7 @@ vi.mock('../lib/debateCounterplay', () => ({
 describe('DebateResultView', () => {
   beforeEach(() => {
     getDebateResultMock.mockReset();
+    importReplayDebateMock.mockReset();
     captureElementDataUrlMock.mockReset();
   });
 
@@ -251,6 +257,7 @@ describe('DebateResultView', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.kind).toBe('debate_result');
       expect(payload?.page?.result?.winner).toBe('proposition');
+      expect(payload?.page?.result?.adjudication_mode).toBe('llm_hybrid');
       expect(payload?.page?.result?.judge_rationale?.winner_reason).toContain('execution logic');
       expect(payload?.page?.result?.supporting_turns?.[0]?.quote).toContain('The cleanest hinge came');
       expect(payload?.page?.result?.supporting_turns?.[0]?.why_it_matters).toContain('winning side');
@@ -274,6 +281,29 @@ describe('DebateResultView', () => {
     expect(screen.getByText('debate.result_phase_map')).toBeInTheDocument();
     expect(screen.getByText('debate.result_prediction_confidence')).toBeInTheDocument();
     expect(screen.getByText('The bet tracked the late momentum correctly.')).toBeInTheDocument();
+  });
+
+  it('hydrates from a replay token without calling the API', async () => {
+    const user = userEvent.setup();
+    const replayToken = encodeDebateReplayToken(buildPayload());
+    importReplayDebateMock.mockResolvedValue({ id: 'imported-debate-1' });
+
+    render(
+      <MemoryRouter initialEntries={[`/debate/replay/result?replay=${replayToken}`]}>
+        <Routes>
+          <Route path="/debate/replay/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(getDebateResultMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+    expect(importReplayDebateMock).toHaveBeenCalledTimes(1);
+    const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    const payload = raw ? JSON.parse(raw) : null;
+    expect(payload?.page?.replay_source).toBe('token');
+    expect(screen.getByText(/debate\.result_adjudication: debate\.adjudication_llm_hybrid/)).toBeInTheDocument();
   });
 
   it('retries result polling after API 409 and eventually renders', async () => {

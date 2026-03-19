@@ -29,13 +29,11 @@ import {
 } from '../lib/scenarioMeta';
 import { copyText } from '../lib/copyText';
 import {
-  applyScenarioDirectorState,
   hasMeaningfulScenarioDirectorState,
   mergeScenarioMetaWithDirectorState,
   scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
 import {
-  applyScenarioGameplayState,
   areScenarioGameplayStatesEquivalent,
   hasMeaningfulScenarioGameplayState,
   mergeScenarioMetaWithGameplayState,
@@ -65,8 +63,10 @@ const LazyInterventionModal = lazy(() => import('../components/InterventionModal
 const LazyBranchDetailModal = lazy(() => import('../components/BranchDetailModal'));
 const LazyPredictionModal = lazy(() => import('../components/PredictionModal'));
 const LazyGameplayCardsModal = lazy(() => import('../components/GameplayCardsModal'));
-import { PhaserGameLoader } from '../game';
-import { preloadPhaserGame } from '../game/PhaserGameLoader';
+const loadPhaserGameLoaderModule = () => import('../game/PhaserGameLoader');
+const LazyPhaserGameLoader = lazy(() =>
+  loadPhaserGameLoaderModule().then((mod) => ({ default: mod.PhaserGameLoader }))
+);
 import {
   buildReplayBranchOptions,
   filterReplayMessages,
@@ -346,7 +346,11 @@ export function SimulationView() {
   useEffect(() => {
     if (viewMode !== 'theater' || !visualizationEnabled) return;
 
-    const preload = () => preloadPhaserGame();
+    const preload = () => {
+      void loadPhaserGameLoaderModule().then((mod) => {
+        mod.preloadPhaserGame();
+      });
+    };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
@@ -374,20 +378,6 @@ export function SimulationView() {
     if (isReplayMode) return;
     setBackendGameplayState(scenario?.gameplay_state ?? null);
   }, [isReplayMode, scenario?.gameplay_state]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    if (!id || !hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
-    applyScenarioDirectorState(id, backendDirectorState as ScenarioDirectorState);
-    refreshLocalMeta();
-  }, [backendDirectorState, id, isReplayMode, refreshLocalMeta]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    if (!id || !hasMeaningfulScenarioGameplayState(backendGameplayState)) return;
-    applyScenarioGameplayState(id, backendGameplayState as ScenarioGameplayState);
-    refreshLocalMeta();
-  }, [backendGameplayState, id, isReplayMode, refreshLocalMeta]);
 
   const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id || isReplayMode) return;
@@ -792,7 +782,8 @@ export function SimulationView() {
       await copyText(replayUrl);
       return;
     }
-    if (!scenario || !storedScenarioMeta) return;
+    const replayScenarioMeta = scenarioMeta ?? storedScenarioMeta;
+    if (!scenario || !replayScenarioMeta) return;
     const snapshot = buildSimulationSnapshot(
       scenario,
       agents,
@@ -803,7 +794,7 @@ export function SimulationView() {
     );
     const artifact = await createReplayArtifact('simulation_view_v1', {
       scenario: snapshot,
-      scenarioMeta: storedScenarioMeta,
+      scenarioMeta: replayScenarioMeta,
       uiState: {
         selectedReplayBranchId,
         selectedReplayRound,
@@ -816,7 +807,7 @@ export function SimulationView() {
       ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
       : await buildSimulationReplayUrl(window.location.origin, {
         scenario: snapshot,
-        scenarioMeta: storedScenarioMeta,
+        scenarioMeta: replayScenarioMeta,
         uiState: {
           selectedReplayBranchId,
           selectedReplayRound,
@@ -827,7 +818,7 @@ export function SimulationView() {
       });
     setReplayUrl(url);
     await copyText(url);
-  }, [agents, backendDirectorState, backendGameplayState, branches, messages, panelCollapsed, playbackMode, replaySpeed, replayUrl, scenario, selectedReplayBranchId, selectedReplayRound, storedScenarioMeta]);
+  }, [agents, backendDirectorState, backendGameplayState, branches, messages, panelCollapsed, playbackMode, replaySpeed, replayUrl, scenario, scenarioMeta, selectedReplayBranchId, selectedReplayRound, storedScenarioMeta]);
 
   const handleImportReplay = useCallback(async () => {
     if (!replayPayload || importingReplay) return;
@@ -1482,7 +1473,7 @@ export function SimulationView() {
                     canPredict={!isReplayMode && !isSimulationComplete}
                     onOpenPrediction={!isReplayMode && !isSimulationComplete ? () => setShowPrediction(true) : undefined}
                 >
-                  <PhaserGameLoader
+                  <LazyPhaserGameLoader
                     key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
                     replaySpeed={replaySpeed}
                     playbackMode={playbackMode}
@@ -1608,6 +1599,7 @@ export function SimulationView() {
         <Suspense fallback={null}>
           <LazyPredictionModal
             scenarioId={id}
+            initialMeta={scenarioMeta}
             branches={branches}
             question={scenario?.question}
             sceneTheme={scenario?.scene_theme}

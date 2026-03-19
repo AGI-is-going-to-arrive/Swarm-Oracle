@@ -168,3 +168,94 @@ def test_get_result_distinguishes_error_terminal_state(client: TestClient):
 
     assert resp.status_code == 500
     assert "ended with an error" in resp.json()["detail"]
+
+
+def test_import_replay_debate_persists_snapshot(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "id": "debate-replay-1",
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "language": "en",
+            "profile_id": "governance",
+            "scene_theme": "debate_arena_civic",
+            "status": "done",
+            "current_phase": "verdict",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "score": {"proposition": 80, "opposition": 72, "audience_meter": 8},
+            "turns": [
+                {
+                    "id": "turn-1",
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                    "score_delta": {"proposition": 4, "opposition": 0},
+                },
+            ],
+            "available_prediction_options": {"winner": ["proposition", "opposition"], "verdict_tone": ["order", "balance", "rupture"]},
+            "phase_insights": [],
+            "result_ready": True,
+            "result": {
+                "winner": "proposition",
+                "verdict_tone": "order",
+                "adjudication_mode": "llm_hybrid",
+                "score": {"proposition": 80, "opposition": 72, "audience_meter": 8},
+                "breakdown": {
+                    "coherence": {"proposition": 4, "opposition": 3},
+                },
+                "best_argument": "Best argument",
+                "best_rebuttal": "Best rebuttal",
+                "judge_summary": "Judge summary",
+                "judge_rationale": {
+                    "winner_reason": "Winner reason",
+                    "loser_gap": "Loser gap",
+                    "swing_factor": "Swing factor",
+                    "closing_note": "Closing note",
+                    "dimension_rationales": {"coherence": "Imported rationale"},
+                },
+                "replay": [],
+            },
+            "counterplay": {
+                "debate_id": "debate-replay-1",
+                "kind": "winner",
+                "target_value": "opposition",
+                "confidence": 0.6,
+                "phase": "crossfire",
+                "variant": "reversal",
+                "outcome": "miss",
+                "phase_score": {"proposition": 6, "opposition": 0},
+                "explanation": "Counterplay explanation",
+                "user_name": "Replay User",
+                "created_at": "2026-03-19T00:00:00Z",
+            },
+            "predictions": [
+                {
+                    "id": "prediction-1",
+                    "debate_id": "debate-replay-1",
+                    "kind": "winner",
+                    "target_value": "proposition",
+                    "confidence": 0.8,
+                    "user_id": "director-1",
+                    "user_name": "Local Director",
+                    "score": 88,
+                    "score_reason": "Imported prediction score",
+                    "created_at": "2026-03-19T00:00:00Z",
+                    "scored_at": "2026-03-19T00:00:00Z",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] != "debate-replay-1"
+    assert data["status"] == "done"
+    assert data["result_ready"] is True
+    assert data["participants"][0]["name"] == "Proposition"
+    assert data["turns"][0]["content"] == "Imported turn"

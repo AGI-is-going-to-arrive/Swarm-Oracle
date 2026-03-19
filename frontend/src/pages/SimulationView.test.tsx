@@ -5,7 +5,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
-import type { BranchInfo, ScenarioDirectorState, ScenarioGameplayState } from '../types';
+import type { BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
+import { encodeSimulationReplayToken } from '../lib/simulationReplay';
 
 const navigateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
@@ -14,7 +15,7 @@ const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
 let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
 let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
-const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock } = vi.hoisted(() => ({
+const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock, importReplayScenarioMock, createReplayArtifactMock, getReplayArtifactMock } = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
@@ -23,6 +24,16 @@ const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock } = vi.
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
   })),
+  importReplayScenarioMock: vi.fn(async (scenario: Scenario) => ({
+    ...scenario,
+    id: 'imported-sim-1',
+  })),
+  createReplayArtifactMock: vi.fn(async () => ({
+    id: 'share-sim-1',
+    kind: 'simulation_view_v1',
+    created_at: '2026-03-19T00:00:00Z',
+  })),
+  getReplayArtifactMock: vi.fn(async () => null),
 }));
 
 const emptyDirectorState: ScenarioDirectorState = {
@@ -48,23 +59,25 @@ const emptyGameplayState: ScenarioGameplayState = {
   archive: { key_moments: [], branch_snapshots: [] },
 };
 
+const baseScenario: Scenario = {
+  id: 'scenario-1',
+  question: '如果罗马帝国从未衰落？',
+  status: 'done',
+  created_at: '2026-03-15T00:00:00Z',
+  total_rounds: 3,
+  mode: 'blackboard',
+  scene_theme: 'ancient_empire',
+  agents: [],
+  branches: [],
+  groups: [],
+  hierarchical: false,
+  visualization_enabled: true,
+  director_state: emptyDirectorState,
+  gameplay_state: emptyGameplayState,
+};
+
 const mockStore = {
-  scenario: {
-    id: 'scenario-1',
-    question: '如果罗马帝国从未衰落？',
-    status: 'done',
-    created_at: '2026-03-15T00:00:00Z',
-    total_rounds: 3,
-    mode: 'blackboard' as const,
-    scene_theme: 'ancient_empire',
-    agents: [],
-    branches: [],
-    groups: [],
-    hierarchical: false,
-    visualization_enabled: true,
-    director_state: emptyDirectorState,
-    gameplay_state: emptyGameplayState,
-  },
+  scenario: baseScenario,
   agents: [
     { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
   ],
@@ -94,6 +107,16 @@ const mockStore = {
   viewMode: 'theater' as 'classic' | 'theater',
   currentRound: 0,
   toggleViewMode: vi.fn(),
+  setScenario: vi.fn((scenario: Scenario) => {
+    mockStore.scenario = scenario;
+    mockStore.agents = scenario.agents as typeof mockStore.agents;
+    mockStore.branches = scenario.branches as typeof mockStore.branches;
+    mockStore.messages = (scenario.messages ?? []) as typeof mockStore.messages;
+    mockStore.status = scenario.status as typeof mockStore.status;
+    mockStore.isSimulationComplete = scenario.status === 'done';
+    mockStore.visualizationEnabled = scenario.visualization_enabled ?? false;
+    mockStore.currentRound = Math.max(0, ...((scenario.messages ?? []).map((message) => message.round ?? 0)));
+  }),
 };
 
 vi.mock('react-i18next', () => ({
@@ -117,6 +140,9 @@ vi.mock('../hooks/useSimulationWS', () => ({
 }));
 
 vi.mock('../api/client', () => ({
+  createReplayArtifact: createReplayArtifactMock,
+  getReplayArtifact: getReplayArtifactMock,
+  importReplayScenario: importReplayScenarioMock,
   upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
   upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
 }));
@@ -178,8 +204,9 @@ vi.mock('../components/GameplayCardsModal', () => ({
   default: () => null,
 }));
 
-vi.mock('../game', () => ({
+vi.mock('../game/PhaserGameLoader', () => ({
   PhaserGameLoader: () => <div>phaser-game</div>,
+  preloadPhaserGame: vi.fn(),
 }));
 
 vi.mock('../game/HudOverlay', () => ({
@@ -217,6 +244,12 @@ describe('SimulationView replay automation output', () => {
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     upsertScenarioDirectorStateMock.mockClear();
     upsertScenarioGameplayStateMock.mockClear();
+    importReplayScenarioMock.mockClear();
+    createReplayArtifactMock.mockClear();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+    mockStore.setScenario.mockClear();
+    mockStore.scenario = { ...baseScenario };
     mockStore.status = 'done';
     mockStore.isSimulationComplete = true;
     mockStore.visualizationEnabled = true;
@@ -289,6 +322,67 @@ describe('SimulationView replay automation output', () => {
         batch_count: 1,
       });
     });
+  });
+
+  it('hydrates a read-only replay token and marks replay_source as token', async () => {
+    const token = await encodeSimulationReplayToken({
+      scenario: {
+        ...mockStore.scenario,
+        id: 'scenario-replay',
+        agents: mockStore.agents,
+        branches: mockStore.branches,
+        messages: mockStore.messages,
+      },
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: [],
+        },
+      },
+      uiState: {
+        selectedReplayBranchId: 'b1',
+        selectedReplayRound: 1,
+        playbackMode: 'replay',
+        replaySpeed: 2,
+        panelCollapsed: true,
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/sim/replay?replay=${token}`]}>
+        <Routes>
+          <Route path="/sim/replay" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.replay_source).toBe('token');
+    });
+
+    expect(screen.queryByRole('button', { name: 'sim.predict_btn' })).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: '导入为本地运行' }));
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith('/sim/imported-sim-1');
   });
 
   it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {

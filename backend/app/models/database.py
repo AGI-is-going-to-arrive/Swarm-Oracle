@@ -153,6 +153,17 @@ class Scenario(SQLModel, table=True):
     branches: list[Branch] = Relationship(back_populates="scenario")
 
 
+class ReplayArtifact(SQLModel, table=True):
+    """Portable replay payload persisted for short share links."""
+
+    __tablename__ = "replay_artifact"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    kind: str
+    payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
+
+
 # ── Database init ────────────────────────────────────────
 
 from sqlmodel import create_engine, Session

@@ -4,16 +4,30 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ScenarioMeta } from '../lib/scenarioMeta';
+import { buildScenarioReplayUrl } from '../lib/scenarioReplay';
 import ResultView from './ResultView';
 
 const {
+  createReplayArtifactMock,
   finalizeCampaignMock,
   findChallengeProgressByScenarioIdMock,
+  getReplayArtifactMock,
+  importReplayScenarioMock,
   upsertScenarioDirectorStateMock,
   upsertScenarioGameplayStateMock,
 } = vi.hoisted(() => ({
+  createReplayArtifactMock: vi.fn(async () => ({
+    id: 'share-result-1',
+    kind: 'scenario_result_v1',
+    created_at: '2026-03-19T00:00:00Z',
+  })),
   finalizeCampaignMock: vi.fn(),
   findChallengeProgressByScenarioIdMock: vi.fn(),
+  getReplayArtifactMock: vi.fn(async () => null),
+  importReplayScenarioMock: vi.fn(async (scenario: { id: string }) => ({
+    ...scenario,
+    id: 'imported-result-1',
+  })),
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
@@ -46,6 +60,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../api/client', () => ({
+  createReplayArtifact: createReplayArtifactMock,
   getStory: vi.fn(async () => ({
     scenario_id: 'scenario-1',
     question: 'What if the archive had to sync?',
@@ -65,6 +80,8 @@ vi.mock('../api/client', () => ({
   getAgents: vi.fn(async () => [
     { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
   ]),
+  getReplayArtifact: getReplayArtifactMock,
+  importReplayScenario: importReplayScenarioMock,
   getScenario: vi.fn(async () => ({
     id: 'scenario-1',
     question: 'What if the archive had to sync?',
@@ -330,11 +347,128 @@ describe('ResultView campaign summary', () => {
     );
 
     await screen.findByText('result.title');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'result.copy_permalink_btn' })).not.toBeDisabled();
+    });
+    await user.click(screen.getByRole('button', { name: 'result.copy_permalink_btn' }));
     await user.click(screen.getByRole('button', { name: 'result.share_challenge_btn' }));
 
-    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(writeText.mock.calls[0][0]).toContain('/result/replay?share=');
     expect(copiedUrl).toContain('sharedChallenge=1');
     expect(copiedUrl).toContain('question=');
+  });
+
+  it('renders from a replay token without finalizing campaign again', async () => {
+    const user = userEvent.setup();
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    importReplayScenarioMock.mockReset();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: ['Moment 1'],
+          profileId: 'law',
+          dominantBranchTitle: 'Archive Branch',
+          dominantTone: 'order',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'A',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      },
+      campaignScenarioSummary: {
+        scenario_id: 'scenario-1',
+        profile_id: 'law',
+        archive_grade: 'A',
+        profile_resonance: 'aligned',
+        betting_hit: null,
+        most_used_card: null,
+        completed_daily_challenge: false,
+        campaign_score_delta: 5,
+        finalized_at: null,
+      },
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(finalizeCampaignMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.replay_source).toBe('token');
+    });
   });
 
   it('marks finalize requests as daily challenge runs when the scenario came from a stored challenge', async () => {
@@ -759,7 +893,7 @@ describe('ResultView campaign summary', () => {
 
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('Worldline Commitment')).toBeInTheDocument();
-    expect(screen.getByText('No commitment')).toBeInTheDocument();
+    expect(screen.getByText('Commitment hit')).toBeInTheDocument();
     expect(screen.getAllByText('Archive Branch').length).toBeGreaterThan(1);
   });
 
