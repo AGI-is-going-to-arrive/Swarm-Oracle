@@ -1,6 +1,10 @@
 name: Release Signoff
 
 on:
+  push:
+    branches:
+      - main
+      - master
   workflow_dispatch:
   schedule:
     - cron: "30 18 * * *"
@@ -17,24 +21,51 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       can_run: ${{ steps.check.outputs.can_run }}
+      missing_secrets: ${{ steps.check.outputs.missing_secrets }}
     steps:
       - name: Check required LLM secrets
         id: check
         env:
           LLM_RESPONSES_URL: ${{ secrets.LLM_RESPONSES_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
         run: |
-          if [ -n "${LLM_RESPONSES_URL}" ] && [ -n "${LLM_API_KEY}" ]; then
+          missing=()
+
+          if [ -z "${LLM_RESPONSES_URL}" ]; then
+            missing+=("LLM_RESPONSES_URL")
+          fi
+          if [ -z "${LLM_API_KEY}" ]; then
+            missing+=("LLM_API_KEY")
+          fi
+
+          if [ "${#missing[@]}" -eq 0 ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
-            echo "Release signoff preflight passed." >> "$GITHUB_STEP_SUMMARY"
+            echo "missing_secrets=" >> "$GITHUB_OUTPUT"
+            {
+              echo "Release signoff preflight passed."
+              echo
+              echo "- event: ${GITHUB_EVENT_NAME}"
+              echo "- ref: ${GITHUB_REF}"
+              if [ -n "${LLM_MODEL_NAME}" ]; then
+                echo "- model override: configured"
+              else
+                echo "- model override: not set, workflow will use runtime default"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
           else
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
             echo "can_run=false" >> "$GITHUB_OUTPUT"
+            echo "missing_secrets=${missing_csv}" >> "$GITHUB_OUTPUT"
             {
               echo "Release signoff skipped."
               echo
-              echo "Missing required repository secrets:"
-              echo "- LLM_RESPONSES_URL"
-              echo "- LLM_API_KEY"
+              echo "- event: ${GITHUB_EVENT_NAME}"
+              echo "- ref: ${GITHUB_REF}"
+              echo "- missing required repository secrets:"
+              for key in "${missing[@]}"; do
+                echo "  - ${key}"
+              done
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -86,6 +117,7 @@ jobs:
           LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
           DEBATE_USE_LLM: "true"
           SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE: llm_hybrid
+          SWARM_SIGNOFF_LABEL: github-release-signoff
           SWARM_URL: http://127.0.0.1:18928
           SWARM_BACKEND_URL: http://127.0.0.1:18927
           SWARM_BACKEND_PYTHON: ${{ github.workspace }}/backend/.venv/bin/python
@@ -153,4 +185,5 @@ jobs:
       - name: Explain why full signoff did not run
         run: |
           echo "Full release signoff was skipped because required repository secrets are missing."
-          echo "Configure LLM_RESPONSES_URL and LLM_API_KEY, then rerun this workflow."
+          echo "Missing: ${{ needs.preflight.outputs.missing_secrets }}"
+          echo "Configure the missing secrets, then rerun this workflow."

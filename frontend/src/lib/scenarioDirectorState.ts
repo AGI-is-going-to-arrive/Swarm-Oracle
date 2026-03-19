@@ -11,6 +11,10 @@ import type {
 } from './scenarioMeta';
 import { updateScenarioMeta } from './scenarioMeta';
 
+function hasOwnKey(value: unknown, key: string): boolean {
+  return typeof value === 'object' && value !== null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function normalizeObjective(goal: ScenarioDirectorObjective): DirectorObjectiveRecord {
   return {
     id: goal.id,
@@ -50,6 +54,12 @@ export function hasMeaningfulScenarioDirectorState(
   return state.objectives.goals.length > 0 || state.commitment.active;
 }
 
+export function hasScenarioDirectorAuthority(
+  state: ScenarioDirectorState | null | undefined,
+): boolean {
+  return hasOwnKey(state, 'objectives') || hasOwnKey(state, 'commitment');
+}
+
 export function scenarioMetaToDirectorState(meta: ScenarioMeta): ScenarioDirectorState {
   return {
     objectives: {
@@ -79,7 +89,7 @@ export function mergeScenarioMetaWithDirectorState(
   meta: ScenarioMeta,
   state: ScenarioDirectorState | null | undefined,
 ): ScenarioMeta {
-  if (!hasMeaningfulScenarioDirectorState(state)) return meta;
+  if (!hasScenarioDirectorAuthority(state)) return meta;
   const remoteState = state as ScenarioDirectorState;
 
   return {

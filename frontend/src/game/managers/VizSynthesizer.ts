@@ -274,6 +274,21 @@ export function mapRoleToSpriteId(role: string, name: string): string {
   return ALL_SPRITE_KEYS[hash % ALL_SPRITE_KEYS.length];
 }
 
+export function getInitialSpriteKeysForAgents(
+  agents: Array<Pick<AgentInfo, 'role' | 'name'>>,
+): string[] | null {
+  if (agents.length === 0) {
+    return null;
+  }
+
+  const spriteKeys = new Set<string>(['sprite_default']);
+  for (const agent of agents) {
+    spriteKeys.add(mapRoleToSpriteId(agent.role, agent.name));
+  }
+
+  return [...spriteKeys].sort();
+}
+
 export function inferSceneTheme(question: string): string {
   return inferSceneThemeFromQuestion(question);
 }

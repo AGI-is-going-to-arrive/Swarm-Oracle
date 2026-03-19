@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   mapRoleToSpriteId,
+  getInitialSpriteKeysForAgents,
   inferSceneTheme,
   synthesizeSceneInit,
   synthesizeBubbles,
@@ -64,6 +65,26 @@ describe('VizSynthesizer — mapRoleToSpriteId', () => {
     expect(mapRoleToSpriteId('bard', 'Lyra')).toBe('sprite_bard');
     expect(mapRoleToSpriteId('monk', 'Tenzin')).toBe('sprite_monk');
     expect(mapRoleToSpriteId('witch', 'Mora')).toBe('sprite_witch');
+  });
+});
+
+describe('VizSynthesizer — getInitialSpriteKeysForAgents', () => {
+  it('returns null when agents are not ready yet', () => {
+    expect(getInitialSpriteKeysForAgents([])).toBeNull();
+  });
+
+  it('collects unique first-view sprite keys and always keeps the fallback sprite', () => {
+    expect(
+      getInitialSpriteKeysForAgents([
+        { role: 'king', name: 'Arthur' },
+        { role: 'King', name: 'Lancelot' },
+        { role: 'doctor', name: 'House' },
+      ]),
+    ).toEqual([
+      'sprite_default',
+      'sprite_healer',
+      'sprite_king',
+    ]);
   });
 });
 

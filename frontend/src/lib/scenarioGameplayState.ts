@@ -319,7 +319,7 @@ export function mergeScenarioMetaWithGameplayState(
   meta: ScenarioMeta,
   state: ScenarioGameplayState | null | undefined,
 ): ScenarioMeta {
-  if (!hasMeaningfulScenarioGameplayState(state)) {
+  if (!hasScenarioGameplayAuthority(state)) {
     return meta;
   }
 

@@ -19,6 +19,7 @@ import {
   synthesizeBubbles,
   synthesizeLatestBubbles,
   inferSceneTheme,
+  getInitialSpriteKeysForAgents,
 } from './managers/VizSynthesizer';
 import { filterReplayMessages } from './replaySelection';
 import {
@@ -125,7 +126,9 @@ export function PhaserGame({
       },
       callbacks: {
         preBoot: (game) => {
-          game.registry.set('initialSceneTheme', resolveSceneTheme(useSimulationStore.getState()));
+          const state = useSimulationStore.getState();
+          game.registry.set('initialSceneTheme', resolveSceneTheme(state));
+          game.registry.set('initialSpriteKeys', getInitialSpriteKeysForAgents(state.agents));
         },
       },
       scene: [BootScene, TitleScene, WorldScene, EndingScene],

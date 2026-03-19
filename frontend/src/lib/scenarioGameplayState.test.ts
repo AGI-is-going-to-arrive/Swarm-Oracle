@@ -282,4 +282,81 @@ describe('scenarioGameplayState helpers', () => {
     expect(merged.archive.profileId).toBeUndefined();
     expect(merged.archive.keyMoments).toEqual(['Remote authoritative moment']);
   });
+
+  it('clears stale local gameplay data when the backend explicitly owns empty partitions', () => {
+    const meta = loadScenarioMeta('scenario-authority-explicit-empty');
+    const nextMeta: ScenarioMeta = {
+      ...meta,
+      director: {
+        maxPoints: 3,
+        remainingPoints: 1,
+        spentPoints: 2,
+        lastUpdatedAt: '2026-03-19T00:00:00Z',
+      },
+      cooldowns: {
+        public_hearing: {
+          lastUsedRound: 2,
+          cooldownRounds: 2,
+        },
+      },
+      cards: {
+        usageLog: [
+          {
+            cardId: 'public_hearing',
+            profileId: 'law',
+            branchId: 'branch-1',
+            branchTitle: 'Open Hearing',
+            round: 2,
+            cost: 1,
+            directive: 'Expose the hidden exception clause.',
+            usedAt: '2026-03-19T00:00:00Z',
+          },
+        ],
+      },
+      betting: {
+        bets: [
+          {
+            betId: 'bet-1',
+            kind: 'branch_winner',
+            targetId: 'branch-1',
+            targetLabel: 'Open Hearing',
+            confidence: 0.7,
+            userName: 'Archivist',
+            placedAtRound: 2,
+            placedAt: '2026-03-19T00:01:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      archive: {
+        ...meta.archive,
+        keyMoments: ['event:card:2:public_hearing', 'event:bet:2:Open%20Hearing'],
+        branchSnapshots: [
+          {
+            branchId: 'branch-1',
+            title: 'Open Hearing',
+            probability: 0.75,
+          },
+        ],
+        profileId: 'law',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    };
+
+    const merged = mergeScenarioMetaWithGameplayState(nextMeta, {
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    });
+
+    expect(merged.cards.usageLog).toEqual([]);
+    expect(merged.betting.bets).toEqual([]);
+    expect(merged.director.remainingPoints).toBe(3);
+    expect(merged.director.spentPoints).toBe(0);
+    expect(merged.cooldowns).toEqual({});
+    expect(merged.archive.profileId).toBeUndefined();
+    expect(merged.archive.keyMoments).toEqual([]);
+    expect(merged.archive.branchSnapshots).toEqual([]);
+  });
 });

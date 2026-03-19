@@ -421,6 +421,10 @@ describe('SimulationView replay automation output', () => {
   });
 
   it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {
+    mockStore.scenario = {
+      ...baseScenario,
+      gameplay_state: null,
+    };
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
       version: 1,
       scenarios: {
@@ -572,6 +576,91 @@ describe('SimulationView replay automation output', () => {
           key_moments: ['remote-authority-moment'],
           branch_snapshots: [],
         },
+      },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      expect(raw).toBeTruthy();
+    });
+
+    expect(upsertScenarioGameplayStateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not re-upload stale local gameplay when backend authority is explicitly empty', async () => {
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1, lastUpdatedAt: '2026-03-19T03:00:00Z' },
+          cooldowns: {
+            public_hearing: {
+              lastUsedRound: 2,
+              cooldownRounds: 2,
+            },
+          },
+          cards: {
+            usageLog: [
+              {
+                cardId: 'public_hearing',
+                profileId: 'law',
+                branchId: 'b1',
+                branchTitle: '永世帝国',
+                round: 2,
+                cost: 1,
+                directive: 'Keep the stale local card trail.',
+                usedAt: '2026-03-19T03:00:00Z',
+              },
+            ],
+          },
+          betting: {
+            bets: [
+              {
+                betId: 'bet-local',
+                kind: 'branch_winner',
+                targetId: 'b1',
+                targetLabel: '永世帝国',
+                confidence: 0.8,
+                placedAtRound: 2,
+                placedAt: '2026-03-19T03:00:00Z',
+                resolved: false,
+              },
+            ],
+          },
+          commitment: {
+            active: false,
+            branchId: null,
+            branchTitle: null,
+            committedAtRound: null,
+            committedAt: null,
+            outcome: null,
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [{ branchId: 'b1', title: '永世帝国', probability: 1 }],
+            keyMoments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+          },
+        },
+      },
+    }));
+    mockStore.scenario = {
+      ...baseScenario,
+      gameplay_state: {
+        cards: { usage_log: [] },
+        betting: { bets: [] },
+        archive: { key_moments: [], branch_snapshots: [] },
       },
     };
 

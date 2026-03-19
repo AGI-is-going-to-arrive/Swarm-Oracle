@@ -55,7 +55,11 @@ function timestampLabel() {
 
 function resolveFrontendPath(inputPath) {
   if (path.isAbsolute(inputPath)) return inputPath;
-  return path.join(FRONTEND_ROOT, inputPath.replace(/^\.\/+/, ""));
+  const normalized = inputPath.replace(/^\.\/+/, "");
+  if (normalized === "frontend" || normalized.startsWith("frontend/")) {
+    return path.join(REPO_ROOT, normalized);
+  }
+  return path.join(FRONTEND_ROOT, normalized);
 }
 
 function summaryPathFor(outputRoot) {
@@ -76,6 +80,7 @@ function parseArgs(argv) {
     scenarioId: process.env.SWARM_SCENARIO_ID || "",
     backendPython: process.env.SWARM_BACKEND_PYTHON || getDefaultBackendPython(),
     requireDebateAdjudicationMode: process.env.SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE || "",
+    invocationLabel: process.env.SWARM_SIGNOFF_LABEL || process.env.GITHUB_WORKFLOW || "",
   };
 
   for (let index = 2; index < argv.length; index += 1) {
@@ -102,6 +107,9 @@ function parseArgs(argv) {
     } else if (arg === "--require-debate-adjudication-mode" && next) {
       args.requireDebateAdjudicationMode = next;
       index += 1;
+    } else if (arg === "--invocation-label" && next) {
+      args.invocationLabel = next;
+      index += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     } else if (arg === "--dry-run") {
@@ -114,7 +122,7 @@ function parseArgs(argv) {
       args.includeAssetsCheck = false;
     } else {
       throw new Error(
-        "Usage: node scripts/release-signoff.mjs [--url URL] [--backend-url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--require-debate-adjudication-mode deterministic|llm_hybrid] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
+        "Usage: node scripts/release-signoff.mjs [--url URL] [--backend-url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--require-debate-adjudication-mode deterministic|llm_hybrid] [--invocation-label LABEL] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
       );
     }
   }
@@ -129,6 +137,23 @@ function parseArgs(argv) {
   }
 
   return args;
+}
+
+function readExecutionContext(invocationLabel) {
+  return {
+    ci: process.env.CI === "true",
+    invocation_label: invocationLabel || null,
+    github: {
+      workflow: process.env.GITHUB_WORKFLOW || null,
+      event_name: process.env.GITHUB_EVENT_NAME || null,
+      ref: process.env.GITHUB_REF || null,
+      ref_name: process.env.GITHUB_REF_NAME || null,
+      sha: process.env.GITHUB_SHA || null,
+      run_id: process.env.GITHUB_RUN_ID || null,
+      run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
+      actor: process.env.GITHUB_ACTOR || null,
+    },
+  };
 }
 
 function formatCommand(command, args) {
@@ -320,6 +345,7 @@ function main() {
     require_debate_adjudication_mode: args.requireDebateAdjudicationMode || null,
     webdriver_url: args.includeSafari ? args.webdriverUrl : null,
     scenario_id: args.scenarioId || null,
+    execution_context: readExecutionContext(args.invocationLabel),
     git: readGitMetadata(),
     steps: [],
     error: null,
@@ -337,6 +363,9 @@ function main() {
   console.log(`- assets check: ${args.includeAssetsCheck ? "true" : "false"}`);
   if (args.requireDebateAdjudicationMode) {
     console.log(`- required debate adjudication mode: ${args.requireDebateAdjudicationMode}`);
+  }
+  if (args.invocationLabel) {
+    console.log(`- invocation label: ${args.invocationLabel}`);
   }
   if (args.scenarioId) {
     console.log(`- safari scenario id: ${args.scenarioId}`);

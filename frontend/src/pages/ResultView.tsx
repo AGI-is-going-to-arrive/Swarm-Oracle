@@ -640,7 +640,12 @@ export default function ResultView() {
   };
 
   const branches = storyData?.branches ?? [];
-  const fallbackScenarioMeta = id ? loadScenarioMeta(id) : null;
+  const fallbackScenarioMeta = useMemo(() => {
+    if (!id || derivedScenarioMeta || replayPayload?.scenarioMeta) {
+      return null;
+    }
+    return loadScenarioMeta(id);
+  }, [derivedScenarioMeta, id, replayPayload?.scenarioMeta]);
   const storedScenarioMeta = derivedScenarioMeta ?? replayPayload?.scenarioMeta ?? fallbackScenarioMeta;
   const inferredProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),

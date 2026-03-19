@@ -29,12 +29,14 @@ import {
 } from '../lib/scenarioMeta';
 import { copyText } from '../lib/copyText';
 import {
+  hasScenarioDirectorAuthority,
   hasMeaningfulScenarioDirectorState,
   mergeScenarioMetaWithDirectorState,
   scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
 import {
   areScenarioGameplayStatesEquivalent,
+  hasScenarioGameplayAuthority,
   hasMeaningfulScenarioGameplayState,
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
@@ -422,14 +424,14 @@ export function SimulationView() {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
     if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
-    if (hasMeaningfulScenarioDirectorState(backendDirectorState)) return;
+    if (hasScenarioDirectorAuthority(backendDirectorState)) return;
     void persistDirectorState(storedScenarioMeta);
   }, [backendDirectorState, id, isReplayMode, persistDirectorState, storedScenarioMeta]);
 
   useEffect(() => {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
-    if (hasMeaningfulScenarioGameplayState(backendGameplayState)) return;
+    if (hasScenarioGameplayAuthority(backendGameplayState)) return;
     const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;

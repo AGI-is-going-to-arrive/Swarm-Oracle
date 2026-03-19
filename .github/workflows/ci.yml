@@ -8,6 +8,52 @@ on:
   pull_request:
 
 jobs:
+  release-signoff-preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      can_run: ${{ steps.check.outputs.can_run }}
+      missing_secrets: ${{ steps.check.outputs.missing_secrets }}
+    steps:
+      - name: Check CI release signoff readiness
+        id: check
+        env:
+          LLM_RESPONSES_URL: ${{ secrets.LLM_RESPONSES_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          missing=()
+
+          if [ -z "${LLM_RESPONSES_URL}" ]; then
+            missing+=("LLM_RESPONSES_URL")
+          fi
+          if [ -z "${LLM_API_KEY}" ]; then
+            missing+=("LLM_API_KEY")
+          fi
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "missing_secrets=" >> "$GITHUB_OUTPUT"
+            {
+              echo "CI release signoff preflight passed."
+              echo
+              echo "- event: ${GITHUB_EVENT_NAME}"
+              echo "- ref: ${GITHUB_REF}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            missing_csv="$(IFS=,; echo "${missing[*]}")"
+            echo "can_run=false" >> "$GITHUB_OUTPUT"
+            echo "missing_secrets=${missing_csv}" >> "$GITHUB_OUTPUT"
+            {
+              echo "CI release signoff preflight skipped."
+              echo
+              echo "- event: ${GITHUB_EVENT_NAME}"
+              echo "- ref: ${GITHUB_REF}"
+              echo "- missing required repository secrets:"
+              for key in "${missing[@]}"; do
+                echo "  - ${key}"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -87,6 +133,8 @@ jobs:
             src/stores/simulationStore.test.ts
 
   release-signoff-dry-run:
+    needs:
+      - release-signoff-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -118,7 +166,7 @@ jobs:
 
       - name: Validate release signoff contract
         working-directory: frontend
-        run: node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/ci-release-signoff-dry-run
+        run: node scripts/release-signoff.mjs --dry-run --headless --require-debate-adjudication-mode llm_hybrid --invocation-label ci-release-signoff-dry-run --output-root output/e2e/ci-release-signoff-dry-run
 
       - name: Upload release signoff dry-run summary
         if: always()
@@ -128,6 +176,8 @@ jobs:
           path: frontend/output/e2e/ci-release-signoff-dry-run
 
   debate-signoff-smoke:
+    needs:
+      - release-signoff-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

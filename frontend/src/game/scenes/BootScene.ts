@@ -15,7 +15,12 @@ import {
 import { getBootScenePreloadThemes } from '../sceneAssetPlan';
 
 /** All sprite keys that the game expects to be registered as textures. */
-const SPRITE_KEYS = CHARACTER_SPRITE_KEYS;
+const FALLBACK_SPRITE_KEYS = CHARACTER_SPRITE_KEYS;
+type SpriteKey = typeof CHARACTER_SPRITE_KEYS[number];
+
+function isKnownSpriteKey(value: string): value is SpriteKey {
+  return FALLBACK_SPRITE_KEYS.includes(value as SpriteKey);
+}
 
 /** Fallback color per sprite role (used when PNG fails to load). */
 const SPRITE_FALLBACK: Record<string, { body: number; accent: number }> = {
@@ -50,6 +55,7 @@ export class BootScene extends Phaser.Scene {
   private failedSprites: Set<string> = new Set();
   private failedScenes: Set<string> = new Set();
   private bootSceneKeys = getBootScenePreloadThemes(undefined);
+  private bootSpriteKeys: SpriteKey[] = [...FALLBACK_SPRITE_KEYS];
 
   constructor() {
     super({ key: 'BootScene' });
@@ -57,6 +63,18 @@ export class BootScene extends Phaser.Scene {
 
   preload(): void {
     this.bootSceneKeys = getBootScenePreloadThemes(this.registry.get('initialSceneTheme') as string | undefined);
+    const initialSpriteKeys = this.registry.get('initialSpriteKeys');
+    if (Array.isArray(initialSpriteKeys)) {
+      const filteredSpriteKeys = initialSpriteKeys.filter(
+        (value): value is string => typeof value === 'string',
+      );
+      const uniqueSpriteKeys = [...new Set(filteredSpriteKeys)].filter(isKnownSpriteKey);
+      this.bootSpriteKeys = uniqueSpriteKeys.length > 0
+        ? uniqueSpriteKeys
+        : [...FALLBACK_SPRITE_KEYS];
+    } else {
+      this.bootSpriteKeys = [...FALLBACK_SPRITE_KEYS];
+    }
 
     // ── Loading bar ──────────────────────────────────────
     const { width, height } = this.scale;
@@ -76,7 +94,7 @@ export class BootScene extends Phaser.Scene {
     // ── Track load failures so we can fallback ──────────
     this.load.on('loaderror', (file: Phaser.Loader.File) => {
       const key = file.key;
-      if (SPRITE_KEYS.includes(key as typeof SPRITE_KEYS[number])) {
+      if (this.bootSpriteKeys.includes(key as SpriteKey)) {
         this.failedSprites.add(key);
       } else {
         const failedTheme = this.bootSceneKeys.find((themeId) => getSceneTextureKey(themeId) === key);
@@ -87,7 +105,7 @@ export class BootScene extends Phaser.Scene {
     });
 
     // ── Load character PNGs ──────────────────────────────
-    for (const key of SPRITE_KEYS) {
+    for (const key of this.bootSpriteKeys) {
       this.load.image(key, `/assets/characters/${key}.png`);
     }
 
@@ -116,7 +134,7 @@ export class BootScene extends Phaser.Scene {
       g.destroy();
     }
 
-    const totalBootAssets = SPRITE_KEYS.length + this.bootSceneKeys.length;
+    const totalBootAssets = this.bootSpriteKeys.length + this.bootSceneKeys.length;
     const loaded = totalBootAssets - this.failedSprites.size - this.failedScenes.size;
     console.log(`[BootScene] ${loaded}/${totalBootAssets} first-view assets loaded, ${this.failedSprites.size} sprite fallbacks, ${this.failedScenes.size} scene fallbacks`);
 
