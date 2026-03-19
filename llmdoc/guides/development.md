@@ -80,6 +80,7 @@ npm run assets:provenance:check
 
 - 当前 targeted frontend set：`100 passed`
 - 这组扩展回归适用于本轮这类“高级干预 + 结果页 authority”改动；当前 clean HEAD 已实跑通过。
+- 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
 
 ## Release Signoff
 
@@ -137,13 +138,15 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最新通过工件：
 
-- `frontend/output/e2e/current-head-signoff/summary.json`
+- current worktree：`frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`
+- clean HEAD baseline：`frontend/output/e2e/current-head-signoff/summary.json`
+- current worktree 这份 `summary.json` 绑定的是 dirty worktree；如果要留 clean 证据，先提交后再复跑一次。
 
 ## CI
 
 - `.github/workflows/ci.yml`
   - targeted backend `pytest`
-  - frontend `assets:provenance:check / build / targeted vitest`
+  - frontend `assets:provenance:check / build / targeted vitest`；当前 lane 已与文档里的 targeted frontend set 对齐
   - `release-signoff-dry-run`
   - deterministic `debate-signoff-smoke`
 - `.github/workflows/release-signoff.yml`

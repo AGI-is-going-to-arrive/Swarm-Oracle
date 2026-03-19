@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
 import type { BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
@@ -231,6 +231,12 @@ describe('SimulationView replay automation output', () => {
         setItem: (key: string, value: string) => {
           store.set(key, value);
         },
+        removeItem: (key: string) => {
+          store.delete(key);
+        },
+        clear: () => {
+          store.clear();
+        },
       },
     });
     navigateMock.mockReset();
@@ -291,6 +297,10 @@ describe('SimulationView replay automation output', () => {
     mockStore.scenario.gameplay_state = emptyGameplayState;
   });
 
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
   it('publishes replay_state inside render_game_to_text', async () => {
     render(
       <MemoryRouter initialEntries={['/sim/scenario-1']}>
@@ -322,6 +332,31 @@ describe('SimulationView replay automation output', () => {
         batch_count: 1,
       });
     });
+  });
+
+  it('re-collapses the agent panel when the page switches into theater mode', async () => {
+    mockStore.viewMode = 'classic';
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('sim.panel_collapse')).toBeInTheDocument();
+
+    mockStore.viewMode = 'theater';
+    rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('sim.panel_expand')).toBeInTheDocument();
   });
 
   it('hydrates a read-only replay token and marks replay_source as token', async () => {
@@ -466,6 +501,94 @@ describe('SimulationView replay automation output', () => {
         key_moment_count: 1,
       });
     });
+  });
+
+  it('stops backfilling stale local gameplay meta once backend gameplay has meaningful authority', async () => {
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+          cooldowns: {
+            public_hearing: {
+              lastUsedRound: 2,
+              cooldownRounds: 2,
+            },
+          },
+          cards: {
+            usageLog: [
+              {
+                cardId: 'public_hearing',
+                profileId: 'law',
+                branchId: 'b1',
+                branchTitle: '永世帝国',
+                round: 2,
+                cost: 1,
+                directive: 'Keep the stale local card trail.',
+                usedAt: '2026-03-19T03:00:00Z',
+              },
+            ],
+          },
+          betting: {
+            bets: [
+              {
+                betId: 'bet-local',
+                kind: 'branch_winner',
+                targetId: 'b1',
+                targetLabel: '永世帝国',
+                confidence: 0.8,
+                placedAtRound: 2,
+                placedAt: '2026-03-19T03:00:00Z',
+                resolved: false,
+              },
+            ],
+          },
+          commitment: {
+            active: false,
+            branchId: null,
+            branchTitle: null,
+            committedAtRound: null,
+            committedAt: null,
+            outcome: null,
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [{ branchId: 'b1', title: '永世帝国', probability: 1 }],
+            keyMoments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+          },
+        },
+      },
+    }));
+    mockStore.scenario = {
+      ...baseScenario,
+      gameplay_state: {
+        cards: { usage_log: [] },
+        betting: { bets: [] },
+        archive: {
+          key_moments: ['remote-authority-moment'],
+          branch_snapshots: [],
+        },
+      },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      expect(raw).toBeTruthy();
+    });
+
+    expect(upsertScenarioGameplayStateMock).not.toHaveBeenCalled();
   });
 
   it('renders the compact timeline inside completed theater mode with result markers', async () => {

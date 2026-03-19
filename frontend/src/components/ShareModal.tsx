@@ -42,12 +42,14 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   const handleGenerate = useCallback(async (platform: string) => {
     if (loading) return;
     setActivePlatform(platform);
     setCopy('');
     setError('');
+    setStatus('loading');
     setLoading(true);
     setCopied(false);
     try {
@@ -60,8 +62,10 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
       });
       setCopy(buildShareCopyEnvelope(result.copy, shareContext ?? {}, isZh));
       setPlatformName(result.platform_name);
+      setStatus('success');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('share.error'));
+      setStatus('error');
     } finally {
       setLoading(false);
     }
@@ -92,6 +96,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
       kind: 'share_modal',
       active_platform: activePlatform,
       platform_name: platformName || null,
+      status,
       loading,
       error: error || null,
       copied,
@@ -104,7 +109,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, error, loading, onAutomationStateChange, platformName, shareContext]);
+  }, [activePlatform, copied, copy, error, loading, onAutomationStateChange, platformName, shareContext, status]);
 
   return (
     <div className="share-overlay" onClick={onClose}>
@@ -137,6 +142,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
             <div className="share-modal__loading">
               <div className="share-spinner" />
               <p>{t('share.generating', { platform: activePlatformLabel ? t(activePlatformLabel.labelKey) : '' })}</p>
+              <p className="share-modal__subtle">{t('share.generating_hint')}</p>
             </div>
           )}
 
@@ -151,6 +157,10 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
 
           {copy && !loading && (
             <div className="share-modal__result">
+              <div className={`share-modal__status share-modal__status--${status}`}>
+                <strong>{t('share.ready', { platform: platformName || (activePlatformLabel ? t(activePlatformLabel.labelKey) : '') })}</strong>
+                <span>{copied ? t('share.copied_hint') : t('share.ready_hint')}</span>
+              </div>
               {shareContext && (shareContext.profileLabel || shareContext.resonanceLabel || shareContext.profileHooks?.length) && (
                 <div className="share-context">
                   {shareContext.profileLabel && (

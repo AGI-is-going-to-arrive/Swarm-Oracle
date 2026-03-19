@@ -200,14 +200,22 @@ export function SimulationView() {
   const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
-  const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(null);
-  const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(null);
+  const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(
+    () => scenario?.director_state ?? null,
+  );
+  const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(
+    () => scenario?.gameplay_state ?? null,
+  );
   const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
+
+  useEffect(() => {
+    setPanelCollapsed(viewMode === 'theater');
+  }, [viewMode]);
 
   // Phase 3 Batch 3: Screen capture
   const { status: captureStatus, lastCaptureKind, captureScreenshot, captureGIF } = useScreenCapture({
@@ -421,6 +429,7 @@ export function SimulationView() {
   useEffect(() => {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
+    if (hasMeaningfulScenarioGameplayState(backendGameplayState)) return;
     const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;

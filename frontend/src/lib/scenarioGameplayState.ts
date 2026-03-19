@@ -13,11 +13,21 @@ import {
   type ScenarioMeta,
   type StructuredBetRecord,
   buildCardUsageMoment,
+  parseScenarioMoment,
   updateScenarioMeta,
 } from './scenarioMeta';
 
-function buildUsageKey(usage: Pick<CardUsageRecord, 'cardId' | 'branchId' | 'round' | 'usedAt'>): string {
-  return [usage.cardId, usage.branchId, usage.round, usage.usedAt].join('::');
+function hasOwnKey(value: unknown, key: string): boolean {
+  return typeof value === 'object' && value !== null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function getGameplayAuthorityFlags(state: ScenarioGameplayState | null | undefined) {
+  return {
+    usage: hasOwnKey(state, 'cards') && hasOwnKey(state?.cards, 'usage_log'),
+    bets: hasOwnKey(state, 'betting') && hasOwnKey(state?.betting, 'bets'),
+    keyMoments: hasOwnKey(state, 'archive') && hasOwnKey(state?.archive, 'key_moments'),
+    branchSnapshots: hasOwnKey(state, 'archive') && hasOwnKey(state?.archive, 'branch_snapshots'),
+  };
 }
 
 function normalizeUsageRecord(entry: ScenarioGameplayCardUsage): CardUsageRecord | null {
@@ -49,16 +59,6 @@ function sortUsageRecords(usages: CardUsageRecord[]): CardUsageRecord[] {
     if (a.usedAt !== b.usedAt) return a.usedAt.localeCompare(b.usedAt);
     return a.cardId.localeCompare(b.cardId);
   });
-}
-
-function mergeUsageRecords(localUsages: CardUsageRecord[], remoteUsages: CardUsageRecord[]): CardUsageRecord[] {
-  const merged = new Map<string, CardUsageRecord>();
-
-  for (const usage of [...localUsages, ...remoteUsages]) {
-    merged.set(buildUsageKey(usage), usage);
-  }
-
-  return sortUsageRecords([...merged.values()]);
 }
 
 function deriveCardStateFromUsages(usages: CardUsageRecord[]) {
@@ -101,10 +101,6 @@ function deriveCardStateFromUsages(usages: CardUsageRecord[]) {
   };
 }
 
-function buildBetKey(bet: Pick<StructuredBetRecord, 'betId'>): string {
-  return bet.betId;
-}
-
 function normalizeBetRecord(entry: ScenarioGameplayBet): StructuredBetRecord | null {
   const betId = (entry.bet_id || '').trim();
   const kind = entry.kind;
@@ -140,22 +136,6 @@ function sortBetRecords(bets: StructuredBetRecord[]): StructuredBetRecord[] {
   });
 }
 
-function mergeBetRecords(
-  localBets: StructuredBetRecord[],
-  remoteBets: StructuredBetRecord[],
-): StructuredBetRecord[] {
-  const merged = new Map<string, StructuredBetRecord>();
-
-  for (const bet of localBets) {
-    merged.set(buildBetKey(bet), bet);
-  }
-  for (const bet of remoteBets) {
-    merged.set(buildBetKey(bet), bet);
-  }
-
-  return sortBetRecords([...merged.values()]);
-}
-
 function normalizeKeyMoments(keyMoments: string[] | undefined): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -173,6 +153,26 @@ function normalizeKeyMoments(keyMoments: string[] | undefined): string[] {
 
 function mergeKeyMoments(localKeyMoments: string[], remoteKeyMoments: string[]): string[] {
   return normalizeKeyMoments([...localKeyMoments, ...remoteKeyMoments]);
+}
+
+function stripCompatKeyMoments(
+  keyMoments: string[],
+  options: {
+    removeCardMoments: boolean;
+    removeBetMoments: boolean;
+  },
+): string[] {
+  if (!options.removeCardMoments && !options.removeBetMoments) {
+    return keyMoments;
+  }
+
+  return keyMoments.filter((moment) => {
+    const parsed = parseScenarioMoment(moment);
+    if (!parsed) return true;
+    if (options.removeCardMoments && parsed.kind === 'card') return false;
+    if (options.removeBetMoments && parsed.kind === 'bet') return false;
+    return true;
+  });
 }
 
 function normalizeBranchSnapshot(
@@ -200,22 +200,6 @@ function sortBranchSnapshots(
     if (a.title !== b.title) return a.title.localeCompare(b.title);
     return a.branchId.localeCompare(b.branchId);
   });
-}
-
-function mergeBranchSnapshots(
-  localSnapshots: ScenarioArchiveState['branchSnapshots'],
-  remoteSnapshots: ScenarioArchiveState['branchSnapshots'],
-): ScenarioArchiveState['branchSnapshots'] {
-  const merged = new Map<string, ScenarioArchiveState['branchSnapshots'][number]>();
-
-  for (const snapshot of localSnapshots) {
-    merged.set(snapshot.branchId, snapshot);
-  }
-  for (const snapshot of remoteSnapshots) {
-    merged.set(snapshot.branchId, snapshot);
-  }
-
-  return sortBranchSnapshots([...merged.values()]);
 }
 
 function normalizeGameplayState(
@@ -286,6 +270,13 @@ export function hasMeaningfulScenarioGameplayState(
   );
 }
 
+export function hasScenarioGameplayAuthority(
+  state: ScenarioGameplayState | null | undefined,
+): boolean {
+  const flags = getGameplayAuthorityFlags(state);
+  return flags.usage || flags.bets || flags.keyMoments || flags.branchSnapshots;
+}
+
 export function scenarioMetaToGameplayState(meta: ScenarioMeta): ScenarioGameplayState {
   return normalizeGameplayState({
     cards: {
@@ -328,7 +319,11 @@ export function mergeScenarioMetaWithGameplayState(
   meta: ScenarioMeta,
   state: ScenarioGameplayState | null | undefined,
 ): ScenarioMeta {
-  if (!hasMeaningfulScenarioGameplayState(state)) return meta;
+  if (!hasMeaningfulScenarioGameplayState(state)) {
+    return meta;
+  }
+
+  const authority = getGameplayAuthorityFlags(state);
 
   const remoteUsages = sortUsageRecords(
     (state?.cards?.usage_log ?? [])
@@ -347,9 +342,18 @@ export function mergeScenarioMetaWithGameplayState(
   );
   const remoteKeyMoments = normalizeKeyMoments(state?.archive?.key_moments ?? []);
 
-  const mergedUsages = mergeUsageRecords(meta.cards.usageLog, remoteUsages);
-  const mergedBets = mergeBetRecords(meta.betting.bets, remoteBets);
-  const derived = deriveCardStateFromUsages(mergedUsages);
+  const effectiveUsages = authority.usage ? remoteUsages : meta.cards.usageLog;
+  const effectiveBets = authority.bets ? remoteBets : meta.betting.bets;
+  const effectiveBranchSnapshots = authority.branchSnapshots
+    ? remoteBranchSnapshots
+    : meta.archive.branchSnapshots;
+  const derived = deriveCardStateFromUsages(effectiveUsages);
+  const compatKeyMoments = stripCompatKeyMoments(meta.archive.keyMoments, {
+    removeCardMoments: authority.usage,
+    removeBetMoments: authority.bets,
+  });
+  const effectiveKeyMoments = authority.keyMoments ? remoteKeyMoments : compatKeyMoments;
+
   return {
     ...meta,
     director: {
@@ -361,19 +365,24 @@ export function mergeScenarioMetaWithGameplayState(
       usageLog: derived.usages,
     },
     betting: {
-      bets: mergedBets,
+      bets: effectiveBets,
     },
     archive: {
       ...meta.archive,
-      profileId: derived.archive.profileId ?? meta.archive.profileId,
-      updatedAt: derived.archive.updatedAt ?? meta.archive.updatedAt,
-      counterplayCardCount: derived.archive.counterplayCardCount,
-      lastCounterplayCard: derived.archive.lastCounterplayCard,
-      keyMoments: mergeKeyMoments(
-        mergeKeyMoments(meta.archive.keyMoments, remoteKeyMoments),
-        derived.archive.keyMoments,
-      ),
-      branchSnapshots: mergeBranchSnapshots(meta.archive.branchSnapshots, remoteBranchSnapshots),
+      profileId: authority.usage
+        ? derived.archive.profileId
+        : (derived.archive.profileId ?? meta.archive.profileId),
+      updatedAt: authority.usage
+        ? derived.archive.updatedAt
+        : (derived.archive.updatedAt ?? meta.archive.updatedAt),
+      counterplayCardCount: authority.usage
+        ? derived.archive.counterplayCardCount
+        : (derived.archive.counterplayCardCount ?? meta.archive.counterplayCardCount),
+      lastCounterplayCard: authority.usage
+        ? derived.archive.lastCounterplayCard
+        : (derived.archive.lastCounterplayCard ?? meta.archive.lastCounterplayCard),
+      keyMoments: mergeKeyMoments(effectiveKeyMoments, derived.archive.keyMoments),
+      branchSnapshots: effectiveBranchSnapshots,
     },
   };
 }

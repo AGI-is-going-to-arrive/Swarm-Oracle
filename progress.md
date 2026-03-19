@@ -8142,6 +8142,121 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 已把本轮临时拉起的 backend / preview 停掉
   - 当前 `18927 / 18928` 无残留监听进程
 
+## 2026-03-20 CI 对齐 + gameplay authority 再收紧 + mobile Theater 小屏 QA + ShareModal 反馈
+
+- 已改：
+  - `.github/workflows/ci.yml`
+    - frontend targeted vitest lane 现已补齐：
+      - `src/components/InterventionModal.test.tsx`
+      - `src/stores/simulationStore.test.ts`
+    - 当前 CI 文档口径与实际 workflow 已重新对齐
+  - `frontend/src/lib/scenarioGameplayState.ts`
+    - gameplay raw state 合并进一步改成“远端 authority 优先”
+    - 当 backend `gameplay_state` 已有有效内容时，不再把本地 stale `usageLog / bets` 混回 authority 链路
+    - 远端显式分区仍继续作为对应分区的真值；兼容层只在远端仍为空时参与回填
+  - `frontend/src/lib/scenarioGameplayState.test.ts`
+    - 新增远端 gameplay authority 覆盖本地 stale compat 的回归
+  - `frontend/src/pages/SimulationView.tsx`
+    - `viewMode` 切进 Theater 时会重新收起 agent panel
+    - 主模式页面当前只会在 backend `gameplay_state` 仍为空时，才做本地 compat gameplay 回写
+  - `frontend/src/pages/SimulationView.css`
+    - 小屏 Theater 顶部动作区 / 状态条 / 导演摘要 / replay filters 改成单行横向滚动条带
+    - 修掉 mobile Theater 的一个真实布局 bug：
+      - `.sim-content__panel--collapsed` 先前在小屏 theater 下仍被 `max-height: 40vh` 顶开
+      - 现在 collapsed panel 会强制收成 `0 height / 0 flex / transparent border-top`
+      - 避免隐藏 panel 继续占高把首屏主剧场顶出视口
+  - `frontend/src/pages/SimulationView.test.tsx`
+    - 新增：
+      - backend gameplay authority 已存在时不得回灌 stale local gameplay
+      - 切进 Theater 后侧栏应重新折叠
+    - 补了 test `localStorage.clear()`，避免与 `ResultView.test.tsx` 串味
+  - `frontend/src/components/ShareModal.tsx`
+    - 主模式分享弹窗当前显式输出：
+      - `status = idle/loading/success/error`
+      - 更直白的 `generating_hint`
+      - 生成完成后的 `ready / ready_hint`
+      - 复制后的 `copied_hint`
+  - `frontend/src/components/ShareModal.css`
+    - 补了 loading hint / ready status 样式
+    - 小屏下 `share-result-header` 改为纵向排列，避免按钮和平台标题挤压
+  - `frontend/src/components/ShareModal.test.tsx`
+    - 新增 loading guidance 与 success status 的回归
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 同步补上 share modal 的新文案：
+      - `generating_hint`
+      - `ready`
+      - `ready_hint`
+      - `copied_hint`
+
+- 定向验证：
+  - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`29 passed`
+  - `cd frontend && npm test -- --run src/components/ShareModal.test.tsx`
+    - 结果：`2 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+
+- 本轮小屏真实 QA：
+  - 通过 Playwright 实际复核了：
+    - `/sim/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+      - `390x844`
+      - `430x932`
+    - `/result/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+      - mobile 结果页
+      - share modal 打开与平台点击
+  - 本轮真实发现并修复：
+    - 小屏直开 `/sim/:id` 时，agent panel 会以“视觉收起但布局仍占高”的状态留在页面里
+    - 这会把 Theater 顶部 capture 条带顶出视口
+    - 修复后在 `390x844 / 430x932` 两个视口下都已确认：
+      - collapsed panel 不再继续占高
+      - Theater 顶部 capture/status 条带回到可视区
+      - 小屏横向滚动条带可用
+  - 本轮结果页 share modal 真实复核：
+    - modal 可正常打开
+    - 点击 `Xiaohongshu` 后后端 `POST /api/scenario/.../social/xiaohongshu` 返回 `200`
+    - 结果页中出现的 `finalize 409` 仍是已归档 scenario 的旧冲突行为，不是本轮回归
+
+- 当前工作树真实签收：
+  - 显式启动：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - 执行：
+    - `cd frontend && SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless --output-root output/e2e/2026-03-20-current-head-post-fixes-signoff`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`
+    - `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/corners/result.json`
+    - `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/mobile/result.json`
+    - `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/cross-browser/result.json`
+    - `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/debate-full/result.json`
+  - 本轮确认：
+    - backend targeted `pytest`：`82 passed`
+    - `summary.json` 总状态：`passed`
+    - `corners / mobile / cross-browser / debate-full` 全部通过
+    - Debate desktop / mobile 两端都命中 `adjudicationMode = llm_hybrid`
+    - 当前这份 `summary.json` 绑定 commit `16ee91e662e802c0778f38356a5abd1213c6318a`
+    - 当前这份工件记录的是 dirty worktree，不是 clean HEAD
+
+- 文档同步：
+  - `README.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/project.md`
+  - `implement/README.md`
+    - 文档口径已同步到：
+      - CI frontend targeted lane 已与文档对齐
+      - gameplay authority 再收紧后的真实行为
+      - mobile Theater 小屏滚动条带与 collapsed panel 修复
+      - ShareModal 的 `status / generating_hint / ready_hint`
+      - 当前工作树 post-fixes signoff 工件位置与 dirty worktree 绑定信息
+
+- 收尾：
+  - 已把本轮临时拉起的 backend / preview 停掉
+  - 当前 `18927 / 18928` 无残留监听进程
+
 ## 2026-03-20 高级干预前端闭环
 
 - 已改：

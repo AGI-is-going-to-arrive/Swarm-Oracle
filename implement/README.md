@@ -84,8 +84,10 @@
   - backend targeted set `82 passed`
   - frontend targeted set `100 passed`
 - Current release signoff：
-  - `frontend/output/e2e/current-head-signoff/summary.json`
-  - 这份 `summary.json` 当前会带 git `branch / commit / worktree` 绑定信息
+  - current worktree：`frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`
+  - 这份 `summary.json` 绑定 commit `16ee91e662e802c0778f38356a5abd1213c6318a`，且当前记录的是 dirty worktree
+  - clean HEAD baseline：`frontend/output/e2e/current-head-signoff/summary.json`
+  - 两份 `summary.json` 都会带 git `branch / commit / worktree` 绑定信息
   - 默认合同当前已包含 `mobile`
   - Debate full 当前可按要求校验 `adjudication_mode = llm_hybrid`
 

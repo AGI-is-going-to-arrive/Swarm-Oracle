@@ -7,6 +7,7 @@
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前 clean HEAD 最新一轮完整 `release:signoff` 已通过，工件位于 `frontend/output/e2e/current-head-signoff/summary.json`。
+- 当前工作树在本次后续收口改动后也已实跑通过完整 `release:signoff`，工件位于 `frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`；这份 `summary.json` 绑定的是当前 dirty worktree。
 - `release:signoff` 的 `summary.json` 现在会记录 git commit / worktree 绑定信息，便于把签收结果和具体代码状态对上。
 
 ## Documentation Contract
@@ -120,6 +121,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
 - Current targeted verification at `HEAD`: backend `82 passed`, frontend `100 passed`, `tsc`/`build`/assets check passed.
+- Current worktree focused verification:
+  - `src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `29 passed`
+  - `src/components/ShareModal.test.tsx`: `2 passed`
+  - `tsc` / `build`: 通过
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -134,13 +139,14 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 如果本地 LLM 链路可用，可以用 `SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid` 强制要求 Debate 结果返回 `adjudication_mode = llm_hybrid`。
 - 如果本轮改动涉及高级干预或结果页 authority，优先跑上面的扩展前端定向回归；当前 clean HEAD 已实跑通过 `100 passed`。
 - Safari is optional and not part of the default full signoff.
-- 最新通过工件：`frontend/output/e2e/current-head-signoff/summary.json`。
+- 最新 current worktree 通过工件：`frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`。
+- 最近一次 clean HEAD 基线工件：`frontend/output/e2e/current-head-signoff/summary.json`。
 
 ## CI
 
 - `.github/workflows/ci.yml`
   - targeted backend `pytest`
-  - frontend `assets:provenance:check / build / targeted vitest`
+  - frontend `assets:provenance:check / build / targeted vitest`；当前 targeted vitest lane 已与文档口径对齐，包含 `InterventionModal.test.tsx` 与 `simulationStore.test.ts`
   - `release-signoff-dry-run`
   - deterministic `debate-signoff-smoke`
 - `.github/workflows/release-signoff.yml`

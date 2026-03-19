@@ -74,6 +74,7 @@ jobs:
             src/lib/archiveSummary.test.ts \
             src/components/gameplayCards.test.ts \
             src/components/gameplayContract.test.ts \
+            src/components/InterventionModal.test.tsx \
             src/pages/SimulationView.test.tsx \
             src/pages/ResultView.test.tsx \
             src/components/GameplayCardsModal.test.tsx \
@@ -82,7 +83,8 @@ jobs:
             src/components/DebateBetModal.test.tsx \
             src/components/DebateShareModal.test.tsx \
             src/hooks/useDebateWS.test.tsx \
-            src/i18n/locales.test.ts
+            src/i18n/locales.test.ts \
+            src/stores/simulationStore.test.ts
 
   release-signoff-dry-run:
     runs-on: ubuntu-latest

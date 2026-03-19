@@ -547,35 +547,112 @@
 }
 
 @media (max-width: 900px) {
+  .theater-panel__header {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .theater-panel__capture,
+  .theater-panel__status,
+  .theater-panel__warmup-checks,
+  .theater-panel__director-top,
+  .theater-panel__commitment,
+  .theater-panel__filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 2px;
+  }
+
+  .theater-panel__capture::-webkit-scrollbar,
+  .theater-panel__status::-webkit-scrollbar,
+  .theater-panel__warmup-checks::-webkit-scrollbar,
+  .theater-panel__director-top::-webkit-scrollbar,
+  .theater-panel__commitment::-webkit-scrollbar,
+  .theater-panel__filters::-webkit-scrollbar {
+    display: none;
+  }
+
   .theater-panel__status {
     gap: 6px;
-    margin-bottom: 10px;
+    margin: 4px 0 8px;
   }
 
   .theater-panel__warmup {
     gap: 8px;
-    padding: 10px 12px;
+    padding: 8px 10px;
   }
 
   .theater-panel__director {
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 6px;
+    padding: 8px 10px;
   }
 
   .theater-panel__director-goals {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .capture-mode-feedback {
-    width: 100%;
-    justify-content: center;
+    flex: 0 0 auto;
+    min-height: 26px;
+    padding: 3px 8px;
+  }
+
+  .capture-mode-toggle__btn,
+  .btn--capture {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .capture-mode-toggle__btn {
+    padding: 4px 7px;
+  }
+
+  .theater-chip,
+  .theater-select {
+    flex: 0 0 auto;
   }
 
   .theater-panel__timeline {
     margin-bottom: 10px;
   }
 
+  .director-goal {
+    padding: 6px 7px;
+    font-size: 0.69rem;
+  }
+
+  .director-goal strong {
+    font-size: 0.72rem;
+  }
+
   .theater-chip {
+    font-size: 0.68rem;
+    padding: 4px 8px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .theater-panel__warmup-copy {
+    font-size: 0.74rem;
+  }
+
+  .theater-panel__warmup-copy strong {
+    font-size: 0.8rem;
+  }
+
+  .theater-panel__director-top {
+    gap: 6px;
+  }
+
+  .director-goal__detail {
+    -webkit-line-clamp: 2;
+  }
+
+  .btn--capture {
     font-size: 0.68rem;
     padding: 4px 8px;
   }
@@ -748,5 +825,14 @@
     max-height: 40vh;
     border-left: none;
     border-top: 1px solid rgba(108, 92, 231, 0.2);
+  }
+
+  .simulation-view--theater .sim-content__panel--collapsed {
+    flex: 0 0 0;
+    width: 0;
+    max-height: 0;
+    height: 0;
+    min-height: 0;
+    border-top-color: transparent;
   }
 }
