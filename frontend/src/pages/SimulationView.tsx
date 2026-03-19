@@ -219,6 +219,15 @@ export function SimulationView() {
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
   );
+  const branchRoundLimits = useMemo(() => {
+    const limits: Record<string, number> = {};
+
+    for (const message of messages) {
+      limits[message.branch] = Math.max(limits[message.branch] ?? 0, message.round);
+    }
+
+    return limits;
+  }, [messages]);
   const isReplayMode = Boolean(replayPayload);
   const storedScenarioMeta = useMemo(
     () => (replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null)),
@@ -1579,6 +1588,9 @@ export function SimulationView() {
             scenarioId={id}
             branchId={interventionTarget.branchId}
             branchTitle={interventionTarget.branchTitle}
+            activeBranches={activeBranches}
+            branchRoundLimits={branchRoundLimits}
+            currentRound={Math.max(currentRound, 1)}
             onClose={() => setInterventionTarget(null)}
           />
         </Suspense>

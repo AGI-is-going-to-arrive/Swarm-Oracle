@@ -6,7 +6,7 @@
 
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
-- 当前工作树最新一轮完整 `release:signoff` 已通过，工件位于 `frontend/output/e2e/codex-top3-live-signoff/summary.json`。
+- 当前工作树最新一轮完整 `release:signoff` 已通过，工件位于 `frontend/output/e2e/current-head-signoff/summary.json`。
 - `release:signoff` 的 `summary.json` 现在会记录 git commit / worktree 绑定信息，便于把签收结果和具体代码状态对上。
 
 ## Documentation Contract
@@ -28,7 +28,7 @@
 |------|------|
 | Multi-Agent Simulation | 多 Agent 基于 persona、立场、情绪进行推演 |
 | Branching Timelines | 生成平行分支与概率追踪 |
-| Butterfly Effect | 支持实时干预、回溯干预和批量干预 |
+| Butterfly Effect | 支持实时干预、回溯干预和批量干预；前端当前已有统一干预弹窗闭环 |
 | Pixel Theater | Phaser 驱动的像素剧场，可视化角色、场景、气泡和结局 |
 | Structured Betting | 支持押世界线、押结局倾向、押题材回响 |
 | Gameplay Cards | 14 张玩法卡，包括 10 张导演卡和 4 张反制卡 |
@@ -110,6 +110,13 @@ npm run assets:provenance:check
 
 ```bash
 cd frontend
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run assets:provenance:check
+```
+
+```bash
+cd frontend
 npm run release:signoff -- --headless
 ```
 
@@ -119,7 +126,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 ```
 
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
-- Current targeted verification at `HEAD`: backend `82 passed`, frontend `79 passed`, `tsc`/`build`/assets check passed.
+- Current targeted verification at `HEAD`: backend `82 passed`, frontend `99 passed`, `tsc`/`build`/assets check passed.
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -132,8 +139,9 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - `scripts/e2e-debate-suite.mjs full`
 - `summary.json` 现在会记录 git commit / worktree 绑定信息。
 - 如果本地 LLM 链路可用，可以用 `SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid` 强制要求 Debate 结果返回 `adjudication_mode = llm_hybrid`。
+- 如果本轮改动涉及高级干预或结果页 authority，建议额外补跑上面的扩展前端定向回归，确认 `InterventionModal / simulationStore / SimulationView / ResultView` 一起通过。
 - Safari is optional and not part of the default full signoff.
-- 最新通过工件：`frontend/output/e2e/codex-top3-live-signoff/summary.json`。
+- 最新通过工件：`frontend/output/e2e/current-head-signoff/summary.json`。
 
 ## CI
 

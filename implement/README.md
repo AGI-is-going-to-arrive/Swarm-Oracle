@@ -69,7 +69,9 @@
 - 前端核心链路已完成：`InputView → SimulationView → ResultView → HistoryView → LeaderboardView`。
 - Pixel Theater 已完成并长期收口：Phase 1-5、语义场景池、HUD 迁移、可读性修复、按需加载与截图/GIF 分流。
 - 主模式玩法层已完成：14 张玩法卡、结构化押注、因果档案、daily/weekly challenge、Replay / Import。
+- 主模式高级干预前端闭环已完成：`InterventionModal` 当前已支持 `即时 / 回溯 / 批量` 三模式。
 - 主模式 authority 已完成：`director_state_json / gameplay_state_json` 为后端真值，`scenarioMeta` 仅保留兼容/缓存层职责。
+- 结果页 authority 又收了一步：远端 `director_state / gameplay_state / campaign summary` 当前作为展示基线，只有缺字段时才回退本地 `scenarioMeta`。
 - Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`。
 - 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`。
 
@@ -80,9 +82,9 @@
   - frontend `179 passed`
 - Current targeted verification：
   - backend targeted set `82 passed`
-  - frontend targeted set `79 passed`
+  - frontend targeted set `99 passed`
 - Current release signoff：
-  - `frontend/output/e2e/codex-top3-live-signoff/summary.json`
+  - `frontend/output/e2e/current-head-signoff/summary.json`
   - 这份 `summary.json` 当前会带 git `branch / commit / worktree` 绑定信息
   - 默认合同当前已包含 `mobile`
   - Debate full 当前可按要求校验 `adjudication_mode = llm_hybrid`

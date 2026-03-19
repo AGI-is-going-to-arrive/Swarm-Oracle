@@ -8141,3 +8141,122 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 收尾：
   - 已把本轮临时拉起的 backend / preview 停掉
   - 当前 `18927 / 18928` 无残留监听进程
+
+## 2026-03-20 高级干预前端闭环
+
+- 已改：
+  - `frontend/src/api/client.ts`
+    - 新增：
+      - `interveneRetrospective()`
+      - `interveneBatch()`
+  - `frontend/src/types.ts`
+    - 新增 retrospective / batch 干预 payload / response
+    - `WSEvent` 新增：
+      - `retrospective_start`
+      - `batch_intervention_applied`
+  - `frontend/src/stores/simulationStore.ts`
+    - `retrospective_start` 现在会补 placeholder branch 并写入 intervention log
+    - `batch_intervention_applied` 现在会把整批干预一起写入 intervention log
+  - `frontend/src/stores/simulationStore.test.ts`
+  - `frontend/src/components/InterventionModal.tsx`
+    - 当前已支持：
+      - `即时`
+      - `回溯`
+      - `批量`
+    - 页面层会传入：
+      - 活跃分支列表
+      - 分支历史轮次上限
+      - 当前轮次
+  - `frontend/src/components/InterventionModal.css`
+  - `frontend/src/components/InterventionModal.test.tsx`
+  - `frontend/src/pages/SimulationView.tsx`
+    - 现在会把 `activeBranches / branchRoundLimits / currentRound` 传给 `InterventionModal`
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+
+- 定向验证：
+  - `cd frontend && npx vitest run /Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/InterventionModal.test.tsx --reporter=verbose`
+    - 结果：`4 passed`
+  - `cd frontend && npx vitest run src/stores/simulationStore.test.ts src/pages/SimulationView.test.tsx`
+    - 结果：`28 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+
+- 当前口径：
+  - 主模式高级干预现在不再只是后端有契约、前端只接普通干预。
+  - 当前 Web 前端已经有统一 `InterventionModal` 闭环：
+    - 即时干预直接注入当前分支
+    - 回溯干预从历史轮次重新推演
+    - 批量干预把同一事件同时施加到多个活跃分支
+
+## 2026-03-20 ResultView 远端 authority 优先
+
+- 已改：
+  - `frontend/src/pages/ResultView.tsx`
+    - 新增 `mergeResultScenarioMetaAuthority()`
+    - 当远端 `gameplay_state` 已有有效内容时，结果页不再从本地 `scenarioMeta` 的 raw gameplay 结果起步
+    - 当前会先用远端 `gameplay_state / director_state / campaign summary` 构成结果页展示基线
+    - 只有当远端缺字段时，才回退本地 `scenarioMeta` 的兼容内容
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增 stale local 不得覆盖 remote 的回归测试
+
+- 定向验证：
+  - `cd frontend && npx vitest run src/pages/ResultView.test.tsx`
+    - 结果：`9 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+
+- 当前口径：
+  - `ResultView` 现在仍会把 story 派生的 archive/objectives 留在内存里用于展示和 replay payload。
+  - 但本地 `scenarioMeta` 不再是结果页 authority 底座。
+  - 当前更准确的说法是：
+    - 远端 authority 优先
+    - 本地 `scenarioMeta` 只做缺字段兜底、兼容层和 replay 输入
+
+## 2026-03-20 文档真值同步 + 当前工作树签收
+
+- 已改：
+  - `README.md`
+  - `llmdoc/guides/development.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `implement/README.md`
+
+- 文档同步内容：
+  - `Butterfly Effect` 口径改成已覆盖实时 / 回溯 / 批量干预，且前端已有统一弹窗闭环
+  - `ResultView / scenarioMeta` 口径改成远端 authority 优先、缺字段才 fallback 本地兼容层
+  - 当前推荐前端 targeted 回归已扩到：
+    - `src/components/InterventionModal.test.tsx`
+    - `src/stores/simulationStore.test.ts`
+  - 当前 targeted frontend set 口径同步为：`99 passed`
+
+- 文档对应验证：
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts`
+    - 结果：`99 passed`
+  - `cd frontend && npm run assets:provenance:check`
+    - 结果：`{"status":"ok"}`
+
+- 本次真实签收：
+  - 显式启动：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - 执行：
+    - `cd frontend && SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless --output-root output/e2e/current-docs-sync-signoff`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/current-docs-sync-signoff/summary.json`
+    - `frontend/output/e2e/current-docs-sync-signoff/mobile/result.json`
+    - `frontend/output/e2e/current-docs-sync-signoff/debate-full/result.json`
+  - 本轮确认：
+    - backend targeted `pytest`：`82 passed`
+    - `summary.json` 已记录 git `branch / commit / worktree`
+    - `corners / mobile / cross-browser / debate-full` 全部通过
+    - Debate desktop / mobile 两端都命中 `adjudicationMode = llm_hybrid`
+
+- 收尾：
+  - 已把本轮临时拉起的 backend / preview 停掉
+  - 当前 `18927 / 18928` 无残留监听进程

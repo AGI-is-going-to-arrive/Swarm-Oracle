@@ -78,7 +78,16 @@ npm run build
 npm run assets:provenance:check
 ```
 
-- 当前 targeted frontend set：`79 passed`
+- 当前 targeted frontend set：`99 passed`
+
+如果本轮改动集中在高级干预或结果页 authority，也建议补跑这一组扩展回归：
+
+```bash
+cd frontend
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run assets:provenance:check
+```
 
 ## Release Signoff
 
@@ -136,7 +145,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最新通过工件：
 
-- `frontend/output/e2e/codex-top3-live-signoff/summary.json`
+- `frontend/output/e2e/current-head-signoff/summary.json`
 
 ## CI
 

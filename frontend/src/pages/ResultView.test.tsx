@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ScenarioMeta } from '../lib/scenarioMeta';
+import type { Scenario } from '../types';
 import { buildScenarioReplayUrl } from '../lib/scenarioReplay';
 import ResultView from './ResultView';
 
@@ -168,6 +169,10 @@ vi.mock('../lib/scenarioMeta', () => {
     },
   };
   return {
+    CARD_RULES: {
+      public_hearing: { cost: 1, cooldownRounds: 2 },
+    },
+    buildCardUsageMoment: vi.fn((round: number, cardId: string) => `event:card:${round}:${cardId}`),
     loadScenarioMeta: vi.fn(() => meta),
     ensureScenarioObjectivesInMemory: vi.fn((current: ScenarioMeta, payload: {
       question: string;
@@ -233,6 +238,7 @@ vi.mock('../components/gameplayCards', () => ({
   getGameplaySignatureArcState: vi.fn(() => null),
   getScenarioSystemTrackState: vi.fn(() => null),
   inferGameplayProfile: vi.fn(() => ({ id: 'law' })),
+  isCounterplayCard: vi.fn(() => false),
 }));
 
 vi.mock('../components/ShareModal', () => ({
@@ -786,6 +792,266 @@ describe('ResultView campaign summary', () => {
           probability: 1,
         },
       ]);
+    });
+  });
+
+  it('prefers remote gameplay authority over stale local scenarioMeta on the result page', async () => {
+    const { getScenario } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue({
+      director: { maxPoints: 3, remainingPoints: 1, spentPoints: 2 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: {
+        bets: [
+          {
+            betId: 'bet-local',
+            kind: 'branch_winner',
+            targetId: 'branch-local',
+            targetLabel: 'Stale Local Branch',
+            confidence: 0.41,
+            placedAtRound: 1,
+            placedAt: '2026-03-18T00:00:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [{ branchId: 'branch-local', title: 'Stale Local Branch', probability: 0.37 }],
+        keyMoments: ['Stale local moment'],
+        profileId: 'law',
+        dominantBranchTitle: 'Stale Local Branch',
+        dominantTone: 'rupture',
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'C',
+        directorStyleTag: 'quiet_observer',
+        profileResonance: 'aligned',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    });
+    vi.mocked(getScenario).mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      director_state: {
+        objectives: {
+          generated_for_question: null,
+          generated_for_profile: null,
+          goals: [],
+          last_updated_at: null,
+        },
+        commitment: {
+          active: false,
+          branch_id: null,
+          branch_title: null,
+          committed_at_round: null,
+          committed_at: null,
+          outcome: null,
+        },
+      },
+      gameplay_state: {
+        cards: {
+          usage_log: [],
+        },
+        betting: {
+          bets: [
+            {
+              bet_id: 'bet-remote',
+              kind: 'branch_winner',
+              target_id: 'branch-1',
+              target_label: 'Archive Branch',
+              confidence: 0.88,
+              user_name: 'Remote Director',
+              placed_at_round: 2,
+              placed_at: '2026-03-19T00:02:00Z',
+              resolved: false,
+            },
+          ],
+        },
+        archive: {
+          key_moments: ['Remote key moment'],
+          branch_snapshots: [
+            {
+              branch_id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+            },
+          ],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.result_bet_list).toEqual([
+        expect.objectContaining({
+          bet_id: 'bet-remote',
+          target_label: 'Archive Branch',
+        }),
+      ]);
+      expect(payload?.page?.result_key_moments).toContain('Remote key moment');
+      expect(payload?.page?.result_key_moments).not.toContain('Stale local moment');
+      expect(payload?.page?.result_branch_snapshots).toEqual([
+        {
+          branch_id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+        },
+      ]);
+    });
+  });
+
+  it('preserves local usage and bets when remote gameplay authority only provides key moments', async () => {
+    const { getScenario } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue({
+      director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+      cooldowns: {},
+      cards: {
+        usageLog: [
+          {
+            cardId: 'public_hearing',
+            profileId: 'law',
+            branchId: 'branch-local',
+            branchTitle: 'Local Branch',
+            round: 2,
+            cost: 1,
+            directive: 'Keep the local public hearing trail.',
+            usedAt: '2026-03-19T00:00:00Z',
+          },
+        ],
+      },
+      betting: {
+        bets: [
+          {
+            betId: 'bet-local',
+            kind: 'branch_winner',
+            targetId: 'branch-local',
+            targetLabel: 'Local Branch',
+            confidence: 0.67,
+            placedAtRound: 2,
+            placedAt: '2026-03-19T00:02:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [{ branchId: 'branch-local', title: 'Local Branch', probability: 0.6 }],
+        keyMoments: ['Stale local moment'],
+        profileId: 'law',
+        dominantBranchTitle: 'Local Branch',
+        dominantTone: 'order',
+        mostUsedCard: 'public_hearing',
+        bettingHit: null,
+        archiveGrade: 'A',
+        directorStyleTag: 'quiet_observer',
+        profileResonance: 'aligned',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    });
+    vi.mocked(getScenario).mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      director_state: {
+        objectives: {
+          generated_for_question: null,
+          generated_for_profile: null,
+          goals: [],
+          last_updated_at: null,
+        },
+        commitment: {
+          active: false,
+          branch_id: null,
+          branch_title: null,
+          committed_at_round: null,
+          committed_at: null,
+          outcome: null,
+        },
+      },
+      gameplay_state: {
+        archive: {
+          key_moments: ['Remote key moment'],
+        },
+      } as unknown as Scenario['gameplay_state'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Keep the local public hearing trail.')).toBeInTheDocument();
+    expect(screen.getAllByText('Local Branch').length).toBeGreaterThan(0);
+    expect(screen.getByText('Remote key moment')).toBeInTheDocument();
+    expect(screen.queryByText('Stale local moment')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.result_bet_list).toEqual([
+        expect.objectContaining({
+          bet_id: 'bet-local',
+          target_label: 'Local Branch',
+        }),
+      ]);
+      expect(payload?.page?.archive_summary?.profile_id).toBe('law');
+      expect(payload?.page?.result_key_moments).toContain('Remote key moment');
     });
   });
 

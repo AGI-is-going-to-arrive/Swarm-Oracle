@@ -177,6 +177,89 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().interventionLog[0].text).toBe("突发地震");
   });
 
+  it("handles 'retrospective_start' → adds placeholder branch and intervention log", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [{
+        id: "b1",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "原始分支",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 0.6,
+        status: "ACTIVE",
+      }],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    store.getState().handleWSEvent({
+      type: "retrospective_start",
+      data: {
+        branch_id: "b2",
+        source_branch_id: "b1",
+        from_round: 2,
+        text: "提前废除奴隶制",
+        intervention_id: "int2",
+      },
+    } as WSEvent);
+
+    expect(store.getState().branches).toHaveLength(2);
+    expect(store.getState().branches[1]).toMatchObject({
+      id: "b2",
+      parent_branch_id: "b1",
+      fork_round: 2,
+      title: "Retrospective R2",
+      status: "ACTIVE",
+    });
+    expect(store.getState().interventionLog).toHaveLength(1);
+    expect(store.getState().interventionLog[0]).toMatchObject({
+      branch_id: "b2",
+      text: "提前废除奴隶制",
+      round: 2,
+    });
+  });
+
+  it("handles 'batch_intervention_applied' → appends all intervention entries", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "batch_intervention_applied",
+      data: {
+        interventions: [
+          {
+            branch_id: "b1",
+            text: "港口停摆",
+            round: 2,
+            intervention_id: "int-a",
+          },
+          {
+            branch_id: "b2",
+            text: "边境关闭",
+            round: 3,
+            intervention_id: "int-b",
+          },
+        ],
+      },
+    } as WSEvent);
+
+    expect(store.getState().interventionLog).toEqual([
+      { branch_id: "b1", text: "港口停摆", round: 2 },
+      { branch_id: "b2", text: "边境关闭", round: 3 },
+    ]);
+  });
+
   it("handles 'simulation_error' → sets error state", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({

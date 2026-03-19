@@ -52,6 +52,12 @@ export interface SimulationState {
   reset: () => void;
 }
 
+interface InterventionLogEntry {
+  branch_id: string;
+  text: string;
+  round: number;
+}
+
 const initialState = {
   scenario: null,
   agents: [] as AgentInfo[],
@@ -68,9 +74,16 @@ const initialState = {
   currentRound: 0,
   simStartTime: null as number | null,
   roundCompleteTimes: [] as number[],
-  interventionLog: [] as Array<{ branch_id: string; text: string; round: number }>,
+  interventionLog: [] as InterventionLogEntry[],
   isSimulationComplete: false,
 };
+
+function appendInterventionLog(
+  current: InterventionLogEntry[],
+  next: InterventionLogEntry[],
+): InterventionLogEntry[] {
+  return [...current, ...next];
+}
 
 export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
@@ -325,18 +338,67 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'intervention_applied':
         set((state) => ({
-          interventionLog: [
-            ...state.interventionLog,
+          interventionLog: appendInterventionLog(state.interventionLog, [
             {
               branch_id: event.data.branch_id,
               text: event.data.text,
               round: event.data.round,
             },
-          ],
+          ]),
         }));
         break;
 
       case 'intervention_injected':
+        break;
+
+      case 'retrospective_start':
+        set((state) => {
+          const sourceBranch = state.branches.find((branch) => branch.id === event.data.source_branch_id);
+          const hasBranch = state.branches.some((branch) => branch.id === event.data.branch_id);
+          const nextBranches = hasBranch
+            ? state.branches
+            : [
+                ...state.branches,
+                {
+                  id: event.data.branch_id,
+                  parent_branch_id: event.data.source_branch_id,
+                  fork_round: event.data.from_round,
+                  fork_reason: event.data.text,
+                  title: `Retrospective R${event.data.from_round}`,
+                  description: '',
+                  summary: '',
+                  story: '',
+                  insight: '',
+                  key_moments: [],
+                  probability: sourceBranch ? Math.max(sourceBranch.probability * 0.8, 0.01) : 0.5,
+                  status: 'ACTIVE' as const,
+                },
+              ];
+
+          return {
+            branches: nextBranches,
+            interventionLog: appendInterventionLog(state.interventionLog, [
+              {
+                branch_id: event.data.branch_id,
+                text: event.data.text,
+                round: event.data.from_round,
+              },
+            ]),
+          };
+        });
+        break;
+
+      case 'batch_intervention_applied':
+        set((state) => ({
+          interventionLog: appendInterventionLog(
+            state.interventionLog,
+            event.data.interventions.map((intervention) => ({
+              branch_id: intervention.branch_id,
+              text: intervention.text,
+              round: intervention.round,
+            })),
+          ),
+        }));
         break;
 
       case 'simulation_done':

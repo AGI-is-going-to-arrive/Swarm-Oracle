@@ -275,11 +275,40 @@ export interface InterventionPayload {
   text: string;
 }
 
+export interface RetrospectiveInterventionPayload extends InterventionPayload {
+  round_number: number;
+}
+
+export interface BatchInterventionPayload {
+  interventions: InterventionPayload[];
+}
+
 export interface InterventionResponse {
   status: string;
   intervention_id: string;
   branch_id: string;
   round: number;
+}
+
+export interface RetrospectiveInterventionResponse {
+  status: string;
+  intervention_id: string;
+  new_branch_id: string;
+  source_branch_id: string;
+  from_round: number;
+}
+
+export interface BatchInterventionEntry {
+  branch_id: string;
+  text: string;
+  round: number;
+  intervention_id: string;
+}
+
+export interface BatchInterventionResponse {
+  status: string;
+  count: number;
+  interventions: BatchInterventionEntry[];
 }
 
 export interface StoryData {
@@ -485,6 +514,8 @@ export type WSEvent =
   | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }
   | { type: 'intervention_applied'; data: { branch_id: string; text: string; round: number; intervention_id: string } }
   | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string } }
+  | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
+  | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
   | { type: 'simulation_done' }
   | { type: 'simulation_error'; data: { error: string } };
 

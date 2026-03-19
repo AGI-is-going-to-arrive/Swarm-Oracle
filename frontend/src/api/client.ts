@@ -4,7 +4,8 @@
 
 import type {
   Scenario, Branch, StoryData, AgentInfo, AgentGroupDetail,
-  InterventionPayload, InterventionResponse,
+  InterventionPayload, InterventionResponse, RetrospectiveInterventionPayload,
+  RetrospectiveInterventionResponse, BatchInterventionPayload, BatchInterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
@@ -225,6 +226,28 @@ export async function intervene(
   payload: InterventionPayload,
 ): Promise<InterventionResponse> {
   return request(`/scenario/${scenarioId}/intervene`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** POST /api/scenario/:id/intervene/retrospective — replay from a past round with an intervention */
+export async function interveneRetrospective(
+  scenarioId: string,
+  payload: RetrospectiveInterventionPayload,
+): Promise<RetrospectiveInterventionResponse> {
+  return request(`/scenario/${scenarioId}/intervene/retrospective`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** POST /api/scenario/:id/intervene/batch — inject the same type of intervention into multiple branches */
+export async function interveneBatch(
+  scenarioId: string,
+  payload: BatchInterventionPayload,
+): Promise<BatchInterventionResponse> {
+  return request(`/scenario/${scenarioId}/intervene/batch`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

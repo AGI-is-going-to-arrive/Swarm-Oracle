@@ -48,6 +48,51 @@
   gap: 16px;
 }
 
+.intervention-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.intervention-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.intervention-mode span {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.intervention-mode small {
+  font-family: var(--font-body);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.intervention-mode--active {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--bg-surface));
+  color: var(--text-primary);
+}
+
+.intervention-mode:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .modal-field {
   display: flex;
   align-items: center;
@@ -67,6 +112,57 @@
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--text-primary);
+}
+
+.intervention-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.intervention-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.intervention-branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.intervention-branch-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.intervention-branch-item code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.intervention-help {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 .intervention-input {
@@ -171,4 +267,22 @@
   font-size: 10px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+@media (max-width: 720px) {
+  .modal-content {
+    padding: 24px;
+  }
+
+  .intervention-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .intervention-branch-item {
+    grid-template-columns: auto 1fr;
+  }
+
+  .intervention-branch-item code {
+    grid-column: 2;
+  }
 }
