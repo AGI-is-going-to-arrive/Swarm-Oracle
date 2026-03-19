@@ -84,21 +84,30 @@ npm run e2e:debate:full
 
 - Historical full frontend baseline recorded in repo docs: **179 passed**
 - `npm run release:signoff -- --headless` now runs:
-  - targeted backend `pytest`
+  - targeted backend `pytest` (now including `tests/test_metrics.py`)
+  - backend `/metrics` reachability check (expects Prometheus text output)
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
   - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
+- `release:signoff` now writes a rolling `summary.json` into the chosen output root, so partial progress and failures remain inspectable instead of living only in terminal logs
 - Optional flags:
   - `--include-safari --scenario-id <id>`
   - `--skip-backend-checks`
   - `--skip-assets-check`
   - `--backend-python /absolute/path/to/python`
+  - `--backend-url http://127.0.0.1:18927`
+- Optional timeout env vars for slower Debate runs:
+  - `SWARM_DEBATE_RESULT_TIMEOUT_MS`
+  - `SWARM_DEBATE_STALL_TIMEOUT_MS`
+  - `SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - Repo CI now includes a minimal guardrail workflow at `.github/workflows/ci.yml`:
-  - backend targeted `pytest`
+  - backend targeted `pytest` (including `test_metrics.py`)
   - frontend `assets:provenance:check / build / targeted vitest`
+  - `release-signoff-dry-run` to validate the signoff orchestration and `summary.json` contract
+  - deterministic `debate-signoff-smoke` (`DEBATE_USE_LLM=false`, local backend/frontend, `e2e-debate-suite.mjs full`, artifact upload)
 - This doc-sync pass re-ran:
   - `npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx` → **49 passed**
   - `npm run build` → passed
@@ -185,13 +194,27 @@ npm run e2e:debate:full
   - `npm run build` → passed
 - This session also re-ran the upgraded signoff entry:
   - targeted backend `pytest` → **81 passed**
-  - targeted frontend `vitest` (`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales`) → **77 passed**
+  - targeted frontend `vitest` (`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales`) → **79 passed**
   - `npm run build` → passed
   - `npm run assets:provenance:check` → passed
   - `npm run release:signoff -- --headless` → passed
     - artifacts: `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → passed
     - artifacts: `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
+- This session also updated the release-signoff infrastructure:
+  - targeted backend `pytest` → **81 passed**
+  - targeted frontend `vitest` (`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales`) → **79 passed**
+  - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/post-fix-debate-desktop --headless` → passed
+    - artifacts: `frontend/output/e2e/post-fix-debate-desktop/`
+  - `node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run` → `summary.json` written successfully
+  - `npm run release:signoff -- --headless --output-root output/e2e/post-fix-release-signoff` was restarted and confirmed to update `summary.json` step by step; this pass was not waited through to completion, so it should not be recorded as a full green signoff
+- This session also closed the metrics + signoff gap:
+  - targeted backend `pytest` (`test_campaign_api / test_campaign_service / test_debate_api / test_debate_service / test_config / test_predictions / test_card_events / test_gameplay_contract_sync / test_metrics`) → **82 passed**
+  - live backend `/metrics` → `200 text/plain`
+  - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-audit-signoff-dry-run-v4` → passed
+    - artifacts: `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`
+  - `node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2` → passed
+    - artifacts: `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
 - Fixed matrix sample set: **15 scenarios** for the main pool, plus **3 variant scenarios** in `output/e2e/sample_matrix_variants.json`
 - Latest Track C artifact bundles:
   - `frontend/output/e2e/20260317-track-c/matrix/`
@@ -203,7 +226,7 @@ npm run e2e:debate:full
 - `scripts/e2e-suite.mjs` now writes `browser-launch.json` into the chosen output directory so you can see which browser launch profile actually ran
 - `scripts/e2e-debate-suite.mjs` now provides a Debate-only baseline for `live -> bet -> result -> share`; the latest successful artifact bundles are `frontend/output/e2e/20260318-post-director-goals-debate-full/` and `frontend/output/e2e/20260319-debate-supporting-turns-full/`
 - Debate result automation now explicitly requires `supporting_turns.length >= 1`; the final `result.json` also records `supportingTurns` and `supportingTurnCount`
-- Because the richer Debate prompts take longer on real LLM runs, the Debate E2E wait windows were widened so slower but valid responses do not fail black-box runs
+- Because the richer Debate prompts take longer on real LLM runs, Debate E2E now uses progress-aware waits for `result_ready` and the result CTA, and it can be tuned with `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - `scripts/e2e-suite.mjs` and `scripts/e2e-automation.mjs` now normalize `frontend/output/...` arguments to the real frontend root, preventing future runs from writing nested `frontend/frontend/output/...` paths
 - Matrix runs now also recreate samples when an old `scenario_id` resolves to a stale `scene_theme`, not only when the scenario is missing
 - `capture-modes` now records `predictionModalBytes` and `gameplayModalBytes`, and replay recovery waits for `theater_ready === true` before marking the flow healthy again

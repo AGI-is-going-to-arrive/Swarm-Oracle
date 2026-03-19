@@ -526,12 +526,27 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
 - **本次 session 又补了升级后的收口基线**:
   - backend targeted `pytest`：**81 passed**
-  - frontend targeted `vitest`：**77 passed**
+  - frontend targeted `vitest`：**79 passed**
   - `src/lib/scenarioMeta.test.ts / src/pages/ResultView.test.tsx`：**17 passed**
   - `npm run build`：通过
   - `npm run assets:provenance:check`：通过
   - `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
   - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
+- **本次 session 又补了发布收口基础设施**:
+  - `release-signoff` 现在会在 output root 增量写 `summary.json`
+  - `release-signoff` 本轮又补进 `backend_metrics` 检查：会在 backend targeted `pytest` 后直接校验 `/metrics` 返回 `text/plain` 且包含 `# HELP`
+  - `scripts/e2e-debate-suite.mjs` 的 Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+  - `.github/workflows/ci.yml` 当前除了 backend targeted `pytest`、frontend `assets:provenance:check / build / targeted vitest` 外，还新增了 `release-signoff-dry-run` 与 `debate-signoff-smoke`
+  - 本次真实验证：
+    - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
+    - live backend `/metrics`：返回 `200 text/plain`
+    - frontend targeted `vitest`：**79 passed**
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/post-fix-debate-desktop --headless`：通过
+    - 工件：`frontend/output/e2e/post-fix-debate-desktop/`
+    - `node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run`：`summary.json` 落盘通过
+    - `node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-audit-signoff-dry-run-v4`：`summary.json` 落盘通过
+    - `node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2`：整条链路通过，`summary.json` 为 `passed`
+    - `npm run release:signoff -- --headless --output-root output/e2e/post-fix-release-signoff` 已重新启动并确认 `summary.json` 会按步骤增量更新；本次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
 - 本次 session 又补了首页首包收口：
   - `src/pages/InputView.test.tsx / src/pages/SimulationView.test.tsx / src/pages/ResultView.test.tsx` → **24 passed**
   - `npx tsc --noEmit -p tsconfig.app.json` → 通过

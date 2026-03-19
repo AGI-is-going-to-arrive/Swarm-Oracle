@@ -115,6 +115,22 @@
    - `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
    - `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
    - `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
+   本次 session 又补了这条线的收口基础设施：
+   - `release:signoff` 现在会在 output root 增量写 `summary.json`
+   - `release:signoff` 当前还会额外检查 backend `/metrics`
+   - Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+   - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
+   本次真实验证为：
+   - backend targeted `pytest`：**81 passed**
+   - frontend targeted `vitest`：**79 passed**
+   - `frontend/output/e2e/post-fix-debate-desktop/`：Debate desktop 黑盒通过
+   - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
+   - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
+   本次 session 又补了一轮当前工作树收口：
+   - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
+   - live `/metrics`：`200 text/plain`
+   - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
+   - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
    后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
    - `release:signoff --headless`
    - 如需要 Safari 证据，再追加 `--include-safari`

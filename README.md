@@ -39,7 +39,7 @@
 | **LLM Retry with Backoff** | 429/5xx 自动重试 3 次，指数退避 1s→2s→4s |
 | **Alembic Migrations** | 数据库版本化迁移框架 |
 | **Pixel Art Visualization** | 像素风可视化：事件映射 + 精灵分配 + 场景主题 + 卡牌事件 (Phase 1) |
-| **Prometheus Observability** | `/metrics` 端点暴露请求延迟、计数、活跃模拟指标 |
+| **Prometheus Observability** | `/metrics` 端点会返回 Prometheus 文本；安装 instrumentator 时暴露完整请求延迟、计数、活跃模拟指标，缺依赖时也会回退到最小文本输出而不是 `404` |
 | **i18n** | 中英文全局切换器 |
 
 ## Architecture
@@ -129,24 +129,34 @@ cd frontend && npm run e2e:full
 
 - 仓库内历史全量基线仍记录为：后端 **815 passed**、前端 **179 passed**
 - `npm run release:signoff -- --headless` 会顺序执行：
-  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
+  - backend `/metrics` 可达性检查（Prometheus 文本响应）
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
   - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
+- `release:signoff` 现在会在输出目录增量写 `summary.json`，每一步都会记录状态、耗时、命令和工件路径；即使中途失败，也会保留已完成步骤与错误信息
 - 如需跳过新增守门项，可传：
   - `--skip-backend-checks`
   - `--skip-assets-check`
 - 如果 backend Python 不在默认 `.venv` 路径，可传：
   - `--backend-python /absolute/path/to/python`
+- 如果 backend 不在默认 `127.0.0.1:18927`，可传：
+  - `--backend-url http://127.0.0.1:18927`
+- 如需调长 Debate 收口等待窗口，可设置：
+  - `SWARM_DEBATE_RESULT_TIMEOUT_MS`
+  - `SWARM_DEBATE_STALL_TIMEOUT_MS`
+  - `SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - 默认工件目录为 `frontend/output/e2e/<timestamp>-release-signoff/`
 - 若本机已配置 Safari WebDriver，可追加：
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
-- 当前仓库也已补最小 CI：
+- 当前仓库也已补 CI 守门链路：
   - `.github/workflows/ci.yml`
-  - 会并行跑 backend targeted `pytest`，以及 frontend `assets:provenance:check / build / targeted vitest`
+  - 会并行跑 backend targeted `pytest`（含 `test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`
+  - 另新增 `release-signoff-dry-run`：只校验 `release-signoff` 编排与 `summary.json` 合同，不伪造整条链路已通过
+  - 另新增 `debate-signoff-smoke`：在 `DEBATE_USE_LLM=false` 下起本地 backend/frontend，并实跑 `e2e-debate-suite.mjs full` 后上传工件
 - 本次 session 已实跑：
   - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-20-32-479Z-release-signoff/`
   - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-25-24-398Z-release-signoff/`
@@ -157,11 +167,23 @@ cd frontend && npm run e2e:full
   - `npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T15-35-24-820Z-release-signoff/`
 - 本次 session 又补跑：
   - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py` → **81 passed**
-  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **77 passed**
+  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **79 passed**
   - `frontend`：`npm run build` → 通过
   - `frontend`：`npm run assets:provenance:check` → 通过
   - `frontend`：`npm run release:signoff -- --headless` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
   - `frontend`：`npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9` → 通过，工件位于 `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
+- 本次 session 围绕发布收口基础设施又补跑：
+  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py` → **81 passed**
+  - 前端：`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales` → **79 passed**
+  - `frontend`：`node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/post-fix-debate-desktop --headless` → 通过，工件位于 `frontend/output/e2e/post-fix-debate-desktop/`
+  - `frontend`：`node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run` → `summary.json` 落盘通过
+  - `frontend`：`npm run release:signoff -- --headless --output-root output/e2e/post-fix-release-signoff` 已重新启动并确认 `summary.json` 会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
+- 本次 session 又补了 `metrics + signoff` 收口：
+  - 后端：`tests/test_campaign_api.py / tests/test_campaign_service.py / tests/test_debate_api.py / tests/test_debate_service.py / tests/test_config.py / tests/test_predictions.py / tests/test_card_events.py / tests/test_gameplay_contract_sync.py / tests/test_metrics.py` → **82 passed**
+  - live `/metrics`：`200 text/plain`
+  - `frontend`：`node scripts/release-signoff.mjs --dry-run --headless --output-root output/e2e/current-audit-signoff-dry-run-v4` → 通过
+  - `frontend`：`node scripts/release-signoff.mjs --headless --output-root output/e2e/current-audit-release-signoff-v2` → 通过
+  - 当前最新签收工件：`frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
 - 当前新增口径：
   - 首页 `InputView` 现在只读取轻量题材摘要（`label / hooks / badge`），不再静态依赖完整玩法策略表
   - 深层玩法 contract / strategy helper 仍保留在后续路由与导演层链路中
@@ -302,7 +324,7 @@ cd frontend && npm run e2e:full
   - `frontend/output/web-game/20260319-post-cross-browser-client/state-0.json`
   - `frontend/output/web-game/20260319-post-cross-browser-client/shot-0.png`
 - `scripts/e2e-debate-suite.mjs` 现支持 `--width / --height / --question / --profile-hint`，可直接补移动端新视口或指定 Debate 主题工件
-- `scripts/e2e-debate-suite.mjs` 当前会在结果页显式校验 `supporting_turns.length >= 1`，并把 `supportingTurns / supportingTurnCount` 写进最终 `result.json`；由于 Debate 的 LLM prompt 更重，`result_ready` 与结果页等待窗口也已放宽，避免真实慢请求被脚本误判为失败
+- `scripts/e2e-debate-suite.mjs` 当前会在结果页显式校验 `supporting_turns.length >= 1`，并把 `supportingTurns / supportingTurnCount` 写进最终 `result.json`；当前 `result_ready` 与结果页 CTA 等待都已改成 progress-aware，必要时会按 API 进度继续等待并自动刷新结果 CTA；如需调长窗口，可设置 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - Safari 默认 session screenshot 偶尔仍会拍到空白 Theater 画布；若需要核对 HUD / 面板可见性，可额外启用 `SWARM_SAFARI_PANEL_CAPTURE=1` 产出 panel capture 工件
 - 本轮还完成了一次 `docker compose up --build -d` 运行时 smoke：前端代理 `POST /api/scenario` 成功创建 Theater 场景并跑到 `status = done`
 

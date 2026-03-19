@@ -139,7 +139,8 @@ npm run release:signoff -- --headless
 ```
 
 - 它会顺序执行：
-  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py -q`
+  - `backend/.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
+  - `backend/.venv/bin/python -c ... http://127.0.0.1:18927/metrics text/plain "# HELP"`（校验 `/metrics` 可访问且返回 Prometheus 文本）
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
   - `npm run assets:provenance:check`
@@ -147,14 +148,22 @@ npm run release:signoff -- --headless
   - `scripts/e2e-suite.mjs cross-browser`
   - `scripts/e2e-debate-suite.mjs full`
 - 默认工件目录：`frontend/output/e2e/<timestamp>-release-signoff/`
+- `release:signoff` 现在会在输出目录增量写 `summary.json`；如果某一步失败，也会保留已完成步骤、命令、耗时和错误信息
 - 可选参数：
   - `--include-safari --scenario-id <id>`
   - `--skip-backend-checks`
   - `--skip-assets-check`
   - `--backend-python /absolute/path/to/python`
+- 如需调长 Debate 收口等待窗口，可设置：
+  - `SWARM_DEBATE_RESULT_TIMEOUT_MS`
+  - `SWARM_DEBATE_STALL_TIMEOUT_MS`
+  - `SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 - 当前仓库已补最小 CI：
   - `.github/workflows/ci.yml`
-  - 会并行跑 backend targeted `pytest` 与 frontend `assets:provenance:check / build / targeted vitest`
+  - 会并行跑 backend targeted `pytest`、frontend `assets:provenance:check / build / targeted vitest`
+  - 当前 backend targeted `pytest` 已包含 `tests/test_metrics.py`
+  - 本次 session 新增 `release-signoff-dry-run`，用于校验 `release-signoff` 的步骤合同与 `summary.json` 落盘
+  - `debate-signoff-smoke` 保持不变：在 `DEBATE_USE_LLM=false` 下起本地 backend/frontend，并实跑 `e2e-debate-suite.mjs full` 后上传工件
 - 如果本机 Safari WebDriver 已准备好，可追加：
 
 ```bash
@@ -179,6 +188,21 @@ npm run release:signoff -- \
   - 本次 session 又补跑 Safari-inclusive 收口链路：
     - `npm run release:signoff -- --headless --include-safari --scenario-id 72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
     - 工件：`frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`
+  - 本次 session 围绕收口基础设施又补了：
+    - `release-signoff` 增量写 `summary.json`
+    - `release-signoff` 会把 `/metrics` 校验纳入 backend checks
+    - backend 新增 `tests/test_metrics.py`
+    - Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_*_TIMEOUT_MS` 调参
+    - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run`
+    - `.github/workflows/ci.yml` 保留 deterministic `debate-signoff-smoke`
+  - 本次 session 真实验证：
+    - backend targeted `pytest`：**82 passed**
+    - frontend targeted `vitest`（`scenarioMeta / archiveSummary / gameplayCards / gameplayContract / SimulationView / ResultView / GameplayCardsModal / DebateArenaView / DebateResultView / DebateBetModal / DebateShareModal / useDebateWS / locales`）：**79 passed**
+    - `node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/post-fix-debate-desktop --headless`：通过
+    - 工件：`frontend/output/e2e/post-fix-debate-desktop/`
+    - `node scripts/release-signoff.mjs --dry-run --output-root output/e2e/release-signoff-summary-dry-run`：`summary.json` 落盘通过
+    - `npm run release:signoff -- --headless --output-root output/e2e/current-audit-release-signoff-v2`：通过
+    - 工件：`frontend/output/e2e/current-audit-release-signoff-v2/summary.json`
 
 - 仓库内历史前端全量基线仍记录为 **179 passed**。
 - 本轮基于当前仓库状态重新执行了定向回归：
@@ -239,7 +263,7 @@ npm run assets:provenance:check
 
 - 结果：
   - backend `pytest`：**81 passed**
-  - frontend `vitest`：**77 passed**
+  - frontend `vitest`：**79 passed**
   - `npm run build`：通过
   - `npm run assets:provenance:check`：通过
 - 本次 session 又补跑了 `ResultView` / `scenarioMeta` 收口回归：
@@ -826,6 +850,12 @@ alembic downgrade -1
 ## Prometheus 监控
 
 - **端点**: `GET /metrics` — 暴露 Prometheus 格式指标
+- **当前口径**:
+  - 若 `prometheus-fastapi-instrumentator` 可用，返回完整 Prometheus 指标
+  - 若依赖缺失，后端会回退到最小文本指标，而不是返回 `404`
+- **本次 session 验证**:
+  - `tests/test_metrics.py`：通过
+  - live `GET /metrics`：返回 `200 text/plain`
 - **指标**:
   - `http_requests_total` — 请求总数 (按方法/路径/状态码)
   - `http_request_duration_seconds` — 请求延迟直方图

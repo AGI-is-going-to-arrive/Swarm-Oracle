@@ -42,6 +42,12 @@
   - 本轮 civic 主题：`frontend/output/e2e/20260318-debate-civic-v2/result.json`
   - develop-web-game 工件：`frontend/output/web-game/20260317-debate-arena-signoff/`
   - 本次 session 又补了 Debate counterplay live/result desktop 黑盒：`frontend/output/e2e/20260318-codex-audit-debate-live-counterplay-desktop/result.json`
+  - 本次 session 又补了 Debate 收口基础设施：
+    - `scripts/e2e-debate-suite.mjs` 的 `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+    - `.github/workflows/ci.yml` 新增 deterministic `debate-signoff-smoke`
+    - `frontend/output/e2e/post-fix-debate-desktop/`：Debate desktop 黑盒通过
+    - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
+    - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
 
 ---
 

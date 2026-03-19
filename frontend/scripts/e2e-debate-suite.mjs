@@ -8,6 +8,9 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const DEFAULT_DEBATE_RESULT_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_TIMEOUT_MS", 240000);
+const DEFAULT_DEBATE_STALL_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_STALL_TIMEOUT_MS", 120000);
+const DEFAULT_DEBATE_RESULT_CTA_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS", 120000);
 
 const DESKTOP_CASE = {
   id: "desktop-en-trade",
@@ -28,6 +31,11 @@ const MOBILE_CASE = {
   betTargetIndex: 1,
   sharePlatformIndex: 0,
 };
+
+function positiveIntFromEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -245,14 +253,90 @@ async function getDebateViaApi(baseUrl, debateId) {
   return response.json();
 }
 
-async function waitForDebateResultReady(baseUrl, debateId, timeout = 30000) {
+function summarizeDebateProgress(debate) {
+  if (!debate) return "status=unknown";
+  return [
+    `status=${debate.status ?? "unknown"}`,
+    `phase=${debate.current_phase ?? "unknown"}`,
+    `turns=${Array.isArray(debate.turns) ? debate.turns.length : 0}`,
+    `updated_at=${debate.updated_at ?? "unknown"}`,
+  ].join(" ");
+}
+
+function debateProgressFingerprint(debate) {
+  return JSON.stringify({
+    status: debate?.status ?? null,
+    current_phase: debate?.current_phase ?? null,
+    turn_count: Array.isArray(debate?.turns) ? debate.turns.length : 0,
+    updated_at: debate?.updated_at ?? null,
+  });
+}
+
+async function waitForDebateResultReady(
+  baseUrl,
+  debateId,
+  timeout = DEFAULT_DEBATE_RESULT_TIMEOUT_MS,
+  stallTimeout = DEFAULT_DEBATE_STALL_TIMEOUT_MS,
+) {
   const start = Date.now();
+  let lastProgressAt = start;
+  let lastFingerprint = "";
+  let lastDebate = null;
   while (Date.now() - start < timeout) {
     const debate = await getDebateViaApi(baseUrl, debateId);
+    lastDebate = debate;
+    const fingerprint = debateProgressFingerprint(debate);
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastProgressAt = Date.now();
+    }
     if (debate?.result_ready) return debate;
+    if (debate?.status === "error") {
+      throw new Error(`Debate ${debateId} entered error state: ${summarizeDebateProgress(debate)}`);
+    }
+    if (Date.now() - lastProgressAt >= stallTimeout) {
+      throw new Error(
+        `Debate ${debateId} stopped making progress before result_ready: ${summarizeDebateProgress(lastDebate)}`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`Timed out waiting for debate ${debateId} to become result_ready`);
+  throw new Error(
+    `Timed out waiting for debate ${debateId} to become result_ready: ${summarizeDebateProgress(lastDebate)}`,
+  );
+}
+
+async function waitForDebateResultCta(
+  page,
+  baseUrl,
+  debateId,
+  timeout = DEFAULT_DEBATE_RESULT_CTA_TIMEOUT_MS,
+) {
+  const start = Date.now();
+  let reloadedAfterApiReady = false;
+  while (Date.now() - start < timeout) {
+    const payload = await readAutomation(page);
+    if (payload?.page?.kind === "debate" && payload.page?.controls?.can_view_result === true) {
+      return payload;
+    }
+
+    const debate = await getDebateViaApi(baseUrl, debateId);
+    if (debate?.status === "error") {
+      throw new Error(`Debate ${debateId} entered error state before result CTA: ${summarizeDebateProgress(debate)}`);
+    }
+    if (debate?.result_ready && !reloadedAfterApiReady) {
+      reloadedAfterApiReady = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      continue;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  const finalDebate = await getDebateViaApi(baseUrl, debateId).catch(() => null);
+  throw new Error(
+    `Timed out waiting for debate ${debateId} result CTA: ${summarizeDebateProgress(finalDebate)}`,
+  );
 }
 
 async function setLanguage(page, baseUrl, locale) {
@@ -709,13 +793,8 @@ async function runDebateFlow(page, {
   await saveScreenshot(page, path.join(outputDir, "bet-submitted.png"));
 
   await fastForwardDebate(page);
-  await waitForDebateResultReady(baseUrl, debateId, 90000);
-  const resultReadyPayload = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "debate" && payload.page?.controls?.can_view_result === true,
-    90000,
-    "debate result CTA",
-  );
+  await waitForDebateResultReady(baseUrl, debateId);
+  const resultReadyPayload = await waitForDebateResultCta(page, baseUrl, debateId);
   writeJson(path.join(outputDir, "result-ready.json"), resultReadyPayload);
   await saveScreenshot(page, path.join(outputDir, "result-ready.png"));
 

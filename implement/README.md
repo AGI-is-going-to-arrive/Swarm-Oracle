@@ -100,7 +100,19 @@
 - ✅ `release:signoff` 当前已升级为更完整的收口入口：默认会先跑 backend targeted `pytest` 与 `assets:provenance:check`，再继续 `tsc / build / corners / cross-browser / debate:full`；本 session 又实跑：
   - `frontend/output/e2e/2026-03-19T16-10-45-581Z-release-signoff/`
   - `frontend/output/e2e/2026-03-19T16-16-01-513Z-release-signoff/`（含 Safari）
-- ✅ 仓库已补最小 CI：`.github/workflows/ci.yml` 当前会并行跑 backend targeted `pytest` 与 frontend `assets:provenance:check / build / targeted vitest`
+- ✅ 本次 session 又补了发布收口基础设施：`release-signoff` 现在会在 output root 增量写 `summary.json`，并新增 backend `/metrics` 可达性检查；Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+- ✅ 仓库已补 CI 守门链路：`.github/workflows/ci.yml` 当前会并行跑 backend targeted `pytest`（含 `tests/test_metrics.py`）、frontend `assets:provenance:check / build / targeted vitest`，并新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
+- ✅ 本次 session 围绕发布收口基础设施的真实验证：
+  - backend targeted `pytest`：**81 passed**
+  - frontend targeted `vitest`：**79 passed**
+  - `frontend/output/e2e/post-fix-debate-desktop/`：Debate desktop 黑盒通过
+  - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
+  - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
+- ✅ 本次 session 又补了 `metrics + signoff` 收口：
+  - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
+  - live `/metrics`：`200 text/plain`
+  - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
+  - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
 - ✅ 首页首包继续收口：`InputView` 当前只读取轻量题材摘要（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；本次定向回归 `InputView / SimulationView / ResultView` 为 **24 passed**
 
 ### 当前边界

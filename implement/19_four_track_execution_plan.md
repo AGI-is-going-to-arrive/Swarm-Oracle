@@ -38,6 +38,10 @@
   - 已有独立 Debate domain：`backend/app/models/debate.py`、`backend/app/api/debate.py`、`backend/app/services/debate*.py`
   - 前端已有 `DebateArenaView / DebateResultView / debateStore / useDebateWS / DebateBetModal / DebateShareModal`
   - 已有真实工件：`frontend/output/e2e/20260318-post-director-goals-debate-full/`、`frontend/output/e2e/20260318-debate-mobile-430x932-v2/`、`frontend/output/e2e/20260318-debate-civic-v2/` 与 `frontend/output/web-game/20260317-debate-arena-signoff/`
+  - 本次 session 又补了 Debate 收口基础设施：
+    - `scripts/e2e-debate-suite.mjs` 的 `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
+    - `.github/workflows/ci.yml` 新增 deterministic `debate-signoff-smoke`
+    - `frontend/output/e2e/post-fix-debate-desktop/`：Debate desktop 黑盒通过
 
 后文保留的设计型条目主要作为归档设计基线；若与当前实现冲突，以本节同步状态为准。
 
@@ -59,6 +63,16 @@
 
 1. `scenarioMeta` 仍保留本地缓存/兼容层。`director_state` 与主模式 `gameplay_state` 已完成 authority 收口，但若继续推进，重点应是继续缩小本地兼容层，而不是再重做 authority 方案。
 2. release signoff 仍需要 clean-room 复验。`corners / cross-browser / debate:full` 已有真实工件，但后续发版前仍应在更干净的运行环境再跑一次，而不是只引用旧工件。
+   本次 session 已把这条链路补成更可诊断的形态：
+   - `release-signoff` 现在会在 output root 增量写 `summary.json`
+   - `release-signoff` 当前还会检查 backend `/metrics`
+   - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json` 已验证可落盘
+   - `frontend/output/e2e/post-fix-release-signoff/summary.json` 已确认会按步骤增量更新，但这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
+   本次 session 又补了一轮当前工作树的真实收口：
+   - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
+   - live `/metrics`：`200 text/plain`
+   - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
+   - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
 3. 移动端 Theater 首屏密度、Safari/WebKit 截图限制、前端包体大小仍属于 polish / 工程优化项，不是阻断当前产品闭环的未完成功能。
 
 因此本执行文档采用四轨路线作为历史收口基线：
@@ -875,11 +889,9 @@ node .tmp-playwright/web_game_playwright_client.mjs \
 如果下一轮直接进入实现，更合理的顺序应是：
 
 1. 先跑 `release signoff`：
-   - `npx tsc --noEmit -p tsconfig.app.json`
-   - `npm run build`
-   - `npm run e2e:corners`
-   - `npm run e2e:cross-browser`
-   - `npm run e2e:debate:full`
+   - `npm run release:signoff -- --headless`
+   - 看 output root 下的 `summary.json`
+   - 若要补 Safari 证据，再追加 `--include-safari`
 2. 再做文档真值收口，避免“前文已完成、尾部仍是计划态”再次出现。
 3. 若还要继续投入开发，优先做：
    - `scenarioMeta` 兼容层继续瘦身

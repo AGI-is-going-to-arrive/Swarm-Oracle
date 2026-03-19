@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from app.api.scenarios import router as scenarios_router
 from app.api.interventions import router as interventions_router
@@ -80,6 +81,20 @@ except ImportError:
     logging.getLogger(__name__).warning(
         "prometheus-fastapi-instrumentator not installed — /metrics disabled"
     )
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_fallback():
+        return PlainTextResponse(
+            "\n".join([
+                "# HELP swarmoracle_metrics_enabled Whether full Prometheus instrumentation is enabled.",
+                "# TYPE swarmoracle_metrics_enabled gauge",
+                "swarmoracle_metrics_enabled 0",
+                "# HELP swarmoracle_metrics_dependency_missing Whether the optional metrics dependency is unavailable.",
+                "# TYPE swarmoracle_metrics_dependency_missing gauge",
+                "swarmoracle_metrics_dependency_missing 1",
+                "",
+            ])
+        )
 
 
 @app.get("/")

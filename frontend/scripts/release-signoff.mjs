@@ -8,6 +8,7 @@ const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(FRONTEND_ROOT, "..");
 const BACKEND_ROOT = path.join(REPO_ROOT, "backend");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
   "tests/test_campaign_service.py",
@@ -17,7 +18,27 @@ const BACKEND_SIGNOFF_TESTS = [
   "tests/test_predictions.py",
   "tests/test_card_events.py",
   "tests/test_gameplay_contract_sync.py",
+  "tests/test_metrics.py",
 ];
+const PYTHON_HTTP_CHECK_SCRIPT = [
+  "import sys, urllib.request",
+  "url = sys.argv[1]",
+  "expected_type = sys.argv[2]",
+  "expected_body = sys.argv[3]",
+  "with urllib.request.urlopen(url, timeout=10) as response:",
+  "    body = response.read().decode('utf-8', errors='replace')",
+  "    content_type = response.headers.get('content-type', '')",
+  "    if response.status >= 400:",
+  "        raise SystemExit(f'HTTP {response.status} for {url}')",
+  "    if expected_type and expected_type not in content_type:",
+  "        raise SystemExit(f'Unexpected content-type for {url}: {content_type}')",
+  "    if expected_body and expected_body not in body:",
+  "        raise SystemExit(f'Missing expected body marker for {url}: {expected_body}')",
+].join("\n");
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
 
 function getDefaultBackendPython() {
   if (process.platform === "win32") {
@@ -36,9 +57,14 @@ function resolveFrontendPath(inputPath) {
   return path.join(FRONTEND_ROOT, inputPath.replace(/^\.\/+/, ""));
 }
 
+function summaryPathFor(outputRoot) {
+  return path.join(outputRoot, "summary.json");
+}
+
 function parseArgs(argv) {
   const args = {
     baseUrl: DEFAULT_BASE_URL,
+    backendUrl: DEFAULT_BACKEND_URL,
     outputRoot: resolveFrontendPath(path.join("output", "e2e", `${timestampLabel()}-release-signoff`)),
     headless: process.env.HEADLESS === "1",
     dryRun: false,
@@ -55,6 +81,9 @@ function parseArgs(argv) {
     const next = argv[index + 1];
     if (arg === "--url" && next) {
       args.baseUrl = next;
+      index += 1;
+    } else if (arg === "--backend-url" && next) {
+      args.backendUrl = next;
       index += 1;
     } else if (arg === "--output-root" && next) {
       args.outputRoot = resolveFrontendPath(next);
@@ -80,7 +109,7 @@ function parseArgs(argv) {
       args.includeAssetsCheck = false;
     } else {
       throw new Error(
-        "Usage: node scripts/release-signoff.mjs [--url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
+        "Usage: node scripts/release-signoff.mjs [--url URL] [--backend-url URL] [--output-root DIR] [--headless] [--include-safari] [--webdriver-url URL] [--scenario-id ID] [--backend-python PATH] [--skip-backend-checks] [--skip-assets-check] [--dry-run]",
       );
     }
   }
@@ -115,11 +144,62 @@ function runCommand(command, args, options) {
   }
 }
 
+function serializeError(error) {
+  if (!(error instanceof Error)) return { message: String(error) };
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack ?? null,
+  };
+}
+
+function writeSummary(outputRoot, summary) {
+  ensureDir(outputRoot);
+  fs.writeFileSync(summaryPathFor(outputRoot), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+}
+
+function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
+  const startedAt = new Date().toISOString();
+  const step = {
+    id: stepId,
+    status: "running",
+    started_at: startedAt,
+    finished_at: null,
+    duration_ms: null,
+    command: formatCommand(command, commandArgs),
+    cwd: options.cwd ?? FRONTEND_ROOT,
+    artifact_dir: options.artifactDir ?? null,
+    result_file: options.resultFile ?? null,
+    browser_launch_file: options.browserLaunchFile ?? null,
+    error: null,
+  };
+  summary.steps.push(step);
+  writeSummary(runArgs.outputRoot, summary);
+
+  const startTime = Date.now();
+  try {
+    runCommand(command, commandArgs, { ...runArgs, ...options });
+    step.status = "passed";
+  } catch (error) {
+    step.status = "failed";
+    step.error = serializeError(error);
+    throw error;
+  } finally {
+    step.finished_at = new Date().toISOString();
+    step.duration_ms = Date.now() - startTime;
+    writeSummary(runArgs.outputRoot, summary);
+  }
+}
+
 function buildSuiteArgs(scriptName, mode, baseUrl, outputDir, headless, scenarioId) {
   const args = [scriptName, mode, "--url", baseUrl, "--output-dir", outputDir];
   if (headless) args.push("--headless");
   if (scenarioId) args.push("--scenario-id", scenarioId);
   return args;
+}
+
+function buildHttpCheckArgs(url, expectedContentType = "", expectedBodyMarker = "") {
+  return ["-c", PYTHON_HTTP_CHECK_SCRIPT, url, expectedContentType, expectedBodyMarker];
 }
 
 function ensureBackendPythonExists(pythonPath) {
@@ -141,10 +221,29 @@ function main() {
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
   const debateOutput = path.join(args.outputRoot, "debate-full");
   const safariOutput = path.join(args.outputRoot, "safari");
+  const summary = {
+    version: 1,
+    status: "running",
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    base_url: args.baseUrl,
+    backend_url: args.backendUrl,
+    output_root: args.outputRoot,
+    headless: args.headless,
+    include_safari: args.includeSafari,
+    include_backend_checks: args.includeBackendChecks,
+    include_assets_check: args.includeAssetsCheck,
+    webdriver_url: args.includeSafari ? args.webdriverUrl : null,
+    scenario_id: args.scenarioId || null,
+    steps: [],
+    error: null,
+  };
+  writeSummary(args.outputRoot, summary);
 
   console.log("Release signoff plan:");
   console.log(`- frontend root: ${FRONTEND_ROOT}`);
   console.log(`- base url: ${args.baseUrl}`);
+  console.log(`- backend url: ${args.backendUrl}`);
   console.log(`- output root: ${args.outputRoot}`);
   console.log(`- headless: ${args.headless ? "true" : "false"}`);
   console.log(`- include safari: ${args.includeSafari ? "true" : "false"}`);
@@ -159,63 +258,110 @@ function main() {
     ensureBackendPythonExists(args.backendPython);
   }
 
-  if (args.includeBackendChecks) {
-    runCommand(
-      args.backendPython,
-      ["-m", "pytest", ...BACKEND_SIGNOFF_TESTS, "-q"],
-      { ...args, cwd: BACKEND_ROOT },
+  try {
+    if (args.includeBackendChecks) {
+      runStep(
+        summary,
+        args,
+        "backend_checks",
+        args.backendPython,
+        ["-m", "pytest", ...BACKEND_SIGNOFF_TESTS, "-q"],
+        { cwd: BACKEND_ROOT },
+      );
+      runStep(
+        summary,
+        args,
+        "backend_metrics",
+        args.backendPython,
+        buildHttpCheckArgs(`${args.backendUrl}/metrics`, "text/plain", "# HELP"),
+        { cwd: BACKEND_ROOT },
+      );
+    }
+    runStep(summary, args, "typecheck", npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"]);
+    runStep(summary, args, "build", npmCommand, ["run", "build"]);
+    if (args.includeAssetsCheck) {
+      runStep(summary, args, "assets_check", npmCommand, ["run", "assets:provenance:check"]);
+    }
+    runStep(
+      summary,
+      args,
+      "corners",
+      nodeCommand,
+      buildSuiteArgs("scripts/e2e-suite.mjs", "corners", args.baseUrl, cornersOutput, args.headless, args.scenarioId),
+      {
+        artifactDir: cornersOutput,
+        resultFile: path.join(cornersOutput, "result.json"),
+        browserLaunchFile: path.join(cornersOutput, "browser-launch.json"),
+      },
     );
-  }
-
-  runCommand(npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"], args);
-  runCommand(npmCommand, ["run", "build"], args);
-  if (args.includeAssetsCheck) {
-    runCommand(npmCommand, ["run", "assets:provenance:check"], args);
-  }
-  runCommand(
-    nodeCommand,
-    buildSuiteArgs("scripts/e2e-suite.mjs", "corners", args.baseUrl, cornersOutput, args.headless, args.scenarioId),
-    args,
-  );
-  runCommand(
-    nodeCommand,
-    buildSuiteArgs("scripts/e2e-suite.mjs", "cross-browser", args.baseUrl, crossBrowserOutput, args.headless, args.scenarioId),
-    args,
-  );
-  runCommand(
-    nodeCommand,
-    [
-      "scripts/e2e-debate-suite.mjs",
-      "full",
-      "--url",
-      args.baseUrl,
-      "--output-dir",
-      debateOutput,
-      ...(args.headless ? ["--headless"] : []),
-    ],
-    args,
-  );
-
-  if (args.includeSafari) {
-    runCommand(
+    runStep(
+      summary,
+      args,
+      "cross_browser",
+      nodeCommand,
+      buildSuiteArgs("scripts/e2e-suite.mjs", "cross-browser", args.baseUrl, crossBrowserOutput, args.headless, args.scenarioId),
+      {
+        artifactDir: crossBrowserOutput,
+        resultFile: path.join(crossBrowserOutput, "result.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "debate_full",
       nodeCommand,
       [
-        "scripts/e2e-suite.mjs",
-        "safari",
+        "scripts/e2e-debate-suite.mjs",
+        "full",
         "--url",
         args.baseUrl,
-        "--webdriver-url",
-        args.webdriverUrl,
         "--output-dir",
-        safariOutput,
-        ...(args.scenarioId ? ["--scenario-id", args.scenarioId] : []),
+        debateOutput,
+        ...(args.headless ? ["--headless"] : []),
       ],
-      args,
+      {
+        artifactDir: debateOutput,
+        resultFile: path.join(debateOutput, "result.json"),
+      },
     );
-  }
 
-  console.log("\nRelease signoff completed.");
-  console.log(`Artifacts: ${args.outputRoot}`);
+    if (args.includeSafari) {
+      runStep(
+        summary,
+        args,
+        "safari",
+        nodeCommand,
+        [
+          "scripts/e2e-suite.mjs",
+          "safari",
+          "--url",
+          args.baseUrl,
+          "--webdriver-url",
+          args.webdriverUrl,
+          "--output-dir",
+          safariOutput,
+          ...(args.scenarioId ? ["--scenario-id", args.scenarioId] : []),
+        ],
+        {
+          artifactDir: safariOutput,
+          resultFile: path.join(safariOutput, "result.json"),
+        },
+      );
+    }
+
+    summary.status = "passed";
+    summary.finished_at = new Date().toISOString();
+    writeSummary(args.outputRoot, summary);
+    console.log("\nRelease signoff completed.");
+    console.log(`Artifacts: ${args.outputRoot}`);
+    console.log(`Summary: ${summaryPathFor(args.outputRoot)}`);
+  } catch (error) {
+    summary.status = "failed";
+    summary.finished_at = new Date().toISOString();
+    summary.error = serializeError(error);
+    writeSummary(args.outputRoot, summary);
+    throw error;
+  }
 }
 
 main();

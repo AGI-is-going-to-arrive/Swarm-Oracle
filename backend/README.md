@@ -53,7 +53,7 @@ actual host-reachable address instead of `host.docker.internal`.
 | `GET` | `/` | App info and process-level health endpoint |
 | `POST` | `/api/health` | Server + LLM health check |
 | `POST` | `/api/health/test` | BYOK-aware LLM connectivity test |
-| `GET` | `/metrics` | Prometheus metrics (P3-9) |
+| `GET` | `/metrics` | Prometheus text metrics (P3-9); full instrumentation when the optional dependency is present, minimal fallback text otherwise |
 | `POST` | `/api/scenario` | Create scenario (parse + start simulation); Theater mode returns a provisional `scene_theme` immediately |
 | `GET` | `/api/scenario/{id}` | Get scenario status, agents, branches, `scene_theme`, top-level `director_state`, and top-level `gameplay_state` |
 | `GET` | `/api/scenario/{id}/branches` | Branch tree |
@@ -122,6 +122,12 @@ Command: `.venv/bin/python -m pytest tests/test_api.py -q`
 
 Latest verified Debate replay import regression in this session: **7 passed**
 Command: `.venv/bin/python -m pytest tests/test_debate_api.py -q`
+
+Latest verified backend signoff set in this session: **82 passed**
+Command: `.venv/bin/python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
+
+Latest verified `/metrics` check in this session: **200 text/plain**
+Verification: live `GET /metrics` plus `tests/test_metrics.py`
 
 ## Database Migrations (Alembic)
 

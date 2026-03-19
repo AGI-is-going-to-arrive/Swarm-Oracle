@@ -31,7 +31,7 @@ api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联)
     │
-main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点
+main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
@@ -354,7 +354,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `tests/test_api.py` → **77 passed**
   - `tests/test_debate_api.py` → **7 passed**
 
-需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
+本次 session 又补跑了 `tests/test_metrics.py`，并把它并入 release signoff 的 backend targeted `pytest`，最新收口结果为 **82 passed**。同时也真实校验了 `GET /metrics`：当前在依赖齐全时会返回完整 Prometheus 文本指标；若缺少 `prometheus-fastapi-instrumentator`，后端会回退为最小文本指标，不再返回 `404`。当前 `release:signoff` 也已新增 `backend_metrics` 步骤，会直接检查 `/metrics` 返回 `text/plain` 且包含 `# HELP`。LLM retry/backoff 与 Alembic 迁移框架则仍以代码与定向测试为主，尚未在本次 session 补独立的运行时 smoke。
 
 覆盖重心：
 

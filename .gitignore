@@ -12,6 +12,7 @@ backend/.pytest_cache/
 backend/swarmoracle_backend.egg-info/
 backend/.env
 backend/swarmoracle.db
+/swarmoracle.db
 backend/chroma_data/
 chroma_data/
 
@@ -28,6 +29,7 @@ frontend/.tmp-playwright/
 /*.jpeg
 /*.gif
 /后续开发命令
+/后续开发命令.md
 
 # Frontend test outputs: keep only the checked-in sample matrix
 frontend/output/*
