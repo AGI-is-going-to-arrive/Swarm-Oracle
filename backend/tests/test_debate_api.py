@@ -80,11 +80,14 @@ async def test_predict_then_fetch_result(client: TestClient):
     assert payload["counterplay"]["phase"] == "crossfire"
     assert payload["counterplay"]["variant"] == "reversal"
     assert payload["counterplay"]["outcome"] in {"hit", "miss"}
+    assert payload["counterplay"]["phase_score"]["proposition"] >= 0
+    assert payload["counterplay"]["explanation"]
     assert len(payload["predictions"]) == 1
     assert payload["predictions"][0]["is_counterplay"] is True
     assert payload["predictions"][0]["counterplay_phase"] == "crossfire"
     assert payload["predictions"][0]["counterplay_variant"] == "reversal"
     assert payload["predictions"][0]["score"] is not None
+    assert payload["result"]["judge_summary"]
 
 
 def test_predict_rejects_invalid_target_value(client: TestClient):

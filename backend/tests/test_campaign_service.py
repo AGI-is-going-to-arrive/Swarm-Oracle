@@ -17,6 +17,7 @@ from app.models.database import get_engine
 from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
+    get_weekly_campaign_summary,
     get_scenario_director_state,
     get_scenario_gameplay_state,
     save_scenario_director_state,
@@ -258,6 +259,52 @@ def test_daily_challenge_summary_returns_incomplete_when_no_matching_log():
         "profile_resonance": None,
         "campaign_score_delta": None,
     }
+
+
+def test_weekly_campaign_summary_aggregates_logs_by_local_week():
+    scenario_id_1 = _seed_completed_scenario("weekly one")
+    scenario_id_2 = _seed_completed_scenario("weekly two")
+
+    finalize_scenario_campaign(
+        scenario_id_1,
+        user_id="director-week",
+        user_name="Wren",
+        profile_id="governance",
+        archive_grade="A",
+        profile_resonance="aligned",
+        betting_hit=True,
+        bet_count=1,
+        most_used_card="public_hearing",
+        completed_daily_challenge=True,
+    )
+    finalize_scenario_campaign(
+        scenario_id_2,
+        user_id="director-week",
+        user_name="Wren",
+        profile_id="trade",
+        archive_grade="S",
+        profile_resonance="signature",
+        betting_hit=False,
+        bet_count=1,
+        most_used_card="backchannel_pact",
+        completed_daily_challenge=False,
+    )
+
+    local_date = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    summary = get_weekly_campaign_summary(
+        "director-week",
+        local_date=local_date,
+        timezone_offset_minutes=-480,
+    )
+
+    assert summary["user_id"] == "director-week"
+    assert summary["total_runs"] == 2
+    assert summary["completed_daily_challenges"] == 1
+    assert summary["hit_bets"] == 1
+    assert summary["best_archive_grade"] == "S"
+    assert summary["top_profile_id"] in {"governance", "trade"}
+    assert summary["profile_runs"] == {"governance": 1, "trade": 1}
+    assert summary["campaign_score_delta"] == 13
 
 
 def test_scenario_summary_persists_objectives_and_commitment_outcome():

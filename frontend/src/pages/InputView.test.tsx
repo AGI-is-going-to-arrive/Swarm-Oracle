@@ -9,12 +9,14 @@ const {
   getCampaignMasteryMock,
   getCampaignBadgesMock,
   getCampaignDailyChallengeStatusMock,
+  getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
 } = vi.hoisted(() => ({
   getCampaignProfileMock: vi.fn(),
   getCampaignMasteryMock: vi.fn(),
   getCampaignBadgesMock: vi.fn(),
   getCampaignDailyChallengeStatusMock: vi.fn(),
+  getCampaignWeeklySummaryMock: vi.fn(),
   getChallengeProgressMock: vi.fn(),
 }));
 
@@ -60,6 +62,7 @@ vi.mock('../api/client', () => ({
   getCampaignMastery: getCampaignMasteryMock,
   getCampaignBadges: getCampaignBadgesMock,
   getCampaignDailyChallengeStatus: getCampaignDailyChallengeStatusMock,
+  getCampaignWeeklySummary: getCampaignWeeklySummaryMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -71,6 +74,7 @@ vi.mock('../lib/directorIdentity', () => ({
 
 vi.mock('../lib/dailyChallenge', () => ({
   challengeDateKey: () => '2026-03-17',
+  challengeWeekKey: () => '2026-03-16',
   getTodayChallenge: () => ({
     id: 'challenge-1',
     question: 'What if AI ruled every city?',
@@ -84,6 +88,44 @@ vi.mock('../lib/dailyChallenge', () => ({
     visualizationEnabled: true,
   }),
   getChallengeProgress: getChallengeProgressMock,
+  getWeeklyChallenges: () => [
+    {
+      id: 'weekly-1',
+      question: 'Weekly challenge 1',
+      questionEn: 'Weekly challenge 1',
+      subtitleZh: '治理博弈',
+      subtitleEn: 'Governance Conflict',
+      profileId: 'governance',
+      rounds: 3,
+      numAgents: 3,
+      mode: 'blackboard',
+      visualizationEnabled: true,
+    },
+    {
+      id: 'weekly-2',
+      question: 'Weekly challenge 2',
+      questionEn: 'Weekly challenge 2',
+      subtitleZh: '法律红线',
+      subtitleEn: 'Legal Red Lines',
+      profileId: 'law',
+      rounds: 3,
+      numAgents: 3,
+      mode: 'blackboard',
+      visualizationEnabled: true,
+    },
+    {
+      id: 'weekly-3',
+      question: 'Weekly challenge 3',
+      questionEn: 'Weekly challenge 3',
+      subtitleZh: '贸易绞盘',
+      subtitleEn: 'Trade Leverage',
+      profileId: 'trade',
+      rounds: 3,
+      numAgents: 3,
+      mode: 'blackboard',
+      visualizationEnabled: true,
+    },
+  ],
   getChallengeQuestion: (challenge: { questionEn?: string; question: string }, isZh: boolean) => (
     isZh ? challenge.question : (challenge.questionEn ?? challenge.question)
   ),
@@ -187,6 +229,22 @@ describe('InputView campaign progress', () => {
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
     getCampaignBadgesMock.mockResolvedValue(campaignBadges);
     getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue({
+      user_id: 'director-1',
+      week_start: '2026-03-16',
+      week_end: '2026-03-22',
+      timezone_offset_minutes: -480,
+      total_runs: 2,
+      completed_daily_challenges: 1,
+      campaign_score_delta: 6,
+      top_profile_id: 'governance',
+      best_archive_grade: 'A',
+      hit_bets: 1,
+      profile_runs: {
+        governance: 1,
+        law: 1,
+      },
+    });
     getChallengeProgressMock.mockReturnValue(null);
   });
 
@@ -202,8 +260,9 @@ describe('InputView campaign progress', () => {
     });
 
     expect(screen.getAllByText('Lv.2').length).toBeGreaterThan(0);
-    expect(screen.getByText((content) => content.includes('3 points to next unlock'))).toBeInTheDocument();
+    expect(screen.getAllByText((content) => content.includes('3 points to next unlock')).length).toBeGreaterThan(0);
     expect(screen.getByText('2 badges unlocked · 4 completed runs')).toBeInTheDocument();
+    expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
   });
 
   it('treats today challenge as completed when backend campaign data is the source of truth', async () => {
@@ -229,5 +288,17 @@ describe('InputView campaign progress', () => {
 
     expect(await screen.findByText('home.daily_challenge_done')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'home.daily_challenge_replay' })).toBeInTheDocument();
+  });
+
+  it('prefills the form from a shared challenge URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?sharedChallenge=1&question=Shared%20Motion&rounds=4&agents=6&mode=raw&viz=1&profile=trade']}>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('home.shared_challenge_label')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
+    expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
   });
 });

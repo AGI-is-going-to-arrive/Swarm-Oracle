@@ -180,10 +180,60 @@ def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient)
     assert daily.status_code == 200
     assert daily.json()["completed"] is False
 
+    weekly = client.get(
+        "/api/campaign/profile/fresh-director/weekly-summary",
+        params={
+            "local_date": local_date,
+            "timezone_offset_minutes": -480,
+        },
+    )
+    assert weekly.status_code == 200
+    assert weekly.json()["total_runs"] == 0
+    assert weekly.json()["profile_runs"] == {}
+
 
 def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
     response = client.get("/api/campaign/scenario/missing-scenario/summary")
     assert response.status_code == 404
+
+
+def test_weekly_summary_endpoint_returns_aggregated_progress(client: TestClient):
+    scenario_id = _seed_completed_scenario("weekly api")
+
+    finalize = client.post(
+        f"/api/campaign/scenario/{scenario_id}/finalize",
+        json={
+            "user_id": "director-api-week",
+            "user_name": "Mira",
+            "profile_id": "governance",
+            "archive_grade": "A",
+            "profile_resonance": "aligned",
+            "bet_count": 1,
+            "betting_hit": True,
+            "most_used_card": "public_hearing",
+            "completed_daily_challenge": True,
+        },
+    )
+    assert finalize.status_code == 200
+
+    local_date = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    weekly = client.get(
+        "/api/campaign/profile/director-api-week/weekly-summary",
+        params={
+            "local_date": local_date,
+            "timezone_offset_minutes": -480,
+        },
+    )
+
+    assert weekly.status_code == 200
+    data = weekly.json()
+    assert data["user_id"] == "director-api-week"
+    assert data["total_runs"] == 1
+    assert data["completed_daily_challenges"] == 1
+    assert data["hit_bets"] == 1
+    assert data["best_archive_grade"] == "A"
+    assert data["top_profile_id"] == "governance"
+    assert data["profile_runs"] == {"governance": 1}
 
 
 def test_director_state_endpoint_round_trip_and_scenario_readback(client: TestClient):

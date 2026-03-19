@@ -645,6 +645,35 @@ def _build_daily_challenge_summary(
     }
 
 
+def _build_weekly_campaign_summary(
+    *,
+    user_id: str,
+    week_start: date,
+    week_end: date,
+    timezone_offset_minutes: int,
+    total_runs: int,
+    completed_daily_challenges: int,
+    hit_bets: int,
+    campaign_score_delta: int,
+    best_archive_grade: str | None,
+    top_profile_id: str | None,
+    profile_runs: dict[str, int],
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "timezone_offset_minutes": timezone_offset_minutes,
+        "total_runs": total_runs,
+        "completed_daily_challenges": completed_daily_challenges,
+        "hit_bets": hit_bets,
+        "campaign_score_delta": campaign_score_delta,
+        "best_archive_grade": best_archive_grade,
+        "top_profile_id": top_profile_id,
+        "profile_runs": profile_runs,
+    }
+
+
 def _list_badge_unlocks(session: Session, director_profile_id: str) -> list[DirectorBadgeUnlock]:
     return list(session.exec(
         select(DirectorBadgeUnlock)
@@ -1065,4 +1094,90 @@ def get_daily_challenge_summary(
             timezone_offset_minutes=timezone_offset_minutes,
             completed=matching_log is not None,
             log=matching_log,
+        )
+
+
+def get_weekly_campaign_summary(
+    user_id: str,
+    *,
+    local_date: str,
+    timezone_offset_minutes: int,
+) -> dict[str, Any]:
+    """Return a lightweight local-week progression summary without schema changes."""
+    target_date = _parse_local_date(local_date)
+    local_timezone = _build_local_timezone(timezone_offset_minutes)
+    week_start = target_date - timedelta(days=target_date.weekday())
+    week_end = week_start + timedelta(days=6)
+
+    engine = get_engine()
+    with Session(engine) as session:
+        profile = _get_director_profile(session, user_id)
+        if profile is None:
+            return _build_weekly_campaign_summary(
+                user_id=user_id,
+                week_start=week_start,
+                week_end=week_end,
+                timezone_offset_minutes=timezone_offset_minutes,
+                total_runs=0,
+                completed_daily_challenges=0,
+                hit_bets=0,
+                campaign_score_delta=0,
+                best_archive_grade=None,
+                top_profile_id=None,
+                profile_runs={},
+            )
+
+        logs = list(
+            session.exec(
+                select(ScenarioCampaignLog)
+                .where(ScenarioCampaignLog.director_profile_id == profile.id)
+                .order_by(ScenarioCampaignLog.created_at.desc())
+            ).all()
+        )
+
+        matching_logs = [
+            log
+            for log in logs
+            if week_start
+            <= _normalize_utc_datetime(log.created_at).astimezone(local_timezone).date()
+            <= week_end
+        ]
+
+        if not matching_logs:
+            return _build_weekly_campaign_summary(
+                user_id=profile.user_id,
+                week_start=week_start,
+                week_end=week_end,
+                timezone_offset_minutes=timezone_offset_minutes,
+                total_runs=0,
+                completed_daily_challenges=0,
+                hit_bets=0,
+                campaign_score_delta=0,
+                best_archive_grade=None,
+                top_profile_id=None,
+                profile_runs={},
+            )
+
+        profile_counter = Counter(log.profile_id for log in matching_logs)
+        top_profile_id = sorted(
+            profile_counter.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[0][0]
+
+        best_archive_grade = None
+        for log in matching_logs:
+            best_archive_grade = _better_archive_grade(best_archive_grade, log.archive_grade)
+
+        return _build_weekly_campaign_summary(
+            user_id=profile.user_id,
+            week_start=week_start,
+            week_end=week_end,
+            timezone_offset_minutes=timezone_offset_minutes,
+            total_runs=len(matching_logs),
+            completed_daily_challenges=sum(1 for log in matching_logs if log.completed_daily_challenge),
+            hit_bets=sum(1 for log in matching_logs if log.betting_hit is True),
+            campaign_score_delta=sum(log.campaign_score_delta for log in matching_logs),
+            best_archive_grade=best_archive_grade,
+            top_profile_id=top_profile_id,
+            profile_runs=dict(sorted(profile_counter.items())),
         )

@@ -170,6 +170,9 @@ describe('DebateArenaView', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.kind).toBe('debate');
       expect(payload?.page?.debate?.visible_quotes).toContain('Verdict issued.');
+      expect(payload?.page?.debate?.unlocked_phase_count).toBeGreaterThan(0);
+      expect(payload?.page?.debate?.latest_turn_id).toBe('turn-2');
+      expect(payload?.page?.controls?.cue_phase).toBe('verdict');
     });
   });
 
@@ -178,7 +181,7 @@ describe('DebateArenaView', () => {
     mockDebateStore.debate = {
       ...mockDebateStore.debate,
       status: 'live',
-      current_phase: 'opening',
+      current_phase: 'crossfire',
       result_ready: false,
       score: { proposition: 0, opposition: 0, audience_meter: 0 },
       turns: [
@@ -189,6 +192,15 @@ describe('DebateArenaView', () => {
           speaker_side: 'proposition',
           speaker_name: 'Proposition',
           content: 'Opening statement.',
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'turn-2',
+          sequence: 2,
+          phase: 'crossfire',
+          speaker_side: 'opposition',
+          speaker_name: 'Opposition',
+          content: 'Crossfire reply.',
           created_at: new Date().toISOString(),
         },
       ],
@@ -217,8 +229,14 @@ describe('DebateArenaView', () => {
     }).capture_game_screenshot?.('modal');
     expect(noModalShot).toBeNull();
 
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(2000);
+    });
+
     await user.click(betButtons.at(-1)!);
     expect(await screen.findByText('debate.bet_title')).toBeInTheDocument();
+    expect(screen.getByTestId('debate-feed-focus')).toBeInTheDocument();
+    expect(screen.getByTestId('debate-live-turn')).toBeInTheDocument();
 
     const modalShot = await (window as Window & {
       capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
@@ -257,6 +275,8 @@ describe('DebateArenaView', () => {
         </Routes>
       </MemoryRouter>,
     );
+
+    expect(await screen.findByTestId('debate-feed-focus')).toBeInTheDocument();
 
     expect(await screen.findByRole('button', { name: 'debate.counterplay_submit' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'debate.counterplay_submit' }));

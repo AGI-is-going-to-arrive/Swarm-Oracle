@@ -1,8 +1,15 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShareModal from './ShareModal';
+
+const { generateSocialCopyMock } = vi.hoisted(() => ({
+  generateSocialCopyMock: vi.fn(async () => ({
+    copy: '生成好的文案',
+    platform_name: '小红书',
+  })),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -12,13 +19,41 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../api/client', () => ({
-  generateSocialCopy: vi.fn(async () => ({
-    copy: '生成好的文案',
-    platform_name: '小红书',
-  })),
+  generateSocialCopy: generateSocialCopyMock,
+}));
+
+vi.mock('../lib/directorIdentity', () => ({
+  getDirectorIdentity: () => ({
+    userId: 'director-1',
+    userName: 'Local Director',
+  }),
 }));
 
 describe('ShareModal automation callback', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    store.set('swarmoracle.llm-provider-policy.v1', JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: 'https://example.com/v1/chat/completions',
+      model: 'gpt-test',
+      reasoningEffort: 'medium',
+    }));
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => store.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        store.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        store.delete(key);
+      }),
+    });
+    generateSocialCopyMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('reports selected platform and generated copy', async () => {
     const user = userEvent.setup();
     const onAutomationStateChange = vi.fn();
@@ -47,5 +82,11 @@ describe('ShareModal automation callback', () => {
     expect(screen.getByText('命中题材核心')).toBeInTheDocument();
     expect(screen.getByText('关税杠杆')).toBeInTheDocument();
     expect(screen.getByText(/生成好的文案/)).toBeInTheDocument();
+    expect(generateSocialCopyMock).toHaveBeenCalledWith('scenario-1', 'xiaohongshu', {
+      llmApiKey: 'sk-test',
+      llmBaseUrl: 'https://example.com/v1/chat/completions',
+      llmModel: 'gpt-test',
+      userId: 'director-1',
+    });
   });
 });

@@ -12,8 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_swarmoracle.db")
 os.environ.setdefault("LLM_RESPONSES_URL", "http://127.0.0.1:8318/v1/chat/completions")
 os.environ.setdefault("LLM_API_KEY", "sk-12345678")
-os.environ.setdefault("LLM_MODEL_NAME", "gpt-5.2")
+os.environ.setdefault("LLM_MODEL_NAME", "gpt-5.4-mini")
 os.environ.setdefault("LLM_REASONING_EFFORT", "low")
+os.environ.setdefault("DEBATE_USE_LLM", "false")
 
 
 @pytest.fixture(autouse=True)

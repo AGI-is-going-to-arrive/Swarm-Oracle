@@ -15,6 +15,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.llm_client import llm_request_scope
 from app.services.parser import parse_question
 from app.services.campaign import (
     normalize_scenario_director_state,
@@ -131,6 +132,7 @@ async def parse_and_run_background(
     rounds: int,
     visualization_enabled: bool,
     reasoning_effort: str | None,
+    user_id: str | None,
     llm_api_key: str | None,
     llm_base_url: str | None,
     llm_model: str | None,
@@ -158,17 +160,20 @@ async def parse_and_run_background(
     except Exception:
         pass
 
+    quota_key = f"user:{user_id}" if user_id else None
+
     try:
-        parsed = await parse_question(
-            question,
-            max_agents=num_agents,
-            target_agents=num_agents,
-            max_rounds=settings.MAX_ROUNDS,
-            hierarchical=hierarchical,
-            api_key=llm_api_key,
-            base_url=llm_base_url,
-            model=llm_model,
-        )
+        with llm_request_scope(quota_key=quota_key, purpose="scenario_parse"):
+            parsed = await parse_question(
+                question,
+                max_agents=num_agents,
+                target_agents=num_agents,
+                max_rounds=settings.MAX_ROUNDS,
+                hierarchical=hierarchical,
+                api_key=llm_api_key,
+                base_url=llm_base_url,
+                model=llm_model,
+            )
     except Exception as exc:
         logger.error("Parse failed for %s: %s", scenario_id, exc, exc_info=True)
         with Session(engine) as session:
@@ -190,6 +195,8 @@ async def parse_and_run_background(
     parsed["mode"] = mode
     parsed["hierarchical"] = hierarchical
     parsed["simulation_rounds"] = rounds
+    if user_id:
+        parsed["user_id"] = user_id
 
     # Only persist non-sensitive display config.
     if llm_base_url:
@@ -286,10 +293,11 @@ async def parse_and_run_background(
             "model": llm_model,
         }
 
-    await run_sim_background(
-        scenario_id,
-        llm_overrides=llm_overrides,
-    )
+    with llm_request_scope(quota_key=quota_key, purpose="scenario_runtime"):
+        await run_sim_background(
+            scenario_id,
+            llm_overrides=llm_overrides,
+        )
 
 
 def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:

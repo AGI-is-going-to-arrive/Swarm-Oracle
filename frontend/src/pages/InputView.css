@@ -188,6 +188,70 @@
   flex-shrink: 0;
 }
 
+.shared-challenge-banner,
+.weekly-challenge-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(64, 48, 40, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--shadow-card);
+}
+
+.shared-challenge-banner {
+  background: linear-gradient(135deg, rgba(255, 247, 232, 0.94), rgba(255, 252, 247, 0.98));
+  border-color: rgba(194, 24, 91, 0.14);
+}
+
+.shared-challenge-banner__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--clr-primary, #c2185b);
+}
+
+.shared-challenge-banner__title {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.shared-challenge-banner__meta,
+.weekly-growth-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.weekly-challenge-card--growth {
+  gap: 12px;
+}
+
+.weekly-growth-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 248, 243, 0.72);
+  border: 1px solid rgba(194, 24, 91, 0.08);
+}
+
+.weekly-growth-list__item strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.weekly-growth-list__item span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* ── Round Count Slider ── */
 .rounds-selector {
   display: flex;
@@ -662,6 +726,11 @@
     padding-top: 28px;
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .shared-challenge-banner,
+  .weekly-challenge-card {
+    padding: 14px 16px;
   }
 
   .daily-challenge-card__badge {

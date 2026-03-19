@@ -5,6 +5,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { generateSocialCopy } from '../api/client';
+import { getDirectorIdentity } from '../lib/directorIdentity';
+import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import { buildShareCopyEnvelope, type ShareFlavorContext } from '../lib/shareEnvelope';
 import './ShareModal.css';
 
@@ -33,6 +35,7 @@ interface ShareModalProps {
 export default function ShareModal({ scenarioId, shareContext, onClose, onAutomationStateChange }: ShareModalProps) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
+  const directorIdentity = getDirectorIdentity();
   const [activePlatform, setActivePlatform] = useState<string | null>(null);
   const [copy, setCopy] = useState('');
   const [platformName, setPlatformName] = useState('');
@@ -48,7 +51,13 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     setLoading(true);
     setCopied(false);
     try {
-      const result = await generateSocialCopy(scenarioId, platform);
+      const providerPolicy = loadLlmProviderPolicy();
+      const result = await generateSocialCopy(scenarioId, platform, {
+        llmApiKey: providerPolicy.apiKey || undefined,
+        llmBaseUrl: providerPolicy.baseUrl || undefined,
+        llmModel: providerPolicy.model || undefined,
+        userId: directorIdentity.userId,
+      });
       setCopy(buildShareCopyEnvelope(result.copy, shareContext ?? {}, isZh));
       setPlatformName(result.platform_name);
     } catch (err) {

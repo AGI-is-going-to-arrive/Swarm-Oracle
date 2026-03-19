@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import logging
 
-from app.services.llm_client import llm_call_json
+from app.services.llm_client import (
+    UNTRUSTED_INPUT_GUARDRAIL,
+    format_untrusted_text_block,
+    llm_call_json,
+)
 from app.services.lang_detect import get_language_directive
 from app.services.vector_store import get_vector_store
 
@@ -142,9 +146,11 @@ def _build_crowd_context(
     # Intervention block — prominent and unmissable
     intervention_block = ""
     intervention_instruction = ""
+    topic_block = format_untrusted_text_block("推演核心议题", current_topic, max_chars=2000)
+
     if intervention_text:
         intervention_block = f"""\n\n【⚡ 突发事件 — 蝴蝶效应】
-{intervention_text}
+{format_untrusted_text_block("突发事件", intervention_text, max_chars=1200)}
 （这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）"""
         intervention_instruction = "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策"
 
@@ -155,7 +161,7 @@ def _build_crowd_context(
 【背景概要】{bg_brief}
 
 【推演核心议题】
-{current_topic}{intervention_block}
+{topic_block}{intervention_block}
 
 【刚才的对话】
 {recent_messages}
@@ -169,6 +175,7 @@ def _build_crowd_context(
 回复格式 (严格 JSON):
 {{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}
 
+{UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""
 
 
@@ -243,9 +250,11 @@ def build_agent_context(
     # Intervention block — prominent and unmissable
     intervention_block = ""
     intervention_instruction = ""
+    topic_block = format_untrusted_text_block("推演核心议题", current_topic, max_chars=2000)
+
     if intervention_text:
         intervention_block = f"""\n\n【⚡ 突发事件 — 蝴蝶效应】
-{intervention_text}
+{format_untrusted_text_block("突发事件", intervention_text, max_chars=1200)}
 （这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）"""
         intervention_instruction = "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响"
 
@@ -259,7 +268,7 @@ def build_agent_context(
 {setting_background}
 
 【推演核心议题】
-{current_topic}{intervention_block}
+{topic_block}{intervention_block}
 
 【刚才的对话】
 {conversation_section}{memories_block}
@@ -274,6 +283,7 @@ def build_agent_context(
 回复格式 (严格 JSON):
 {{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}
 
+{UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""
 
 

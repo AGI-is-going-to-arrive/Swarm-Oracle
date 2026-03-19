@@ -92,7 +92,7 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["server"] == "ok"
         assert "llm" in data
-        assert data["llm"]["model"] == "gpt-5.2"
+        assert data["llm"]["model"] == "gpt-5.4-mini"
 
 
 # ── Scenario CRUD ────────────────────────────────────────
@@ -939,6 +939,47 @@ class TestExportScenario:
         resp = client.get(f"/api/scenario/{sid}/export")
         assert "决战时刻" in resp.text
         assert "转折点" in resp.text
+
+
+class TestSocialCopy:
+    def test_social_copy_accepts_provider_policy_in_post_body(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            question="如果罗马帝国从未衰落？",
+            status=ScenarioStatus.DONE,
+        )
+        _seed_agent(engine, sid, name="奥古斯都", role="皇帝", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="帝国续命",
+            probability=0.7,
+            status=BranchStatus.COMPLETED,
+            story="帝国秩序被延长了三个世纪。",
+            insight="制度惯性比个人寿命更重要。",
+        )
+
+        async def _fake_llm_call(*args, **kwargs):
+            assert kwargs["api_key"] == "sk-test"
+            assert kwargs["base_url"] == "https://example.com/v1/chat/completions"
+            assert kwargs["model"] == "gpt-test"
+            return "生成好的文案"
+
+        monkeypatch.setattr("app.services.llm_client.llm_call", _fake_llm_call)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/social/xiaohongshu",
+            json={
+                "llm_api_key": "sk-test",
+                "llm_base_url": "https://example.com/v1/chat/completions",
+                "llm_model": "gpt-test",
+                "user_id": "director-1",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["copy"] == "生成好的文案"
 
 
 # ── P4-D: Intervention Templates ─────────────────────────

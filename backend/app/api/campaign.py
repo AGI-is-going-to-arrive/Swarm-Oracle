@@ -15,6 +15,7 @@ from app.services.campaign import (
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_campaign_profile_summary,
+    get_weekly_campaign_summary,
     get_scenario_gameplay_state,
     get_scenario_director_state,
     get_scenario_campaign_summary,
@@ -85,6 +86,20 @@ class CampaignDailyChallengeResponse(BaseModel):
     betting_hit: bool | None = None
     profile_resonance: str | None = None
     campaign_score_delta: int | None = None
+
+
+class CampaignWeeklySummaryResponse(BaseModel):
+    user_id: str
+    week_start: str
+    week_end: str
+    timezone_offset_minutes: int
+    total_runs: int
+    completed_daily_challenges: int
+    hit_bets: int
+    campaign_score_delta: int
+    best_archive_grade: str | None = None
+    top_profile_id: str | None = None
+    profile_runs: dict[str, int] = Field(default_factory=dict)
 
 
 class CampaignFinalizeRequest(BaseModel):
@@ -562,6 +577,27 @@ async def get_daily_status(
         raise HTTPException(400, str(exc)) from exc
 
     return CampaignDailyChallengeResponse(**summary)
+
+
+@router.get(
+    "/profile/{user_id}/weekly-summary",
+    response_model=CampaignWeeklySummaryResponse,
+)
+async def get_weekly_summary(
+    user_id: str,
+    local_date: str,
+    timezone_offset_minutes: int = 0,
+) -> CampaignWeeklySummaryResponse:
+    try:
+        summary = get_weekly_campaign_summary(
+            user_id,
+            local_date=local_date,
+            timezone_offset_minutes=timezone_offset_minutes,
+        )
+    except CampaignError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return CampaignWeeklySummaryResponse(**summary)
 
 
 @router.post(

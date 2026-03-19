@@ -10,6 +10,7 @@ export interface DebateShareContext {
   propositionScore: number;
   oppositionScore: number;
   counterplaySummary?: string | null;
+  counterplayExplanation?: string | null;
   counterplayOutcomeLabel?: string | null;
 }
 
@@ -37,6 +38,7 @@ export function buildDebateShareCopy(
     `${t('debate.result_scoreline')}: ${context.propositionScore} : ${context.oppositionScore}`,
     `${t('debate.result_tone')}: ${context.toneLabel}`,
     ...(context.counterplaySummary ? [`${t('debate.counterplay_title')}: ${context.counterplaySummary}`] : []),
+    ...(context.counterplayExplanation ? [`${t('debate.counterplay_explanation')}: ${context.counterplayExplanation}`] : []),
     ...(context.counterplayOutcomeLabel ? [`${t('debate.counterplay_result')}: ${context.counterplayOutcomeLabel}`] : []),
     `${t('debate.result_best_argument')}: ${context.bestArgument}`,
     `${t('debate.result_best_rebuttal')}: ${context.bestRebuttal}`,

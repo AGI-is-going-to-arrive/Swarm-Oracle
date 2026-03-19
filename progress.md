@@ -6766,6 +6766,15 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `cd frontend && npm run build`
   - 结果：通过
 
+## 2026-03-19 Debate Result Readability Fix
+
+- 问题：`DebateResultView` 的 `最佳论点 / 最佳反驳 / 评委摘要` 直接把正文压在 `quoteFrame` 装饰背景上，深色边缘纹理会明显干扰正文阅读。
+- 根因：结果页复用了 `debate-quote-frame` 背景图，但没有给正文提供独立的高对比承载层；文字直接落在纹理背景之上。
+- 修复：在 `frontend/src/pages/DebateArena.css` 为 `.debate-quote-frame` 增加内层浅色衬底（`::before`），并为 `.debate-quote-frame .debate-result-quote` 增加独立内边距、轻底色和更稳的行高，保留装饰框但提升正文对比度。
+- 验证：
+  - `cd frontend && npm test -- --run src/pages/DebateResultView.test.tsx` → `2 passed`
+  - 真实浏览器复验：新建 Debate `08dd0acf-7d7d-4a27-9212-a413f81c3f3e`，结果页三块摘要卡文字已恢复可读。
+
 ## 2026-03-19 Main Gameplay State + Safari + Theater Size
 
 - 主模式 `cards.usageLog` 已后端化到 `Scenario.gameplay_state_json`：
@@ -7561,3 +7570,105 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 结果：通过
   - `cd frontend && npm run build`
   - 结果：通过
+
+## 2026-03-19 LLM Governance + Debate + Campaign Lite
+
+- 本轮先把默认 `8318` 模型口径统一到 `gpt-5.4-mini`：
+  - `backend/app/config.py`
+  - `backend/.env`
+  - `.env.example`
+  - `backend/tests/conftest.py`
+  - 依赖旧默认模型的断言也同步更新
+- 对应验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_llm_client.py tests/test_api.py -q`
+  - 结果：`87 passed`
+
+- 本轮完成 Phase 1 LLM 治理 / provider policy 收口：
+  - `backend/app/services/llm_client.py`
+    - 新增进程内全局 semaphore、全局 pending 上限、用户级 pending 配额、provider 熔断
+    - 新增 `sanitize_untrusted_text()` / `format_untrusted_text_block()`，把不可信输入统一包成 `UNTRUSTED DATA`
+  - `backend/app/api/{schemas,helpers,scenarios,predictions,social}.py`
+    - `createScenario` 新增 `user_id`
+    - `score-predictions` / `social copy` 现可接 provider policy
+    - social copy 已支持 `POST body` 透传 provider policy，避免把 key 暴露到 URL
+  - `backend/app/services/{parser,memory,scoring}.py`
+    - parser / agent context / scoring prompt 现统一使用 `UNTRUSTED DATA` 包装
+    - scoring 现支持 provider overrides
+  - `frontend/src/{api/client.ts,stores/simulationStore.ts,pages/InputView.tsx,components/ShareModal.tsx,pages/ResultView.tsx,lib/llmProviderPolicy.ts}`
+    - provider policy 本地持久化
+    - 贯通 `createScenario / createDebate / social copy / scorePredictions`
+- 对应验证：
+  - backend：
+    - `python -m pytest tests/test_predictions.py tests/test_api.py -k 'social_copy_accepts_provider_policy_in_post_body or create_scenario_returns_immediately_and_schedules_background_parse or create_scenario_whitespace_only or create_scenario_empty_question' tests/test_config.py -q`
+    - 结果：`4 passed`
+    - `python -m pytest tests/test_llm_client.py -k 'global_backpressure_rejects_when_queue_is_full or format_untrusted_text_block_marks_injection_attempts or json_keyed_fallback_for_malformed_agent_payload or agent_message_fallback_wraps_plain_text' -q`
+    - 结果：`4 passed`
+    - `python -m pytest tests/test_debate_api.py tests/test_predictions.py tests/test_api.py tests/test_config.py -q`
+    - 结果：`105 passed`
+  - frontend：
+    - `npm test -- --run src/lib/llmProviderPolicy.test.ts src/components/ShareModal.test.tsx src/pages/InputView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`11 passed`
+    - `npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+    - `npm run build`
+    - 结果：通过
+
+- 本轮继续把 Debate 从“纯 deterministic 模板”推进到“LLM 文案优先”：
+  - `backend/app/services/debate.py`
+    - 回合文案改为 `LLM 优先、deterministic fallback`
+    - `judge summary` 改为单独生成，不再直接等于最后一句 verdict
+    - `counterplay` payload 新增 `phase_score / explanation`
+    - `replay digest` 会把对应阶段的 counterplay explanation 一起带出
+  - `backend/app/services/debate_prompts.py`
+    - 新增 turn generation prompt builder
+    - 强化“回应上一轮 / 说清机制 / 避免套话”的 prompt 约束
+  - `frontend/src/pages/DebateArenaView.{tsx,css}`
+    - 新增 `phase cue / feed focus / latest turn 高亮 / unlocked count`
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页现显示 counterplay explanation
+  - `frontend/src/lib/debateShare.ts`
+    - share copy 现会带 `counterplay explanation`
+- 对应验证：
+  - backend：
+    - `python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q`
+    - 结果：`12 passed`
+  - frontend：
+    - `npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/lib/debateShare.test.ts src/lib/debateCounterplay.test.ts`
+    - 结果：`8 passed`
+    - `npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+    - `npm run build`
+    - 结果：通过
+- 本轮还做了一个真实后端样本取证：
+  - 新开 Debate 局后，`judge summary` 已不再是模板 verdict 复读
+  - `counterplay explanation` 会解释为什么命中 / 为什么没翻盘
+
+- 本轮继续推进 Track A 的 Lite 长期循环，不改 schema：
+  - `backend/app/services/campaign.py`
+    - 新增 `get_weekly_campaign_summary()`，按调用方本地周窗口聚合 `ScenarioCampaignLog.created_at`
+  - `backend/app/api/campaign.py`
+    - 新增 `GET /api/campaign/profile/{user_id}/weekly-summary`
+  - `frontend/src/lib/{dailyChallenge,challengeShare}.ts`
+    - 新增 `challengeWeekKey()` / `getWeeklyChallenges()`
+    - 新增分享 challenge URL encode/decode helper
+  - `frontend/src/pages/InputView.tsx`
+    - 首页新增 `weekly challenge` / `director growth` Lite 展示
+    - 支持从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile`
+  - `frontend/src/pages/ResultView.tsx`
+    - 结果页新增“分享挑战”按钮，复制 challenge URL
+- 对应验证：
+  - backend：
+    - `python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q`
+    - 结果：`21 passed`
+  - frontend：
+    - `npm test -- --run src/lib/challengeShare.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`11 passed`
+    - `npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+    - `npm run build`
+    - 结果：通过
+
+- 当前边界：
+  - `weekly challenge` / `director growth` / `share challenge` 目前是 Lite，不是赛季系统
+  - `share challenge` 共享的是开局配置，不是 deterministic replay seed
+  - Debate 胜负 / breakdown / verdict tone 仍是 deterministic 规则；当前升级的是文案与解释层

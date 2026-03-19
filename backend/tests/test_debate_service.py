@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session
 
+import app.services.debate as debate_module
 from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
 from app.models.database import get_engine
 from app.services.debate_scoring import _profile_dimension_bias
@@ -14,6 +15,11 @@ from app.services.debate import (
     load_debate_snapshot,
     run_debate_background,
 )
+
+
+@pytest.fixture(autouse=True)
+def _disable_debate_llm(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", False)
 
 
 @pytest.mark.asyncio
@@ -52,6 +58,8 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert snapshot["counterplay"]["phase"] == "crossfire"
     assert snapshot["counterplay"]["variant"] == "reversal"
     assert snapshot["counterplay"]["outcome"] in {"hit", "miss"}
+    assert snapshot["counterplay"]["phase_score"]["proposition"] >= 0
+    assert snapshot["counterplay"]["explanation"]
     assert snapshot["scene_theme"] == "debate_arena_civic"
     assert len(snapshot["turns"]) == 9
     assert result["result"]["winner"] in {"proposition", "opposition"}
@@ -61,6 +69,8 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert result["counterplay"]["phase"] == "crossfire"
     assert result["counterplay"]["variant"] == "reversal"
     assert result["counterplay"]["outcome"] in {"hit", "miss"}
+    assert result["counterplay"]["phase_score"]["proposition"] >= 0
+    assert result["counterplay"]["explanation"]
     assert result["predictions"][0]["is_counterplay"] is True
     assert result["predictions"][0]["counterplay_phase"] == "crossfire"
     assert result["predictions"][0]["counterplay_variant"] == "reversal"
@@ -72,6 +82,7 @@ async def test_run_debate_background_finishes_with_structured_result():
     }
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
+    assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
 
 
 def test_create_debate_record_uses_english_defaults_for_non_chinese_questions():
@@ -146,3 +157,28 @@ def test_create_debate_record_keeps_scene_compatible_with_existing_debate_assets
         "debate_arena_judicial",
         "debate_arena_civic",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+
+    counter = {"value": 0}
+
+    async def _fake_llm_call_json(*args, **kwargs):
+        counter["value"] += 1
+        return {"content": f"LLM turn #{counter['value']}"}
+
+    monkeypatch.setattr(debate_module, "llm_call_json", _fake_llm_call_json)
+
+    debate = create_debate_record("Should a permanent audit chamber review every emergency budget?")
+
+    async def _push(_debate_id: str, _event: dict) -> None:
+        return None
+
+    await run_debate_background(debate.id, ws_callback=_push, quota_key="debate-user")
+    snapshot = load_debate_snapshot(debate.id)
+
+    assert snapshot is not None
+    assert snapshot["turns"][0]["content"] == "LLM turn #1"
+    assert snapshot["turns"][-1]["content"] == "LLM turn #9"

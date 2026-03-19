@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
@@ -13,18 +13,26 @@ import {
   getCampaignDailyChallengeStatus,
   getCampaignMastery,
   getCampaignProfile,
+  getCampaignWeeklySummary,
   testLlmConnection,
 } from '../api/client';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import {
   challengeDateKey,
+  challengeWeekKey,
   getChallengeQuestion,
   getChallengeProgress,
   getTodayChallenge,
+  getWeeklyChallenges,
   markChallengeStarted,
   resolveChallengeProgress,
 } from '../lib/dailyChallenge';
+import { readSharedChallengePayload } from '../lib/challengeShare';
 import { stringifyAutomationPayload } from '../game/automation';
+import {
+  loadLlmProviderPolicy,
+  saveLlmProviderPolicy,
+} from '../lib/llmProviderPolicy';
 import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
@@ -36,6 +44,7 @@ import type {
   CampaignDailyChallengeStatus,
   CampaignMastery,
   CampaignProfileSummary,
+  CampaignWeeklySummary,
 } from '../types';
 import './InputView.css';
 
@@ -74,7 +83,9 @@ export function InputView() {
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
+  const providerPolicyHydrated = useRef(false);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const reset = useSimulationStore((s) => s.reset);
@@ -85,10 +96,16 @@ export function InputView() {
   const cachedChallengeProgress = getChallengeProgress(todayChallenge.id);
   const challengeProfileLabel = getGameplayProfileLabel(todayChallenge.profileId, isZh);
   const challengeHooks = getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2);
+  const weeklyChallenges = getWeeklyChallenges();
   const [campaignProfile, setCampaignProfile] = useState<CampaignProfileSummary | null>(null);
   const [campaignMastery, setCampaignMastery] = useState<CampaignMastery[]>([]);
   const [campaignBadges, setCampaignBadges] = useState<CampaignBadge[]>([]);
   const [campaignDailyStatus, setCampaignDailyStatus] = useState<CampaignDailyChallengeStatus | null>(null);
+  const [campaignWeeklySummary, setCampaignWeeklySummary] = useState<CampaignWeeklySummary | null>(null);
+  const [sharedChallengeBanner, setSharedChallengeBanner] = useState<{
+    question: string;
+    profileId?: string | null;
+  } | null>(null);
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -121,6 +138,40 @@ export function InputView() {
   useEffect(() => {
     reset();
   }, [reset]);
+
+  useEffect(() => {
+    const storedPolicy = loadLlmProviderPolicy();
+    setLlmApiKey(storedPolicy.apiKey);
+    setLlmBaseUrl(storedPolicy.baseUrl);
+    setLlmModel(storedPolicy.model);
+    setReasoningEffort(storedPolicy.reasoningEffort);
+    setShowByok(Boolean(storedPolicy.apiKey || storedPolicy.baseUrl || storedPolicy.model));
+    providerPolicyHydrated.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!providerPolicyHydrated.current) return;
+    saveLlmProviderPolicy({
+      apiKey: llmApiKey,
+      baseUrl: llmBaseUrl,
+      model: llmModel,
+      reasoningEffort,
+    });
+  }, [llmApiKey, llmBaseUrl, llmModel, reasoningEffort]);
+
+  useEffect(() => {
+    const sharedChallenge = readSharedChallengePayload(searchParams);
+    if (!sharedChallenge) return;
+    setQuestion(sharedChallenge.question);
+    setRounds(sharedChallenge.rounds);
+    setNumAgents(sharedChallenge.numAgents);
+    setMode(sharedChallenge.mode);
+    setVizEnabled(sharedChallenge.visualizationEnabled);
+    setSharedChallengeBanner({
+      question: sharedChallenge.question,
+      profileId: sharedChallenge.profileId,
+    });
+  }, [searchParams]);
 
   // Animate loading steps while submitting
   useEffect(() => {
@@ -187,16 +238,22 @@ export function InputView() {
           setCampaignMastery([]);
           setCampaignBadges([]);
           setCampaignDailyStatus(null);
+          setCampaignWeeklySummary(null);
         }
         return;
       }
 
-      const [mastery, badges, dailyStatus] = await Promise.all([
+      const [mastery, badges, dailyStatus, weeklySummary] = await Promise.all([
         getCampaignMastery(directorIdentity.userId).catch(() => [] as CampaignMastery[]),
         getCampaignBadges(directorIdentity.userId).catch(() => [] as CampaignBadge[]),
         getCampaignDailyChallengeStatus(
           directorIdentity.userId,
           todayChallenge.profileId,
+          challengeDateKey(),
+          new Date().getTimezoneOffset(),
+        ).catch(() => null),
+        getCampaignWeeklySummary(
+          directorIdentity.userId,
           challengeDateKey(),
           new Date().getTimezoneOffset(),
         ).catch(() => null),
@@ -206,6 +263,7 @@ export function InputView() {
       setCampaignMastery(mastery);
       setCampaignBadges(badges);
       setCampaignDailyStatus(dailyStatus);
+      setCampaignWeeklySummary(weeklySummary);
     };
 
     void loadCampaign();
@@ -215,6 +273,13 @@ export function InputView() {
   }, [directorIdentity.userId, todayChallenge.profileId]);
 
   const dailyMastery = campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null;
+  const topMasteries = [...campaignMastery]
+    .sort((left, right) => (
+      right.campaign_score - left.campaign_score
+      || right.level - left.level
+      || left.profile_id.localeCompare(right.profile_id)
+    ))
+    .slice(0, 3);
   const todayChallengeProgress = resolveChallengeProgress(
     cachedChallengeProgress,
     campaignDailyStatus,
@@ -222,6 +287,16 @@ export function InputView() {
   const nextUnlockLabel = dailyMastery?.score_to_next_level != null
     ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
     : t('home.campaign_mastered');
+  const sharedChallengeProfileLabel = sharedChallengeBanner?.profileId
+    ? getGameplayProfileLabel(sharedChallengeBanner.profileId as never, isZh)
+    : null;
+  const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
+    ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
+    : null;
+  const weeklyChallengeProgress = weeklyChallenges.map((challenge) => ({
+    challenge,
+    runs: campaignWeeklySummary?.profile_runs?.[challenge.profileId] ?? 0,
+  }));
 
   // Entry animations
   useEffect(() => {
@@ -291,6 +366,7 @@ export function InputView() {
         llmModel || undefined,
         reasoningEffort || undefined,
         nextVisualization,
+        directorIdentity.userId,
       );
       if (challengeId) {
         markChallengeStarted(challengeId, id);
@@ -311,7 +387,13 @@ export function InputView() {
 
     setIsSubmitting(true);
     try {
-      const debate = await createDebate(trimmed);
+      const debate = await createDebate(trimmed, undefined, {
+        llmApiKey: llmApiKey || undefined,
+        llmBaseUrl: llmBaseUrl || undefined,
+        llmModel: llmModel || undefined,
+        reasoningEffort: reasoningEffort || undefined,
+        userId: directorIdentity.userId,
+      });
       const targetLanguage = debate.language === 'zh' ? 'zh' : 'en';
       if (!i18n.language.startsWith(targetLanguage)) {
         await i18n.changeLanguage(targetLanguage);
@@ -499,6 +581,25 @@ export function InputView() {
 
         {/* Input Area */}
         <div className="input-view__form">
+          {sharedChallengeBanner && (
+            <section className="shared-challenge-banner" role="status">
+              <span className="shared-challenge-banner__eyebrow">
+                {t('home.shared_challenge_label')}
+              </span>
+              <strong className="shared-challenge-banner__title">{sharedChallengeBanner.question}</strong>
+              <div className="shared-challenge-banner__meta">
+                {sharedChallengeProfileLabel && (
+                  <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                    {sharedChallengeProfileLabel}
+                  </span>
+                )}
+                <span className="daily-challenge-card__pill">
+                  {t('home.shared_challenge_prefilled')}
+                </span>
+              </div>
+            </section>
+          )}
+
           <section className="daily-challenge-card">
             <img
               className="daily-challenge-card__art"
@@ -583,6 +684,80 @@ export function InputView() {
                   ? t('home.daily_challenge_continue')
                   : t('home.daily_challenge_start')}
             </button>
+          </section>
+
+          <section className="weekly-challenge-card">
+            <div className="weekly-challenge-card__copy">
+              <span className="daily-challenge-card__eyebrow">
+                {t('home.weekly_challenge_label')}
+              </span>
+              <strong className="daily-challenge-card__title">
+                {t('home.weekly_challenge_title', { week: challengeWeekKey() })}
+              </strong>
+              <span className="daily-challenge-card__subtitle">
+                {campaignWeeklySummary
+                  ? t('home.weekly_challenge_summary', {
+                    runs: campaignWeeklySummary.total_runs,
+                    score: campaignWeeklySummary.campaign_score_delta,
+                  })
+                  : t('home.weekly_challenge_fallback')}
+              </span>
+              <div className="daily-challenge-card__hooks">
+                {weeklyChallengeProgress.map(({ challenge, runs }) => (
+                  <span
+                    key={challenge.id}
+                    className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
+                  >
+                    {getGameplayProfileLabel(challenge.profileId, isZh)}
+                    {runs > 0 ? ` · ${t('home.weekly_challenge_runs', { count: runs })}` : ''}
+                  </span>
+                ))}
+              </div>
+              <div className="daily-challenge-card__status">
+                <span className="daily-challenge-card__pill">
+                  {campaignWeeklySummary
+                    ? t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })
+                    : t('home.weekly_challenge_fallback')}
+                </span>
+                {weeklyTopProfileLabel && (
+                  <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                    {t('home.weekly_challenge_top_profile', { profile: weeklyTopProfileLabel })}
+                  </span>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="weekly-challenge-card weekly-challenge-card--growth">
+            <div className="weekly-challenge-card__copy">
+              <span className="daily-challenge-card__eyebrow">
+                {t('home.director_growth_label')}
+              </span>
+              <strong className="daily-challenge-card__title">
+                {campaignProfile
+                  ? t('home.director_growth_title', {
+                    runs: campaignProfile.total_runs,
+                    badges: campaignBadges.length,
+                  })
+                  : t('home.director_growth_empty')}
+              </strong>
+              <div className="weekly-growth-list">
+                {topMasteries.length > 0 ? topMasteries.map((mastery) => (
+                  <div key={mastery.profile_id} className="weekly-growth-list__item">
+                    <strong>{getGameplayProfileLabel(mastery.profile_id as never, isZh)}</strong>
+                    <span>
+                      {t('home.campaign_mastery_level', { level: mastery.level })} · {
+                        mastery.score_to_next_level != null
+                          ? t('home.campaign_next_unlock', { count: mastery.score_to_next_level })
+                          : t('home.campaign_mastered')
+                      }
+                    </span>
+                  </div>
+                )) : (
+                  <p className="daily-challenge-card__subtitle">{t('home.director_growth_hint')}</p>
+                )}
+              </div>
+            </div>
           </section>
 
           <div className="input-wrapper">

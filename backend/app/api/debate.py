@@ -36,6 +36,11 @@ _COUNTERPLAY_VARIANTS = {"balanced", "reversal"}
 class CreateDebateRequest(BaseModel):
     question: str
     profile_hint: str | None = None
+    user_id: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    reasoning_effort: str | None = None
 
     @field_validator("question")
     @classmethod
@@ -56,6 +61,14 @@ class CreateDebateRequest(BaseModel):
         if cleaned not in KNOWN_DEBATE_PROFILES:
             raise ValueError(f"Unsupported profile_hint: {cleaned}")
         return cleaned
+
+    @field_validator("user_id", "llm_api_key", "llm_base_url", "llm_model", "reasoning_effort")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class DebatePredictionRequest(BaseModel):
@@ -113,10 +126,23 @@ class DebatePredictionRequest(BaseModel):
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
+    llm_overrides = None
+    if req.llm_api_key or req.llm_base_url or req.llm_model or req.reasoning_effort:
+        llm_overrides = {
+            "api_key": req.llm_api_key,
+            "base_url": req.llm_base_url,
+            "model": req.llm_model,
+            "reasoning_effort": req.reasoning_effort,
+        }
 
     async def _delayed_run() -> None:
         await asyncio.sleep(DEBATE_START_DELAY_SECONDS)
-        await run_debate_background(debate.id, ws_callback=debate_ws_manager.broadcast)
+        await run_debate_background(
+            debate.id,
+            ws_callback=debate_ws_manager.broadcast,
+            llm_overrides=llm_overrides,
+            quota_key=req.user_id,
+        )
 
     schedule_background_task(
         _delayed_run()

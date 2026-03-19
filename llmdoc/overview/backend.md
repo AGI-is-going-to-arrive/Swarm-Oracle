@@ -126,7 +126,15 @@ alembic/ ──► Alembic 数据库迁移框架
     - 正则抽取对象 / 数组
     - keyed fallback（恢复轻微损坏的 `story/content/emotion/diverge` 这类键值）
     - `agent_message` 专用 fallback（把带键的坏 JSON 或纯文本尽量恢复成单条 agent 发言）
+- **全局治理**:
+  - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`
+  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure
+  - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断
+- **输入防护**:
+  - `sanitize_untrusted_text()` / `format_untrusted_text_block()` 会把用户题面、干预文本、评分输入等包成 `UNTRUSTED DATA`
+  - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
 - **BYOK (P4-E)**: 所有函数接受 `api_key`/`base_url`/`model` 可选覆盖，用户可自带 OpenAI 兼容 API Key；API Key 仅内存传递不持久化
+- **Provider policy 贯通**: 当前 BYOK/provider policy 已接进 `createScenario / social copy / score-predictions / createDebate`，同一份 `user_id` 也会参与用户级 pending 配额
 - **容器部署提示**: 如果后端在 Docker 容器内运行而 LLM 服务在宿主机本地，`LLM_RESPONSES_URL` 需要改为 `host.docker.internal` 或其他宿主可达地址；`POST /api/health` 会同步探测 LLM，因此容器健康检查现改用 `GET /`
 
 ### `parser.py` (≈200行) — 问题解析
@@ -177,9 +185,11 @@ alembic/ ──► Alembic 数据库迁移框架
   - `list_campaign_mastery_summaries(user_id)` — 按 `campaign_score` 列出题材 mastery
   - `list_campaign_badge_summaries(user_id)` — 列出已解锁 badge
   - `get_daily_challenge_summary(user_id, profile_id, local_date, timezone_offset_minutes)` — 返回指定题材在调用方本地日期上的 daily challenge 完成态
+  - `get_weekly_campaign_summary(user_id, local_date, timezone_offset_minutes)` — 返回调用方本地周窗口内的轻量周汇总
 - **数据写入**: 会更新 `DirectorProfile`、`ProfileMastery`，并写入不可变的 `ScenarioCampaignLog`
 - **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
 - **单局摘要**: scenario summary 会返回 `profile_id / archive_grade / profile_resonance / betting_hit / most_used_card / completed_daily_challenge / campaign_score_delta / finalized_at`
+- **周汇总**: `weekly-summary` 当前不改 schema，直接按 `ScenarioCampaignLog.created_at` + 调用方本地时区聚合 `total_runs / completed_daily_challenges / hit_bets / campaign_score_delta / best_archive_grade / top_profile_id / profile_runs`
 - **director state**:
   - goals / commitment 当前落在 `Scenario.director_state_json`
   - live/result 前端会优先读取这一份
@@ -194,17 +204,19 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
 - **职责**:
-  - `debate.py`：独立 Debate Arena 运行、turn 落库、verdict 结算、prediction 评分、counterplay 显式 payload
-  - `debate_prompts.py`：deterministic motion / cast / turn 文案与题材→场景映射
+  - `debate.py`：独立 Debate Arena 运行、turn 落库、LLM 回合生成、judge summary、verdict 结算、prediction 评分、counterplay 显式 payload
+  - `debate_prompts.py`：deterministic motion / cast / 语义锚点文案与 LLM turn prompt builder
   - `debate_scoring.py`：winner / verdict tone / breakdown / phase delta 规划
 - **关键行为**:
   - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction / DebateCounterplay`
   - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
   - prediction 只支持 `winner` 与 `verdict_tone`
   - `counterplay` 当前已提升成 Debate 域内的显式记录：提交时会同时写 `DebatePrediction + DebateCounterplay`，live snapshot / result payload / WS 会优先读独立 `DebateCounterplay`，仅在缺失时回退到旧的 prediction metadata
-  - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 辩风文案
+  - 当前胜负 / breakdown / verdict tone 仍走 deterministic 规则，但回合文案与 `judge summary` 已升级为 **LLM 优先、deterministic fallback**
+  - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 语义锚点，同时会生成更强的 LLM prompt，要求回应上一轮、避免套话
   - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
+  - `counterplay` 现在除了 `outcome`，还会返回 `phase_score / explanation`，并被织进 `judge summary` 与 replay digest
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
@@ -247,7 +259,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /api/scenario/{id}/social/{platform}` | GET | 生成社交媒体文案 — 支持小红书/微博/知乎/Reddit/X |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；推荐走 `POST body` 透传 provider policy，避免把 key 暴露在 URL |
 
 ### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
 | 端点 | 方法 | 描述 |
@@ -261,6 +273,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态；内部会先把 SQLite round-trip 的 naive UTC 时间按 UTC 归一后再做本地日期换算 |
+| `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 获取调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
 > 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 只要场景存在就返回结果，未写入时会回安全默认值。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
@@ -281,7 +294,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
+| `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前可选透传 `user_id / llm_* / reasoning_effort`，并会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` |
 | `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / replay digest / predictions）；当前顶层也会显式带 `counterplay`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
 | `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
@@ -324,7 +337,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 ## 测试覆盖
 
-仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
+仓库内历史后端全量基线仍记录为 **815 passed**。本轮重新复验了 `test_debate_service.py / test_debate_api.py / test_config.py / test_campaign_api.py / test_campaign_service.py / test_predictions.py / test_card_events.py / test_gameplay_contract_sync.py`，结果为 **65 passed**；分别覆盖 Debate API/服务、prediction 评分、shared contract、`campaign scenario summary` 路由与 backend-root 路径归一。后续本次 director-state 后端化又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **17 passed**，重点覆盖 `director-state` round-trip、active commitment 校验，以及 `GET /api/scenario/{id}` 顶层 `director_state` 回读。本次 `gameplay_state` authority + 角色映射收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py tests/test_persona_mapper.py -q`，结果为 **80 passed**。本次 session 围绕 `gameplay_state` raw state 收口又补跑了 `tests/test_campaign_api.py tests/test_campaign_service.py -q`，结果为 **19 passed**，重点覆盖 `betting.bets / archive.key_moments / archive.branch_snapshots` 的 round-trip 与 `GET /api/scenario/{id}` 顶层回读。再往后本次 session 又补跑了：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**，`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**，`tests/test_campaign_service.py / tests/test_campaign_api.py` 新增 weekly summary 后 → **21 passed**，以及 Debate 最新 LLM 文案/judge summary/counterplay explanation 回归 `tests/test_debate_service.py / tests/test_debate_api.py` → **12 passed**。需要注意的是：`/metrics`、LLM retry/backoff 与 Alembic 迁移框架当前是“代码存在”，并非本轮已做完备运行验证。
 
 覆盖重心：
 

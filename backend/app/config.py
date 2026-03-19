@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # ── LLM ──────────────────────────────────────────────
     LLM_RESPONSES_URL: str = "http://127.0.0.1:8318/v1/chat/completions"
     LLM_API_KEY: str = "sk-12345678"
-    LLM_MODEL_NAME: str = "gpt-5.1-codex-mini"
+    LLM_MODEL_NAME: str = "gpt-5.4-mini"
     LLM_REASONING_EFFORT: str = "none"  # none | low | medium | high
 
     # ── Simulation ───────────────────────────────────────
@@ -29,6 +29,11 @@ class Settings(BaseSettings):
 
     # ── Concurrency ──────────────────────────────────────
     LLM_CONCURRENCY: int = 5
+    LLM_MAX_PENDING: int = 24
+    LLM_USER_MAX_PENDING: int = 4
+    LLM_CIRCUIT_BREAKER_THRESHOLD: int = 6
+    LLM_CIRCUIT_BREAKER_RESET_SECONDS: int = 30
+    DEBATE_USE_LLM: bool = True
 
     # ── Database ─────────────────────────────────────────
     DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'swarmoracle.db').resolve()}"

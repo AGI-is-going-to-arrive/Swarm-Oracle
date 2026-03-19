@@ -12,6 +12,7 @@ from app.config import settings
 
 class CreateScenarioRequest(BaseModel):
     question: str
+    user_id: str | None = None
     num_agents: int | None = None  # User-specified agent count, range 3-1500
     rounds: int | None = None      # User-specified round count (overrides parsed default)
     mode: str | None = None         # "raw" | "blackboard", default "blackboard"
@@ -23,6 +24,22 @@ class CreateScenarioRequest(BaseModel):
     llm_model: str | None = None      # Model name override (e.g. gpt-4o, claude-3.5-sonnet)
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        normalized = v.strip()
+        if len(normalized) > 1000:
+            raise ValueError("question too long (max 1000 chars)")
+        return normalized
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        return normalized or None
 
     @field_validator("num_agents")
     @classmethod

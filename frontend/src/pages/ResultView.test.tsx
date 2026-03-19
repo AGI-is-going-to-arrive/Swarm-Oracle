@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ScenarioMeta } from '../lib/scenarioMeta';
@@ -272,6 +273,68 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByText('Lv.2')).toBeInTheDocument();
     expect(screen.getByText('5 points to next unlock')).toBeInTheDocument();
     expect(screen.getByText('Archive Record')).toBeInTheDocument();
+  });
+
+  it('copies a shareable challenge link for the current scenario', async () => {
+    const user = userEvent.setup();
+    let copiedUrl = '';
+    const writeText = vi.fn(async (text: string) => {
+      copiedUrl = text;
+    });
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        writeText,
+      },
+    });
+
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 5,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 0,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 5,
+        level: 2,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 10,
+        score_to_next_level: 5,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('result.title');
+    await user.click(screen.getByRole('button', { name: 'result.share_challenge_btn' }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(copiedUrl).toContain('sharedChallenge=1');
+    expect(copiedUrl).toContain('question=');
   });
 
   it('marks finalize requests as daily challenge runs when the scenario came from a stored challenge', async () => {

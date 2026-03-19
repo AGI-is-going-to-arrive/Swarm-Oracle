@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from app.models import DebatePhase, DebateSide
+from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block
 from app.services.lang_detect import detect_language
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -214,6 +215,39 @@ def normalize_question(question: str, *, max_length: int = 160) -> str:
     return f"{compact[: max_length - 1].rstrip()}..."
 
 
+def phase_argument_goal(language: str, phase: DebatePhase, side: DebateSide) -> str:
+    """Describe the rhetorical job of a turn without dictating exact wording."""
+    if language == "zh":
+        if phase == DebatePhase.OPENING:
+            return "先立一个清晰主张，再说明这条主张会怎样影响制度、执行或代价分布。"
+        if phase == DebatePhase.CROSSFIRE:
+            return "抓住对方刚才最脆弱的一点，追问它会在现实里先伤到谁、卡在哪一环。"
+        if phase == DebatePhase.REBUTTAL:
+            return "正面回应上一轮最强质疑，补上缺口，同时把自己的方案讲得更可执行。"
+        if phase == DebatePhase.CLOSING:
+            return "收束争点，不重复前文，用一句更大的判断说明为什么这条世界线更稳或更危险。"
+        return "以裁决者口吻点出胜负关键，至少引用两类具体优势或漏洞。"
+
+    if phase == DebatePhase.OPENING:
+        return "Plant a clear thesis, then tie it to institutions, execution, or who absorbs the cost."
+    if phase == DebatePhase.CROSSFIRE:
+        return "Hit the weakest point in the other side's latest case and ask where it breaks first in reality."
+    if phase == DebatePhase.REBUTTAL:
+        return "Answer the strongest criticism directly, repair the exposed gap, and make your path more executable."
+    if phase == DebatePhase.CLOSING:
+        return "Compress the dispute into one larger judgment instead of repeating earlier lines."
+    return "Sound like a judge, naming at least two concrete reasons why one side wins."
+
+
+def stock_opening_guard(language: str, phase: DebatePhase) -> str:
+    """List openings the model should avoid repeating verbatim."""
+    if phase == DebatePhase.VERDICT:
+        return ""
+    if language == "zh":
+        return "避免使用这些开头：我方支持、我方反对、正方认为、反方认为、所谓、显然。"
+    return "Avoid stock openings like: We support the motion, We oppose the motion, Proposition says, Opposition says, Obviously."
+
+
 def resolve_debate_language(question: str) -> str:
     return "zh" if detect_language(question) == "Chinese" else "en"
 
@@ -332,6 +366,99 @@ def _build_turn_copy_zh(
         }.get(verdict_tone or "", "均衡")
         return f"裁决：{outcome}获胜。本场主导判词是“{tone_label}”。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"
     return motion
+
+
+def build_turn_generation_prompt(
+    *,
+    language: str,
+    phase: DebatePhase,
+    side: DebateSide,
+    speaker_name: str,
+    speaker_role: str,
+    motion: str,
+    question: str,
+    profile_id: str,
+    anchor_copy: str,
+    recent_turns: list[dict[str, str]],
+    verdict_tone: str | None = None,
+    winner: str | None = None,
+) -> str:
+    """Build an LLM prompt for a single debate turn.
+
+    The deterministic anchor copy preserves the current design intent while
+    letting the model rewrite it into something less templated.
+    """
+    phase_label = phase.value
+    recent_lines = []
+    for turn in recent_turns[-4:]:
+        recent_lines.append(
+            f"- {turn['phase']} / {turn['speaker_name']}: {turn['content']}"
+        )
+    recent_block = "\n".join(recent_lines) if recent_lines else "(none)"
+    latest_opponent_turn = next(
+        (
+            turn["content"]
+            for turn in reversed(recent_turns)
+            if turn["speaker_name"] != speaker_name
+        ),
+        "",
+    )
+    verdict_hint = ""
+    if phase == DebatePhase.VERDICT:
+        verdict_hint = (
+            f"\nRequired verdict: winner={winner or 'unknown'}, tone={verdict_tone or 'balance'}."
+        )
+
+    if language == "zh":
+        return (
+            "你正在为 SwarmOracle Debate Arena 生成一条结构化辩论台词。\n"
+            f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
+            f"角色：{speaker_name} / {speaker_role}\n"
+            f"阶段：{phase_label}\n"
+            f"立场：{side.value}\n"
+            f"题材：{profile_id}\n"
+            f"{verdict_hint}\n"
+            f"本轮任务：{phase_argument_goal(language, phase, side)}\n"
+            f"{stock_opening_guard(language, phase)}\n"
+            f"{format_untrusted_text_block('辩题问题', question, max_chars=600)}\n"
+            f"{format_untrusted_text_block('正式动议', motion, max_chars=600)}\n"
+            f"{format_untrusted_text_block('最近辩论记录', recent_block, max_chars=1200)}\n"
+            f"{format_untrusted_text_block('上一条对手发言', latest_opponent_turn or '(none)', max_chars=500)}\n"
+            f"{format_untrusted_text_block('语义锚点', anchor_copy, max_chars=500)}\n"
+            "任务：保留同样的立场、阶段目标和结论方向，但不要复读锚点文案本身，要写成更像真人现场辩论的即时回应。\n"
+            "要求：\n"
+            "- 2-4 句，必须至少包含一个具体机制、执行后果或责任链\n"
+            "- 如果存在上一条对手发言，你必须正面回应其中一个具体点，而不是另起炉灶\n"
+            "- 不要重复“我方支持/反对”这类开场套话，也不要直接改写语义锚点原句\n"
+            "- 不要引入与题目无关的新设定\n"
+            "- 如果是 verdict，必须明确给出胜方与判词语气\n"
+            "- 只输出严格 JSON：{\"content\": \"...\"}\n"
+        )
+
+    return (
+        "You are generating one structured line for SwarmOracle Debate Arena.\n"
+        f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
+        f"Speaker: {speaker_name} / {speaker_role}\n"
+        f"Phase: {phase_label}\n"
+        f"Side: {side.value}\n"
+        f"Profile: {profile_id}\n"
+        f"{verdict_hint}\n"
+        f"Turn goal: {phase_argument_goal(language, phase, side)}\n"
+        f"{stock_opening_guard(language, phase)}\n"
+        f"{format_untrusted_text_block('Debate question', question, max_chars=600)}\n"
+        f"{format_untrusted_text_block('Motion', motion, max_chars=600)}\n"
+        f"{format_untrusted_text_block('Recent debate turns', recent_block, max_chars=1200)}\n"
+        f"{format_untrusted_text_block('Latest opposing turn', latest_opponent_turn or '(none)', max_chars=500)}\n"
+        f"{format_untrusted_text_block('Semantic anchor', anchor_copy, max_chars=500)}\n"
+        "Task: keep the same stance, phase objective, and conclusion direction, but do not paraphrase the anchor line. Write it like a live response in an actual debate.\n"
+        "Requirements:\n"
+        "- 2-4 sentences with at least one concrete mechanism, execution consequence, or accountability chain\n"
+        "- If there is a latest opposing turn, answer one specific point from it directly\n"
+        "- Avoid stock openings and do not recycle anchor wording\n"
+        "- Do not invent unrelated world details\n"
+        "- If this is the verdict, explicitly state winner and tone\n"
+        "- Output strict JSON only: {\"content\": \"...\"}\n"
+    )
 
 
 def _build_turn_copy_en(

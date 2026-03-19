@@ -8,7 +8,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": ""}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
+| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": ""}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
 | `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`） |
 | `GET /api/scenario/{id}/branches` | GET | 获取分支列表 | — | BranchInfo[] |
 | `GET /api/scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） | — | AgentInfo[] |
@@ -25,7 +25,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenarios` | GET | 场景列表（分页+筛选） | `?status=done&limit=20&offset=0` | `{scenarios[], total, limit, offset}` |
 | `DELETE /api/scenario/{id}` | DELETE | 删除场景（级联删除所有关联数据） | — | `{status: "deleted", scenario_id}` |
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
-| `GET /api/scenario/{id}/social/{platform}` | GET | 生成社交媒体文案 (P6) | platform: `xiaohongshu/weibo/zhihu/reddit/x` | `{platform, platform_name, copy}` |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；推荐走 `POST`，这样 provider policy 不会出现在 URL 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
 
 ### Predictions & Leaderboard (P3-B)
@@ -34,7 +34,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | — | PredictionResponse[] |
-| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 | — | `{scored, results[]}` |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{scored, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20` | LeaderboardEntry[] |
 
 > `POST /api/scenario/{id}/predict` 当前会透传并回显 `user_id`；若未提供，后端会退回到 `user_name`，再退回到 `"anonymous"`。
@@ -47,12 +47,13 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单个 scenario 已落库的 campaign 摘要；供结果页在本地 `scenarioMeta` 缺失时做跨设备兜底 | — | CampaignScenarioSummaryResponse |
 | `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单个 scenario 的导演层权威态；当前只包含 goals / commitment | — | ScenarioDirectorStateResponse |
 | `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单个 scenario 的导演层权威态；当前只覆盖 goals / commitment | `{"objectives": {"generated_for_question?": "...", "generated_for_profile?": "...", "goals": [...]}, "commitment": {"active": true, "branch_id?": "...", "branch_title?": "...", "committed_at_round?": 2, "committed_at?": "...", "outcome?": "pending"}}` | ScenarioDirectorStateResponse |
-| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单个 scenario 的玩法层权威态；当前已包含 `cards.usage_log` | — | ScenarioGameplayStateResponse |
-| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单个 scenario 的玩法层权威态；当前主要用于主模式 `cards.usageLog` 的跨设备同步 | `{"cards": {"usage_log": [{"card_id": "...", "profile_id": "...", "branch_id": "...", "branch_title": "...", "round": 3, "cost": 1, "directive": "...", "used_at": "..."}]}}` | ScenarioGameplayStateResponse |
+| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单个 scenario 的玩法层权威态；当前已包含 `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots` | — | ScenarioGameplayStateResponse |
+| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单个 scenario 的玩法层权威态；当前主要用于主模式整套 gameplay raw state 的跨设备同步 | `{"cards": {"usage_log": [...]}, "betting": {"bets": [...]}, "archive": {"key_moments": [...], "branch_snapshots": [...]}}` | ScenarioGameplayStateResponse |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 查询指定题材在调用方本地日期上的 daily challenge 完成态；供首页把后端真值与本地缓存合并显示 | `?profile_id=governance&local_date=2026-03-17&timezone_offset_minutes=-480` | CampaignDailyChallengeResponse |
+| `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 查询调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 | `?local_date=2026-03-19&timezone_offset_minutes=-480` | `{"user_id", "week_start", "week_end", "timezone_offset_minutes", "total_runs", "completed_daily_challenges", "hit_bets", "campaign_score_delta", "best_archive_grade", "top_profile_id", "profile_runs"}` |
 
 > `POST /api/campaign/scenario/{scenario_id}/finalize` 边界行为（已按当前实现与实测核对）：
 > - `200 OK`：首次结算成功，或同一 `scenario_id` 被同一导演档案重复结算；重复结算时 `already_finalized = true`，不会重复累计进度。
@@ -73,6 +74,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `200 OK`：返回该题材在调用方本地日期上的完成态；若当日没有完成记录，会返回 `completed = false`，而不是报错。
 > - `400 Bad Request`：`profile_id` 为空、`local_date` 非法，或 `timezone_offset_minutes` 无法构造本地时区。
 > - campaign log 时间在比对前会先按 UTC 归一；即使 SQLite 把时间读回成 naive datetime，也会按 UTC 解释后再换算调用方本地日期。
+>
+> `GET /api/campaign/profile/{user_id}/weekly-summary` 的口径：
+> - 周窗口按调用方传入的 `local_date + timezone_offset_minutes` 计算；
+> - 当前不改 schema，直接基于 `ScenarioCampaignLog.created_at` 做聚合；
+> - 返回值适合首页 Lite 展示，不是赛季系统的最终数据结构。
 
 > `CampaignProfileResponse` 当前额外包含：
 > - `last_daily_challenge_completed_at`
@@ -126,6 +132,21 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >   - `cost`
 >   - `directive`
 >   - `used_at`
+> - `betting.bets[]`
+>   - `bet_id`
+>   - `kind`
+>   - `target_id`
+>   - `target_label`
+>   - `confidence`
+>   - `user_name`
+>   - `placed_at_round`
+>   - `placed_at`
+>   - `resolved`
+> - `archive.key_moments[]`
+> - `archive.branch_snapshots[]`
+>   - `branch_id`
+>   - `title`
+>   - `probability`
 >
 > 当前前端 `SimulationView` / `ResultView` 会优先读取：
 > - `director-state`
@@ -134,14 +155,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > 其中：
 > - goals / commitment 以后端 `director-state` 为准
-> - 主模式 `cards.usageLog` 以后端 `gameplay-state` 为准
+> - 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 以后端 `gameplay-state` 为准
 > - 导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count`、`last_counterplay_card` 会由前端基于远端 `usage_log` 重算
 > - `summary` 继续兜底 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`
 >
-> 当前仍未完全后端化的是：
-> - `betting.bets`
-> - 部分 archive raw 细节
-
 ### Health & Observability
 
 | 端点 | 方法 | 描述 |
@@ -155,7 +172,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law"}` | DebateSnapshot |
+| `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "reasoning_effort?": "low"}` | DebateSnapshot |
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot |
 | `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload |
 | `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
@@ -166,6 +183,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `rebuttal`
 > - `closing`
 > - `verdict`
+>
+> 当前 Debate 的**胜负 / breakdown / verdict tone** 仍走 deterministic 规划；但**回合文案与 judge summary** 已升级为 `LLM 优先、deterministic fallback`。如果 `DEBATE_USE_LLM = false` 或上游暂时不可用，会自动退回到 deterministic 文案。
 >
 > prediction 只支持两类：
 > - `winner`
@@ -185,6 +204,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `phase`
 > - `variant`
 > - `outcome`
+> - `phase_score`
+> - `explanation`
 > - `user_name`
 > - `created_at`
 >

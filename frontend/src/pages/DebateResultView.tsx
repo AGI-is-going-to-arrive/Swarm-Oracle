@@ -88,6 +88,7 @@ export function DebateResultView() {
     () => getDebateCounterplaySummary(counterplayRecord, t),
     [counterplayRecord, t],
   );
+  const counterplayExplanation = payload?.counterplay?.explanation ?? null;
   const counterplayOutcome = useMemo(
     () => resolveDebateCounterplayOutcome(counterplayRecord, payload?.result),
     [counterplayRecord, payload?.result],
@@ -105,6 +106,7 @@ export function DebateResultView() {
       propositionScore: payload.result.score.proposition,
       oppositionScore: payload.result.score.opposition,
       counterplaySummary,
+      counterplayExplanation,
       counterplayOutcomeLabel:
         counterplayOutcome === 'hit'
           ? t('debate.counterplay_hit')
@@ -112,7 +114,7 @@ export function DebateResultView() {
             ? t('debate.counterplay_miss')
             : null,
     };
-  }, [counterplayOutcome, counterplaySummary, payload, t]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, payload, t]);
 
   useEffect(() => {
     if (!payload?.language) return;
@@ -178,6 +180,7 @@ export function DebateResultView() {
           score: payload.result.score,
           prediction_count: payload.predictions.length,
           counterplay_summary: counterplaySummary ?? null,
+          counterplay_explanation: counterplayExplanation,
           counterplay_outcome: counterplayOutcome,
         } : null,
       },
@@ -187,7 +190,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayOutcome, counterplaySummary, error, loading, payload, shareModalState, showShare]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, loading, payload, shareModalState, showShare]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -416,6 +419,9 @@ export function DebateResultView() {
                     <p className="debate-rule-copy">
                       {counterplaySummary ?? t('debate.counterplay_unused')}
                     </p>
+                    {counterplayExplanation && (
+                      <p className="debate-rule-copy">{counterplayExplanation}</p>
+                    )}
                   </article>
                 </div>
               </div>

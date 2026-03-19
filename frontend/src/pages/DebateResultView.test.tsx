@@ -49,6 +49,8 @@ function buildPayload() {
       phase: 'crossfire',
       variant: 'reversal',
       outcome: 'miss',
+      phase_score: { proposition: 6, opposition: 0 },
+      explanation: 'The hedge backed Opposition, but Crossfire still tilted toward Proposition and the later rounds never flipped hard enough.',
       user_name: 'Local Director',
       created_at: new Date().toISOString(),
     },
@@ -145,10 +147,12 @@ describe('DebateResultView', () => {
       expect(payload?.page?.kind).toBe('debate_result');
       expect(payload?.page?.result?.winner).toBe('proposition');
       expect(payload?.page?.result?.counterplay_summary).toContain('Counterplay used during Crossfire');
+      expect(payload?.page?.result?.counterplay_explanation).toContain('tilted toward Proposition');
       expect(payload?.page?.result?.counterplay_outcome).toBe('miss');
     });
 
     expect(screen.getByText('Counterplay used during Crossfire → Opposition at 60%.')).toBeInTheDocument();
+    expect(screen.getAllByText(/tilted toward Proposition/).length).toBeGreaterThan(0);
     expect(screen.getByText('debate.counterplay_miss')).toBeInTheDocument();
   });
 

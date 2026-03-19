@@ -79,14 +79,18 @@
 - ✅ 玩法契约统一（B2 已收口：shared gameplay contract 现覆盖卡牌规则、modal 输入契约、prompt 语义和后端 branching bonus；前后端不再各自维护第二份静态卡牌事实源）
 - ✅ 12 个题材画像全量 E2E / 工件补齐（主 12 profile + 3 条 variant matrix + mobile 双证据）
 - ✅ AI 辩论竞技场 MVP（独立 Debate domain + `/api/debate` / `/ws/debate/{id}` + live/result 页 + 结构化押注 + share + automation hooks + desktop/mobile E2E）
-- ✅ Debate `counterplay` 最小闭环（可提示、可一键提交、后端显式返回到 live snapshot / result payload / WS、结果页与 share 会显示命中/未中）
+- ✅ Debate `counterplay` 最小闭环（可提示、可一键提交、后端显式返回到 live snapshot / result payload / WS、结果页与 share 会显示命中/未中；当前 payload 还会带 `phase_score / explanation`，并进入 replay digest 与 judge summary）
+- ✅ LLM 治理与 provider policy 第一段收口（全局并发闸门 / pending 配额 / provider 熔断 + provider policy 贯通 createScenario / createDebate / social copy / scorePredictions）
+- ✅ Director Campaign Lite 增量（`weekly-summary` API + 首页 `weekly challenge / director growth` + 结果页分享 challenge 链接）
+- ✅ Debate Arena 文案增强（回合文案 `LLM 优先、deterministic fallback` + live `phase cue / feed focus` + 更具体的 judge summary）
 
 ### 当前边界
 - ℹ️ 当前交付形态仍是浏览器优先的 Web 应用；“跨平台”指桌面/移动浏览器响应式与视口 E2E，不代表原生 Windows/macOS/Linux/iOS/Android 客户端已交付
-- ℹ️ `director goals / worldline commitment` 当前已后端化到 `Scenario.director_state_json`；主模式 `cards.usageLog` 也已后端化到 `Scenario.gameplay_state_json`。当前仍未完全收口的是 `betting.bets` 与部分 archive raw 细节
+- ℹ️ `director goals / worldline commitment` 与主模式 `cards.usageLog / betting.bets / archive key moments / branch snapshots` 当前都已后端化到 `Scenario.director_state_json / gameplay_state_json`；`scenarioMeta` 退为缓存/兼容层
 - ℹ️ 主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari；Safari 若开启翻译插件，截图仍可能被浏览器/插件浮层污染
 - ℹ️ asset provenance 当前是 `62/62` PNG 均有 sidecar；其中多数为诚实 backfill，表示 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt
 - ℹ️ Debate `counterplay` 已经是后端优先的显式 payload，但仍是挂在 Debate 领域里的最小实现，不是完整独立子系统
+- ℹ️ 当前分享 challenge 仍是“分享开局配置”，不是 deterministic replay seed；被分享方会按同题同参数再打一遍，而不是复刻同一条已落库世界线
 
 ### 已完成 Sprint
 - ✅ **Sprint 11 — 像素化可视化 Phase 1**: 事件映射 + 精灵分配 + 场景选择 + 卡牌事件, 7 Bug 修复, 225 新测试

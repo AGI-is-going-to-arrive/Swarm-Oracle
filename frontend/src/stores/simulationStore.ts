@@ -44,7 +44,7 @@ export interface SimulationState {
   isSimulationComplete: boolean;
 
   // Actions
-  startSimulation: (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean) => Promise<string>;
+  startSimulation: (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean, userId?: string) => Promise<string>;
   setScenario: (s: Scenario) => void;
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent) => void;
@@ -75,10 +75,10 @@ const initialState = {
 export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
 
-  startSimulation: async (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean) => {
+  startSimulation: async (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean, userId?: string) => {
     set({ status: 'parsing', error: null });
     try {
-      const scenario = await createScenario(question, rounds, numAgents, mode, hierarchical, llmApiKey, llmBaseUrl, llmModel, reasoningEffort, visualizationEnabled);
+      const scenario = await createScenario(question, rounds, numAgents, mode, hierarchical, llmApiKey, llmBaseUrl, llmModel, reasoningEffort, visualizationEnabled, userId);
       set({
         scenario,
         agents: scenario.agents as AgentInfo[],

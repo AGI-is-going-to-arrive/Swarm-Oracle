@@ -7,13 +7,21 @@ import type {
   InterventionPayload, InterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
-  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary,
+  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
 
 const BASE = '/api';
 
 const DEFAULT_TIMEOUT = 30000; // M-5 fix: 30s default request timeout
+
+export interface LlmProviderRequestOptions {
+  llmApiKey?: string;
+  llmBaseUrl?: string;
+  llmModel?: string;
+  reasoningEffort?: string;
+  userId?: string;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // M-9 fix: only set Content-Type for requests with a body
@@ -89,6 +97,7 @@ export async function createScenario(
   llmModel?: string,
   reasoningEffort?: string,
   visualizationEnabled?: boolean,
+  userId?: string,
 ): Promise<Scenario> {
   return request('/scenario', {
     method: 'POST',
@@ -103,6 +112,7 @@ export async function createScenario(
       ...(llmModel && { llm_model: llmModel }),
       ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
       ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
+      ...(userId && { user_id: userId }),
     }),
   });
 }
@@ -111,12 +121,18 @@ export async function createScenario(
 export async function createDebate(
   question: string,
   profileHint?: string,
+  options?: LlmProviderRequestOptions,
 ): Promise<DebateSnapshot> {
   return request('/debate', {
     method: 'POST',
     body: JSON.stringify({
       question,
       ...(profileHint ? { profile_hint: profileHint } : {}),
+      ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
+      ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
+      ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.reasoningEffort && { reasoning_effort: options.reasoningEffort }),
+      ...(options?.userId && { user_id: options.userId }),
     }),
   });
 }
@@ -228,12 +244,21 @@ export async function exportScenario(id: string): Promise<string> {
   return requestText(`/scenario/${id}/export`);
 }
 
-/** GET /api/scenario/:id/social/:platform — generate social media copy (P6) */
+/** Social copy generation — send provider policy in request body to avoid leaking keys in URLs. */
 export async function generateSocialCopy(
   id: string,
   platform: string,
+  options?: LlmProviderRequestOptions,
 ): Promise<{ platform: string; platform_name: string; copy: string }> {
-  return request(`/scenario/${id}/social/${platform}`);
+  return request(`/scenario/${id}/social/${platform}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
+      ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
+      ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.userId && { user_id: options.userId }),
+    }),
+  });
 }
 
 /** POST /api/scenario/:id/predict — submit a prediction (P5-B) */
@@ -260,9 +285,19 @@ export async function listPredictions(scenarioId: string): Promise<PredictionInf
   return request(`/scenario/${scenarioId}/predictions`);
 }
 
-/** POST /api/scenario/:id/score-predictions — trigger LLM scoring (P5-B) */
-export async function scorePredictions(scenarioId: string): Promise<{ scored: number }> {
-  return request(`/scenario/${scenarioId}/score-predictions`, { method: 'POST' });
+export async function scorePredictions(
+  scenarioId: string,
+  options?: LlmProviderRequestOptions,
+): Promise<{ scored: number }> {
+  return request(`/scenario/${scenarioId}/score-predictions`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
+      ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
+      ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.userId && { user_id: options.userId }),
+    }),
+  });
 }
 
 /** GET /api/leaderboard — global prediction leaderboard (P5-B) */
@@ -345,6 +380,18 @@ export async function getCampaignDailyChallengeStatus(
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
   return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`);
+}
+
+export async function getCampaignWeeklySummary(
+  userId: string,
+  localDate: string,
+  timezoneOffsetMinutes: number,
+): Promise<CampaignWeeklySummary> {
+  const params = new URLSearchParams({
+    local_date: localDate,
+    timezone_offset_minutes: String(timezoneOffsetMinutes),
+  });
+  return request(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`);
 }
 
 /** Intervention template from backend */

@@ -136,6 +136,7 @@ async def create_scenario(req: CreateScenarioRequest):
             rounds=sim_rounds,
             visualization_enabled=viz_enabled,
             reasoning_effort=req.reasoning_effort,
+            user_id=req.user_id,
             llm_api_key=req.llm_api_key,
             llm_base_url=req.llm_base_url,
             llm_model=req.llm_model,

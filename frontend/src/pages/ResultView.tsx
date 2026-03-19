@@ -19,6 +19,8 @@ import {
 } from '../api/client';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { getDirectorIdentity } from '../lib/directorIdentity';
+import { buildSharedChallengeUrl } from '../lib/challengeShare';
+import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
   findChallengeProgressByScenarioId,
   markChallengeCompleted,
@@ -201,6 +203,7 @@ export default function ResultView() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
   const [showShare, setShowShare] = useState(false);
+  const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState('');
@@ -466,7 +469,13 @@ export default function ResultView() {
     setScoring(true);
     setScoreError('');
     try {
-      await scorePredictions(id);
+      const providerPolicy = loadLlmProviderPolicy();
+      await scorePredictions(id, {
+        llmApiKey: providerPolicy.apiKey || undefined,
+        llmBaseUrl: providerPolicy.baseUrl || undefined,
+        llmModel: providerPolicy.model || undefined,
+        userId: directorIdentity.userId,
+      });
       // Reload predictions to show scores
       const preds = await listPredictions(id);
       setPredictions(preds);
@@ -475,6 +484,31 @@ export default function ResultView() {
     } finally {
       setScoring(false);
     }
+  };
+
+  const handleShareChallenge = async () => {
+    if (!scenario) return;
+    const url = buildSharedChallengeUrl(window.location.origin, {
+      question: scenario.question,
+      rounds: scenario.total_rounds ?? 5,
+      numAgents: scenario.agents.length || agents.length || 3,
+      mode: scenario.mode ?? 'blackboard',
+      visualizationEnabled: scenario.visualization_enabled ?? false,
+      profileId: inferGameplayProfile(scenario.question, scenario.scene_theme)?.id ?? null,
+    });
+
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setChallengeLinkCopied(true);
+    window.setTimeout(() => setChallengeLinkCopied(false), 2000);
   };
 
   const branches = storyData?.branches ?? [];
@@ -876,6 +910,13 @@ export default function ResultView() {
             onClick={() => setShowShare(true)}
           >
             {t('result.share_btn')}
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void handleShareChallenge()}
+            disabled={!scenario}
+          >
+            {challengeLinkCopied ? t('result.challenge_link_copied') : t('result.share_challenge_btn')}
           </button>
           <button
             className="btn btn-ghost"

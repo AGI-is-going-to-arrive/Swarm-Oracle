@@ -10,10 +10,11 @@
 |------|------|--------|------|
 | `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8318/v1/chat/completions` | OpenAI兼容API端点 |
 | `LLM_API_KEY` | str | `sk-12345678` | API密钥 |
-| `LLM_MODEL_NAME` | str | `gpt-5.1-codex-mini` | 模型名称 |
+| `LLM_MODEL_NAME` | str | `gpt-5.4-mini` | 模型名称 |
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
+| `DEBATE_USE_LLM` | bool | `true` | Debate Arena 回合文案是否优先走 LLM；关闭时会退回 deterministic 文案 |
 
-> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API。
+> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。
 
 > **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。本轮真实容器验证使用的是 `http://host.docker.internal:8318/v1/chat/completions`；Linux 请替换成实际可达宿主机的地址。
 
@@ -35,7 +36,11 @@
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `LLM_CONCURRENCY` | int | 5 | 并发LLM调用数上限 |
+| `LLM_CONCURRENCY` | int | 5 | 进程内全局 LLM 并发上限 |
+| `LLM_MAX_PENDING` | int | 24 | 全局排队中的 LLM 请求上限；超过后直接返回 backpressure |
+| `LLM_USER_MAX_PENDING` | int | 4 | 单个 `user_id` 同时挂起的 LLM 请求上限 |
+| `LLM_CIRCUIT_BREAKER_THRESHOLD` | int | 6 | 同一 provider 连续失败达到此阈值后，短时间打开熔断 |
+| `LLM_CIRCUIT_BREAKER_RESET_SECONDS` | int | 30 | 熔断打开后的冷却秒数 |
 
 ## 数据库
 

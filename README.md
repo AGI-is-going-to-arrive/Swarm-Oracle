@@ -18,8 +18,8 @@
 | **Theme Registry & Asset Manifest** | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 frame / badge 素材统一收进单一注册表；`generic` 现有独立 `gameplay_card_frame_generic` 卡框 |
 | **Expanded Runtime Sprite Pool** | 25 张角色 sprite 已进入运行时清单；本轮新接入 `alchemist / assassin / bard / knight / monk / thief / witch` 7 张精灵，前后端 persona/role 映射也已同步收口 |
 | **Semantic Scene Pool** | 当前 registry 共有 33 个主题条目：30 张 Theater 语义背景 + 3 张 Debate 专属背景；`law / faith / generic` 已补进 `law_court_variant / faith_temple_variant / switchboard_forum_variant` 三个变体，Debate 另有 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张专用背景 |
-| **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status` API，首页会把 daily challenge 的后端真值与本地缓存合并显示，结果页会展示本局 campaign 进展 |
-| **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前 `counterplay` 已由后端显式返回到 live snapshot / result payload / WS，结果页与分享文案都会显示这次反制是否命中 |
+| **Director Campaign** | 导演生涯最小闭环已落地：后端已有 `finalize/profile/mastery/badges/daily-status/weekly-summary` API；首页会同时显示 daily challenge 真值、本周赛道和导演成长概览，结果页可直接复制分享挑战链接 |
+| **Debate Arena** | 独立 Debate domain 已落地，包含 `/api/debate` + `/ws/debate/{id}`、live/result 页、结构化押注、分享链路，以及最小 `counterplay` 闭环；当前回合文案已升级为 **LLM 生成优先、deterministic fallback**，结果页会显示更像评委总结的 `judge summary`，`counterplay` 也会带命中/未中解释并进入分享文案 |
 | **Director Goals & Worldline Commitment** | Theater 局内现有最小导演层：2 个导演目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页里的目标完成度 / 承诺命中或落空结算；当前这批状态已后端化到 `Scenario.director_state_json` |
 | **Gameplay State Authority** | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 现已统一收口到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填并重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`，清空本地缓存后仍可跨设备读回下注记录与 archive raw 明细 |
 | **Generic Quick Start** | 首页 generic 题材现为 3 条 `switchboard_forum` 题库，并会一键带入推荐预设：`Theater / 4 rounds / 4 agents / blackboard` |
@@ -28,7 +28,8 @@
 | **Responsive Scenario Startup** | 创建场景后立即返回 `simulating` 占位状态，并附带 provisional root branch；后台继续解析并填充 Agent / 分支 |
 | **Scenario Management** | 场景列表 / 删除 / 导出 Markdown |
 | **Intervention Templates** | 预设干预模板（自然灾害、技术突破等） |
-| **BYOK** | 用户自带 OpenAI 兼容 API Key / URL / Model |
+| **BYOK** | 用户自带 OpenAI 兼容 API Key / URL / Model；当前 provider policy 已贯通到创建场景、社交文案、预测评分和 Debate 创建入口 |
+| **LLM Runtime Guard** | 后端现在有进程内全局 LLM 并发闸门、pending 上限、用户级 pending 配额与 provider 熔断；用户题面、干预文本和评分/分享输入也会按 `UNTRUSTED DATA` 口径注入，减少坏 JSON 与提示词注入带来的链路抖动 |
 | **Social Media Copy** | 一键生成小红书 / 微博 / 知乎 / Reddit / X 文案 |
 | **Language Detection** | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
 | **Codebase Modularization** | API 层拆分为 5 个独立模块（schemas/helpers/interventions/social/scenarios） |
@@ -96,7 +97,7 @@ Copy `.env.example` to `.env` and configure:
 |----------|-------------|---------|
 | `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8318/v1/chat/completions` |
 | `LLM_API_KEY` | API key | `sk-12345678` |
-| `LLM_MODEL_NAME` | Model name | `gpt-5.1-codex-mini` |
+| `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
 | `MAX_AGENTS` | Max agents per scenario | `100` |
 | `MAX_ROUNDS` | Max simulation rounds | `40` |
 | `MAX_BRANCHES` | Max parallel branches | `8` |
@@ -157,6 +158,25 @@ cd frontend && npm run e2e:full
   - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
   - `frontend`：`npm run build` → 通过
   - 黑盒：`e2e-suite.mjs corners / cross-browser / safari` → 通过
+- 本次 session 围绕默认模型、LLM 治理、BYOK/provider policy 与长期循环 Lite 又补跑：
+  - 后端：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**
+  - 后端：`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**
+  - 后端：`tests/test_campaign_service.py / tests/test_campaign_api.py` → **21 passed**
+  - 后端：`tests/test_debate_service.py / tests/test_debate_api.py` 最新 Debate 回归 → **12 passed**
+  - 前端：`llmProviderPolicy / ShareModal / InputView / ResultView` → **11 passed**
+  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay` → **8 passed**
+  - 前端：`challengeShare / InputView / ResultView` → **11 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
+- 本次 session 围绕默认模型、LLM 治理、BYOK/provider policy 收口又补跑：
+  - 后端：`tests/test_llm_client.py / tests/test_api.py` → **87 passed**
+  - 后端：`tests/test_debate_api.py / tests/test_predictions.py / tests/test_api.py / tests/test_config.py` → **105 passed**
+  - 后端：`tests/test_campaign_service.py / tests/test_campaign_api.py` → **21 passed**
+  - 前端：`llmProviderPolicy / ShareModal / InputView / ResultView` → **11 passed**
+  - 前端：`DebateArenaView / DebateResultView / debateShare / debateCounterplay` → **8 passed**
+  - 前端：`challengeShare / InputView / ResultView` → **11 passed**
+  - `frontend`：`npx tsc --noEmit -p tsconfig.app.json` → 通过
+  - `frontend`：`npm run build` → 通过
 - 固定回归样本矩阵：**15 条** 主样本 + **3 条** 变体样本（`output/e2e/sample_matrix_variants.json`）
 - `scripts/e2e-suite.mjs` 在历史 `scenario_id` 缺失，或样本 `scene_theme` 已与当前 `select_scene(question)` 漂移时，会按 theme runtime fallback 重建样本；输出目录会写入 `browser-launch.json`，截图阶段若超时或失败，会自动回退到 Chromium CDP 截图
 - `scripts/e2e-suite.mjs` 的 `corners` 现已补：

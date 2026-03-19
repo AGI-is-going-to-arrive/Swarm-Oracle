@@ -190,6 +190,22 @@ export function challengeDateKey(date = new Date()) {
 
 export const getChallengeDayKey = challengeDateKey;
 
+export function challengeWeekKey(date = new Date()) {
+  const localMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = localMidnight.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  localMidnight.setDate(localMidnight.getDate() + mondayOffset);
+  return challengeDateKey(localMidnight);
+}
+
+export function getWeeklyChallenges(date = new Date(), count = 3): DailyChallenge[] {
+  const localMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayIndex = Math.floor(localMidnight.getTime() / 86400000);
+  const weekIndex = Math.floor(dayIndex / 7);
+  const start = (weekIndex * count) % DAILY_CHALLENGES.length;
+  return Array.from({ length: count }, (_, offset) => DAILY_CHALLENGES[(start + offset) % DAILY_CHALLENGES.length]);
+}
+
 function loadProgressStore(): Record<string, Record<string, ChallengeProgressEntry>> {
   try {
     return JSON.parse(window.localStorage.getItem(CHALLENGE_STORAGE_KEY) || '{}') as Record<string, Record<string, ChallengeProgressEntry>>;

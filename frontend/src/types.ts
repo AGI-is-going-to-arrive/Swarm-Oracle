@@ -231,6 +231,20 @@ export interface CampaignDailyChallengeStatus {
   campaign_score_delta?: number | null;
 }
 
+export interface CampaignWeeklySummary {
+  user_id: string;
+  week_start: string;
+  week_end: string;
+  timezone_offset_minutes: number;
+  total_runs: number;
+  completed_daily_challenges: number;
+  campaign_score_delta: number;
+  hit_bets: number;
+  top_profile_id?: string | null;
+  best_archive_grade?: string | null;
+  profile_runs: Record<string, number>;
+}
+
 export interface BranchInfo {
   id: string;
   parent_branch_id: string | null;
@@ -364,6 +378,11 @@ export interface DebateCounterplayResult {
   phase: DebatePhase;
   variant: 'balanced' | 'reversal';
   outcome: 'hit' | 'miss';
+  phase_score?: {
+    proposition: number;
+    opposition: number;
+  } | null;
+  explanation?: string | null;
   user_name: string;
   created_at: string;
 }

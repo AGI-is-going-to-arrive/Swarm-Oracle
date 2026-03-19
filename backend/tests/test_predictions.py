@@ -207,6 +207,19 @@ class TestPredictionAPIValidation(unittest.TestCase):
         self.assertEqual(req.prediction_text, "BTC hits 100k")
         self.assertEqual(req.confidence, 0.75)
 
+    def test_score_predictions_request_accepts_provider_overrides(self):
+        from app.api.predictions import ScorePredictionsRequest
+
+        req = ScorePredictionsRequest(
+            llm_api_key="sk-test",
+            llm_base_url="https://example.com/v1/chat/completions",
+            llm_model="gpt-test",
+        )
+
+        self.assertEqual(req.llm_api_key, "sk-test")
+        self.assertEqual(req.llm_base_url, "https://example.com/v1/chat/completions")
+        self.assertEqual(req.llm_model, "gpt-test")
+
 
 # ── Scoring Mock Tests ─────────────────────────────────
 
@@ -246,6 +259,63 @@ class TestScoringService(unittest.TestCase):
 
             result = asyncio.run(score_prediction(pred_id))
             self.assertIsNone(result)
+
+    def test_score_prediction_uses_provider_overrides(self):
+        """score_prediction should honor explicit provider overrides."""
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services.scoring import score_prediction
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            with Session(engine) as session:
+                scenario = Scenario(
+                    question="测试问题",
+                    status=ScenarioStatus.DONE,
+                    parsed_context={"_language": "Chinese", "user_id": "director-1"},
+                )
+                session.add(scenario)
+                session.commit()
+                session.refresh(scenario)
+
+                branch = Branch(
+                    scenario_id=scenario.id,
+                    title="主线",
+                    probability=1.0,
+                    story="故事结果",
+                    insight="关键洞察",
+                )
+                session.add(branch)
+
+                pred = Prediction(
+                    scenario_id=scenario.id,
+                    prediction_text="预测文本",
+                    user_id="director-1",
+                )
+                session.add(pred)
+                session.commit()
+                pred_id = pred.id
+
+            with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                mock_llm.return_value = {"score": 88, "reason": "命中主线"}
+                result = asyncio.run(
+                    score_prediction(
+                        pred_id,
+                        llm_overrides={
+                            "api_key": "sk-test",
+                            "base_url": "https://example.com/v1/chat/completions",
+                            "model": "gpt-test",
+                        },
+                    )
+                )
+
+            self.assertEqual(result, {"score": 88, "reason": "命中主线"})
+            _, kwargs = mock_llm.call_args
+            self.assertEqual(kwargs["api_key"], "sk-test")
+            self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
+            self.assertEqual(kwargs["model"], "gpt-test")
 
 
 if __name__ == "__main__":

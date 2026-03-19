@@ -15,6 +15,7 @@ import {
   type DebateCounterplayRecord,
 } from '../lib/debateCounterplay';
 import {
+  DEBATE_PHASE_ORDER,
   getDebateDimensionLabel,
   getDebatePhaseLabel,
   getDebateSideLabel,
@@ -53,6 +54,12 @@ export function DebateArenaView() {
   const [captureNotice, setCaptureNotice] = useState('');
   const [autoReveal, setAutoReveal] = useState(true);
   const [phaseLocked, setPhaseLocked] = useState(false);
+  const [phaseCue, setPhaseCue] = useState<{
+    phase: string;
+    speakerName: string | null;
+    speakerSide: 'proposition' | 'opposition' | 'judge' | null;
+    token: number;
+  } | null>(null);
   const [betPreset, setBetPreset] = useState<{
     kind: 'winner' | 'verdict_tone';
     targetValue: string;
@@ -63,6 +70,7 @@ export function DebateArenaView() {
   } | null>(null);
   const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
   const revealRef = useRef(0);
+  const previousPhaseRef = useRef<string | null>(null);
 
   const { status: captureStatus, captureScreenshot } = useScreenCapture({
     selector: '.debate-shell',
@@ -131,12 +139,33 @@ export function DebateArenaView() {
     () => visibleTurns.filter((turn) => turn.phase === selectedPhase),
     [selectedPhase, visibleTurns],
   );
+  const latestVisibleTurn = visibleTurns.at(-1) ?? null;
+  const latestStageTurn = stageTurns.at(-1) ?? null;
+  const phaseUnlockCount = unlockedPhases.length;
 
   useEffect(() => {
     if (!phaseLocked) {
       setSelectedPhase(currentPhase);
     }
   }, [currentPhase, phaseLocked]);
+
+  useEffect(() => {
+    if (!debate) return;
+    if (previousPhaseRef.current === null) {
+      previousPhaseRef.current = currentPhase;
+      return;
+    }
+    if (previousPhaseRef.current === currentPhase) return;
+    previousPhaseRef.current = currentPhase;
+    setPhaseCue({
+      phase: currentPhase,
+      speakerName: latestVisibleTurn?.speaker_name ?? null,
+      speakerSide: latestVisibleTurn?.speaker_side ?? null,
+      token: Date.now(),
+    });
+    const timer = window.setTimeout(() => setPhaseCue(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [currentPhase, debate, latestVisibleTurn]);
 
   const currentPhaseIndex = useMemo(
     () => ['opening', 'crossfire', 'rebuttal', 'closing', 'verdict'].indexOf(currentPhase),
@@ -226,6 +255,34 @@ export function DebateArenaView() {
       variant: 'reversal' as const,
     };
   }, [canBetNow, debate, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
+  const feedFocusLabel = useMemo(() => {
+    if (!latestVisibleTurn) return null;
+    const sideLabel = getDebateSideLabel(t, latestVisibleTurn.speaker_side);
+    if (isZh) {
+      return `${latestVisibleTurn.speaker_name} 正在把话题推向 ${sideLabel}`;
+    }
+    return `${latestVisibleTurn.speaker_name} currently has the floor for ${sideLabel}`;
+  }, [isZh, latestVisibleTurn, t]);
+  const phaseCueCopy = useMemo(() => {
+    if (!phaseCue) return null;
+    const phaseLabel = getDebatePhaseLabel(t, phaseCue.phase);
+    if (isZh) {
+      return phaseCue.speakerName
+        ? `${phaseLabel}阶段已解锁，${phaseCue.speakerName} 刚把局势往前推了一步。`
+        : `${phaseLabel}阶段已解锁。`;
+    }
+    return phaseCue.speakerName
+      ? `${phaseLabel} just unlocked and ${phaseCue.speakerName} pushed the room into a new beat.`
+      : `${phaseLabel} just unlocked.`;
+  }, [isZh, phaseCue, t]);
+  const unlockProgressLabel = useMemo(() => {
+    if (isZh) return `已解锁 ${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length}`;
+    return `${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length} unlocked`;
+  }, [isZh, phaseUnlockCount]);
+  const stageStateLabel = useMemo(() => {
+    if (!phaseLocked) return isZh ? '直播跟进' : 'Live sync';
+    return isZh ? '阶段锁定回看' : 'Phase locked';
+  }, [isZh, phaseLocked]);
 
   const themeLabel = getTheaterThemeLabel(debate?.scene_theme, isZh);
   const themeAsset = debate?.scene_theme ? getThemeAssetPath(debate.scene_theme as never) : null;
@@ -291,6 +348,8 @@ export function DebateArenaView() {
           show_bet_modal: showBetModal,
           bet_submitting: betSubmitting,
           auto_reveal: autoReveal,
+          cue_phase: phaseCue?.phase ?? null,
+          cue_speaker: phaseCue?.speakerName ?? null,
           modal_state: betModalState,
         },
         debate: debate ? {
@@ -308,6 +367,9 @@ export function DebateArenaView() {
           } : null,
           counterplay_used: Boolean(counterplayRecord),
           stage_turn_count: stageTurns.length,
+          unlocked_phase_count: phaseUnlockCount,
+          latest_turn_id: latestVisibleTurn?.id ?? null,
+          feed_focus: feedFocusLabel,
           phase_delta: phaseScoreDelta,
           watched_dimension: watchedDimension,
         } : null,
@@ -333,6 +395,8 @@ export function DebateArenaView() {
     revealCount,
     selectedPhase,
     showBetModal,
+    phaseCue,
+    phaseUnlockCount,
     stageTurns.length,
     status,
     t,
@@ -533,6 +597,20 @@ export function DebateArenaView() {
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         {error && <p className="debate-modal__error">{error}</p>}
+        {phaseCueCopy && !debate?.result_ready && (
+          <section
+            key={phaseCue?.token}
+            className="debate-live-cue"
+            data-testid="debate-live-cue"
+            aria-live="polite"
+          >
+            <span className="debate-live-cue__eyebrow">{getDebatePhaseLabel(t, phaseCue?.phase ?? currentPhase)}</span>
+            <strong className="debate-live-cue__title">{phaseCueCopy}</strong>
+            <span className="debate-live-cue__meta">
+              {phaseCue?.speakerSide ? getDebateSideLabel(t, phaseCue.speakerSide) : stageStateLabel}
+            </span>
+          </section>
+        )}
         <div className="debate-mobile-rail" aria-label={t('debate.mobile_primary_actions')}>
           {!debate?.result_ready ? (
             <button
@@ -599,6 +677,12 @@ export function DebateArenaView() {
             <section className="debate-panel">
               <div className="debate-panel__header">
                 <h2>{t('debate.feed_title')}</h2>
+                <div className="debate-feed-header-meta">
+                  <span className="debate-phase-chip debate-phase-chip--accent">
+                    {unlockProgressLabel}
+                  </span>
+                  <span className="debate-phase-chip">{stageStateLabel}</span>
+                </div>
                 <div className="debate-controls">
                   <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
                     {t('debate.auto_reveal')}: {t(autoReveal ? 'debate.state_on' : 'debate.state_off')}
@@ -630,10 +714,23 @@ export function DebateArenaView() {
                 </div>
               </div>
               <div className="debate-panel__body">
+                {feedFocusLabel && (
+                  <div className="debate-feed-focus" data-testid="debate-feed-focus">
+                    <span className="debate-feed-focus__dot" aria-hidden="true" />
+                    <div className="debate-feed-focus__copy">
+                      <strong>{getDebatePhaseLabel(t, currentPhase)}</strong>
+                      <p>{feedFocusLabel}</p>
+                    </div>
+                  </div>
+                )}
                 {stageTurns.length > 0 ? (
                   <div className="debate-turn-list">
                     {stageTurns.map((turn) => (
-                      <article key={turn.id} className="debate-turn-card">
+                      <article
+                        key={turn.id}
+                        className={`debate-turn-card ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
+                        data-testid={turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-live-turn' : undefined}
+                      >
                         <div className="debate-turn-card__meta">
                           <strong>{turn.speaker_name}</strong>
                           <span>{getDebateSideLabel(t, turn.speaker_side)}</span>

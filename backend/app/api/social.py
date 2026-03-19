@@ -6,14 +6,27 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.api.helpers import parse_key_moments
 from app.models import Agent, Branch, BranchStatus, Scenario
 from app.models.database import get_engine
-from app.api.helpers import parse_key_moments
+from app.services.llm_client import (
+    UNTRUSTED_INPUT_GUARDRAIL,
+    format_untrusted_text_block,
+    llm_request_scope,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+
+
+class SocialCopyRequest(BaseModel):
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    user_id: str | None = None
 
 
 # ── Social Platform Prompts (P6) ─────────────────────────
@@ -96,17 +109,23 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, str]] = {
 # ── Endpoints ────────────────────────────────────────────
 
 
-@router.get("/scenario/{scenario_id}/social/{platform}")
+@router.api_route("/scenario/{scenario_id}/social/{platform}", methods=["GET", "POST"])
 async def generate_social_copy(
     scenario_id: str,
     platform: str,
-    # M-10 fix: BYOK support for social copy generation
+    req: SocialCopyRequest | None = None,
     llm_api_key: str | None = None,
     llm_base_url: str | None = None,
     llm_model: str | None = None,
+    user_id: str | None = None,
 ):
     """Generate platform-specific social media copy from simulation results."""
-    from app.services.llm_client import llm_call, LLMError
+    from app.services.llm_client import (
+        LLMBackpressureError,
+        LLMCircuitOpenError,
+        LLMError,
+        llm_call,
+    )
 
     if platform not in SOCIAL_PLATFORM_PROMPTS:
         raise HTTPException(
@@ -149,21 +168,38 @@ async def generate_social_copy(
         context_lines.append("")
 
     context = "\n".join(context_lines)
+    provider_policy = scenario.parsed_context or {}
+    req = req or SocialCopyRequest()
+    effective_base_url = req.llm_base_url or llm_base_url or provider_policy.get("llm_base_url")
+    effective_model = req.llm_model or llm_model or provider_policy.get("llm_model")
+    effective_api_key = req.llm_api_key or llm_api_key
+    quota_key = req.user_id or user_id or provider_policy.get("user_id")
 
     prompt = (
         f"{platform_config['instruction']}\n"
+        f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         f"---\n"
-        f"推演结果如下：\n\n{context}\n"
+        f"推演结果如下：\n\n"
+        f"{format_untrusted_text_block('推演结果', context, max_chars=5000)}\n"
         f"---\n"
         f"请直接输出{platform_config['name']}平台的文案，不要加多余说明。"
     )
 
     try:
         # M-10 fix: Pass BYOK credentials to llm_call
-        copy = await llm_call(
-            prompt, timeout=60.0,
-            api_key=llm_api_key, base_url=llm_base_url, model=llm_model,
-        )
+        with llm_request_scope(
+            quota_key=f"user:{quota_key}" if quota_key else None,
+            purpose="social_copy",
+        ):
+            copy = await llm_call(
+                prompt,
+                timeout=60.0,
+                api_key=effective_api_key,
+                base_url=effective_base_url,
+                model=effective_model,
+            )
+    except (LLMBackpressureError, LLMCircuitOpenError) as exc:
+        raise HTTPException(503, f"LLM temporarily unavailable: {exc}") from exc
     except LLMError as exc:
         raise HTTPException(502, f"LLM generation failed: {exc}") from exc
 

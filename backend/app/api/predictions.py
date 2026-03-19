@@ -68,6 +68,13 @@ class LeaderboardEntry(BaseModel):
     win_streak: int
 
 
+class ScorePredictionsRequest(BaseModel):
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    user_id: str | None = None
+
+
 # ── Endpoints ─────────────────────────────────────────
 
 @router.post("/scenario/{scenario_id}/predict")
@@ -137,7 +144,10 @@ async def list_predictions(scenario_id: str) -> list[PredictionResponse]:
 
 
 @router.post("/scenario/{scenario_id}/score-predictions")
-async def trigger_scoring(scenario_id: str) -> dict:
+async def trigger_scoring(
+    scenario_id: str,
+    req: ScorePredictionsRequest | None = None,
+) -> dict:
     """Score all unscored predictions for a completed scenario."""
     engine = get_engine()
     with Session(engine) as session:
@@ -148,7 +158,18 @@ async def trigger_scoring(scenario_id: str) -> dict:
             raise HTTPException(400, "Scenario not yet completed — cannot score predictions")
 
     from app.services.scoring import score_all_for_scenario
-    results = await score_all_for_scenario(scenario_id)
+
+    req = req or ScorePredictionsRequest()
+    llm_overrides = None
+    if req.llm_api_key or req.llm_base_url or req.llm_model:
+        llm_overrides = {
+            "api_key": req.llm_api_key,
+            "base_url": req.llm_base_url,
+            "model": req.llm_model,
+            "quota_key": req.user_id,
+        }
+
+    results = await score_all_for_scenario(scenario_id, llm_overrides=llm_overrides)
 
     return {
         "scored": len(results),

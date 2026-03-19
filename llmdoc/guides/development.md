@@ -44,6 +44,7 @@ cp .env.example backend/.env
 ```
 
 - `docker compose` 仍使用仓库根目录 `.env`，不要把这两处混在一起。
+- 当前仓库默认模型已切到 `gpt-5.4-mini`；若你本地 `8318` 网关没有这条模型映射，先改好网关再跑依赖默认模型的集成测试。
 
 ## 测试
 
@@ -228,6 +229,65 @@ SWARM_SAFARI_PANEL_CAPTURE=1 npm run e2e:safari -- --url http://127.0.0.1:18928 
   - `e2e-suite.mjs cross-browser`：通过
   - `e2e-suite.mjs safari`：通过
   - `SWARM_SAFARI_PANEL_CAPTURE=1` Safari follow-up：通过
+- 本次 session 围绕默认模型 / LLM 治理 / BYOK-provider policy 又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_llm_client.py tests/test_api.py -q
+python -m pytest tests/test_debate_api.py tests/test_predictions.py tests/test_api.py tests/test_config.py -q
+python -m pytest tests/test_campaign_service.py tests/test_campaign_api.py -q
+
+cd frontend
+npm test -- --run \
+  src/lib/llmProviderPolicy.test.ts \
+  src/components/ShareModal.test.tsx \
+  src/pages/InputView.test.tsx \
+  src/pages/ResultView.test.tsx
+npm test -- --run \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/lib/debateShare.test.ts \
+  src/lib/debateCounterplay.test.ts
+npm test -- --run \
+  src/lib/challengeShare.test.ts \
+  src/pages/InputView.test.tsx \
+  src/pages/ResultView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+```
+
+- 结果：
+  - backend `pytest`：**87 passed**
+  - backend `pytest`：**105 passed**
+  - backend `pytest`：**21 passed**
+  - frontend `vitest`：**11 passed**
+  - frontend `vitest`：**8 passed**
+  - frontend `vitest`：**11 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+- 本次 session 围绕 Debate LLM 回合生成与 judge summary / counterplay explanation 又补跑了：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_service.py tests/test_debate_api.py -q
+
+cd frontend
+npm test -- --run \
+  src/pages/DebateArenaView.test.tsx \
+  src/pages/DebateResultView.test.tsx \
+  src/lib/debateShare.test.ts \
+  src/lib/debateCounterplay.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+```
+
+- 结果：
+  - backend `pytest`：**12 passed**
+  - frontend `vitest`：**8 passed**
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
 - 本轮还重新执行了：
 
 ```bash
