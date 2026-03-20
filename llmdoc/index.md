@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-20（P0-P4 closure + p0-p4-postfix signoff）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-20（P0-P4 closure + post-commit signoff）
 
 ## 阅读顺序
 

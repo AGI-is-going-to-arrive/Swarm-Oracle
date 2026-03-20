@@ -8,8 +8,8 @@
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.cjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
 - 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.11 kB`，gzip 从 `328.41 kB` 降到 `202.34 kB`。
-- 当前工作树最近一次通过的 fresh full `release:signoff` 工件位于 `frontend/output/e2e/p0-p4-postfix/summary.json`。
-- 这份工件绑定 commit `1f1a0385144d579b1944cac2c2010df9d423b666`，状态为 `passed`，并记录当前工作树为 `dirty=true`。
+- 当前工作树最近一次通过的 fresh full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff/summary.json`。
+- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
 - 最近一次 clean runtime 基线仍是 `frontend/output/e2e/current-head-audit-signoff/summary.json`。
 - 这份 clean baseline 的 `summary.json` 绑定运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
@@ -146,7 +146,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `src/lib/scenarioMeta.test.ts + src/lib/archiveSummary.test.ts + src/components/gameplayCards.test.ts + src/components/gameplayContract.test.ts + src/components/InterventionModal.test.tsx + src/components/ShareModal.test.tsx + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/components/GameplayCardsModal.test.tsx + src/pages/DebateArenaView.test.tsx + src/pages/DebateResultView.test.tsx + src/components/DebateBetModal.test.tsx + src/components/DebateShareModal.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts + src/stores/simulationStore.test.ts`: `107 passed`
   - `tsc` / `build` / assets check：当前代码相关复验通过
-  - 当前工作树的 full `release:signoff`：`frontend/output/e2e/p0-p4-postfix/summary.json`（`passed`）
+  - 当前工作树的 full `release:signoff`：`frontend/output/e2e/post-commit-signoff/summary.json`（`passed`）
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -162,8 +162,8 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 如果本轮改动涉及 authority 写入、`scenarioMeta / replay` 收口或结果页展示链路，优先跑上面的扩展前端定向回归；本 session 相关前端子集实跑通过 `32 passed`。
 - Safari is optional and not part of the default full signoff.
 - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）。
-- 当前工作树最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/p0-p4-postfix/summary.json`。
-- 这份工件绑定 commit `1f1a0385144d579b1944cac2c2010df9d423b666`，状态 `passed`，并记录当前工作树为 `dirty=true`。
+- 当前工作树最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`。
+- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，并记录当前工作树为 `dirty=false`。
 - 当前 checkout 是否已通过完整签收，应以最近实跑生成的 `summary.json` 为准，不应直接把旧工件等同于当前 `HEAD`。
 - 同一批代码改动在更干净工作树上的完整签收工件：`frontend/output/e2e/current-head-recheck/summary.json`。
 

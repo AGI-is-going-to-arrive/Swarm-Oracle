@@ -160,15 +160,15 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 当前工作树最新的完整 signoff 工件：
 
-- `frontend/output/e2e/p0-p4-postfix/summary.json`
+- `frontend/output/e2e/post-commit-signoff/summary.json`
 - 这份工件对应当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
-- 这份工件绑定 commit `1f1a0385144d579b1944cac2c2010df9d423b666`，状态 `passed`
+- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`
 - 这份工件显式要求 `adjudication_mode = llm_hybrid`
 - `corners` 里的 share 生成 / share retry 等待当前也已跟前端更长的社交文案超时窗口对齐，减少正常 LLM 延迟下的假失败
 - 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
-- 这份工件记录工作树 `dirty=true`，因为签收时当前改动尚未提交
+- 这份工件记录工作树 `dirty=false`
 - 当前 checkout 是否已严格签收，应以重新实跑生成的 `summary.json` 为准，而不是直接套用旧工件
 
 ## CI
