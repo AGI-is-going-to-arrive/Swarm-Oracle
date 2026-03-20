@@ -37,7 +37,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `DebateScoreCard` | Debate 三方 score card；现支持 proposition / opposition / judge badge 装饰位 |
 | `DebateBetModal` | Debate Arena 结构化押注弹窗，只支持 `winner / verdict_tone`；现会输出 modal 内部 automation state，并显示更直白的押注说明文案；当 live 页触发 `counterplay` 预设时，它会接收 preset kind/target/confidence |
 | `DebateShareModal` | Debate 结果页专用分享弹窗，复用现有 share copy 口径但不走旧 scenario social API；现会输出平台、copy length、复制状态等 automation state，平台按钮与文案首行也会带对应 emoji 图标；当前 share copy 会带 `counterplay` 摘要和命中/未中结果，以及 replay permalink |
-| `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀；当前如果页面已有 replay permalink，也会一起放进分享 envelope；弹窗现在会明确区分 `idle / loading / success / error`，生成中会显示等待提示，生成完成后会给出“文案已生成 / 可直接复制或切平台”的结果提示，automation state 里也会带 `status` 字段 |
+| `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀；当前如果页面已有 replay permalink，也会一起放进分享 envelope；弹窗现在会明确区分 `idle / loading / success / error`，生成中会显示等待提示，生成完成后会给出“文案已生成 / 可直接复制或切平台”的结果提示，automation state 里也会带 `status` 字段；当前社交文案请求已走更长的前端超时窗口，避免正常 LLM 延迟下前端先于后端中断 |
 | `LanguageSwitcher` | 全局语言切换器（EN/ZH）；桌面端固定右下角，移动端普通页面移到右上安全区，Theater 页继续贴右下安全区 |
 
 ## 状态管理 (`src/stores/`)
@@ -523,7 +523,8 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 - **开发**: `npm run dev` → Vite dev server (localhost:18928)
 - **测试**:
   - Historical full baseline: **179 passed**
-  - Current targeted frontend set: **104 passed**
+  - Current targeted frontend set: **107 passed**
+  - 当前 targeted set 已纳入 `src/components/ShareModal.test.tsx`
   - `npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run assets:provenance:check` 当前通过
 - **发布签收**:
   - 默认 `release:signoff` 合同由 backend targeted checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 组成
@@ -532,6 +533,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `e2e-suite.mjs` 的 `director_state_roundtrip / gameplay_state_roundtrip` 当前会先回读 authority 的最新 `revision` 再 PUT，避免固定历史样本在 signoff 中稳定撞 `409`
   - `debate-signoff-smoke` 当前在 secrets 可用时会真实要求 `llm_hybrid`，否则安全回退 deterministic
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）
+  - 当前 `HEAD` 的 fresh full signoff 工件：`frontend/output/e2e/codex-completion-audit-fixed/summary.json`（绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，状态 `passed`）
   - 本 session 代码相关的完整 signoff 工件：`frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`
   - 当前默认构建下的 `phaser` chunk 约为 `718 kB / 202 kB gzip`
   - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`

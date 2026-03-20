@@ -15,6 +15,7 @@ import type {
 const BASE = '/api';
 
 const DEFAULT_TIMEOUT = 30000; // M-5 fix: 30s default request timeout
+const SOCIAL_COPY_TIMEOUT = 90000;
 
 export interface LlmProviderRequestOptions {
   llmApiKey?: string;
@@ -24,7 +25,7 @@ export interface LlmProviderRequestOptions {
   userId?: string;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT): Promise<T> {
   // M-9 fix: only set Content-Type for requests with a body
   const headers: Record<string, string> = {};
   if (init?.body) {
@@ -32,7 +33,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   // M-5 fix: AbortController-based timeout
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE}${path}`, {
       ...init,
@@ -47,7 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return res.json();
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`API request timed out after ${DEFAULT_TIMEOUT}ms: ${path}`);
+      throw new Error(`API request timed out after ${timeoutMs}ms: ${path}`);
     }
     throw err;
   } finally {
@@ -313,7 +314,7 @@ export async function generateSocialCopy(
       ...(options?.llmModel && { llm_model: options.llmModel }),
       ...(options?.userId && { user_id: options.userId }),
     }),
-  });
+  }, SOCIAL_COPY_TIMEOUT);
 }
 
 /** POST /api/scenario/:id/predict — submit a prediction (P5-B) */

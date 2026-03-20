@@ -61,7 +61,7 @@
 ### 当前结论
 
 - 在当前 `browser-first Web` 作用域内，项目当前工作树已完成完整 `release:signoff` 实跑，可按 `release-candidate` 看待。
-- 当前默认前端 build / vitest 已切到本地精简 Phaser 入口，完整签收工件见 `frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`。
+- 当前默认前端 build / vitest 已切到本地精简 Phaser 入口；当前 `HEAD` 的完整签收工件见 `frontend/output/e2e/codex-completion-audit-fixed/summary.json`。
 - 这一目录页只保留高层结论；细节请按文件状态继续下钻到 `11 / 19 / 20 / 21 / 22` 或仓库根 `README.md`、`llmdoc/*`。
 
 ### 已并入当前基线
@@ -84,14 +84,16 @@
   - frontend `179 passed`
 - Current targeted verification：
   - backend targeted set `86 passed`
-  - frontend targeted set `104 passed`
+  - frontend targeted set `107 passed`
 - Current session focused verification：
   - `backend/tests/test_campaign_service.py + backend/tests/test_campaign_api.py + backend/tests/test_debate_api.py`：`32 passed`
   - `src/pages/SimulationView.test.tsx + src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/pages/ResultView.test.tsx`：`32 passed`
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`41 passed`
+  - `src/lib/scenarioMeta.test.ts + src/lib/archiveSummary.test.ts + src/components/gameplayCards.test.ts + src/components/gameplayContract.test.ts + src/components/InterventionModal.test.tsx + src/components/ShareModal.test.tsx + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/components/GameplayCardsModal.test.tsx + src/pages/DebateArenaView.test.tsx + src/pages/DebateResultView.test.tsx + src/components/DebateBetModal.test.tsx + src/components/DebateShareModal.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts + src/stores/simulationStore.test.ts`：`107 passed`
   - `tsc / build`：通过
 - Current release signoff：
-  - 本 session 代码相关完整签收工件：`frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`
+  - 当前 `HEAD` 的完整签收工件：`frontend/output/e2e/codex-completion-audit-fixed/summary.json`
+  - 这份 `summary.json` 绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，状态 `passed`
   - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`
   - 这份 `summary.json` 绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`

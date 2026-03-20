@@ -121,6 +121,7 @@ jobs:
             src/components/gameplayCards.test.ts \
             src/components/gameplayContract.test.ts \
             src/components/InterventionModal.test.tsx \
+            src/components/ShareModal.test.tsx \
             src/pages/SimulationView.test.tsx \
             src/pages/ResultView.test.tsx \
             src/components/GameplayCardsModal.test.tsx \

@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-20（custom Phaser signoff）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-20（share timeout fix + current-head signoff）
 
 ## 阅读顺序
 

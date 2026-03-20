@@ -49,10 +49,21 @@ React + TypeScript frontend for SwarmOracle.
 ```bash
 cd frontend
 npm install
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 npm run assets:provenance:check
+```
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 18927
+```
+
+```bash
+cd frontend
+npm run preview -- --host 127.0.0.1 --port 18928
 ```
 
 ```bash
@@ -67,7 +78,7 @@ npm run build:spike:phaser-custom
 ```
 
 - Historical full baseline: `179 passed`.
-- Current targeted frontend set: `104 passed`.
+- Current targeted frontend set: `107 passed`.
 - Current custom Phaser runtime subset:
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `npm run test:spike:phaser-custom`: `30 passed`
@@ -83,7 +94,8 @@ npm run build:spike:phaser-custom
   - `cross-browser`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
-- Latest passing worktree signoff artifact: `output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`.
+- Latest current-HEAD full signoff artifact: `output/e2e/codex-completion-audit-fixed/summary.json`.
+- That artifact is bound to commit `8948322942e17f03e8cacafbab0b20b105c9b86f` with `passed` status.
 - Current signoff script now re-reads `director_state / gameplay_state` revisions before roundtrip PUT, so `corners` no longer depends on historical samples staying at revision `0`.
 - Current custom Phaser spike artifact root: `dist-spikes/phaser-custom/`.
 

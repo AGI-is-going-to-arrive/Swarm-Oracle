@@ -34,7 +34,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
 | BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model |
-| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈 |
+| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
 | Language Switcher (P9) | 全局 EN/ZH 切换器；桌面端固定右下角，小屏普通页面会移到右上安全区，Theater 小屏继续贴底部安全区 |
 | Collapsible Sidebar (P7) | 可收起Agent面板，磨砂玻璃药丸Toggle，无边框残留 |
@@ -55,7 +55,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Visual Upgrade (3.0 Phase C) | UI/UX布局优化 + Theater模式完善 — SimulationView布局重构 + GBC暗色主题 + HUD像素风 + 8个Theater Bug修复（精灵/气泡/漫游/多轮回放） |
 | Theater Bubble Bugfix (3.0-D) | 剧场气泡冻结修复 — `visualization_enabled` 参数透传后端 + 增量气泡分发竞态条件修复（fallback synth init）+ Scenario hydration 恢复 Theater 模式 + completed replay 自动跳过 `TitleScene` 回到 `WorldScene` |
 | Theater Stability Hardening (3.0-E) | 剧场稳定性加固 — simulator 将数值/文本 stance 统一归一化到可视化坐标，避免中文立场词在 Theater 链路中触发类型错误 |
-| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；InputView 现在会输出 `page.daily_challenge / page.weekly_challenge / page.director_growth`，Simulation 页面输出 `page.replay_state / replay_source / warmup / director / betting`，ResultView 输出 `archive_summary / result_bet_list / result_key_moments / result_branch_snapshots`，DebateResultView 输出 `replay_source` 与 `result.adjudication_mode`。前端提供 `e2e:matrix / e2e:variants / e2e:corners / e2e:cross-browser / e2e:safari / e2e:full` 与 `e2e:debate:*` 入口；主模式 `mobile` 现通过 `scripts/e2e-suite.mjs mobile` 进入签收链路。`e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也已在 PUT 前先回读最新 authority revision，再发起写入，避免固定历史样本因 revision 漂移稳定撞 `409`。`release:signoff` 会落盘带 git `branch / commit / worktree` 绑定信息的 `summary.json`，并把 backend targeted `pytest`、`/metrics`、`tsc / build / assets / corners / mobile / cross-browser / debate:full` 组成默认签收合同；在显式要求时，Debate signoff 还会校验 `adjudication_mode`。CI 里的 `debate-signoff-smoke` 当前也已收紧为：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic。最近一次 clean runtime 基线工件见 `frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）；本 session 代码相关的完整 signoff 工件见 `frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`，并已完整通过 backend checks、`tsc / build / assets / corners / mobile / cross-browser / debate:full`。 |
+| Automation QA Hooks | 浏览器自动化钩子 — `render_game_to_text()` 覆盖关键页面，Theater 暴露 `advanceTime(ms)`；InputView 现在会输出 `page.daily_challenge / page.weekly_challenge / page.director_growth`，Simulation 页面输出 `page.replay_state / replay_source / warmup / director / betting`，ResultView 输出 `archive_summary / result_bet_list / result_key_moments / result_branch_snapshots`，DebateResultView 输出 `replay_source` 与 `result.adjudication_mode`。前端提供 `e2e:matrix / e2e:variants / e2e:corners / e2e:cross-browser / e2e:safari / e2e:full` 与 `e2e:debate:*` 入口；主模式 `mobile` 现通过 `scripts/e2e-suite.mjs mobile` 进入签收链路。`e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也已在 PUT 前先回读最新 authority revision，再发起写入，避免固定历史样本因 revision 漂移稳定撞 `409`。`release:signoff` 会落盘带 git `branch / commit / worktree` 绑定信息的 `summary.json`，并把 backend targeted `pytest`、`/metrics`、`tsc / build / assets / corners / mobile / cross-browser / debate:full` 组成默认签收合同；在显式要求时，Debate signoff 还会校验 `adjudication_mode`。CI 里的 `debate-signoff-smoke` 当前也已收紧为：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic。最近一次当前 HEAD 的完整 signoff 工件见 `frontend/output/e2e/codex-completion-audit-fixed/summary.json`（绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，status=`passed`）；最近一次 clean runtime 基线工件仍为 `frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）。 |
 | Semantic Scene Pool | 当前 registry 共有 33 个主题条目：30 张 Theater 语义背景 + 3 张 Debate 专属背景；`scene_selector` / `VizSynthesizer` 会优先扫描原始题面，按问题语义选择更贴题的场景，而不是做粗暴轮换；原有法庭 / 信仰 / generic 变体仍保留，Track D 另补 `debate_arena_civic / debate_arena_judicial / debate_arena_forum` 三张辩论专用背景 |
 | Theater Replay Director | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 直接嵌回 Theater 面板内，显示 `fork/card/bet/result` marker |
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
@@ -114,7 +114,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | 工具 | 覆盖 |
 |------|------|
 | pytest + pytest-asyncio | Historical full baseline: **815 passed**。当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准；最新 signoff backend set：**86 passed** |
-| Vitest + jsdom | Historical full baseline: **179 passed**。当前发布判断以前端 targeted `vitest` 与 `release:signoff` 为准；最新 targeted frontend set：**104 passed**，且 `tsc` / `build` / assets check 通过 |
+| Vitest + jsdom | Historical full baseline: **179 passed**。当前发布判断以前端 targeted `vitest` 与 `release:signoff` 为准；最新 targeted frontend set：**107 passed**，且 `tsc` / `build` / assets check 通过 |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
 

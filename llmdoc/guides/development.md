@@ -72,15 +72,15 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 
 ```bash
 cd frontend
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 npm run assets:provenance:check
 ```
 
-- 当前 targeted frontend set：`104 passed`
+- 当前 targeted frontend set：`107 passed`
 - 这组扩展回归适用于本轮这类“authority 写入 / 结果页 authority / scenarioMeta-replay 收口”改动；更贴近本 session 的前端相关子集实跑为 `32 passed`。
-- 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
+- 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx`、`src/components/ShareModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
 - 本轮这类“`scenarioMeta` 继续收口 + replay helper 动态加载 + Theater 首屏/截图兜底 + BootScene/WorldScene 资源加载优化”改动，当前还额外实跑通过：
   - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`：`42 passed`
   - `src/lib/simulationReplay.test.ts + src/lib/scenarioReplay.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`32 passed`
@@ -161,6 +161,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
+- 当前 `HEAD` 的 fresh full signoff 工件：`frontend/output/e2e/codex-completion-audit-fixed/summary.json`
+- 这份工件绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，状态 `passed`
+- 这份工件记录工作树 `dirty=true`，原因是本轮代码/文档变更仍未提交，且 `frontend/dist-spikes/` 仍为未跟踪目录
+- 同一次排查里，较早的 `frontend/output/e2e/codex-completion-audit/summary.json` 曾在 `corners -> share-context` 失败；修复分享文案请求超时后，`codex-completion-audit-fixed` 已通过
 
 ## CI
 
