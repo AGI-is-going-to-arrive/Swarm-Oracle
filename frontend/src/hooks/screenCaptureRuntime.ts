@@ -39,20 +39,35 @@ async function settleElementImages(root: Element) {
   const images = Array.from(root.querySelectorAll('img'));
   if (images.length === 0) return;
 
-  await Promise.all(images.map((image) => {
-    if (image.complete) return Promise.resolve();
+  await Promise.all(images.map(async (image) => {
+    if (!image.complete) {
+      await new Promise<void>((resolve) => {
+        const cleanup = () => {
+          image.removeEventListener('load', cleanup);
+          image.removeEventListener('error', cleanup);
+          resolve();
+        };
+        image.addEventListener('load', cleanup, { once: true });
+        image.addEventListener('error', cleanup, { once: true });
+        window.setTimeout(cleanup, 1000);
+      });
+    }
 
-    return new Promise<void>((resolve) => {
-      const cleanup = () => {
-        image.removeEventListener('load', cleanup);
-        image.removeEventListener('error', cleanup);
-        resolve();
-      };
-      image.addEventListener('load', cleanup, { once: true });
-      image.addEventListener('error', cleanup, { once: true });
-      window.setTimeout(cleanup, 1000);
-    });
+    if (typeof image.decode === 'function') {
+      try {
+        await image.decode();
+      } catch {
+        // Best-effort only. A failed decode should not block fallback capture paths.
+      }
+    }
   }));
+}
+
+async function settleWebKitCaptureSurface() {
+  await settleFrames();
+  await new Promise<void>((resolve) => {
+    window.setTimeout(() => resolve(), 32);
+  });
 }
 
 export async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -253,13 +268,19 @@ export async function captureElementBlob(
   const targetCanvas = el instanceof HTMLCanvasElement ? el : el.querySelector('canvas');
   const captureCanvasDirectly = captureTarget !== 'element';
   const captureElementFirst = captureTarget === 'element';
+  const isWebKitCapture = isLikelyWebKitCaptureUserAgent(
+    typeof navigator === 'undefined' ? undefined : navigator.userAgent,
+  );
 
   await settleDocumentFonts();
   await settleFrames();
-  if (isLikelyWebKitCaptureUserAgent(typeof navigator === 'undefined' ? undefined : navigator.userAgent)) {
+  if (isWebKitCapture) {
     await settleFrames();
   }
   await settleElementImages(el);
+  if (isWebKitCapture) {
+    await settleWebKitCaptureSurface();
+  }
 
   let directCanvasFailed = false;
   if (captureCanvasDirectly && targetCanvas instanceof HTMLCanvasElement) {

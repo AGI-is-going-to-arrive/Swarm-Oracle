@@ -101,7 +101,12 @@ export interface ScenarioMeta {
   archive: ScenarioArchiveState;
 }
 
-type PersistedScenarioMeta = Partial<ScenarioMeta>;
+type PersistedScenarioMeta =
+  Partial<Omit<ScenarioMeta, 'archive' | 'objectives'>>
+  & {
+    archive?: Partial<ScenarioMeta['archive']>;
+    objectives?: Partial<ScenarioMeta['objectives']>;
+  };
 
 interface RootStore {
   version: number;
@@ -260,10 +265,8 @@ function compactScenarioMetaForStorage(meta: ScenarioMeta): PersistedScenarioMet
       generatedForQuestion: meta.objectives.generatedForQuestion ?? null,
       generatedForProfile: meta.objectives.generatedForProfile ?? null,
       goals: meta.objectives.goals,
-      lastUpdatedAt: meta.objectives.lastUpdatedAt,
     },
     archive: {
-      branchSnapshots: meta.archive.branchSnapshots,
       keyMoments: stripGameplayKeyMoments(
         normalizeKeyMoments(meta.archive.keyMoments),
         { removeCardMoments: true, removeBetMoments: true },

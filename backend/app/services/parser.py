@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from app.services.llm_client import (
+    LLMError,
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json,
@@ -141,6 +143,82 @@ _FALLBACK_AGENT_TEMPLATES_EN = [
     ("Field Recorder", "Quiet, precise, and unusually good at surfacing costs everyone else is ignoring."),
 ]
 
+_FALLBACK_AGENT_SEEDS_ZH = [
+    {
+        "name": "顾闻",
+        "role": "边境联络官",
+        "persona": "负责把前线变化翻译给不同派系，谨慎但不失行动力。",
+        "stance": "支持",
+        "tier": "CORE",
+    },
+    {
+        "name": "林铎",
+        "role": "资源调度员",
+        "persona": "天天盯着补给与产能，说话务实，讨厌空话。",
+        "stance": "观望",
+        "tier": "CORE",
+    },
+    {
+        "name": "周汐",
+        "role": "民生观察员",
+        "persona": "更在意普通人的日常感受，擅长从细节判断风险。",
+        "stance": "反对",
+        "tier": "CORE",
+    },
+    {
+        "name": "韩策",
+        "role": "安全协调员",
+        "persona": "习惯先看系统性漏洞，再决定是否支持激进方案。",
+        "stance": "观望",
+        "tier": "IMPORTANT",
+    },
+    {
+        "name": "沈砚",
+        "role": "现场记录员",
+        "persona": "沉默寡言但记忆极强，善于指出被忽略的代价。",
+        "stance": "中立",
+        "tier": "IMPORTANT",
+    },
+]
+
+_FALLBACK_AGENT_SEEDS_EN = [
+    {
+        "name": "Mara Quinn",
+        "role": "Frontier Liaison",
+        "persona": "Translates fast-changing frontline conditions across factions and acts with careful urgency.",
+        "stance": "support",
+        "tier": "CORE",
+    },
+    {
+        "name": "Jonah Pike",
+        "role": "Resource Dispatcher",
+        "persona": "Obsesses over supply and throughput, speaks bluntly, and distrusts vague promises.",
+        "stance": "neutral",
+        "tier": "CORE",
+    },
+    {
+        "name": "Elise Ward",
+        "role": "Civic Observer",
+        "persona": "Tracks everyday consequences for ordinary people and spots risks in small details.",
+        "stance": "oppose",
+        "tier": "CORE",
+    },
+    {
+        "name": "Rhea Cole",
+        "role": "Safety Coordinator",
+        "persona": "Looks for system-wide failure modes before supporting any radical turn.",
+        "stance": "neutral",
+        "tier": "IMPORTANT",
+    },
+    {
+        "name": "Milan Cross",
+        "role": "Field Recorder",
+        "persona": "Quiet, precise, and unusually good at surfacing costs everyone else is ignoring.",
+        "stance": "neutral",
+        "tier": "IMPORTANT",
+    },
+]
+
 
 def _build_agent_plan(target_agents: int) -> str:
     target = max(3, target_agents)
@@ -157,6 +235,22 @@ def _build_agent_plan(target_agents: int) -> str:
             important = max(1, target - core)
     crowd = max(0, target - core - important)
     return f"CORE {core} / IMPORTANT {important} / CROWD {crowd}"
+
+
+def _fallback_initial_title(question: str, language: str) -> str:
+    stripped = question.strip()
+    if language == "Chinese":
+        stripped = re.sub(r"^如果", "", stripped)
+        stripped = re.sub(r"[？?！!。,.，；;：:]+$", "", stripped)
+        return (stripped[:8] or "变局开端").strip()
+
+    lowered = stripped.lower()
+    for prefix in ("what if", "if"):
+        if lowered.startswith(prefix):
+            stripped = stripped[len(prefix):].strip(" ?!.,:")
+            break
+    compact = re.sub(r"\s+", " ", stripped)
+    return (compact[:24] or "Turning Point").strip()
 
 
 def _synthesize_missing_agents(
@@ -205,6 +299,48 @@ def _synthesize_missing_agents(
         enriched_agents.append(agent)
 
     return enriched_agents
+
+
+def _build_parser_fallback_result(
+    question: str,
+    *,
+    requested_agents: int,
+    max_rounds: int,
+    language: str,
+    hierarchical: bool,
+) -> dict:
+    seed_agents = [
+        dict(agent)
+        for agent in (
+            _FALLBACK_AGENT_SEEDS_ZH
+            if language == "Chinese"
+            else _FALLBACK_AGENT_SEEDS_EN
+        )[:requested_agents]
+    ]
+    agents = _synthesize_missing_agents(
+        seed_agents,
+        target_agents=requested_agents,
+        language=language,
+    )
+    groups = _generate_fallback_groups(agents) if hierarchical else []
+    background = (
+        "围绕这个假设问题的多方推演会从同一个临界起点展开，各方都在重新定义风险、秩序与机会。"
+        if language == "Chinese"
+        else "Multiple factions enter the same turning point and immediately begin renegotiating risk, order, and opportunity."
+    )
+    return {
+        "setting": {
+            "time_period": "",
+            "location": "",
+            "background": background,
+        },
+        "key_variable": question.strip()[:120],
+        "initial_title": _fallback_initial_title(question, language),
+        "agents": agents,
+        "groups": groups,
+        "simulation_rounds": min(max(10, 3), max_rounds),
+        "branch_sensitivity": 0.7,
+    }
 
 
 async def parse_question(
@@ -263,10 +399,24 @@ async def parse_question(
         )
 
     logger.info("Parsing question: %s (hierarchical=%s)", question[:80], hierarchical)
-    result = await llm_call_json(
-        prompt, reasoning_effort="low",
-        api_key=api_key, base_url=base_url, model=model,
-    )
+    try:
+        result = await llm_call_json(
+            prompt, reasoning_effort="low",
+            api_key=api_key, base_url=base_url, model=model,
+        )
+    except (LLMError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Parser JSON failed for '%s'; using deterministic fallback: %s",
+            question[:80],
+            exc,
+        )
+        result = _build_parser_fallback_result(
+            question,
+            requested_agents=requested_agents,
+            max_rounds=max_rounds,
+            language=language,
+            hierarchical=hierarchical,
+        )
 
     if len(result.get("agents", [])) < requested_agents:
         logger.warning(
@@ -282,12 +432,16 @@ async def parse_question(
             language_directive=lang_directive,
             untrusted_input_guardrail=UNTRUSTED_INPUT_GUARDRAIL,
         )
-        retry_result = await llm_call_json(
-            retry_prompt, reasoning_effort="low",
-            api_key=api_key, base_url=base_url, model=model,
-        )
-        if len(retry_result.get("agents", [])) >= len(result.get("agents", [])):
-            result = retry_result
+        try:
+            retry_result = await llm_call_json(
+                retry_prompt, reasoning_effort="low",
+                api_key=api_key, base_url=base_url, model=model,
+            )
+        except (LLMError, ValueError, TypeError) as exc:
+            logger.warning("Parser retry failed for '%s'; keeping best-effort result: %s", question[:80], exc)
+        else:
+            if len(retry_result.get("agents", [])) >= len(result.get("agents", [])):
+                result = retry_result
 
     # Validate structure
     if "setting" not in result:

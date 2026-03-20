@@ -37,6 +37,9 @@ React + TypeScript frontend for SwarmOracle.
 - `scenarioMeta`
   compatibility/cache layer, not cross-device authority
   authority-backed replay snapshots now strip redundant `cards / bets / branchSnapshots`
+  localStorage no longer persists authority-backed `branchSnapshots` or runtime-only objective timestamps
+- `replayCodec.ts`
+  shared gzip/base64/url replay token codec used by both `scenarioReplay.ts` and `simulationReplay.ts`
 - `useDebateWS` / `useSimulationWS`
   live event hydration
 - `PhaserGameLoader` / `useScreenCapture`
@@ -94,8 +97,10 @@ npm run build:spike:phaser-custom
   - `cross-browser`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
-- Latest current-HEAD full signoff artifact: `output/e2e/codex-completion-audit-fixed/summary.json`.
-- That artifact is bound to commit `8948322942e17f03e8cacafbab0b20b105c9b86f` with `passed` status.
+- Latest current-worktree full signoff artifact: `output/e2e/p0-p4-postfix/summary.json`.
+- That artifact is bound to commit `1f1a0385144d579b1944cac2c2010df9d423b666` with `passed` status and `llm_hybrid` debate adjudication enforced.
+- `corners` share generation and share retry waits now follow the longer frontend social-copy timeout, reducing false negatives under normal LLM latency.
+- Treat `summary.json` git metadata as the source of truth for whether a specific checkout has been signed off.
 - Current signoff script now re-reads `director_state / gameplay_state` revisions before roundtrip PUT, so `corners` no longer depends on historical samples staying at revision `0`.
 - Current custom Phaser spike artifact root: `dist-spikes/phaser-custom/`.
 

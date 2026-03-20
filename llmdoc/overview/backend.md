@@ -146,6 +146,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **启动策略**: 解析阶段固定使用 `reasoning_effort="low"`，优先缩短 Theater 首次可见世界线前的等待窗口
 - **语言检测** (P9): 调用 `lang_detect.detect_language()` 检测输入语言，存入 `result["_language"]` 供下游服务使用
 - **分层模式** (P3-A): `PARSE_PROMPT_HIERARCHICAL` 生成 `groups[]` 分组信息，含 fallback 自动分组逻辑
+- **坏 JSON 兜底**: 若 parse 阶段的 `llm_call_json()` 仍返回不可恢复坏 JSON，parser 当前会退到确定性 fallback 结构，而不是直接让整条 `create scenario -> simulate` 链路中断；fallback 结果仍会按 `requested_agents` 补足最小角色集，并保留同样的 rounds / sensitivity 边界
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
 
 ### `lang_detect.py` (≈70行) — 语言检测 (P9 **NEW**)

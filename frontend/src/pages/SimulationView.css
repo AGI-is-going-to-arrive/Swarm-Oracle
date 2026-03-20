@@ -562,7 +562,20 @@
     overflow-x: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 12px;
+    overscroll-behavior-x: contain;
     padding-bottom: 2px;
+  }
+
+  .theater-panel__capture > *,
+  .theater-panel__status > *,
+  .theater-panel__warmup-checks > *,
+  .theater-panel__director-top > *,
+  .theater-panel__commitment > *,
+  .theater-panel__filters > * {
+    scroll-snap-align: start;
   }
 
   .theater-panel__capture::-webkit-scrollbar,
@@ -668,6 +681,14 @@
 
   .theater-panel__status {
     margin-bottom: 4px;
+  }
+
+  .simulation-view--theater .sim-content__tree {
+    min-height: 60svh;
+  }
+
+  .simulation-view--theater .sim-content__panel {
+    max-height: 26svh;
   }
 }
 
@@ -832,10 +853,10 @@
     width: auto;
   }
   .simulation-view--theater .sim-content__tree {
-    min-height: 60vh;
+    min-height: 62vh;
   }
   .simulation-view--theater .sim-content__panel {
-    max-height: 34vh;
+    max-height: 32vh;
     border-left: none;
     border-top: 1px solid rgba(108, 92, 231, 0.2);
   }

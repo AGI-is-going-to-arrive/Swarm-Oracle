@@ -67,6 +67,8 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - 当前 targeted backend set：`86 passed`
+- 本轮这类“parse 阶段坏 JSON fallback 兜底”改动，当前还额外实跑通过：
+  - `tests/test_parser.py -k deterministic_parse`：`1 passed`
 
 ### Frontend
 
@@ -87,6 +89,8 @@ npm run assets:provenance:check
   - `src/game/sceneAssetPlan.test.ts + src/game/PhaserGameLoader.test.ts + src/pages/SimulationView.test.tsx`：`30 passed`
 - 本轮这类“默认 build / vitest 切到本地精简 Phaser 入口 + `e2e-suite` revision 修复”改动，当前还额外实跑通过：
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`41 passed`
+- 本轮这类“`scenarioMeta` 持久化继续压缩 + shared replay codec + WebKit capture / mobile Theater 收口”改动，当前还额外实跑通过：
+  - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`：`38 passed`
 
 ## Release Signoff
 
@@ -154,17 +158,18 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 这份工件绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
 - 引用 signoff 结果时，以 `summary.json` 里的 git `branch / commit / worktree` 为准
 
-本 session 代码相关的完整 signoff 工件：
+当前工作树最新的完整 signoff 工件：
 
-- `frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`
-- 这份工件对应本 session 当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
+- `frontend/output/e2e/p0-p4-postfix/summary.json`
+- 这份工件对应当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
+- 这份工件绑定 commit `1f1a0385144d579b1944cac2c2010df9d423b666`，状态 `passed`
+- 这份工件显式要求 `adjudication_mode = llm_hybrid`
+- `corners` 里的 share 生成 / share retry 等待当前也已跟前端更长的社交文案超时窗口对齐，减少正常 LLM 延迟下的假失败
 - 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
-- 当前 `HEAD` 的 fresh full signoff 工件：`frontend/output/e2e/codex-completion-audit-fixed/summary.json`
-- 这份工件绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，状态 `passed`
-- 这份工件记录工作树 `dirty=true`，原因是本轮代码/文档变更仍未提交，且 `frontend/dist-spikes/` 仍为未跟踪目录
-- 同一次排查里，较早的 `frontend/output/e2e/codex-completion-audit/summary.json` 曾在 `corners -> share-context` 失败；修复分享文案请求超时后，`codex-completion-audit-fixed` 已通过
+- 这份工件记录工作树 `dirty=true`，因为签收时当前改动尚未提交
+- 当前 checkout 是否已严格签收，应以重新实跑生成的 `summary.json` 为准，而不是直接套用旧工件
 
 ## CI
 

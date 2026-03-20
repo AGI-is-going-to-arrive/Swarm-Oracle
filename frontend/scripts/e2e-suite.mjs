@@ -12,6 +12,7 @@ const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json")
 const DEFAULT_SAFARI_WEBDRIVER_URL = process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444";
 const DEFAULT_DIRECTOR_STATE_SCENARIO_ID = "72ae364d-3ea1-4959-939c-8fe1dbeca1c9";
 const SAFARI_PANEL_CAPTURE_ENABLED = process.env.SWARM_SAFARI_PANEL_CAPTURE === "1";
+const SHARE_COPY_WAIT_TIMEOUT_MS = 90000;
 const MATRIX_SCENARIO_FALLBACKS = {
   governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
   law: { question: "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？", rounds: 1, numAgents: 3 },
@@ -741,7 +742,7 @@ async function runResultFlow(page, {
       && payload.page?.controls?.modal_state?.loading === false
       && payload.page?.controls?.modal_state?.has_copy === true
     ),
-    90000,
+    SHARE_COPY_WAIT_TIMEOUT_MS,
     "share generation",
   );
   writeJson(path.join(outputDir, "share-generated.json"), generated);
@@ -1782,7 +1783,7 @@ async function runShareRetryCase(page, {
   const recovered = await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.modal_state?.has_copy === true && payload.page?.controls?.modal_state?.loading === false,
-    30000,
+    SHARE_COPY_WAIT_TIMEOUT_MS,
     "share retry success",
   );
   await page.unroute(routePattern);

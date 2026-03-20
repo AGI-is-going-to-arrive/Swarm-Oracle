@@ -75,8 +75,9 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - 当前口径：
   - `cards.usageLog` 已不再是纯本地 authority；前端会优先用后端 `gameplay_state.cards.usage_log` 回填，再把本地当缓存/兼容层
   - `betting.bets`、`archive.keyMoments` 与 `archive.branchSnapshots` 也已进入后端 `gameplay_state`；`scenarioMeta` 继续保留缓存/兼容层，但 localStorage 当前已不再长期保存 usage-derived 的 `director/cooldowns/profileId/counterplay` 等重复字段，读取时会按 usage/bets 现算回补
+  - localStorage 当前也不再长期保存 authority-backed `archive.branchSnapshots`；结果页与 replay 读路径优先按 `storyData.branches` 或远端 authority 重建这部分展示输入
   - `director_state / gameplay_state` 当前都会带 `revision`；页面写回 authority 时会带上当前 revision，若命中 `409` 则回读最新 authority，避免静默覆盖第二设备写入
-  - localStorage 当前也不再长期保存 archive 摘要重复字段（如 `mostUsedCard / archiveGrade / dominantBranchTitle / dominantTone / directorStyleTag / profileResonance / objective counts / commitmentOutcome`）；这些字段改为结果页按 `story/usages/bets/campaign summary` 现算
+  - localStorage 当前也不再长期保存 archive 摘要重复字段（如 `mostUsedCard / archiveGrade / dominantBranchTitle / dominantTone / directorStyleTag / profileResonance / objective counts / commitmentOutcome`）以及 `objectives.lastUpdatedAt` 这类只用于运行态的时间戳；这些字段改为结果页按 `story/usages/bets/campaign summary` 现算，或仅保留在内存里
   - `ResultView` 当前已改成远端 authority 优先：远端 `gameplay_state / director_state / campaign summary` 会先构成结果页基线，只有缺字段时才 fallback 本地 `scenarioMeta`
   - 如果远端只显式带某个 gameplay 分区，结果页现在也只替换那一块，不会误清空其它本地兼容字段
   - 结果页派生出的 archive/objectives 现在只保留在内存里，不再回写 localStorage；`PredictionModal` 也不再自己直读本地 `scenarioMeta`
@@ -130,6 +131,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 主模式结果页 replay 快照编码与解码
   - 主模式过程页 replay 快照编码与解码
   - Debate 结果页 replay token 编码与解码
+- 当前 `scenarioReplay.ts` 与 `simulationReplay.ts` 的 token gzip/base64/url 编解码已收口到共享 `replayCodec.ts`，避免两条主模式 replay helper 重复打包同一套逻辑
 - 当前口径：
   - 主模式优先走后端 `ReplayArtifact` 短 `share id`
   - token 仍保留为 fallback
@@ -533,8 +535,8 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `e2e-suite.mjs` 的 `director_state_roundtrip / gameplay_state_roundtrip` 当前会先回读 authority 的最新 `revision` 再 PUT，避免固定历史样本在 signoff 中稳定撞 `409`
   - `debate-signoff-smoke` 当前在 secrets 可用时会真实要求 `llm_hybrid`，否则安全回退 deterministic
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）
-  - 当前 `HEAD` 的 fresh full signoff 工件：`frontend/output/e2e/codex-completion-audit-fixed/summary.json`（绑定 commit `8948322942e17f03e8cacafbab0b20b105c9b86f`，状态 `passed`）
-  - 本 session 代码相关的完整 signoff 工件：`frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`
+  - 当前工作树最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/p0-p4-postfix/summary.json`（绑定 commit `1f1a0385144d579b1944cac2c2010df9d423b666`，状态 `passed`，并要求 `adjudication_mode = llm_hybrid`）
+  - 当前 checkout 是否已完整签收，应以重新实跑得到的 `summary.json` 为准
   - 当前默认构建下的 `phaser` chunk 约为 `718 kB / 202 kB gzip`
   - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`
   - Safari 为可选附加项，不属于默认 full signoff

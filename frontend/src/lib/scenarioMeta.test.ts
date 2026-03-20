@@ -183,6 +183,7 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(persisted.cooldowns).toBeUndefined();
     expect(persisted.archive.profileId).toBeUndefined();
     expect(persisted.archive.updatedAt).toBeUndefined();
+    expect(persisted.archive.branchSnapshots).toBeUndefined();
     expect(persisted.archive.counterplayCardCount).toBeUndefined();
     expect(persisted.archive.lastCounterplayCard).toBeUndefined();
     expect(persisted.archive.mostUsedCard).toBeUndefined();
@@ -195,6 +196,7 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(persisted.archive.objectiveCompletedCount).toBeUndefined();
     expect(persisted.archive.objectiveTotalCount).toBeUndefined();
     expect(persisted.archive.commitmentOutcome).toBeUndefined();
+    expect(persisted.objectives.lastUpdatedAt).toBeUndefined();
     expect(persisted.archive.keyMoments).toEqual([
       'event:commitment:3:Open%20Hearing',
     ]);
@@ -203,10 +205,12 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(hydrated.director.spentPoints).toBe(1);
     expect(hydrated.cooldowns.public_hearing?.lastUsedRound).toBe(2);
     expect(hydrated.archive.profileId).toBe('law');
+    expect(hydrated.archive.branchSnapshots).toEqual([]);
     expect(hydrated.archive.keyMoments).toEqual([
       'event:commitment:3:Open%20Hearing',
     ]);
     expect(hydrated.archive.archiveGrade).toBeUndefined();
+    expect(hydrated.objectives.lastUpdatedAt).toBeUndefined();
     expect(getScenarioArchiveKeyMoments(hydrated)).toEqual(expect.arrayContaining([
       'event:card:2:public_hearing',
       'event:bet:2:Open%20Hearing',

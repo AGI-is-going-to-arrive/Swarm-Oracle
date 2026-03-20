@@ -6,6 +6,7 @@ import pytest
 
 import app.services.parser as parser_module
 from app.services.parser import parse_question
+from app.services.llm_client import LLMError
 
 
 class TestParseQuestion:
@@ -94,3 +95,24 @@ class TestParseQuestion:
         assert len(result["agents"]) == 5
         assert len({agent["name"] for agent in result["agents"]}) == 5
         assert result["agents"][-1]["tier"] == "IMPORTANT"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_deterministic_parse_when_llm_json_is_invalid(self, monkeypatch):
+        """Parser should degrade to a deterministic scenario instead of failing the whole run."""
+        llm_mock = AsyncMock(side_effect=LLMError("Invalid JSON from LLM after recovery attempts"))
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "如果一个沿海城市突然由算法议会接管，会发生什么？",
+            max_agents=5,
+            target_agents=5,
+            max_rounds=8,
+        )
+
+        assert llm_mock.await_count == 1
+        assert result["initial_title"]
+        assert result["setting"]["background"]
+        assert len(result["agents"]) == 5
+        assert all("name" in agent for agent in result["agents"])
+        assert 3 <= result["simulation_rounds"] <= 8
+        assert 0.0 <= result["branch_sensitivity"] <= 1.0

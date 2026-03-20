@@ -19,6 +19,7 @@ chroma_data/
 # Node / build
 frontend/node_modules/
 frontend/dist/
+frontend/dist-spikes/
 frontend/.tmp-playwright/
 
 # Generated runtime artifacts

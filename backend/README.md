@@ -75,6 +75,11 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - Current signoff backend set: `86 passed`.
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
+## Runtime Notes
+
+- `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline.
+- If parse-stage LLM JSON is still unrecoverably broken, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately.
+
 ## Environment Variables
 
 See `../.env.example` for the full list.
