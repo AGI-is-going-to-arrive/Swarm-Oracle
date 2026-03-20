@@ -38,6 +38,9 @@ React + TypeScript frontend for SwarmOracle.
   compatibility/cache layer, not cross-device authority
   authority-backed replay snapshots now strip redundant `cards / bets / branchSnapshots`
   localStorage no longer persists authority-backed `branchSnapshots` or runtime-only objective timestamps
+- `scenarioAuthority.ts`
+  shared authority merge/reset helper for `SimulationView` and `ResultView`
+  keeps page-level fallback order in one place instead of duplicating the merge path in each screen
 - `replayCodec.ts`
   shared gzip/base64/url replay token codec used by both `scenarioReplay.ts` and `simulationReplay.ts`
 - `useDebateWS` / `useSimulationWS`
@@ -99,9 +102,9 @@ npm run build:spike:phaser-custom
   - `cross-browser`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
-- CI now also includes `release-signoff-fixture`, a no-secrets deterministic full-flow signoff lane that runs the main scenario path against an isolated mock LLM and forces deterministic Debate adjudication.
-- Latest repository-side full signoff artifact: `output/e2e/post-commit-signoff/summary.json`.
-- That artifact is bound to commit `c8f4f5713089a044be0e6697597616a1b6f76617` with `passed` status, `dirty=false`, and `llm_hybrid` debate adjudication enforced.
+- CI now also includes `release-signoff-fixture`, a no-secrets deterministic full-flow signoff lane that runs the main scenario path against an isolated mock LLM on `18318` and forces deterministic Debate adjudication. The real LLM path still follows the configured `LLM_RESPONSES_URL`.
+- Latest clean real full signoff artifact: `output/e2e/post-commit-signoff-clean/summary.json`.
+- That artifact is bound to commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473` with `passed` status, `dirty=false`, and `llm_hybrid` debate adjudication enforced.
 - `corners` share generation and share retry waits now follow the longer frontend social-copy timeout, reducing false negatives under normal LLM latency.
 - Treat `summary.json` git metadata as the source of truth for whether a specific checkout has been signed off.
 - Current signoff script now re-reads `director_state / gameplay_state` revisions before roundtrip PUT, so `corners` no longer depends on historical samples staying at revision `0`.

@@ -8,10 +8,9 @@
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.cjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
 - 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.11 kB`，gzip 从 `328.41 kB` 降到 `202.34 kB`。
-- 仓库内最近一次通过的 fresh full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff/summary.json`。
-- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
-- 最近一次 clean runtime 基线仍是 `frontend/output/e2e/current-head-audit-signoff/summary.json`。
-- 这份 clean baseline 的 `summary.json` 绑定运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`。
+- 仓库内最近一次通过的 clean real full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff-clean/summary.json`。
+- 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
+- CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8318`）。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
 
 ## Documentation Contract
@@ -110,8 +109,8 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
-npm run assets:provenance:check
 npm run perf:budgets:check
+npm run assets:provenance:check
 ```
 
 ```bash
@@ -141,13 +140,14 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `src/lib/scenarioAuthority.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/hooks/useScreenCapture.test.ts`：`37 passed`
   - `backend/tests/test_parser.py -k deterministic_parse`: `1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`: `38 passed`
   - `backend/tests/test_campaign_service.py + backend/tests/test_campaign_api.py + backend/tests/test_debate_api.py`: `32 passed`
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `src/lib/scenarioMeta.test.ts + src/lib/archiveSummary.test.ts + src/components/gameplayCards.test.ts + src/components/gameplayContract.test.ts + src/components/InterventionModal.test.tsx + src/components/ShareModal.test.tsx + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/components/GameplayCardsModal.test.tsx + src/pages/DebateArenaView.test.tsx + src/pages/DebateResultView.test.tsx + src/components/DebateBetModal.test.tsx + src/components/DebateShareModal.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts + src/stores/simulationStore.test.ts`: `107 passed`
-  - `tsc` / `build` / assets check：当前代码相关复验通过
-  - 仓库内最近一次通过的 full `release:signoff`：`frontend/output/e2e/post-commit-signoff/summary.json`（`passed`）
+  - `tsc` / `build` / perf budgets / assets check：当前代码相关复验通过
+  - clean real full `release:signoff`：`frontend/output/e2e/post-commit-signoff-clean/summary.json`（`passed`，绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，`dirty=false`）
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -163,11 +163,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 如果本地 LLM 链路可用，可以用 `SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid` 强制要求 Debate 结果返回 `adjudication_mode = llm_hybrid`。
 - 如果本轮改动涉及 authority 写入、`scenarioMeta / replay` 收口或结果页展示链路，优先跑上面的扩展前端定向回归；本 session 相关前端子集实跑通过 `32 passed`。
 - Safari is optional and not part of the default full signoff.
-- 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）。
-- 仓库内最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`。
-- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，并记录当前工作树为 `dirty=false`。
+- 仓库内最近一次通过的 clean real full signoff 工件：`frontend/output/e2e/post-commit-signoff-clean/summary.json`。
+- 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态 `passed`，并记录当前工作树为 `dirty=false`。
 - 当前 checkout 是否已通过完整签收，应以最近实跑生成的 `summary.json` 为准，不应直接把旧工件等同于当前 `HEAD`。
-- 同一批代码改动在更干净工作树上的完整签收工件：`frontend/output/e2e/current-head-recheck/summary.json`。
+- CI 当前还包含 `release-signoff-fixture`，用于无 secrets 的 deterministic 全链路回归；这条链路使用隔离 mock LLM，不占用真实 `LLM_RESPONSES_URL`。
 
 ## CI
 
@@ -175,7 +174,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - targeted backend `pytest`
   - frontend `assets:provenance:check / perf:budgets:check / build / targeted vitest`；当前 targeted vitest lane 已与文档口径对齐，包含 `InterventionModal.test.tsx`、`ShareModal.test.tsx` 与 `simulationStore.test.ts`
   - `release-signoff-dry-run`
-  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
+  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM（默认 `18318`），Debate 强约束 `deterministic`
   - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff

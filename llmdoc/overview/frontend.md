@@ -83,6 +83,15 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 结果页派生出的 archive/objectives 现在只保留在内存里，不再回写 localStorage；`PredictionModal` 也不再自己直读本地 `scenarioMeta`
   - `archive.keyMoments` 当前主要只保留兼容/非派生 moment；card/bet moment 会在展示与序列化阶段通过 helper 现算
 
+### `scenarioAuthority.ts`
+- 主模式 authority 合流 helper
+- 负责：
+  - 共享 `SimulationView / ResultView` 的 authority merge 入口
+  - 在结果页 authority 存在时，先剥掉 localStorage 里已被远端覆盖的 gameplay compat 字段，再统一合流
+- 当前口径：
+  - `mergeScenarioMetaAuthority()` 当前负责 shared merge，不再让页面层各自拼一套 fallback 顺序
+  - `resetScenarioMetaGameplayCompat()` 只在结果页这类 authority 优先读路径使用，避免远端 authority 已经存在时仍让旧本地 compat 继续污染展示链
+
 ### `scenarioDirectorState.ts`
 - director goals / worldline commitment 的前后端映射层
 - 负责：
@@ -533,13 +542,11 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `summary.json` 现会记录 git `branch / commit / worktree` 绑定信息
   - `release:signoff` / `e2e-debate-suite.mjs` 现支持显式要求 Debate 返回指定 `adjudication_mode`
   - `e2e-suite.mjs` 的 `director_state_roundtrip / gameplay_state_roundtrip` 当前会先回读 authority 的最新 `revision` 再 PUT，避免固定历史样本在 signoff 中稳定撞 `409`
-  - `.github/workflows/ci.yml` 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
+  - `.github/workflows/ci.yml` 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM（默认 `18318`），Debate 强约束 `deterministic`；真实 LLM 路径仍按现有 `LLM_RESPONSES_URL` 配置
   - `debate-signoff-smoke` 当前在 secrets 可用时会真实要求 `llm_hybrid`，否则安全回退 deterministic
-  - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）
-  - 仓库内最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`（绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，`dirty=false`，并要求 `adjudication_mode = llm_hybrid`）
+  - 最近一次 clean real full signoff 工件：`frontend/output/e2e/post-commit-signoff-clean/summary.json`（绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态 `passed`，`dirty=false`，并要求 `adjudication_mode = llm_hybrid`）
   - 当前 checkout 是否已完整签收，应以重新实跑得到的 `summary.json` 为准
   - 当前默认构建下的 `phaser` chunk 约为 `718 kB / 202 kB gzip`
-  - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`
   - Safari 为可选附加项，不属于默认 full signoff
 - **部署**:
   - `npm run build` → `dist/`

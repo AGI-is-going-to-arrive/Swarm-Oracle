@@ -156,21 +156,19 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最近一次 clean runtime 基线工件：
 
-- `frontend/output/e2e/current-head-audit-signoff/summary.json`
-- 这份工件绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
+- `frontend/output/e2e/post-commit-signoff-clean/summary.json`
+- 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，且 `dirty=false`
 - 引用 signoff 结果时，以 `summary.json` 里的 git `branch / commit / worktree` 为准
 
 仓库内最近一次通过的完整 signoff 工件：
 
-- `frontend/output/e2e/post-commit-signoff/summary.json`
+- `frontend/output/e2e/post-commit-signoff-clean/summary.json`
 - 这份工件对应当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
-- 这份工件绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`
+- 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态 `passed`
 - 这份工件显式要求 `adjudication_mode = llm_hybrid`
 - `corners` 里的 share 生成 / share retry 等待当前也已跟前端更长的社交文案超时窗口对齐，减少正常 LLM 延迟下的假失败
 - 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
-- 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
-- 这份工件记录工作树 `dirty=false`
 - 当前 checkout 是否已严格签收，应以重新实跑生成的 `summary.json` 为准，而不是直接套用旧工件
 
 ## CI
@@ -179,7 +177,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - targeted backend `pytest`
   - frontend `assets:provenance:check / perf:budgets:check / build / targeted vitest`；当前 lane 已与文档里的 targeted frontend set 对齐
   - `release-signoff-dry-run`
-  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
+  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM（默认 `18318`），Debate 强约束 `deterministic`；真实 LLM 路径仍按 `LLM_RESPONSES_URL` 走现有配置
   - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
