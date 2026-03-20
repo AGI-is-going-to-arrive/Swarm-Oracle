@@ -527,12 +527,13 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - Historical full baseline: **179 passed**
   - Current targeted frontend set: **107 passed**
   - 当前 targeted set 已纳入 `src/components/ShareModal.test.tsx`
-  - `npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run assets:provenance:check` 当前通过
+  - `npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run perf:budgets:check`、`npm run assets:provenance:check` 当前通过
 - **发布签收**:
-  - 默认 `release:signoff` 合同由 backend targeted checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 组成
+  - 默认 `release:signoff` 合同由 backend targeted checks、`/metrics`、`tsc`、`build`、perf budgets、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 组成
   - `summary.json` 现会记录 git `branch / commit / worktree` 绑定信息
   - `release:signoff` / `e2e-debate-suite.mjs` 现支持显式要求 Debate 返回指定 `adjudication_mode`
   - `e2e-suite.mjs` 的 `director_state_roundtrip / gameplay_state_roundtrip` 当前会先回读 authority 的最新 `revision` 再 PUT，避免固定历史样本在 signoff 中稳定撞 `409`
+  - `.github/workflows/ci.yml` 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
   - `debate-signoff-smoke` 当前在 secrets 可用时会真实要求 `llm_hybrid`，否则安全回退 deterministic
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）
   - 仓库内最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`（绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，`dirty=false`，并要求 `adjudication_mode = llm_hybrid`）

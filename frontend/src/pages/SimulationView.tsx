@@ -36,7 +36,6 @@ import { copyText } from '../lib/copyText';
 import {
   hasScenarioDirectorAuthority,
   hasMeaningfulScenarioDirectorState,
-  mergeScenarioMetaWithDirectorState,
   scenarioMetaToDirectorState,
 } from '../lib/scenarioDirectorState';
 import {
@@ -46,6 +45,7 @@ import {
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
 } from '../lib/scenarioGameplayState';
+import { mergeScenarioMetaAuthority } from '../lib/scenarioAuthority';
 import {
   getGameplayCardDefinition,
   getGameplaySignatureArcState,
@@ -286,8 +286,11 @@ export function SimulationView() {
   const scenarioMeta = useMemo(
     () => {
       if (!storedScenarioMeta) return null;
-      const gameplayMerged = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
-      return mergeScenarioMetaWithDirectorState(gameplayMerged, backendDirectorState);
+      return mergeScenarioMetaAuthority(
+        storedScenarioMeta,
+        backendGameplayState,
+        backendDirectorState,
+      );
     },
     [backendDirectorState, backendGameplayState, storedScenarioMeta],
   );

@@ -55,6 +55,7 @@ npm install
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
+npm run perf:budgets:check
 npm run assets:provenance:check
 ```
 
@@ -91,12 +92,14 @@ npm run build:spike:phaser-custom
   - backend `/metrics`
   - `tsc`
   - `build`
+  - `perf:budgets:check`
   - asset provenance check
   - `corners`
   - `mobile`
   - `cross-browser`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
+- CI now also includes `release-signoff-fixture`, a no-secrets deterministic full-flow signoff lane that runs the main scenario path against an isolated mock LLM and forces deterministic Debate adjudication.
 - Latest repository-side full signoff artifact: `output/e2e/post-commit-signoff/summary.json`.
 - That artifact is bound to commit `c8f4f5713089a044be0e6697597616a1b6f76617` with `passed` status, `dirty=false`, and `llm_hybrid` debate adjudication enforced.
 - `corners` share generation and share retry waits now follow the longer frontend social-copy timeout, reducing false negatives under normal LLM latency.

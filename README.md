@@ -111,6 +111,7 @@ cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run assets:provenance:check
+npm run perf:budgets:check
 ```
 
 ```bash
@@ -138,7 +139,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - Current targeted verification:
   - backend targeted set `86 passed`
   - frontend targeted set `107 passed`
-  - `tsc` / `build` / assets check 通过
+  - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
   - `backend/tests/test_parser.py -k deterministic_parse`: `1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`: `38 passed`
@@ -152,6 +153,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - backend `/metrics` reachability check
   - `npx tsc --noEmit -p tsconfig.app.json`
   - `npm run build`
+  - `npm run perf:budgets:check`
   - `npm run assets:provenance:check`
   - `scripts/e2e-suite.mjs corners`
   - `scripts/e2e-suite.mjs mobile`
@@ -171,8 +173,9 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - `.github/workflows/ci.yml`
   - targeted backend `pytest`
-  - frontend `assets:provenance:check / build / targeted vitest`；当前 targeted vitest lane 已与文档口径对齐，包含 `InterventionModal.test.tsx`、`ShareModal.test.tsx` 与 `simulationStore.test.ts`
+  - frontend `assets:provenance:check / perf:budgets:check / build / targeted vitest`；当前 targeted vitest lane 已与文档口径对齐，包含 `InterventionModal.test.tsx`、`ShareModal.test.tsx` 与 `simulationStore.test.ts`
   - `release-signoff-dry-run`
+  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
   - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff

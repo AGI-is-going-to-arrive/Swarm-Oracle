@@ -11,6 +11,7 @@
     "generate:ui-assets": "node scripts/generate-ui-assets.mjs",
     "assets:provenance:backfill": "node scripts/backfill-asset-provenance.mjs",
     "assets:provenance:check": "node scripts/check-asset-provenance.mjs",
+    "perf:budgets:check": "node scripts/check-performance-budgets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e:predict": "node scripts/e2e-automation.mjs predict",

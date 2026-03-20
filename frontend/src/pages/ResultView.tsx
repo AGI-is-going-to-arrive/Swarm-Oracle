@@ -36,14 +36,9 @@ import {
   parseScenarioMoment,
   type ScenarioMeta,
 } from '../lib/scenarioMeta';
-import {
-  hasScenarioDirectorAuthority,
-  mergeScenarioMetaWithDirectorState,
-} from '../lib/scenarioDirectorState';
-import {
-  hasScenarioGameplayAuthority,
-  mergeScenarioMetaWithGameplayState,
-} from '../lib/scenarioGameplayState';
+import { hasScenarioDirectorAuthority } from '../lib/scenarioDirectorState';
+import { hasScenarioGameplayAuthority } from '../lib/scenarioGameplayState';
+import { mergeScenarioMetaAuthority } from '../lib/scenarioAuthority';
 import {
   buildDefaultDirectorObjectives,
   countCompletedObjectives,
@@ -83,10 +78,6 @@ import ShareModal from '../components/ShareModal';
 import './ResultView.css';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
-
-function hasOwnKey(value: unknown, key: string): boolean {
-  return typeof value === 'object' && value !== null && Object.prototype.hasOwnProperty.call(value, key);
-}
 
 function getBetOutcomeLabel(
   outcome: StructuredBetOutcome,
@@ -139,81 +130,6 @@ function getCampaignBadgeCopy(badgeId: string, isZh: boolean) {
     ? { label: badgeId, description: '新徽章已解锁。' }
     : { label: badgeId, description: 'A new badge has been unlocked.' };
   return badges[badgeId as keyof typeof badges]?.[isZh ? 'zh' : 'en'] ?? fallback;
-}
-
-function resetScenarioMetaGameplayCompat(
-  meta: ScenarioMeta,
-  remoteGameplayState: Scenario['gameplay_state'] | null | undefined,
-): ScenarioMeta {
-  const remoteCards = hasOwnKey(remoteGameplayState, 'cards') && remoteGameplayState?.cards
-    ? remoteGameplayState.cards
-    : null;
-  const remoteBetting = hasOwnKey(remoteGameplayState, 'betting') && remoteGameplayState?.betting
-    ? remoteGameplayState.betting
-    : null;
-  const remoteArchive = hasOwnKey(remoteGameplayState, 'archive') && remoteGameplayState?.archive
-    ? remoteGameplayState.archive
-    : null;
-  const hasRemoteUsageAuthority = hasOwnKey(remoteCards, 'usage_log');
-  const hasRemoteBetAuthority = hasOwnKey(remoteBetting, 'bets');
-  const hasRemoteKeyMomentAuthority = hasOwnKey(remoteArchive, 'key_moments');
-  const hasRemoteBranchSnapshotAuthority = hasOwnKey(remoteArchive, 'branch_snapshots');
-
-  if (
-    !hasRemoteUsageAuthority
-    && !hasRemoteBetAuthority
-    && !hasRemoteKeyMomentAuthority
-    && !hasRemoteBranchSnapshotAuthority
-  ) {
-    return meta;
-  }
-
-  return {
-    ...meta,
-    director: hasRemoteUsageAuthority
-      ? {
-          maxPoints: meta.director.maxPoints,
-          remainingPoints: meta.director.maxPoints,
-          spentPoints: 0,
-          lastUpdatedAt: undefined,
-        }
-      : meta.director,
-    cooldowns: hasRemoteUsageAuthority ? {} : meta.cooldowns,
-    cards: {
-      usageLog: hasRemoteUsageAuthority ? [] : meta.cards.usageLog,
-    },
-    betting: {
-      bets: hasRemoteBetAuthority ? [] : meta.betting.bets,
-    },
-    archive: {
-      ...meta.archive,
-      profileId: hasRemoteUsageAuthority ? undefined : meta.archive.profileId,
-      mostUsedCard: hasRemoteUsageAuthority ? null : meta.archive.mostUsedCard,
-      counterplayCardCount: hasRemoteUsageAuthority ? null : meta.archive.counterplayCardCount,
-      lastCounterplayCard: hasRemoteUsageAuthority ? null : meta.archive.lastCounterplayCard,
-      updatedAt: hasRemoteUsageAuthority ? undefined : meta.archive.updatedAt,
-      branchSnapshots: hasRemoteBranchSnapshotAuthority ? [] : meta.archive.branchSnapshots,
-      keyMoments: hasRemoteKeyMomentAuthority
-        ? meta.archive.keyMoments.filter((moment) => {
-            const parsed = parseScenarioMoment(moment);
-            return !parsed || parsed.kind === 'commitment';
-          })
-        : meta.archive.keyMoments,
-    },
-  };
-}
-
-function mergeResultScenarioMetaAuthority(
-  localMeta: ScenarioMeta,
-  remoteGameplayState: Scenario['gameplay_state'] | null | undefined,
-  remoteDirectorState: Scenario['director_state'] | null | undefined,
-): ScenarioMeta {
-  const gameplayBase = resetScenarioMetaGameplayCompat(localMeta, remoteGameplayState);
-
-  return mergeScenarioMetaWithDirectorState(
-    mergeScenarioMetaWithGameplayState(gameplayBase, remoteGameplayState),
-    remoteDirectorState,
-  );
 }
 
 function classifyCampaignFinalizeError(err: unknown): 'missing' | 'conflict' | 'other' {
@@ -413,10 +329,11 @@ export default function ResultView() {
         const remoteDirectorState = scenario.director_state ?? null;
         const remoteGameplayState = scenario.gameplay_state ?? null;
         const localMeta = loadScenarioMeta(id);
-        let workingMeta = mergeResultScenarioMetaAuthority(
+        let workingMeta = mergeScenarioMetaAuthority(
           localMeta,
           remoteGameplayState,
           remoteDirectorState,
+          { resetGameplayCompat: true },
         );
         const storyKeyMoments = buildStoryKeyMoments(story);
         const storyBranchSnapshots = story.branches.map((branch) => ({
@@ -667,10 +584,11 @@ export default function ResultView() {
       return derivedScenarioMeta;
     }
 
-    return mergeResultScenarioMetaAuthority(
+    return mergeScenarioMetaAuthority(
       storedScenarioMeta,
       scenario?.gameplay_state ?? null,
       scenario?.director_state ?? null,
+      { resetGameplayCompat: true },
     );
   }, [derivedScenarioMeta, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
   const resolvedProfileId =

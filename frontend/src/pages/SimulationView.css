@@ -549,7 +549,7 @@
 @media (max-width: 900px) {
   .theater-panel__header {
     align-items: flex-start;
-    gap: 8px;
+    gap: 6px;
   }
 
   .theater-panel__capture,
@@ -564,7 +564,7 @@
     -ms-overflow-style: none;
     -webkit-overflow-scrolling: touch;
     scroll-snap-type: x proximity;
-    scroll-padding-inline: 12px;
+    scroll-padding-inline: 8px;
     overscroll-behavior-x: contain;
     padding-bottom: 2px;
   }
@@ -612,8 +612,8 @@
   .capture-mode-feedback {
     flex: 0 0 auto;
     min-height: 26px;
-    padding: 3px 7px;
-    font-size: 0.64rem;
+    padding: 3px 6px;
+    font-size: 0.62rem;
   }
 
   .capture-mode-toggle__btn,
@@ -623,7 +623,7 @@
   }
 
   .capture-mode-toggle__btn {
-    padding: 4px 6px;
+    padding: 3px 5px;
   }
 
   .theater-chip,
@@ -645,14 +645,14 @@
   }
 
   .theater-chip {
-    font-size: 0.66rem;
-    padding: 3px 7px;
+    font-size: 0.64rem;
+    padding: 3px 6px;
     white-space: nowrap;
   }
 
   .theater-select {
     gap: 4px;
-    padding: 4px 7px;
+    padding: 3px 6px;
     font-size: 0.64rem;
   }
 }
@@ -676,7 +676,7 @@
 
   .btn--capture {
     font-size: 0.64rem;
-    padding: 4px 7px;
+    padding: 4px 6px;
   }
 
   .theater-panel__status {
@@ -684,11 +684,11 @@
   }
 
   .simulation-view--theater .sim-content__tree {
-    min-height: 60svh;
+    min-height: 56svh;
   }
 
   .simulation-view--theater .sim-content__panel {
-    max-height: 26svh;
+    max-height: 22svh;
   }
 }
 

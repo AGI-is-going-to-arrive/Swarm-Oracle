@@ -12,6 +12,7 @@ const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json")
 const DEFAULT_SAFARI_WEBDRIVER_URL = process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444";
 const DEFAULT_DIRECTOR_STATE_SCENARIO_ID = "72ae364d-3ea1-4959-939c-8fe1dbeca1c9";
 const SAFARI_PANEL_CAPTURE_ENABLED = process.env.SWARM_SAFARI_PANEL_CAPTURE === "1";
+const FIXTURE_MODE = process.env.SWARM_E2E_FIXTURE_MODE === "1";
 const SHARE_COPY_WAIT_TIMEOUT_MS = 90000;
 const MATRIX_SCENARIO_FALLBACKS = {
   governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
@@ -1314,7 +1315,7 @@ async function runPredictionVariant(page, {
   ensureDir(outputDir);
   const scenario = await createScenarioViaApi(baseUrl, {
     question,
-    rounds: 3,
+    rounds: FIXTURE_MODE ? 5 : 3,
     numAgents: 3,
     visualizationEnabled: false,
   });
@@ -1370,7 +1371,7 @@ async function runPredictionFailureCase(page, {
   ensureDir(outputDir);
   const scenario = await createScenarioViaApi(baseUrl, {
     question,
-    rounds: 3,
+    rounds: FIXTURE_MODE ? 5 : 3,
     numAgents: 3,
     visualizationEnabled: false,
   });
@@ -1485,7 +1486,7 @@ async function runCaptureModesCase(page, {
     question,
     // Keep this case in a live, capture-ready theater state long enough for
     // prediction/gameplay modal probes before the scenario auto-completes.
-    rounds: 2,
+    rounds: FIXTURE_MODE ? 4 : 2,
     numAgents: 3,
     visualizationEnabled: true,
   });

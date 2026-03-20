@@ -76,6 +76,7 @@
 - 结果页 authority 又收了一步：远端 `director_state / gameplay_state / campaign summary` 当前作为展示基线，只有缺字段时才回退本地 `scenarioMeta`；本 session 又继续压缩了本地兼容层：`scenarioMeta` 的 localStorage 不再长期保留 archive 摘要重复字段，主模式 `result / simulation replay` 也会先压缩 `scenarioMeta`，当 snapshot 已自带 authority 时还会去掉 authority-backed `cards / bets / branchSnapshots`，读路径再按 usage/bets 现算回补。
 - Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`；本 session 又补了 replay import 的 `phase_insights` 保真。
 - 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`；Theater 这轮又补了意图级 loader 预取、WebKit 截图兜底、移动端首屏压缩、`e2e-suite` roundtrip 的 revision 回读修复，以及默认前端构建使用本地精简 Phaser 入口。
+- CI 当前又补了一条无 secrets 的 `release-signoff-fixture`：主模式走隔离 mock LLM，Debate 强约束 `deterministic`；前端构建链也新增 `perf:budgets:check` 体积预算门槛。
 
 ### 当前验证口径
 
@@ -85,6 +86,7 @@
 - Current targeted verification：
   - backend targeted set `86 passed`
   - frontend targeted set `107 passed`
+  - `tsc / build / perf budgets / assets`：通过
 - Current session focused verification：
   - `backend/tests/test_parser.py -k deterministic_parse`：`1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`：`38 passed`

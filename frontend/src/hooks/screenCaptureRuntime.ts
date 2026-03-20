@@ -65,8 +65,9 @@ async function settleElementImages(root: Element) {
 
 async function settleWebKitCaptureSurface() {
   await settleFrames();
+  await settleFrames();
   await new Promise<void>((resolve) => {
-    window.setTimeout(() => resolve(), 32);
+    window.setTimeout(() => resolve(), 64);
   });
 }
 

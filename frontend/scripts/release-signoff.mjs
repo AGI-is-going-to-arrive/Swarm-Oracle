@@ -397,6 +397,7 @@ function main() {
     }
     runStep(summary, args, "typecheck", npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"]);
     runStep(summary, args, "build", npmCommand, ["run", "build"]);
+    runStep(summary, args, "perf_budgets", npmCommand, ["run", "perf:budgets:check"]);
     if (args.includeAssetsCheck) {
       runStep(summary, args, "assets_check", npmCommand, ["run", "assets:provenance:check"]);
     }

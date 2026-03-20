@@ -77,6 +77,7 @@ cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
+npm run perf:budgets:check
 npm run assets:provenance:check
 ```
 
@@ -131,6 +132,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - backend `/metrics` 可达性检查
 - `npx tsc --noEmit -p tsconfig.app.json`
 - `npm run build`
+- `npm run perf:budgets:check`
 - `npm run assets:provenance:check`
 - `scripts/e2e-suite.mjs corners`
 - `scripts/e2e-suite.mjs mobile`
@@ -175,8 +177,9 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - `.github/workflows/ci.yml`
   - targeted backend `pytest`
-  - frontend `assets:provenance:check / build / targeted vitest`；当前 lane 已与文档里的 targeted frontend set 对齐
+  - frontend `assets:provenance:check / perf:budgets:check / build / targeted vitest`；当前 lane 已与文档里的 targeted frontend set 对齐
   - `release-signoff-dry-run`
+  - `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM，Debate 强约束 `deterministic`
   - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
