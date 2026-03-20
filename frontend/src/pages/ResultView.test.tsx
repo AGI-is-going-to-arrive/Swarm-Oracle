@@ -173,6 +173,7 @@ vi.mock('../lib/scenarioMeta', () => {
       public_hearing: { cost: 1, cooldownRounds: 2 },
     },
     buildCardUsageMoment: vi.fn((round: number, cardId: string) => `event:card:${round}:${cardId}`),
+    getScenarioArchiveKeyMoments: vi.fn((current: ScenarioMeta) => current.archive.keyMoments),
     loadScenarioMeta: vi.fn(() => meta),
     ensureScenarioObjectivesInMemory: vi.fn((current: ScenarioMeta, payload: {
       question: string;
@@ -833,7 +834,7 @@ describe('ResultView campaign summary', () => {
       archive: {
         branchSnapshots: [{ branchId: 'branch-local', title: 'Stale Local Branch', probability: 0.37 }],
         keyMoments: ['Stale local moment'],
-        profileId: 'law',
+        profileId: 'trade',
         dominantBranchTitle: 'Stale Local Branch',
         dominantTone: 'rupture',
         mostUsedCard: null,
@@ -929,6 +930,7 @@ describe('ResultView campaign summary', () => {
           probability: 1,
         },
       ]);
+      expect(payload?.page?.archive_summary?.profile_id).toBe('law');
     });
   });
 

@@ -5,7 +5,11 @@ import {
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
 } from './scenarioGameplayState';
-import { loadScenarioMeta, type ScenarioMeta } from './scenarioMeta';
+import {
+  getScenarioArchiveKeyMoments,
+  loadScenarioMeta,
+  type ScenarioMeta,
+} from './scenarioMeta';
 
 describe('scenarioGameplayState helpers', () => {
   beforeEach(() => {
@@ -60,7 +64,7 @@ describe('scenarioGameplayState helpers', () => {
         bets: [],
       },
       archive: {
-        key_moments: [],
+        key_moments: ['event:card:2:public_hearing'],
         branch_snapshots: [],
       },
     });
@@ -131,6 +135,11 @@ describe('scenarioGameplayState helpers', () => {
     expect(merged.archive.counterplayCardCount).toBe(2);
     expect(merged.archive.lastCounterplayCard).toBe('audit_reckoning');
     expect(merged.archive.keyMoments).toContain('Remote key moment');
+    expect(getScenarioArchiveKeyMoments(merged)).toEqual(expect.arrayContaining([
+      'Remote key moment',
+      'event:card:2:public_hearing',
+      'event:card:3:audit_reckoning',
+    ]));
     expect(merged.archive.branchSnapshots).toEqual([
       {
         branchId: 'branch-1',
@@ -197,9 +206,12 @@ describe('scenarioGameplayState helpers', () => {
     const merged = mergeScenarioMetaWithGameplayState(meta, payload);
     expect(merged.betting.bets[0].betId).toBe('bet-1');
     expect(merged.archive.branchSnapshots[0].branchId).toBe('branch-1');
-    expect(merged.archive.keyMoments).toContain('event:bet:2:Open%20Hearing');
-    expect(merged.archive.keyMoments.some((moment) => moment.includes('public_hearing'))).toBe(true);
-    expect(areScenarioGameplayStatesEquivalent(payload, scenarioMetaToGameplayState(merged))).toBe(false);
+    expect(merged.archive.keyMoments).toEqual([]);
+    expect(getScenarioArchiveKeyMoments(merged)).toEqual(expect.arrayContaining([
+      'event:bet:2:Open%20Hearing',
+      'event:card:2:public_hearing',
+    ]));
+    expect(areScenarioGameplayStatesEquivalent(payload, scenarioMetaToGameplayState(merged))).toBe(true);
     expect(scenarioMetaToGameplayState(merged).archive.key_moments).toEqual(expect.arrayContaining([
       'event:bet:2:Open%20Hearing',
       'event:card:2:public_hearing',
@@ -281,6 +293,7 @@ describe('scenarioGameplayState helpers', () => {
     expect(merged.cooldowns).toEqual({});
     expect(merged.archive.profileId).toBeUndefined();
     expect(merged.archive.keyMoments).toEqual(['Remote authoritative moment']);
+    expect(getScenarioArchiveKeyMoments(merged)).toEqual(['Remote authoritative moment']);
   });
 
   it('clears stale local gameplay data when the backend explicitly owns empty partitions', () => {

@@ -6,9 +6,11 @@ import {
   clearBranchCommitment,
   ensureScenarioObjectives,
   ensureScenarioObjectivesInMemory,
+  getScenarioArchiveKeyMoments,
   getCardCooldownRemaining,
   loadScenarioMeta,
   mergeScenarioArchive,
+  placeBet,
   setBranchCommitment,
 } from './scenarioMeta';
 
@@ -48,7 +50,8 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(next.cooldowns.mandate_surge?.cooldownRounds).toBe(1);
     expect(next.cards.usageLog.at(-1)?.cardId).toBe('mandate_surge');
     expect(next.archive.profileId).toBe('law');
-    expect(next.archive.keyMoments.at(-1)).toContain('mandate_surge');
+    expect(next.archive.keyMoments).toEqual([]);
+    expect(getScenarioArchiveKeyMoments(next).at(-1)).toContain('mandate_surge');
   });
 
   it('reports mandate surge cooldown against the current round', () => {
@@ -128,6 +131,63 @@ describe('scenarioMeta gameplay card rules', () => {
     const cleared = clearBranchCommitment(scenarioId);
     expect(cleared.commitment.active).toBe(false);
     expect(cleared.commitment.branchId).toBeNull();
+  });
+
+  it('persists a compact storage payload and rehydrates derived gameplay fields on read', () => {
+    const scenarioId = 'scenario-compact-storage';
+
+    applyCardUsage(scenarioId, {
+      cardId: 'public_hearing',
+      profileId: 'law',
+      branchId: 'branch-1',
+      branchTitle: 'Open Hearing',
+      round: 2,
+      directive: 'Expose the hidden exception clause.',
+      usedAt: '2026-03-19T00:00:00Z',
+    });
+    placeBet(scenarioId, {
+      betId: 'bet-1',
+      kind: 'branch_winner',
+      targetId: 'branch-1',
+      targetLabel: 'Open Hearing',
+      confidence: 0.7,
+      userName: 'Archivist',
+      placedAtRound: 2,
+      placedAt: '2026-03-19T00:01:00Z',
+      resolved: false,
+    });
+    const hydrated = setBranchCommitment(scenarioId, {
+      branchId: 'branch-1',
+      branchTitle: 'Open Hearing',
+      currentRound: 3,
+    });
+
+    const persisted = JSON.parse(
+      window.localStorage.getItem('swarmoracle:scenario-meta:v1') ?? '{"scenarios":{}}',
+    ).scenarios[scenarioId];
+
+    expect(persisted.director).toBeUndefined();
+    expect(persisted.cooldowns).toBeUndefined();
+    expect(persisted.archive.profileId).toBeUndefined();
+    expect(persisted.archive.updatedAt).toBeUndefined();
+    expect(persisted.archive.counterplayCardCount).toBeUndefined();
+    expect(persisted.archive.lastCounterplayCard).toBeUndefined();
+    expect(persisted.archive.keyMoments).toEqual([
+      'event:commitment:3:Open%20Hearing',
+    ]);
+
+    expect(hydrated.director.remainingPoints).toBe(2);
+    expect(hydrated.director.spentPoints).toBe(1);
+    expect(hydrated.cooldowns.public_hearing?.lastUsedRound).toBe(2);
+    expect(hydrated.archive.profileId).toBe('law');
+    expect(hydrated.archive.keyMoments).toEqual([
+      'event:commitment:3:Open%20Hearing',
+    ]);
+    expect(getScenarioArchiveKeyMoments(hydrated)).toEqual(expect.arrayContaining([
+      'event:card:2:public_hearing',
+      'event:bet:2:Open%20Hearing',
+      'event:commitment:3:Open%20Hearing',
+    ]));
   });
 
   it('persists generated director objectives once per question/profile pair', () => {

@@ -24,6 +24,7 @@ import {
 import {
   clearBranchCommitment,
   ensureScenarioObjectives,
+  getScenarioArchiveKeyMoments,
   loadScenarioMeta,
   setBranchCommitment,
 } from '../lib/scenarioMeta';
@@ -254,6 +255,10 @@ export function SimulationView() {
   const gameplayProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
     [scenario],
+  );
+  const archiveKeyMoments = useMemo(
+    () => (scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta) : []),
+    [scenarioMeta],
   );
   const signatureArcState = useMemo(
     () => (
@@ -632,7 +637,7 @@ export function SimulationView() {
               confidence: bet.confidence,
               resolved: bet.resolved,
             })),
-            key_moment_count: scenarioMeta.archive.keyMoments.length,
+            key_moment_count: archiveKeyMoments.length,
           }
           : null,
         controls: {
@@ -1061,7 +1066,7 @@ export function SimulationView() {
               confidence: bet.confidence,
               resolved: bet.resolved,
             })),
-            key_moment_count: scenarioMeta.archive.keyMoments.length,
+            key_moment_count: archiveKeyMoments.length,
           }
           : null,
         controls: {

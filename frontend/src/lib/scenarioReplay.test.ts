@@ -11,6 +11,7 @@ import type {
 } from '../types';
 import {
   buildScenarioReplayUrl,
+  compactScenarioMetaForResultReplay,
   decodeScenarioReplayToken,
   encodeScenarioReplayToken,
   type ScenarioResultReplayPayload,
@@ -77,7 +78,13 @@ const scenarioMeta: ScenarioMeta = {
     goals: [],
   },
   archive: {
-    branchSnapshots: [],
+    branchSnapshots: [
+      {
+        branchId: 'branch-1',
+        title: 'Archive Branch',
+        probability: 1,
+      },
+    ],
     keyMoments: ['Moment 1'],
     profileId: 'law',
     dominantBranchTitle: 'Archive Branch',
@@ -146,6 +153,16 @@ const replayPayload: ScenarioResultReplayPayload = {
 };
 
 describe('scenarioReplay helpers', () => {
+  it('compacts scenario meta for replay by trimming archive summary duplicates', () => {
+    expect(compactScenarioMetaForResultReplay(scenarioMeta)).toEqual({
+      ...scenarioMeta,
+      archive: {
+        branchSnapshots: [],
+        keyMoments: ['Moment 1'],
+      },
+    });
+  });
+
   it('round-trips a scenario result replay token', async () => {
     const token = await encodeScenarioReplayToken(replayPayload);
     await expect(decodeScenarioReplayToken(token)).resolves.toEqual(replayPayload);

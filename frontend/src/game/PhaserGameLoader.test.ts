@@ -49,11 +49,33 @@ describe('shouldPreloadPhaserGame', () => {
     ).toBe(false);
   });
 
+  it('skips preloading on low-memory devices', () => {
+    expect(
+      shouldPreloadPhaserGame({
+        userAgent: 'Mozilla/5.0',
+        connection: { effectiveType: '4g' },
+        deviceMemory: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it('skips preloading on low-concurrency devices', () => {
+    expect(
+      shouldPreloadPhaserGame({
+        userAgent: 'Mozilla/5.0',
+        connection: { effectiveType: '4g' },
+        hardwareConcurrency: 2,
+      }),
+    ).toBe(false);
+  });
+
   it('allows preloading on normal connections', () => {
     expect(
       shouldPreloadPhaserGame({
         userAgent: 'Mozilla/5.0',
         connection: { effectiveType: '4g' },
+        deviceMemory: 8,
+        hardwareConcurrency: 8,
       }),
     ).toBe(true);
   });

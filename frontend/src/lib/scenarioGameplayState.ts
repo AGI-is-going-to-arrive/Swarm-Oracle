@@ -1,5 +1,4 @@
 import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
-import { isCounterplayCard } from '../components/gameplayCards';
 import type {
   ScenarioGameplayArchiveBranchSnapshot,
   ScenarioGameplayBet,
@@ -7,12 +6,18 @@ import type {
   ScenarioGameplayState,
 } from '../types';
 import {
+  deriveUsageDrivenScenarioState,
+  normalizeKeyMoments,
+  sortBetRecords,
+  sortUsageRecords,
+} from './scenarioGameplayDerivations';
+import {
   CARD_RULES,
   type CardUsageRecord,
   type ScenarioArchiveState,
   type ScenarioMeta,
   type StructuredBetRecord,
-  buildCardUsageMoment,
+  getScenarioArchiveKeyMoments,
   parseScenarioMoment,
   updateScenarioMeta,
 } from './scenarioMeta';
@@ -53,54 +58,6 @@ function normalizeUsageRecord(entry: ScenarioGameplayCardUsage): CardUsageRecord
   };
 }
 
-function sortUsageRecords(usages: CardUsageRecord[]): CardUsageRecord[] {
-  return [...usages].sort((a, b) => {
-    if (a.round !== b.round) return a.round - b.round;
-    if (a.usedAt !== b.usedAt) return a.usedAt.localeCompare(b.usedAt);
-    return a.cardId.localeCompare(b.cardId);
-  });
-}
-
-function deriveCardStateFromUsages(usages: CardUsageRecord[]) {
-  const sortedUsages = sortUsageRecords(usages);
-  let remainingPoints = 3;
-  let spentPoints = 0;
-  const cooldowns: ScenarioMeta['cooldowns'] = {};
-
-  for (const usage of sortedUsages) {
-    const rule = CARD_RULES[usage.cardId];
-    const cost = rule?.cost ?? usage.cost ?? 0;
-    remainingPoints = Math.max(0, remainingPoints - cost);
-    spentPoints += cost;
-    cooldowns[usage.cardId] = {
-      lastUsedRound: usage.round,
-      cooldownRounds: rule?.cooldownRounds ?? 0,
-    };
-  }
-
-  const counterplayUsages = sortedUsages.filter((usage) => isCounterplayCard(usage.cardId));
-  const keyMoments = sortedUsages.map((usage) => buildCardUsageMoment(usage.round, usage.cardId));
-  const lastUsage = sortedUsages.at(-1) ?? null;
-
-  return {
-    usages: sortedUsages,
-    director: {
-      maxPoints: 3,
-      remainingPoints,
-      spentPoints,
-      lastUpdatedAt: lastUsage?.usedAt,
-    },
-    cooldowns,
-    archive: {
-      profileId: lastUsage?.profileId ?? undefined,
-      updatedAt: lastUsage?.usedAt,
-      counterplayCardCount: counterplayUsages.length,
-      lastCounterplayCard: counterplayUsages.at(-1)?.cardId ?? null,
-      keyMoments,
-    },
-  };
-}
-
 function normalizeBetRecord(entry: ScenarioGameplayBet): StructuredBetRecord | null {
   const betId = (entry.bet_id || '').trim();
   const kind = entry.kind;
@@ -126,33 +83,6 @@ function normalizeBetRecord(entry: ScenarioGameplayBet): StructuredBetRecord | n
     placedAt,
     resolved: Boolean(entry.resolved),
   };
-}
-
-function sortBetRecords(bets: StructuredBetRecord[]): StructuredBetRecord[] {
-  return [...bets].sort((a, b) => {
-    if (a.placedAtRound !== b.placedAtRound) return a.placedAtRound - b.placedAtRound;
-    if (a.placedAt !== b.placedAt) return a.placedAt.localeCompare(b.placedAt);
-    return a.betId.localeCompare(b.betId);
-  });
-}
-
-function normalizeKeyMoments(keyMoments: string[] | undefined): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  for (const moment of keyMoments ?? []) {
-    if (typeof moment !== 'string') continue;
-    const trimmed = moment.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-
-  return normalized;
-}
-
-function mergeKeyMoments(localKeyMoments: string[], remoteKeyMoments: string[]): string[] {
-  return normalizeKeyMoments([...localKeyMoments, ...remoteKeyMoments]);
 }
 
 function stripCompatKeyMoments(
@@ -305,7 +235,7 @@ export function scenarioMetaToGameplayState(meta: ScenarioMeta): ScenarioGamepla
       })),
     },
     archive: {
-      key_moments: meta.archive.keyMoments,
+      key_moments: getScenarioArchiveKeyMoments(meta),
       branch_snapshots: meta.archive.branchSnapshots.map((snapshot) => ({
         branch_id: snapshot.branchId,
         title: snapshot.title,
@@ -347,12 +277,16 @@ export function mergeScenarioMetaWithGameplayState(
   const effectiveBranchSnapshots = authority.branchSnapshots
     ? remoteBranchSnapshots
     : meta.archive.branchSnapshots;
-  const derived = deriveCardStateFromUsages(effectiveUsages);
+  const derived = deriveUsageDrivenScenarioState(effectiveUsages);
   const compatKeyMoments = stripCompatKeyMoments(meta.archive.keyMoments, {
     removeCardMoments: authority.usage,
     removeBetMoments: authority.bets,
   });
   const effectiveKeyMoments = authority.keyMoments ? remoteKeyMoments : compatKeyMoments;
+  const compatOnlyKeyMoments = stripCompatKeyMoments(effectiveKeyMoments, {
+    removeCardMoments: true,
+    removeBetMoments: true,
+  });
 
   return {
     ...meta,
@@ -381,7 +315,7 @@ export function mergeScenarioMetaWithGameplayState(
       lastCounterplayCard: authority.usage
         ? derived.archive.lastCounterplayCard
         : (derived.archive.lastCounterplayCard ?? meta.archive.lastCounterplayCard),
-      keyMoments: mergeKeyMoments(effectiveKeyMoments, derived.archive.keyMoments),
+      keyMoments: compatOnlyKeyMoments,
       branchSnapshots: effectiveBranchSnapshots,
     },
   };

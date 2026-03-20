@@ -30,6 +30,7 @@ import {
 import { buildArchiveSummary, getDirectorStyleLabel } from '../lib/archiveSummary';
 import {
   ensureScenarioObjectivesInMemory,
+  getScenarioArchiveKeyMoments,
   loadScenarioMeta,
   mergeScenarioArchive,
   parseScenarioMoment,
@@ -67,6 +68,7 @@ import {
 } from '../components/gameplayCards';
 import {
   buildScenarioReplayUrl,
+  compactScenarioMetaForResultReplay,
   readScenarioReplayPayload,
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
@@ -413,8 +415,6 @@ export default function ResultView() {
           probability: branch.probability,
         }));
         workingMeta = mergeScenarioArchive(workingMeta, {
-          question: scenario.question,
-          sceneTheme: scenario.scene_theme,
           profileId: profile.id,
           keyMoments: Array.from(new Set([
             ...workingMeta.archive.keyMoments,
@@ -469,7 +469,7 @@ export default function ResultView() {
           branches: story.branches,
           usages: workingMeta.cards.usageLog,
           bets: workingMeta.betting.bets,
-          keyMomentCount: workingMeta.archive.keyMoments.length,
+          keyMomentCount: getScenarioArchiveKeyMoments(workingMeta).length,
           isDailyChallenge,
           profileId: profile.id,
           objectiveCompletedCount: completedObjectiveCount,
@@ -654,152 +654,188 @@ export default function ResultView() {
   const scenarioMeta = useMemo(() => {
     if (!storedScenarioMeta) return null;
 
-    const baseMeta = derivedScenarioMeta || replayPayload?.scenarioMeta
+    return derivedScenarioMeta || replayPayload?.scenarioMeta
       ? storedScenarioMeta
       : mergeResultScenarioMetaAuthority(
           storedScenarioMeta,
           scenario?.gameplay_state ?? null,
           scenario?.director_state ?? null,
         );
-
-    return {
-      ...baseMeta,
-      archive: {
-        ...baseMeta.archive,
-        profileId:
-          (
-            baseMeta.archive.profileId
-            ?? campaignScenarioSummary?.profile_id
-            ?? inferredProfile?.id
-          ) as typeof baseMeta.archive.profileId,
-        mostUsedCard:
-          (
-            campaignScenarioSummary?.most_used_card
-            ?? baseMeta.archive.mostUsedCard
-            ?? null
-          ) as typeof baseMeta.archive.mostUsedCard,
-        bettingHit:
-          campaignScenarioSummary?.betting_hit
-          ?? baseMeta.archive.bettingHit
-          ?? null,
-        archiveGrade:
-          (
-            campaignScenarioSummary?.archive_grade
-            ?? baseMeta.archive.archiveGrade
-            ?? null
-          ) as typeof baseMeta.archive.archiveGrade,
-        profileResonance:
-          campaignScenarioSummary?.profile_resonance
-          ?? baseMeta.archive.profileResonance
-          ?? null,
-        objectiveCompletedCount:
-          campaignScenarioSummary?.objective_completed_count
-          ?? baseMeta.archive.objectiveCompletedCount
-          ?? null,
-        objectiveTotalCount:
-          campaignScenarioSummary?.objective_total_count
-          ?? baseMeta.archive.objectiveTotalCount
-          ?? null,
-        commitmentOutcome:
-          campaignScenarioSummary?.commitment_outcome
-          ?? baseMeta.archive.commitmentOutcome
-          ?? null,
-      },
-    };
-  }, [campaignScenarioSummary, derivedScenarioMeta, inferredProfile?.id, replayPayload?.scenarioMeta, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
+  }, [derivedScenarioMeta, replayPayload?.scenarioMeta, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
+  const resolvedProfileId =
+    (
+      campaignScenarioSummary?.profile_id
+      ?? inferredProfile?.id
+      ?? scenarioMeta?.archive.profileId
+      ?? null
+    ) as typeof scenarioMeta extends null ? null : ScenarioMeta['archive']['profileId'] | null;
   const gameplayProfileLabel =
-    scenarioMeta?.archive.profileId
+    resolvedProfileId
       ? getGameplayProfileLabel(
-          scenarioMeta.archive.profileId as Parameters<typeof getGameplayProfileLabel>[0],
+          resolvedProfileId as Parameters<typeof getGameplayProfileLabel>[0],
           isZh,
         )
       : null;
-  const gameplayProfileHooks = scenarioMeta?.archive.profileId
+  const gameplayProfileHooks = resolvedProfileId
     ? getGameplayProfileSignatureHooks(
-        scenarioMeta.archive.profileId as Parameters<typeof getGameplayProfileSignatureHooks>[0],
+        resolvedProfileId as Parameters<typeof getGameplayProfileSignatureHooks>[0],
         isZh,
       )
     : [];
-  const dominantBranch = useMemo(() => (
-    scenarioMeta?.archive.dominantBranchTitle
-      ? branches.find((branch) => branch.title === scenarioMeta.archive.dominantBranchTitle) ?? null
-      : null
-  ), [branches, scenarioMeta?.archive.dominantBranchTitle]);
+  const dominantBranchFromStory = useMemo(
+    () => [...branches].sort((a, b) => b.probability - a.probability)[0] ?? null,
+    [branches],
+  );
   const hasLocalDirectorState = Boolean(
     scenarioMeta?.director.lastUpdatedAt
     || (scenarioMeta?.director.spentPoints ?? 0) > 0
     || (scenarioMeta?.cards.usageLog.length ?? 0) > 0
     || (scenarioMeta?.betting.bets.length ?? 0) > 0,
   );
-  const profileResonanceLabel = scenarioMeta?.archive.profileResonance
-    ? t(`result.archive_resonance_${scenarioMeta.archive.profileResonance}`)
-    : t('result.archive_unset');
-  const challengeFeedbackLabel = challengeProgress?.profileResonance
-    ? `${gameplayProfileLabel ?? ''} · ${t(`result.archive_resonance_${challengeProgress.profileResonance}`)}`
-    : null;
-  const directorStyleLabel = scenarioMeta?.archive.directorStyleTag
-    ? getDirectorStyleLabel(
-        scenarioMeta.archive.directorStyleTag as Parameters<typeof getDirectorStyleLabel>[0],
-        isZh,
-      )
-    : null;
-  const signatureArcState = useMemo(() => (
-    scenarioMeta?.archive.profileId
-      ? getGameplaySignatureArcState(
-          scenarioMeta.archive.profileId as Parameters<typeof getGameplaySignatureArcState>[0],
-          scenarioMeta.cards.usageLog,
-          isZh,
-        )
-      : null
-  ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog]);
-  const systemTracks = useMemo(() => (
-    scenarioMeta?.archive.profileId
-      ? getScenarioSystemTrackState(
-          scenarioMeta.archive.profileId as Parameters<typeof getScenarioSystemTrackState>[0],
-          scenarioMeta.cards.usageLog,
-          scenarioMeta.commitment,
-          isZh,
-        )
-      : null
-  ), [isZh, scenarioMeta?.archive.profileId, scenarioMeta?.cards.usageLog, scenarioMeta?.commitment]);
+  const signatureArcState = useMemo(() => {
+    if (!scenarioMeta || !resolvedProfileId) return null;
+    return getGameplaySignatureArcState(
+      resolvedProfileId as Parameters<typeof getGameplaySignatureArcState>[0],
+      scenarioMeta.cards.usageLog,
+      isZh,
+    );
+  }, [isZh, resolvedProfileId, scenarioMeta?.cards.usageLog]);
+  const systemTracks = useMemo(() => {
+    if (!scenarioMeta || !resolvedProfileId) return null;
+    return getScenarioSystemTrackState(
+      resolvedProfileId as Parameters<typeof getScenarioSystemTrackState>[0],
+      scenarioMeta.cards.usageLog,
+      scenarioMeta.commitment,
+      isZh,
+    );
+  }, [isZh, resolvedProfileId, scenarioMeta?.cards.usageLog, scenarioMeta?.commitment]);
   const evaluatedObjectives = useMemo(() => (
     scenarioMeta
       ? evaluateDirectorObjectives({
           objectives: scenarioMeta.objectives.goals,
           meta: scenarioMeta,
-          dominantBranch,
+          dominantBranch: dominantBranchFromStory,
           isZh,
           isFinal: true,
         })
       : []
-  ), [dominantBranch, isZh, scenarioMeta]);
+  ), [dominantBranchFromStory, isZh, scenarioMeta]);
   const completedObjectiveCount = useMemo(
     () => countCompletedObjectives(evaluatedObjectives),
     [evaluatedObjectives],
   );
-  const commitmentOutcomeLabel = scenarioMeta?.archive.commitmentOutcome
-    ? scenarioMeta.archive.commitmentOutcome === 'hit'
+  const archiveKeyMoments = useMemo(
+    () => (scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta) : []),
+    [scenarioMeta],
+  );
+  const displayBranchSnapshots = useMemo(() => {
+    const storySnapshots = storyData?.branches.map((branch) => ({
+      branchId: branch.id,
+      title: branch.title,
+      probability: branch.probability,
+    })) ?? [];
+
+    if (storySnapshots.length > 0) {
+      return storySnapshots;
+    }
+
+    return scenarioMeta?.archive.branchSnapshots ?? [];
+  }, [scenarioMeta?.archive.branchSnapshots, storyData?.branches]);
+  const localCommitmentOutcome = !scenarioMeta?.commitment.active
+    ? null
+    : dominantBranchFromStory?.id
+      ? dominantBranchFromStory.id === scenarioMeta.commitment.branchId
+        ? 'hit'
+        : 'miss'
+      : scenarioMeta.archive.commitmentOutcome ?? null;
+  const localArchiveSummary = useMemo(() => {
+    if (!scenarioMeta) return null;
+    return buildArchiveSummary({
+      branches,
+      usages: scenarioMeta.cards.usageLog,
+      bets: scenarioMeta.betting.bets,
+      keyMomentCount: archiveKeyMoments.length,
+      isDailyChallenge,
+      profileId: resolvedProfileId ?? undefined,
+      objectiveCompletedCount: completedObjectiveCount,
+      objectiveTotalCount: evaluatedObjectives.length,
+      commitmentOutcome: localCommitmentOutcome,
+    });
+  }, [
+    archiveKeyMoments.length,
+    branches,
+    completedObjectiveCount,
+    evaluatedObjectives.length,
+    isDailyChallenge,
+    localCommitmentOutcome,
+    resolvedProfileId,
+    scenarioMeta,
+  ]);
+  const displayArchive = useMemo(() => {
+    if (!scenarioMeta) return null;
+    return {
+      profileId: resolvedProfileId ?? null,
+      dominantBranchTitle: localArchiveSummary?.dominantBranchTitle ?? scenarioMeta.archive.dominantBranchTitle ?? null,
+      dominantTone: localArchiveSummary?.dominantTone ?? scenarioMeta.archive.dominantTone ?? null,
+      mostUsedCard: campaignScenarioSummary?.most_used_card ?? localArchiveSummary?.mostUsedCard ?? scenarioMeta.archive.mostUsedCard ?? null,
+      bettingHit: campaignScenarioSummary?.betting_hit ?? localArchiveSummary?.bettingHit ?? scenarioMeta.archive.bettingHit ?? null,
+      archiveGrade: campaignScenarioSummary?.archive_grade ?? localArchiveSummary?.archiveGrade ?? scenarioMeta.archive.archiveGrade ?? null,
+      directorStyleTag: localArchiveSummary?.directorStyleTag ?? scenarioMeta.archive.directorStyleTag ?? null,
+      profileResonance: campaignScenarioSummary?.profile_resonance ?? localArchiveSummary?.profileResonance ?? scenarioMeta.archive.profileResonance ?? null,
+      objectiveCompletedCount: campaignScenarioSummary?.objective_completed_count ?? completedObjectiveCount,
+      objectiveTotalCount: campaignScenarioSummary?.objective_total_count ?? evaluatedObjectives.length,
+      commitmentOutcome: campaignScenarioSummary?.commitment_outcome ?? localCommitmentOutcome,
+      counterplayCardCount: localArchiveSummary?.counterplayCardCount ?? scenarioMeta.archive.counterplayCardCount ?? 0,
+      lastCounterplayCard: localArchiveSummary?.lastCounterplayCard ?? scenarioMeta.archive.lastCounterplayCard ?? null,
+      riskValue: systemTracks?.riskValue ?? scenarioMeta.archive.riskValue ?? null,
+      resourceValue: systemTracks?.resourceValue ?? scenarioMeta.archive.resourceValue ?? null,
+    };
+  }, [
+    campaignScenarioSummary,
+    completedObjectiveCount,
+    evaluatedObjectives.length,
+    localArchiveSummary,
+    localCommitmentOutcome,
+    resolvedProfileId,
+    scenarioMeta,
+    systemTracks?.resourceValue,
+    systemTracks?.riskValue,
+  ]);
+  const profileResonanceLabel = displayArchive?.profileResonance
+    ? t(`result.archive_resonance_${displayArchive.profileResonance}`)
+    : t('result.archive_unset');
+  const challengeFeedbackLabel = challengeProgress?.profileResonance
+    ? `${gameplayProfileLabel ?? ''} · ${t(`result.archive_resonance_${challengeProgress.profileResonance}`)}`
+    : null;
+  const directorStyleLabel = displayArchive?.directorStyleTag
+    ? getDirectorStyleLabel(
+        displayArchive.directorStyleTag as Parameters<typeof getDirectorStyleLabel>[0],
+        isZh,
+      )
+    : null;
+  const commitmentOutcomeLabel = displayArchive?.commitmentOutcome
+    ? displayArchive.commitmentOutcome === 'hit'
       ? (isZh ? '承诺命中' : 'Commitment hit')
-      : scenarioMeta.archive.commitmentOutcome === 'miss'
+      : displayArchive.commitmentOutcome === 'miss'
         ? (isZh ? '承诺落空' : 'Commitment missed')
         : (isZh ? '承诺进行中' : 'Commitment pending')
     : (isZh ? '未承诺' : 'No commitment');
-  const lastCounterplayCardLabel = scenarioMeta?.archive.lastCounterplayCard
+  const lastCounterplayCardLabel = displayArchive?.lastCounterplayCard
     ? (
       isZh
         ? getGameplayCardDefinition(
-            scenarioMeta.archive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
+            displayArchive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
           ).labelZh
         : getGameplayCardDefinition(
-            scenarioMeta.archive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
+            displayArchive.lastCounterplayCard as Parameters<typeof getGameplayCardDefinition>[0],
           ).labelEn
     )
     : t('result.archive_no_counterplay');
   const counterplaySummaryLabel =
-    !scenarioMeta || (scenarioMeta.archive.counterplayCardCount ?? 0) === 0
+    !displayArchive || (displayArchive.counterplayCardCount ?? 0) === 0
       ? t('result.archive_no_counterplay')
       : t('result.archive_counterplay_count', {
-          count: scenarioMeta.archive.counterplayCardCount ?? 0,
+          count: displayArchive.counterplayCardCount ?? 0,
         });
   const replaySnapshot = useMemo<ScenarioResultReplayPayload | null>(() => {
     if (!scenario || !storyData || !scenarioMeta) return null;
@@ -808,7 +844,7 @@ export default function ResultView() {
       storyData,
       agents,
       predictions,
-      scenarioMeta,
+      scenarioMeta: compactScenarioMetaForResultReplay(scenarioMeta),
       campaignScenarioSummary,
       campaignSummary,
       isDailyChallenge,
@@ -848,9 +884,9 @@ export default function ResultView() {
     profileHooks: gameplayProfileHooks,
     resonanceLabel: profileResonanceLabel,
     directorStyleLabel,
-    dominantBranchTitle: scenarioMeta?.archive.dominantBranchTitle ?? null,
+    dominantBranchTitle: displayArchive?.dominantBranchTitle ?? null,
     counterplaySummary:
-      scenarioMeta && (scenarioMeta.archive.counterplayCardCount ?? 0) > 0
+      displayArchive && (displayArchive.counterplayCardCount ?? 0) > 0
         ? `${counterplaySummaryLabel} · ${t('result.archive_last_counterplay')}: ${lastCounterplayCardLabel}`
         : null,
     commitmentSummary:
@@ -864,8 +900,8 @@ export default function ResultView() {
     gameplayProfileHooks,
     profileResonanceLabel,
     directorStyleLabel,
-    scenarioMeta?.archive.dominantBranchTitle,
-    scenarioMeta?.archive.counterplayCardCount,
+    displayArchive?.dominantBranchTitle,
+    displayArchive?.counterplayCardCount,
     scenarioMeta?.commitment.active,
     scenarioMeta?.commitment.branchTitle,
     counterplaySummaryLabel,
@@ -875,15 +911,15 @@ export default function ResultView() {
     t,
   ]);
   const betOutcomeContext = useMemo(() => ({
-    dominantBranchId: dominantBranch?.id ?? null,
-    dominantBranchTitle: scenarioMeta?.archive.dominantBranchTitle ?? null,
-    dominantTone: scenarioMeta?.archive.dominantTone ?? null,
-    profileResonance: scenarioMeta?.archive.profileResonance ?? null,
+    dominantBranchId: dominantBranchFromStory?.id ?? null,
+    dominantBranchTitle: displayArchive?.dominantBranchTitle ?? null,
+    dominantTone: displayArchive?.dominantTone ?? null,
+    profileResonance: displayArchive?.profileResonance ?? null,
   }), [
-    dominantBranch?.id,
-    scenarioMeta?.archive.dominantBranchTitle,
-    scenarioMeta?.archive.dominantTone,
-    scenarioMeta?.archive.profileResonance,
+    dominantBranchFromStory?.id,
+    displayArchive?.dominantBranchTitle,
+    displayArchive?.dominantTone,
+    displayArchive?.profileResonance,
   ]);
   const localBetOutcomes = useMemo(() => (
     scenarioMeta?.betting.bets.map((bet) => ({
@@ -892,8 +928,8 @@ export default function ResultView() {
     })) ?? []
   ), [betOutcomeContext, scenarioMeta?.betting.bets]);
   const formattedArchiveKeyMoments = useMemo(
-    () => scenarioMeta?.archive.keyMoments.map((moment) => formatArchiveKeyMoment(moment, isZh)) ?? [],
-    [isZh, scenarioMeta?.archive.keyMoments],
+    () => scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta).map((moment) => formatArchiveKeyMoment(moment, isZh)) : [],
+    [isZh, scenarioMeta],
   );
   const newlyUnlockedBadges = useMemo(() => (
     campaignSummary?.newly_unlocked_badges.map((badge) => ({
@@ -930,28 +966,22 @@ export default function ResultView() {
         branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
         predictions_count: predictions.length,
         has_unscored: hasUnscored,
-        archive_summary: storyData && scenarioMeta
+        archive_summary: storyData && scenarioMeta && displayArchive
           ? {
-              most_used_card: scenarioMeta.archive.mostUsedCard ?? null,
-              betting_hit: scenarioMeta.archive.bettingHit ?? null,
-              archive_grade: scenarioMeta.archive.archiveGrade ?? null,
-              dominant_branch_title: scenarioMeta.archive.dominantBranchTitle ?? null,
-              dominant_tone: scenarioMeta.archive.dominantTone ?? null,
-              profile_id: scenarioMeta.archive.profileId ?? null,
-              profile_resonance: scenarioMeta.archive.profileResonance ?? null,
-              objective_completed_count:
-                evaluatedObjectives.length > 0
-                  ? completedObjectiveCount
-                  : scenarioMeta.archive.objectiveCompletedCount ?? 0,
-              objective_total_count:
-                evaluatedObjectives.length > 0
-                  ? evaluatedObjectives.length
-                  : scenarioMeta.archive.objectiveTotalCount ?? 0,
-              commitment_outcome: scenarioMeta.archive.commitmentOutcome ?? null,
-              counterplay_card_count: scenarioMeta.archive.counterplayCardCount ?? 0,
-              last_counterplay_card: scenarioMeta.archive.lastCounterplayCard ?? null,
-              risk_value: systemTracks?.riskValue ?? scenarioMeta.archive.riskValue ?? null,
-              resource_value: systemTracks?.resourceValue ?? scenarioMeta.archive.resourceValue ?? null,
+              most_used_card: displayArchive.mostUsedCard ?? null,
+              betting_hit: displayArchive.bettingHit ?? null,
+              archive_grade: displayArchive.archiveGrade ?? null,
+              dominant_branch_title: displayArchive.dominantBranchTitle ?? null,
+              dominant_tone: displayArchive.dominantTone ?? null,
+              profile_id: displayArchive.profileId ?? null,
+              profile_resonance: displayArchive.profileResonance ?? null,
+              objective_completed_count: displayArchive.objectiveCompletedCount ?? 0,
+              objective_total_count: displayArchive.objectiveTotalCount ?? 0,
+              commitment_outcome: displayArchive.commitmentOutcome ?? null,
+              counterplay_card_count: displayArchive.counterplayCardCount ?? 0,
+              last_counterplay_card: displayArchive.lastCounterplayCard ?? null,
+              risk_value: displayArchive.riskValue ?? null,
+              resource_value: displayArchive.resourceValue ?? null,
               completed_daily_challenge: isDailyChallenge,
             }
           : null,
@@ -964,7 +994,7 @@ export default function ResultView() {
           outcome,
         })),
         result_key_moments: formattedArchiveKeyMoments,
-        result_branch_snapshots: scenarioMeta?.archive.branchSnapshots.map((snapshot) => ({
+        result_branch_snapshots: displayBranchSnapshots.map((snapshot) => ({
           branch_id: snapshot.branchId,
           title: snapshot.title,
           probability: snapshot.probability,
@@ -1006,7 +1036,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
 
   if (loading) {
     return (
@@ -1031,13 +1061,13 @@ export default function ResultView() {
     );
   }
 
-  const mostUsedCardLabel = scenarioMeta?.archive.mostUsedCard
+  const mostUsedCardLabel = displayArchive?.mostUsedCard
     ? (isZh
       ? getGameplayCardDefinition(
-          scenarioMeta.archive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
+          displayArchive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
         ).labelZh
       : getGameplayCardDefinition(
-          scenarioMeta.archive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
+          displayArchive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
         ).labelEn)
     : t('result.archive_no_cards');
   const bettingHitLabel =
@@ -1047,13 +1077,13 @@ export default function ResultView() {
         ? resolvedBetCount === 0
           ? t('result.archive_pending')
           : t('result.archive_hit_ratio', { hit: hitBetCount, total: scenarioMeta.betting.bets.length })
-        : scenarioMeta.archive.bettingHit == null
+        : displayArchive?.bettingHit == null
           ? t('result.archive_no_bets')
-          : scenarioMeta.archive.bettingHit
+          : displayArchive.bettingHit
             ? t('result.archive_bet_hit')
             : t('result.archive_bet_miss');
-  const dominantToneLabel = scenarioMeta?.archive.dominantTone
-    ? getEndingToneLabel(scenarioMeta.archive.dominantTone, isZh)
+  const dominantToneLabel = displayArchive?.dominantTone
+    ? getEndingToneLabel(displayArchive.dominantTone, isZh)
     : t('result.archive_unset');
 
   return (
@@ -1310,7 +1340,7 @@ export default function ResultView() {
                 })}
               </span>
             )}
-            {scenarioMeta.archive.bettingHit === true && (
+            {displayArchive?.bettingHit === true && (
               <span className="archive-chip archive-chip--winner">
                 <img src={getGameplayBadgeSrc('bet_winner')} alt="" aria-hidden="true" />
                 <span>{t('result.archive_bet_hit')}</span>
@@ -1335,7 +1365,7 @@ export default function ResultView() {
           <div className="archive-summary-grid">
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_dominant_branch')}</span>
-              <strong>{scenarioMeta.archive.dominantBranchTitle ?? t('result.archive_unset')}</strong>
+              <strong>{displayArchive?.dominantBranchTitle ?? t('result.archive_unset')}</strong>
             </div>
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_dominant_tone')}</span>
@@ -1352,7 +1382,7 @@ export default function ResultView() {
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_counterplay')}</span>
               <strong>{counterplaySummaryLabel}</strong>
-              {(scenarioMeta.archive.counterplayCardCount ?? 0) > 0 && (
+              {(displayArchive?.counterplayCardCount ?? 0) > 0 && (
                 <small>
                   {t('result.archive_last_counterplay')}
                   {': '}
@@ -1362,7 +1392,7 @@ export default function ResultView() {
             </div>
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_grade')}</span>
-              <strong>{scenarioMeta.archive.archiveGrade ?? 'C'}</strong>
+              <strong>{displayArchive?.archiveGrade ?? 'C'}</strong>
             </div>
             <div className="archive-summary-card">
               <span className="archive-summary-card__label">{t('result.archive_resonance')}</span>
@@ -1451,7 +1481,7 @@ export default function ResultView() {
             </div>
           )}
 
-          {scenarioMeta.archive.keyMoments.length > 0 && (
+          {formattedArchiveKeyMoments.length > 0 && (
             <div className="result-archive__section">
               <h3>{t('result.archive_moments_section')}</h3>
               <ul className="archive-moments">
@@ -1462,11 +1492,11 @@ export default function ResultView() {
             </div>
           )}
 
-          {scenarioMeta.archive.branchSnapshots.length > 0 && (
+          {displayBranchSnapshots.length > 0 && (
             <div className="result-archive__section">
               <h3>{t('result.archive_branches_section')}</h3>
               <div className="archive-list">
-                {scenarioMeta.archive.branchSnapshots.map((snapshot) => (
+                {displayBranchSnapshots.map((snapshot) => (
                   <div key={snapshot.branchId} className="archive-item">
                     <strong>{snapshot.title}</strong>
                     <span>{t('result.archive_branch_probability', { percent: Math.round(snapshot.probability * 100) })}</span>

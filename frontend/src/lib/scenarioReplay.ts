@@ -6,7 +6,10 @@ import type {
   Scenario,
   StoryData,
 } from '../types';
-import type { ScenarioMeta } from './scenarioMeta';
+import {
+  type ScenarioMeta,
+  getScenarioArchiveKeyMoments,
+} from './scenarioMeta';
 
 const REPLAY_QUERY_KEY = 'replay';
 const REPLAY_KIND = 'scenario_result_v1';
@@ -20,6 +23,16 @@ export interface ScenarioResultReplayPayload {
   campaignScenarioSummary?: CampaignScenarioSummary | null;
   campaignSummary?: CampaignFinalizeResult | null;
   isDailyChallenge?: boolean;
+}
+
+export function compactScenarioMetaForResultReplay(meta: ScenarioMeta): ScenarioMeta {
+  return {
+    ...meta,
+    archive: {
+      branchSnapshots: [],
+      keyMoments: getScenarioArchiveKeyMoments(meta),
+    },
+  };
 }
 
 function normalizeOrigin(origin: string): string {

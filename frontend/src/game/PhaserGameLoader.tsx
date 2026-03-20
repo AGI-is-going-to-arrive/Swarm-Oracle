@@ -23,6 +23,8 @@ interface NavigatorConnectionLike {
 interface NavigatorLike {
   userAgent?: string;
   connection?: NavigatorConnectionLike;
+  deviceMemory?: number;
+  hardwareConcurrency?: number;
 }
 
 interface PhaserPreloadEnvironmentLike {
@@ -52,6 +54,25 @@ export function shouldPreloadPhaserGame(
 
   const effectiveType = connection?.effectiveType?.toLowerCase();
   if (effectiveType === 'slow-2g' || effectiveType === '2g') {
+    return false;
+  }
+
+  // Skip eager Phaser warmup on constrained devices. The Theater still
+  // loads on demand once the user actually opens it, but we avoid paying
+  // the preheat cost up front on low-resource hardware.
+  if (
+    typeof targetNavigator.deviceMemory === 'number'
+    && targetNavigator.deviceMemory > 0
+    && targetNavigator.deviceMemory <= 2
+  ) {
+    return false;
+  }
+
+  if (
+    typeof targetNavigator.hardwareConcurrency === 'number'
+    && targetNavigator.hardwareConcurrency > 0
+    && targetNavigator.hardwareConcurrency <= 2
+  ) {
     return false;
   }
 

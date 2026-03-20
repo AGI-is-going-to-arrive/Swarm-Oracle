@@ -1,6 +1,13 @@
 import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
 import type { EndingToneId } from './predictionBetting';
 import type { ProfileResonance } from './archiveSummary';
+import {
+  deriveUsageDrivenScenarioState,
+  mergeKeyMomentGroups,
+  normalizeKeyMoments,
+  sortBetRecords,
+  sortUsageRecords,
+} from './scenarioGameplayDerivations';
 import { CONTRACT_CARD_RULES } from './gameplayContract';
 
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
@@ -50,8 +57,6 @@ export interface BranchCommitmentState {
 }
 
 export interface ScenarioArchiveState {
-  question?: string;
-  sceneTheme?: string | null;
   profileId?: GameplayProfileId;
   branchSnapshots: Array<{ branchId: string; title: string; probability: number }>;
   keyMoments: string[];
@@ -96,9 +101,11 @@ export interface ScenarioMeta {
   archive: ScenarioArchiveState;
 }
 
+type PersistedScenarioMeta = Partial<ScenarioMeta>;
+
 interface RootStore {
   version: number;
-  scenarios: Record<string, ScenarioMeta>;
+  scenarios: Record<string, PersistedScenarioMeta>;
 }
 
 export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
@@ -188,6 +195,93 @@ function createDefaultScenarioMeta(): ScenarioMeta {
   };
 }
 
+function stripGameplayKeyMoments(
+  keyMoments: string[],
+  options: {
+    removeCardMoments: boolean;
+    removeBetMoments: boolean;
+  },
+): string[] {
+  if (!options.removeCardMoments && !options.removeBetMoments) {
+    return keyMoments;
+  }
+
+  return keyMoments.filter((moment) => {
+    const parsed = parseScenarioMoment(moment);
+    if (!parsed) return true;
+    if (options.removeCardMoments && parsed.kind === 'card') return false;
+    if (options.removeBetMoments && parsed.kind === 'bet') return false;
+    return true;
+  });
+}
+
+export function getScenarioArchiveKeyMoments(
+  meta: Pick<ScenarioMeta, 'cards' | 'betting' | 'archive'>,
+): string[] {
+  const compatKeyMoments = stripGameplayKeyMoments(
+    normalizeKeyMoments(meta.archive.keyMoments),
+    {
+      removeCardMoments: true,
+      removeBetMoments: true,
+    },
+  );
+
+  return mergeKeyMomentGroups(
+    compatKeyMoments,
+    meta.cards.usageLog.map((usage) => buildCardUsageMoment(usage.round, usage.cardId)),
+    meta.betting.bets.map((bet) => buildBetMoment(bet.placedAtRound, bet.targetLabel)),
+  );
+}
+
+function deriveArchiveUpdatedAt(
+  meta: Pick<ScenarioMeta, 'cards' | 'betting' | 'commitment' | 'archive'>,
+  usageUpdatedAt: string | null,
+): string | undefined {
+  const timestamps = [
+    usageUpdatedAt,
+    ...meta.betting.bets.map((bet) => bet.placedAt),
+    meta.commitment.committedAt ?? null,
+    meta.archive.updatedAt ?? null,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+  return timestamps.sort().at(-1);
+}
+
+function compactScenarioMetaForStorage(meta: ScenarioMeta): PersistedScenarioMeta {
+  return {
+    cards: {
+      usageLog: meta.cards.usageLog,
+    },
+    betting: {
+      bets: meta.betting.bets,
+    },
+    commitment: meta.commitment,
+    objectives: {
+      generatedForQuestion: meta.objectives.generatedForQuestion ?? null,
+      generatedForProfile: meta.objectives.generatedForProfile ?? null,
+      goals: meta.objectives.goals,
+      lastUpdatedAt: meta.objectives.lastUpdatedAt,
+    },
+    archive: {
+      branchSnapshots: meta.archive.branchSnapshots,
+      keyMoments: stripGameplayKeyMoments(
+        normalizeKeyMoments(meta.archive.keyMoments),
+        { removeCardMoments: true, removeBetMoments: true },
+      ),
+      mostUsedCard: meta.archive.mostUsedCard ?? null,
+      bettingHit: meta.archive.bettingHit ?? null,
+      archiveGrade: meta.archive.archiveGrade ?? null,
+      dominantBranchTitle: meta.archive.dominantBranchTitle ?? null,
+      dominantTone: meta.archive.dominantTone ?? null,
+      directorStyleTag: meta.archive.directorStyleTag ?? null,
+      profileResonance: meta.archive.profileResonance ?? null,
+      objectiveCompletedCount: meta.archive.objectiveCompletedCount ?? null,
+      objectiveTotalCount: meta.archive.objectiveTotalCount ?? null,
+      commitmentOutcome: meta.archive.commitmentOutcome ?? null,
+    },
+  };
+}
+
 export function mergeScenarioArchive(
   meta: ScenarioMeta,
   patch: Partial<ScenarioArchiveState>,
@@ -202,21 +296,49 @@ export function mergeScenarioArchive(
   };
 }
 
-function hydrateScenarioMeta(raw: Partial<ScenarioMeta> | null | undefined): ScenarioMeta {
+function hydrateScenarioMeta(raw: PersistedScenarioMeta | null | undefined): ScenarioMeta {
   const base = createDefaultScenarioMeta();
   if (!raw) return base;
 
+  const usageLog = sortUsageRecords(raw.cards?.usageLog ?? base.cards.usageLog);
+  const bets = sortBetRecords(raw.betting?.bets ?? base.betting.bets);
+  const derivedUsage = deriveUsageDrivenScenarioState(usageLog);
+  const rawKeyMoments = normalizeKeyMoments(raw.archive?.keyMoments ?? base.archive.keyMoments);
+  const compatKeyMoments = stripGameplayKeyMoments(rawKeyMoments, {
+    removeCardMoments: true,
+    removeBetMoments: true,
+  });
+  const archiveUpdatedAt = deriveArchiveUpdatedAt(
+    {
+      cards: { usageLog },
+      betting: { bets },
+      commitment: {
+        ...base.commitment,
+        ...raw.commitment,
+      },
+      archive: {
+        ...base.archive,
+        ...raw.archive,
+      },
+    },
+    derivedUsage.archive.updatedAt ?? null,
+  );
+
   return {
     director: {
-      ...base.director,
-      ...raw.director,
+      ...(usageLog.length > 0
+        ? derivedUsage.director
+        : {
+            ...base.director,
+            ...raw.director,
+          }),
     },
-    cooldowns: raw.cooldowns ?? base.cooldowns,
+    cooldowns: usageLog.length > 0 ? derivedUsage.cooldowns : (raw.cooldowns ?? base.cooldowns),
     cards: {
-      usageLog: raw.cards?.usageLog ?? base.cards.usageLog,
+      usageLog,
     },
     betting: {
-      bets: raw.betting?.bets ?? base.betting.bets,
+      bets,
     },
     commitment: {
       ...base.commitment,
@@ -231,7 +353,17 @@ function hydrateScenarioMeta(raw: Partial<ScenarioMeta> | null | undefined): Sce
       ...base.archive,
       ...raw.archive,
       branchSnapshots: raw.archive?.branchSnapshots ?? base.archive.branchSnapshots,
-      keyMoments: raw.archive?.keyMoments ?? base.archive.keyMoments,
+      keyMoments: compatKeyMoments,
+      profileId: derivedUsage.archive.profileId ?? raw.archive?.profileId ?? base.archive.profileId,
+      counterplayCardCount:
+        usageLog.length > 0
+          ? derivedUsage.archive.counterplayCardCount
+          : (raw.archive?.counterplayCardCount ?? base.archive.counterplayCardCount),
+      lastCounterplayCard:
+        usageLog.length > 0
+          ? derivedUsage.archive.lastCounterplayCard
+          : (raw.archive?.lastCounterplayCard ?? base.archive.lastCounterplayCard),
+      updatedAt: archiveUpdatedAt,
     },
   };
 }
@@ -263,9 +395,9 @@ export function loadScenarioMeta(scenarioId: string): ScenarioMeta {
 
 export function saveScenarioMeta(scenarioId: string, next: ScenarioMeta): ScenarioMeta {
   const store = safeReadStore();
-  store.scenarios[scenarioId] = next;
+  store.scenarios[scenarioId] = compactScenarioMetaForStorage(next);
   safeWriteStore(store);
-  return next;
+  return loadScenarioMeta(scenarioId);
 }
 
 export function updateScenarioMeta(
@@ -326,7 +458,6 @@ export function applyCardUsage(scenarioId: string, usage: CardUsageInput): Scena
         ...current.archive,
         profileId: usage.profileId,
         updatedAt: usage.usedAt,
-        keyMoments: [...current.archive.keyMoments, buildCardUsageMoment(usage.round, usage.cardId)],
       },
     };
   });
@@ -341,7 +472,6 @@ export function placeBet(scenarioId: string, bet: StructuredBetRecord): Scenario
     archive: {
       ...current.archive,
       updatedAt: bet.placedAt,
-      keyMoments: [...current.archive.keyMoments, buildBetMoment(bet.placedAtRound, bet.targetLabel)],
     },
   }));
 }

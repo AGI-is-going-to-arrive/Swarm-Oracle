@@ -78,8 +78,8 @@ npm run build
 npm run assets:provenance:check
 ```
 
-- 当前 targeted frontend set：`100 passed`
-- 这组扩展回归适用于本轮这类“高级干预 + 结果页 authority”改动；当前 clean HEAD 已实跑通过。
+- 当前 targeted frontend set：`104 passed`
+- 这组扩展回归适用于本轮这类“高级干预 + 结果页 authority + scenarioMeta/replay 收口”改动；当前实跑通过 `104 passed`。
 - 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
 
 ## Release Signoff
@@ -136,11 +136,11 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - `SWARM_DEBATE_STALL_TIMEOUT_MS`
 - `SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
 
-最新通过工件：
+最近一次 clean runtime 基线工件：
 
-- current worktree：`frontend/output/e2e/2026-03-20-current-head-post-fixes-signoff/summary.json`
-- clean HEAD baseline：`frontend/output/e2e/current-head-signoff/summary.json`
-- current worktree 这份 `summary.json` 绑定的是 dirty worktree；如果要留 clean 证据，先提交后再复跑一次。
+- `frontend/output/e2e/current-head-audit-signoff/summary.json`
+- 这份工件绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
+- 引用 signoff 结果时，以 `summary.json` 里的 git `branch / commit / worktree` 为准
 
 ## CI
 

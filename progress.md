@@ -216,8 +216,44 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `page.controls.can_open_leaderboard`
     - `page.controls.can_score_predictions`
     - `page.controls.active_modal`
-    - `page.controls.expanded_branch_id`
-    - `page.branches[]`（含 `can_expand_story / expanded`）
+  - `page.controls.expanded_branch_id`
+  - `page.branches[]`（含 `can_expand_story / expanded`）
+
+## 2026-03-20 ScenarioMeta / Replay Closure + Doc Sync
+
+- 本 session 继续收口了主模式前端兼容层，重点不再是补功能，而是压缩 `scenarioMeta` / Result replay / 结果页展示链路中的重复状态：
+  - `PhaserGameLoader` 预热守卫新增低内存 / 低并发设备跳过逻辑，避免在资源紧张设备上提前拉 Phaser 大包。
+  - `scenarioMeta` 的 localStorage 现在只保留兼容层真正需要的输入；usage-derived 的 `director / cooldowns / counterplay / profileId / updatedAt` 等重复字段不再长期保真，读取时会按 `usageLog / bets` 现算回补。
+  - `scenarioMeta.ts` 与 `scenarioGameplayState.ts` 的 usage/bet 派生逻辑已抽成共享 helper，避免本地兼容层与 authority 合并层两套算法漂移。
+  - `archive.keyMoments` 当前只保留 compat / 非派生 moment；card/bet moments 在展示与序列化阶段通过 helper 现算，不再反复存一份冗余副本。
+  - `ResultView` 当前使用 `displayArchive / displayBranchSnapshots` 作为展示层：live 结果页优先按 `story.branches / usages / bets / commitment / campaign summary` 现算，再把本地 `scenarioMeta.archive` 降成最后兜底。
+  - `scenario_result_v1` replay 当前会先压缩 `scenarioMeta`：archive 摘要字段不再整包写进 replay payload，`branchSnapshots` 也已从 replay archive 中移除，结果页会优先从 `storyData.branches` 重建世界线快照。
+  - `ResultView` 里的 `resolvedProfileId` 优先级已调整为 `campaign summary -> inferred profile -> local archive profileId`，避免 stale local profile 污染画像展示链。
+  - `ScenarioArchiveState.question / sceneTheme` 已删除，避免继续把 `scenario` 本体里已经有的字段再平铺一份到 archive 里。
+
+- 本 session 实跑验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q`
+    - `82 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts`
+    - `104 passed`
+  - Focused frontend suites（彼此重叠，不能直接相加）:
+    - `src/game/PhaserGameLoader.test.ts`: `8 passed`
+    - `src/lib/scenarioMeta.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
+    - `src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx`: `13 passed`
+    - `src/pages/ResultView.test.tsx`: `10 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 多轮复验通过
+  - `cd frontend && npm run build`
+    - 多轮复验通过
+  - 完整 `release:signoff` 已在本 session 针对运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3` 实跑通过，工件位于：
+    - `frontend/output/e2e/current-head-audit-signoff/summary.json`
+
+- 文档同步：
+  - 已同步根 `README.md`
+  - 已同步 `llmdoc/guides/development.md`
+  - 已同步 `llmdoc/overview/project.md`
+  - 已同步 `llmdoc/overview/frontend.md`
+  - 已同步 `implement/README.md`
 - 实测确认：
 - `/sim/:id` 的 `render_game_to_text()` 已同时包含页面控件摘要 + Theater 场景状态。
 - `/result/:id` 的 `render_game_to_text()` 已包含结果页控件摘要与分支摘要。
