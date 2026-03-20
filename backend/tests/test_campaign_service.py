@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlmodel import Session, select
 
 from app.models import Scenario, ScenarioStatus
@@ -15,6 +16,7 @@ from app.models.campaign import (
 )
 from app.models.database import get_engine
 from app.services.campaign import (
+    CampaignConflictError,
     finalize_scenario_campaign,
     get_daily_challenge_summary,
     get_weekly_campaign_summary,
@@ -342,6 +344,7 @@ def test_scenario_director_state_defaults_and_round_trip():
     scenario_id = _seed_completed_scenario("director state round trip")
 
     default_state = get_scenario_director_state(scenario_id)
+    assert default_state["revision"] == 0
     assert default_state["objectives"]["goals"] == []
     assert default_state["commitment"]["active"] is False
 
@@ -377,9 +380,11 @@ def test_scenario_director_state_defaults_and_round_trip():
                 "committed_at": "2026-03-18T00:02:00Z",
                 "outcome": "pending",
             },
+            "revision": default_state["revision"],
         },
     )
 
+    assert saved_state["revision"] == 1
     assert saved_state["objectives"]["generated_for_profile"] == "governance"
     assert len(saved_state["objectives"]["goals"]) == 2
     assert saved_state["commitment"]["branch_id"] == "branch-1"
@@ -409,9 +414,11 @@ def test_scenario_director_state_normalizes_inactive_commitment_to_default():
                 "committed_at": "2026-03-18T00:03:00Z",
                 "outcome": "miss",
             },
+            "revision": 0,
         },
     )
 
+    assert saved_state["revision"] == 1
     assert saved_state["commitment"] == {
         "active": False,
         "branch_id": None,
@@ -422,10 +429,59 @@ def test_scenario_director_state_normalizes_inactive_commitment_to_default():
     }
 
 
+def test_scenario_director_state_rejects_stale_revision():
+    scenario_id = _seed_completed_scenario("director state stale revision")
+
+    saved_state = save_scenario_director_state(
+        scenario_id,
+        {
+            "revision": 0,
+            "objectives": {
+                "generated_for_question": "director state stale revision",
+                "generated_for_profile": "law",
+                "goals": [],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": False,
+                "branch_id": None,
+                "branch_title": None,
+                "committed_at_round": None,
+                "committed_at": None,
+                "outcome": None,
+            },
+        },
+    )
+    assert saved_state["revision"] == 1
+
+    with pytest.raises(CampaignConflictError):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {
+                    "generated_for_question": "director state stale revision",
+                    "generated_for_profile": "trade",
+                    "goals": [],
+                    "last_updated_at": "2026-03-18T00:01:00Z",
+                },
+                "commitment": {
+                    "active": False,
+                    "branch_id": None,
+                    "branch_title": None,
+                    "committed_at_round": None,
+                    "committed_at": None,
+                    "outcome": None,
+                },
+            },
+        )
+
+
 def test_scenario_gameplay_state_defaults_and_round_trip():
     scenario_id = _seed_completed_scenario("gameplay state round trip")
 
     default_state = get_scenario_gameplay_state(scenario_id)
+    assert default_state["revision"] == 0
     assert default_state["cards"]["usage_log"] == []
     assert default_state["betting"]["bets"] == []
     assert default_state["archive"]["key_moments"] == []
@@ -486,9 +542,11 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
                     },
                 ],
             },
+            "revision": default_state["revision"],
         },
     )
 
+    assert saved_state["revision"] == 1
     assert [entry["card_id"] for entry in saved_state["cards"]["usage_log"]] == [
         "public_hearing",
         "audit_reckoning",
@@ -508,3 +566,43 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
 
     loaded_state = get_scenario_gameplay_state(scenario_id)
     assert loaded_state == saved_state
+
+
+def test_scenario_gameplay_state_rejects_stale_revision():
+    scenario_id = _seed_completed_scenario("gameplay state stale revision")
+
+    saved_state = save_scenario_gameplay_state(
+        scenario_id,
+        {
+            "revision": 0,
+            "cards": {
+                "usage_log": [],
+            },
+            "betting": {
+                "bets": [],
+            },
+            "archive": {
+                "key_moments": ["Moment one"],
+                "branch_snapshots": [],
+            },
+        },
+    )
+    assert saved_state["revision"] == 1
+
+    with pytest.raises(CampaignConflictError):
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "cards": {
+                    "usage_log": [],
+                },
+                "betting": {
+                    "bets": [],
+                },
+                "archive": {
+                    "key_moments": ["Moment two"],
+                    "branch_snapshots": [],
+                },
+            },
+        )

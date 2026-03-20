@@ -306,12 +306,20 @@ class ScenarioDirectorCommitmentResponse(BaseModel):
 
 
 class ScenarioDirectorStateRequest(BaseModel):
+    revision: int = 0
     objectives: ScenarioDirectorObjectivesResponse = Field(
         default_factory=ScenarioDirectorObjectivesResponse
     )
     commitment: ScenarioDirectorCommitmentResponse = Field(
         default_factory=ScenarioDirectorCommitmentResponse
     )
+
+    @field_validator("revision")
+    @classmethod
+    def validate_revision(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("revision must be >= 0")
+        return value
 
 
 class ScenarioDirectorStateResponse(ScenarioDirectorStateRequest):
@@ -454,9 +462,17 @@ class ScenarioGameplayArchiveStateResponse(BaseModel):
 
 
 class ScenarioGameplayStateRequest(BaseModel):
+    revision: int = 0
     cards: ScenarioGameplayCardsStateResponse = Field(default_factory=ScenarioGameplayCardsStateResponse)
     betting: ScenarioGameplayBettingStateResponse = Field(default_factory=ScenarioGameplayBettingStateResponse)
     archive: ScenarioGameplayArchiveStateResponse = Field(default_factory=ScenarioGameplayArchiveStateResponse)
+
+    @field_validator("revision")
+    @classmethod
+    def validate_revision(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("revision must be >= 0")
+        return value
 
 
 class ScenarioGameplayStateResponse(ScenarioGameplayStateRequest):
@@ -519,6 +535,8 @@ async def put_director_state(
         state = save_scenario_director_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except CampaignConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except CampaignError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -550,6 +568,8 @@ async def put_gameplay_state(
         state = save_scenario_gameplay_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except CampaignConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except CampaignError as exc:
         raise HTTPException(400, str(exc)) from exc
 

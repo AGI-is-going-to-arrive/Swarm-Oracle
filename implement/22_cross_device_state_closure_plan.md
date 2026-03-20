@@ -1,7 +1,7 @@
 # SwarmOracle — 跨设备状态收口报告
 
 > 文档状态：这份文件已从“下一次执行手册”切换为“收口结果报告”。
-> 适用时间：截至 `2026-03-19`。
+> 适用时间：截至 `2026-03-20`。
 > 用途：记录主模式跨设备 authority 的最终形态、验证结果和剩余边界。
 
 ---
@@ -14,6 +14,7 @@
 
 - `director goals / worldline commitment` 以后端 `Scenario.director_state_json` 为准
 - `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots` 以后端 `Scenario.gameplay_state_json` 为准
+- `director_state / gameplay_state` 写路径当前走 `revision` 版乐观并发控制，stale PUT 会返回 `409`
 - 前端 `scenarioMeta` 退为兼容层 / 缓存层，而不是 authority
 
 因此，这份文件不再应被阅读成“下一次要做什么”，而应被阅读成“这条线已经如何收口”。
@@ -27,6 +28,7 @@
 后端 authoritative：
 
 - `Scenario.director_state_json`
+  - `revision`
   - `objectives`
   - `commitment`
 
@@ -50,6 +52,7 @@
 
 ```json
 {
+  "revision": 0,
   "cards": {
     "usage_log": []
   },
@@ -78,11 +81,13 @@
 已完成：
 
 - `campaign.py` 扩展 `DEFAULT_SCENARIO_GAMEPLAY_STATE`
+- `campaign.py` 当前还会为 `director_state / gameplay_state` 维护 `revision`
 - `normalize_scenario_gameplay_state()`
 - `normalize_bet_entry()`
 - `normalize_archive_state()` 相关归一化链路
 - `campaign` API request/response 扩展到完整 gameplay raw state
 - `/api/scenario/{id}` 顶层一起返回完整 `gameplay_state`
+- authority PUT 当前会做 `revision` 匹配；stale 写入返回 `409`
 
 说明：
 
@@ -98,6 +103,7 @@
   - local → remote payload 映射
   - remote → local apply
   - `usage_log / bets / key_moments / branch_snapshots` merge/backfill
+- `SimulationView` 当前会带着 `revision` 写回 authority；若命中 `409`，会先回读最新 `director_state / gameplay_state`
 - `PredictionModal` 在下注成功后立即回写后端 authority
 - `SimulationView` 与 `ResultView` 优先读取远端 `gameplay_state`
 - `SimulationView` 当前不再把后端 `director_state / gameplay_state` 反向 apply 到 localStorage；页面内只做 authority 优先的内存合并与 replay payload 组装
@@ -145,34 +151,17 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py -q
 
 结果：
 
-- `19 passed`
+- `25 passed`
 
 已通过：
 
 ```bash
 cd frontend
 npm test -- --run \
-  src/lib/scenarioGameplayState.test.ts \
-  src/components/PredictionModal.test.tsx \
   src/pages/SimulationView.test.tsx \
+  src/lib/scenarioReplay.test.ts \
+  src/lib/simulationReplay.test.ts \
   src/pages/ResultView.test.tsx
-```
-
-结果：
-
-- `26 passed`
-
-已通过：
-
-```bash
-cd frontend
-npm test -- --run \
-  src/hooks/useScreenCapture.test.ts \
-  src/components/PredictionModal.test.tsx \
-  src/pages/SimulationView.test.tsx \
-  src/pages/ResultView.test.tsx \
-  src/pages/DebateArenaView.test.tsx \
-  src/pages/DebateResultView.test.tsx
 ```
 
 结果：
@@ -185,6 +174,13 @@ npm test -- --run \
 cd frontend
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
+```
+
+已通过：
+
+```bash
+cd frontend
+SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless --output-root output/e2e/current-head-rerun
 ```
 
 ### 4.2 E2E 工件
@@ -230,6 +226,9 @@ npm run build
 
 3. 当前交付仍是浏览器优先 Web。
    这里的“跨设备一致”指浏览器之间的状态一致，不代表原生客户端壳已完成。
+
+4. 当前冲突策略仍是“拒绝 stale 写入 + 回读最新 authority”。
+   这能阻止静默覆盖，但还没有做更细粒度的字段级 merge 或设备级协同编辑。
 
 ---
 

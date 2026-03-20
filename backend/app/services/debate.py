@@ -57,6 +57,7 @@ _DEBATE_DIMENSION_LABELS = {
 
 _VALID_DEBATE_WINNERS = {"proposition", "opposition"}
 _VALID_VERDICT_TONES = {"order", "balance", "rupture"}
+_VALID_PRESSURE_SIDES = {"balanced", "proposition", "opposition"}
 
 
 def _now() -> datetime:
@@ -186,6 +187,80 @@ def _extract_breakdown_metadata(raw_breakdown: dict[str, Any] | None) -> dict[st
     if not isinstance(metadata, dict):
         return {}
     return metadata
+
+
+def _normalize_phase_insight_direction(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _VALID_PRESSURE_SIDES:
+        return normalized
+    return "balanced"
+
+
+def _normalize_phase_insight_entry(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    phase_raw = str(raw.get("phase") or "").strip().lower()
+    try:
+        phase = DebatePhase(phase_raw)
+    except ValueError:
+        return None
+
+    confidence_drift = raw.get("confidence_drift")
+    if not isinstance(confidence_drift, dict):
+        confidence_drift = {}
+
+    try:
+        pressure_margin = int(raw.get("pressure_margin", 0))
+    except (TypeError, ValueError):
+        pressure_margin = 0
+    try:
+        turn_count = int(raw.get("turn_count", 0))
+    except (TypeError, ValueError):
+        turn_count = 0
+    try:
+        phase_margin = int(confidence_drift.get("phase_margin", 0))
+    except (TypeError, ValueError):
+        phase_margin = 0
+    try:
+        cumulative_margin = int(confidence_drift.get("cumulative_margin", 0))
+    except (TypeError, ValueError):
+        cumulative_margin = 0
+
+    return {
+        "phase": phase.value,
+        "stakes": str(raw.get("stakes", "")).strip(),
+        "judge_focus": str(raw.get("judge_focus", "")).strip(),
+        "commentary": str(raw.get("commentary", "")).strip(),
+        "pressure_side": _normalize_phase_insight_direction(raw.get("pressure_side")),
+        "pressure_margin": max(0, pressure_margin),
+        "turn_count": max(0, turn_count),
+        "confidence_drift": {
+            "direction": _normalize_phase_insight_direction(confidence_drift.get("direction")),
+            "phase_margin": phase_margin,
+            "cumulative_margin": cumulative_margin,
+        },
+    }
+
+
+def _extract_persisted_phase_insights(
+    raw_breakdown: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    metadata = _extract_breakdown_metadata(raw_breakdown)
+    if "phase_insights" not in metadata:
+        return None
+
+    raw_phase_insights = metadata.get("phase_insights")
+    if not isinstance(raw_phase_insights, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for entry in raw_phase_insights:
+        normalized_entry = _normalize_phase_insight_entry(entry)
+        if normalized_entry is None:
+            continue
+        normalized.append(normalized_entry)
+    return normalized
 
 
 def _pack_breakdown_payload(
@@ -1159,14 +1234,19 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
             counterplays=counterplays,
         )
         plan = _plan_from_persisted_debate(debate) if debate.status == DebateStatus.DONE else build_debate_plan(debate.question)
+        persisted_phase_insights = _extract_persisted_phase_insights(debate.breakdown_json)
         snapshot = _serialize_debate(
             debate,
             turns,
-            phase_insights=_build_phase_insights(
-                debate=debate,
-                plan=plan,
-                turns=turns,
-                counterplay_context=counterplay_result,
+            phase_insights=(
+                persisted_phase_insights
+                if persisted_phase_insights is not None
+                else _build_phase_insights(
+                    debate=debate,
+                    plan=plan,
+                    turns=turns,
+                    counterplay_context=counterplay_result,
+                )
             ),
         )
         snapshot["counterplay"] = counterplay_result
@@ -1207,14 +1287,19 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             counterplays=counterplays,
         )
         plan = _plan_from_persisted_debate(debate)
+        persisted_phase_insights = _extract_persisted_phase_insights(debate.breakdown_json)
         snapshot = _serialize_debate(
             debate,
             turns,
-            phase_insights=_build_phase_insights(
-                debate=debate,
-                plan=plan,
-                turns=turns,
-                counterplay_context=counterplay_result,
+            phase_insights=(
+                persisted_phase_insights
+                if persisted_phase_insights is not None
+                else _build_phase_insights(
+                    debate=debate,
+                    plan=plan,
+                    turns=turns,
+                    counterplay_context=counterplay_result,
+                )
             ),
         )
         judge_rationale = _extract_judge_rationale(debate.breakdown_json)
@@ -1630,6 +1715,13 @@ def _finalize_debate(
                 .order_by(DebateTurn.sequence.asc())
             ).all()
         )
+        predictions = list(
+            session.exec(
+                select(DebatePrediction)
+                .where(DebatePrediction.debate_id == debate_id)
+                .order_by(DebatePrediction.created_at.asc())
+            ).all()
+        )
         debate.status = DebateStatus.DONE
         debate.current_phase = DebatePhase.VERDICT
         debate.score_proposition = plan.score["proposition"]
@@ -1643,6 +1735,29 @@ def _finalize_debate(
             winner_side="opposition" if plan.winner == "proposition" else "proposition",
             fallback=debate.best_argument,
             phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL},
+        )
+        counterplays = list(
+            session.exec(
+                select(DebateCounterplay).where(DebateCounterplay.debate_id == debate_id)
+            ).all()
+        )
+        for counterplay in counterplays:
+            if counterplay.kind == DebatePredictionKind.WINNER:
+                counterplay.outcome = "hit" if counterplay.target_value == debate.winner else "miss"
+            else:
+                counterplay.outcome = "hit" if counterplay.target_value == debate.verdict_tone else "miss"
+            session.add(counterplay)
+        persisted_counterplay_result = _build_counterplay_result(
+            predictions,
+            debate,
+            turns=turns,
+            counterplays=counterplays,
+        )
+        persisted_phase_insights = _build_phase_insights(
+            debate=debate,
+            plan=plan,
+            turns=turns,
+            counterplay_context=persisted_counterplay_result,
         )
         latest_counterplay_explanation = None
         if judge_analysis:
@@ -1662,6 +1777,7 @@ def _finalize_debate(
             counterplay_explanation=latest_counterplay_explanation,
             metadata={
                 "adjudication_mode": adjudication_mode,
+                "phase_insights": persisted_phase_insights,
             },
         )
         debate.judge_summary = (
@@ -1670,18 +1786,6 @@ def _finalize_debate(
         ) or (turns[-1].content if turns else "")
         debate.updated_at = _now()
         session.add(debate)
-
-        counterplays = list(
-            session.exec(
-                select(DebateCounterplay).where(DebateCounterplay.debate_id == debate_id)
-            ).all()
-        )
-        for counterplay in counterplays:
-            if counterplay.kind == DebatePredictionKind.WINNER:
-                counterplay.outcome = "hit" if counterplay.target_value == debate.winner else "miss"
-            else:
-                counterplay.outcome = "hit" if counterplay.target_value == debate.verdict_tone else "miss"
-            session.add(counterplay)
 
         session.commit()
         session.refresh(debate)

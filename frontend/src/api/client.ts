@@ -413,6 +413,12 @@ export async function upsertScenarioDirectorState(
   });
 }
 
+export async function getScenarioDirectorState(
+  scenarioId: string,
+): Promise<ScenarioDirectorStateResponse> {
+  return request(`/campaign/scenario/${scenarioId}/director-state`);
+}
+
 export async function upsertScenarioGameplayState(
   scenarioId: string,
   payload: ScenarioGameplayState,
@@ -421,6 +427,12 @@ export async function upsertScenarioGameplayState(
     method: 'PUT',
     body: JSON.stringify(payload),
   });
+}
+
+export async function getScenarioGameplayState(
+  scenarioId: string,
+): Promise<ScenarioGameplayStateResponse> {
+  return request(`/campaign/scenario/${scenarioId}/gameplay-state`);
 }
 
 export async function getCampaignDailyChallengeStatus(

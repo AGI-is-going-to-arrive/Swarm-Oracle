@@ -179,9 +179,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - `finalize_scenario_campaign(...)` — 对已完成 scenario 做一次性结算；同一 scenario 对同一导演幂等，若绑定到不同导演则抛 `CampaignConflictError`
   - `calculate_campaign_score_delta(...)` — 按 archive grade / profile resonance / bet / daily challenge 规则计算积分增量
   - `get_scenario_director_state(scenario_id)` — 读取单局 goals / commitment 权威态
-  - `save_scenario_director_state(scenario_id, director_state)` — 写入单局 goals / commitment 权威态
+  - `save_scenario_director_state(scenario_id, director_state)` — 写入单局 goals / commitment 权威态；当前要求 `revision` 匹配，stale 写入会抛 `CampaignConflictError`
   - `get_scenario_gameplay_state(scenario_id)` — 读取单局玩法层权威态
-  - `save_scenario_gameplay_state(scenario_id, gameplay_state)` — 写入单局玩法层权威态
+  - `save_scenario_gameplay_state(scenario_id, gameplay_state)` — 写入单局玩法层权威态；当前要求 `revision` 匹配，stale 写入会抛 `CampaignConflictError`
   - `normalize_scenario_gameplay_state(payload)` — 规范化 `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots`
   - `get_scenario_campaign_summary(scenario_id)` — 读取单局已落库的 campaign 摘要；供 `ResultView` 在本地档案缺失时回填关键字段
   - `get_campaign_profile_summary(user_id)` — 读取导演总览
@@ -196,9 +196,11 @@ alembic/ ──► Alembic 数据库迁移框架
 - **director state**:
   - goals / commitment 当前落在 `Scenario.director_state_json`
   - live/result 前端会优先读取这一份
+  - 当前还会带 `revision`，用于乐观并发控制；stale PUT 会返回 `409`
 - **gameplay state**:
   - 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 当前都落在 `Scenario.gameplay_state_json`
   - 前端会基于远端 `usage_log` 重算导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count` 与 `last_counterplay_card`
+  - 当前还会带 `revision`，用于乐观并发控制；stale PUT 会返回 `409`
   - 这次只是扩现有 JSON 列契约，没有新增 DB column，也没有新增 Alembic migration
 - **时区归一**: `daily-status` 查询现在会把 SQLite round-trip 回来的 naive UTC 时间先按 UTC 归一，再换算调用方本地日期，避免跨时区同日完成态误判
 - **时间序列化**: `profile / mastery / badges / daily-status` 响应里的时间字段统一输出带 `+00:00` 的 UTC ISO 字符串
@@ -222,6 +224,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `counterplay` 现在除了 `outcome`，还会返回 `phase_score / explanation`，并被织进 `judge summary` 与 replay digest
   - live snapshot / result payload 顶层当前还会返回 `phase_insights[]`，每个阶段都有 `stakes / judge_focus / commentary / pressure_margin / confidence_drift`
   - `counterplay` 当前不只影响顶层摘要；若某阶段命中了对冲，后端会把这条信息直接织进对应阶段的 `phase_insights.commentary`
+  - replay import 当前会把输入 payload 里的 `phase_insights` 一并持久化；后续 live/result 读路径会优先回放这份已导入的阶段洞察，而不是只靠重算
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
@@ -275,10 +278,10 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单局 campaign 摘要；若该 scenario 尚未 finalize，则返回 `404` |
-| `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单局 goals / commitment 权威态；若该 scenario 已存在但尚未写入，会返回安全默认值 |
-| `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单局 goals / commitment 权威态；当前只覆盖这批导演层状态，不负责主模式 `cards.usageLog` 之外的玩法状态 |
-| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单局玩法层权威态；当前已包含主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` |
-| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单局玩法层权威态；当前用于主模式整套 gameplay raw state 的跨设备同步 |
+| `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单局 goals / commitment 权威态；若该 scenario 已存在但尚未写入，会返回安全默认值；响应当前还会带 `revision` |
+| `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单局 goals / commitment 权威态；当前只覆盖这批导演层状态，不负责主模式 `cards.usageLog` 之外的玩法状态；若 `revision` 过期则返回 `409` |
+| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单局玩法层权威态；当前已包含主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots`，响应还会带 `revision` |
+| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单局玩法层权威态；当前用于主模式整套 gameplay raw state 的跨设备同步；若 `revision` 过期则返回 `409` |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
@@ -286,7 +289,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 获取调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
-> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 只要场景存在就返回结果，未写入时会回安全默认值。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
 
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
@@ -307,7 +310,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前可选透传 `user_id / llm_* / reasoning_effort`，并会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` 与 `phase_insights[]` |
 | `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay`、`phase_insights[]` 与 `adjudication_mode`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
-| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用 |
+| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用，并会保留输入里的 `phase_insights` / `adjudication_mode` |
 | `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由
@@ -353,7 +356,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准：
 
-- backend signoff set：**82 passed**
+- backend signoff set：**86 passed**
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 

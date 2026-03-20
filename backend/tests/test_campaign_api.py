@@ -241,6 +241,7 @@ def test_director_state_endpoint_round_trip_and_scenario_readback(client: TestCl
 
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/director-state")
     assert initial.status_code == 200
+    assert initial.json()["revision"] == 0
     assert initial.json()["objectives"]["goals"] == []
     assert initial.json()["commitment"]["active"] is False
 
@@ -276,10 +277,12 @@ def test_director_state_endpoint_round_trip_and_scenario_readback(client: TestCl
                 "committed_at": "2026-03-18T00:02:00Z",
                 "outcome": "pending",
             },
+            "revision": initial.json()["revision"],
         },
     )
     assert update.status_code == 200
     update_data = update.json()
+    assert update_data["revision"] == 1
     assert update_data["objectives"]["generated_for_profile"] == "trade"
     assert update_data["commitment"]["branch_id"] == "branch-2"
 
@@ -321,6 +324,7 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
 
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
     assert initial.status_code == 200
+    assert initial.json()["revision"] == 0
     assert initial.json()["cards"]["usage_log"] == []
     assert initial.json()["betting"]["bets"] == []
     assert initial.json()["archive"]["key_moments"] == []
@@ -370,10 +374,12 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
                     },
                 ],
             },
+            "revision": initial.json()["revision"],
         },
     )
     assert update.status_code == 200
     update_data = update.json()
+    assert update_data["revision"] == 1
     assert update_data["cards"]["usage_log"][0]["card_id"] == "public_hearing"
     assert update_data["betting"]["bets"][0]["bet_id"] == "bet-1"
     assert update_data["archive"]["key_moments"] == ["Opened the ruling to public scrutiny."]
@@ -384,3 +390,91 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
     assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"
     assert scenario_data["gameplay_state"]["betting"]["bets"][0]["target_label"] == "Judicial Review"
     assert scenario_data["gameplay_state"]["archive"]["branch_snapshots"][0]["branch_id"] == "branch-1"
+
+
+def test_director_state_endpoint_rejects_stale_revision_conflict(client: TestClient):
+    scenario_id = _seed_completed_scenario("director state stale api")
+
+    first = client.put(
+        f"/api/campaign/scenario/{scenario_id}/director-state",
+        json={
+            "revision": 0,
+            "objectives": {
+                "generated_for_question": "director state stale api",
+                "generated_for_profile": "law",
+                "goals": [],
+                "last_updated_at": "2026-03-18T00:00:00Z",
+            },
+            "commitment": {
+                "active": False,
+                "branch_id": None,
+                "branch_title": None,
+                "committed_at_round": None,
+                "committed_at": None,
+                "outcome": None,
+            },
+        },
+    )
+    assert first.status_code == 200
+
+    conflict = client.put(
+        f"/api/campaign/scenario/{scenario_id}/director-state",
+        json={
+            "revision": 0,
+            "objectives": {
+                "generated_for_question": "director state stale api",
+                "generated_for_profile": "trade",
+                "goals": [],
+                "last_updated_at": "2026-03-18T00:01:00Z",
+            },
+            "commitment": {
+                "active": False,
+                "branch_id": None,
+                "branch_title": None,
+                "committed_at_round": None,
+                "committed_at": None,
+                "outcome": None,
+            },
+        },
+    )
+    assert conflict.status_code == 409
+
+
+def test_gameplay_state_endpoint_rejects_stale_revision_conflict(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay state stale api")
+
+    first = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json={
+            "revision": 0,
+            "cards": {
+                "usage_log": [],
+            },
+            "betting": {
+                "bets": [],
+            },
+            "archive": {
+                "key_moments": ["First moment"],
+                "branch_snapshots": [],
+            },
+        },
+    )
+    assert first.status_code == 200
+
+    conflict = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json={
+            "revision": 0,
+            "cards": {
+                "usage_log": [],
+            },
+            "betting": {
+                "bets": [],
+            },
+            "archive": {
+                "key_moments": ["Second moment"],
+                "branch_snapshots": [],
+            },
+        },
+    )
+    assert conflict.status_code == 409

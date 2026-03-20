@@ -157,6 +157,7 @@ export interface ScenarioDirectorCommitmentState {
 }
 
 export interface ScenarioDirectorState {
+  revision?: number;
   objectives: ScenarioDirectorObjectivesState;
   commitment: ScenarioDirectorCommitmentState;
 }
@@ -208,6 +209,7 @@ export interface ScenarioGameplayArchiveState {
 }
 
 export interface ScenarioGameplayState {
+  revision?: number;
   cards: ScenarioGameplayCardsState;
   betting: ScenarioGameplayBettingState;
   archive: ScenarioGameplayArchiveState;

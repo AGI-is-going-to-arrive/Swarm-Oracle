@@ -52,14 +52,14 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `POST` | `/api/replay-artifact` | Persist replay payload and return short share id |
 | `GET` | `/api/replay-artifact/{id}` | Load replay payload |
 | `POST` | `/api/campaign/scenario/{id}/finalize` | Finalize campaign progress |
-| `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority |
-| `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority |
+| `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority with `revision`-based optimistic concurrency |
+| `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority with `revision`-based optimistic concurrency |
 | `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
 | `POST` | `/api/debate` | Create debate |
 | `GET` | `/api/debate/{id}` | Debate live snapshot |
 | `GET` | `/api/debate/{id}/result` | Debate result payload |
-| `POST` | `/api/debate/import-replay` | Import debate replay as local run |
+| `POST` | `/api/debate/import-replay` | Import debate replay as local run and preserve imported `phase_insights` / `adjudication_mode` |
 | `WS` | `/ws/scenario/{scenario_id}` | Scenario events |
 | `WS` | `/ws/debate/{debate_id}` | Debate events |
 
@@ -72,7 +72,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - Historical full baseline: `815 passed`.
-- Current signoff backend set: `82 passed`.
+- Current signoff backend set: `86 passed`.
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Environment Variables

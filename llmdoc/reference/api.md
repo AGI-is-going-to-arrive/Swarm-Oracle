@@ -57,10 +57,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 结算单局导演生涯进度；同一 `scenario_id` 对同一导演档案重复提交为幂等返回，响应内会带 `already_finalized` | `{"user_id": "...", "user_name?": "匿名导演", "profile_id": "...", "archive_grade?": "C", "profile_resonance?": "offbeat", "betting_hit?": true, "bet_count?": 0, "most_used_card?": "...", "completed_daily_challenge?": false, "objective_completed_count?": 0, "objective_total_count?": 0, "commitment_outcome?": "hit|miss|pending"}` | CampaignFinalizeResponse |
 | `GET /api/campaign/scenario/{scenario_id}/summary` | GET | 读取单个 scenario 已落库的 campaign 摘要；供结果页在本地 `scenarioMeta` 缺失时做跨设备兜底 | — | CampaignScenarioSummaryResponse |
-| `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单个 scenario 的导演层权威态；当前只包含 goals / commitment | — | ScenarioDirectorStateResponse |
-| `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单个 scenario 的导演层权威态；当前只覆盖 goals / commitment | `{"objectives": {"generated_for_question?": "...", "generated_for_profile?": "...", "goals": [...]}, "commitment": {"active": true, "branch_id?": "...", "branch_title?": "...", "committed_at_round?": 2, "committed_at?": "...", "outcome?": "pending"}}` | ScenarioDirectorStateResponse |
-| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单个 scenario 的玩法层权威态；当前已包含 `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots` | — | ScenarioGameplayStateResponse |
-| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单个 scenario 的玩法层权威态；当前主要用于主模式整套 gameplay raw state 的跨设备同步 | `{"cards": {"usage_log": [...]}, "betting": {"bets": [...]}, "archive": {"key_moments": [...], "branch_snapshots": [...]}}` | ScenarioGameplayStateResponse |
+| `GET /api/campaign/scenario/{scenario_id}/director-state` | GET | 读取单个 scenario 的导演层权威态；当前只包含 goals / commitment，且响应会带 `revision` | — | ScenarioDirectorStateResponse |
+| `PUT /api/campaign/scenario/{scenario_id}/director-state` | PUT | 写入单个 scenario 的导演层权威态；当前只覆盖 goals / commitment，并要求请求体携带当前 `revision` | `{"revision": 0, "objectives": {"generated_for_question?": "...", "generated_for_profile?": "...", "goals": [...]}, "commitment": {"active": true, "branch_id?": "...", "branch_title?": "...", "committed_at_round?": 2, "committed_at?": "...", "outcome?": "pending"}}` | ScenarioDirectorStateResponse |
+| `GET /api/campaign/scenario/{scenario_id}/gameplay-state` | GET | 读取单个 scenario 的玩法层权威态；当前已包含 `cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots`，且响应会带 `revision` | — | ScenarioGameplayStateResponse |
+| `PUT /api/campaign/scenario/{scenario_id}/gameplay-state` | PUT | 写入单个 scenario 的玩法层权威态；当前主要用于主模式整套 gameplay raw state 的跨设备同步，并要求请求体携带当前 `revision` | `{"revision": 0, "cards": {"usage_log": [...]}, "betting": {"bets": [...]}, "archive": {"key_moments": [...], "branch_snapshots": [...]}}` | ScenarioGameplayStateResponse |
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
@@ -122,6 +122,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > `ScenarioDirectorStateResponse` 当前包含：
 > - `scenario_id`
+> - `revision`
 > - `objectives.generated_for_question`
 > - `objectives.generated_for_profile`
 > - `objectives.goals[]`
@@ -135,6 +136,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > `ScenarioGameplayStateResponse` 当前包含：
 > - `scenario_id`
+> - `revision`
 > - `cards.usage_log[]`
 >   - `card_id`
 >   - `profile_id`
@@ -168,8 +170,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 其中：
 > - goals / commitment 以后端 `director-state` 为准
 > - 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 以后端 `gameplay-state` 为准
+> - `director-state / gameplay-state` 写入当前走乐观并发控制；若请求里的 `revision` 已过期，后端会返回 `409 Conflict`
 > - 导演点数、卡牌冷却、`most_used_card`、`counterplay_card_count`、`last_counterplay_card` 会由前端基于远端 `usage_log` 重算
 > - `summary` 继续兜底 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`
+>
+> 当前仓库里至少有 3 种 `409 Conflict`：
+> - `PUT director-state / gameplay-state`：stale `revision`
+> - `POST /api/campaign/scenario/{scenario_id}/finalize`：scenario 已归属另一 director profile
+> - `GET /api/debate/{id}/result`：verdict 尚未就绪
 >
 ### Health & Observability
 
@@ -187,7 +195,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "reasoning_effort?": "low"}` | DebateSnapshot |
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot（当前顶层还会带 `phase_insights[]`） |
 | `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]` 与 `adjudication_mode`） |
-| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate | `{"debate": DebateResultPayload}` | DebateSnapshot |
+| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前会保留导入 payload 里的 `phase_insights` 与 `adjudication_mode` | `{"debate": DebateResultPayload}` | DebateSnapshot |
 | `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
 
 > Debate 当前已按真实实现固定为 5 个阶段：
@@ -237,6 +245,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 当前口径：
 > - `phase_insights` 是后端权威阶段洞察，不是前端猜出来的辅助字段
 > - 若某阶段有 `counterplay`，后端会把这手对冲是否挂出、命中或未中，直接织进对应阶段的 `phase_insights.commentary`
+> - 若 Debate 是通过 `import-replay` 导入，后端会优先回放导入时持久化下来的 `phase_insights`，不再只靠运行时重算近似版本
 >
 > `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳；若 Debate 已进入 `ERROR` 终态，则返回 `500`，前端会直接显示终态错误。
 

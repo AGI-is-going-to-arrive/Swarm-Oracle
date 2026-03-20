@@ -215,7 +215,11 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
-      - name: Run deterministic debate signoff smoke
+      - name: Run debate signoff smoke
+        env:
+          LLM_RESPONSES_URL: ${{ secrets.LLM_RESPONSES_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
         run: |
           set -euo pipefail
 
@@ -229,7 +233,11 @@ jobs:
           }
           trap cleanup EXIT
 
-          DEBATE_USE_LLM=false backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
+          if [ "${{ needs.release-signoff-preflight.outputs.can_run }}" = "true" ]; then
+            backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
+          else
+            DEBATE_USE_LLM=false backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
+          fi
           BACKEND_PID=$!
 
           (
@@ -258,7 +266,11 @@ jobs:
           PY
 
           cd frontend
-          node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ci-debate-signoff --headless
+          if [ "${{ needs.release-signoff-preflight.outputs.can_run }}" = "true" ]; then
+            node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ci-debate-signoff --require-adjudication-mode llm_hybrid --headless
+          else
+            node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ci-debate-signoff --headless
+          fi
 
       - name: Upload debate signoff smoke artifacts
         if: always()

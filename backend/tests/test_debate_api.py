@@ -199,7 +199,36 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
                 },
             ],
             "available_prediction_options": {"winner": ["proposition", "opposition"], "verdict_tone": ["order", "balance", "rupture"]},
-            "phase_insights": [],
+            "phase_insights": [
+                {
+                    "phase": "opening",
+                    "stakes": "Imported opening stakes",
+                    "judge_focus": "Imported opening focus",
+                    "commentary": "Imported opening commentary",
+                    "pressure_side": "balanced",
+                    "pressure_margin": 0,
+                    "turn_count": 1,
+                    "confidence_drift": {
+                        "direction": "balanced",
+                        "phase_margin": 0,
+                        "cumulative_margin": 0,
+                    },
+                },
+                {
+                    "phase": "verdict",
+                    "stakes": "Imported verdict stakes",
+                    "judge_focus": "Imported verdict focus",
+                    "commentary": "Imported verdict commentary",
+                    "pressure_side": "proposition",
+                    "pressure_margin": 8,
+                    "turn_count": 1,
+                    "confidence_drift": {
+                        "direction": "proposition",
+                        "phase_margin": 8,
+                        "cumulative_margin": 8,
+                    },
+                },
+            ],
             "result_ready": True,
             "result": {
                 "winner": "proposition",
@@ -259,3 +288,11 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
     assert data["result_ready"] is True
     assert data["participants"][0]["name"] == "Proposition"
     assert data["turns"][0]["content"] == "Imported turn"
+    assert data["phase_insights"][0]["commentary"] == "Imported opening commentary"
+    assert data["phase_insights"][-1]["phase"] == "verdict"
+
+    result = client.get(f"/api/debate/{data['id']}/result")
+    assert result.status_code == 200
+    result_payload = result.json()
+    assert result_payload["phase_insights"][0]["commentary"] == "Imported opening commentary"
+    assert result_payload["phase_insights"][-1]["judge_focus"] == "Imported verdict focus"

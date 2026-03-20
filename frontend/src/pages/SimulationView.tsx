@@ -9,10 +9,12 @@ import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
 import {
-  createReplayArtifact,
-  getReplayArtifact,
-  importReplayScenario,
-  upsertScenarioDirectorState,
+    createReplayArtifact,
+    getScenarioDirectorState,
+    getScenarioGameplayState,
+    getReplayArtifact,
+    importReplayScenario,
+    upsertScenarioDirectorState,
   upsertScenarioGameplayState,
 } from '../api/client';
 import {
@@ -418,25 +420,45 @@ export function SimulationView() {
 
   const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id || isReplayMode) return;
-    const nextState = scenarioMetaToDirectorState(nextMeta);
+    const nextState = {
+      ...scenarioMetaToDirectorState(nextMeta),
+      revision: backendDirectorState?.revision ?? scenario?.director_state?.revision ?? 0,
+    };
     setBackendDirectorState(nextState);
     try {
-      await upsertScenarioDirectorState(id, nextState);
+      const persisted = await upsertScenarioDirectorState(id, nextState);
+      setBackendDirectorState(persisted);
     } catch (err) {
+      if (err instanceof Error && err.message.includes('API 409:')) {
+        const latest = await getScenarioDirectorState(id).catch(() => null);
+        if (latest) {
+          setBackendDirectorState(latest);
+        }
+      }
       console.warn('[DirectorState] Failed to persist backend state', err);
     }
-  }, [id, isReplayMode]);
+  }, [backendDirectorState?.revision, id, isReplayMode, scenario?.director_state?.revision]);
 
   const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id || isReplayMode) return;
-    const nextState = scenarioMetaToGameplayState(nextMeta);
+    const nextState = {
+      ...scenarioMetaToGameplayState(nextMeta),
+      revision: backendGameplayState?.revision ?? scenario?.gameplay_state?.revision ?? 0,
+    };
     setBackendGameplayState(nextState);
     try {
-      await upsertScenarioGameplayState(id, nextState);
+      const persisted = await upsertScenarioGameplayState(id, nextState);
+      setBackendGameplayState(persisted);
     } catch (err) {
+      if (err instanceof Error && err.message.includes('API 409:')) {
+        const latest = await getScenarioGameplayState(id).catch(() => null);
+        if (latest) {
+          setBackendGameplayState(latest);
+        }
+      }
       console.warn('[GameplayState] Failed to persist backend state', err);
     }
-  }, [id, isReplayMode]);
+  }, [backendGameplayState?.revision, id, isReplayMode, scenario?.gameplay_state?.revision]);
 
   useEffect(() => {
     if (isReplayMode) return;

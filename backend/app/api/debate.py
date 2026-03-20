@@ -180,6 +180,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     score = result.get("score") if isinstance(result.get("score"), dict) else payload.get("score") if isinstance(payload.get("score"), dict) else {}
     counterplay = payload.get("counterplay") if isinstance(payload.get("counterplay"), dict) else None
     rationale = result.get("judge_rationale") if isinstance(result.get("judge_rationale"), dict) else {}
+    phase_insights = payload.get("phase_insights") if isinstance(payload.get("phase_insights"), list) else None
 
     engine = get_engine()
     with Session(engine) as session:
@@ -217,6 +218,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
                 "counterplay_explanation": counterplay.get("explanation") if counterplay else "",
                 "metadata": {
                     "adjudication_mode": str(result.get("adjudication_mode", "deterministic")).strip() or "deterministic",
+                    "phase_insights": phase_insights if phase_insights is not None else [],
                 },
             },
         )

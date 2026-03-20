@@ -71,8 +71,9 @@
 - 主模式玩法层已完成：14 张玩法卡、结构化押注、因果档案、daily/weekly challenge、Replay / Import。
 - 主模式高级干预前端闭环已完成：`InterventionModal` 当前已支持 `即时 / 回溯 / 批量` 三模式。
 - 主模式 authority 已完成：`director_state_json / gameplay_state_json` 为后端真值，`scenarioMeta` 仅保留兼容/缓存层职责。
+- authority 写路径本 session 又补了 `revision` 版乐观并发控制：`director_state / gameplay_state` stale PUT 会返回 `409`，前端会回读最新 authority，而不是静默覆盖。
 - 结果页 authority 又收了一步：远端 `director_state / gameplay_state / campaign summary` 当前作为展示基线，只有缺字段时才回退本地 `scenarioMeta`；本 session 又继续压缩了本地兼容层：`scenarioMeta` 的 localStorage 不再长期保留 archive 摘要重复字段，主模式 `result / simulation replay` 也会先压缩 `scenarioMeta`，读路径再按 usage/bets 现算回补。
-- Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`。
+- Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`；本 session 又补了 replay import 的 `phase_insights` 保真。
 - 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`；Theater 这轮又补了意图级 loader 预取、WebKit 截图兜底、移动端首屏压缩，以及 `BootScene` 初始 sprite 预载收紧 + `WorldScene` 缺失 sprite 按需补载。
 
 ### 当前验证口径
@@ -81,15 +82,15 @@
   - backend `815 passed`
   - frontend `179 passed`
 - Current targeted verification：
-  - backend targeted set `82 passed`
+  - backend targeted set `86 passed`
   - frontend targeted set `104 passed`
 - Current session focused verification：
-  - `useScreenCapture / scenarioMeta / scenarioReplay / ResultView / SimulationView`：`42 passed`
-  - `simulationReplay / scenarioReplay / ResultView / SimulationView`：`32 passed`
-  - `sceneAssetPlan / PhaserGameLoader / SimulationView`：`30 passed`
+  - `backend/tests/test_campaign_service.py + backend/tests/test_campaign_api.py + backend/tests/test_debate_api.py`：`32 passed`
+  - `src/pages/SimulationView.test.tsx + src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/pages/ResultView.test.tsx`：`32 passed`
   - `tsc / build`：通过
 - Current release signoff：
-  - 本轮当前工作树完整签收工件：`frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`
+  - 本 session 代码相关完整签收工件：`frontend/output/e2e/current-head-rerun/summary.json`
+  - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`
   - 这份 `summary.json` 绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
   - `summary.json` 会带 git `branch / commit / worktree` 绑定信息

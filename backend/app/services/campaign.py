@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -28,6 +29,7 @@ LEVEL_SCORE_STEP = 5
 BADGE_IDS = ("daily_challenge", "archive_record", "bet_winner")
 
 DEFAULT_SCENARIO_DIRECTOR_STATE = {
+    "revision": 0,
     "objectives": {
         "generated_for_question": None,
         "generated_for_profile": None,
@@ -45,6 +47,7 @@ DEFAULT_SCENARIO_DIRECTOR_STATE = {
 }
 
 DEFAULT_SCENARIO_GAMEPLAY_STATE = {
+    "revision": 0,
     "cards": {
         "usage_log": [],
     },
@@ -135,10 +138,27 @@ def get_default_scenario_director_state() -> dict[str, Any]:
     return deepcopy(DEFAULT_SCENARIO_DIRECTOR_STATE)
 
 
+def _normalize_state_revision(payload: dict[str, Any] | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    try:
+        revision = int(payload.get("revision", 0))
+    except (TypeError, ValueError):
+        revision = 0
+    return max(0, revision)
+
+
+def _with_state_revision(payload: dict[str, Any], revision: int) -> dict[str, Any]:
+    next_payload = deepcopy(payload)
+    next_payload["revision"] = max(0, revision)
+    return next_payload
+
+
 def normalize_scenario_director_state(payload: dict[str, Any] | None) -> dict[str, Any]:
     state = get_default_scenario_director_state()
     if not isinstance(payload, dict):
         return state
+    state["revision"] = _normalize_state_revision(payload)
 
     raw_objectives = payload.get("objectives")
     if isinstance(raw_objectives, dict):
@@ -341,6 +361,7 @@ def normalize_scenario_gameplay_state(payload: dict[str, Any] | None) -> dict[st
     state = get_default_scenario_gameplay_state()
     if not isinstance(payload, dict):
         return state
+    state["revision"] = _normalize_state_revision(payload)
 
     raw_cards = payload.get("cards")
     if isinstance(raw_cards, dict):
@@ -963,11 +984,35 @@ def save_scenario_director_state(
         if scenario is None:
             raise CampaignNotFoundError("Scenario not found")
 
-        scenario.director_state_json = normalize_scenario_director_state(director_state)
-        session.add(scenario)
+        current_state = normalize_scenario_director_state(scenario.director_state_json)
+        expected_revision = _normalize_state_revision(director_state)
+        if expected_revision != current_state["revision"]:
+            raise CampaignConflictError("Director state revision mismatch")
+
+        next_state = normalize_scenario_director_state(
+            _with_state_revision(director_state, current_state["revision"] + 1)
+        )
+        result = session.exec(
+            update(Scenario)
+            .where(Scenario.id == scenario_id)
+            .where(
+                func.coalesce(
+                    func.json_extract(Scenario.director_state_json, "$.revision"),
+                    0,
+                )
+                == current_state["revision"]
+            )
+            .values(director_state_json=next_state)
+        )
+        if result.rowcount != 1:
+            session.rollback()
+            raise CampaignConflictError("Director state revision mismatch")
         session.commit()
-        session.refresh(scenario)
-        return normalize_scenario_director_state(scenario.director_state_json)
+        session.expire_all()
+        persisted = session.get(Scenario, scenario_id)
+        if persisted is None:
+            raise CampaignNotFoundError("Scenario not found")
+        return normalize_scenario_director_state(persisted.director_state_json)
 
 
 def get_scenario_gameplay_state(scenario_id: str) -> dict[str, Any]:
@@ -991,11 +1036,35 @@ def save_scenario_gameplay_state(
         if scenario is None:
             raise CampaignNotFoundError("Scenario not found")
 
-        scenario.gameplay_state_json = normalize_scenario_gameplay_state(gameplay_state)
-        session.add(scenario)
+        current_state = normalize_scenario_gameplay_state(scenario.gameplay_state_json)
+        expected_revision = _normalize_state_revision(gameplay_state)
+        if expected_revision != current_state["revision"]:
+            raise CampaignConflictError("Gameplay state revision mismatch")
+
+        next_state = normalize_scenario_gameplay_state(
+            _with_state_revision(gameplay_state, current_state["revision"] + 1)
+        )
+        result = session.exec(
+            update(Scenario)
+            .where(Scenario.id == scenario_id)
+            .where(
+                func.coalesce(
+                    func.json_extract(Scenario.gameplay_state_json, "$.revision"),
+                    0,
+                )
+                == current_state["revision"]
+            )
+            .values(gameplay_state_json=next_state)
+        )
+        if result.rowcount != 1:
+            session.rollback()
+            raise CampaignConflictError("Gameplay state revision mismatch")
         session.commit()
-        session.refresh(scenario)
-        return normalize_scenario_gameplay_state(scenario.gameplay_state_json)
+        session.expire_all()
+        persisted = session.get(Scenario, scenario_id)
+        if persisted is None:
+            raise CampaignNotFoundError("Scenario not found")
+        return normalize_scenario_gameplay_state(persisted.gameplay_state_json)
 
 
 def get_scenario_campaign_summary(scenario_id: str) -> dict[str, Any]:

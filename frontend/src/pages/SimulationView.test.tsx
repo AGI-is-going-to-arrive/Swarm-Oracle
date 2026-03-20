@@ -15,7 +15,15 @@ const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
 let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
 let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
-const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock, importReplayScenarioMock, createReplayArtifactMock, getReplayArtifactMock } = vi.hoisted(() => ({
+const {
+  upsertScenarioDirectorStateMock,
+  upsertScenarioGameplayStateMock,
+  getScenarioDirectorStateMock,
+  getScenarioGameplayStateMock,
+  importReplayScenarioMock,
+  createReplayArtifactMock,
+  getReplayArtifactMock,
+} = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
@@ -23,6 +31,31 @@ const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock, import
   upsertScenarioGameplayStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
+  })),
+  getScenarioDirectorStateMock: vi.fn(async (scenarioId: string) => ({
+    scenario_id: scenarioId,
+    revision: 0,
+    objectives: {
+      generated_for_question: null,
+      generated_for_profile: null,
+      goals: [],
+      last_updated_at: null,
+    },
+    commitment: {
+      active: false,
+      branch_id: null,
+      branch_title: null,
+      committed_at_round: null,
+      committed_at: null,
+      outcome: null,
+    },
+  })),
+  getScenarioGameplayStateMock: vi.fn(async (scenarioId: string) => ({
+    scenario_id: scenarioId,
+    revision: 0,
+    cards: { usage_log: [] },
+    betting: { bets: [] },
+    archive: { key_moments: [], branch_snapshots: [] },
   })),
   importReplayScenarioMock: vi.fn(async (scenario: Scenario) => ({
     ...scenario,
@@ -37,6 +70,7 @@ const { upsertScenarioDirectorStateMock, upsertScenarioGameplayStateMock, import
 }));
 
 const emptyDirectorState: ScenarioDirectorState = {
+  revision: 0,
   objectives: {
     generated_for_question: null,
     generated_for_profile: null,
@@ -54,6 +88,7 @@ const emptyDirectorState: ScenarioDirectorState = {
 };
 
 const emptyGameplayState: ScenarioGameplayState = {
+  revision: 0,
   cards: { usage_log: [] },
   betting: { bets: [] },
   archive: { key_moments: [], branch_snapshots: [] },
@@ -141,6 +176,8 @@ vi.mock('../hooks/useSimulationWS', () => ({
 
 vi.mock('../api/client', () => ({
   createReplayArtifact: createReplayArtifactMock,
+  getScenarioDirectorState: getScenarioDirectorStateMock,
+  getScenarioGameplayState: getScenarioGameplayStateMock,
   getReplayArtifact: getReplayArtifactMock,
   importReplayScenario: importReplayScenarioMock,
   upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
@@ -252,6 +289,33 @@ describe('SimulationView replay automation output', () => {
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,ZmFrZQ==');
     upsertScenarioDirectorStateMock.mockClear();
     upsertScenarioGameplayStateMock.mockClear();
+    getScenarioDirectorStateMock.mockReset();
+    getScenarioGameplayStateMock.mockReset();
+    getScenarioDirectorStateMock.mockImplementation(async (scenarioId: string) => ({
+      scenario_id: scenarioId,
+      revision: 0,
+      objectives: {
+        generated_for_question: null,
+        generated_for_profile: null,
+        goals: [],
+        last_updated_at: null,
+      },
+      commitment: {
+        active: false,
+        branch_id: null,
+        branch_title: null,
+        committed_at_round: null,
+        committed_at: null,
+        outcome: null,
+      },
+    }));
+    getScenarioGameplayStateMock.mockImplementation(async (scenarioId: string) => ({
+      scenario_id: scenarioId,
+      revision: 0,
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    }));
     importReplayScenarioMock.mockClear();
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
@@ -479,6 +543,7 @@ describe('SimulationView replay automation output', () => {
 
     await waitFor(() => {
       expect(upsertScenarioGameplayStateMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
+        revision: 0,
         betting: {
           bets: [
             expect.objectContaining({

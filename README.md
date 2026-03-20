@@ -6,7 +6,7 @@
 
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
-- 本轮当前工作树 `release:signoff` 已实跑通过，工件位于 `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`。
+- 本 session 最近一次代码相关 `release:signoff` 已实跑通过，工件位于 `frontend/output/e2e/current-head-rerun/summary.json`。
 - 最近一次 clean runtime 基线仍是 `frontend/output/e2e/current-head-audit-signoff/summary.json`。
 - 这份 clean baseline 的 `summary.json` 绑定运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
@@ -122,15 +122,14 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
 - Current targeted verification:
-  - backend targeted set `82 passed`
+  - backend targeted set `86 passed`
   - frontend targeted set `104 passed`
   - `tsc` / `build` / assets check 通过
 - Current session focused verification:
-  - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`: `42 passed`
-  - `src/lib/simulationReplay.test.ts + src/lib/scenarioReplay.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `32 passed`
-  - `src/game/sceneAssetPlan.test.ts + src/game/PhaserGameLoader.test.ts + src/pages/SimulationView.test.tsx`: `30 passed`
-  - `tsc` / `build`: 多轮复验通过
-  - 当前工作树 `release:signoff`: 通过
+  - `backend/tests/test_campaign_service.py + backend/tests/test_campaign_api.py + backend/tests/test_debate_api.py`: `32 passed`
+  - `src/pages/SimulationView.test.tsx + src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/pages/ResultView.test.tsx`: `32 passed`
+  - `tsc` / `build`: 当前代码相关复验通过
+  - 本 session 代码相关 `release:signoff`：通过
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -143,10 +142,11 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - `scripts/e2e-debate-suite.mjs full`
 - `summary.json` 现在会记录 git commit / worktree 绑定信息。
 - 如果本地 LLM 链路可用，可以用 `SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid` 强制要求 Debate 结果返回 `adjudication_mode = llm_hybrid`。
-- 如果本轮改动涉及高级干预、结果页 authority 或 `scenarioMeta / replay` 收口，优先跑上面的扩展前端定向回归；本 session 实跑通过 `104 passed`。
+- 如果本轮改动涉及 authority 写入、`scenarioMeta / replay` 收口或结果页展示链路，优先跑上面的扩展前端定向回归；本 session 相关前端子集实跑通过 `32 passed`。
 - Safari is optional and not part of the default full signoff.
 - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）。
-- 本轮当前工作树完整签收工件：`frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`。
+- 本 session 代码相关完整签收工件：`frontend/output/e2e/current-head-rerun/summary.json`（要求 Debate `adjudication_mode = llm_hybrid`）。
+- 同一批代码改动在更干净工作树上的完整签收工件：`frontend/output/e2e/current-head-recheck/summary.json`。
 
 ## CI
 
@@ -154,7 +154,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - targeted backend `pytest`
   - frontend `assets:provenance:check / build / targeted vitest`；当前 targeted vitest lane 已与文档口径对齐，包含 `InterventionModal.test.tsx` 与 `simulationStore.test.ts`
   - `release-signoff-dry-run`
-  - deterministic `debate-signoff-smoke`
+  - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
   - preflight on `LLM_RESPONSES_URL / LLM_API_KEY`

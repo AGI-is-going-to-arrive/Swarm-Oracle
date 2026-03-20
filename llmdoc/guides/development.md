@@ -66,7 +66,7 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-- 当前 targeted backend set：`82 passed`
+- 当前 targeted backend set：`86 passed`
 
 ### Frontend
 
@@ -79,7 +79,7 @@ npm run assets:provenance:check
 ```
 
 - 当前 targeted frontend set：`104 passed`
-- 这组扩展回归适用于本轮这类“高级干预 + 结果页 authority + scenarioMeta/replay 收口”改动；当前实跑通过 `104 passed`。
+- 这组扩展回归适用于本轮这类“authority 写入 / 结果页 authority / scenarioMeta-replay 收口”改动；更贴近本 session 的前端相关子集实跑为 `32 passed`。
 - 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
 - 本轮这类“`scenarioMeta` 继续收口 + replay helper 动态加载 + Theater 首屏/截图兜底 + BootScene/WorldScene 资源加载优化”改动，当前还额外实跑通过：
   - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`：`42 passed`
@@ -146,10 +146,11 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 这份工件绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
 - 引用 signoff 结果时，以 `summary.json` 里的 git `branch / commit / worktree` 为准
 
-本轮当前工作树的完整 signoff 工件：
+本 session 代码相关的完整 signoff 工件：
 
-- `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`
-- 这份工件对应本轮当前工作树实跑通过；由于运行时包含尚未提交的本地改动，`summary.json` 当前记录为 `dirty=true`
+- `frontend/output/e2e/current-head-rerun/summary.json`
+- 这份工件对应本 session 代码相关改动的真实复跑，且显式要求 Debate `adjudication_mode = llm_hybrid`
+- 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
 
 ## CI
 
@@ -157,7 +158,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - targeted backend `pytest`
   - frontend `assets:provenance:check / build / targeted vitest`；当前 lane 已与文档里的 targeted frontend set 对齐
   - `release-signoff-dry-run`
-  - deterministic `debate-signoff-smoke`
+  - `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
 - `.github/workflows/release-signoff.yml`
   - nightly + manual full signoff
   - preflight on `LLM_RESPONSES_URL / LLM_API_KEY`
