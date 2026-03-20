@@ -37,9 +37,11 @@ import {
   type ScenarioMeta,
 } from '../lib/scenarioMeta';
 import {
+  hasScenarioDirectorAuthority,
   mergeScenarioMetaWithDirectorState,
 } from '../lib/scenarioDirectorState';
 import {
+  hasScenarioGameplayAuthority,
   mergeScenarioMetaWithGameplayState,
 } from '../lib/scenarioGameplayState';
 import {
@@ -191,7 +193,12 @@ function resetScenarioMetaGameplayCompat(
       lastCounterplayCard: hasRemoteUsageAuthority ? null : meta.archive.lastCounterplayCard,
       updatedAt: hasRemoteUsageAuthority ? undefined : meta.archive.updatedAt,
       branchSnapshots: hasRemoteBranchSnapshotAuthority ? [] : meta.archive.branchSnapshots,
-      keyMoments: hasRemoteKeyMomentAuthority ? [] : meta.archive.keyMoments,
+      keyMoments: hasRemoteKeyMomentAuthority
+        ? meta.archive.keyMoments.filter((moment) => {
+            const parsed = parseScenarioMoment(moment);
+            return !parsed || parsed.kind === 'commitment';
+          })
+        : meta.archive.keyMoments,
     },
   };
 }
@@ -656,15 +663,16 @@ export default function ResultView() {
   );
   const scenarioMeta = useMemo(() => {
     if (!storedScenarioMeta) return null;
+    if (derivedScenarioMeta) {
+      return derivedScenarioMeta;
+    }
 
-    return derivedScenarioMeta || replayPayload?.scenarioMeta
-      ? storedScenarioMeta
-      : mergeResultScenarioMetaAuthority(
-          storedScenarioMeta,
-          scenario?.gameplay_state ?? null,
-          scenario?.director_state ?? null,
-        );
-  }, [derivedScenarioMeta, replayPayload?.scenarioMeta, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
+    return mergeResultScenarioMetaAuthority(
+      storedScenarioMeta,
+      scenario?.gameplay_state ?? null,
+      scenario?.director_state ?? null,
+    );
+  }, [derivedScenarioMeta, scenario?.director_state, scenario?.gameplay_state, storedScenarioMeta]);
   const resolvedProfileId =
     (
       campaignScenarioSummary?.profile_id
@@ -872,7 +880,10 @@ export default function ResultView() {
       } = await loadScenarioReplayHelpers();
       const compactReplaySnapshot = {
         ...replaySnapshot,
-        scenarioMeta: compactScenarioMetaForReplay(replaySnapshot.scenarioMeta),
+        scenarioMeta: compactScenarioMetaForReplay(replaySnapshot.scenarioMeta, {
+          stripDirectorAuthority: hasScenarioDirectorAuthority(replaySnapshot.scenario.director_state ?? null),
+          stripGameplayAuthority: hasScenarioGameplayAuthority(replaySnapshot.scenario.gameplay_state ?? null),
+        }),
       };
       const artifact = await createReplayArtifact(
         'scenario_result_v1',

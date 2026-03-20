@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ScenarioMeta } from '../lib/scenarioMeta';
 import type { Scenario } from '../types';
-import { buildScenarioReplayUrl } from '../lib/scenarioReplay';
+import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import ResultView from './ResultView';
 
 const {
@@ -482,18 +482,185 @@ describe('ResultView campaign summary', () => {
       <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
         <Routes>
           <Route path="/result/replay" element={<ResultView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
         </Routes>
       </MemoryRouter>,
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
-    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.replay_source).toBe('token');
+    });
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
+  });
+
+  it('prefers replay snapshot authority over compact local scenarioMeta on the result page', async () => {
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    importReplayScenarioMock.mockReset();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: {
+          objectives: {
+            generated_for_question: null,
+            generated_for_profile: null,
+            goals: [],
+            last_updated_at: null,
+          },
+          commitment: {
+            active: false,
+            branch_id: null,
+            branch_title: null,
+            committed_at_round: null,
+            committed_at: null,
+            outcome: null,
+          },
+        },
+        gameplay_state: {
+          cards: {
+            usage_log: [],
+          },
+          betting: {
+            bets: [
+              {
+                bet_id: 'bet-remote',
+                kind: 'branch_winner',
+                target_id: 'branch-1',
+                target_label: 'Archive Branch',
+                confidence: 0.73,
+                user_name: 'Remote Analyst',
+                placed_at_round: 2,
+                placed_at: '2026-03-19T00:02:00Z',
+                resolved: true,
+              },
+            ],
+          },
+          archive: {
+            key_moments: ['Remote key moment'],
+            branch_snapshots: [
+              {
+                branch_id: 'branch-1',
+                title: 'Archive Branch',
+                probability: 1,
+              },
+            ],
+          },
+        },
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: compactScenarioMetaForReplay({
+        director: { maxPoints: 3, remainingPoints: 1, spentPoints: 2 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: {
+          bets: [
+            {
+              betId: 'bet-local',
+              kind: 'branch_winner',
+              targetId: 'branch-local',
+              targetLabel: 'Stale Local Branch',
+              confidence: 0.21,
+              placedAtRound: 1,
+              placedAt: '2026-03-18T00:00:00Z',
+              resolved: false,
+            },
+          ],
+        },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: 'What if the archive had to sync?',
+          generatedForProfile: 'law',
+          goals: [],
+          lastUpdatedAt: '2026-03-19T00:00:00Z',
+        },
+        archive: {
+          branchSnapshots: [{ branchId: 'branch-local', title: 'Stale Local Branch', probability: 0.37 }],
+          keyMoments: ['Stale local moment'],
+          profileId: 'law',
+          dominantBranchTitle: 'Stale Local Branch',
+          dominantTone: 'rupture',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'C',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      }, {
+        stripDirectorAuthority: true,
+        stripGameplayAuthority: true,
+      }),
+      campaignScenarioSummary: null,
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Remote key moment')).toBeInTheDocument();
+    expect(finalizeCampaignMock).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.replay_source).toBe('token');
+      expect(payload?.page?.result_bet_list).toHaveLength(1);
+      expect(payload?.page?.result_bet_list?.[0]?.target_label).toBe('Archive Branch');
+      expect(payload?.page?.result_key_moments).toContain('Remote key moment');
     });
   });
 

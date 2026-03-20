@@ -85,6 +85,8 @@ npm run assets:provenance:check
   - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`：`42 passed`
   - `src/lib/simulationReplay.test.ts + src/lib/scenarioReplay.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`32 passed`
   - `src/game/sceneAssetPlan.test.ts + src/game/PhaserGameLoader.test.ts + src/pages/SimulationView.test.tsx`：`30 passed`
+- 本轮这类“默认 build / vitest 切到本地精简 Phaser 入口 + `e2e-suite` revision 修复”改动，当前还额外实跑通过：
+  - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`41 passed`
 
 ## Release Signoff
 
@@ -104,6 +106,12 @@ npm run preview -- --host 127.0.0.1 --port 18928
 ```bash
 cd frontend
 npm run release:signoff -- --headless
+```
+
+```bash
+cd frontend
+npm run test:spike:phaser-custom
+npm run build:spike:phaser-custom
 ```
 
 如需把 Debate 结果强约束到真 `LLM hybrid` 裁决，可显式加：
@@ -148,8 +156,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 本 session 代码相关的完整 signoff 工件：
 
-- `frontend/output/e2e/current-head-rerun/summary.json`
-- 这份工件对应本 session 代码相关改动的真实复跑，且显式要求 Debate `adjudication_mode = llm_hybrid`
+- `frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`
+- 这份工件对应本 session 当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
+- 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
+- `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 同一批代码改动在更干净工作树上的实跑工件见 `frontend/output/e2e/current-head-recheck/summary.json`
 
 ## CI

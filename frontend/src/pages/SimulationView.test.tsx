@@ -236,7 +236,7 @@ vi.mock('../components/BranchDetailModal', () => ({
 }));
 
 vi.mock('../components/PredictionModal', () => ({
-  default: () => null,
+  default: () => <div data-testid="prediction-modal" />,
 }));
 
 vi.mock('../components/GameplayCardsModal', () => ({
@@ -984,6 +984,8 @@ describe('SimulationView replay automation output', () => {
       </MemoryRouter>,
     );
 
+    await screen.findByText('phaser-game');
+
     const panelShot = await (window as Window & { capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null> }).capture_game_screenshot?.('panel');
     expect(panelShot).toContain('data:image/png');
     expect(captureCompositeElementDataUrlMock).toHaveBeenCalledWith('.theater-panel', '.phaser-game-container');
@@ -995,6 +997,12 @@ describe('SimulationView replay automation output', () => {
     expect(noModalShot).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'sim.predict_btn' }));
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.active_modal).toBe('prediction');
+    });
+    await screen.findByTestId('prediction-modal');
     captureElementDataUrlMock.mockImplementation((selector: string) => {
       if (selector === '.modal-content') {
         return Promise.resolve('data:image/png;base64,ZmFrZQ==');

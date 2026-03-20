@@ -421,28 +421,66 @@ async function deleteScenarioViaApi(baseUrl, scenarioId) {
   return response.json();
 }
 
-async function putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState) {
-  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/director-state`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(directorState),
-  });
+async function getScenarioDirectorStateViaApi(baseUrl, scenarioId) {
+  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/director-state`);
   if (!response.ok) {
-    throw new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${await response.text()}`);
+    throw new Error(`Failed to get director state for ${scenarioId}: ${response.status} ${await response.text()}`);
   }
   return response.json();
 }
 
-async function putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState) {
-  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/gameplay-state`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(gameplayState),
-  });
+async function getScenarioGameplayStateViaApi(baseUrl, scenarioId) {
+  const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/gameplay-state`);
   if (!response.ok) {
-    throw new Error(`Failed to save gameplay state for ${scenarioId}: ${response.status} ${await response.text()}`);
+    throw new Error(`Failed to get gameplay state for ${scenarioId}: ${response.status} ${await response.text()}`);
   }
   return response.json();
+}
+
+async function putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const currentState = await getScenarioDirectorStateViaApi(baseUrl, scenarioId);
+    const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/director-state`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...directorState,
+        revision: currentState.revision ?? 0,
+      }),
+    });
+    if (response.ok) {
+      return response.json();
+    }
+
+    const body = await response.text();
+    if (response.status === 409 && attempt === 0) {
+      continue;
+    }
+    throw new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${body}`);
+  }
+}
+
+async function putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const currentState = await getScenarioGameplayStateViaApi(baseUrl, scenarioId);
+    const response = await fetch(`${baseUrl}/api/campaign/scenario/${scenarioId}/gameplay-state`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...gameplayState,
+        revision: currentState.revision ?? 0,
+      }),
+    });
+    if (response.ok) {
+      return response.json();
+    }
+
+    const body = await response.text();
+    if (response.status === 409 && attempt === 0) {
+      continue;
+    }
+    throw new Error(`Failed to save gameplay state for ${scenarioId}: ${response.status} ${body}`);
+  }
 }
 
 async function waitForScenarioStatus(baseUrl, scenarioId, predicate, timeout = 60000, label = "scenario status") {

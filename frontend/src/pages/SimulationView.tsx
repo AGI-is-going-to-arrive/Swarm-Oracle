@@ -161,6 +161,42 @@ function SimulationSlotFallback({ label }: { label: string }) {
   return <div className="sim-slot-fallback">{label}</div>;
 }
 
+function shouldWarmTheaterLoaderOnIntent() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return false;
+  }
+
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+    return false;
+  }
+
+  if (typeof window.matchMedia === 'function') {
+    if (window.matchMedia('(prefers-reduced-data: reduce)').matches) {
+      return false;
+    }
+
+    if (!window.matchMedia('(pointer: fine)').matches) {
+      return false;
+    }
+  }
+
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean };
+    deviceMemory?: number;
+  }).connection;
+
+  if (connection?.saveData) {
+    return false;
+  }
+
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  if (typeof deviceMemory === 'number' && deviceMemory > 0 && deviceMemory <= 2) {
+    return false;
+  }
+
+  return true;
+}
+
 export function SimulationView() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
@@ -324,6 +360,7 @@ export function SimulationView() {
   );
   const preloadTheaterLoader = useCallback(() => {
     if (!canToggleViewMode || viewMode === 'theater') return;
+    if (!shouldWarmTheaterLoaderOnIntent()) return;
     void loadPhaserGameLoaderModule();
   }, [canToggleViewMode, viewMode]);
 
@@ -863,7 +900,6 @@ export function SimulationView() {
     const {
       compactScenarioMetaForReplay,
     } = await loadScenarioReplayHelpers();
-    const compactReplayMeta = compactScenarioMetaForReplay(replayScenarioMeta);
     const snapshot = buildSimulationSnapshot(
       scenario,
       agents,
@@ -872,6 +908,10 @@ export function SimulationView() {
       backendDirectorState,
       backendGameplayState,
     );
+    const compactReplayMeta = compactScenarioMetaForReplay(replayScenarioMeta, {
+      stripDirectorAuthority: hasScenarioDirectorAuthority(snapshot.director_state ?? null),
+      stripGameplayAuthority: hasScenarioGameplayAuthority(snapshot.gameplay_state ?? null),
+    });
     const artifact = await createReplayArtifact('simulation_view_v1', {
       scenario: snapshot,
       scenarioMeta: compactReplayMeta,
@@ -1320,7 +1360,6 @@ export function SimulationView() {
             onClick={toggleViewMode}
             onMouseEnter={preloadTheaterLoader}
             onFocus={preloadTheaterLoader}
-            onTouchStart={preloadTheaterLoader}
             aria-label={viewMode === 'classic' ? t('sim.switch_to_theater_aria') : t('sim.switch_to_classic_aria')}
             disabled={!canToggleViewMode}
             title={theaterToggleHint}

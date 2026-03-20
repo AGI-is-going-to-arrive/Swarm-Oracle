@@ -188,6 +188,36 @@ describe('scenarioReplay helpers', () => {
     await expect(decodeScenarioReplayToken(token)).resolves.toEqual(replayPayload);
   });
 
+  it('drops authority-backed runtime state when replay snapshot already carries authority', () => {
+    expect(compactScenarioMetaForReplay(scenarioMeta, {
+      stripDirectorAuthority: true,
+      stripGameplayAuthority: true,
+    })).toEqual({
+      ...scenarioMeta,
+      director: {
+        maxPoints: 3,
+        remainingPoints: 3,
+        spentPoints: 0,
+      },
+      cooldowns: {},
+      cards: {
+        usageLog: [],
+      },
+      betting: {
+        bets: [],
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [],
+        keyMoments: ['Moment 1', 'event:card:2:public_hearing'],
+      },
+    });
+  });
+
   it('builds a replay route url', async () => {
     const url = await buildScenarioReplayUrl('https://example.com/', replayPayload);
     expect(url).toContain('/result/replay?replay=');

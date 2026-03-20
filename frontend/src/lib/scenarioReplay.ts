@@ -26,7 +26,47 @@ export interface ScenarioResultReplayPayload {
   isDailyChallenge?: boolean;
 }
 
-export function compactScenarioMetaForReplay(meta: ScenarioMeta): ScenarioMeta {
+export interface CompactScenarioMetaForReplayOptions {
+  stripDirectorAuthority?: boolean;
+  stripGameplayAuthority?: boolean;
+}
+
+function compactReplayObjectives(meta: ScenarioMeta['objectives']): ScenarioMeta['objectives'] {
+  return {
+    generatedForQuestion: null,
+    generatedForProfile: null,
+    goals: meta.goals,
+  };
+}
+
+function compactReplayCommitment(meta: ScenarioMeta['commitment']): ScenarioMeta['commitment'] {
+  if (!meta.active || !meta.branchId || !meta.branchTitle) {
+    return {
+      active: false,
+      branchId: null,
+      branchTitle: null,
+      committedAtRound: null,
+      committedAt: null,
+      outcome: null,
+    };
+  }
+
+  return {
+    active: true,
+    branchId: meta.branchId,
+    branchTitle: meta.branchTitle,
+    committedAtRound: null,
+    committedAt: null,
+    outcome: meta.outcome ?? 'pending',
+  };
+}
+
+export function compactScenarioMetaForReplay(
+  meta: ScenarioMeta,
+  options: CompactScenarioMetaForReplayOptions = {},
+): ScenarioMeta {
+  const { stripGameplayAuthority = false } = options;
+
   return {
     director: {
       maxPoints: 3,
@@ -34,10 +74,10 @@ export function compactScenarioMetaForReplay(meta: ScenarioMeta): ScenarioMeta {
       spentPoints: 0,
     },
     cooldowns: {},
-    cards: meta.cards,
-    betting: meta.betting,
-    commitment: meta.commitment,
-    objectives: meta.objectives,
+    cards: stripGameplayAuthority ? { usageLog: [] } : meta.cards,
+    betting: stripGameplayAuthority ? { bets: [] } : meta.betting,
+    commitment: compactReplayCommitment(meta.commitment),
+    objectives: compactReplayObjectives(meta.objectives),
     archive: {
       branchSnapshots: [],
       keyMoments: getScenarioArchiveKeyMoments(meta),

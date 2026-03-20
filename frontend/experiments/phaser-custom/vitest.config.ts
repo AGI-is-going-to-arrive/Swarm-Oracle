@@ -1,0 +1,23 @@
+/// <reference types="vitest" />
+import { fileURLToPath, URL } from 'node:url';
+import { defineConfig, mergeConfig } from 'vitest/config';
+
+import baseConfig from '../../vitest.config';
+
+const phaserCustomEntry = fileURLToPath(new URL('./entry.cjs', import.meta.url));
+const spectorStub = fileURLToPath(new URL('./phaser3spectorjs-stub.cjs', import.meta.url));
+
+export default mergeConfig(baseConfig, defineConfig({
+  resolve: {
+    alias: [
+      {
+        find: /^phaser$/,
+        replacement: phaserCustomEntry,
+      },
+      {
+        find: /^phaser3spectorjs$/,
+        replacement: spectorStub,
+      },
+    ],
+  },
+}));

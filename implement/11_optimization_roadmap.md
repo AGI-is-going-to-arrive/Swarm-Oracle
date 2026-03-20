@@ -105,7 +105,10 @@
    本 session 又补了一层首页首包收口：
    - 首页题材 `label / hooks / badge` 改走轻量摘要 helper
    - `InputView` 不再直接 runtime 引完整玩法策略表
-   当前 `phaser` 仍是大体积引擎 chunk；`capture-vendor` 已经拆掉，但首页首包这条线已经继续收紧，后续若继续做，主要目标仍是 Theater 引擎和更深层的异步 chunk，而不是把首页题材摘要重新当成“尚未开工”。
+   本 session 又补了更激进的一层：
+   - 当前默认 `vite / vitest` 已 alias 到本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
+   - `phaser` chunk 当前已从约 `1202.19 kB / 328.41 kB gzip` 收口到约 `718.11 kB / 202.34 kB gzip`
+   当前前端包体的主要增量空间仍在 `capture-html`、字体与大体积 PNG 资源；`phaser` 虽然仍是最大单块资源，但已经不再是原先那种 1.2MB 级别的默认工作树阻塞项。
 
 2. 文档真值持续收口。
    需要避免“总表已完成、正文仍停留在计划态”的文档漂移再次出现。
@@ -138,12 +141,9 @@
    本次 session 又补了一轮当前工作树收口：
    - backend targeted `pytest`（含 `tests/test_metrics.py`）：**86 passed**
    - live `/metrics`：`200 text/plain`
-   - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
-   - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
-   - `sceneAssetPlan / PhaserGameLoader / useScreenCapture / EndingScene / WorldScene / SimulationView`：**59 passed**
-   - `frontend/output/e2e/current-post-change-dry-run/summary.json`：dry-run 通过
-   - `frontend/src/pages/InputView.test.tsx`：**4 passed**
-   - `frontend/output/e2e/codex-top3-live-signoff/summary.json`：真实 full signoff 通过；默认合同已带 `mobile`，Debate desktop/mobile 都命中 `adjudication_mode = llm_hybrid`
+   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：**41 passed**
+   - `frontend/output/e2e-spikes/phaser-custom-release-signoff-rerun/summary.json`：真实 full signoff 通过
+   - 这轮还补了 `e2e-suite` 的 authority revision 回读：`director_state_roundtrip / gameplay_state_roundtrip` 在 PUT 前会先 GET 当前 state，再带上最新 `revision`
    后续若做 release signoff，仍建议在更干净的工作区再复跑一次：
    - `release:signoff --headless`
    - 如需要 Safari 证据，再追加 `--include-safari`

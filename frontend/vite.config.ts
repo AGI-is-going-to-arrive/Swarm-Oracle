@@ -1,9 +1,29 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
+
+const phaserCustomEntry = fileURLToPath(
+  new URL('./experiments/phaser-custom/entry.cjs', import.meta.url),
+)
+const spectorStub = fileURLToPath(
+  new URL('./experiments/phaser-custom/phaser3spectorjs-stub.cjs', import.meta.url),
+)
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: [
+      {
+        find: /^phaser$/,
+        replacement: phaserCustomEntry,
+      },
+      {
+        find: /^phaser3spectorjs$/,
+        replacement: spectorStub,
+      },
+    ],
+  },
   build: {
     // Phaser remains a single large engine asset, but it is now isolated behind
     // route + Theater-only lazy loading. Keep warnings focused on chunks that
