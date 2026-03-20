@@ -61,7 +61,7 @@
 ### 当前结论
 
 - 在当前 `browser-first Web` 作用域内，项目主闭环已达到 `release-candidate` 水平；当前工作树已有完整 `release:signoff` 通过工件。
-- 当前默认前端 build / vitest 已切到本地精简 Phaser 入口；当前工作树最近一次通过的完整签收工件见 `frontend/output/e2e/post-commit-signoff/summary.json`。
+- 当前默认前端 build / vitest 已切到本地精简 Phaser 入口；仓库内最近一次通过的完整签收工件见 `frontend/output/e2e/post-commit-signoff/summary.json`。
 - 这一目录页只保留高层结论；细节请按文件状态继续下钻到 `11 / 19 / 20 / 21 / 22` 或仓库根 `README.md`、`llmdoc/*`。
 
 ### 已并入当前基线
@@ -94,7 +94,7 @@
   - `src/lib/scenarioMeta.test.ts + src/lib/archiveSummary.test.ts + src/components/gameplayCards.test.ts + src/components/gameplayContract.test.ts + src/components/InterventionModal.test.tsx + src/components/ShareModal.test.tsx + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/components/GameplayCardsModal.test.tsx + src/pages/DebateArenaView.test.tsx + src/pages/DebateResultView.test.tsx + src/components/DebateBetModal.test.tsx + src/components/DebateShareModal.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts + src/stores/simulationStore.test.ts`：`107 passed`
   - `tsc / build`：通过
 - Current release signoff：
-  - 当前工作树最近一次通过的完整签收工件：`frontend/output/e2e/post-commit-signoff/summary.json`
+  - 仓库内最近一次通过的完整签收工件：`frontend/output/e2e/post-commit-signoff/summary.json`
   - 这份 `summary.json` 绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，`dirty=false`，且 `require_debate_adjudication_mode = llm_hybrid`
   - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`

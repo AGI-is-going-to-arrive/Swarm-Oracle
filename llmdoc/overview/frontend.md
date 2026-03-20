@@ -535,7 +535,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
   - `e2e-suite.mjs` 的 `director_state_roundtrip / gameplay_state_roundtrip` 当前会先回读 authority 的最新 `revision` 再 PUT，避免固定历史样本在 signoff 中稳定撞 `409`
   - `debate-signoff-smoke` 当前在 secrets 可用时会真实要求 `llm_hybrid`，否则安全回退 deterministic
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）
-  - 当前工作树最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`（绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，`dirty=false`，并要求 `adjudication_mode = llm_hybrid`）
+  - 仓库内最近一次通过的 fresh full signoff 工件：`frontend/output/e2e/post-commit-signoff/summary.json`（绑定 commit `c8f4f5713089a044be0e6697597616a1b6f76617`，状态 `passed`，`dirty=false`，并要求 `adjudication_mode = llm_hybrid`）
   - 当前 checkout 是否已完整签收，应以重新实跑得到的 `summary.json` 为准
   - 当前默认构建下的 `phaser` chunk 约为 `718 kB / 202 kB gzip`
   - 同一批代码改动在更干净工作树上的实跑工件：`frontend/output/e2e/current-head-recheck/summary.json`

@@ -97,7 +97,7 @@ npm run build:spike:phaser-custom
   - `cross-browser`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
-- Latest current-worktree full signoff artifact: `output/e2e/post-commit-signoff/summary.json`.
+- Latest repository-side full signoff artifact: `output/e2e/post-commit-signoff/summary.json`.
 - That artifact is bound to commit `c8f4f5713089a044be0e6697597616a1b6f76617` with `passed` status, `dirty=false`, and `llm_hybrid` debate adjudication enforced.
 - `corners` share generation and share retry waits now follow the longer frontend social-copy timeout, reducing false negatives under normal LLM latency.
 - Treat `summary.json` git metadata as the source of truth for whether a specific checkout has been signed off.

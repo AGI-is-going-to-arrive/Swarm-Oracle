@@ -158,7 +158,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 这份工件绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
 - 引用 signoff 结果时，以 `summary.json` 里的 git `branch / commit / worktree` 为准
 
-当前工作树最新的完整 signoff 工件：
+仓库内最近一次通过的完整 signoff 工件：
 
 - `frontend/output/e2e/post-commit-signoff/summary.json`
 - 这份工件对应当前工作树的真实完整 signoff：backend checks、`/metrics`、`tsc`、`build`、assets、`corners`、`mobile`、`cross-browser`、`debate-full` 全部通过
