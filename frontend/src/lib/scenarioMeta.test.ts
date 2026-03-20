@@ -12,6 +12,7 @@ import {
   mergeScenarioArchive,
   placeBet,
   setBranchCommitment,
+  updateArchive,
 } from './scenarioMeta';
 
 describe('scenarioMeta gameplay card rules', () => {
@@ -161,6 +162,18 @@ describe('scenarioMeta gameplay card rules', () => {
       branchTitle: 'Open Hearing',
       currentRound: 3,
     });
+    updateArchive(scenarioId, {
+      mostUsedCard: 'public_hearing',
+      bettingHit: true,
+      archiveGrade: 'S',
+      dominantBranchTitle: 'Open Hearing',
+      dominantTone: 'order',
+      directorStyleTag: 'cold_reader',
+      profileResonance: 'aligned',
+      objectiveCompletedCount: 2,
+      objectiveTotalCount: 2,
+      commitmentOutcome: 'hit',
+    });
 
     const persisted = JSON.parse(
       window.localStorage.getItem('swarmoracle:scenario-meta:v1') ?? '{"scenarios":{}}',
@@ -172,6 +185,16 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(persisted.archive.updatedAt).toBeUndefined();
     expect(persisted.archive.counterplayCardCount).toBeUndefined();
     expect(persisted.archive.lastCounterplayCard).toBeUndefined();
+    expect(persisted.archive.mostUsedCard).toBeUndefined();
+    expect(persisted.archive.bettingHit).toBeUndefined();
+    expect(persisted.archive.archiveGrade).toBeUndefined();
+    expect(persisted.archive.dominantBranchTitle).toBeUndefined();
+    expect(persisted.archive.dominantTone).toBeUndefined();
+    expect(persisted.archive.directorStyleTag).toBeUndefined();
+    expect(persisted.archive.profileResonance).toBeUndefined();
+    expect(persisted.archive.objectiveCompletedCount).toBeUndefined();
+    expect(persisted.archive.objectiveTotalCount).toBeUndefined();
+    expect(persisted.archive.commitmentOutcome).toBeUndefined();
     expect(persisted.archive.keyMoments).toEqual([
       'event:commitment:3:Open%20Hearing',
     ]);
@@ -183,6 +206,7 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(hydrated.archive.keyMoments).toEqual([
       'event:commitment:3:Open%20Hearing',
     ]);
+    expect(hydrated.archive.archiveGrade).toBeUndefined();
     expect(getScenarioArchiveKeyMoments(hydrated)).toEqual(expect.arrayContaining([
       'event:card:2:public_hearing',
       'event:bet:2:Open%20Hearing',

@@ -174,6 +174,7 @@ vi.mock('../lib/scenarioMeta', () => {
     },
     buildCardUsageMoment: vi.fn((round: number, cardId: string) => `event:card:${round}:${cardId}`),
     getScenarioArchiveKeyMoments: vi.fn((current: ScenarioMeta) => current.archive.keyMoments),
+    hydrateScenarioMetaSnapshot: vi.fn((current: ScenarioMeta) => current),
     loadScenarioMeta: vi.fn(() => meta),
     ensureScenarioObjectivesInMemory: vi.fn((current: ScenarioMeta, payload: {
       question: string;

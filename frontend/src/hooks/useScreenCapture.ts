@@ -21,6 +21,12 @@ interface UseScreenCaptureOptions {
 export type CaptureTargetMode = 'auto' | 'canvas' | 'element';
 export type CaptureMode = 'panel' | 'canvas' | 'modal';
 
+export function isLikelyWebKitCaptureUserAgent(userAgent: string | undefined): boolean {
+  if (!userAgent) return false;
+  return /\bAppleWebKit\b/i.test(userAgent)
+    && !/\b(?:Chrome|Chromium|CriOS|EdgiOS|EdgA|OPR|FxiOS)\b/i.test(userAgent);
+}
+
 export interface CaptureRequestOptions {
   selector?: string;
   selectors?: string[];
@@ -71,6 +77,14 @@ export async function captureCompositeElementDataUrl(
 ): Promise<string | null> {
   const runtime = await loadScreenCaptureRuntime();
   return runtime.captureCompositeElementDataUrl(rootSelector, overlaySelector);
+}
+
+export async function captureCompositeElementBlob(
+  rootSelector: string,
+  overlaySelector: string,
+): Promise<Blob | null> {
+  const runtime = await loadScreenCaptureRuntime();
+  return runtime.captureCompositeElementBlob(rootSelector, overlaySelector);
 }
 
 export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScreenCaptureReturn {

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_BOOT_THEME_ID,
+  DEFAULT_BOOT_SPRITE_KEY,
+  getBootScenePreloadSpriteKeys,
   getBootScenePreloadThemes,
+  getCharacterTextureRequest,
   getEndingTextureRequest,
   getSceneTextureRequest,
   resolveBootSceneThemeId,
@@ -25,6 +28,22 @@ describe('sceneAssetPlan', () => {
       textureKey: 'scene_law_court_variant',
       assetPath: '/assets/scenes/law_court_variant.png',
     });
+  });
+
+  it('keeps boot sprite preload focused on default plus known initial sprites', () => {
+    expect(getBootScenePreloadSpriteKeys(undefined)).toEqual([DEFAULT_BOOT_SPRITE_KEY]);
+    expect(getBootScenePreloadSpriteKeys(['sprite_knight', 'sprite_knight', 'unknown'])).toEqual([
+      DEFAULT_BOOT_SPRITE_KEY,
+      'sprite_knight',
+    ]);
+  });
+
+  it('builds character texture requests for known sprite keys only', () => {
+    expect(getCharacterTextureRequest('sprite_knight')).toEqual({
+      spriteKey: 'sprite_knight',
+      assetPath: '/assets/characters/sprite_knight.png',
+    });
+    expect(getCharacterTextureRequest('unknown')).toBeNull();
   });
 
   it('builds ending texture requests for known endings only', () => {

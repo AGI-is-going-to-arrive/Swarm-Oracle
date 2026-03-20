@@ -10,17 +10,15 @@ import Phaser from 'phaser';
 import {
   CHARACTER_SPRITE_KEYS,
   getSceneTextureKey,
-  getThemeAssetPath,
 } from '../../lib/themeRegistry';
-import { getBootScenePreloadThemes } from '../sceneAssetPlan';
+import {
+  getBootScenePreloadSpriteKeys,
+  getBootScenePreloadThemes,
+  getCharacterTextureRequest,
+  getSceneTextureRequest,
+} from '../sceneAssetPlan';
 
-/** All sprite keys that the game expects to be registered as textures. */
-const FALLBACK_SPRITE_KEYS = CHARACTER_SPRITE_KEYS;
 type SpriteKey = typeof CHARACTER_SPRITE_KEYS[number];
-
-function isKnownSpriteKey(value: string): value is SpriteKey {
-  return FALLBACK_SPRITE_KEYS.includes(value as SpriteKey);
-}
 
 /** Fallback color per sprite role (used when PNG fails to load). */
 const SPRITE_FALLBACK: Record<string, { body: number; accent: number }> = {
@@ -55,7 +53,7 @@ export class BootScene extends Phaser.Scene {
   private failedSprites: Set<string> = new Set();
   private failedScenes: Set<string> = new Set();
   private bootSceneKeys = getBootScenePreloadThemes(undefined);
-  private bootSpriteKeys: SpriteKey[] = [...FALLBACK_SPRITE_KEYS];
+  private bootSpriteKeys: SpriteKey[] = getBootScenePreloadSpriteKeys(undefined);
 
   constructor() {
     super({ key: 'BootScene' });
@@ -64,17 +62,11 @@ export class BootScene extends Phaser.Scene {
   preload(): void {
     this.bootSceneKeys = getBootScenePreloadThemes(this.registry.get('initialSceneTheme') as string | undefined);
     const initialSpriteKeys = this.registry.get('initialSpriteKeys');
-    if (Array.isArray(initialSpriteKeys)) {
-      const filteredSpriteKeys = initialSpriteKeys.filter(
-        (value): value is string => typeof value === 'string',
-      );
-      const uniqueSpriteKeys = [...new Set(filteredSpriteKeys)].filter(isKnownSpriteKey);
-      this.bootSpriteKeys = uniqueSpriteKeys.length > 0
-        ? uniqueSpriteKeys
-        : [...FALLBACK_SPRITE_KEYS];
-    } else {
-      this.bootSpriteKeys = [...FALLBACK_SPRITE_KEYS];
-    }
+    this.bootSpriteKeys = getBootScenePreloadSpriteKeys(
+      Array.isArray(initialSpriteKeys)
+        ? initialSpriteKeys.filter((value): value is string => typeof value === 'string')
+        : null,
+    );
 
     // ── Loading bar ──────────────────────────────────────
     const { width, height } = this.scale;
@@ -106,12 +98,16 @@ export class BootScene extends Phaser.Scene {
 
     // ── Load character PNGs ──────────────────────────────
     for (const key of this.bootSpriteKeys) {
-      this.load.image(key, `/assets/characters/${key}.png`);
+      const request = getCharacterTextureRequest(key);
+      if (request) {
+        this.load.image(request.spriteKey, request.assetPath);
+      }
     }
 
     // ── Load scene background PNGs ───────────────────────
     for (const key of this.bootSceneKeys) {
-      this.load.image(getSceneTextureKey(key), getThemeAssetPath(key));
+      const request = getSceneTextureRequest(key);
+      this.load.image(request.textureKey, request.assetPath);
     }
   }
 

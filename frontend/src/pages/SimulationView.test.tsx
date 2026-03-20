@@ -148,8 +148,10 @@ vi.mock('../api/client', () => ({
 }));
 
 vi.mock('../hooks/useScreenCapture', () => ({
+  captureCompositeElementBlob: vi.fn(async () => null),
   captureCompositeElementDataUrl: (...args: unknown[]) => captureCompositeElementDataUrlMock(...args),
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
+  isLikelyWebKitCaptureUserAgent: () => false,
   useScreenCapture: () => ({
     status: mockCaptureStatus,
     lastCaptureKind: mockLastCaptureKind,

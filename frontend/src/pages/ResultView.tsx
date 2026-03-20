@@ -67,9 +67,6 @@ import {
   inferGameplayProfile,
 } from '../components/gameplayCards';
 import {
-  buildScenarioReplayUrl,
-  compactScenarioMetaForResultReplay,
-  readScenarioReplayPayload,
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
 import type {
@@ -82,6 +79,8 @@ import type {
 } from '../types';
 import ShareModal from '../components/ShareModal';
 import './ResultView.css';
+
+const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 
 function hasOwnKey(value: unknown, key: string): boolean {
   return typeof value === 'object' && value !== null && Object.prototype.hasOwnProperty.call(value, key);
@@ -325,7 +324,10 @@ export default function ResultView() {
           setLoading(false);
           return;
         }
-        const replay = artifact.payload as unknown as ScenarioResultReplayPayload;
+        const { normalizeScenarioResultReplayPayload } = await loadScenarioReplayHelpers();
+        const replay = normalizeScenarioResultReplayPayload(
+          artifact.payload as unknown as ScenarioResultReplayPayload,
+        );
         setReplayPayload(replay);
         setStoryData(replay.storyData);
         setScenario(replay.scenario);
@@ -341,6 +343,7 @@ export default function ResultView() {
       if (replayToken) {
         const replayParams = new URLSearchParams();
         replayParams.set('replay', replayToken);
+        const { readScenarioReplayPayload } = await loadScenarioReplayHelpers();
         const replay = await readScenarioReplayPayload(replayParams);
         if (cancelled) return;
         if (!replay) {
@@ -775,20 +778,20 @@ export default function ResultView() {
     if (!scenarioMeta) return null;
     return {
       profileId: resolvedProfileId ?? null,
-      dominantBranchTitle: localArchiveSummary?.dominantBranchTitle ?? scenarioMeta.archive.dominantBranchTitle ?? null,
-      dominantTone: localArchiveSummary?.dominantTone ?? scenarioMeta.archive.dominantTone ?? null,
-      mostUsedCard: campaignScenarioSummary?.most_used_card ?? localArchiveSummary?.mostUsedCard ?? scenarioMeta.archive.mostUsedCard ?? null,
-      bettingHit: campaignScenarioSummary?.betting_hit ?? localArchiveSummary?.bettingHit ?? scenarioMeta.archive.bettingHit ?? null,
-      archiveGrade: campaignScenarioSummary?.archive_grade ?? localArchiveSummary?.archiveGrade ?? scenarioMeta.archive.archiveGrade ?? null,
-      directorStyleTag: localArchiveSummary?.directorStyleTag ?? scenarioMeta.archive.directorStyleTag ?? null,
-      profileResonance: campaignScenarioSummary?.profile_resonance ?? localArchiveSummary?.profileResonance ?? scenarioMeta.archive.profileResonance ?? null,
+      dominantBranchTitle: localArchiveSummary?.dominantBranchTitle ?? null,
+      dominantTone: localArchiveSummary?.dominantTone ?? null,
+      mostUsedCard: campaignScenarioSummary?.most_used_card ?? localArchiveSummary?.mostUsedCard ?? null,
+      bettingHit: campaignScenarioSummary?.betting_hit ?? localArchiveSummary?.bettingHit ?? null,
+      archiveGrade: campaignScenarioSummary?.archive_grade ?? localArchiveSummary?.archiveGrade ?? null,
+      directorStyleTag: localArchiveSummary?.directorStyleTag ?? null,
+      profileResonance: campaignScenarioSummary?.profile_resonance ?? localArchiveSummary?.profileResonance ?? null,
       objectiveCompletedCount: campaignScenarioSummary?.objective_completed_count ?? completedObjectiveCount,
       objectiveTotalCount: campaignScenarioSummary?.objective_total_count ?? evaluatedObjectives.length,
       commitmentOutcome: campaignScenarioSummary?.commitment_outcome ?? localCommitmentOutcome,
-      counterplayCardCount: localArchiveSummary?.counterplayCardCount ?? scenarioMeta.archive.counterplayCardCount ?? 0,
-      lastCounterplayCard: localArchiveSummary?.lastCounterplayCard ?? scenarioMeta.archive.lastCounterplayCard ?? null,
-      riskValue: systemTracks?.riskValue ?? scenarioMeta.archive.riskValue ?? null,
-      resourceValue: systemTracks?.resourceValue ?? scenarioMeta.archive.resourceValue ?? null,
+      counterplayCardCount: localArchiveSummary?.counterplayCardCount ?? 0,
+      lastCounterplayCard: localArchiveSummary?.lastCounterplayCard ?? null,
+      riskValue: systemTracks?.riskValue ?? null,
+      resourceValue: systemTracks?.resourceValue ?? null,
     };
   }, [
     campaignScenarioSummary,
@@ -844,7 +847,7 @@ export default function ResultView() {
       storyData,
       agents,
       predictions,
-      scenarioMeta: compactScenarioMetaForResultReplay(scenarioMeta),
+      scenarioMeta,
       campaignScenarioSummary,
       campaignSummary,
       isDailyChallenge,
@@ -863,10 +866,21 @@ export default function ResultView() {
         setReplayUrl(null);
         return;
       }
-      const artifact = await createReplayArtifact('scenario_result_v1', replaySnapshot as unknown as Record<string, unknown>).catch(() => null);
+      const {
+        buildScenarioReplayUrl,
+        compactScenarioMetaForReplay,
+      } = await loadScenarioReplayHelpers();
+      const compactReplaySnapshot = {
+        ...replaySnapshot,
+        scenarioMeta: compactScenarioMetaForReplay(replaySnapshot.scenarioMeta),
+      };
+      const artifact = await createReplayArtifact(
+        'scenario_result_v1',
+        compactReplaySnapshot as unknown as Record<string, unknown>,
+      ).catch(() => null);
       const url = artifact
         ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
-        : await buildScenarioReplayUrl(window.location.origin, replaySnapshot);
+        : await buildScenarioReplayUrl(window.location.origin, compactReplaySnapshot);
       if (!cancelled) {
         setReplayUrl(url);
       }

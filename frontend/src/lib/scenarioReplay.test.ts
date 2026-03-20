@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import {
   buildScenarioReplayUrl,
-  compactScenarioMetaForResultReplay,
+  compactScenarioMetaForReplay,
   decodeScenarioReplayToken,
   encodeScenarioReplayToken,
   type ScenarioResultReplayPayload,
@@ -61,8 +61,22 @@ const predictions: PredictionInfo[] = [];
 
 const scenarioMeta: ScenarioMeta = {
   director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
-  cooldowns: {},
-  cards: { usageLog: [] },
+  cooldowns: {
+    public_hearing: {
+      lastUsedRound: 2,
+      cooldownRounds: 2,
+    },
+  },
+  cards: { usageLog: [{
+    cardId: 'public_hearing',
+    profileId: 'law',
+    branchId: 'branch-1',
+    branchTitle: 'Archive Branch',
+    round: 2,
+    cost: 1,
+    directive: 'Open the public hearing ledger.',
+    usedAt: '2026-03-19T00:02:00Z',
+  }] },
   betting: { bets: [] },
   commitment: {
     active: false,
@@ -154,11 +168,17 @@ const replayPayload: ScenarioResultReplayPayload = {
 
 describe('scenarioReplay helpers', () => {
   it('compacts scenario meta for replay by trimming archive summary duplicates', () => {
-    expect(compactScenarioMetaForResultReplay(scenarioMeta)).toEqual({
+    expect(compactScenarioMetaForReplay(scenarioMeta)).toEqual({
       ...scenarioMeta,
+      director: {
+        maxPoints: 3,
+        remainingPoints: 3,
+        spentPoints: 0,
+      },
+      cooldowns: {},
       archive: {
         branchSnapshots: [],
-        keyMoments: ['Moment 1'],
+        keyMoments: ['Moment 1', 'event:card:2:public_hearing'],
       },
     });
   });

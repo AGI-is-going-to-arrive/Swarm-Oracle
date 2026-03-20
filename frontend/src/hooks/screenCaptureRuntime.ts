@@ -18,6 +18,23 @@ async function settleFrames() {
   });
 }
 
+function isLikelyWebKitCaptureUserAgent(userAgent: string | undefined): boolean {
+  if (!userAgent) return false;
+  return /\bAppleWebKit\b/i.test(userAgent)
+    && !/\b(?:Chrome|Chromium|CriOS|EdgiOS|EdgA|OPR|FxiOS)\b/i.test(userAgent);
+}
+
+async function settleDocumentFonts() {
+  const fonts = document.fonts;
+  if (!fonts?.ready) return;
+
+  try {
+    await fonts.ready;
+  } catch {
+    // Best-effort only. Capture should still proceed if the browser rejects the font promise.
+  }
+}
+
 async function settleElementImages(root: Element) {
   const images = Array.from(root.querySelectorAll('img'));
   if (images.length === 0) return;
@@ -180,6 +197,32 @@ async function captureElementBlobViaSvgFallback(el: Element): Promise<Blob | nul
   return canvasToBlobWithFallback(canvas, 'image/png');
 }
 
+async function renderElementBlobWithHtml2Canvas(
+  el: Element,
+  selector: string,
+  colorOverrides: Array<Array<[string, string]>>,
+  foreignObjectRendering: boolean,
+): Promise<Blob | null> {
+  const html2canvas = await loadHtml2Canvas();
+  const html2CanvasOptions = {
+    useCORS: true,
+    backgroundColor: '#1a1a2e',
+    scale: 2,
+    foreignObjectRendering,
+    onclone: (clonedDocument: Document) => {
+      const cloneRoot =
+        el === document.body
+          ? clonedDocument.body
+          : clonedDocument.querySelector(selector);
+      if (cloneRoot) {
+        applyColorStyleOverrides(cloneRoot, colorOverrides);
+      }
+    },
+  } as unknown as Parameters<Awaited<ReturnType<typeof loadHtml2Canvas>>>[1];
+  const canvas = await html2canvas(el as HTMLElement, html2CanvasOptions);
+  return canvasToBlobWithFallback(canvas, 'image/png');
+}
+
 export async function canvasToBlobWithFallback(
   canvas: HTMLCanvasElement,
   type = 'image/png',
@@ -211,47 +254,49 @@ export async function captureElementBlob(
   const captureCanvasDirectly = captureTarget !== 'element';
   const captureElementFirst = captureTarget === 'element';
 
+  await settleDocumentFonts();
   await settleFrames();
+  if (isLikelyWebKitCaptureUserAgent(typeof navigator === 'undefined' ? undefined : navigator.userAgent)) {
+    await settleFrames();
+  }
   await settleElementImages(el);
 
+  let directCanvasFailed = false;
   if (captureCanvasDirectly && targetCanvas instanceof HTMLCanvasElement) {
     const directBlob = await canvasToBlobWithFallback(targetCanvas, 'image/png');
     if (directBlob) return directBlob;
+    directCanvasFailed = true;
   }
 
-  const tryHtml2Canvas = async () => {
-    const html2canvas = await loadHtml2Canvas();
+  if (captureElementFirst || !targetCanvas || directCanvasFailed) {
     const colorOverrides = collectColorStyleOverrides(el);
-    const html2CanvasOptions = {
-      useCORS: true,
-      backgroundColor: '#1a1a2e',
-      scale: 2,
-      foreignObjectRendering: true,
-      onclone: (clonedDocument: Document) => {
-        const cloneRoot =
-          el === document.body
-            ? clonedDocument.body
-            : clonedDocument.querySelector(selector);
-        if (cloneRoot) {
-          applyColorStyleOverrides(cloneRoot, colorOverrides);
-        }
-      },
-    } as unknown as Parameters<Awaited<ReturnType<typeof loadHtml2Canvas>>>[1];
-    const canvas = await html2canvas(el as HTMLElement, html2CanvasOptions);
-    return canvasToBlobWithFallback(canvas, 'image/png');
-  };
+    let lastHtml2CanvasError: unknown = null;
 
-  try {
-    if (captureElementFirst || !targetCanvas) {
-      const html2CanvasBlob = await tryHtml2Canvas();
-      if (html2CanvasBlob) return html2CanvasBlob;
+    for (const foreignObjectRendering of [true, false]) {
+      try {
+        const html2CanvasBlob = await renderElementBlobWithHtml2Canvas(
+          el,
+          selector,
+          colorOverrides,
+          foreignObjectRendering,
+        );
+        if (html2CanvasBlob) return html2CanvasBlob;
+      } catch (error) {
+        lastHtml2CanvasError = error;
+        continue;
+      }
     }
-  } catch (error) {
-    console.warn('[useScreenCapture] html2canvas capture failed', { selector, captureTarget, error });
-    if (captureElementFirst) {
-      const fallbackBlob = await captureElementBlobViaSvgFallback(el);
-      if (fallbackBlob) return fallbackBlob;
+
+    if (lastHtml2CanvasError) {
+      console.warn('[useScreenCapture] html2canvas capture failed', {
+        selector,
+        captureTarget,
+        error: lastHtml2CanvasError,
+      });
     }
+
+    const fallbackBlob = await captureElementBlobViaSvgFallback(el);
+    if (fallbackBlob) return fallbackBlob;
   }
 
   if (!(targetCanvas instanceof HTMLCanvasElement)) return null;
@@ -271,6 +316,15 @@ export async function captureCompositeElementDataUrl(
   rootSelector: string,
   overlaySelector: string,
 ): Promise<string | null> {
+  const blob = await captureCompositeElementBlob(rootSelector, overlaySelector);
+  if (!blob) return null;
+  return blobToDataUrl(blob);
+}
+
+export async function captureCompositeElementBlob(
+  rootSelector: string,
+  overlaySelector: string,
+): Promise<Blob | null> {
   const root = document.querySelector(rootSelector);
   const overlay = document.querySelector(overlaySelector);
   if (!(root instanceof HTMLElement)) return null;
@@ -279,12 +333,12 @@ export async function captureCompositeElementDataUrl(
   if (!rootBlob) return null;
 
   if (!(overlay instanceof HTMLElement)) {
-    return blobToDataUrl(rootBlob);
+    return rootBlob;
   }
 
   const overlayBlob = await captureElementBlob(overlaySelector, 'canvas');
   if (!overlayBlob) {
-    return blobToDataUrl(rootBlob);
+    return rootBlob;
   }
 
   const rootRect = root.getBoundingClientRect();
@@ -306,14 +360,21 @@ export async function captureCompositeElementDataUrl(
   composite.height = rootImage.height;
   const context = composite.getContext('2d');
   if (!context) {
-    return blobToDataUrl(rootBlob);
+    return rootBlob;
   }
 
   context.drawImage(rootImage, 0, 0, composite.width, composite.height);
-  context.drawImage(overlayImage, offsetX, offsetY, drawWidth, drawHeight);
+  try {
+    if (drawWidth <= 0 || drawHeight <= 0) {
+      return rootBlob;
+    }
+    context.drawImage(overlayImage, offsetX, offsetY, drawWidth, drawHeight);
+  } catch {
+    return rootBlob;
+  }
 
   const mergedBlob = await canvasToBlobWithFallback(composite, 'image/png');
-  return mergedBlob ? blobToDataUrl(mergedBlob) : blobToDataUrl(rootBlob);
+  return mergedBlob ?? rootBlob;
 }
 
 export async function captureFirstAvailableBlob(

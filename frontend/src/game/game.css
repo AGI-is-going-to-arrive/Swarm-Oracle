@@ -293,6 +293,39 @@
   position: relative;
 }
 
+@media (max-width: 900px) {
+  .theater-panel {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+
+  .theater-panel__header {
+    gap: 8px;
+    font-size: 9px;
+    letter-spacing: 2px;
+  }
+
+  .theater-panel__game-wrapper {
+    gap: 4px;
+  }
+}
+
+@media (max-width: 520px) {
+  .theater-panel {
+    gap: 5px;
+    padding: 8px 10px;
+  }
+
+  .theater-panel__header {
+    font-size: 8px;
+    letter-spacing: 1.2px;
+  }
+
+  .theater-panel__power-led {
+    display: none;
+  }
+}
+
 /* ── HUD Overlay Bars (outside canvas) ─────────────────── */
 
 .hud-bar {

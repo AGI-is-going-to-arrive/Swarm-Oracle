@@ -8467,3 +8467,83 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 收尾：
   - 已把本轮临时拉起的 backend / preview 停掉
   - 当前 `18927 / 18928` 无残留监听进程
+
+## 2026-03-20 `scenarioMeta` / replay / Theater runtime 收口
+
+- 已改：
+  - `frontend/src/lib/scenarioMeta.ts`
+    - `localStorage` 当前不再长期保存 archive 摘要重复字段
+    - 读取时继续按 `usageLog / bets` 现算回补 usage-derived 状态
+  - `frontend/src/lib/scenarioReplay.ts`
+    - `scenario_result_v1` 当前会先压缩 `scenarioMeta`
+    - replay 读路径现在会对精简版 `scenarioMeta` 做 hydrate
+  - `frontend/src/lib/simulationReplay.ts`
+    - `simulation_view_v1` 当前也会先压缩 `scenarioMeta`
+    - replay 读路径现在会按 `usageLog / bets` 回补 usage-derived director / cooldown / profile
+  - `frontend/src/pages/ResultView.tsx`
+    - replay helper 改为按需动态加载
+    - `displayArchive` 当前继续减少对本地 archive 摘要的兜底依赖
+  - `frontend/src/pages/SimulationView.tsx`
+    - replay helper 改为按需动态加载
+    - Theater toggle 当前会在 hover / focus / touch 时轻量预取 loader chunk
+    - panel capture 在 WebKit 路径当前优先走稳定的 `.theater-panel` 元素截图
+  - `frontend/src/hooks/screenCaptureRuntime.ts`
+    - capture 前当前会等待字体与额外一轮 WebKit settle
+    - `html2canvas` 失败后会再试一次 `foreignObjectRendering=false`
+    - composite capture 失败时当前会回退 root blob，而不是直接空结果
+  - `frontend/src/hooks/useScreenCapture.ts`
+    - 新增 WebKit user agent 检测 helper
+  - `frontend/src/game/sceneAssetPlan.ts`
+    - 新增 `getBootScenePreloadSpriteKeys()`
+    - `BootScene` 当前只预载 `sprite_default + 初始角色 sprite`
+  - `frontend/src/game/scenes/BootScene.ts`
+    - 拿不到初始角色列表时，不再回退预载整包 sprite roster
+  - `frontend/src/game/scenes/WorldScene.ts`
+    - agent 到场时若目标 sprite 尚未进纹理缓存，当前会先显示 `sprite_default`，再按需加载真实 sprite 并热替换
+  - `frontend/src/pages/SimulationView.css`
+  - `frontend/src/game/game.css`
+    - 移动端 Theater 顶部 rail / warmup / director card 当前进一步压缩，给主剧场让出更多首屏高度
+
+- 定向验证：
+  - `cd frontend && npm test -- --run src/hooks/useScreenCapture.test.ts src/lib/scenarioMeta.test.ts src/lib/scenarioReplay.test.ts src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx`
+    - 结果：`42 passed`
+  - `cd frontend && npm test -- --run src/lib/simulationReplay.test.ts src/lib/scenarioReplay.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx`
+    - 结果：`32 passed`
+  - `cd frontend && npm test -- --run src/game/sceneAssetPlan.test.ts src/game/PhaserGameLoader.test.ts src/pages/SimulationView.test.tsx`
+    - 结果：`30 passed`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts`
+    - 结果：`104 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 结果：通过
+  - `cd frontend && npm run build`
+    - 结果：通过
+
+- 构建观察：
+  - replay helper 当前已拆成独立 chunk：
+    - `simulationReplay-*.js` 约 `2.08 kB`
+    - `scenarioReplay-*.js` 约 `2.34 kB`
+  - `SimulationView` 路由块当前约 `35.96 kB`
+  - 当前最大的剩余热点仍是：
+    - `phaser-*.js` 约 `1.2 MB`
+    - `capture-html-*.js` 约 `201 kB`
+    - `frontend/public/assets` 下多张 `1.3-2.0 MB` 的 PNG
+
+- 当前工作树完整签收：
+  - 显式启动：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18928`
+  - 执行：
+    - `cd frontend && npm run release:signoff -- --headless --output-root output/e2e/2026-03-20T00-54-22-772Z-release-signoff`
+  - 结果：通过
+  - 工件：
+    - `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`
+    - `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/mobile/result.json`
+    - `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/debate-full/result.json`
+  - 本轮确认：
+    - backend targeted `pytest`：`82 passed`
+    - `corners / mobile / cross-browser / debate-full` 全部通过
+    - Debate desktop / mobile 两端都返回了 `adjudicationMode = llm_hybrid`
+
+- 收尾：
+  - 已把本轮临时拉起的 backend / preview 停掉
+  - 当前 `18927 / 18928` 无残留监听进程

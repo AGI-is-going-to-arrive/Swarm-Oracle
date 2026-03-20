@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import {
   type ScenarioMeta,
+  hydrateScenarioMetaSnapshot,
   getScenarioArchiveKeyMoments,
 } from './scenarioMeta';
 
@@ -25,13 +26,31 @@ export interface ScenarioResultReplayPayload {
   isDailyChallenge?: boolean;
 }
 
-export function compactScenarioMetaForResultReplay(meta: ScenarioMeta): ScenarioMeta {
+export function compactScenarioMetaForReplay(meta: ScenarioMeta): ScenarioMeta {
   return {
-    ...meta,
+    director: {
+      maxPoints: 3,
+      remainingPoints: 3,
+      spentPoints: 0,
+    },
+    cooldowns: {},
+    cards: meta.cards,
+    betting: meta.betting,
+    commitment: meta.commitment,
+    objectives: meta.objectives,
     archive: {
       branchSnapshots: [],
       keyMoments: getScenarioArchiveKeyMoments(meta),
     },
+  };
+}
+
+export function normalizeScenarioResultReplayPayload(
+  payload: ScenarioResultReplayPayload,
+): ScenarioResultReplayPayload {
+  return {
+    ...payload,
+    scenarioMeta: hydrateScenarioMetaSnapshot(payload.scenarioMeta),
   };
 }
 
@@ -138,5 +157,6 @@ export async function readScenarioReplayPayload(
 ): Promise<ScenarioResultReplayPayload | null> {
   const token = params.get(REPLAY_QUERY_KEY)?.trim();
   if (!token) return null;
-  return decodeScenarioReplayToken(token);
+  const payload = await decodeScenarioReplayToken(token);
+  return payload ? normalizeScenarioResultReplayPayload(payload) : null;
 }

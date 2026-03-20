@@ -268,16 +268,6 @@ function compactScenarioMetaForStorage(meta: ScenarioMeta): PersistedScenarioMet
         normalizeKeyMoments(meta.archive.keyMoments),
         { removeCardMoments: true, removeBetMoments: true },
       ),
-      mostUsedCard: meta.archive.mostUsedCard ?? null,
-      bettingHit: meta.archive.bettingHit ?? null,
-      archiveGrade: meta.archive.archiveGrade ?? null,
-      dominantBranchTitle: meta.archive.dominantBranchTitle ?? null,
-      dominantTone: meta.archive.dominantTone ?? null,
-      directorStyleTag: meta.archive.directorStyleTag ?? null,
-      profileResonance: meta.archive.profileResonance ?? null,
-      objectiveCompletedCount: meta.archive.objectiveCompletedCount ?? null,
-      objectiveTotalCount: meta.archive.objectiveTotalCount ?? null,
-      commitmentOutcome: meta.archive.commitmentOutcome ?? null,
     },
   };
 }
@@ -296,7 +286,9 @@ export function mergeScenarioArchive(
   };
 }
 
-function hydrateScenarioMeta(raw: PersistedScenarioMeta | null | undefined): ScenarioMeta {
+export function hydrateScenarioMetaSnapshot(
+  raw: PersistedScenarioMeta | null | undefined,
+): ScenarioMeta {
   const base = createDefaultScenarioMeta();
   if (!raw) return base;
 
@@ -350,8 +342,6 @@ function hydrateScenarioMeta(raw: PersistedScenarioMeta | null | undefined): Sce
       goals: raw.objectives?.goals ?? base.objectives.goals,
     },
     archive: {
-      ...base.archive,
-      ...raw.archive,
       branchSnapshots: raw.archive?.branchSnapshots ?? base.archive.branchSnapshots,
       keyMoments: compatKeyMoments,
       profileId: derivedUsage.archive.profileId ?? raw.archive?.profileId ?? base.archive.profileId,
@@ -390,7 +380,7 @@ function safeWriteStore(store: RootStore) {
 
 export function loadScenarioMeta(scenarioId: string): ScenarioMeta {
   const store = safeReadStore();
-  return hydrateScenarioMeta(store.scenarios[scenarioId]);
+  return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
 }
 
 export function saveScenarioMeta(scenarioId: string, next: ScenarioMeta): ScenarioMeta {

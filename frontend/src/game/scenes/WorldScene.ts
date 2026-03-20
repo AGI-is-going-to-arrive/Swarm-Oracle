@@ -16,10 +16,12 @@ import Phaser from 'phaser';
 import i18next from 'i18next';
 import { EventBridge, dispatchVizEvent } from '../managers/EventBridge';
 import {
+  CHARACTER_SPRITE_KEYS,
   getSceneTextureKey,
   getThemeAssetPath,
   isSceneThemeId,
 } from '../../lib/themeRegistry';
+import { getCharacterTextureRequest } from '../sceneAssetPlan';
 
 interface AgentSpriteData {
   agent_id: string;
@@ -71,6 +73,7 @@ const THEME_PALETTES: Record<string, { sky1: number; sky2: number; ground: numbe
 };
 
 const DEFAULT_PALETTE = THEME_PALETTES.medieval_village;
+const CHARACTER_SPRITE_KEY_SET = new Set<string>(CHARACTER_SPRITE_KEYS);
 
 // ── i18n helper for Phaser Canvas context ───────────────
 /** Resolve a bilingual label based on current i18next language. */
@@ -167,6 +170,7 @@ export class WorldScene extends Phaser.Scene {
   private weatherPool: Phaser.GameObjects.Graphics[] = [];
   private bubblePool: Phaser.GameObjects.Container[] = [];
   private pendingSceneTextureLoads: Set<string> = new Set();
+  private pendingSpriteTextureLoads: Set<string> = new Set();
 
   // Phase 3: MiniMap HUD
   private minimapContainer: Phaser.GameObjects.Container | null = null;
@@ -762,6 +766,12 @@ export class WorldScene extends Phaser.Scene {
     const texKey = this.textures.exists(agent.sprite_id) ? agent.sprite_id : 'sprite_default';
     // Sprite PNGs are 640×640; shrink to pixel-art size
     const sprite = this.add.image(0, 0, texKey).setDisplaySize(32, 48);
+    if (texKey === 'sprite_default' && agent.sprite_id !== 'sprite_default') {
+      this.ensureSpriteTexture(agent.sprite_id, () => {
+        if (!sprite.scene || sprite.scene !== this || !sprite.active) return;
+        sprite.setTexture(agent.sprite_id);
+      });
+    }
     container.add(sprite);
 
     // V3: Subtle highlight glow behind sprite
@@ -842,6 +852,44 @@ export class WorldScene extends Phaser.Scene {
 
     // Phase 3: Add initial minimap dot
     this.updateMinimapDot(agent.agent_id, x, y);
+  }
+
+  private ensureSpriteTexture(spriteKey: string, onReady?: () => void): void {
+    if (!CHARACTER_SPRITE_KEY_SET.has(spriteKey) || this.textures.exists(spriteKey)) {
+      onReady?.();
+      return;
+    }
+    if (this.pendingSpriteTextureLoads.has(spriteKey)) {
+      return;
+    }
+
+    const request = getCharacterTextureRequest(spriteKey);
+    if (!request) return;
+
+    this.pendingSpriteTextureLoads.add(spriteKey);
+
+    const cleanup = () => {
+      this.pendingSpriteTextureLoads.delete(spriteKey);
+      this.load.off(`filecomplete-image-${spriteKey}`, handleFileComplete);
+      this.load.off(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    };
+
+    const handleFileComplete = () => {
+      cleanup();
+      onReady?.();
+    };
+
+    const handleLoadError = (file: Phaser.Loader.File) => {
+      if (file.key !== spriteKey) return;
+      cleanup();
+    };
+
+    this.load.once(`filecomplete-image-${spriteKey}`, handleFileComplete);
+    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
+    this.load.image(request.spriteKey, request.assetPath);
+    if (!this.load.isLoading()) {
+      this.load.start();
+    }
   }
 
   // ── Idle Wandering ─────────────────────────────────────

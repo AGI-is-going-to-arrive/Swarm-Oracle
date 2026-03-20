@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { canvasToBlobWithFallback } from './useScreenCapture';
+import {
+  canvasToBlobWithFallback,
+  isLikelyWebKitCaptureUserAgent,
+} from './useScreenCapture';
 
 describe('canvasToBlobWithFallback', () => {
   it('returns the native blob when toBlob succeeds', async () => {
@@ -22,5 +25,14 @@ describe('canvasToBlobWithFallback', () => {
     expect(blob?.type).toBe('image/png');
     expect(blob?.size).toBeGreaterThan(0);
     expect(canvas.toDataURL).toHaveBeenCalledWith('image/png');
+  });
+
+  it('detects Safari/WebKit user agents for conservative capture fallbacks', () => {
+    expect(isLikelyWebKitCaptureUserAgent(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    )).toBe(true);
+    expect(isLikelyWebKitCaptureUserAgent(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    )).toBe(false);
   });
 });

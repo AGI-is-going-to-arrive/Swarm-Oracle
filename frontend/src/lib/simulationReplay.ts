@@ -1,5 +1,8 @@
 import type { Scenario } from '../types';
-import type { ScenarioMeta } from './scenarioMeta';
+import {
+  type ScenarioMeta,
+  hydrateScenarioMetaSnapshot,
+} from './scenarioMeta';
 
 const REPLAY_QUERY_KEY = 'replay';
 const REPLAY_KIND = 'simulation_view_v1';
@@ -16,6 +19,15 @@ export interface SimulationReplayPayload {
   scenario: Scenario;
   scenarioMeta: ScenarioMeta;
   uiState?: SimulationReplayUiState;
+}
+
+export function normalizeSimulationReplayPayload(
+  payload: SimulationReplayPayload,
+): SimulationReplayPayload {
+  return {
+    ...payload,
+    scenarioMeta: hydrateScenarioMetaSnapshot(payload.scenarioMeta),
+  };
 }
 
 function normalizeOrigin(origin: string): string {
@@ -121,5 +133,6 @@ export async function readSimulationReplayPayload(
 ): Promise<SimulationReplayPayload | null> {
   const token = params.get(REPLAY_QUERY_KEY)?.trim();
   if (!token) return null;
-  return decodeSimulationReplayToken(token);
+  const payload = await decodeSimulationReplayToken(token);
+  return payload ? normalizeSimulationReplayPayload(payload) : null;
 }

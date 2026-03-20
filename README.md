@@ -6,8 +6,9 @@
 
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
-- 最近一次 clean runtime 基线 `release:signoff` 已通过，工件位于 `frontend/output/e2e/current-head-audit-signoff/summary.json`。
-- 这份 `summary.json` 绑定运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`。
+- 本轮当前工作树 `release:signoff` 已实跑通过，工件位于 `frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`。
+- 最近一次 clean runtime 基线仍是 `frontend/output/e2e/current-head-audit-signoff/summary.json`。
+- 这份 clean baseline 的 `summary.json` 绑定运行时代码 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
 
 ## Documentation Contract
@@ -125,10 +126,11 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `104 passed`
   - `tsc` / `build` / assets check 通过
 - Current session focused verification:
-  - `src/game/PhaserGameLoader.test.ts`: `8 passed`
-  - `src/lib/scenarioMeta.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
-  - `src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx`: `13 passed`
+  - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`: `42 passed`
+  - `src/lib/simulationReplay.test.ts + src/lib/scenarioReplay.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `32 passed`
+  - `src/game/sceneAssetPlan.test.ts + src/game/PhaserGameLoader.test.ts + src/pages/SimulationView.test.tsx`: `30 passed`
   - `tsc` / `build`: 多轮复验通过
+  - 当前工作树 `release:signoff`: 通过
 - Default `release:signoff` contract:
   - targeted backend `pytest`
   - backend `/metrics` reachability check
@@ -144,6 +146,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 如果本轮改动涉及高级干预、结果页 authority 或 `scenarioMeta / replay` 收口，优先跑上面的扩展前端定向回归；本 session 实跑通过 `104 passed`。
 - Safari is optional and not part of the default full signoff.
 - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`（绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，`dirty=false`）。
+- 本轮当前工作树完整签收工件：`frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`。
 
 ## CI
 

@@ -16,8 +16,10 @@ import {
   upsertScenarioGameplayState,
 } from '../api/client';
 import {
+  captureCompositeElementBlob,
   captureCompositeElementDataUrl,
   captureElementDataUrl,
+  isLikelyWebKitCaptureUserAgent,
   type CaptureMode,
   useScreenCapture,
 } from '../hooks/useScreenCapture';
@@ -88,12 +90,11 @@ import type {
   ScenarioDirectorState,
   ScenarioGameplayState,
 } from '../types';
-import {
-  buildSimulationReplayUrl,
-  readSimulationReplayPayload,
-  type SimulationReplayPayload,
-} from '../lib/simulationReplay';
+import type { SimulationReplayPayload } from '../lib/simulationReplay';
 import './SimulationView.css';
+
+const loadSimulationReplayHelpers = () => import('../lib/simulationReplay');
+const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 
 const THEATER_SCENE_LABELS = {
   BootScene: { zh: '启动场景', en: 'Boot Scene' },
@@ -310,11 +311,19 @@ export function SimulationView() {
   const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
     ? t('sim.theater_unavailable_hint')
     : undefined;
+  const prefersStableScreenCapture = useMemo(
+    () => isLikelyWebKitCaptureUserAgent(typeof navigator === 'undefined' ? undefined : navigator.userAgent),
+    [],
+  );
   const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
   const replayBranchOptions = useMemo(
     () => buildReplayBranchOptions(branches, messages),
     [branches, messages],
   );
+  const preloadTheaterLoader = useCallback(() => {
+    if (!canToggleViewMode || viewMode === 'theater') return;
+    void loadPhaserGameLoaderModule();
+  }, [canToggleViewMode, viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -323,7 +332,10 @@ export function SimulationView() {
       if (replayShareId) {
         const artifact = await getReplayArtifact(replayShareId).catch(() => null);
         if (cancelled || !artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) return;
-        const replay = artifact.payload as unknown as SimulationReplayPayload;
+        const { normalizeSimulationReplayPayload } = await loadSimulationReplayHelpers();
+        const replay = normalizeSimulationReplayPayload(
+          artifact.payload as unknown as SimulationReplayPayload,
+        );
         setReplayPayload(replay);
         setScenario(replay.scenario);
         setBackendDirectorState(replay.scenario.director_state ?? null);
@@ -341,6 +353,7 @@ export function SimulationView() {
       }
       const params = new URLSearchParams();
       params.set('replay', replayToken);
+      const { readSimulationReplayPayload } = await loadSimulationReplayHelpers();
       const replay = await readSimulationReplayPayload(params);
       if (cancelled) return;
       if (!replay) {
@@ -737,7 +750,10 @@ export function SimulationView() {
     const win = window as AutomationWindow;
     const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
       if (mode === 'canvas') {
-        return captureElementDataUrl('.phaser-game-container', 'canvas');
+        return captureElementDataUrl(
+          '.phaser-game-container',
+          prefersStableScreenCapture ? 'element' : 'canvas',
+        );
       }
       if (mode === 'modal') {
         if (!hasActiveModal) return null;
@@ -749,10 +765,17 @@ export function SimulationView() {
       }
 
       return (
-        await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
+        prefersStableScreenCapture
+          ? await captureElementDataUrl('.theater-panel', 'element')
+          : await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
       ) ?? (
-        await captureElementDataUrl('.theater-panel', 'element')
-      ) ?? captureElementDataUrl('.phaser-game-container', 'canvas');
+        prefersStableScreenCapture
+          ? await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
+          : await captureElementDataUrl('.theater-panel', 'element')
+      ) ?? captureElementDataUrl(
+        '.phaser-game-container',
+        prefersStableScreenCapture ? 'element' : 'canvas',
+      );
     };
 
     win.capture_game_screenshot = capture;
@@ -761,13 +784,13 @@ export function SimulationView() {
         delete win.capture_game_screenshot;
       }
     };
-  }, [hasActiveModal]);
+  }, [hasActiveModal, prefersStableScreenCapture]);
 
   const resolveCaptureOptions = useCallback((mode: CaptureMode = captureMode) => {
     if (mode === 'canvas') {
       return {
         selector: '.phaser-game-container',
-        captureTarget: 'canvas' as const,
+        captureTarget: prefersStableScreenCapture ? 'element' as const : 'canvas' as const,
       };
     }
     if (mode === 'modal') {
@@ -780,14 +803,17 @@ export function SimulationView() {
     return {
       selector: '.theater-panel',
       captureTarget: 'element' as const,
-      captureBlob: async () => {
-        const dataUrl = await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container');
-        if (!dataUrl) return null;
-        const response = await fetch(dataUrl);
-        return await response.blob();
-      },
+      captureBlob: () => (
+        prefersStableScreenCapture
+          ? captureElementDataUrl('.theater-panel', 'element').then(async (dataUrl) => {
+            if (!dataUrl) return null;
+            const response = await fetch(dataUrl);
+            return await response.blob();
+          })
+          : captureCompositeElementBlob('.theater-panel', '.phaser-game-container')
+      ),
     };
-  }, [captureMode, hasActiveModal]);
+  }, [captureMode, hasActiveModal, prefersStableScreenCapture]);
 
   const handleScreenshotCapture = useCallback(() => {
     const options = resolveCaptureOptions();
@@ -809,6 +835,13 @@ export function SimulationView() {
     }
     const replayScenarioMeta = scenarioMeta ?? storedScenarioMeta;
     if (!scenario || !replayScenarioMeta) return;
+    const {
+      buildSimulationReplayUrl,
+    } = await loadSimulationReplayHelpers();
+    const {
+      compactScenarioMetaForReplay,
+    } = await loadScenarioReplayHelpers();
+    const compactReplayMeta = compactScenarioMetaForReplay(replayScenarioMeta);
     const snapshot = buildSimulationSnapshot(
       scenario,
       agents,
@@ -819,7 +852,7 @@ export function SimulationView() {
     );
     const artifact = await createReplayArtifact('simulation_view_v1', {
       scenario: snapshot,
-      scenarioMeta: replayScenarioMeta,
+      scenarioMeta: compactReplayMeta,
       uiState: {
         selectedReplayBranchId,
         selectedReplayRound,
@@ -832,7 +865,7 @@ export function SimulationView() {
       ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
       : await buildSimulationReplayUrl(window.location.origin, {
         scenario: snapshot,
-        scenarioMeta: replayScenarioMeta,
+        scenarioMeta: compactReplayMeta,
         uiState: {
           selectedReplayBranchId,
           selectedReplayRound,
@@ -1263,6 +1296,9 @@ export function SimulationView() {
           <button
             className={`view-mode-toggle ${viewMode === 'theater' ? 'view-mode-toggle--active' : ''}`}
             onClick={toggleViewMode}
+            onMouseEnter={preloadTheaterLoader}
+            onFocus={preloadTheaterLoader}
+            onTouchStart={preloadTheaterLoader}
             aria-label={viewMode === 'classic' ? t('sim.switch_to_theater_aria') : t('sim.switch_to_classic_aria')}
             disabled={!canToggleViewMode}
             title={theaterToggleHint}

@@ -6,6 +6,7 @@ import {
   buildSimulationReplayUrl,
   decodeSimulationReplayToken,
   encodeSimulationReplayToken,
+  normalizeSimulationReplayPayload,
   type SimulationReplayPayload,
 } from './simulationReplay';
 
@@ -47,8 +48,22 @@ const scenario: Scenario = {
 
 const scenarioMeta: ScenarioMeta = {
   director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
-  cooldowns: {},
-  cards: { usageLog: [] },
+  cooldowns: {
+    public_hearing: {
+      lastUsedRound: 1,
+      cooldownRounds: 2,
+    },
+  },
+  cards: { usageLog: [{
+    cardId: 'public_hearing',
+    profileId: 'empire',
+    branchId: 'b1',
+    branchTitle: '永世帝国',
+    round: 1,
+    cost: 1,
+    directive: '召开公开听证，重申帝国秩序。',
+    usedAt: '2026-03-19T00:00:00Z',
+  }] },
   betting: { bets: [] },
   commitment: {
     active: false,
@@ -85,6 +100,26 @@ describe('simulationReplay helpers', () => {
   it('round-trips a simulation replay token', async () => {
     const token = await encodeSimulationReplayToken(payload);
     await expect(decodeSimulationReplayToken(token)).resolves.toEqual(payload);
+  });
+
+  it('rehydrates compact replay meta back into usage-derived runtime state', () => {
+    const normalized = normalizeSimulationReplayPayload({
+      ...payload,
+      scenarioMeta: {
+        ...payload.scenarioMeta,
+        director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+        cooldowns: {},
+        archive: {
+          branchSnapshots: [],
+          keyMoments: [],
+        },
+      },
+    });
+
+    expect(normalized.scenarioMeta.director.remainingPoints).toBe(2);
+    expect(normalized.scenarioMeta.director.spentPoints).toBe(1);
+    expect(normalized.scenarioMeta.cooldowns.public_hearing?.lastUsedRound).toBe(1);
+    expect(normalized.scenarioMeta.archive.profileId).toBe('empire');
   });
 
   it('builds a simulation replay url', async () => {

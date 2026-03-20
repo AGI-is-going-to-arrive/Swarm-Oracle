@@ -60,7 +60,7 @@
 
 ### 当前结论
 
-- 在当前 `browser-first Web` 作用域内，项目已达到 `release-candidate / signoff-ready` 状态。
+- 在当前 `browser-first Web` 作用域内，项目当前工作树已完成完整 `release:signoff` 实跑，可按 `release-candidate` 看待。
 - 这一目录页只保留高层结论；细节请按文件状态继续下钻到 `11 / 19 / 20 / 21 / 22` 或仓库根 `README.md`、`llmdoc/*`。
 
 ### 已并入当前基线
@@ -71,9 +71,9 @@
 - 主模式玩法层已完成：14 张玩法卡、结构化押注、因果档案、daily/weekly challenge、Replay / Import。
 - 主模式高级干预前端闭环已完成：`InterventionModal` 当前已支持 `即时 / 回溯 / 批量` 三模式。
 - 主模式 authority 已完成：`director_state_json / gameplay_state_json` 为后端真值，`scenarioMeta` 仅保留兼容/缓存层职责。
-- 结果页 authority 又收了一步：远端 `director_state / gameplay_state / campaign summary` 当前作为展示基线，只有缺字段时才回退本地 `scenarioMeta`；本 session 又继续压缩了本地兼容层：`scenarioMeta` 的 localStorage / result replay payload 不再保留大部分 usage-derived 与结果摘要重复字段，结果页展示也优先使用 story / usage / bets / campaign summary 现算结果。
+- 结果页 authority 又收了一步：远端 `director_state / gameplay_state / campaign summary` 当前作为展示基线，只有缺字段时才回退本地 `scenarioMeta`；本 session 又继续压缩了本地兼容层：`scenarioMeta` 的 localStorage 不再长期保留 archive 摘要重复字段，主模式 `result / simulation replay` 也会先压缩 `scenarioMeta`，读路径再按 usage/bets 现算回补。
 - Debate Arena 已完成最小闭环并持续增强：独立 domain、live/result/replay、`counterplay`、`judge_rationale`、`supporting_turns`、`adjudication_mode`。
-- 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`。
+- 工程收口已完成：shared gameplay contract、provider policy、Alembic、Prometheus `/metrics`、CI、`release:signoff`；Theater 这轮又补了意图级 loader 预取、WebKit 截图兜底、移动端首屏压缩，以及 `BootScene` 初始 sprite 预载收紧 + `WorldScene` 缺失 sprite 按需补载。
 
 ### 当前验证口径
 
@@ -84,11 +84,12 @@
   - backend targeted set `82 passed`
   - frontend targeted set `104 passed`
 - Current session focused verification：
-  - `PhaserGameLoader.test.ts`：`8 passed`
-  - `scenarioMeta / scenarioGameplayState / SimulationView / ResultView` 相关 focused suites：通过
-  - `scenarioReplay / ResultView` focused suites：通过
+  - `useScreenCapture / scenarioMeta / scenarioReplay / ResultView / SimulationView`：`42 passed`
+  - `simulationReplay / scenarioReplay / ResultView / SimulationView`：`32 passed`
+  - `sceneAssetPlan / PhaserGameLoader / SimulationView`：`30 passed`
   - `tsc / build`：通过
 - Current release signoff：
+  - 本轮当前工作树完整签收工件：`frontend/output/e2e/2026-03-20T00-54-22-772Z-release-signoff/summary.json`
   - 最近一次 clean runtime 基线工件：`frontend/output/e2e/current-head-audit-signoff/summary.json`
   - 这份 `summary.json` 绑定 commit `3c96b52f618bc1e1e06d2630ecacb885951948a3`，且 `dirty=false`
   - `summary.json` 会带 git `branch / commit / worktree` 绑定信息
@@ -100,7 +101,7 @@
 - 当前交付形态仍是浏览器优先的 Web 应用；`跨平台` 指桌面/移动浏览器响应式与视口 E2E，不代表原生客户端壳已交付。
 - Safari 属于可选附加验证，不在默认 full signoff 合同内；其截图仍可能受浏览器/插件浮层污染。
 - `scenarioMeta` 仍存在，但已经不是跨设备 authority；它现在主要保留兼容、缓存和 replay 输入职责，usage-derived director/cooldown 字段、ResultView 摘要字段与 replay archive 冗余项都已进一步压缩。
-- 当前最主要的增量空间是 Theater 包体、首次进入成本、Safari/WebKit 取证边界，以及更细的玩法/视觉 polish，而不是核心功能缺失。
+- 当前最主要的增量空间是 `phaser` 主 chunk、`capture-html` chunk，以及 `frontend/public/assets` 下大体积 PNG 资源；其次才是 Safari/WebKit 取证边界与更细的玩法/视觉 polish，而不是核心功能缺失。
 
 ### 推荐下钻顺序
 

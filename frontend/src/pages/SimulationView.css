@@ -575,29 +575,32 @@
   }
 
   .theater-panel__status {
-    gap: 6px;
-    margin: 4px 0 8px;
+    gap: 4px;
+    margin: 2px 0 6px;
   }
 
   .theater-panel__warmup {
-    gap: 8px;
-    padding: 8px 10px;
+    gap: 6px;
+    padding: 7px 8px;
+    margin-bottom: 8px;
   }
 
   .theater-panel__director {
-    gap: 6px;
-    padding: 8px 10px;
+    gap: 5px;
+    padding: 7px 8px;
+    margin-bottom: 6px;
   }
 
   .theater-panel__director-goals {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
+    gap: 5px;
   }
 
   .capture-mode-feedback {
     flex: 0 0 auto;
     min-height: 26px;
-    padding: 3px 8px;
+    padding: 3px 7px;
+    font-size: 0.64rem;
   }
 
   .capture-mode-toggle__btn,
@@ -607,7 +610,7 @@
   }
 
   .capture-mode-toggle__btn {
-    padding: 4px 7px;
+    padding: 4px 6px;
   }
 
   .theater-chip,
@@ -620,41 +623,51 @@
   }
 
   .director-goal {
-    padding: 6px 7px;
-    font-size: 0.69rem;
+    padding: 5px 6px;
+    font-size: 0.67rem;
   }
 
   .director-goal strong {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
   }
 
   .theater-chip {
-    font-size: 0.68rem;
-    padding: 4px 8px;
+    font-size: 0.66rem;
+    padding: 3px 7px;
     white-space: nowrap;
+  }
+
+  .theater-select {
+    gap: 4px;
+    padding: 4px 7px;
+    font-size: 0.64rem;
   }
 }
 
 @media (max-width: 520px) {
   .theater-panel__warmup-copy {
-    font-size: 0.74rem;
+    font-size: 0.72rem;
   }
 
   .theater-panel__warmup-copy strong {
-    font-size: 0.8rem;
+    font-size: 0.76rem;
   }
 
   .theater-panel__director-top {
-    gap: 6px;
+    gap: 4px;
   }
 
   .director-goal__detail {
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
   }
 
   .btn--capture {
-    font-size: 0.68rem;
-    padding: 4px 8px;
+    font-size: 0.64rem;
+    padding: 4px 7px;
+  }
+
+  .theater-panel__status {
+    margin-bottom: 4px;
   }
 }
 
@@ -819,10 +832,10 @@
     width: auto;
   }
   .simulation-view--theater .sim-content__tree {
-    min-height: 55vh;
+    min-height: 60vh;
   }
   .simulation-view--theater .sim-content__panel {
-    max-height: 40vh;
+    max-height: 34vh;
     border-left: none;
     border-top: 1px solid rgba(108, 92, 231, 0.2);
   }
