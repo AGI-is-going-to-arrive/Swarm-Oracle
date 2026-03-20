@@ -127,7 +127,7 @@
    - 首页移动端签收当前会显式检查 `daily challenge / weekly challenge / director growth` Lite 卡片与 automation 摘要
    - Debate `result_ready / result CTA` 等待改成 progress-aware，并支持 `SWARM_DEBATE_RESULT_TIMEOUT_MS / SWARM_DEBATE_STALL_TIMEOUT_MS / SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS`
    - `release:signoff` / `e2e-debate-suite.mjs` 当前可显式要求 Debate 返回指定 `adjudication_mode`
-   - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run` 与 deterministic `debate-signoff-smoke`
+   - `.github/workflows/ci.yml` 新增 `release-signoff-dry-run` 与条件式 `debate-signoff-smoke`：secrets 可用时真实要求 `llm_hybrid`，否则安全回退 deterministic
    - `.github/workflows/release-signoff.yml` 新增 nightly + workflow_dispatch 的完整 signoff workflow，并会在缺少 `LLM_RESPONSES_URL / LLM_API_KEY` 时安全跳过；secrets 可用时当前要求 Debate `adjudication_mode = llm_hybrid`
    本次真实验证为：
    - backend targeted `pytest`：**81 passed**
@@ -136,7 +136,7 @@
    - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
    - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
    本次 session 又补了一轮当前工作树收口：
-   - backend targeted `pytest`（含 `tests/test_metrics.py`）：**82 passed**
+   - backend targeted `pytest`（含 `tests/test_metrics.py`）：**86 passed**
    - live `/metrics`：`200 text/plain`
    - `frontend/output/e2e/current-audit-signoff-dry-run-v4/summary.json`：dry-run 通过
    - `frontend/output/e2e/current-audit-release-signoff-v2/summary.json`：真实 full signoff 通过
