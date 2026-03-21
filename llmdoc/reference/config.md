@@ -2,13 +2,13 @@
 
 所有配置通过环境变量或 `.env` 文件加载（pydantic-settings）。
 
-> 本地后端默认读取 `backend/.env`。`docker compose` 仍使用仓库根目录 `.env`。
+> 本地后端默认读取 `backend/.env`。`docker compose` 默认使用仓库根目录 `.env.docker`。
 
 ## LLM 配置
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8318/v1/chat/completions` | OpenAI兼容API端点 |
+| `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8318/v1/chat/completions` | OpenAI兼容API端点；Docker 默认模板 `.env.docker` 会改写成 `http://host.docker.internal:8318/v1/chat/completions` |
 | `LLM_API_KEY` | str | `sk-12345678` | API密钥 |
 | `LLM_MODEL_NAME` | str | `gpt-5.4-mini` | 模型名称 |
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
@@ -16,7 +16,7 @@
 
 > **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。
 
-> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。本轮真实容器验证使用的是 `http://host.docker.internal:8318/v1/chat/completions`；Linux 请替换成实际可达宿主机的地址。
+> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8318/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
 
 ## 模拟参数
 

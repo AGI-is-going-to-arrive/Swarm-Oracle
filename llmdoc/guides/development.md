@@ -42,7 +42,8 @@ npm run dev
 cp .env.example backend/.env
 ```
 
-- `docker compose` 读取仓库根目录 `.env`。
+- `docker compose` 默认读取仓库根目录 `.env.docker`。
+- `.env.example` 是本地直启 backend 的模板，不再作为 Docker 默认环境文件。
 - 默认模型为 `gpt-5.4-mini`；若本地网关没有该模型映射，需要先更新网关。
 
 ## 测试写法约定
@@ -187,12 +188,12 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 ## Docker 部署
 
 ```bash
-cp .env.example .env
-docker compose up --build
+docker compose up --build -d
 ```
 
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
+- Docker 默认 LLM 地址是 `http://host.docker.internal:8318/v1/chat/completions`，用于容器访问宿主机本地代理。
 
 ## 数据库迁移
 

@@ -3,6 +3,8 @@
 .claude/
 .trae/
 .agent/*.png
+.env
+.env.docker.local
 
 # Python
 **/__pycache__/

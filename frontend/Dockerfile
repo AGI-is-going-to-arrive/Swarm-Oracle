@@ -1,17 +1,18 @@
 # ── Stage 1: Build frontend ──────────────────────────────
 FROM node:22-alpine AS builder
 
-WORKDIR /app
-COPY package.json package-lock.json* ./
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
-COPY . .
+COPY frontend/ /app/frontend/
+COPY shared/ /app/shared/
 RUN npm run build
 
 # ── Stage 2: Serve with Nginx ────────────────────────────
 FROM nginx:1.27-alpine
 
 # Custom nginx config for SPA routing
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 RUN cat > /etc/nginx/conf.d/default.conf <<'EOF'
 server {

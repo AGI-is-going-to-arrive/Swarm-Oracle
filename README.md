@@ -63,12 +63,13 @@ Backend (FastAPI + SQLModel + SQLite + ChromaDB)
 ### Docker
 
 ```bash
-cp .env.example .env
-docker compose up --build
+docker compose up --build -d
 ```
 
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
+- `docker compose` 默认读取仓库根目录 `.env.docker`。
+- 如果 LLM 服务跑在宿主机本地，默认 Docker 配置已经使用 `http://host.docker.internal:8318/v1/chat/completions`。
 
 ### Local Development
 
@@ -95,7 +96,7 @@ npm run dev
 | `MAX_AGENTS` | Max agents per scenario | `100` |
 | `MAX_ROUNDS` | Max rounds | `40` |
 
-本地直接启动 backend 时读取 `backend/.env`；`docker compose` 读取仓库根目录 `.env`。
+本地直接启动 backend 时读取 `backend/.env`，可由 `.env.example` 初始化；`docker compose` 默认读取仓库根目录 `.env.docker`。
 
 ## Testing And Signoff
 

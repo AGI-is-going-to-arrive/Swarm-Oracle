@@ -1,14 +1,15 @@
 FROM python:3.13-slim
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # System deps for building wheels
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy app code before install so the package metadata and sources stay in sync.
-COPY . .
+# Copy backend sources and the shared gameplay contract into a repo-like layout.
+COPY backend/ /app/backend/
+COPY shared/ /app/shared/
 RUN pip install --no-cache-dir .
 
 # Create data directories
