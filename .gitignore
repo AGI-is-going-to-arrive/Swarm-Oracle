@@ -27,6 +27,7 @@ frontend/.tmp-playwright/
 # Generated runtime artifacts
 .tmp/
 .tmp-playwright/
+/video/
 /*.png
 /*.jpg
 /*.jpeg
