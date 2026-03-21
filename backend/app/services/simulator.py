@@ -93,12 +93,33 @@ async def get_pending_interventions(key: str) -> list[str]:
         return pending_interventions.pop(key, [])
 
 
+async def pop_next_pending_intervention(key: str) -> str | None:
+    """Atomically pop the next intervention while preserving per-branch order."""
+    async with _intervention_lock:
+        queue = pending_interventions.get(key)
+        if not queue:
+            return None
+        next_text = queue.pop(0)
+        if not queue:
+            pending_interventions.pop(key, None)
+        return next_text
+
+
 async def add_pending_intervention(key: str, text: str) -> None:
     """C-4 fix: Thread-safe append of intervention text."""
     async with _intervention_lock:
         if key not in pending_interventions:
             pending_interventions[key] = []
         pending_interventions[key].append(text)
+
+
+async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
+    """Remove any leftover queued interventions for a finished scenario."""
+    prefix = f"{scenario_id}:"
+    async with _intervention_lock:
+        keys_to_remove = [key for key in pending_interventions if key.startswith(prefix)]
+        for key in keys_to_remove:
+            pending_interventions.pop(key, None)
 
 FORK_DETECT_PROMPT = """你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。
 
@@ -313,11 +334,8 @@ async def run_simulation(
 
             # 0) Check for pending user interventions (Butterfly Effect)
             intervention_key = f"{scenario_id}:{branch_id}"
-            intervention_text = None
-            if intervention_key in pending_interventions and pending_interventions[intervention_key]:
-                intervention_text = pending_interventions[intervention_key].pop(0)
-                if not pending_interventions[intervention_key]:
-                    del pending_interventions[intervention_key]
+            intervention_text = await pop_next_pending_intervention(intervention_key)
+            if intervention_text is not None:
                 await push({
                     "type": "intervention_injected",
                     "data": {
@@ -519,9 +537,7 @@ async def run_simulation(
 
     # ── Done ─────────────────────────────────────────
     # Cleanup pending interventions for this scenario (prevent memory leak)
-    keys_to_remove = [k for k in pending_interventions if k.startswith(f"{scenario_id}:")]
-    for k in keys_to_remove:
-        del pending_interventions[k]
+    await clear_pending_interventions_for_scenario(scenario_id)
 
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)

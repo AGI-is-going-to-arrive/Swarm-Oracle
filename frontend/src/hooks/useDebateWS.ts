@@ -34,6 +34,8 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
         const payload = JSON.parse(event.data) as DebateWSEvent;
         const store = useDebateStore.getState();
         switch (payload.type) {
+          case 'heartbeat':
+            break;
           case 'status':
             if (payload.data.status === 'error') {
               store.setError(payload.data.error ?? 'Debate runtime error');

@@ -156,6 +156,31 @@ describe('useDebateWS', () => {
     }));
   });
 
+  it('ignores heartbeat events', () => {
+    render(<Harness debateId="debate-heartbeat" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'heartbeat',
+          data: { ts: new Date().toISOString() },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setError).not.toHaveBeenCalled();
+    expect(storeState.setDebate).not.toHaveBeenCalled();
+    expect(storeState.setPhase).not.toHaveBeenCalled();
+    expect(storeState.setScore).not.toHaveBeenCalled();
+    expect(storeState.setCounterplay).not.toHaveBeenCalled();
+    expect(storeState.appendTurn).not.toHaveBeenCalled();
+    expect(storeState.setVerdict).not.toHaveBeenCalled();
+  });
+
   it('forwards debate_verdict phase insights into the store', () => {
     render(<Harness debateId="debate-5" />);
 

@@ -153,6 +153,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
   handleWSEvent: (event: WSEvent) => {
     switch (event.type) {
+      case 'heartbeat':
+        break;
+
       case 'status':
         set((state) => ({
           status: event.data.status as SimulationState['status'],

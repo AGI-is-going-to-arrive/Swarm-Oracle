@@ -32,6 +32,10 @@ from app.services.simulator import (
     _save_narration,
     _save_round_summary,
     _update_branch_status,
+    add_pending_intervention,
+    clear_pending_interventions_for_scenario,
+    pending_interventions,
+    pop_next_pending_intervention,
 )
 from app.visualization.mapper import VisualizationMapper
 
@@ -743,8 +747,6 @@ class TestCornerCases:
 
     def test_intervention_cleanup(self):
         """pending_interventions should be cleaned after keys are removed."""
-        from app.services.simulator import pending_interventions
-
         # Simulate adding interventions
         pending_interventions["test-scenario:branch-1"] = ["干预文本1"]
         pending_interventions["test-scenario:branch-2"] = ["干预文本2"]
@@ -760,4 +762,29 @@ class TestCornerCases:
         assert "other-scenario:branch-3" in pending_interventions
 
         # Clean up test state
+        del pending_interventions["other-scenario:branch-3"]
+
+    @pytest.mark.asyncio
+    async def test_pop_next_pending_intervention_preserves_order(self):
+        key = "queued-scenario:branch-1"
+        await add_pending_intervention(key, "第一条")
+        await add_pending_intervention(key, "第二条")
+
+        assert await pop_next_pending_intervention(key) == "第一条"
+        assert pending_interventions[key] == ["第二条"]
+        assert await pop_next_pending_intervention(key) == "第二条"
+        assert key not in pending_interventions
+
+    @pytest.mark.asyncio
+    async def test_clear_pending_interventions_for_scenario_is_scoped(self):
+        pending_interventions["cleanup-scenario:branch-1"] = ["干预文本1"]
+        pending_interventions["cleanup-scenario:branch-2"] = ["干预文本2"]
+        pending_interventions["other-scenario:branch-3"] = ["其他"]
+
+        await clear_pending_interventions_for_scenario("cleanup-scenario")
+
+        assert "cleanup-scenario:branch-1" not in pending_interventions
+        assert "cleanup-scenario:branch-2" not in pending_interventions
+        assert pending_interventions["other-scenario:branch-3"] == ["其他"]
+
         del pending_interventions["other-scenario:branch-3"]

@@ -49,6 +49,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - **场景 hydration**: `setScenario()` / `loadScenario()` 会读取 `Scenario.visualization_enabled`，并在直开 `/sim/:id` 时自动恢复 `viewMode='theater'`，避免已启用像素剧场的场景回落到 Classic
 - **高级干预事件**: `retrospective_start` 会补一条占位分支并写入 intervention log，`batch_intervention_applied` 会把整批分支干预一起写入 intervention log
 - **防护**: `MAX_MESSAGES=5000` 消息上限 + composite-key dedup 防止内存无限增长
+- **WS keepalive**: `heartbeat` 当前会被显式当作 no-op 事件忽略，不再落进默认 `unhandled event` warning，也不会污染 simulation 状态
 
 ### `debateStore.ts` (Zustand)
 - **状态**: `debate`、`status`、`error`
@@ -201,10 +202,12 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - 初始连接延迟到 effect tick 后建立，并在清理阶段显式取消 pending reconnect timer，减少 mount/unmount 抖动时的首次 WS 噪声
 - 事件分发到 Zustand store
 - 支持流式agent发言（start → delta → complete）
+- 当前会透明接收后端应用层 `heartbeat`；这类 keepalive 事件会被 store 显式忽略，不会触发页面状态变化或告警噪声
 
 ### `useDebateWS.ts`
 - WebSocket 连接到 `/ws/debate/{id}`
 - 分发最小 Debate 事件：
+  - `heartbeat`
   - `status`
   - `agent_speak`
   - `debate_phase_change`
@@ -213,10 +216,11 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - `debate_verdict`
 - 出错时会保留 `error` 状态，而不是把整个 Debate store 清空，便于前端显示可读错误
 - `debate_verdict` 当前除了 winner / score / judge summary 这些 verdict 字段，还会把后端 `phase_insights` 一起透传给 `debateStore.setVerdict()`
+- `heartbeat` 当前显式走 no-op，不会触发 `setDebate / setPhase / setScore / setVerdict`
 - 初始连接和重连都已补 cleanup：
   - effect cleanup 会取消延迟首连 timer
   - `code=1000` 的正常关闭不会再误触发重连
-  - 目前这条 hook 也有独立单测覆盖 `unmount-before-connect / normal close / abnormal close`
+  - 目前这条 hook 也有独立单测覆盖 `unmount-before-connect / normal close / abnormal close / heartbeat ignored`
 
 ### `useScreenCapture.ts` (Phase 3)
 - 截图支持按调用覆盖 selector / captureTarget

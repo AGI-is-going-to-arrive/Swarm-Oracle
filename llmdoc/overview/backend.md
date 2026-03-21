@@ -32,7 +32,7 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 都会在 `finally` 中清理连接)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
@@ -71,6 +71,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
 - **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口
+- **干预队列**: API 层与模拟主循环当前都统一走 async-safe helper；每轮每分支只会按顺序原子取出一条待注入干预，scenario 结束时也会按 helper 统一清理残留 key
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
 - **职责**: 中央共享黑板，所有 Agent 共读同一份信息
@@ -331,14 +332,15 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` 与 `phase_insights[]` |
 | `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay`、`phase_insights[]` 与 `adjudication_mode`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
 | `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用，并会保留输入里的 `phase_insights` / `adjudication_mode` |
-| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；`closing / verdict` 阶段会拒绝新押注；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
+| `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；当前只在 `DebateStatus.LIVE` 且阶段仍处于 `opening / crossfire / rebuttal` 时接受新押注；`QUEUED / ERROR / DONE / closing / verdict` 都会拒绝；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
-- **事件类型**: `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
+- **事件类型**: `heartbeat`, `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
-- **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里
+- **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里；空闲期还会发送应用层 `heartbeat`，让半断开连接在发送路径上更快暴露并清理
 - **事件类型**:
+  - `heartbeat`（客户端可忽略；主要用于 idle keepalive / dead socket cleanup）
   - `status`
   - `agent_speak`
   - `debate_phase_change`

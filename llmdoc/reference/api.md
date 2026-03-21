@@ -221,7 +221,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot（当前顶层还会带 `phase_insights[]`） |
 | `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]` 与 `adjudication_mode`） |
 | `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前会保留导入 payload 里的 `phase_insights` 与 `adjudication_mode` | `{"debate": DebateResultPayload}` | DebateSnapshot |
-| `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
+| `POST /api/debate/{id}/predict` | POST | 提交 Debate 结构化押注；当前只在 `DebateStatus.LIVE` 且阶段仍处于 `opening / crossfire / rebuttal` 时接受新押注 | `{"kind": "winner"|"verdict_tone", "target_value": "proposition|opposition|order|balance|rupture", "confidence?": 0.5, "user_id?": "...", "user_name?": "...", "is_counterplay?": true, "counterplay_phase?": "opening|crossfire|rebuttal", "counterplay_variant?": "balanced|reversal"}` | DebatePrediction |
 
 > Debate 当前已按真实实现固定为 5 个阶段：
 > - `opening`
@@ -238,7 +238,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > `POST /api/debate` 当前会在返回 live snapshot 后保留约 `5s` pre-roll，再启动后台阶段推进；这样前端 live 页能稳定出现下注窗口。
 >
-> `POST /api/debate/{id}/predict` 只在 `opening / crossfire / rebuttal` 阶段开放；进入 `closing / verdict` 后会返回 `400`。当 `is_counterplay = true` 时，当前实现要求同时提供：
+> `POST /api/debate/{id}/predict` 当前要求同时满足两层条件：
+> - `debate.status == LIVE`
+> - `debate.current_phase` 仍处于 `opening / crossfire / rebuttal`
+>
+> 也就是说，进入 `closing / verdict` 后会返回 `400`；若 Debate 已经处于 `QUEUED / ERROR / DONE`，同样会返回 `400`。当 `is_counterplay = true` 时，当前实现要求同时提供：
 > - `counterplay_phase`
 > - `counterplay_variant`
 >
@@ -283,6 +287,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 当前 `scenario` / `debate` 两条 WebSocket receive loop 都会在 `finally` 中执行断链清理：
 > - 正常 `WebSocketDisconnect` 会清理连接
 > - `receive_text()` 抛出的非正常异常也会清理连接，然后继续向上抛错
+> - 空闲期还会发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露；客户端收到这类事件后可以直接忽略
 
 > `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 wrapper / instruction：
 > - 中文 scenario 继续使用中文 wrapper
@@ -292,6 +297,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | type | data | 方向 | 描述 |
 |------|------|------|------|
+| `heartbeat` | `{ts}` | S→C | 应用层 keepalive；客户端可忽略 |
 | `status` | `{status, hierarchical?}` | S→C | 场景状态变更 |
 | `agent_speak_start` | `{agent, agent_id, branch, round}` | S→C | agent开始发言（流式） |
 | `agent_speak_delta` | `{agent, agent_id, delta, branch, round}` | S→C | agent发言增量token |
@@ -313,6 +319,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | type | data | 方向 | 描述 |
 |------|------|------|------|
+| `heartbeat` | `{ts}` | S→C | 应用层 keepalive；客户端可忽略 |
 | `status` | `{status, error?}` | S→C | Debate 状态变更 |
 | `agent_speak` | `{id, sequence, phase, speaker_side, speaker_name, content, score_delta, created_at?}` | S→C | 单条阶段发言 |
 | `debate_phase_change` | `{phase}` | S→C | 当前阶段切换 |

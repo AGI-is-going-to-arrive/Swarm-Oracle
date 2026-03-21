@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket
 from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import Session
 
 from app.api.helpers import schedule_background_task
-from app.api.ws import WSManager
+from app.api.ws import WSManager, run_websocket_session
 from app.models import (
     Debate,
     DebateCounterplay,
@@ -344,8 +344,8 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
         debate = session.get(Debate, debate_id)
         if debate is None:
             raise HTTPException(404, "Debate not found")
-        if debate.status == DebateStatus.DONE:
-            raise HTTPException(400, "Debate already completed — predictions are closed")
+        if debate.status != DebateStatus.LIVE:
+            raise HTTPException(400, "Debate is not accepting predictions")
         if debate.current_phase in {DebatePhase.CLOSING, DebatePhase.VERDICT}:
             raise HTTPException(400, "Predictions lock once closing arguments begin")
 
@@ -418,13 +418,4 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
 
 @router.websocket("/ws/debate/{debate_id}")
 async def debate_websocket_endpoint(websocket: WebSocket, debate_id: str) -> None:
-    connected = await debate_ws_manager.connect(debate_id, websocket)
-    if not connected:
-        return
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        debate_ws_manager.disconnect(debate_id, websocket)
+    await run_websocket_session(debate_ws_manager, debate_id, websocket)

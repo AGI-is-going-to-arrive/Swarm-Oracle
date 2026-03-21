@@ -55,6 +55,22 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().isSimulationComplete).toBe(true);
   });
 
+  it("ignores 'heartbeat' events", () => {
+    const store = useSimulationStore;
+    const before = store.getState();
+
+    store.getState().handleWSEvent({
+      type: "heartbeat",
+      data: { ts: new Date().toISOString() },
+    } as WSEvent);
+
+    const after = store.getState();
+    expect(after.status).toBe(before.status);
+    expect(after.messages).toEqual(before.messages);
+    expect(after.interventionLog).toEqual(before.interventionLog);
+    expect(after.error).toBe(before.error);
+  });
+
   it("handles 'agent_speak_start' → adds to thinkingAgents", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({

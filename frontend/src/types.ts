@@ -494,6 +494,7 @@ export interface DebatePredictionRequest {
 }
 
 export type DebateWSEvent =
+  | { type: 'heartbeat'; data: { ts: string } }
   | { type: 'status'; data: { status: DebateSnapshot['status']; error?: string } }
   | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
   | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
@@ -504,6 +505,7 @@ export type DebateWSEvent =
 // ── WebSocket Events ─────────────────────────────────────
 
 export type WSEvent =
+  | { type: 'heartbeat'; data: { ts: string } }
   | { type: 'status'; data: { status: string; hierarchical?: boolean } }
   | { type: 'agent_speak_start'; data: { agent: string; agent_id: string; branch: string; round: number } }
   | { type: 'agent_speak_delta'; data: { agent: string; agent_id: string; delta: string; branch: string; round: number } }

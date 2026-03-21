@@ -158,6 +158,31 @@ class TestWSManager:
         sent = json.loads(ws.send_text.call_args[0][0])
         assert sent["type"] == "alias_test"
 
+    @pytest.mark.asyncio
+    async def test_send_heartbeat(self):
+        """Heartbeat payload should use the application-level keepalive event."""
+        mgr = WSManager()
+        ws = AsyncMock()
+
+        await mgr.send_heartbeat(ws)
+
+        ws.send_text.assert_called_once()
+        sent = json.loads(ws.send_text.call_args[0][0])
+        assert sent["type"] == "heartbeat"
+        assert sent["data"]["ts"]
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loop_cleans_dead_connection(self):
+        """Heartbeat loop should drop dead sockets during idle periods."""
+        mgr = WSManager()
+        ws = AsyncMock()
+        ws.send_text.side_effect = Exception("Connection closed")
+        mgr._connections["s1"].append(ws)
+
+        await mgr.heartbeat_loop("s1", ws, interval_seconds=0)
+
+        assert ws not in mgr._connections["s1"]
+
 
 class TestWSManagerConcurrency:
     @pytest.mark.asyncio
