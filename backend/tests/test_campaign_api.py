@@ -117,6 +117,24 @@ def test_finalize_endpoint_is_idempotent(client: TestClient):
     assert first.json()["campaign_score_delta"] == second.json()["campaign_score_delta"] == 4
 
 
+def test_finalize_uses_language_aware_default_name_when_user_name_blank(client: TestClient):
+    scenario_id = _seed_completed_scenario("What if Rome never fell?")
+
+    response = client.post(
+        f"/api/campaign/scenario/{scenario_id}/finalize",
+        json={
+            "user_id": "campaign-fallback-en",
+            "user_name": "   ",
+            "profile_id": "governance",
+            "archive_grade": "B",
+            "profile_resonance": "aligned",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["profile"]["user_name"] == "Anonymous Director"
+
+
 def test_daily_status_endpoint_returns_backend_truth_for_today(client: TestClient):
     scenario_id = _seed_completed_scenario()
 

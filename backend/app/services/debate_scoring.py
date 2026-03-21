@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass
 
@@ -20,14 +21,19 @@ PHASES_WITH_SPEAKERS = (
 
 _UPSIDE_RE = re.compile(
     r"accelerat|expand|adopt|build|reform|empower|advance|gain|"
-    r"加速|扩张|采用|建立|改革|赋权|推进|提升"
+    r"innovat|boost|prosper|stabiliz|growth|improv|breakthrough|"
+    r"加速|扩张|采用|建立|改革|赋权|推进|提升|"
+    r"创新|繁荣|增长|提振|稳定|改善|突破"
 )
 _RISK_RE = re.compile(
     r"ban|collapse|crisis|risk|fragile|war|backlash|fail|"
-    r"禁止|崩溃|危机|风险|脆弱|战争|反噬|失败"
+    r"recession|sanction|deadlock|unrest|shortage|panic|disrupt|"
+    r"禁止|崩溃|危机|风险|脆弱|战争|反噬|失败|"
+    r"衰退|制裁|僵局|动荡|短缺|恐慌|失控"
 )
 _RUPTURE_RE = re.compile(
-    r"war|collapse|revolution|ban|purge|终结|崩溃|革命|禁令|清洗"
+    r"war|collapse|revolution|ban|purge|sanction|embargo|coup|"
+    r"终结|崩溃|革命|禁令|清洗|制裁|政变|封锁"
 )
 
 _PROFILE_DIMENSION_BIAS: dict[str, dict[str, int]] = {
@@ -164,33 +170,43 @@ def _build_phase_deltas(
         DebatePhase.CLOSING: {"impact": 2, "evidence": 1},
     }
 
-    phase_deltas: dict[DebatePhase, dict[str, dict[str, int]]] = {}
-    for phase, mapping in weights.items():
-        phase_deltas[phase] = {}
-        for side in SIDE_KEYS:
-            raw_total = sum(breakdown[dimension][side] * weight for dimension, weight in mapping.items())
-            all_raw = sum(
-                breakdown[dimension][side] * weight
-                for dimension, weight in weights[DebatePhase.OPENING].items()
-            ) + sum(
-                breakdown[dimension][side] * weight
-                for phase_weights in (
-                    weights[DebatePhase.CROSSFIRE],
-                    weights[DebatePhase.REBUTTAL],
-                    weights[DebatePhase.CLOSING],
-                )
-                for dimension, weight in phase_weights.items()
+    phase_deltas: dict[DebatePhase, dict[str, dict[str, int]]] = {
+        phase: {} for phase in PHASES_WITH_SPEAKERS
+    }
+    for side in SIDE_KEYS:
+        raw_by_phase: dict[DebatePhase, float] = {}
+        total_raw = 0.0
+        for phase, mapping in weights.items():
+            raw_total = float(
+                sum(breakdown[dimension][side] * weight for dimension, weight in mapping.items())
             )
-            scaled = max(1, round(score[side] * raw_total / max(1, all_raw)))
+            raw_by_phase[phase] = raw_total
+            total_raw += raw_total
+
+        allocated = {phase: 0 for phase in PHASES_WITH_SPEAKERS}
+        if total_raw > 0 and score[side] > 0:
+            fractional_parts: list[tuple[float, DebatePhase]] = []
+            remaining = score[side]
+            for phase in PHASES_WITH_SPEAKERS:
+                raw_score = score[side] * raw_by_phase[phase] / total_raw
+                whole = math.floor(raw_score)
+                allocated[phase] = whole
+                remaining -= whole
+                fractional_parts.append((raw_score - whole, phase))
+
+            for _, phase in sorted(
+                fractional_parts,
+                key=lambda item: (item[0], item[1] == DebatePhase.CLOSING),
+                reverse=True,
+            )[:remaining]:
+                allocated[phase] += 1
+
+        for phase in PHASES_WITH_SPEAKERS:
+            scaled = allocated[phase]
             phase_deltas[phase][side] = {
                 "proposition": scaled if side == "proposition" else 0,
                 "opposition": scaled if side == "opposition" else 0,
             }
-
-    for side in SIDE_KEYS:
-        total = sum(phase_deltas[phase][side][side] for phase in PHASES_WITH_SPEAKERS)
-        diff = score[side] - total
-        phase_deltas[DebatePhase.CLOSING][side][side] += diff
 
     return phase_deltas
 

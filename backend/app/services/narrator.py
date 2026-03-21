@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.services.llm_client import llm_call_json
 from app.services.lang_detect import get_language_directive
+from app.services.llm_client import llm_call_json
 
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
@@ -65,21 +65,36 @@ def _build_fallback_narration(
     branch_title: str,
     probability: float,
     raw_rounds: str,
+    *,
+    language: str,
 ) -> dict:
     lines = [line.strip() for line in raw_rounds.splitlines() if line.strip()]
     key_moments = lines[:2]
-    story_lines = [
-        f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",
-    ]
+    if language == "Chinese":
+        story_lines = [
+            f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",
+        ]
+    else:
+        story_lines = [
+            f"Branch '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}.",
+        ]
     if key_moments:
-        story_lines.append("关键交互包括：")
+        story_lines.append("关键交互包括：" if language == "Chinese" else "Key interactions included:")
         story_lines.extend(key_moments)
     else:
-        story_lines.append("当前轮次没有留下足够的原始交互，系统仅保留了分支标题与概率。")
+        story_lines.append(
+            "当前轮次没有留下足够的原始交互，系统仅保留了分支标题与概率。"
+            if language == "Chinese"
+            else "The current rounds did not retain enough raw interaction data, so only the branch title and probability remain."
+        )
 
     return {
         "story": " ".join(story_lines),
-        "insight": "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。",
+        "insight": (
+            "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。"
+            if language == "Chinese"
+            else "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records."
+        ),
         "key_moments": key_moments,
     }
 
@@ -113,7 +128,12 @@ async def narrate_branch(
         result = _normalize_narration_result(raw_result)
     except Exception as exc:
         logger.warning("Narration fallback for %s: %s", branch_title, exc)
-        result = _build_fallback_narration(branch_title, probability, raw_rounds)
+        result = _build_fallback_narration(
+            branch_title,
+            probability,
+            raw_rounds,
+            language=language,
+        )
     key_moments_raw = result.get("key_moments", [])
     if isinstance(key_moments_raw, str):
         key_moments = [key_moments_raw]

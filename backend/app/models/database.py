@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlmodel import Field, Relationship, SQLModel, Column, JSON
+from sqlmodel import JSON, Column, Field, Relationship, Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ class AgentMessage(SQLModel, table=True):
     __tablename__ = "agent_message"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    round_id: str = Field(foreign_key="round.id")
-    agent_id: str = Field(foreign_key="agent.id")
+    round_id: str = Field(foreign_key="round.id", index=True)
+    agent_id: str = Field(foreign_key="agent.id", index=True)
     content: str = ""
     emotion: str = "neutral"
     diverge: Optional[str] = None  # divergence signal, if any
@@ -74,7 +74,7 @@ class Round(SQLModel, table=True):
     """A single simulation round within a branch."""
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    branch_id: str = Field(foreign_key="branch.id")
+    branch_id: str = Field(foreign_key="branch.id", index=True)
     round_number: int
     compressed_summary: Optional[str] = None
 
@@ -86,7 +86,7 @@ class Agent(SQLModel, table=True):
     """An agent participating in the simulation."""
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id")
+    scenario_id: str = Field(foreign_key="scenario.id", index=True)
     name: str
     role: str = ""
     persona: str = ""
@@ -102,7 +102,7 @@ class Branch(SQLModel, table=True):
     """A story branch (node in the prediction tree)."""
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id")
+    scenario_id: str = Field(foreign_key="scenario.id", index=True)
     parent_branch_id: Optional[str] = None
     fork_round: int = 0
     fork_reason: str = ""
@@ -125,8 +125,8 @@ class InterventionLog(SQLModel, table=True):
     __tablename__ = "intervention_log"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id")
-    branch_id: str = Field(foreign_key="branch.id")
+    scenario_id: str = Field(foreign_key="scenario.id", index=True)
+    branch_id: str = Field(foreign_key="branch.id", index=True)
     round_number: int = 0
     user_input: str = ""
     created_at: datetime = Field(default_factory=_now)
@@ -163,10 +163,6 @@ class ReplayArtifact(SQLModel, table=True):
     payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=_now)
 
-
-# ── Database init ────────────────────────────────────────
-
-from sqlmodel import create_engine, Session
 
 _engine = None
 
@@ -225,6 +221,21 @@ def init_db():
             _migrate_add_column(cursor, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
             _migrate_add_column(cursor, "debate_prediction", "counterplay_phase", "TEXT")
             _migrate_add_column(cursor, "debate_prediction", "counterplay_variant", "TEXT")
+            _migrate_create_index(
+                cursor, "agent_message", "ix_agent_message_round_id", ["round_id"]
+            )
+            _migrate_create_index(
+                cursor, "agent_message", "ix_agent_message_agent_id", ["agent_id"]
+            )
+            _migrate_create_index(cursor, "round", "ix_round_branch_id", ["branch_id"])
+            _migrate_create_index(cursor, "agent", "ix_agent_scenario_id", ["scenario_id"])
+            _migrate_create_index(cursor, "branch", "ix_branch_scenario_id", ["scenario_id"])
+            _migrate_create_index(
+                cursor, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
+            )
+            _migrate_create_index(
+                cursor, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
+            )
             conn.commit()
             conn.close()
         except Exception as exc:
@@ -247,6 +258,15 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     if column not in existing:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
         logger.info("Migrated: added %s.%s", table, column)
+
+
+def _migrate_create_index(cursor, table: str, index_name: str, columns: list[str]) -> None:
+    """Create an index if it doesn't already exist (SQLite only)."""
+    for identifier in (table, index_name, *columns):
+        if not _SAFE_IDENTIFIER.match(identifier):
+            raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
+    column_sql = ", ".join(columns)
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column_sql})")
 
 
 def get_session():

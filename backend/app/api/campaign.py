@@ -13,16 +13,16 @@ from app.services.campaign import (
     CampaignNotFoundError,
     CampaignStateError,
     finalize_scenario_campaign,
-    get_daily_challenge_summary,
     get_campaign_profile_summary,
-    get_weekly_campaign_summary,
-    get_scenario_gameplay_state,
-    get_scenario_director_state,
+    get_daily_challenge_summary,
     get_scenario_campaign_summary,
+    get_scenario_director_state,
+    get_scenario_gameplay_state,
+    get_weekly_campaign_summary,
     list_campaign_badge_summaries,
     list_campaign_mastery_summaries,
-    save_scenario_gameplay_state,
     save_scenario_director_state,
+    save_scenario_gameplay_state,
 )
 
 router = APIRouter(prefix="/api/campaign", tags=["campaign"])
@@ -104,7 +104,7 @@ class CampaignWeeklySummaryResponse(BaseModel):
 
 class CampaignFinalizeRequest(BaseModel):
     user_id: str
-    user_name: str = "匿名导演"
+    user_name: str = ""
     profile_id: str
     archive_grade: str = "C"
     profile_resonance: str = "offbeat"
@@ -127,8 +127,7 @@ class CampaignFinalizeRequest(BaseModel):
     @field_validator("user_name")
     @classmethod
     def validate_user_name(cls, value: str) -> str:
-        normalized = value.strip()
-        return normalized or "匿名导演"
+        return value.strip()
 
     @field_validator("archive_grade")
     @classmethod

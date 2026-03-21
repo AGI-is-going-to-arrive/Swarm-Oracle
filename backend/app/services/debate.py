@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.models import (
     Debate,
     DebateCounterplay,
@@ -20,18 +21,22 @@ from app.models import (
     DebateTurn,
 )
 from app.models.database import get_engine
-from app.config import settings
 from app.services.debate_prompts import (
     build_cast,
-    build_turn_generation_prompt,
     build_motion,
     build_turn_copy,
+    build_turn_generation_prompt,
     get_debate_profile_style,
     infer_debate_profile,
     resolve_debate_language,
     select_debate_scene,
 )
-from app.services.debate_scoring import DEBATE_DIMENSIONS, DebatePlan, PHASES_WITH_SPEAKERS, build_debate_plan
+from app.services.debate_scoring import (
+    DEBATE_DIMENSIONS,
+    PHASES_WITH_SPEAKERS,
+    DebatePlan,
+    build_debate_plan,
+)
 from app.services.llm_client import format_untrusted_text_block, llm_call_json, llm_request_scope
 
 logger = logging.getLogger(__name__)
@@ -1238,6 +1243,7 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
         snapshot = _serialize_debate(
             debate,
             turns,
+            plan=plan,
             phase_insights=(
                 persisted_phase_insights
                 if persisted_phase_insights is not None
@@ -1291,6 +1297,7 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
         snapshot = _serialize_debate(
             debate,
             turns,
+            plan=plan,
             phase_insights=(
                 persisted_phase_insights
                 if persisted_phase_insights is not None
@@ -1810,9 +1817,10 @@ def _serialize_debate(
     debate: Debate,
     turns: list[DebateTurn],
     *,
+    plan: DebatePlan | None = None,
     phase_insights: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    plan = build_debate_plan(debate.question)
+    effective_plan = plan or build_debate_plan(debate.question)
     return {
         "id": debate.id,
         "question": debate.question,
@@ -1867,7 +1875,7 @@ def _serialize_debate(
         if phase_insights is not None
         else _build_phase_insights(
             debate=debate,
-            plan=plan,
+            plan=effective_plan,
             turns=turns,
         ),
         "result_ready": debate.status == DebateStatus.DONE,
@@ -2133,8 +2141,8 @@ def _supporting_turn_reason(language: str, kind: str, phase: DebatePhase) -> str
     if language == "zh":
         mapping = {
             "winner": f"这是胜方最能把论点落到机制和执行后果上的一击，真正把局势往 {phase_label} 的方向推实了。",
-            "pressure": f"这是败方最有威胁的一次施压，说明它并不是没抓到漏洞，只是没能把压力延续成改判。",
-            "swing": f"这一段基本锁住了整场辩论的收束方向，评委后面的判断就是沿着这里的分歧继续放大。",
+            "pressure": "这是败方最有威胁的一次施压，说明它并不是没抓到漏洞，只是没能把压力延续成改判。",
+            "swing": "这一段基本锁住了整场辩论的收束方向，评委后面的判断就是沿着这里的分歧继续放大。",
             "verdict": "这句裁决把前面所有争点压成了最后的结论，是评委视角下的明确盖棺。",
         }
         return mapping.get(kind, "这是评委在复盘时最值得回看的关键一段。")

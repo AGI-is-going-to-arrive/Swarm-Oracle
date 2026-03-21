@@ -173,3 +173,20 @@ class TestNarrateBranch:
         assert "轮换序章" in result["story"]
         assert "简化摘要" in result["insight"]
         assert result["key_moments"] == ["[R1 A]: 第一条记录", "[R1 B]: 第二条记录"]
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    async def test_llm_failure_falls_back_in_english_when_requested(self, mock_llm):
+        """Fallback narration should respect the requested output language."""
+        mock_llm.side_effect = RuntimeError("llm unavailable")
+
+        result = await narrate_branch(
+            branch_title="Opening Branch",
+            probability=0.4,
+            agents_summary="",
+            raw_rounds="[R1 A]: First record\n[R1 B]: Second record",
+            language="English",
+        )
+
+        assert "Opening Branch" in result["story"]
+        assert "compact summary" in result["insight"]

@@ -32,11 +32,11 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 都会在 `finally` 中清理连接)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
@@ -52,7 +52,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键函数**:
   - `run_simulation(scenario_id, session)` — 主入口，根据 `mode` 条件初始化 `blackboards`；BYOK API Key 纯内存传递，不持久化
   - `_gather_agent_messages(..., blackboard)` — 读共享简报 + batch post
-  - `_compress_round_memory(..., blackboard)` — 压缩 + 更新黑板全局态势
+  - `_compress_round_memory(..., blackboard)` — 以上一份滚动态势简报 + 当前窗口原始消息做压缩，并更新黑板全局态势
   - `_check_fork_conditions()` — 分支检测逻辑
   - `_prune_branches()` — 概率低分支剪枝
   - `_get_recent_messages(engine, branch_id)` — LEFT JOIN 单查询取消息+agent名（P0-2 N+1修复）
@@ -70,6 +70,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **并发**: `LLM_CONCURRENCY` 限制并发LLM调用
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
+- **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
 - **职责**: 中央共享黑板，所有 Agent 共读同一份信息
@@ -86,7 +87,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `memory.py` (≈230行) — 记忆管理
 - **职责**: L0上下文构建 + 结构化压缩 + 分层上下文 + 黑板格式化
 - **关键函数**:
-  - `compress_rounds(messages_text)` → `dict` (态势简报)
+  - `compress_rounds(messages_text, previous_briefing?)` → `dict` (态势简报)
   - `_validate_compress_result(raw)` — 防御性LLM输出校验
   - `format_messages_for_context(messages, max_recent, tier)` — 按tier差异化消息数量
   - `format_briefing_for_context(briefing)` — 黑板 dict → 中文结构化文本
@@ -94,7 +95,11 @@ alembic/ ──► Alembic 数据库迁移框架
   - `_build_crowd_context(...)` — CROWD精简prompt (~800 tokens)
 - **Tier映射**: `_TIER_MAX_RECENT` = CORE→8, IMPORTANT→5, CROWD→3
 - **输出格式**: `{situation, active_debates, key_quotes, tension_points, consensus}`
-- **玩法卡强化**: intervention block 现在明确把玩法卡描述成“高优先级、持续生效的世界线事件”，要求 agent 先回应、再在后续轮次持续体现影响，而不是把它当普通补充说明
+- **干预 / 玩法卡注入**:
+  - `intervention_text` 当前会在 agent prompt 里被明确描述成“高优先级、持续生效的世界线事件”，要求先回应、再在后续轮次持续体现影响
+  - 玩法卡当前不是从 `gameplay_state` 直接反向注入 prompt；前端 `GameplayCardsModal` 会先把 card prompt 作为 `/intervene` 文本发给后端，再把 `usage_log` 同步进 `gameplay_state`
+- **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
+- **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
   - `retrieve_relevant_memories(scenario_id, query, top_k)` → 格式化 Top-K 语义相关记忆
@@ -110,7 +115,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `gameplay_contract.py` (≈15行) — shared gameplay contract 载入器 (**NEW**)
 - **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约
 - **关键API**:
-  - `load_gameplay_contract()` → `dict[str, Any]` — `lru_cache(maxsize=1)` 缓存 contract JSON
+  - `load_gameplay_contract()` → `dict[str, Any]` — 基于文件 `mtime_ns` 的轻量缓存；文件未变更时复用缓存，变更后自动重读
 - **集成点**: `visualization/card_events.py` 启动时据此构建 `CARD_TYPES`，后端测试 `test_gameplay_contract_sync.py` 会校验卡牌 ID 与触发模式和 shared contract 保持一致
 
 ### `llm_client.py` (≈270行) — LLM调用封装
@@ -129,10 +134,11 @@ alembic/ ──► Alembic 数据库迁移框架
     - 正则抽取对象 / 数组
     - keyed fallback（恢复轻微损坏的 `story/content/emotion/diverge` 这类键值）
     - `agent_message` 专用 fallback（把带键的坏 JSON 或纯文本尽量恢复成单条 agent 发言）
+  - `llm_call_json_stream()` 当前复用同一套恢复链，不再只做一次裸 `json.loads()`
 - **全局治理**:
   - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`
-  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure
-  - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断
+  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，还会通过 SQLite reservation 表共享全局/用户级 pending 计数
+  - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
 - **输入防护**:
   - `sanitize_untrusted_text()` / `format_untrusted_text_block()` 会把用户题面、干预文本、评分输入等包成 `UNTRUSTED DATA`
   - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
@@ -147,6 +153,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **语言检测** (P9): 调用 `lang_detect.detect_language()` 检测输入语言，存入 `result["_language"]` 供下游服务使用
 - **分层模式** (P3-A): `PARSE_PROMPT_HIERARCHICAL` 生成 `groups[]` 分组信息，含 fallback 自动分组逻辑
 - **坏 JSON 兜底**: 若 parse 阶段的 `llm_call_json()` 仍返回不可恢复坏 JSON，parser 当前会退到确定性 fallback 结构，而不是直接让整条 `create scenario -> simulate` 链路中断；fallback 结果仍会按 `requested_agents` 补足最小角色集，并保留同样的 rounds / sensitivity 边界
+- **fallback rounds**: fallback 轮数当前不再写死 `10`；会优先使用调用方给的默认轮数，再按 `max_rounds` 做 clamp
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
 
 ### `lang_detect.py` (≈70行) — 语言检测 (P9 **NEW**)
@@ -154,6 +161,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键函数**:
   - `detect_language(text)` → `str` — 返回 "Chinese"/"English"/"Japanese"/"Korean"，字符比例启发式，无外部依赖
   - `get_language_directive(language)` → `str` — 生成 prompt 注入的多语言指令文本
+  - `get_anonymous_director_name(language)` / `get_anonymous_predictor_name(language)` — 生成 language-aware 的匿名显示名
 - **覆盖范围**: CJK 统一表意文字、日文假名（平假名+片假名）、韩文谚文
 - **防护**: 空输入默认 English；不计入全角Latin/数字避免误判
 - **集成点**: `parser.py` (检测)、`simulator.py`/`memory.py`/`narrator.py`/`scoring.py` (指令注入)
@@ -173,6 +181,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 为已完成的分支生成故事总结和洞察
 - **输出**: `{title, story, insight, key_moments[]}`
 - **返回值归一化**: narrator 现在会容忍 `llm_call_json()` 返回 `list[dict]` 或字符串列表，优先提取第一条可用叙事，避免再因 `list` 没有 `.get()` 把整局场景打进 `error`
+- **fallback 语言**: 当 LLM 不可用时，fallback narration 当前会跟随 `language` 输出中英文摘要，而不是固定中文兜底
 
 ### `campaign.py` (≈330行) — Campaign 进度服务 (**NEW**)
 - **职责**: 管理导演 campaign 进度结算、档案积分、题材 mastery 与 badge 解锁，以及单局 `director_state / gameplay_state` 权威态
@@ -206,6 +215,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - **时区归一**: `daily-status` 查询现在会把 SQLite round-trip 回来的 naive UTC 时间先按 UTC 归一，再换算调用方本地日期，避免跨时区同日完成态误判
 - **时间序列化**: `profile / mastery / badges / daily-status` 响应里的时间字段统一输出带 `+00:00` 的 UTC ISO 字符串
 - **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
+- **默认名策略**: finalize 时若 `user_name` 为空，当前会按 scenario 语言回退到匿名导演显示名，而不是固定中文
+- **徽章解锁**: `badge` 当前通过 SQLite `on_conflict_do_nothing` 风格的幂等写入保证唯一性；重复命中不会再靠“先查后插”判断
 - **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
 
 ### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
@@ -221,6 +232,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - 当前终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；结果 payload 当前会显式带 `adjudication_mode`，若 LLM 不可用或输出无效则退回 deterministic fallback
   - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 语义锚点，同时会生成更强的 LLM prompt，要求回应上一轮、避免套话，并压缩长句、保留更像现场回击的节奏
   - `debate_scoring.py` 会按题材做轻量维度偏置；`war / ecology` 在高风险题面更容易收敛到 `rupture`
+  - `_serialize_debate()` 当前支持复用外层已算好的 deterministic `plan`，不会在 live/result 序列化时无意义重复构建
+  - `_question_signal` 的 deterministic 关键词覆盖这轮又补了 `innovation / growth / breakthrough / sanction / deadlock / unrest / coup` 等中英文信号词，仍保持 deterministic 评分路线
   - Track D 的 `profile -> scene_theme` 已改为 Debate 专属背景：`debate_arena_civic / debate_arena_judicial / debate_arena_forum`
   - `counterplay` 现在除了 `outcome`，还会返回 `phase_score / explanation`，并被织进 `judge summary` 与 replay digest
   - live snapshot / result payload 顶层当前还会返回 `phase_insights[]`，每个阶段都有 `stakes / judge_focus / commentary / pressure_margin / confidence_drift`
@@ -235,7 +248,10 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键函数**:
   - `score_prediction(prediction_id)` — 评估单条预测，自动读取场景 `_language` 匹配输出语言
   - `score_all_for_scenario(scenario_id)` — 批量评分场景所有未评预测
-  - `_update_leaderboard(session, user_id, user_name, score)` — 更新排行榜物化视图
+  - `_update_leaderboard(session, user_id, user_name, score)` — 从该用户所有已评分 `Prediction` 行重算排行榜物化视图
+- **排行榜物化**:
+  - `total_predictions / total_score / avg_score / best_score / win_streak` 当前统一由已评分 `Prediction` 重建
+  - `win_streak` 当前按稳定顺序（`created_at desc / scored_at desc / id desc`）重算，不再依赖并发评分的落库顺序
 
 ## API层 (`app/api/`) — P0-1 拆分
 
@@ -266,14 +282,14 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `interventions.py` — 干预路由
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /scenarios/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符） |
-| `POST /scenarios/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演） |
-| `POST /api/scenarios/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支） |
+| `POST /api/scenario/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符） |
+| `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演） |
+| `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支；当前单次请求最多 50 条） |
 
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；推荐走 `POST body` 透传 provider policy，避免把 key 暴露在 URL |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；推荐走 `POST body` 透传 provider policy，避免把 key 暴露在 URL；当前 wrapper / instruction 会跟随场景语言，英文场景不再收到中文包装文案 |
 
 ### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
 | 端点 | 方法 | 描述 |
@@ -290,7 +306,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 获取调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
-> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。`finalize` 若传空 `user_name`，会按场景语言落匿名导演名。
 
 **安全防护**:
 - 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
@@ -298,12 +314,15 @@ alembic/ ──► Alembic 数据库迁移框架
 - 删除校验拒绝非终态场景（PARSING / NARRATING）
 
 ### `predictions.py` — 预测与排行榜路由 (P3-B **NEW**)
+> 当前 `/api/scenario/{id}/predict`、`/predictions`、`/score-predictions` 与 `/api/leaderboard` 只由本模块持有；`scenarios.py` 内的旧实现已移除，不再存在 shadow route。
+
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） |
-| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 |
+| `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前；当前 `confidence` 走 Pydantic 范围校验） |
+| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测；若 scenario 不存在则返回 `404` |
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 |
+- **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
 
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
@@ -318,6 +337,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
 - **事件类型**: `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
+- **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里
 - **事件类型**:
   - `status`
   - `agent_speak`
@@ -351,15 +371,20 @@ alembic/ ──► Alembic 数据库迁移框架
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
+> 这轮又补了 hot-path 外键索引：`AgentMessage.round_id / agent_id`、`Round.branch_id`、`Agent.scenario_id`、`Branch.scenario_id`、`InterventionLog.scenario_id / branch_id`、`Prediction.scenario_id`、`DebateTurn.debate_id`、`DebatePrediction.debate_id`、`DebateCounterplay.prediction_id`。对应 Alembic revision：`008_add_hot_path_foreign_key_indexes`。
+>
+> 本地仓库 `backend/swarmoracle.db` 已在本 session 迁到 `008_add_hot_path_foreign_key_indexes`。
+
 ## 测试覆盖
 
 历史全量基线：**815 passed**
 
 当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准：
 
-- backend signoff set：**86 passed**
+- backend signoff set：**90 passed**
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
+- 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**
 
 覆盖重心：
 

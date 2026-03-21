@@ -9,20 +9,26 @@ import logging
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
+from app.api.schemas import ScenarioResponse
 from app.config import settings
 from app.models import (
-    Agent, AgentGroup, AgentGroupMember, AgentMessage, AgentTier, Branch, Round, Scenario,
+    Agent,
+    AgentGroup,
+    AgentGroupMember,
+    AgentTier,
+    Branch,
+    Round,
+    Scenario,
     ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.services.llm_client import llm_request_scope
-from app.services.parser import parse_question
 from app.services.campaign import (
     normalize_scenario_director_state,
     normalize_scenario_gameplay_state,
 )
+from app.services.llm_client import llm_request_scope
+from app.services.parser import parse_question
 from app.services.simulator import run_simulation
-from app.api.schemas import ScenarioResponse
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +174,7 @@ async def parse_and_run_background(
                 question,
                 max_agents=num_agents,
                 target_agents=num_agents,
+                default_rounds=rounds,
                 max_rounds=settings.MAX_ROUNDS,
                 hierarchical=hierarchical,
                 api_key=llm_api_key,

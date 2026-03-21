@@ -40,7 +40,7 @@
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
 | i18n | 中英文界面与输入语言联动输出 |
-| BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断 |
+| BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；同一 SQLite `DATABASE_URL` 下的多进程还会共享 pending / quota 计数 |
 | Observability | `/metrics` 暴露 Prometheus 文本指标，依赖缺失时仍有最小回退文本 |
 
 ## Architecture
@@ -93,7 +93,7 @@ npm run dev
 | `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8318/v1/chat/completions` |
 | `LLM_API_KEY` | API key | `sk-12345678` |
 | `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
-| `MAX_AGENTS` | Max agents per scenario | `100` |
+| `MAX_AGENTS` | Max agents per scenario | `1500` |
 | `MAX_ROUNDS` | Max rounds | `40` |
 
 本地直接启动 backend 时读取 `backend/.env`，可由 `.env.example` 初始化；`docker compose` 默认读取仓库根目录 `.env.docker`。
@@ -137,12 +137,14 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
 - Current targeted verification:
-  - backend targeted set `86 passed`
+  - backend targeted set `90 passed`
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `backend/tests/test_llm_client.py + backend/tests/test_campaign_api.py + backend/tests/test_campaign_service.py + backend/tests/test_debate_api.py + backend/tests/test_debate_service.py + backend/tests/test_gameplay_contract_sync.py + backend/tests/test_memory.py + backend/tests/test_models.py + backend/tests/test_narrator.py + backend/tests/test_predictions.py + backend/tests/test_ws.py + backend/tests/test_api.py`: `269 passed`
+  - `backend/tests/test_simulator.py -k reuses_latest_rolling_briefing_before_current_window`: `1 passed`
   - `src/lib/scenarioAuthority.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/hooks/useScreenCapture.test.ts`：`37 passed`
-  - `backend/tests/test_parser.py -k deterministic_parse`: `1 passed`
+  - `backend/tests/test_parser.py -k fallback_rounds_use_explicit_default_rounds`: `1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`: `38 passed`
   - `backend/tests/test_campaign_service.py + backend/tests/test_campaign_api.py + backend/tests/test_debate_api.py`: `32 passed`
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`

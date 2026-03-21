@@ -17,7 +17,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Multi-Ending Comparison | 跨分支比较结局、洞察、关键时刻 |
 | Real-time WebSocket | 实时观看agent发言流 |
 | Hierarchical Agents (P3-A) | Leader-Worker分层架构，支持千人规模模拟 |
-| Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜 |
+| Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜；当 `user_name` 留空时，后端会按场景语言回退到匿名预言家 / `Anonymous Predictor` |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
 | Gameplay Cards | 当前共有 14 张玩法卡：10 张原始导演卡 + 4 张反制卡（`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`）；玩法卡会按题目画像动态推荐，弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件、profile-specific 打法说明，以及常驻 `风险 / 资源` 轨道；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
 | Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；前端 `gameplayContract.ts` 直接消费卡牌规则、modal 输入契约与 prompt 语义，后端 `card_events.py` 当前主要消费 card event 映射与 `branching_bonus`，并有同步测试覆盖 |
@@ -27,14 +27,14 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Landing Route Summary Split | 首页当前只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接依赖完整玩法策略表；深层玩法 contract / strategy helper 仍由 `gameplayCards` 与导演层链路在后续路由里消费 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录、世界线快照与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案；结果页当前会先读取后端 `director_state`、`gameplay_state` 与 `campaign summary`，并以远端 authority 作为展示基线；只有远端缺字段时，才会回退本地 `scenarioMeta` 的兼容内容；如果远端只回某个 gameplay 分区，也只替换那一块，不会误清空无关的本地兼容字段；当前派生出的 archive/objectives 只保留在内存里用于展示，`displayArchive` 与 `displayBranchSnapshots` 会优先按 story/usages/bets/campaign summary 现算；`result / simulation replay` payload 里的 `scenarioMeta` 也继续精简，读路径会在进入 replay 页面时把 usage-derived 状态补回运行态 |
 | Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；题面与副标题都支持 `zh/en`，首页会把后端 `campaign daily-status` 真值与本地缓存合并显示完成态、已用卡数、下注态与题材回响反馈；本轮又补了 `weekly challenge` Lite，首页会显示本周 3 个轮换题材与本地周窗口内的轻量周汇总 |
-| Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status/weekly-summary/scenario/{id}/summary/director-state` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章；首页现还会显示 `director growth` Lite，总结累计 runs、badge 数和 Top mastery；结果页可直接复制分享 challenge 链接，让别人按同题同参数再打一遍 |
+| Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status/weekly-summary/scenario/{id}/summary/director-state` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章；首页现还会显示 `director growth` Lite，总结累计 runs、badge 数和 Top mastery；结果页可直接复制分享 challenge 链接，让别人按同题同参数再打一遍；当 `user_name` 留空时，后端会按场景语言回退到匿名导演 / `Anonymous Director` |
 | Debate Arena (Track D) | 已落地独立 Debate domain：`/api/debate` + `/ws/debate/{id}` 后端竖切、首页 `Debate Arena` 入口、`/debate/:id` live 页、`/debate/:id/result` 结果页、结构化押注（`winner / verdict_tone`）、`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()` 自动化钩子；当前终局裁决已升级为 **LLM hybrid**：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`，结果 payload 会显式带 `adjudication_mode`；若 LLM 不可用或输出无效，会退回 deterministic fallback；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；结果页会继续返回 `supporting_turns`，分享文案会带 1-2 条关键引文；创建后仍保留短暂 pre-roll 供 live 页下注，`closing / verdict` 阶段会锁单；`counterplay` 现在除了 `phase_score / explanation`，还会显式改写对应阶段的 `phase_insights.commentary`，并同步进入 replay digest 与 share copy；本 session 又把 replay import 的 `phase_insights` 做成持久化保真，导入后的 live/result 会优先使用已导入的阶段洞察，而不是只靠后端重算近似版本 |
 | Portable Replay & Import | 主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 当前都支持 replay 页面。主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时再回退到本地 token；Debate 结果页当前使用 `/debate/replay/result?replay=...`。主模式 `scenario_result_v1 / simulation_view_v1` 当前都会先压缩 `scenarioMeta`，当 snapshot 已自带 authority 时还会去掉 authority-backed `cards / bets / branchSnapshots`，并把 `objectives / commitment` 收成更小的 replay 形态；读路径再按 usage/bets 现算回补 usage-derived 状态。三条 replay 页默认都是只读模式，但都支持“导入为本地运行”，把当前快照落成真实本地 scenario / debate 记录 |
 | Generic Quick Start | 首页 generic 题材现有 3 条 `switchboard_forum` 题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard） |
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
 | BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model |
-| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断 |
+| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
 | Language Switcher (P9) | 全局 EN/ZH 切换器；桌面端固定右下角，小屏普通页面会移到右上安全区，Theater 小屏继续贴底部安全区 |
 | Collapsible Sidebar (P7) | 可收起Agent面板，磨砂玻璃药丸Toggle，无边框残留 |
@@ -60,7 +60,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Theater Replay Director | 完成态 Theater 支持按世界线/轮次筛选回放，并保留重播/跳到最新/倍速控制；compact TimelineBar 直接嵌回 Theater 面板内，显示 `fork/card/bet/result` marker |
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
-| LLM Runtime Guard | 当前后端已增加进程内全局 LLM 并发闸门、pending 上限、用户级 pending 配额和 provider 熔断；用户题面、干预文本、评分输入与分享上下文也会按 `UNTRUSTED DATA` 口径注入，减少坏 JSON 与提示词注入带来的链路抖动 |
+| LLM Runtime Guard | 当前后端已增加进程内全局 LLM 并发闸门、pending 上限、用户级 pending 配额和 provider 熔断；当多个进程共享同一个 SQLite `DATABASE_URL` 时，pending / quota 计数还会通过 SQLite 轻量占位表共享；用户题面、干预文本、评分输入与分享上下文也会按 `UNTRUSTED DATA` 口径注入，减少坏 JSON 与提示词注入带来的链路抖动 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
 | Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame；当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有同名 `.meta.json` sidecar，其中较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则使用诚实回填的 provenance 记录；这里的 backfill 代表 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
 | Theme Registry & Asset Manifest | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 / 辩论 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；Track D 的 `DEBATE_UI_ASSETS` 也走同一套 registry。本轮又把 7 张原先只在库存里的 sprite（`alchemist / assassin / bard / knight / monk / thief / witch`）接入运行时角色池，并同步收口了前后端 persona/role 映射；当前 `BootScene` 只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载；后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载，旧 `bet_panel / leaderboard / title_screen / minimap_frame` 也不再是 Theater 首次进入硬依赖 |
@@ -113,10 +113,12 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 ### Testing
 | 工具 | 覆盖 |
 |------|------|
-| pytest + pytest-asyncio | Historical full baseline: **815 passed**。当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准；最新 signoff backend set：**86 passed** |
+| pytest + pytest-asyncio | Historical full baseline: **815 passed**。当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准；最新 signoff backend set：**90 passed** |
 | Vitest + jsdom | Historical full baseline: **179 passed**。当前发布判断以前端 targeted `vitest` 与 `release:signoff` 为准；最新 targeted frontend set：**107 passed**，且 `tsc` / `build` / assets check 通过 |
 | conftest.py | 每测例独立临时 SQLite fixtures（前后显式释放 engine，避免 readonly / disk I/O 冲突） |
 | benchmark_compression.py | 压缩质量离线标尺 (3场景 × 4维度) |
+
+- 本 session 还额外实跑了后端回归子集：`269 passed`
 
 ## 目录结构
 

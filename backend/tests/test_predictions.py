@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.models.predictions import Prediction, Leaderboard
+from app.models.predictions import Leaderboard, Prediction
 from app.services.scoring import _update_leaderboard
-
 
 # ── Model Unit Tests ─────────────────────────────────────
 
@@ -25,7 +24,7 @@ class TestPredictionModel(unittest.TestCase):
         p = Prediction(scenario_id="s1", prediction_text="BTC will moon")
         self.assertEqual(p.scenario_id, "s1")
         self.assertEqual(p.prediction_text, "BTC will moon")
-        self.assertEqual(p.user_name, "匿名预言家")
+        self.assertEqual(p.user_name, "Anonymous Predictor")
         self.assertEqual(p.confidence, 0.5)
         self.assertIsNone(p.score)
         self.assertIsNone(p.score_reason)
@@ -95,9 +94,59 @@ class TestLeaderboardUpdate(unittest.TestCase):
         with Session(self.engine) as session:
             for entry in session.exec(select(Leaderboard)).all():
                 session.delete(entry)
+            for pred in session.exec(select(Prediction)).all():
+                session.delete(pred)
+            session.commit()
+
+    def _create_scored_prediction(
+        self,
+        *,
+        user_id: str,
+        user_name: str,
+        score: float | None,
+        minutes: int,
+    ) -> str:
+        created_at = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+        with Session(self.engine) as session:
+            pred = Prediction(
+                scenario_id="scenario-1",
+                user_id=user_id,
+                user_name=user_name,
+                prediction_text=f"prediction-{minutes}",
+                score=score,
+                score_reason="ok" if score is not None else None,
+                created_at=created_at,
+                scored_at=(created_at + timedelta(seconds=30)) if score is not None else None,
+            )
+            session.add(pred)
+            session.commit()
+            return pred.id
+
+    def _score_existing_prediction(
+        self,
+        prediction_id: str,
+        *,
+        score: float,
+        user_id: str,
+        user_name: str,
+        scored_minutes: int,
+    ) -> None:
+        with Session(self.engine) as session:
+            pred = session.get(Prediction, prediction_id)
+            assert pred is not None
+            pred.score = score
+            pred.score_reason = "ok"
+            pred.scored_at = datetime(
+                2026, 1, 2, 0, 0, tzinfo=timezone.utc
+            ) + timedelta(minutes=scored_minutes)
+            session.add(pred)
+            session.commit()
+            _update_leaderboard(session, user_id, user_name, score)
             session.commit()
 
     def test_create_new_entry(self):
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=80.0, minutes=1)
+
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Alice", 80.0)
             session.commit()
@@ -111,10 +160,12 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.win_streak, 1)
 
     def test_update_existing_entry(self):
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=80.0, minutes=1)
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Alice", 80.0)
             session.commit()
 
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=90.0, minutes=2)
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Alice", 90.0)
             session.commit()
@@ -127,10 +178,8 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.win_streak, 2)
 
     def test_win_streak_resets_on_low_score(self):
-        with Session(self.engine) as session:
-            _update_leaderboard(session, "u1", "Alice", 80.0)
-            session.commit()
-
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=80.0, minutes=1)
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=40.0, minutes=2)
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Alice", 40.0)
             session.commit()
@@ -140,14 +189,9 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.win_streak, 0)
 
     def test_win_streak_continues(self):
-        with Session(self.engine) as session:
-            _update_leaderboard(session, "u1", "Bob", 70.0)
-            session.commit()
-
-        with Session(self.engine) as session:
-            _update_leaderboard(session, "u1", "Bob", 60.0)
-            session.commit()
-
+        self._create_scored_prediction(user_id="u1", user_name="Bob", score=70.0, minutes=1)
+        self._create_scored_prediction(user_id="u1", user_name="Bob", score=60.0, minutes=2)
+        self._create_scored_prediction(user_id="u1", user_name="Bob", score=80.0, minutes=3)
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Bob", 80.0)
             session.commit()
@@ -157,10 +201,8 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.win_streak, 3)
 
     def test_best_score_only_increases(self):
-        with Session(self.engine) as session:
-            _update_leaderboard(session, "u1", "Alice", 95.0)
-            session.commit()
-
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=95.0, minutes=1)
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=50.0, minutes=2)
         with Session(self.engine) as session:
             _update_leaderboard(session, "u1", "Alice", 50.0)
             session.commit()
@@ -168,6 +210,33 @@ class TestLeaderboardUpdate(unittest.TestCase):
         with Session(self.engine) as session:
             entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
             self.assertEqual(entry.best_score, 95.0)
+
+    def test_win_streak_is_stable_under_scoring_order(self):
+        prediction_ids = [
+            self._create_scored_prediction(user_id="u1", user_name="Alice", score=None, minutes=1),
+            self._create_scored_prediction(user_id="u1", user_name="Alice", score=None, minutes=2),
+            self._create_scored_prediction(user_id="u1", user_name="Alice", score=None, minutes=3),
+        ]
+
+        # Score out of chronological order. The latest created prediction is a win,
+        # but the streak should still stop at the middle low score.
+        self._score_existing_prediction(
+            prediction_ids[2], score=80.0, user_id="u1", user_name="Alice", scored_minutes=3
+        )
+        self._score_existing_prediction(
+            prediction_ids[0], score=80.0, user_id="u1", user_name="Alice", scored_minutes=1
+        )
+        self._score_existing_prediction(
+            prediction_ids[1], score=40.0, user_id="u1", user_name="Alice", scored_minutes=2
+        )
+
+        with Session(self.engine) as session:
+            entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.total_predictions, 3)
+            self.assertAlmostEqual(entry.avg_score, 200.0 / 3.0, places=4)
+            self.assertEqual(entry.best_score, 80.0)
+            self.assertEqual(entry.win_streak, 1)
 
 
 # ── API Validation Tests ─────────────────────────────

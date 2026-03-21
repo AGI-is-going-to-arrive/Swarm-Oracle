@@ -7,12 +7,16 @@ and scores are aggregated into a leaderboard.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
-from app.models.database import _uuid
+from app.models.database import _now, _uuid
+
+
+def _default_predictor_name() -> str:
+    return "Anonymous Predictor"
 
 
 class Prediction(SQLModel, table=True):
@@ -24,9 +28,9 @@ class Prediction(SQLModel, table=True):
     __tablename__ = "prediction"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id")
+    scenario_id: str = Field(foreign_key="scenario.id", index=True)
     user_id: str = ""  # Reuse optional Scenario.user_id pattern
-    user_name: str = "匿名预言家"  # Display name
+    user_name: str = Field(default_factory=_default_predictor_name)
 
     # The prediction itself
     prediction_text: str = ""  # Free-text prediction
@@ -37,7 +41,7 @@ class Prediction(SQLModel, table=True):
     score_reason: Optional[str] = None  # One-line explanation
     scored_at: Optional[datetime] = None
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=_now)
 
 
 class Leaderboard(SQLModel, table=True):
@@ -50,7 +54,7 @@ class Leaderboard(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     user_id: str = Field(unique=True)
-    user_name: str = "匿名预言家"
+    user_name: str = Field(default_factory=_default_predictor_name)
 
     total_predictions: int = 0
     total_score: float = 0.0
@@ -58,4 +62,4 @@ class Leaderboard(SQLModel, table=True):
     best_score: float = 0.0
     win_streak: int = 0  # consecutive scores >= 60
 
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=_now)

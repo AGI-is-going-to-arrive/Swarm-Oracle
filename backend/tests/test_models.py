@@ -1,14 +1,24 @@
 """Tests for app.models.database — ORM models and DB operations."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlmodel import Session, select
+from sqlalchemy import create_engine, inspect
+from sqlmodel import Session, SQLModel, select
 
 from app.models import (
-    Agent, AgentMessage, AgentTier, Branch, BranchStatus,
-    InterventionLog, Round, Scenario, ScenarioStatus,
+    Agent,
+    AgentMessage,
+    AgentTier,
+    Branch,
+    BranchStatus,
+    InterventionLog,
+    Round,
+    Scenario,
+    ScenarioStatus,
 )
+from app.models.campaign import DirectorProfile
 from app.models.database import get_engine
+from app.models.predictions import Leaderboard, Prediction
 
 
 class TestScenarioModel:
@@ -154,6 +164,45 @@ class TestAgentModel:
             assert a.persona == ""
             assert a.stance == ""
             assert a.tier == AgentTier.IMPORTANT
+
+    def test_hot_path_foreign_key_indexes_exist(self):
+        """Hot-path foreign keys should be indexed for large simulations."""
+        engine = create_engine("sqlite:///:memory:")
+        SQLModel.metadata.create_all(engine)
+        inspector = inspect(engine)
+
+        expected = {
+            "agent_message": {"ix_agent_message_round_id", "ix_agent_message_agent_id"},
+            "round": {"ix_round_branch_id"},
+            "agent": {"ix_agent_scenario_id"},
+            "branch": {"ix_branch_scenario_id"},
+            "intervention_log": {
+                "ix_intervention_log_scenario_id",
+                "ix_intervention_log_branch_id",
+            },
+            "prediction": {"ix_prediction_scenario_id"},
+            "debate_turn": {"ix_debate_turn_debate_id"},
+            "debate_prediction": {"ix_debate_prediction_debate_id"},
+            "debate_counterplay": {"ix_debate_counterplay_prediction_id"},
+        }
+
+        for table, index_names in expected.items():
+            actual = {index["name"] for index in inspector.get_indexes(table)}
+            assert index_names.issubset(actual)
+
+
+class TestDisplayNameDefaults:
+    def test_director_profile_uses_neutral_default_name(self):
+        profile = DirectorProfile(user_id="director-1")
+        assert profile.user_name == "Anonymous Director"
+
+    def test_prediction_model_uses_neutral_default_name(self):
+        prediction = Prediction(scenario_id="scenario-1", prediction_text="BTC will moon")
+        assert prediction.user_name == "Anonymous Predictor"
+
+    def test_leaderboard_uses_neutral_default_name(self):
+        leaderboard = Leaderboard(user_id="user-1")
+        assert leaderboard.user_name == "Anonymous Predictor"
 
 
 class TestBranchModel:
@@ -433,7 +482,7 @@ class TestInterventionLogModel:
                 select(InterventionLog).where(InterventionLog.branch_id == bid)
             ).all()
             assert len(logs) == 5
-            inputs = {l.user_input for l in logs}
+            inputs = {log.user_input for log in logs}
             assert inputs == {f"干预 #{i + 1}" for i in range(5)}
 
     def test_unicode_and_emoji(self):

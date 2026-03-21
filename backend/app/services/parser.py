@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import re
 
+from app.services.lang_detect import detect_language, get_language_directive
 from app.services.llm_client import (
-    LLMError,
     UNTRUSTED_INPUT_GUARDRAIL,
+    LLMError,
     format_untrusted_text_block,
     llm_call_json,
 )
-from app.services.lang_detect import detect_language, get_language_directive
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +305,7 @@ def _build_parser_fallback_result(
     question: str,
     *,
     requested_agents: int,
+    default_rounds: int,
     max_rounds: int,
     language: str,
     hierarchical: bool,
@@ -338,7 +339,7 @@ def _build_parser_fallback_result(
         "initial_title": _fallback_initial_title(question, language),
         "agents": agents,
         "groups": groups,
-        "simulation_rounds": min(max(10, 3), max_rounds),
+        "simulation_rounds": min(max(default_rounds, 3), max_rounds),
         "branch_sensitivity": 0.7,
     }
 
@@ -348,6 +349,7 @@ async def parse_question(
     *,
     max_agents: int = 30,
     target_agents: int | None = None,
+    default_rounds: int = 10,
     max_rounds: int = 15,
     hierarchical: bool = False,
     api_key: str | None = None,
@@ -360,6 +362,7 @@ async def parse_question(
         question: The what-if question to parse.
         max_agents: Maximum number of agents to generate.
         target_agents: Preferred exact agent count requested by the user.
+        default_rounds: Preferred default round count when fallback parsing is needed.
         max_rounds: Maximum simulation rounds.
         hierarchical: If True, use hierarchical prompt with groups.
         api_key: BYOK — override API key for this call.
@@ -413,6 +416,7 @@ async def parse_question(
         result = _build_parser_fallback_result(
             question,
             requested_agents=requested_agents,
+            default_rounds=default_rounds,
             max_rounds=max_rounds,
             language=language,
             hierarchical=hierarchical,

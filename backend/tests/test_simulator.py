@@ -8,12 +8,19 @@ import pytest
 from sqlmodel import Session, select
 
 from app.models import (
-    Agent, AgentMessage, AgentTier, Branch, BranchStatus, Round, Scenario, ScenarioStatus,
+    Agent,
+    AgentMessage,
+    AgentTier,
+    Branch,
+    BranchStatus,
+    Round,
+    Scenario,
 )
 from app.models.database import get_engine
 from app.services.simulator import (
     _agent_to_dict,
     _coerce_stance_value,
+    _compress_round_memory,
     _create_branch,
     _create_round,
     _format_setting,
@@ -27,7 +34,6 @@ from app.services.simulator import (
     _update_branch_status,
 )
 from app.visualization.mapper import VisualizationMapper
-
 
 # ── Fixtures / Helpers ────────────────────────────────────────
 
@@ -545,6 +551,57 @@ class TestSaveRoundSummary:
         bid = _create_branch(engine, sid)
         # No round created — should silently skip
         _save_round_summary(engine, bid, 99, "summary")
+
+
+class TestCompressRoundMemory:
+    @pytest.mark.asyncio
+    async def test_reuses_latest_rolling_briefing_before_current_window(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        aid = _make_agent(engine, sid, name="Agent-A")
+
+        last_round_id = None
+        for round_number in range(1, 11):
+            last_round_id = _create_round(engine, bid, round_number)
+
+        _save_round_summary(
+            engine,
+            bid,
+            5,
+            str(
+                {
+                    "situation": "旧局势",
+                    "active_debates": ["旧焦点"],
+                    "key_quotes": ["[Agent-A]: 旧原话"],
+                    "tension_points": ["旧紧张点"],
+                    "consensus": "旧共识",
+                }
+            ),
+        )
+        assert last_round_id is not None
+        _save_message(engine, last_round_id, aid, "最新发言", "neutral", None)
+
+        captured = {}
+
+        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None):
+            captured["messages_text"] = messages_text
+            captured["previous_briefing"] = previous_briefing
+            return {
+                "situation": "新局势",
+                "active_debates": ["新焦点"],
+                "key_quotes": [],
+                "tension_points": [],
+                "consensus": "",
+            }
+
+        monkeypatch.setattr("app.services.simulator.compress_rounds", _fake_compress)
+
+        await _compress_round_memory(engine, bid, 10, language="Chinese")
+
+        assert "最新发言" in captured["messages_text"]
+        assert captured["previous_briefing"]["situation"] == "旧局势"
+        assert captured["previous_briefing"]["active_debates"] == ["旧焦点"]
 
 
 # ── Corner Cases ─────────────────────────────────────────────

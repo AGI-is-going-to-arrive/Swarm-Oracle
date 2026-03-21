@@ -9,32 +9,47 @@ Extracted modules:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
-from sqlalchemy import delete as sa_delete, func as sa_func
 
+from app.api.helpers import (
+    load_scenario_response,
+    parse_and_run_background,
+    parse_key_moments,
+    schedule_background_task,
+)
+from app.api.schemas import (
+    CreateScenarioRequest,
+    ScenarioResponse,
+    StoryBranch,
+    TestLlmRequest,
+)
 from app.config import settings
 from app.models import (
-    Agent, AgentTier, Branch, BranchStatus, InterventionLog, Round, AgentMessage,
-    Scenario, ScenarioStatus, AgentGroup, AgentGroupMember, ReplayArtifact,
-    Prediction, Leaderboard,
+    Agent,
+    AgentGroup,
+    AgentGroupMember,
+    AgentMessage,
+    AgentTier,
+    Branch,
+    BranchStatus,
+    InterventionLog,
+    Leaderboard,
+    Prediction,
+    ReplayArtifact,
+    Round,
+    Scenario,
+    ScenarioStatus,
 )
 from app.models.database import get_engine
 from app.services.llm_client import health_check
-from app.services.lang_detect import detect_language
-from app.api.schemas import (
-    CreateScenarioRequest, TestLlmRequest, ScenarioResponse, StoryBranch,
-)
-from app.api.helpers import (
-    parse_and_run_background, parse_key_moments, run_sim_background, schedule_background_task,
-    load_scenario_response,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -729,6 +744,7 @@ async def delete_scenario(scenario_id: str):
     # 9. Clean up ChromaDB collection (best-effort)
     try:
         import chromadb
+
         from app.config import settings as _cfg
         client = chromadb.Client(chromadb.config.Settings(
             persist_directory=_cfg.CHROMA_PERSIST_DIR,
@@ -748,112 +764,4 @@ async def delete_scenario(scenario_id: str):
     return {"status": "deleted", "scenario_id": scenario_id}
 
 
-# ── Prediction & Leaderboard ─────────────────────────────
-# (These were already in the original scenarios.py — kept here for now)
-
-
-@router.post("/scenario/{scenario_id}/predict")
-async def submit_prediction(scenario_id: str, req: dict):
-    """P3-B: Submit a user prediction for a scenario outcome."""
-    engine = get_engine()
-    with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise HTTPException(404, "Scenario not found")
-
-        if scenario.status == ScenarioStatus.DONE:
-            raise HTTPException(400, "Scenario already completed — predictions are closed")
-
-        prediction_text = str(req.get("prediction_text", "")).strip()
-        if not prediction_text:
-            raise HTTPException(422, "Prediction text cannot be empty")
-
-        user_name = str(req.get("user_name") or "匿名预言家")
-        user_id = str(req.get("user_id") or user_name or "anonymous")
-        prediction = Prediction(
-            scenario_id=scenario_id,
-            user_id=user_id,
-            user_name=user_name,
-            prediction_text=prediction_text,
-            confidence=float(req.get("confidence", 0.5)),
-        )
-        session.add(prediction)
-        session.commit()
-        session.refresh(prediction)
-
-        return {
-            "id": prediction.id,
-            "scenario_id": prediction.scenario_id,
-            "user_id": prediction.user_id,
-            "user_name": prediction.user_name,
-            "prediction_text": prediction.prediction_text,
-            "confidence": prediction.confidence,
-            "score": prediction.score,
-            "score_reason": prediction.score_reason,
-            "created_at": prediction.created_at.isoformat(),
-        }
-
-
-@router.get("/scenario/{scenario_id}/predictions")
-async def list_predictions(scenario_id: str):
-    """P3-B: List all predictions for a scenario."""
-    engine = get_engine()
-    with Session(engine) as session:
-        preds = session.exec(
-            select(Prediction)
-            .where(Prediction.scenario_id == scenario_id)
-            .order_by(Prediction.created_at.desc())
-        ).all()
-        return [
-            {
-                "id": p.id,
-                "scenario_id": p.scenario_id,
-                "user_id": p.user_id,
-                "user_name": p.user_name,
-                "prediction_text": p.prediction_text,
-                "confidence": p.confidence,
-                "score": p.score,
-                "score_reason": p.score_reason,
-                "created_at": p.created_at.isoformat(),
-            }
-            for p in preds
-        ]
-
-
-@router.post("/scenario/{scenario_id}/score-predictions")
-async def score_predictions(scenario_id: str):
-    """P3-B: Score predictions against actual outcomes using the shared service."""
-    engine = get_engine()
-    with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise HTTPException(404, "Scenario not found")
-        if scenario.status != ScenarioStatus.DONE:
-            raise HTTPException(400, "Scenario must be done before scoring predictions")
-    from app.services.scoring import score_all_for_scenario
-    results = await score_all_for_scenario(scenario_id)
-    return {"scored": len(results), "results": results}
-
-
-@router.get("/leaderboard")
-async def get_leaderboard(limit: int = 20):
-    """P3-B: Global prediction leaderboard."""
-    engine = get_engine()
-    with Session(engine) as session:
-        entries = session.exec(
-            select(Leaderboard)
-            .where(Leaderboard.total_predictions >= 1)
-            .order_by(Leaderboard.avg_score.desc())
-            .limit(min(limit, 100))
-        ).all()
-        return [
-            {
-                "user_id": lb.user_id,
-                "user_name": lb.user_name,
-                "total_predictions": lb.total_predictions,
-                "avg_score": round(lb.avg_score, 1),
-                "best_score": round(lb.best_score, 1),
-                "win_streak": lb.win_streak,
-            }
-            for lb in entries
-        ]
+# Prediction / leaderboard routes now live exclusively in app.api.predictions.

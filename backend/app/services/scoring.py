@@ -33,13 +33,13 @@ def _truncate_at_boundary(text: str, max_chars: int) -> str:
 
 
 from app.models.predictions import Leaderboard, Prediction
+from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json,
     llm_request_scope,
 )
-from app.services.lang_detect import get_language_directive
 
 logger = logging.getLogger(__name__)
 
@@ -239,26 +239,53 @@ async def score_all_for_scenario(
 
 
 def _update_leaderboard(session: Session, user_id: str, user_name: str, new_score: float) -> None:
-    """Update or create a leaderboard entry after scoring."""
+    """Recompute a user's materialized leaderboard entry from scored predictions."""
+    scored_predictions = list(session.exec(
+        select(Prediction)
+        .where(
+            Prediction.user_id == user_id,
+            Prediction.score != None,  # noqa: E711
+        )
+        .order_by(
+            Prediction.created_at.desc(),
+            Prediction.scored_at.desc(),
+            Prediction.id.desc(),
+        )
+    ).all())
+
     entry = session.exec(
         select(Leaderboard).where(Leaderboard.user_id == user_id)
     ).first()
+
+    if not scored_predictions:
+        if entry is not None:
+            entry.total_predictions = 0
+            entry.total_score = 0.0
+            entry.avg_score = 0.0
+            entry.best_score = 0.0
+            entry.win_streak = 0
+            entry.user_name = user_name
+            entry.updated_at = datetime.now(timezone.utc)
+            session.add(entry)
+        return
 
     if entry is None:
         entry = Leaderboard(user_id=user_id, user_name=user_name)
         session.add(entry)
 
-    entry.total_predictions += 1
-    entry.total_score += new_score
-    entry.avg_score = entry.total_score / entry.total_predictions
-    entry.best_score = max(entry.best_score, new_score)
-    entry.user_name = user_name  # Update display name
+    total_score = sum(float(pred.score or 0.0) for pred in scored_predictions)
+    win_streak = 0
+    for pred in scored_predictions:
+        if (pred.score or 0.0) < 60:
+            break
+        win_streak += 1
 
-    # Win streak: consecutive scores >= 60
-    if new_score >= 60:
-        entry.win_streak += 1
-    else:
-        entry.win_streak = 0
+    entry.total_predictions = len(scored_predictions)
+    entry.total_score = total_score
+    entry.avg_score = total_score / entry.total_predictions
+    entry.best_score = max(float(pred.score or 0.0) for pred in scored_predictions)
+    entry.user_name = scored_predictions[0].user_name or user_name
 
     entry.updated_at = datetime.now(timezone.utc)
+    entry.win_streak = win_streak
     session.add(entry)

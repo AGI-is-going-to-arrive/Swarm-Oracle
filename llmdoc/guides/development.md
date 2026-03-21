@@ -34,6 +34,14 @@ npm install
 npm run dev
 ```
 
+- 做视频采集时，当前以 `preview` 为准，不建议直接用 `dev`：
+
+```bash
+cd frontend
+npm run build
+npm run preview -- --host 127.0.0.1 --port 18929
+```
+
 ### 环境变量
 
 本地直接启动 backend 时，默认读取 `backend/.env`：
@@ -67,9 +75,11 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-- 当前 targeted backend set：`86 passed`
-- 本轮这类“parse 阶段坏 JSON fallback 兜底”改动，当前还额外实跑通过：
-  - `tests/test_parser.py -k deterministic_parse`：`1 passed`
+- 当前 targeted backend set：`90 passed`
+- 本轮这类“runtime guard / rolling briefing / language-aware fallback / mtime-aware contract”改动，当前还额外实跑通过：
+  - `tests/test_llm_client.py + tests/test_campaign_api.py + tests/test_campaign_service.py + tests/test_debate_api.py + tests/test_debate_service.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_models.py + tests/test_narrator.py + tests/test_predictions.py + tests/test_ws.py + tests/test_api.py`：`269 passed in 30.26s`
+  - `tests/test_parser.py -k fallback_rounds_use_explicit_default_rounds`：`1 passed`
+  - `tests/test_simulator.py -k reuses_latest_rolling_briefing_before_current_window`：`1 passed`
 
 ### Frontend
 
@@ -93,6 +103,28 @@ npm run assets:provenance:check
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`41 passed`
 - 本轮这类“`scenarioMeta` 持久化继续压缩 + shared replay codec + WebKit capture / mobile Theater 收口”改动，当前还额外实跑通过：
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`：`38 passed`
+
+### 视频素材采集
+
+V2 系列当前统一走：
+
+```bash
+cd frontend
+node scripts/capture-v2-series-assets.mjs <blackboard-walkthrough|gameplay-explainer|longform-showcase> <zh|en> --url http://127.0.0.1:18929 --headless
+```
+
+- 当前已实跑通过 6 组素材 manifest：
+  - `video/output/swarmoracle-blackboard-walkthrough-v1.zh.capture-manifest.json`
+  - `video/output/swarmoracle-blackboard-walkthrough-v1.en.capture-manifest.json`
+  - `video/output/swarmoracle-gameplay-explainer-v1.zh.capture-manifest.json`
+  - `video/output/swarmoracle-gameplay-explainer-v1.en.capture-manifest.json`
+  - `video/output/swarmoracle-longform-showcase-v1.zh.capture-manifest.json`
+  - `video/output/swarmoracle-longform-showcase-v1.en.capture-manifest.json`
+- 当前视频采集注意点：
+  - `gameplay-explainer` 必须拆成 `board scenario` 和 `interaction scenario`
+  - 切 Theater 前必须等 automation payload 里的 `can_toggle_view_mode=true`
+  - 玩法卡、下注和分享都按页面 automation state 等待，不要靠固定 sleep 猜状态
+  - `longform-showcase` 的 Debate 段默认复用 `promo-v1` 已有 Debate raw/gif/still
 
 ## Release Signoff
 
@@ -204,6 +236,9 @@ alembic revision --autogenerate -m "describe change"
 alembic upgrade head
 alembic current
 ```
+
+- 当前最新 revision：`008_add_hot_path_foreign_key_indexes`。
+- 若本地 SQLite 文件是早期通过 `init_db()` 长出来的 legacy 数据库，Alembic revision 标记可能比实际 schema 更旧；若 `alembic upgrade head` 命中“table already exists”这类错误，先看 `alembic current` 再继续处理。
 
 ## 代码约定
 

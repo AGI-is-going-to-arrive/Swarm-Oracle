@@ -19,6 +19,15 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预 | `{"branch_id": "...", "round_number": 2, "text": "..."}` | `{status, new_branch_id, from_round}` |
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预 | `{"interventions": [{"branch_id": "...", "text": "..."}]}` | `{status, count, interventions[]}` |
 
+> `POST /api/scenario/{id}/intervene/batch` 当前由 `BatchInterveneRequest` 做输入边界校验：
+> - `interventions` 不能为空
+> - `interventions` 最多 `50` 条；超过时返回 `422`
+>
+> 当前主模式玩法卡的真实写路径是：
+> - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
+> - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
+> - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，`gameplay-state` 负责 authority / 冷却 / 结算与回放
+
 ### Scenario Management (P4)
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
@@ -28,6 +37,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
 | `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；推荐走 `POST`，这样 provider policy 不会出现在 URL 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
+
+> `GET/POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 prompt wrapper / context 包装：
+> - 英文 scenario 不再收到中文包装文本
+> - `reddit / x` 仍按各自模板要求输出英文文案
 
 ### Replay 分享
 
@@ -49,7 +62,17 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{scored, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20` | LeaderboardEntry[] |
 
-> `POST /api/scenario/{id}/predict` 当前会透传并回显 `user_id`；若未提供，后端会退回到 `user_name`，再退回到 `"anonymous"`。
+> 这 4 个 endpoint 当前只由专用模块 `app/api/predictions.py` 提供；`scenarios.py` 不再持有 legacy 同名路由。
+>
+> `POST /api/scenario/{id}/predict` 当前请求体仍接受可选 `user_id`；若 `user_name` 留空，后端会按 scenario / question 语言补匿名昵称（中文场景用 `匿名预言家`，英文场景用 `Anonymous Predictor`），再把 `user_id` 缺省回退到 `"anonymous"`。当前 `PredictionResponse` 不回显 `user_id`。
+>
+> `POST /api/scenario/{id}/predict` 当前通过 Pydantic 校验 `confidence`：
+> - 合法范围：`0.0 <= confidence <= 1.0`
+> - 超界时返回 `422`
+>
+> `GET /api/scenario/{id}/predictions` 当前会先校验 scenario 是否存在：
+> - 存在：返回该场景预测列表
+> - 不存在：返回 `404 Not Found`
 
 ### Director Campaign (Track A)
 
@@ -66,6 +89,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 查询指定题材在调用方本地日期上的 daily challenge 完成态；供首页把后端真值与本地缓存合并显示 | `?profile_id=governance&local_date=2026-03-17&timezone_offset_minutes=-480` | CampaignDailyChallengeResponse |
 | `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 查询调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 | `?local_date=2026-03-19&timezone_offset_minutes=-480` | `{"user_id", "week_start", "week_end", "timezone_offset_minutes", "total_runs", "completed_daily_challenges", "hit_bets", "campaign_score_delta", "best_archive_grade", "top_profile_id", "profile_runs"}` |
+
+> `POST /api/campaign/scenario/{scenario_id}/finalize` 当前请求体里的 `user_name` 可以留空；若留空，后端会按 scenario 语言补匿名昵称（中文场景用 `匿名导演`，英文场景用 `Anonymous Director`）。
 
 > `POST /api/campaign/scenario/{scenario_id}/finalize` 边界行为（已按当前实现与实测核对）：
 > - `200 OK`：首次结算成功，或同一 `scenario_id` 被同一导演档案重复结算；重复结算时 `already_finalized = true`，不会重复累计进度。
@@ -254,6 +279,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 ## WebSocket API
 
 连接: `ws://localhost:18927/ws/scenario/{scenario_id}`
+
+> 当前 `scenario` / `debate` 两条 WebSocket receive loop 都会在 `finally` 中执行断链清理：
+> - 正常 `WebSocketDisconnect` 会清理连接
+> - `receive_text()` 抛出的非正常异常也会清理连接，然后继续向上抛错
+
+> `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 wrapper / instruction：
+> - 中文 scenario 继续使用中文 wrapper
+> - 英文 scenario 改用英文 wrapper，不再混入中文包裹文本
 
 ### 事件类型
 

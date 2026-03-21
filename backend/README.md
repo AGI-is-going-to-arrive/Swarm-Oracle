@@ -72,13 +72,18 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - Historical full baseline: `815 passed`.
-- Current signoff backend set: `86 passed`.
+- Current signoff backend set: `90 passed`.
+- Current session backend regression pack: `269 passed`.
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
 
 - `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline.
-- If parse-stage LLM JSON is still unrecoverably broken, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately.
+- If parse-stage LLM JSON is still unrecoverably broken, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately; fallback rounds also honor the caller-provided default round count instead of hardcoding `10`.
+- `memory.py` now rolls the previous structured briefing forward into the next compression window, while keeping the current raw window verbatim.
+- `social.py` now selects wrapper / prompt language by scenario language, so English scenarios no longer receive Chinese wrapper text.
+- `llm_client.py` now shares pending/quota accounting across processes through SQLite when they point at the same `DATABASE_URL`, while keeping the in-process semaphore and circuit breaker.
+- `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
 
 ## Environment Variables
 

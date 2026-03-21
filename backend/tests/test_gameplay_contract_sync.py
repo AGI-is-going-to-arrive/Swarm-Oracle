@@ -1,5 +1,7 @@
 """Sync checks between the shared gameplay contract and backend card events."""
 
+import os
+
 from app.services.gameplay_contract import load_gameplay_contract
 from app.visualization.card_events import CARD_TYPES
 
@@ -25,3 +27,21 @@ def test_backend_branching_bonus_follows_contract():
 
     for card_id, card_type in CARD_TYPES.items():
         assert card_type["branching_bonus"] == contract_by_id[card_id].get("branching_bonus", 0)
+
+
+def test_gameplay_contract_reload_tracks_file_mtime(tmp_path, monkeypatch):
+    contract_path = tmp_path / "gameplay_contract.v1.json"
+    contract_path.write_text('{"cards": [{"id": "alpha"}]}', encoding="utf-8")
+
+    monkeypatch.setattr("app.services.gameplay_contract.CONTRACT_PATH", contract_path)
+    monkeypatch.setattr("app.services.gameplay_contract._CONTRACT_CACHE", None)
+
+    first = load_gameplay_contract()
+    assert first["cards"][0]["id"] == "alpha"
+
+    contract_path.write_text('{"cards": [{"id": "beta"}]}', encoding="utf-8")
+    stat = contract_path.stat()
+    os.utime(contract_path, ns=(stat.st_atime_ns + 1_000_000, stat.st_mtime_ns + 1_000_000))
+
+    second = load_gameplay_contract()
+    assert second["cards"][0]["id"] == "beta"

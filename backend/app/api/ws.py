@@ -74,4 +74,6 @@ async def websocket_endpoint(websocket: WebSocket, scenario_id: str):
             # Future: handle client intervention events
             logger.debug("WS received from client: %s", data[:100])
     except WebSocketDisconnect:
+        pass
+    finally:
         ws_manager.disconnect(scenario_id, websocket)

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
-from sqlmodel import SQLModel, Field, Column, JSON
+from sqlmodel import JSON, Column, Field, SQLModel
 
-from app.models.database import _uuid
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+from app.models.database import _now, _uuid
 
 
 class DebateStatus(str, enum.Enum):
@@ -83,7 +79,7 @@ class DebateTurn(SQLModel, table=True):
     __tablename__ = "debate_turn"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    debate_id: str = Field(foreign_key="debate.id")
+    debate_id: str = Field(foreign_key="debate.id", index=True)
     sequence: int
     phase: DebatePhase
     speaker_side: DebateSide
@@ -99,7 +95,7 @@ class DebatePrediction(SQLModel, table=True):
     __tablename__ = "debate_prediction"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    debate_id: str = Field(foreign_key="debate.id")
+    debate_id: str = Field(foreign_key="debate.id", index=True)
     kind: DebatePredictionKind
     target_value: str
     confidence: float = 0.5
@@ -121,7 +117,7 @@ class DebateCounterplay(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     debate_id: str = Field(foreign_key="debate.id", index=True)
-    prediction_id: str | None = Field(default=None, foreign_key="debate_prediction.id")
+    prediction_id: str | None = Field(default=None, foreign_key="debate_prediction.id", index=True)
     kind: DebatePredictionKind
     target_value: str
     confidence: float = 0.5

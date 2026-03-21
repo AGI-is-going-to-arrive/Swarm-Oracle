@@ -6,6 +6,9 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
+import time
+import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -111,6 +114,8 @@ _provider_failures: dict[str, int] = defaultdict(int)
 _provider_circuit_until: dict[str, float] = defaultdict(float)
 _global_semaphore: asyncio.Semaphore | None = None
 _global_semaphore_limit = 0
+_RUNTIME_GUARD_TABLE = "llm_runtime_guard"
+_SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
 
 
 @contextmanager
@@ -143,9 +148,116 @@ def _get_global_semaphore() -> asyncio.Semaphore:
     return _global_semaphore
 
 
-async def _reserve_runtime_slot(*, quota_key: str | None, provider_key: str) -> None:
+def _runtime_guard_db_path() -> str | None:
+    """Return the SQLite DB file path when cross-process coordination is possible."""
+    db_url = settings.DATABASE_URL.strip()
+    prefix = "sqlite:///"
+    if not db_url.startswith(prefix):
+        return None
+
+    db_path = db_url[len(prefix):].split("?", 1)[0]
+    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+        return None
+    return db_path
+
+
+def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_RUNTIME_GUARD_TABLE} (
+            reservation_id TEXT PRIMARY KEY,
+            quota_key TEXT,
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{_RUNTIME_GUARD_TABLE}_quota_key
+        ON {_RUNTIME_GUARD_TABLE} (quota_key)
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{_RUNTIME_GUARD_TABLE}_expires_at
+        ON {_RUNTIME_GUARD_TABLE} (expires_at)
+        """
+    )
+
+
+def _reserve_sqlite_runtime_slot(
+    *,
+    db_path: str,
+    quota_key: str | None,
+    lease_seconds: float,
+) -> str:
+    """Reserve one global runtime slot in SQLite for cross-process accounting."""
+    reservation_id = uuid.uuid4().hex
+    now = time.time()
+    expires_at = now + max(lease_seconds, 30.0)
+    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_runtime_guard_table(conn)
+        conn.execute(
+            f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
+            (now,),
+        )
+        total_pending = conn.execute(
+            f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE}"
+        ).fetchone()[0]
+        if total_pending >= settings.LLM_MAX_PENDING:
+            conn.execute("ROLLBACK")
+            raise LLMBackpressureError("LLM queue is full; retry later")
+
+        if quota_key:
+            quota_pending = conn.execute(
+                f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE} WHERE quota_key = ?",
+                (quota_key,),
+            ).fetchone()[0]
+            if quota_pending >= settings.LLM_USER_MAX_PENDING:
+                conn.execute("ROLLBACK")
+                raise LLMBackpressureError("Too many in-flight LLM requests for this user")
+
+        conn.execute(
+            f"""
+            INSERT INTO {_RUNTIME_GUARD_TABLE} (
+                reservation_id,
+                quota_key,
+                created_at,
+                expires_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (reservation_id, quota_key, now, expires_at),
+        )
+        conn.execute("COMMIT")
+        return reservation_id
+    finally:
+        conn.close()
+
+
+def _release_sqlite_runtime_slot(*, db_path: str, reservation_id: str) -> None:
+    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    try:
+        conn.execute(
+            f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE reservation_id = ?",
+            (reservation_id,),
+        )
+    finally:
+        conn.close()
+
+
+async def _reserve_runtime_slot(
+    *,
+    quota_key: str | None,
+    provider_key: str,
+    lease_seconds: float,
+) -> str | None:
     global _pending_requests
     now = monotonic()
+    reservation_id: str | None = None
     async with _guard_lock:
         circuit_until = _provider_circuit_until.get(provider_key, 0.0)
         if circuit_until > now:
@@ -154,23 +266,50 @@ async def _reserve_runtime_slot(*, quota_key: str | None, provider_key: str) -> 
                 f"LLM provider temporarily unavailable; retry after ~{wait_seconds}s"
             )
 
-        if _pending_requests >= settings.LLM_MAX_PENDING:
-            raise LLMBackpressureError("LLM queue is full; retry later")
+        db_path = _runtime_guard_db_path()
+        if db_path is not None:
+            try:
+                reservation_id = _reserve_sqlite_runtime_slot(
+                    db_path=db_path,
+                    quota_key=quota_key,
+                    lease_seconds=lease_seconds,
+                )
+            except LLMBackpressureError:
+                raise
+            except sqlite3.Error as exc:
+                logger.warning(
+                    "SQLite runtime guard unavailable; "
+                    "falling back to in-process counts: %s",
+                    exc,
+                )
+                reservation_id = None
 
-        if quota_key and _pending_by_quota[quota_key] >= settings.LLM_USER_MAX_PENDING:
-            raise LLMBackpressureError("Too many in-flight LLM requests for this user")
+        if reservation_id is None:
+            if _pending_requests >= settings.LLM_MAX_PENDING:
+                raise LLMBackpressureError("LLM queue is full; retry later")
+
+            if quota_key and _pending_by_quota[quota_key] >= settings.LLM_USER_MAX_PENDING:
+                raise LLMBackpressureError("Too many in-flight LLM requests for this user")
 
         _pending_requests += 1
         if quota_key:
             _pending_by_quota[quota_key] += 1
 
     await _get_global_semaphore().acquire()
+    return reservation_id
 
 
-async def _release_runtime_slot(*, quota_key: str | None) -> None:
+async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | None) -> None:
     global _pending_requests
     _get_global_semaphore().release()
     async with _guard_lock:
+        db_path = _runtime_guard_db_path()
+        if db_path is not None and reservation_id is not None:
+            try:
+                _release_sqlite_runtime_slot(db_path=db_path, reservation_id=reservation_id)
+            except sqlite3.Error as exc:
+                logger.warning("SQLite runtime guard release failed: %s", exc)
+
         _pending_requests = max(0, _pending_requests - 1)
         if quota_key:
             next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
@@ -250,7 +389,11 @@ async def llm_call(
                  "chat" if is_chat else "responses",
                  effort, len(input_text), bool(api_key or base_url))
 
-    await _reserve_runtime_slot(quota_key=quota_key, provider_key=provider_key)
+    reservation_id = await _reserve_runtime_slot(
+        quota_key=quota_key,
+        provider_key=provider_key,
+        lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             max_retries = 3
@@ -306,7 +449,10 @@ async def llm_call(
                 logger.error("LLM call failed after %d attempts", max_retries + 1)
                 raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
     finally:
-        await _release_runtime_slot(quota_key=quota_key)
+        await _release_runtime_slot(
+            quota_key=quota_key,
+            reservation_id=reservation_id,
+        )
 
     data = resp.json()
 
@@ -429,7 +575,10 @@ def _recover_agent_message_payload(cleaned: str) -> dict[str, Any] | None:
     if not recovered.get("content"):
         content_patterns = [
             re.compile(r'"content"\s*:\s*"([\s\S]*?)(?=",\s*"emotion"|",\s*"diverge"|"\s*[}\]])'),
-            re.compile(r'content\s*[:=]\s*([\s\S]*?)(?:\n(?:emotion|diverge)\s*[:=]|$)', re.IGNORECASE),
+            re.compile(
+                r'content\s*[:=]\s*([\s\S]*?)(?:\n(?:emotion|diverge)\s*[:=]|$)',
+                re.IGNORECASE,
+            ),
         ]
         for pattern in content_patterns:
             match = pattern.search(cleaned)
@@ -453,6 +602,49 @@ def _recover_agent_message_payload(cleaned: str) -> dict[str, Any] | None:
     return recovered if recovered.get("content") else None
 
 
+def _parse_json_response(cleaned: str, *, fallback_mode: str | None = None) -> dict:
+    """Parse cleaned LLM JSON with the shared recovery chain."""
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: try to extract any JSON object or array via regex
+    import re as _re
+
+    json_patterns = [
+        _re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", _re.DOTALL),  # nested objects
+        _re.compile(r"\[.*?\]", _re.DOTALL),  # arrays
+    ]
+    for pattern in json_patterns:
+        matches = pattern.findall(cleaned)
+        for match in matches:
+            try:
+                result = json.loads(match, strict=False)
+                logger.warning("LLM JSON recovered via regex extraction (len=%d)", len(match))
+                return result
+            except json.JSONDecodeError:
+                continue
+
+    # Strategy 3: recover simple keyed payloads from malformed object text
+    recovered = _recover_keyed_json_like_response(cleaned)
+    if recovered is not None:
+        logger.warning(
+            "LLM JSON recovered via keyed fallback (keys=%s)",
+            ",".join(sorted(recovered.keys())),
+        )
+        return recovered
+
+    if fallback_mode == "agent_message":
+        recovered = _recover_agent_message_payload(cleaned)
+        if recovered is not None:
+            logger.warning("LLM JSON recovered via agent-message fallback")
+            return recovered
+
+    logger.error("Failed to parse LLM JSON after all recovery attempts:\n%s", cleaned[:500])
+    raise LLMError("Invalid JSON from LLM after recovery attempts")
+
+
 async def llm_call_json(
     input_text: str,
     *,
@@ -472,43 +664,7 @@ async def llm_call_json(
     )
 
     cleaned = _clean_json_text(raw)
-
-    try:
-        return json.loads(cleaned, strict=False)
-    except json.JSONDecodeError:
-        pass  # try recovery strategies below
-
-    # Strategy 2: try to extract any JSON object or array via regex
-    import re as _re
-    json_patterns = [
-        _re.compile(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', _re.DOTALL),  # nested objects
-        _re.compile(r'\[.*?\]', _re.DOTALL),  # arrays
-    ]
-    for pattern in json_patterns:
-        matches = pattern.findall(cleaned)
-        for match in matches:
-            try:
-                result = json.loads(match, strict=False)
-                logger.warning("LLM JSON recovered via regex extraction (len=%d)", len(match))
-                return result
-            except json.JSONDecodeError:
-                continue
-
-    # Strategy 3: recover simple keyed payloads from malformed object text
-    recovered = _recover_keyed_json_like_response(cleaned)
-    if recovered is not None:
-        logger.warning("LLM JSON recovered via keyed fallback (keys=%s)", ",".join(sorted(recovered.keys())))
-        return recovered
-
-    if fallback_mode == "agent_message":
-        recovered = _recover_agent_message_payload(cleaned)
-        if recovered is not None:
-            logger.warning("LLM JSON recovered via agent-message fallback")
-            return recovered
-
-    # Strategy 4: give up with a descriptive error
-    logger.error("Failed to parse LLM JSON after all recovery attempts:\n%s", cleaned[:500])
-    raise LLMError(f"Invalid JSON from LLM after recovery attempts")
+    return _parse_json_response(cleaned, fallback_mode=fallback_mode)
 
 
 async def llm_call_stream(
@@ -552,7 +708,11 @@ async def llm_call_stream(
     logger.debug("LLM stream request → %s (effort=%s, %d chars, byok=%s)",
                  payload["model"], effort, len(input_text), bool(api_key or base_url))
 
-    await _reserve_runtime_slot(quota_key=quota_key, provider_key=provider_key)
+    reservation_id = await _reserve_runtime_slot(
+        quota_key=quota_key,
+        provider_key=provider_key,
+        lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             try:
@@ -596,7 +756,10 @@ async def llm_call_stream(
                 raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
             await _record_provider_success(provider_key)
     finally:
-        await _release_runtime_slot(quota_key=quota_key)
+        await _release_runtime_slot(
+            quota_key=quota_key,
+            reservation_id=reservation_id,
+        )
 
 
 async def llm_call_json_stream(
@@ -607,6 +770,7 @@ async def llm_call_json_stream(
     on_delta: Any = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    fallback_mode: str | None = None,
 ) -> dict:
     """Stream LLM response with real-time delta callback, then parse as JSON.
 
@@ -623,11 +787,7 @@ async def llm_call_json_stream(
             await on_delta(delta)
 
     cleaned = _clean_json_text(full_text)
-    try:
-        return json.loads(cleaned, strict=False)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse streamed LLM JSON:\n%s", cleaned[:500])
-        raise LLMError(f"Invalid JSON from LLM: {exc}") from exc
+    return _parse_json_response(cleaned, fallback_mode=fallback_mode)
 
 
 async def health_check(

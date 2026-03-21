@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlmodel import Session, select
@@ -18,10 +19,11 @@ from app.models.database import get_engine
 from app.services.campaign import (
     CampaignConflictError,
     finalize_scenario_campaign,
+    get_campaign_profile_summary,
     get_daily_challenge_summary,
-    get_weekly_campaign_summary,
     get_scenario_director_state,
     get_scenario_gameplay_state,
+    get_weekly_campaign_summary,
     save_scenario_director_state,
     save_scenario_gameplay_state,
 )
@@ -75,6 +77,26 @@ def test_finalize_accumulates_campaign_score_and_summaries():
         "archive_record",
         "bet_winner",
     }
+
+
+def test_finalize_uses_chinese_fallback_name_for_chinese_scenarios():
+    scenario_id = _seed_completed_scenario("如果法律委员会接管边境城市？")
+
+    result = finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-zh-fallback",
+        user_name="",
+        profile_id="governance",
+        archive_grade="B",
+        profile_resonance="aligned",
+    )
+
+    assert result["profile"]["user_name"] == "匿名导演"
+
+
+def test_empty_profile_summary_uses_neutral_default_name():
+    summary = get_campaign_profile_summary("director-empty-profile")
+    assert summary["user_name"] == "Anonymous Director"
 
 
 def test_finalize_rewards_completed_objectives_and_commitment_hit():
@@ -189,6 +211,50 @@ def test_finalize_unlocks_only_matching_badges():
     assert [badge["badge_id"] for badge in result["newly_unlocked_badges"]] == ["daily_challenge"]
     assert [badge["badge_id"] for badge in result["badges"]] == ["daily_challenge"]
     assert result["profile"]["last_daily_challenge_profile_id"] == "law"
+
+
+def test_finalize_does_not_duplicate_existing_badge_unlocks():
+    first_scenario_id = _seed_completed_scenario(f"badge-first-{uuid4()}")
+    second_scenario_id = _seed_completed_scenario(f"badge-second-{uuid4()}")
+
+    first = finalize_scenario_campaign(
+        first_scenario_id,
+        user_id="director-badge-repeat",
+        user_name="Morgan",
+        profile_id="law",
+        archive_grade="A",
+        profile_resonance="aligned",
+        betting_hit=None,
+        bet_count=0,
+        most_used_card=None,
+        completed_daily_challenge=False,
+    )
+    second = finalize_scenario_campaign(
+        second_scenario_id,
+        user_id="director-badge-repeat",
+        user_name="Morgan",
+        profile_id="law",
+        archive_grade="A",
+        profile_resonance="signature",
+        betting_hit=None,
+        bet_count=0,
+        most_used_card=None,
+        completed_daily_challenge=False,
+    )
+
+    assert [badge["badge_id"] for badge in first["newly_unlocked_badges"]] == ["archive_record"]
+    assert second["newly_unlocked_badges"] == []
+
+    engine = get_engine()
+    with Session(engine) as session:
+        badges = list(session.exec(
+            select(DirectorBadgeUnlock).where(
+                DirectorBadgeUnlock.director_profile_id == first["profile"]["id"]
+            )
+        ).all())
+
+    assert len(badges) == 1
+    assert badges[0].badge_id == "archive_record"
 
 
 def test_daily_challenge_summary_prefers_backend_log_for_local_day():

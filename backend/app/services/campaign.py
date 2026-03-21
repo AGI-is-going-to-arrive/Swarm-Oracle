@@ -6,8 +6,10 @@ from collections import Counter
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import func, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -19,6 +21,7 @@ from app.models.campaign import (
     ScenarioCampaignLog,
 )
 from app.models.database import get_engine
+from app.services.lang_detect import detect_language, get_anonymous_director_name
 
 ARCHIVE_GRADE_ORDER = {"C": 0, "B": 1, "A": 2, "S": 3}
 VALID_ARCHIVE_GRADES = set(ARCHIVE_GRADE_ORDER)
@@ -474,7 +477,10 @@ def _get_or_create_director_profile(
 ) -> DirectorProfile:
     profile = _get_director_profile(session, user_id)
     if profile is None:
-        profile = DirectorProfile(user_id=user_id, user_name=user_name or "匿名导演")
+        profile = DirectorProfile(
+            user_id=user_id,
+            user_name=user_name or get_anonymous_director_name(),
+        )
         session.add(profile)
         session.flush()
         return profile
@@ -563,12 +569,12 @@ def _build_profile_summary(
     }
 
 
-def _build_empty_profile_summary(user_id: str) -> dict[str, Any]:
+def _build_empty_profile_summary(user_id: str, *, language: str | None = None) -> dict[str, Any]:
     now = _now().isoformat()
     return {
         "id": user_id,
         "user_id": user_id,
-        "user_name": "匿名导演",
+        "user_name": get_anonymous_director_name(language),
         "total_runs": 0,
         "completed_challenges": 0,
         "total_bets": 0,
@@ -725,23 +731,28 @@ def _unlock_badges(
         if not rules[badge_id]:
             continue
 
-        existing = session.exec(
+        stmt = sqlite_insert(DirectorBadgeUnlock).values(
+            id=str(uuid4()),
+            director_profile_id=director_profile_id,
+            badge_id=badge_id,
+            unlocked_at=_now(),
+            source_profile_id=profile_id,
+            source_scenario_id=scenario_id,
+        ).on_conflict_do_nothing(
+            index_elements=["director_profile_id", "badge_id"],
+        )
+        result = session.execute(stmt)
+        if not result.rowcount:
+            continue
+
+        unlock = session.exec(
             select(DirectorBadgeUnlock).where(
                 DirectorBadgeUnlock.director_profile_id == director_profile_id,
                 DirectorBadgeUnlock.badge_id == badge_id,
             )
         ).first()
-        if existing is not None:
-            continue
-
-        unlock = DirectorBadgeUnlock(
-            director_profile_id=director_profile_id,
-            badge_id=badge_id,
-            source_profile_id=profile_id,
-            source_scenario_id=scenario_id,
-        )
-        session.add(unlock)
-        unlocked.append(unlock)
+        if unlock is not None:
+            unlocked.append(unlock)
 
     return unlocked
 
@@ -819,6 +830,11 @@ def finalize_scenario_campaign(
             raise CampaignNotFoundError("Scenario not found")
         if scenario.status != ScenarioStatus.DONE:
             raise CampaignStateError("Scenario not yet completed")
+        scenario_language = (
+            scenario.parsed_context.get("_language")
+            if isinstance(scenario.parsed_context, dict)
+            else None
+        ) or detect_language(scenario.question)
 
         existing_log = session.exec(
             select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
@@ -842,7 +858,7 @@ def finalize_scenario_campaign(
         director_profile = _get_or_create_director_profile(
             session,
             user_id=user_id.strip(),
-            user_name=user_name.strip() or "匿名导演",
+            user_name=user_name.strip() or get_anonymous_director_name(scenario_language),
         )
         mastery = _get_or_create_profile_mastery(
             session,

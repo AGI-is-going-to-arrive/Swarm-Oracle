@@ -11,16 +11,24 @@ from sqlmodel import Session
 
 from app.api.helpers import schedule_background_task
 from app.api.ws import WSManager
-from app.models import Debate, DebatePhase, DebatePrediction, DebatePredictionKind, DebateSide, DebateStatus, DebateTurn
-from app.models import DebateCounterplay
+from app.models import (
+    Debate,
+    DebateCounterplay,
+    DebatePhase,
+    DebatePrediction,
+    DebatePredictionKind,
+    DebateSide,
+    DebateStatus,
+    DebateTurn,
+)
 from app.models.database import get_engine
-from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.debate import (
     create_debate_record,
     load_debate_result_payload,
     load_debate_snapshot,
     run_debate_background,
 )
+from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 
 router = APIRouter(tags=["debate"])
 debate_ws_manager = WSManager()
@@ -417,4 +425,6 @@ async def debate_websocket_endpoint(websocket: WebSocket, debate_id: str) -> Non
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         debate_ws_manager.disconnect(debate_id, websocket)

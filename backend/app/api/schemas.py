@@ -6,7 +6,6 @@ from pydantic import BaseModel, field_validator
 
 from app.config import settings
 
-
 # ── Request schemas ──────────────────────────────────────
 
 
@@ -92,6 +91,13 @@ class RetrospectiveInterveneRequest(BaseModel):
 class BatchInterveneRequest(BaseModel):
     """Inject interventions into multiple branches simultaneously."""
     interventions: list[InterveneRequest]
+
+    @field_validator("interventions")
+    @classmethod
+    def validate_interventions(cls, v: list[InterveneRequest]) -> list[InterveneRequest]:
+        if len(v) > 50:
+            raise ValueError("interventions must contain at most 50 items")
+        return v
 
 
 # ── Response schemas ─────────────────────────────────────

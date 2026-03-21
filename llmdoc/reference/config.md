@@ -26,7 +26,7 @@
 | `HIERARCHICAL_AGENT_THRESHOLD` | int | 50 | 超过此数量自动启用分层架构 (P3-A) |
 | `MAX_ROUNDS` | int | 40 | 最大模拟轮数 |
 | `MAX_BRANCHES` | int | 8 | 最大并行分支数 |
-| `MEMORY_COMPRESS_INTERVAL` | int | 5 | 每N轮压缩一次记忆 |
+| `MEMORY_COMPRESS_INTERVAL` | int | 5 | 每N轮压缩一次记忆；当前压缩会把“此前滚动态势简报 + 当前窗口原始对话”合并成新的态势简报，且滚动摘要字段会做固定上限约束，避免 prompt 逐轮膨胀 |
 | `BRANCH_PRUNE_THRESHOLD` | float | 0.05 | 概率低于此值的分支被剪枝 |
 | `FORK_SENSITIVITY` | float | 0.7 | 分支灵敏度 (0-1) |
 | `DEFAULT_NUM_AGENTS` | int | 20 | 用户不传参时默认agent数 (3-100) |
@@ -42,6 +42,14 @@
 | `LLM_CIRCUIT_BREAKER_THRESHOLD` | int | 6 | 同一 provider 连续失败达到此阈值后，短时间打开熔断 |
 | `LLM_CIRCUIT_BREAKER_RESET_SECONDS` | int | 30 | 熔断打开后的冷却秒数 |
 
+> 当前 LLM runtime guard 有两层：
+> - 进程内 `Semaphore + circuit breaker`
+> - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，`LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 还会通过 SQLite 共享 reservation 做跨进程计数
+>
+> 也就是说：
+> - 同一台机器上多个 backend 进程共用同一个 SQLite 文件时，pending 配额会共享
+> - provider 熔断与单进程内 `Semaphore` 仍是进程本地行为，不会跨进程同步
+
 ## 数据库
 
 | 变量 | 类型 | 默认值 | 描述 |
@@ -54,6 +62,10 @@
 > - `CHROMA_PERSIST_DIR=./relative-chroma` → `<backend-root>/relative-chroma`
 >
 > 这样本地直接在 repo root、`backend/` 目录，或通过 `uvicorn --app-dir ...` 启动时，都不会再因为 cwd 不同命中不同 SQLite / Chroma 数据目录。`test_config.py` 已覆盖这条行为。
+
+> `shared/gameplay_contract.v1.json` 当前走 mtime-aware 缓存：文件未变时复用内存结果，文件更新时间变化后会自动重新读取，不再要求后端重启才能看到新的 contract 内容。
+
+> 当前 Alembic 最新 revision 为 `008_add_hot_path_foreign_key_indexes`，用于补齐热路径外键索引。
 
 ## 服务器
 

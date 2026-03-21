@@ -5,15 +5,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.services.memory import (
-    _validate_compress_result,
+    _COMPRESS_DEFAULTS,
     _TIER_MAX_RECENT,
     _build_crowd_context,
+    _validate_compress_result,
     build_agent_context,
     compress_rounds,
     format_messages_for_context,
-    _COMPRESS_DEFAULTS,
 )
-
 
 # ── TestFormatMessages ────────────────────────────────────────
 
@@ -197,6 +196,27 @@ class TestValidateCompressResult:
         assert result["key_quotes"] == []
         assert result["tension_points"] == []
 
+    def test_compaction_result_is_bounded(self):
+        """Rolling briefing fields should stay bounded to avoid prompt creep."""
+        raw = {
+            "situation": "局" * 500,
+            "consensus": "共" * 500,
+            "active_debates": ["争" * 300] * 10,
+            "key_quotes": ["[A]: " + ("引" * 400)] * 10,
+            "tension_points": ["紧" * 300] * 10,
+        }
+
+        result = _validate_compress_result(raw)
+
+        assert len(result["situation"]) <= 320
+        assert len(result["consensus"]) <= 220
+        assert len(result["active_debates"]) == 6
+        assert len(result["key_quotes"]) == 4
+        assert len(result["tension_points"]) == 6
+        assert all(len(item) <= 160 for item in result["active_debates"])
+        assert all(len(item) <= 220 for item in result["key_quotes"])
+        assert all(len(item) <= 180 for item in result["tension_points"])
+
     def test_numeric_situation(self):
         """Numeric situation should be coerced to string."""
         raw = {"situation": 42}
@@ -287,6 +307,35 @@ class TestCompressRounds:
         # Verify LLM was called with the full text embedded in prompt
         call_args = mock_llm.call_args
         assert len(call_args[0][0]) > 35000  # prompt should contain the full text
+
+    @pytest.mark.asyncio
+    async def test_previous_briefing_is_carried_into_next_compaction(self):
+        """Rolling briefing should be included alongside the current raw window."""
+        mock_response = {
+            "situation": "新局势",
+            "active_debates": ["新焦点"],
+            "key_quotes": ["[A]: 新原话"],
+            "tension_points": ["新紧张点"],
+            "consensus": "新共识",
+        }
+        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            await compress_rounds(
+                "[B]: 当前窗口原始发言",
+                previous_briefing={
+                    "situation": "旧局势",
+                    "active_debates": ["旧焦点"],
+                    "key_quotes": ["[A]: 旧原话"],
+                    "tension_points": ["旧紧张点"],
+                    "consensus": "旧共识",
+                },
+            )
+
+        prompt = mock_llm.call_args[0][0]
+        assert "此前滚动态势简报" in prompt
+        assert "旧局势" in prompt
+        assert "[A]: 旧原话" in prompt
+        assert "[B]: 当前窗口原始发言" in prompt
 
 
 # ── Phase 2: Tier-based Context Tests ─────────────────────────
@@ -532,5 +581,3 @@ class TestBuildCrowdContextEdgeCases:
         ctx = _build_crowd_context(agent, bg, "topic", "msgs")
         assert bg not in ctx
         assert "B" * 80 + "…" in ctx
-
-

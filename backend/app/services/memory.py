@@ -9,18 +9,22 @@ from __future__ import annotations
 
 import logging
 
+from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json,
 )
-from app.services.lang_detect import get_language_directive
 from app.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
 COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧和转折信号:
 
+【此前滚动态势简报】
+{previous_briefing_block}
+
+【当前窗口原始对话】
 {messages_text}
 
 输出严格 JSON:
@@ -31,6 +35,11 @@ COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧
   "tension_points": ["可能导致历史走向分裂的紧张点"],
   "consensus": "共识摘要(如有，无则留空字符串)"
 }}
+
+要求:
+- 优先保留当前窗口里的具体原话、最新立场变化与新分歧
+- 如果此前滚动态势简报里有仍然有效的长期背景、未解冲突或既有共识，需要继续带入新的结果
+- 不要把此前摘要机械重复一遍，要把它与当前窗口原始对话合并成一份更新后的态势简报
 
 {language_directive}
 """
@@ -44,6 +53,23 @@ _COMPRESS_DEFAULTS: dict = {
     "consensus": "",
 }
 
+_COMPRESS_STRING_LIMITS = {
+    "situation": 320,
+    "consensus": 220,
+}
+_COMPRESS_LIST_LIMITS = {
+    "active_debates": (6, 160),
+    "key_quotes": (4, 220),
+    "tension_points": (6, 180),
+}
+
+
+def _truncate_compaction_text(value: object, max_chars: int) -> str:
+    text = str(value) if value is not None else ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
 
 def _validate_compress_result(raw: dict) -> dict:
     """Validate and normalize LLM compression output with defensive type coercion.
@@ -56,22 +82,62 @@ def _validate_compress_result(raw: dict) -> dict:
     # String fields — coerce to str
     for key in ("situation", "consensus"):
         val = raw.get(key, _COMPRESS_DEFAULTS[key])
-        result[key] = str(val) if val is not None else ""
+        result[key] = _truncate_compaction_text(val, _COMPRESS_STRING_LIMITS[key])
 
     # List[str] fields — coerce single str to [str], reject non-list/str
     for key in ("active_debates", "key_quotes", "tension_points"):
         val = raw.get(key, _COMPRESS_DEFAULTS[key])
+        max_items, max_chars = _COMPRESS_LIST_LIMITS[key]
         if isinstance(val, list):
-            result[key] = [str(item) for item in val]
+            items = val[:max_items]
         elif isinstance(val, str):
-            result[key] = [val] if val else []
+            items = [val] if val else []
         else:
-            result[key] = list(_COMPRESS_DEFAULTS[key])
+            items = list(_COMPRESS_DEFAULTS[key])
+        result[key] = [
+            _truncate_compaction_text(item, max_chars)
+            for item in items[:max_items]
+            if str(item).strip()
+        ]
 
     return result
 
 
-async def compress_rounds(messages_text: str, language: str = "Chinese") -> dict:
+def _format_previous_briefing(previous_briefing: dict | None) -> str:
+    """Render the rolling briefing carried forward from earlier windows."""
+    if not previous_briefing:
+        return "(无)"
+
+    parts: list[str] = []
+    situation = str(previous_briefing.get("situation", "") or "").strip()
+    if situation:
+        parts.append(f"局势: {situation}")
+
+    active_debates = previous_briefing.get("active_debates", [])
+    if isinstance(active_debates, list) and active_debates:
+        parts.append("争论焦点: " + "；".join(str(item) for item in active_debates if str(item).strip()))
+
+    key_quotes = previous_briefing.get("key_quotes", [])
+    if isinstance(key_quotes, list) and key_quotes:
+        parts.append("关键原话:\n- " + "\n- ".join(str(item) for item in key_quotes if str(item).strip()))
+
+    tension_points = previous_briefing.get("tension_points", [])
+    if isinstance(tension_points, list) and tension_points:
+        parts.append("紧张点: " + "；".join(str(item) for item in tension_points if str(item).strip()))
+
+    consensus = str(previous_briefing.get("consensus", "") or "").strip()
+    if consensus:
+        parts.append(f"共识: {consensus}")
+
+    return "\n".join(parts) if parts else "(无)"
+
+
+async def compress_rounds(
+    messages_text: str,
+    language: str = "Chinese",
+    *,
+    previous_briefing: dict | None = None,
+) -> dict:
     """Compress multiple rounds of agent messages into a structured situation briefing.
 
     Uses reasoning_effort=low to save tokens on summarization tasks.
@@ -87,6 +153,7 @@ async def compress_rounds(messages_text: str, language: str = "Chinese") -> dict
         return dict(_COMPRESS_DEFAULTS)
 
     prompt = COMPRESS_PROMPT.format(
+        previous_briefing_block=_format_previous_briefing(previous_briefing),
         messages_text=messages_text,
         language_directive=get_language_directive(language),
     )

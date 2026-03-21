@@ -68,3 +68,13 @@ def get_language_directive(language: str) -> str:
         "Korean": "모든 텍스트는 한국어로 출력해 주세요 (All output text must be in Korean)",
     }
     return directives.get(language, f"All output text MUST be in {language}")
+
+
+def get_anonymous_director_name(language: str | None = None) -> str:
+    """Return a localized anonymous label for director-facing surfaces."""
+    return "匿名导演" if language == "Chinese" else "Anonymous Director"
+
+
+def get_anonymous_predictor_name(language: str | None = None) -> str:
+    """Return a localized anonymous label for prediction-facing surfaces."""
+    return "匿名预言家" if language == "Chinese" else "Anonymous Predictor"

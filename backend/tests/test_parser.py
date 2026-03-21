@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.services.parser as parser_module
-from app.services.parser import parse_question
 from app.services.llm_client import LLMError
+from app.services.parser import parse_question
 
 
 class TestParseQuestion:
@@ -116,3 +116,20 @@ class TestParseQuestion:
         assert all("name" in agent for agent in result["agents"])
         assert 3 <= result["simulation_rounds"] <= 8
         assert 0.0 <= result["branch_sensitivity"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_fallback_rounds_use_explicit_default_rounds(self, monkeypatch):
+        """Fallback parse should honor caller-provided default rounds instead of hardcoding 10."""
+        llm_mock = AsyncMock(side_effect=LLMError("Invalid JSON from LLM after recovery attempts"))
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "如果一个港口城市突然改由自治委员会接管，会发生什么？",
+            max_agents=5,
+            target_agents=5,
+            default_rounds=6,
+            max_rounds=12,
+        )
+
+        assert llm_mock.await_count == 1
+        assert result["simulation_rounds"] == 6

@@ -1,11 +1,13 @@
 """Tests for app.api.ws — WebSocket manager."""
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import WebSocketDisconnect
 
+import app.api.debate as debate_api
+import app.api.ws as ws_api
 from app.api.ws import WSManager
 
 
@@ -190,3 +192,54 @@ class TestWSManagerConcurrency:
             mgr.disconnect("s1", ws)
 
         assert len(mgr._connections["s1"]) == 0
+
+
+class TestScenarioWebSocketEndpoint:
+    @pytest.mark.asyncio
+    async def test_disconnects_on_generic_exception(self, monkeypatch):
+        websocket = AsyncMock()
+        websocket.receive_text.side_effect = RuntimeError("boom")
+        connect = AsyncMock(return_value=True)
+        disconnect = MagicMock()
+
+        monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
+        monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await ws_api.websocket_endpoint(websocket, "scenario-1")
+
+        connect.assert_awaited_once_with("scenario-1", websocket)
+        disconnect.assert_called_once_with("scenario-1", websocket)
+
+    @pytest.mark.asyncio
+    async def test_disconnects_on_normal_websocket_close(self, monkeypatch):
+        websocket = AsyncMock()
+        websocket.receive_text.side_effect = WebSocketDisconnect()
+        connect = AsyncMock(return_value=True)
+        disconnect = MagicMock()
+
+        monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
+        monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
+
+        await ws_api.websocket_endpoint(websocket, "scenario-2")
+
+        connect.assert_awaited_once_with("scenario-2", websocket)
+        disconnect.assert_called_once_with("scenario-2", websocket)
+
+
+class TestDebateWebSocketEndpoint:
+    @pytest.mark.asyncio
+    async def test_disconnects_on_generic_exception(self, monkeypatch):
+        websocket = AsyncMock()
+        websocket.receive_text.side_effect = RuntimeError("boom")
+        connect = AsyncMock(return_value=True)
+        disconnect = MagicMock()
+
+        monkeypatch.setattr(debate_api.debate_ws_manager, "connect", connect)
+        monkeypatch.setattr(debate_api.debate_ws_manager, "disconnect", disconnect)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await debate_api.debate_websocket_endpoint(websocket, "debate-1")
+
+        connect.assert_awaited_once_with("debate-1", websocket)
+        disconnect.assert_called_once_with("debate-1", websocket)

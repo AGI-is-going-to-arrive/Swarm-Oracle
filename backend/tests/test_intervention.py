@@ -292,3 +292,17 @@ class TestBatchIntervention:
         })
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
+
+    def test_batch_rejects_oversized_intervention_list(self, client):
+        """Batch request should reject excessive branch fan-out."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/batch", json={
+            "interventions": [
+                {"branch_id": f"branch-{index}", "text": "fanout"}
+                for index in range(51)
+            ]
+        })
+
+        assert resp.status_code == 422

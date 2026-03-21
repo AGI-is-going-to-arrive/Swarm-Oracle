@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import logging
@@ -11,13 +12,18 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.models import (
-    Agent, AgentMessage, AgentTier, Branch, BranchStatus, Round, Scenario, ScenarioStatus,
-    AgentGroup, AgentGroupMember,
+    Agent,
+    AgentMessage,
+    Branch,
+    BranchStatus,
+    Round,
+    Scenario,
+    ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.services.llm_client import llm_call_json
-from app.services.lang_detect import get_language_directive
 from app.services.blackboard import Blackboard
+from app.services.lang_detect import get_language_directive
+from app.services.llm_client import llm_call_json
 from app.services.memory import (
     build_agent_context,
     compress_rounds,
@@ -31,8 +37,12 @@ from app.services.narrator import narrate_branch
 # V2: Visualization layer (lazy-loaded only when enabled)
 try:
     from app.visualization import (
-        VisualizationMapper, assign_sprites_batch, assign_position, select_scene,
-        check_card_trigger, get_card_viz_event,
+        VisualizationMapper,
+        assign_position,
+        assign_sprites_batch,
+        check_card_trigger,
+        get_card_viz_event,
+        select_scene,
     )
     _VIZ_AVAILABLE = True
 except ImportError:
@@ -161,7 +171,6 @@ async def run_simulation(
         if not scenario:
             raise ValueError(f"Scenario {scenario_id} not found")
         ctx = scenario.parsed_context or {}
-        agents_data = ctx.get("agents", [])
         setting_bg = _format_setting(ctx.get("setting", {}))
         sim_rounds = ctx.get("simulation_rounds", 10)
         sensitivity = ctx.get("branch_sensitivity", 0.7)
@@ -778,8 +787,6 @@ async def _gather_hierarchical_messages(
             # Synthesize: Worker echoes a condensed version of Leader's stance
             leader_content = leader_msg.get("content", "")
             worker_stance = worker.get("stance", "")
-            persona_hint = worker.get("persona", "")[:30]
-
             # Create a short synthesized response reflecting the worker's persona
             synth_content = (
                 f"({worker['name']}作为{worker.get('role', '成员')}，"
@@ -890,13 +897,51 @@ async def _compress_round_memory(
         return
 
     msgs_text = "\n".join(f"[{m['agent_name']}]: {m['content']}" for m in msgs)
-    summary = await compress_rounds(msgs_text, language=language)
+    previous_briefing = _load_latest_compressed_briefing(
+        engine,
+        branch_id,
+        before_round=start_round,
+    )
+    summary = await compress_rounds(
+        msgs_text,
+        language=language,
+        previous_briefing=previous_briefing,
+    )
 
     _save_round_summary(engine, branch_id, current_round, str(summary))
 
     # Update Blackboard with structured compression output
     if blackboard is not None:
         blackboard.update_global_summary(summary)
+
+
+def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: int) -> dict | None:
+    """Load the latest structured summary before the current compression window."""
+    with Session(engine) as session:
+        round_row = session.exec(
+            select(Round)
+            .where(
+                Round.branch_id == branch_id,
+                Round.round_number < before_round,
+                Round.compressed_summary != None,  # noqa: E711
+            )
+            .order_by(Round.round_number.desc())
+        ).first()
+
+    if round_row is None or not round_row.compressed_summary:
+        return None
+
+    try:
+        parsed = ast.literal_eval(round_row.compressed_summary)
+    except (SyntaxError, ValueError):
+        logger.warning(
+            "Failed to parse historical compressed_summary for branch=%s round=%s",
+            branch_id,
+            round_row.round_number,
+        )
+        return None
+
+    return parsed if isinstance(parsed, dict) else None
 
 
 async def _narrate_branch_data(engine, branch_id, agents, *, language: str = "Chinese") -> dict:

@@ -9,8 +9,15 @@ from sqlmodel import Session, select
 import app.api.scenarios as scenarios_api
 from app.main import app
 from app.models import (
-    Agent, AgentTier, Branch, BranchStatus, InterventionLog, Leaderboard,
-    Round, Scenario, ScenarioStatus,
+    Agent,
+    AgentTier,
+    Branch,
+    BranchStatus,
+    InterventionLog,
+    Leaderboard,
+    Round,
+    Scenario,
+    ScenarioStatus,
 )
 from app.models.database import get_engine
 
@@ -362,6 +369,22 @@ class TestScenarioEndpoints:
 
 
 class TestPredictionLeaderboardEndpoints:
+    def test_prediction_submission_uses_validated_router(self, client):
+        """Oversized prediction payloads should be rejected by the dedicated router."""
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        resp = client.post(
+            f"/api/scenario/{scenario_id}/predict",
+            json={
+                "prediction_text": "x" * 600,
+                "confidence": 2,
+                "user_name": "Tester",
+            },
+        )
+
+        assert resp.status_code == 422
+
     def test_get_leaderboard_includes_display_fields(self, client):
         """Leaderboard response should match the frontend's expected shape."""
         engine = get_engine()
@@ -388,6 +411,27 @@ class TestPredictionLeaderboardEndpoints:
         assert row["avg_score"] == 75.0
         assert row["best_score"] == 90.0
         assert row["win_streak"] == 2
+
+    def test_submit_prediction_rejects_invalid_confidence_via_active_router(self, client):
+        """Prediction API should use predictions.py validation rather than legacy dict parsing."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/predict",
+            json={
+                "prediction_text": "世界线会逆转",
+                "confidence": 1.5,
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "Confidence must be between 0.0 and 1.0" in resp.text
+
+    def test_list_predictions_nonexistent_scenario_returns_404(self, client):
+        """Prediction listing should now come from predictions.py and validate scenario existence."""
+        resp = client.get("/api/scenario/nonexistent/predictions")
+        assert resp.status_code == 404
 
     def test_special_characters_in_scenario_id(self, client):
         """Special characters in scenario ID should be handled gracefully."""
@@ -439,6 +483,25 @@ class TestInterveneEndpoint:
             "branch_id": "any", "text": "test",
         })
         assert resp.status_code == 404
+
+    def test_intervene_batch_rejects_excessive_items(self, client):
+        """Batch intervene request should cap list size to a safe upper bound."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {"branch_id": bid, "text": f"事件 {index}"}
+                    for index in range(51)
+                ]
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "at most 50 items" in resp.text
 
     def test_intervene_finished_scenario(self, client):
         """Should reject intervention on DONE scenario."""
@@ -915,7 +978,7 @@ class TestDeleteScenario:
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
         _seed_agent(engine, sid, name="Agent1")
-        rid = _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 1)
 
         resp = client.delete(f"/api/scenario/{sid}")
         assert resp.status_code == 200
@@ -953,7 +1016,7 @@ class TestDeleteScenario:
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
         _seed_agent(engine, sid, name="Agent1")
-        rid = _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 1)
 
         resp = client.delete(f"/api/scenario/{sid}")
         assert resp.status_code == 200
@@ -1069,6 +1132,43 @@ class TestSocialCopy:
 
         assert resp.status_code == 200
         assert resp.json()["copy"] == "生成好的文案"
+
+    def test_social_copy_uses_english_wrappers_for_english_scenarios(self, client, monkeypatch):
+        engine = get_engine()
+        scenario = Scenario(
+            question="What if Rome never fell?",
+            status=ScenarioStatus.DONE,
+            parsed_context={"_language": "English"},
+        )
+        with Session(engine) as session:
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            sid = scenario.id
+
+        _seed_agent(engine, sid, name="Augustus", role="Emperor", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="Imperial Continuity",
+            probability=0.7,
+            status=BranchStatus.COMPLETED,
+            story="The empire survives for three more centuries.",
+            insight="Institutions can outlive their founders.",
+        )
+
+        async def _fake_llm_call(prompt, **kwargs):
+            assert "Simulation results" in prompt
+            assert "Output only the final Xiaohongshu copy" in prompt
+            assert "推演结果如下" not in prompt
+            return "English social copy"
+
+        monkeypatch.setattr("app.services.llm_client.llm_call", _fake_llm_call)
+
+        resp = client.post(f"/api/scenario/{sid}/social/xiaohongshu", json={})
+
+        assert resp.status_code == 200
+        assert resp.json()["copy"] == "English social copy"
 
 
 # ── P4-D: Intervention Templates ─────────────────────────

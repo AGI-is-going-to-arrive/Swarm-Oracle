@@ -8,12 +8,16 @@ from sqlmodel import Session
 import app.services.debate as debate_module
 from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
 from app.models.database import get_engine
-from app.services.debate_scoring import _profile_dimension_bias
 from app.services.debate import (
     create_debate_record,
     load_debate_result_payload,
     load_debate_snapshot,
     run_debate_background,
+)
+from app.services.debate_scoring import (
+    DebatePlan,
+    _build_phase_deltas,
+    _profile_dimension_bias,
 )
 
 
@@ -156,6 +160,96 @@ def test_profile_dimension_bias_tracks_question_signal():
     assert _profile_dimension_bias("law", law_question, "evidence") < 0
     assert _profile_dimension_bias("trade", trade_question, "impact") > 0
     assert _profile_dimension_bias("ecology", ecology_question, "impact") < 0
+
+
+def test_profile_dimension_bias_tracks_expanded_question_signal_keywords():
+    trade_question = "Will innovation and breakthrough reform boost port growth and prosperity?"
+    governance_question = "Will sanctions, unrest, and shortage push the council into deadlock?"
+
+    assert _profile_dimension_bias("trade", trade_question, "impact") > 0
+    assert _profile_dimension_bias("governance", governance_question, "coherence") < 0
+
+
+def test_build_phase_deltas_never_goes_negative_for_low_scores():
+    phase_deltas = _build_phase_deltas(
+        {"proposition": 4, "opposition": 2},
+        {
+            "coherence": {"proposition": 37, "opposition": 83},
+            "impact": {"proposition": 99, "opposition": 3},
+            "evidence": {"proposition": 35, "opposition": 35},
+            "adaptability": {"proposition": 6, "opposition": 95},
+        },
+    )
+
+    for phase in (
+        DebatePhase.OPENING,
+        DebatePhase.CROSSFIRE,
+        DebatePhase.REBUTTAL,
+        DebatePhase.CLOSING,
+    ):
+        assert phase_deltas[phase]["proposition"]["proposition"] >= 0
+        assert phase_deltas[phase]["opposition"]["opposition"] >= 0
+
+    assert sum(
+        phase_deltas[phase]["proposition"]["proposition"]
+        for phase in (
+            DebatePhase.OPENING,
+            DebatePhase.CROSSFIRE,
+            DebatePhase.REBUTTAL,
+            DebatePhase.CLOSING,
+        )
+    ) == 4
+    assert sum(
+        phase_deltas[phase]["opposition"]["opposition"]
+        for phase in (
+            DebatePhase.OPENING,
+            DebatePhase.CROSSFIRE,
+            DebatePhase.REBUTTAL,
+            DebatePhase.CLOSING,
+        )
+    ) == 2
+
+
+def test_serialize_debate_reuses_provided_plan(monkeypatch):
+    debate = create_debate_record("Should port reform accelerate trade growth?")
+    fake_plan = DebatePlan(
+        winner="proposition",
+        verdict_tone="order",
+        score={"proposition": 80, "opposition": 70},
+        breakdown={
+            "coherence": {"proposition": 4, "opposition": 3},
+            "evidence": {"proposition": 4, "opposition": 3},
+            "adaptability": {"proposition": 4, "opposition": 4},
+            "impact": {"proposition": 4, "opposition": 4},
+        },
+        phase_deltas={
+            DebatePhase.OPENING: {
+                "proposition": {"proposition": 20, "opposition": 0},
+                "opposition": {"proposition": 0, "opposition": 18},
+            },
+            DebatePhase.CROSSFIRE: {
+                "proposition": {"proposition": 20, "opposition": 0},
+                "opposition": {"proposition": 0, "opposition": 18},
+            },
+            DebatePhase.REBUTTAL: {
+                "proposition": {"proposition": 20, "opposition": 0},
+                "opposition": {"proposition": 0, "opposition": 17},
+            },
+            DebatePhase.CLOSING: {
+                "proposition": {"proposition": 20, "opposition": 0},
+                "opposition": {"proposition": 0, "opposition": 17},
+            },
+        },
+        audience_meter=10,
+    )
+
+    def _boom(_question: str):
+        raise AssertionError("build_debate_plan should not be called when plan is provided")
+
+    monkeypatch.setattr(debate_module, "build_debate_plan", _boom)
+    payload = debate_module._serialize_debate(debate, [], plan=fake_plan, phase_insights=[])
+
+    assert payload["available_prediction_options"]["winner"] == ["proposition", "opposition"]
 
 
 def test_create_debate_record_keeps_scene_compatible_with_existing_debate_assets():

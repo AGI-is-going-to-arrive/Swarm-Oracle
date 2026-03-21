@@ -15,8 +15,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
-from app.models import Prediction, Leaderboard, Scenario, ScenarioStatus
+from app.models import Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
+from app.services.lang_detect import detect_language, get_anonymous_predictor_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["predictions"])
@@ -28,7 +29,7 @@ class PredictRequest(BaseModel):
     prediction_text: str
     confidence: float = 0.5
     user_id: str = ""
-    user_name: str = "匿名预言家"
+    user_name: str = ""
 
     @field_validator("confidence")
     @classmethod
@@ -45,6 +46,11 @@ class PredictRequest(BaseModel):
             raise ValueError("Prediction text cannot be empty")
         if len(v) > 500:
             raise ValueError("Prediction text too long (max 500 chars)")
+        return v.strip()
+
+    @field_validator("user_id", "user_name")
+    @classmethod
+    def normalize_optional_text(cls, v: str) -> str:
         return v.strip()
 
 
@@ -90,10 +96,17 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
         if scenario.status == ScenarioStatus.DONE:
             raise HTTPException(400, "Scenario already completed — predictions are closed")
 
+        scenario_language = (
+            scenario.parsed_context.get("_language")
+            if isinstance(scenario.parsed_context, dict)
+            else None
+        ) or detect_language(scenario.question)
+        user_name = req.user_name or get_anonymous_predictor_name(scenario_language)
+
         pred = Prediction(
             scenario_id=scenario_id,
             user_id=req.user_id or "anonymous",
-            user_name=req.user_name,
+            user_name=user_name,
             prediction_text=req.prediction_text,
             confidence=req.confidence,
         )

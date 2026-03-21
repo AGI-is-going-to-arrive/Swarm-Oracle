@@ -1,25 +1,120 @@
 """Tests for app.services.llm_client — LLM API integration."""
 
+import sqlite3
+
 import pytest
 
 from app.services import llm_client
 from app.services.llm_client import (
     LLMBackpressureError,
     format_untrusted_text_block,
+    health_check,
     llm_call,
     llm_call_json,
-    health_check,
-    LLMError,
+    llm_call_json_stream,
 )
 
 
 class TestLLMCall:
+    def _reset_runtime_guard(self):
+        llm_client._pending_requests = 0
+        llm_client._pending_by_quota.clear()
+        llm_client._provider_failures.clear()
+        llm_client._provider_circuit_until.clear()
+        llm_client._global_semaphore = None
+        llm_client._global_semaphore_limit = 0
+
     @pytest.mark.asyncio
     async def test_global_backpressure_rejects_when_queue_is_full(self, monkeypatch):
         """Global queue guard should reject immediately before making a network call."""
         monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
         with pytest.raises(LLMBackpressureError):
             await llm_call("Reply with OK.", reasoning_effort="low")
+
+    @pytest.mark.asyncio
+    async def test_sqlite_runtime_guard_shares_global_pending_counts(self, monkeypatch, tmp_path):
+        """SQLite-backed reservations should reject when another process has filled the queue."""
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 4)
+
+        conn = sqlite3.connect(db_path)
+        llm_client._ensure_runtime_guard_table(conn)
+        conn.execute(
+            f"INSERT INTO {llm_client._RUNTIME_GUARD_TABLE} VALUES (?, ?, ?, ?)",
+            ("other-process", None, 1.0, 9999999999.0),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(LLMBackpressureError):
+            await llm_client._reserve_runtime_slot(
+                quota_key=None,
+                provider_key="provider",
+                lease_seconds=30,
+            )
+
+    @pytest.mark.asyncio
+    async def test_sqlite_runtime_guard_shares_quota_counts(self, monkeypatch, tmp_path):
+        """SQLite-backed reservations should enforce per-user pending limits across processes."""
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard_quota.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 4)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 1)
+
+        conn = sqlite3.connect(db_path)
+        llm_client._ensure_runtime_guard_table(conn)
+        conn.execute(
+            f"INSERT INTO {llm_client._RUNTIME_GUARD_TABLE} VALUES (?, ?, ?, ?)",
+            ("other-process", "user:director-1", 1.0, 9999999999.0),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(LLMBackpressureError):
+            await llm_client._reserve_runtime_slot(
+                quota_key="user:director-1",
+                provider_key="provider",
+                lease_seconds=30,
+            )
+
+    @pytest.mark.asyncio
+    async def test_sqlite_runtime_guard_reservation_is_released(self, monkeypatch, tmp_path):
+        """SQLite reservation rows should be removed on release."""
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard_release.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 4)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 2)
+
+        reservation_id = await llm_client._reserve_runtime_slot(
+            quota_key="user:director-2",
+            provider_key="provider",
+            lease_seconds=30,
+        )
+        assert reservation_id is not None
+
+        conn = sqlite3.connect(db_path)
+        count_before = conn.execute(
+            f"SELECT COUNT(*) FROM {llm_client._RUNTIME_GUARD_TABLE}"
+        ).fetchone()[0]
+        conn.close()
+        assert count_before == 1
+
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-2",
+            reservation_id=reservation_id,
+        )
+
+        conn = sqlite3.connect(db_path)
+        count_after = conn.execute(
+            f"SELECT COUNT(*) FROM {llm_client._RUNTIME_GUARD_TABLE}"
+        ).fetchone()[0]
+        conn.close()
+        assert count_after == 0
 
     @pytest.mark.asyncio
     async def test_basic_call(self):
@@ -80,7 +175,10 @@ class TestLLMCallJSON:
         """Malformed keyed JSON should still recover agent payloads when possible."""
 
         async def _fake_llm_call(*args, **kwargs):
-            return '{"content": "Recovered agent line", "emotion": "calm", "diverge": "critical split"]'
+            return (
+                '{"content": "Recovered agent line", '
+                '"emotion": "calm", "diverge": "critical split"]'
+            )
 
         monkeypatch.setattr(llm_client, "llm_call", _fake_llm_call)
 
@@ -101,11 +199,36 @@ class TestLLMCallJSON:
 
         monkeypatch.setattr(llm_client, "llm_call", _fake_llm_call)
 
-        result = await llm_call_json("ignored", reasoning_effort="low", fallback_mode="agent_message")
+        result = await llm_call_json(
+            "ignored",
+            reasoning_effort="low",
+            fallback_mode="agent_message",
+        )
 
-        assert result["content"] == "We should immediately halt the rollout and review the evidence."
+        assert (
+            result["content"]
+            == "We should immediately halt the rollout and review the evidence."
+        )
         assert result["emotion"] == "neutral"
         assert result["diverge"] is None
+
+    @pytest.mark.asyncio
+    async def test_json_stream_keyed_fallback_for_malformed_payload(self, monkeypatch):
+        """Streamed malformed keyed JSON should reuse the non-stream recovery path."""
+
+        async def _fake_stream(*args, **kwargs):
+            yield '{"content": "Recovered from stream", '
+            yield '"emotion": "calm", "diverge": "critical split"]'
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _fake_stream)
+
+        result = await llm_call_json_stream("ignored", reasoning_effort="low")
+
+        assert result == {
+            "content": "Recovered from stream",
+            "emotion": "calm",
+            "diverge": "critical split",
+        }
 
 
 class TestHealthCheck:

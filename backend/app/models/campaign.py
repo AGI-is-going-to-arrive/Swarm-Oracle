@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-from app.models.database import _uuid
+from app.models.database import _now, _uuid
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+def _default_director_name() -> str:
+    return "Anonymous Director"
 
 
 class DirectorProfile(SQLModel, table=True):
@@ -22,7 +22,7 @@ class DirectorProfile(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     user_id: str = Field(index=True, unique=True)
-    user_name: str = "匿名导演"
+    user_name: str = Field(default_factory=_default_director_name)
 
     total_runs: int = 0
     completed_challenges: int = 0
