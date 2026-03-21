@@ -6,19 +6,23 @@ import asyncio
 import logging
 
 from app.services.lang_detect import get_language_directive
-from app.services.llm_client import llm_call_json
+from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block, llm_call_json
 
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
 
 NARRATE_PROMPT = """你是一位出色的故事讲述者。请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
 
-【分支标题】{branch_title}
+{untrusted_input_guardrail}
+
+【分支标题】
+{branch_title_block}
 【最终概率】{probability:.0%}
-【参与角色】{agents_summary}
+【参与角色】
+{agents_summary_block}
 
 【原始交互记录】
-{raw_rounds}
+{raw_rounds_block}
 
 写作要求:
 1. 用生动的第三人称讲述，像一部精彩的历史纪录片
@@ -105,6 +109,10 @@ async def narrate_branch(
     agents_summary: str,
     raw_rounds: str,
     language: str = "Chinese",
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Generate a narrative story for a completed branch.
 
@@ -112,17 +120,36 @@ async def narrate_branch(
         dict with keys: story, insight, key_moments
     """
     prompt = NARRATE_PROMPT.format(
-        branch_title=branch_title or "未命名分支",
+        branch_title_block=format_untrusted_text_block(
+            "分支标题",
+            branch_title or "未命名分支",
+            max_chars=200,
+        ),
         probability=probability,
-        agents_summary=agents_summary,
-        raw_rounds=raw_rounds,
+        agents_summary_block=format_untrusted_text_block(
+            "参与角色",
+            agents_summary,
+            max_chars=800,
+        ),
+        raw_rounds_block=format_untrusted_text_block(
+            "原始交互记录",
+            raw_rounds,
+            max_chars=3200,
+        ),
         language_directive=get_language_directive(language),
+        untrusted_input_guardrail=UNTRUSTED_INPUT_GUARDRAIL,
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
     try:
         raw_result = await asyncio.wait_for(
-            llm_call_json(prompt, reasoning_effort="low"),
+            llm_call_json(
+                prompt,
+                reasoning_effort="low",
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            ),
             timeout=_NARRATION_TIMEOUT_SECONDS,
         )
         result = _normalize_narration_result(raw_result)

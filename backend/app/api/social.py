@@ -214,15 +214,10 @@ def _build_social_context(
 # ── Endpoints ────────────────────────────────────────────
 
 
-@router.api_route("/scenario/{scenario_id}/social/{platform}", methods=["GET", "POST"])
-async def generate_social_copy(
+async def _generate_social_copy(
     scenario_id: str,
     platform: str,
-    req: SocialCopyRequest | None = None,
-    llm_api_key: str | None = None,
-    llm_base_url: str | None = None,
-    llm_model: str | None = None,
-    user_id: str | None = None,
+    req: SocialCopyRequest,
 ):
     """Generate platform-specific social media copy from simulation results."""
     from app.services.llm_client import (
@@ -238,7 +233,6 @@ async def generate_social_copy(
             f"Unsupported platform '{platform}'. "
             f"Supported: {', '.join(SOCIAL_PLATFORM_PROMPTS.keys())}",
         )
-
     platform_config = SOCIAL_PLATFORM_PROMPTS[platform]
 
     engine = get_engine()
@@ -262,11 +256,10 @@ async def generate_social_copy(
         language=social_language,
     )
     provider_policy = scenario.parsed_context or {}
-    req = req or SocialCopyRequest()
-    effective_base_url = req.llm_base_url or llm_base_url or provider_policy.get("llm_base_url")
-    effective_model = req.llm_model or llm_model or provider_policy.get("llm_model")
-    effective_api_key = req.llm_api_key or llm_api_key
-    quota_key = req.user_id or user_id or provider_policy.get("user_id")
+    effective_base_url = req.llm_base_url or provider_policy.get("llm_base_url")
+    effective_model = req.llm_model or provider_policy.get("llm_model")
+    effective_api_key = req.llm_api_key
+    quota_key = req.user_id or provider_policy.get("user_id")
 
     platform_name = platform_config["name"].get(social_language, platform_config["name"]["English"])
     instruction = platform_config["instruction"].get(
@@ -313,6 +306,29 @@ async def generate_social_copy(
         "platform_name": platform_name,
         "copy": copy.strip(),
     }
+
+
+@router.get("/scenario/{scenario_id}/social/{platform}")
+async def generate_social_copy(
+    scenario_id: str,
+    platform: str,
+):
+    """Generate platform-specific social media copy without provider overrides."""
+    return await _generate_social_copy(scenario_id, platform, SocialCopyRequest())
+
+
+@router.post("/scenario/{scenario_id}/social/{platform}")
+async def generate_social_copy_with_overrides(
+    scenario_id: str,
+    platform: str,
+    req: SocialCopyRequest | None = None,
+):
+    """Generate platform-specific social media copy with provider overrides in the POST body."""
+    return await _generate_social_copy(
+        scenario_id,
+        platform,
+        req or SocialCopyRequest(),
+    )
 
 
 @router.get("/scenario/{scenario_id}/export")

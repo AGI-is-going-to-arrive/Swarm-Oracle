@@ -35,12 +35,13 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenarios` | GET | 场景列表（分页+筛选） | `?status=done&limit=20&offset=0` | `{scenarios[], total, limit, offset}` |
 | `DELETE /api/scenario/{id}` | DELETE | 删除场景（级联删除所有关联数据） | — | `{status: "deleted", scenario_id}` |
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；推荐走 `POST`，这样 provider policy 不会出现在 URL 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；provider overrides 当前只能走 `POST body`，不能放在 `GET query` 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
 
 > `GET/POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 prompt wrapper / context 包装：
 > - 英文 scenario 不再收到中文包装文本
 > - `reddit / x` 仍按各自模板要求输出英文文案
+> - `GET` 仍可直接生成文案，但如果把 `llm_api_key / llm_base_url / llm_model / user_id` 放进 query，后端会返回 `400`；这类 provider overrides 必须改走 `POST body`
 
 ### Replay 分享
 
@@ -245,6 +246,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 也就是说，进入 `closing / verdict` 后会返回 `400`；若 Debate 已经处于 `QUEUED / ERROR / DONE`，同样会返回 `400`。当 `is_counterplay = true` 时，当前实现要求同时提供：
 > - `counterplay_phase`
 > - `counterplay_variant`
+>
+> 当 `is_counterplay = true` 时，后端当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；如果这一步 WebSocket 广播失败，请求仍返回 `200`，不会把已落库的预测回滚成 `500`
 >
 > `GET /api/debate/{id}` 与 `GET /api/debate/{id}/result` 当前都会在顶层返回可选 `counterplay` 对象：
 > - `debate_id`

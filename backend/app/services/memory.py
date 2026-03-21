@@ -137,6 +137,9 @@ async def compress_rounds(
     language: str = "Chinese",
     *,
     previous_briefing: dict | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
 ) -> dict:
     """Compress multiple rounds of agent messages into a structured situation briefing.
 
@@ -159,7 +162,13 @@ async def compress_rounds(
     )
 
     logger.debug("Compressing %d chars of messages", len(messages_text))
-    result = await llm_call_json(prompt, reasoning_effort="low")
+    result = await llm_call_json(
+        prompt,
+        reasoning_effort="low",
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+    )
 
     return _validate_compress_result(result)
 

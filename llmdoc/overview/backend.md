@@ -101,6 +101,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 玩法卡当前不是从 `gameplay_state` 直接反向注入 prompt；前端 `GameplayCardsModal` 会先把 card prompt 作为 `/intervene` 文本发给后端，再把 `usage_log` 同步进 `gameplay_state`
 - **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
+- **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
   - `retrieve_relevant_memories(scenario_id, query, top_k)` → 格式化 Top-K 语义相关记忆
@@ -117,6 +118,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约
 - **关键API**:
   - `load_gameplay_contract()` → `dict[str, Any]` — 基于文件 `mtime_ns` 的轻量缓存；文件未变更时复用缓存，变更后自动重读
+- **缺文件报错**: 若 `shared/gameplay_contract.v1.json` 缺失，当前会直接抛出清晰 `RuntimeError`，提示先恢复 shared contract，而不是让后端在 `Path.stat()` 上抛裸异常
 - **集成点**: `visualization/card_events.py` 启动时据此构建 `CARD_TYPES`，后端测试 `test_gameplay_contract_sync.py` 会校验卡牌 ID 与触发模式和 shared contract 保持一致
 
 ### `llm_client.py` (≈270行) — LLM调用封装
@@ -183,6 +185,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - **输出**: `{title, story, insight, key_moments[]}`
 - **返回值归一化**: narrator 现在会容忍 `llm_call_json()` 返回 `list[dict]` 或字符串列表，优先提取第一条可用叙事，避免再因 `list` 没有 `.get()` 把整局场景打进 `error`
 - **fallback 语言**: 当 LLM 不可用时，fallback narration 当前会跟随 `language` 输出中英文摘要，而不是固定中文兜底
+- **输入防护**: `branch_title / agents_summary / raw_rounds` 当前都会通过 `format_untrusted_text_block()` 包进 `UNTRUSTED DATA` 区块，再进入 narration prompt；可疑 prompt-injection 文本只会被当成待分析数据
+- **BYOK 透传**: narrator 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传，不把 BYOK 凭证落库
 
 ### `campaign.py` (≈330行) — Campaign 进度服务 (**NEW**)
 - **职责**: 管理导演 campaign 进度结算、档案积分、题材 mastery 与 badge 解锁，以及单局 `director_state / gameplay_state` 权威态
@@ -243,6 +247,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
+  - `POST /api/debate/{id}/predict` 当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；若 WebSocket 广播失败，只会记 warning，不会把已落库请求翻成假 `500`
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
 - **职责**: LLM 对比用户预测与模拟实际结果，给出 0-100 准确度评分
@@ -253,6 +258,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **排行榜物化**:
   - `total_predictions / total_score / avg_score / best_score / win_streak` 当前统一由已评分 `Prediction` 重建
   - `win_streak` 当前按稳定顺序（`created_at desc / scored_at desc / id desc`）重算，不再依赖并发评分的落库顺序
+- **原子持久化**: 单条 prediction 评分当前会把 `Prediction.score*` 写入和 leaderboard 重建收口到同一事务；若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
 
 ## API层 (`app/api/`) — P0-1 拆分
 
@@ -290,7 +296,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；推荐走 `POST body` 透传 provider policy，避免把 key 暴露在 URL；当前 wrapper / instruction 会跟随场景语言，英文场景不再收到中文包装文案 |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；当前 wrapper / instruction 会跟随场景语言，英文场景不再收到中文包装文案 |
 
 ### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
 | 端点 | 方法 | 描述 |
@@ -387,6 +393,10 @@ alembic/ ──► Alembic 数据库迁移框架
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 - 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**
+- 本轮这类 backend review fixes 还额外实跑通过：
+  - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`：`86 passed in 1.85s`
+  - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`：`2 passed in 0.31s`
+  - `tests/test_debate_api.py + tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`：`2 passed in 0.41s`
 
 覆盖重心：
 

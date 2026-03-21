@@ -412,7 +412,14 @@ async def run_simulation(
             # 3) Compress memory every N rounds
             if round_num % settings.MEMORY_COMPRESS_INTERVAL == 0:
                 compress_bb = blackboards.get(branch_id)  # None in RAW mode
-                await _compress_round_memory(engine, branch_id, round_num, blackboard=compress_bb, language=detected_language)
+                await _compress_round_memory(
+                    engine,
+                    branch_id,
+                    round_num,
+                    blackboard=compress_bb,
+                    language=detected_language,
+                    llm_overrides=llm_overrides,
+                )
 
             # 4) Detect forking (skip on last round — children would have no messages)
             diverge_signals = [m["diverge"] for m in messages if m.get("diverge")]
@@ -511,7 +518,13 @@ async def run_simulation(
 
     for b in all_branches:
         if b["status"] in ("ACTIVE", "COMPLETED"):
-            narration = await _narrate_branch_data(engine, b["id"], agents, language=detected_language)
+            narration = await _narrate_branch_data(
+                engine,
+                b["id"],
+                agents,
+                language=detected_language,
+                llm_overrides=llm_overrides,
+            )
             _save_narration(engine, b["id"], narration)
             await push({
                 "type": "narration",
@@ -900,7 +913,13 @@ async def _detect_fork(engine, branch_id, diverge_signals, sensitivity, *, llm_o
 
 
 async def _compress_round_memory(
-    engine, branch_id, current_round, *, blackboard: Blackboard | None = None, language: str = "Chinese",
+    engine,
+    branch_id,
+    current_round,
+    *,
+    blackboard: Blackboard | None = None,
+    language: str = "Chinese",
+    llm_overrides: dict | None = None,
 ):
     """Compress recent rounds into a summary.
 
@@ -922,6 +941,9 @@ async def _compress_round_memory(
         msgs_text,
         language=language,
         previous_briefing=previous_briefing,
+        api_key=(llm_overrides or {}).get("api_key"),
+        base_url=(llm_overrides or {}).get("base_url"),
+        model=(llm_overrides or {}).get("model"),
     )
 
     _save_round_summary(engine, branch_id, current_round, str(summary))
@@ -960,7 +982,14 @@ def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: in
     return parsed if isinstance(parsed, dict) else None
 
 
-async def _narrate_branch_data(engine, branch_id, agents, *, language: str = "Chinese") -> dict:
+async def _narrate_branch_data(
+    engine,
+    branch_id,
+    agents,
+    *,
+    language: str = "Chinese",
+    llm_overrides: dict | None = None,
+) -> dict:
     """Collect branch data and narrate it."""
     branch_info = _get_branch(engine, branch_id)
     all_msgs = _get_recent_messages(engine, branch_id, max_rounds=100)
@@ -973,6 +1002,9 @@ async def _narrate_branch_data(engine, branch_id, agents, *, language: str = "Ch
         agents_summary=agents_summary,
         raw_rounds=raw_text[:3000],  # limit to ~3K chars
         language=language,
+        api_key=(llm_overrides or {}).get("api_key"),
+        base_url=(llm_overrides or {}).get("base_url"),
+        model=(llm_overrides or {}).get("model"),
     )
     result["title"] = branch_info.get("title", "未命名")
     return result

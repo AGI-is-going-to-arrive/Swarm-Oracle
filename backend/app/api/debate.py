@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket
@@ -33,6 +35,11 @@ from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 router = APIRouter(tags=["debate"])
 debate_ws_manager = WSManager()
 DEBATE_START_DELAY_SECONDS = 5.0
+MAX_IMPORT_REPLAY_DEBATE_BYTES = 1_000_000
+MAX_IMPORT_REPLAY_TURNS = 512
+MAX_IMPORT_REPLAY_PREDICTIONS = 512
+MAX_IMPORT_REPLAY_PHASE_INSIGHTS = 32
+logger = logging.getLogger(__name__)
 
 _PREDICTION_OPTIONS = {
     DebatePredictionKind.WINNER: {"proposition", "opposition"},
@@ -134,6 +141,18 @@ class DebatePredictionRequest(BaseModel):
 class ImportReplayDebateRequest(BaseModel):
     debate: dict[str, Any]
 
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> "ImportReplayDebateRequest":
+        try:
+            encoded = json.dumps(self.debate, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Replay debate payload must be JSON-serializable") from exc
+        if len(encoded.encode("utf-8")) > MAX_IMPORT_REPLAY_DEBATE_BYTES:
+            raise ValueError(
+                f"Replay debate payload too large (max {MAX_IMPORT_REPLAY_DEBATE_BYTES} bytes)"
+            )
+        return self
+
 
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
@@ -174,6 +193,16 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
         raise HTTPException(422, "Replay debate is missing question or motion")
 
     participants = payload.get("participants") if isinstance(payload.get("participants"), list) else []
+    turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+    predictions = payload.get("predictions") if isinstance(payload.get("predictions"), list) else []
+    phase_insights = payload.get("phase_insights") if isinstance(payload.get("phase_insights"), list) else None
+
+    if len(turns) > MAX_IMPORT_REPLAY_TURNS:
+        raise HTTPException(413, "Replay debate has too many turns")
+    if len(predictions) > MAX_IMPORT_REPLAY_PREDICTIONS:
+        raise HTTPException(413, "Replay debate has too many predictions")
+    if phase_insights is not None and len(phase_insights) > MAX_IMPORT_REPLAY_PHASE_INSIGHTS:
+        raise HTTPException(413, "Replay debate has too many phase insights")
 
     def _participant(side: str) -> dict[str, Any]:
         for item in participants:
@@ -188,7 +217,6 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     score = result.get("score") if isinstance(result.get("score"), dict) else payload.get("score") if isinstance(payload.get("score"), dict) else {}
     counterplay = payload.get("counterplay") if isinstance(payload.get("counterplay"), dict) else None
     rationale = result.get("judge_rationale") if isinstance(result.get("judge_rationale"), dict) else {}
-    phase_insights = payload.get("phase_insights") if isinstance(payload.get("phase_insights"), list) else None
 
     engine = get_engine()
     with Session(engine) as session:
@@ -234,7 +262,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
         session.flush()
         debate_id = debate.id
 
-        for raw_turn in payload.get("turns") or []:
+        for raw_turn in turns:
             if not isinstance(raw_turn, dict):
                 continue
             try:
@@ -254,7 +282,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
                 )
             )
 
-        for raw_prediction in payload.get("predictions") or []:
+        for raw_prediction in predictions:
             if not isinstance(raw_prediction, dict):
                 continue
             try:
@@ -396,23 +424,31 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
             "created_at": prediction.created_at.isoformat(),
         }
         if prediction.is_counterplay:
-            await debate_ws_manager.broadcast(
-                debate_id,
-                {
-                    "type": "debate_counterplay",
-                    "data": {
-                        "debate_id": prediction.debate_id,
-                        "kind": prediction.kind.value,
-                        "target_value": prediction.target_value,
-                        "confidence": prediction.confidence,
-                        "phase": counterplay.phase.value if counterplay else None,
-                        "variant": counterplay.variant if counterplay else None,
-                        "outcome": counterplay.outcome if counterplay else None,
-                        "user_name": prediction.user_name,
-                        "created_at": prediction.created_at.isoformat(),
+            try:
+                await debate_ws_manager.broadcast(
+                    debate_id,
+                    {
+                        "type": "debate_counterplay",
+                        "data": {
+                            "debate_id": prediction.debate_id,
+                            "kind": prediction.kind.value,
+                            "target_value": prediction.target_value,
+                            "confidence": prediction.confidence,
+                            "phase": counterplay.phase.value if counterplay else None,
+                            "variant": counterplay.variant if counterplay else None,
+                            "outcome": counterplay.outcome if counterplay else None,
+                            "user_name": prediction.user_name,
+                            "created_at": prediction.created_at.isoformat(),
+                        },
                     },
-                },
-            )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Debate counterplay broadcast failed after persisting prediction: debate=%s prediction=%s error=%s",
+                    debate_id,
+                    prediction.id,
+                    exc,
+                )
         return payload
 
 

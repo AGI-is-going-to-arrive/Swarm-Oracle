@@ -180,6 +180,32 @@ def test_predict_rejects_when_debate_is_in_error_state(client: TestClient):
     assert "not accepting predictions" in resp.json()["detail"]
 
 
+def test_predict_counterplay_still_succeeds_when_broadcast_fails(monkeypatch):
+    client = TestClient(app, raise_server_exceptions=False)
+    debate = create_debate_record("Should every emergency tribunal expose its failed ruling chain?")
+
+    monkeypatch.setattr(
+        debate_api.debate_ws_manager,
+        "broadcast",
+        AsyncMock(side_effect=RuntimeError("broadcast failed")),
+    )
+
+    resp = client.post(
+        f"/api/debate/{debate.id}/predict",
+        json={
+            "kind": "winner",
+            "target_value": "proposition",
+            "confidence": 0.8,
+            "is_counterplay": True,
+            "counterplay_phase": "crossfire",
+            "counterplay_variant": "reversal",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["is_counterplay"] is True
+
+
 def test_get_result_distinguishes_error_terminal_state(client: TestClient):
     debate = create_debate_record("Should every emergency tribunal expose its failed ruling chain?")
 
@@ -355,3 +381,60 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
     result_payload = result.json()
     assert result_payload["phase_insights"][0]["commentary"] == "Imported opening commentary"
     assert result_payload["phase_insights"][-1]["judge_focus"] == "Imported verdict focus"
+
+
+def test_import_replay_debate_rejects_oversized_payload(client: TestClient):
+    oversized_content = "x" * (debate_api.MAX_IMPORT_REPLAY_DEBATE_BYTES + 1)
+
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "id": "turn-1",
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": oversized_content,
+                    "score_delta": {"proposition": 1, "opposition": 0},
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "payload too large" in resp.text
+
+
+def test_import_replay_debate_rejects_excessive_turn_count(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": index + 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                }
+                for index in range(debate_api.MAX_IMPORT_REPLAY_TURNS + 1)
+            ],
+        },
+    })
+
+    assert resp.status_code == 413
+    assert "too many turns" in resp.text

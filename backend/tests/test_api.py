@@ -1170,6 +1170,15 @@ class TestSocialCopy:
         assert resp.status_code == 200
         assert resp.json()["copy"] == "English social copy"
 
+    def test_social_copy_get_openapi_does_not_advertise_provider_query_params(self, client):
+        app.openapi_schema = None
+        params = app.openapi()["paths"]["/api/scenario/{scenario_id}/social/{platform}"]["get"].get("parameters", [])
+        names = {param["name"] for param in params}
+
+        assert "llm_api_key" not in names
+        assert "llm_base_url" not in names
+        assert "llm_model" not in names
+
 
 # ── P4-D: Intervention Templates ─────────────────────────
 

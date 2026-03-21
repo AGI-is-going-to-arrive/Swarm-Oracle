@@ -142,6 +142,9 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
   - `backend/tests/test_llm_client.py + backend/tests/test_campaign_api.py + backend/tests/test_campaign_service.py + backend/tests/test_debate_api.py + backend/tests/test_debate_service.py + backend/tests/test_gameplay_contract_sync.py + backend/tests/test_memory.py + backend/tests/test_models.py + backend/tests/test_narrator.py + backend/tests/test_predictions.py + backend/tests/test_ws.py + backend/tests/test_api.py`: `269 passed`
+  - `backend/tests/test_predictions.py + backend/tests/test_gameplay_contract_sync.py + backend/tests/test_memory.py + backend/tests/test_narrator.py`: `86 passed in 1.85s`
+  - `backend/tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`: `2 passed in 0.31s`
+  - `backend/tests/test_debate_api.py + backend/tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`: `2 passed in 0.41s`
   - `backend/tests/test_simulator.py -k reuses_latest_rolling_briefing_before_current_window`: `1 passed`
   - `src/lib/scenarioAuthority.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/hooks/useScreenCapture.test.ts`：`37 passed`
   - `backend/tests/test_parser.py -k fallback_rounds_use_explicit_default_rounds`: `1 passed`

@@ -337,6 +337,23 @@ class TestCompressRounds:
         assert "[A]: 旧原话" in prompt
         assert "[B]: 当前窗口原始发言" in prompt
 
+    @pytest.mark.asyncio
+    async def test_provider_overrides_are_forwarded(self):
+        """BYOK overrides should propagate to the compression LLM call."""
+        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = {"situation": "局势"}
+            await compress_rounds(
+                "[A]: 当前局势更新",
+                api_key="sk-test",
+                base_url="https://example.com/v1/chat/completions",
+                model="gpt-test",
+            )
+
+        _, kwargs = mock_llm.call_args
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["base_url"] == "https://example.com/v1/chat/completions"
+        assert kwargs["model"] == "gpt-test"
+
 
 # ── Phase 2: Tier-based Context Tests ─────────────────────────
 

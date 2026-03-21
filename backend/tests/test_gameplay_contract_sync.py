@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from app.services.gameplay_contract import load_gameplay_contract
 from app.visualization.card_events import CARD_TYPES
 
@@ -45,3 +47,13 @@ def test_gameplay_contract_reload_tracks_file_mtime(tmp_path, monkeypatch):
 
     second = load_gameplay_contract()
     assert second["cards"][0]["id"] == "beta"
+
+
+def test_gameplay_contract_missing_file_raises_clear_error(tmp_path, monkeypatch):
+    missing_path = tmp_path / "missing.json"
+
+    monkeypatch.setattr("app.services.gameplay_contract.CONTRACT_PATH", missing_path)
+    monkeypatch.setattr("app.services.gameplay_contract._CONTRACT_CACHE", None)
+
+    with pytest.raises(RuntimeError, match="Gameplay contract file is missing"):
+        load_gameplay_contract()

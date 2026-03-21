@@ -13,7 +13,13 @@ _CONTRACT_CACHE: tuple[int, dict[str, Any]] | None = None
 def load_gameplay_contract() -> dict[str, Any]:
     global _CONTRACT_CACHE
 
-    mtime_ns = CONTRACT_PATH.stat().st_mtime_ns
+    try:
+        mtime_ns = CONTRACT_PATH.stat().st_mtime_ns
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Gameplay contract file is missing: {CONTRACT_PATH}. "
+            "Restore shared/gameplay_contract.v1.json before starting the backend."
+        ) from exc
     if _CONTRACT_CACHE is not None and _CONTRACT_CACHE[0] == mtime_ns:
         return _CONTRACT_CACHE[1]
 

@@ -386,6 +386,60 @@ class TestScoringService(unittest.TestCase):
             self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
             self.assertEqual(kwargs["model"], "gpt-test")
 
+    def test_score_prediction_rolls_back_if_leaderboard_update_fails(self):
+        """Prediction score and leaderboard should commit atomically."""
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services.scoring import score_prediction
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            with Session(engine) as session:
+                scenario = Scenario(
+                    question="测试问题",
+                    status=ScenarioStatus.DONE,
+                    parsed_context={"_language": "Chinese"},
+                )
+                session.add(scenario)
+                session.commit()
+                session.refresh(scenario)
+
+                branch = Branch(
+                    scenario_id=scenario.id,
+                    title="主线",
+                    probability=1.0,
+                    story="故事结果",
+                    insight="关键洞察",
+                )
+                session.add(branch)
+
+                pred = Prediction(
+                    scenario_id=scenario.id,
+                    prediction_text="预测文本",
+                    user_id="director-1",
+                )
+                session.add(pred)
+                session.commit()
+                pred_id = pred.id
+
+            with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                mock_llm.return_value = {"score": 88, "reason": "命中主线"}
+                with patch(
+                    "app.services.scoring._update_leaderboard",
+                    side_effect=RuntimeError("leaderboard boom"),
+                ):
+                    result = asyncio.run(score_prediction(pred_id))
+
+            self.assertIsNone(result)
+
+            with Session(engine) as session:
+                persisted = session.get(Prediction, pred_id)
+                self.assertIsNotNone(persisted)
+                self.assertIsNone(persisted.score)
+                self.assertIsNone(persisted.scored_at)
+
 
 if __name__ == "__main__":
     unittest.main()

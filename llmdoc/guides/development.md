@@ -82,6 +82,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `tests/test_simulator.py -k reuses_latest_rolling_briefing_before_current_window`：`1 passed`
 - 本轮这类“WS heartbeat keepalive / Debate LIVE-only prediction / intervention queue async-safe pop”改动，当前还额外实跑通过：
   - `tests/test_debate_api.py + tests/test_debate_service.py + tests/test_ws.py + tests/test_simulator.py + tests/test_intervention.py`：`104 passed in 2.69s`
+- 本轮这类“backend review fixes / scoring atomicity / gameplay contract clear error / memory+narrator BYOK pass-through / debate-social API guard”改动，当前还额外实跑通过：
+  - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`：`86 passed in 1.85s`
+  - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`：`2 passed in 0.31s`
+  - `tests/test_debate_api.py + tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`：`2 passed in 0.41s`
 
 ### Frontend
 

@@ -28,6 +28,7 @@ from app.services.simulator import (
     _get_branch,
     _get_messages_in_range,
     _get_recent_messages,
+    _narrate_branch_data,
     _save_message,
     _save_narration,
     _save_round_summary,
@@ -588,7 +589,15 @@ class TestCompressRoundMemory:
 
         captured = {}
 
-        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None):
+        async def _fake_compress(
+            messages_text,
+            language="Chinese",
+            *,
+            previous_briefing=None,
+            api_key=None,
+            base_url=None,
+            model=None,
+        ):
             captured["messages_text"] = messages_text
             captured["previous_briefing"] = previous_briefing
             return {
@@ -606,6 +615,89 @@ class TestCompressRoundMemory:
         assert "最新发言" in captured["messages_text"]
         assert captured["previous_briefing"]["situation"] == "旧局势"
         assert captured["previous_briefing"]["active_debates"] == ["旧焦点"]
+
+    @pytest.mark.asyncio
+    async def test_passes_llm_overrides_into_compression(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "最新发言", "neutral", None)
+
+        captured = {}
+
+        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None, api_key=None, base_url=None, model=None):
+            captured["api_key"] = api_key
+            captured["base_url"] = base_url
+            captured["model"] = model
+            return {
+                "situation": "新局势",
+                "active_debates": [],
+                "key_quotes": [],
+                "tension_points": [],
+                "consensus": "",
+            }
+
+        monkeypatch.setattr("app.services.simulator.compress_rounds", _fake_compress)
+
+        await _compress_round_memory(
+            engine,
+            bid,
+            1,
+            language="Chinese",
+            llm_overrides={
+                "api_key": "sk-test",
+                "base_url": "https://example.com/v1/chat/completions",
+                "model": "gpt-test",
+            },
+        )
+
+        assert captured == {
+            "api_key": "sk-test",
+            "base_url": "https://example.com/v1/chat/completions",
+            "model": "gpt-test",
+        }
+
+
+class TestNarrateBranchData:
+    @pytest.mark.asyncio
+    async def test_passes_llm_overrides_into_narration(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=0.7)
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "最新发言", "neutral", None)
+
+        captured = {}
+
+        async def _fake_narrate_branch(*, branch_title, probability, agents_summary, raw_rounds, language, api_key=None, base_url=None, model=None):
+            captured["api_key"] = api_key
+            captured["base_url"] = base_url
+            captured["model"] = model
+            return {"story": "story", "insight": "insight", "key_moments": []}
+
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+
+        result = await _narrate_branch_data(
+            engine,
+            bid,
+            [{"name": "Agent-A", "role": "tester"}],
+            language="Chinese",
+            llm_overrides={
+                "api_key": "sk-test",
+                "base_url": "https://example.com/v1/chat/completions",
+                "model": "gpt-test",
+            },
+        )
+
+        assert result["title"] == "主线"
+        assert captured == {
+            "api_key": "sk-test",
+            "base_url": "https://example.com/v1/chat/completions",
+            "model": "gpt-test",
+        }
 
 
 # ── Corner Cases ─────────────────────────────────────────────

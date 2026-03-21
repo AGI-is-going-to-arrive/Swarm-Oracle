@@ -74,6 +74,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - Historical full baseline: `815 passed`.
 - Current signoff backend set: `90 passed`.
 - Current session backend regression pack: `269 passed`.
+- Current session backend review-fix pack:
+  - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`: `86 passed in 1.85s`
+  - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`: `2 passed in 0.31s`
+  - `tests/test_debate_api.py + tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`: `2 passed in 0.41s`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -81,9 +85,15 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline.
 - If parse-stage LLM JSON is still unrecoverably broken, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately; fallback rounds also honor the caller-provided default round count instead of hardcoding `10`.
 - `memory.py` now rolls the previous structured briefing forward into the next compression window, while keeping the current raw window verbatim.
+- `memory.py` and `narrator.py` now honor in-memory BYOK overrides from the simulation pipeline; credentials still stay in memory and are not persisted into scenario records.
+- `narrator.py` now wraps branch title / participant summary / raw rounds in the same untrusted-data guardrail style already used by other prompt builders.
 - `social.py` now selects wrapper / prompt language by scenario language, so English scenarios no longer receive Chinese wrapper text.
+- `social.py` still exposes both `GET` and `POST`, but provider overrides now must be sent in the `POST` body; `GET` query overrides are rejected to avoid leaking them into URLs.
 - `llm_client.py` now shares pending/quota accounting across processes through SQLite when they point at the same `DATABASE_URL`, while keeping the in-process semaphore and circuit breaker.
 - `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
+- `shared/gameplay_contract.v1.json` missing at boot now raises a clear runtime error instead of failing later with a raw file-stat exception.
+- `scoring.py` now persists prediction scores and leaderboard materialization in one transaction, so a leaderboard failure does not leave scored predictions half-written.
+- `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.
 
 ## Environment Variables
 

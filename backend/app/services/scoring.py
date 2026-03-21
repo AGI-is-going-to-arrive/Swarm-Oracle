@@ -174,19 +174,24 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         logger.error("LLM scoring failed for prediction %s: %s", prediction_id, exc)
         return None
 
-    # H-2 fix: Save score atomically — re-check score is still None to prevent TOCTOU race
+    # Persist score + leaderboard in one transaction so they cannot drift apart.
     with Session(engine) as session:
         pred = session.get(Prediction, prediction_id)
         if pred and pred.score is None:
-            pred.score = score
-            pred.score_reason = reason
-            pred.scored_at = datetime.now(timezone.utc)
-            session.add(pred)
-            session.commit()
-
-            # Update leaderboard
-            _update_leaderboard(session, pred.user_id, pred.user_name, score)
-            session.commit()
+            try:
+                pred.score = score
+                pred.score_reason = reason
+                pred.scored_at = datetime.now(timezone.utc)
+                session.add(pred)
+                _update_leaderboard(session, pred.user_id, pred.user_name, score)
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception(
+                    "Failed to persist prediction %s and leaderboard atomically",
+                    prediction_id,
+                )
+                return None
         elif pred and pred.score is not None:
             logger.info("Prediction %s already scored (race avoided)", prediction_id)
             return {"score": pred.score, "reason": pred.score_reason or ""}
