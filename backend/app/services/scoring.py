@@ -10,28 +10,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from app.models.database import get_engine
-
-
-def _truncate_at_boundary(text: str, max_chars: int) -> str:
-    """Truncate text at a sentence boundary, falling back to word boundary."""
-    if len(text) <= max_chars:
-        return text
-    truncated = text[:max_chars]
-    # Try to break at last sentence end
-    for sep in ('. ', '。', '! ', '? '):
-        last = truncated.rfind(sep)
-        if last > max_chars * 0.5:  # Don't cut off too much
-            return truncated[:last + len(sep)] + '…'
-    # Fallback: break at last space
-    last_space = truncated.rfind(' ')
-    if last_space > max_chars * 0.5:
-        return truncated[:last_space] + '…'
-    return truncated + '…'
-
-
 from app.models.predictions import Leaderboard, Prediction
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
@@ -90,6 +72,115 @@ def _normalize_scoring_result(raw: object) -> tuple[int, str]:
     return max(0, min(100, score)), reason
 
 
+def _truncate_at_boundary(text: str, max_chars: int) -> str:
+    """Truncate text at a sentence boundary, falling back to word boundary."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    # Try to break at last sentence end
+    for sep in ('. ', '。', '! ', '? '):
+        last = truncated.rfind(sep)
+        if last > max_chars * 0.5:  # Don't cut off too much
+            return truncated[:last + len(sep)] + '…'
+    # Fallback: break at last space
+    last_space = truncated.rfind(' ')
+    if last_space > max_chars * 0.5:
+        return truncated[:last_space] + '…'
+    return truncated + '…'
+
+
+def _claim_prediction_score(
+    session: Session,
+    prediction_id: str,
+    *,
+    score: int,
+    reason: str,
+    scored_at: datetime,
+) -> tuple[Prediction | None, bool]:
+    """Atomically claim an unscored prediction row for score persistence."""
+    result = session.execute(
+        update(Prediction)
+        .where(
+            Prediction.id == prediction_id,
+            Prediction.score.is_(None),
+        )
+        .values(
+            score=score,
+            score_reason=reason,
+            scored_at=scored_at,
+        )
+    )
+    if result.rowcount:
+        claimed = session.get(Prediction, prediction_id)
+        return claimed, True
+
+    existing = session.get(Prediction, prediction_id)
+    if existing is None or existing.score is None:
+        return None, False
+    return existing, False
+
+
+def _calculate_win_streak(session: Session, user_id: str) -> int:
+    """Count consecutive wins from the newest scored predictions backward."""
+    recent_scores = session.exec(
+        select(Prediction.score)
+        .where(
+            Prediction.user_id == user_id,
+            Prediction.score != None,  # noqa: E711
+        )
+        .order_by(
+            Prediction.created_at.desc(),
+            Prediction.scored_at.desc(),
+            Prediction.id.desc(),
+        )
+    ).all()
+
+    streak = 0
+    for score in recent_scores:
+        if (score or 0.0) < 60:
+            break
+        streak += 1
+    return streak
+
+
+def recompute_leaderboard_entry(
+    session: Session,
+    user_id: str,
+    user_name: str,
+) -> Leaderboard:
+    """Rebuild one leaderboard row from the current scored predictions."""
+    entry = session.exec(
+        select(Leaderboard).where(Leaderboard.user_id == user_id)
+    ).first()
+    if entry is None:
+        entry = Leaderboard(user_id=user_id, user_name=user_name)
+
+    total_predictions, total_score, best_score = session.exec(
+        select(
+            func.count(Prediction.id),
+            func.coalesce(func.sum(Prediction.score), 0.0),
+            func.coalesce(func.max(Prediction.score), 0.0),
+        ).where(
+            Prediction.user_id == user_id,
+            Prediction.score != None,  # noqa: E711
+        )
+    ).one()
+
+    total_predictions = int(total_predictions or 0)
+    total_score = float(total_score or 0.0)
+    best_score = float(best_score or 0.0)
+
+    entry.total_predictions = total_predictions
+    entry.total_score = total_score
+    entry.avg_score = total_score / total_predictions if total_predictions > 0 else 0.0
+    entry.best_score = best_score if total_predictions > 0 else 0.0
+    entry.win_streak = _calculate_win_streak(session, user_id) if total_predictions > 0 else 0
+    entry.user_name = user_name
+    entry.updated_at = datetime.now(timezone.utc)
+    session.add(entry)
+    return entry
+
+
 async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = None) -> dict | None:
     """Score a single prediction against its scenario's outcome.
 
@@ -146,8 +237,16 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
 
     try:
         prompt = SCORING_PROMPT.format(
-            question_block=format_untrusted_text_block("原始问题", scenario.question, max_chars=1200),
-            prediction_block=format_untrusted_text_block("用户预测", pred.prediction_text, max_chars=1200),
+            question_block=format_untrusted_text_block(
+                "原始问题",
+                scenario.question,
+                max_chars=1200,
+            ),
+            prediction_block=format_untrusted_text_block(
+                "用户预测",
+                pred.prediction_text,
+                max_chars=1200,
+            ),
             actual_result_block=format_untrusted_text_block(
                 "实际推演结果",
                 _truncate_at_boundary(actual_result, 2000),
@@ -176,25 +275,32 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
 
     # Persist score + leaderboard in one transaction so they cannot drift apart.
     with Session(engine) as session:
-        pred = session.get(Prediction, prediction_id)
-        if pred and pred.score is None:
-            try:
-                pred.score = score
-                pred.score_reason = reason
-                pred.scored_at = datetime.now(timezone.utc)
-                session.add(pred)
+        scored_at = datetime.now(timezone.utc)
+        try:
+            pred, claimed = _claim_prediction_score(
+                session,
+                prediction_id,
+                score=score,
+                reason=reason,
+                scored_at=scored_at,
+            )
+            if pred is None:
+                session.rollback()
+                return None
+            if claimed:
                 _update_leaderboard(session, pred.user_id, pred.user_name, score)
                 session.commit()
-            except Exception:
+            else:
                 session.rollback()
-                logger.exception(
-                    "Failed to persist prediction %s and leaderboard atomically",
-                    prediction_id,
-                )
-                return None
-        elif pred and pred.score is not None:
-            logger.info("Prediction %s already scored (race avoided)", prediction_id)
-            return {"score": pred.score, "reason": pred.score_reason or ""}
+                logger.info("Prediction %s already scored (race avoided)", prediction_id)
+                return {"score": pred.score, "reason": pred.score_reason or ""}
+        except Exception:
+            session.rollback()
+            logger.exception(
+                "Failed to persist prediction %s and leaderboard atomically",
+                prediction_id,
+            )
+            return None
 
     logger.info("Scored prediction %s: %d (%s)", prediction_id, score, reason)
     return {"score": score, "reason": reason}
@@ -244,53 +350,19 @@ async def score_all_for_scenario(
 
 
 def _update_leaderboard(session: Session, user_id: str, user_name: str, new_score: float) -> None:
-    """Recompute a user's materialized leaderboard entry from scored predictions."""
-    scored_predictions = list(session.exec(
-        select(Prediction)
-        .where(
-            Prediction.user_id == user_id,
-            Prediction.score != None,  # noqa: E711
-        )
-        .order_by(
-            Prediction.created_at.desc(),
-            Prediction.scored_at.desc(),
-            Prediction.id.desc(),
-        )
-    ).all())
-
+    """Incrementally update leaderboard stats and only recompute the streak."""
     entry = session.exec(
         select(Leaderboard).where(Leaderboard.user_id == user_id)
     ).first()
 
-    if not scored_predictions:
-        if entry is not None:
-            entry.total_predictions = 0
-            entry.total_score = 0.0
-            entry.avg_score = 0.0
-            entry.best_score = 0.0
-            entry.win_streak = 0
-            entry.user_name = user_name
-            entry.updated_at = datetime.now(timezone.utc)
-            session.add(entry)
-        return
-
     if entry is None:
-        entry = Leaderboard(user_id=user_id, user_name=user_name)
-        session.add(entry)
-
-    total_score = sum(float(pred.score or 0.0) for pred in scored_predictions)
-    win_streak = 0
-    for pred in scored_predictions:
-        if (pred.score or 0.0) < 60:
-            break
-        win_streak += 1
-
-    entry.total_predictions = len(scored_predictions)
-    entry.total_score = total_score
-    entry.avg_score = total_score / entry.total_predictions
-    entry.best_score = max(float(pred.score or 0.0) for pred in scored_predictions)
-    entry.user_name = scored_predictions[0].user_name or user_name
-
+        recompute_leaderboard_entry(session, user_id, user_name)
+        return
+    entry.total_predictions += 1
+    entry.total_score += float(new_score)
+    entry.avg_score = entry.total_score / entry.total_predictions
+    entry.best_score = max(entry.best_score, float(new_score))
+    entry.user_name = user_name
     entry.updated_at = datetime.now(timezone.utc)
-    entry.win_streak = win_streak
+    entry.win_streak = _calculate_win_streak(session, user_id)
     session.add(entry)

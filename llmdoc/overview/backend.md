@@ -41,6 +41,7 @@ models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
+services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
 config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录)
 alembic/ ──► Alembic 数据库迁移框架
 ```
@@ -59,6 +60,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `_get_messages_in_range(engine, branch_id, start, end)` — LEFT JOIN 范围查询（P0-2 N+1修复）
 - **模式**: `blackboard`（默认，每分支一个 Blackboard，fork深拷贝）| `raw`（跳过 Blackboard，Agent 直接读 DB）
 - **分层模式** (P3-A): `_gather_hierarchical_messages()` — Leader 代表推演 + Worker 响应合成，千人规模时 LLM 调用量降低 90%+；Worker 合成消息也广播 `viz:bubble_show` 可视化事件
+- **Leader 缺失回退**: 分层模式若 group 配置的 leader 不在当前 agent 集合中，当前会回退到该组第一个可用成员作为 effective leader，并记录 warning；不会再让整组 Worker 退化成“保持沉默”
 - **Agent JSON 容错**: `_gather_agent_messages()` 现在会通过 `llm_call_json(..., fallback_mode="agent_message")` 恢复轻微损坏的 agent JSON；如果模型至少吐出了 `content/emotion/diverge` 这样的键或纯文本，不会直接让该 agent 丢一整轮发言
 - **结局类型 3 级映射**: `ending_type` 按概率分 3 档: `< 0.3` → "negative", `0.3-0.5` → "neutral", `> 0.5` → "positive"
 - **可视化 stance 归一化**: `_coerce_stance_value()` 将数值 stance 与中英文立场词（如 `支持/反对/neutral/support`）统一映射到 `[-1, 1]`，避免 Theater 定位阶段因文本 stance 触发类型错误
@@ -111,8 +113,26 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键API**:
   - `VectorStore.store(scenario_id, agent_name, content, ...)` — 存入 ChromaDB
   - `VectorStore.retrieve(scenario_id, query_text, top_k)` → `list[dict]` — 余弦相似度检索
+  - `VectorStore.delete_collection(scenario_id)` — 按 canonical collection name 删除单个 scenario 的 collection
   - `VectorStore.health_check()` — 连通性检查
-- **设计**: 按 scenario_id 分 collection，全局单例，ChromaDB 不可用时静默降级
+- **设计**:
+  - collection name 当前统一走 canonical naming：`scenario_{scenario_id.replace('-', '_')}`；创建、读取和删除共用同一套命名规则
+  - `_collections` 当前是有上限的 LRU 缓存（默认 128），避免长期运行时无界持有 collection 引用
+  - 全局单例，ChromaDB 不可用时静默降级
+
+### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
+- **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease
+- **关键API**:
+  - `acquire_runtime_lock(lock_key, lease_seconds)` → `RuntimeLockLease | None`
+  - `release_runtime_lock(lease)` → `bool`
+  - `simulation_lock_key(scenario_id)` / `debate_lock_key(debate_id)` — 构造运行锁 key
+- **设计**:
+  - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
+  - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
+  - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内 lease 对象，不引入额外迁移
+- **集成点**:
+  - `api/helpers.py` 的 `run_sim_background()` 当前会在真正启动 simulation 前拿 `simulation:{scenario_id}` 锁
+  - `services/debate.py` 的 `run_debate_background()` 当前会在广播 `LIVE` 前拿 `debate:{debate_id}` 锁
 
 ### `gameplay_contract.py` (≈15行) — shared gameplay contract 载入器 (**NEW**)
 - **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约
@@ -142,6 +162,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`
   - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，还会通过 SQLite reservation 表共享全局/用户级 pending 计数
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
+  - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
 - **输入防护**:
   - `sanitize_untrusted_text()` / `format_untrusted_text_block()` 会把用户题面、干预文本、评分输入等包成 `UNTRUSTED DATA`
   - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
@@ -248,17 +269,22 @@ alembic/ ──► Alembic 数据库迁移框架
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
   - `POST /api/debate/{id}/predict` 当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；若 WebSocket 广播失败，只会记 warning，不会把已落库请求翻成假 `500`
+  - `run_debate_background()` 当前会在广播 `LIVE` 前先拿 SQLite shared runtime lock；同一 `debate_id` 若已被另一 worker 持锁，会直接返回，不会重复推进回合
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
 - **职责**: LLM 对比用户预测与模拟实际结果，给出 0-100 准确度评分
 - **关键函数**:
   - `score_prediction(prediction_id)` — 评估单条预测，自动读取场景 `_language` 匹配输出语言
   - `score_all_for_scenario(scenario_id)` — 批量评分场景所有未评预测
-  - `_update_leaderboard(session, user_id, user_name, score)` — 从该用户所有已评分 `Prediction` 行重算排行榜物化视图
+  - `_update_leaderboard(session, user_id, user_name, score)` — 增量更新排行榜计数/总分/最高分，并按稳定顺序重算 streak
+  - `recompute_leaderboard_entry(session, user_id, user_name)` — 在删 scenario / 删 prediction 后按剩余已评分预测重建单个排行榜行
 - **排行榜物化**:
-  - `total_predictions / total_score / avg_score / best_score / win_streak` 当前统一由已评分 `Prediction` 重建
-  - `win_streak` 当前按稳定顺序（`created_at desc / scored_at desc / id desc`）重算，不再依赖并发评分的落库顺序
-- **原子持久化**: 单条 prediction 评分当前会把 `Prediction.score*` 写入和 leaderboard 重建收口到同一事务；若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
+  - `total_predictions / total_score / avg_score / best_score` 当前走增量更新；`win_streak` 仍按稳定顺序（`created_at desc / scored_at desc / id desc`）重算
+  - `entry.user_name` 当前始终使用本次请求传入的显示名，不再回跳到历史 prediction 上的旧名字
+- **原子持久化**:
+  - `score_prediction()` 当前会先用单条 `UPDATE ... WHERE score IS NULL` 原子 claim 未评分 prediction，再落 leaderboard 事务
+  - 若并发 scorer 已经先写入，该请求会回读已有分数返回，不再重复覆盖
+  - 若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
 
 ## API层 (`app/api/`) — P0-1 拆分
 
@@ -316,7 +342,7 @@ alembic/ ──► Alembic 数据库迁移框架
 > 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。`finalize` 若传空 `user_name`，会按场景语言落匿名导演名。
 
 **安全防护**:
-- 防重入锁 (`_running_simulations`) 阻止同一场景重复启动
+- simulation / debate 当前都同时有进程内 fast path 和 SQLite shared runtime lock；当多个 worker 共用同一个 SQLite 文件时，同一 `scenario_id / debate_id` 不会被重复启动
 - 总模拟超时 `MAX_ROUNDS × 180s`
 - 删除校验拒绝非终态场景（PARSING / NARRATING）
 
@@ -440,3 +466,6 @@ alembic/ ──► Alembic 数据库迁移框架
   - `test_parser.py`
 
 > **注**: `benchmark_compression.py` 为离线压缩质量标尺，不计入主回归套件。
+> `CreateScenarioRequest.question` 当前会在 schema 层直接拒绝空字符串和纯空白输入：
+> - 空字符串 / 纯空白：`422`
+> - 超过 `1000` 字符：`422`

@@ -49,6 +49,11 @@
 > 也就是说：
 > - 同一台机器上多个 backend 进程共用同一个 SQLite 文件时，pending 配额会共享
 > - provider 熔断与单进程内 `Semaphore` 仍是进程本地行为，不会跨进程同步
+>
+> 除了 LLM runtime guard，这一轮后台任务也补上了 SQLite shared lease：
+> - 主模式 simulation 与 Debate background task 当前都会通过 `runtime_lock` 表做跨 worker 防重入
+> - 只有当 `DATABASE_URL` 指向同一个 SQLite 文件时，这层 lease 才能跨进程共享
+> - 若 `DATABASE_URL = sqlite:///:memory:`、`file:` URI，或根本不是 SQLite，这层锁会退回进程内 fast path，不做跨 worker 协调
 
 ## 数据库
 
@@ -62,6 +67,11 @@
 > - `CHROMA_PERSIST_DIR=./relative-chroma` → `<backend-root>/relative-chroma`
 >
 > 这样本地直接在 repo root、`backend/` 目录，或通过 `uvicorn --app-dir ...` 启动时，都不会再因为 cwd 不同命中不同 SQLite / Chroma 数据目录。`test_config.py` 已覆盖这条行为。
+
+> `VectorStore` 当前的 collection cache 也是进程内实现：
+> - 走 bounded LRU，默认上限 `128`
+> - 这是内部实现细节，不对应环境变量
+> - cache 超限时只淘汰内存里的 collection 引用，不会删除 Chroma 持久化数据
 
 > `shared/gameplay_contract.v1.json` 当前走 mtime-aware 缓存：文件未变时复用内存结果，文件更新时间变化后会自动重新读取，不再要求后端重启才能看到新的 contract 内容。
 

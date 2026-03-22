@@ -61,6 +61,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Result Loading Gate | 用户过早打开 `/result/:id` 时，结果页会先 loading，等待 narration 真正完成后再展示，不再把半成品 branch 当最终结果 |
 | LLM JSON Hardening | narrator 与 agent 发言链路都补了 JSON 容错：叙事阶段会归一化 `list` payload，agent 阶段会恢复轻微坏 JSON 或纯文本，尽量不丢整条发言 |
 | LLM Runtime Guard | 当前后端已增加进程内全局 LLM 并发闸门、pending 上限、用户级 pending 配额和 provider 熔断；当多个进程共享同一个 SQLite `DATABASE_URL` 时，pending / quota 计数还会通过 SQLite 轻量占位表共享；用户题面、干预文本、评分输入与分享上下文也会按 `UNTRUSTED DATA` 口径注入，减少坏 JSON 与提示词注入带来的链路抖动 |
+| Background Runtime Lock | 主模式 simulation 与 Debate background task 当前都会在同一个 SQLite 文件上申请共享 lease；当多个 backend worker 共享同一个 `DATABASE_URL` 时，同一场景 / 同一辩局不会再被重复启动，worker 异常退出后也会靠 lease 过期回收 |
 | Scenario Bootstrap State | 新建 Theater 场景时，`POST /api/scenario` 立即返回 `simulating`、`scene_theme` 与 provisional root branch，避免首屏完全空壳 |
 | Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame；当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有同名 `.meta.json` sidecar，其中较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则使用诚实回填的 provenance 记录；这里的 backfill 代表 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
 | Theme Registry & Asset Manifest | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 / 辩论 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；Track D 的 `DEBATE_UI_ASSETS` 也走同一套 registry。本轮又把 7 张原先只在库存里的 sprite（`alchemist / assassin / bard / knight / monk / thief / witch`）接入运行时角色池，并同步收口了前后端 persona/role 映射；当前 `BootScene` 只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载；后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载，旧 `bet_panel / leaderboard / title_screen / minimap_frame` 也不再是 Theater 首次进入硬依赖 |
@@ -123,6 +124,9 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
   - `tests/test_debate_api.py + tests/test_debate_service.py + tests/test_ws.py + tests/test_simulator.py + tests/test_intervention.py`：`104 passed in 2.69s`
   - `src/hooks/useDebateWS.test.tsx + src/stores/simulationStore.test.ts`：`22 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本轮这类“SQLite runtime lock / leaderboard 增量更新 / scenario 删除后 leaderboard 重建 / whitespace question 校验 / vector cache LRU / 分层 leader 缺失回退”改动，当前还额外实跑通过：
+  - `tests/test_predictions.py + tests/test_vector_store.py + tests/test_runtime_lock.py + tests/test_debate_service.py + tests/test_debate_api.py + tests/test_api.py + tests/test_simulator.py`：`206 passed in 61.40s`
+  - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/debate.py app/services/runtime_lock.py app/services/scoring.py app/services/vector_store.py tests/test_api.py tests/test_debate_service.py tests/test_predictions.py tests/test_runtime_lock.py tests/test_vector_store.py`：通过
 
 ## 目录结构
 
@@ -153,6 +157,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 │   │       ├── llm_client.py    # LLM 调用封装
 │   │       ├── parser.py        # 问题解析
 │   │       ├── narrator.py      # 叙事生成
+│   │       ├── runtime_lock.py  # SQLite 跨 worker 运行锁
 │   │       ├── vector_store.py  # ChromaDB 向量记忆 L2
 │   │       ├── debate.py        # Debate Arena 运行与结算 (Track D)
 │   │       ├── debate_prompts.py # Debate 文案/场景映射 (Track D)

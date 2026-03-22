@@ -121,6 +121,56 @@ async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
         for key in keys_to_remove:
             pending_interventions.pop(key, None)
 
+
+def _resolve_hierarchical_agent_sets(
+    agents: list[dict[str, Any]],
+    group_leaders: dict[str, str],
+    agent_to_group: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    """Resolve effective leader/worker sets from hierarchical group config.
+
+    If a configured leader is missing from the loaded agent set, promote the first
+    available member in that group so hierarchical mode can keep producing leader
+    guidance instead of degrading the entire group to silence.
+    """
+    if not group_leaders:
+        return [], list(agents), {}
+
+    agent_names = {str(agent.get("name", "")).strip() for agent in agents}
+    group_members: dict[str, list[dict[str, Any]]] = {}
+    for agent in agents:
+        group_name = agent_to_group.get(str(agent.get("name", "")).strip())
+        if group_name:
+            group_members.setdefault(group_name, []).append(agent)
+
+    effective_group_leaders: dict[str, str] = {}
+    for group_name, configured_leader in group_leaders.items():
+        members = group_members.get(group_name, [])
+        if not members:
+            logger.warning(
+                "Hierarchical group %s has no available members; skipping leader resolution",
+                group_name,
+            )
+            continue
+
+        if configured_leader in agent_names:
+            effective_group_leaders[group_name] = configured_leader
+            continue
+
+        fallback_leader = str(members[0].get("name", "")).strip()
+        effective_group_leaders[group_name] = fallback_leader
+        logger.warning(
+            "Hierarchical group %s configured leader %s missing; falling back to %s",
+            group_name,
+            configured_leader or "<empty>",
+            fallback_leader,
+        )
+
+    leader_names = set(effective_group_leaders.values())
+    leader_agents = [agent for agent in agents if agent.get("name") in leader_names]
+    worker_agents = [agent for agent in agents if agent.get("name") not in leader_names]
+    return leader_agents, worker_agents, effective_group_leaders
+
 FORK_DETECT_PROMPT = """你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。
 
 【最近讨论摘要】
@@ -236,12 +286,11 @@ async def run_simulation(
     leader_agents = []
     worker_agents = []
     if hierarchical:
-        leader_names = set(group_leaders.values())
-        for a in agents:
-            if a["name"] in leader_names:
-                leader_agents.append(a)
-            else:
-                worker_agents.append(a)
+        leader_agents, worker_agents, group_leaders = _resolve_hierarchical_agent_sets(
+            agents,
+            group_leaders,
+            agent_to_group,
+        )
         logger.info("Leaders: %d, Workers: %d", len(leader_agents), len(worker_agents))
 
     await push({"type": "status", "data": {"status": "simulating", "hierarchical": hierarchical}})

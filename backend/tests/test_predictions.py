@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.models.predictions import Leaderboard, Prediction
-from app.services.scoring import _update_leaderboard
+from app.services.scoring import _update_leaderboard, recompute_leaderboard_entry
 
 # ── Model Unit Tests ─────────────────────────────────────
 
@@ -238,6 +238,61 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.best_score, 80.0)
             self.assertEqual(entry.win_streak, 1)
 
+    def test_update_uses_current_user_name_instead_of_latest_prediction_name(self):
+        self._create_scored_prediction(user_id="u1", user_name="Old Name", score=80.0, minutes=1)
+        self._create_scored_prediction(
+            user_id="u1",
+            user_name="Older Latest",
+            score=90.0,
+            minutes=2,
+        )
+
+        with Session(self.engine) as session:
+            _update_leaderboard(session, "u1", "Current Name", 90.0)
+            session.commit()
+
+        with Session(self.engine) as session:
+            entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.user_name, "Current Name")
+
+    def test_recompute_leaderboard_after_prediction_removal(self):
+        keep_id = self._create_scored_prediction(
+            user_id="u1",
+            user_name="Alice",
+            score=40.0,
+            minutes=1,
+        )
+        drop_id = self._create_scored_prediction(
+            user_id="u1",
+            user_name="Alice",
+            score=95.0,
+            minutes=2,
+        )
+
+        with Session(self.engine) as session:
+            _update_leaderboard(session, "u1", "Alice", 95.0)
+            session.commit()
+
+        with Session(self.engine) as session:
+            dropped = session.get(Prediction, drop_id)
+            kept = session.get(Prediction, keep_id)
+            assert dropped is not None
+            assert kept is not None
+            session.delete(dropped)
+            session.commit()
+            recompute_leaderboard_entry(session, "u1", "Alice")
+            session.commit()
+
+        with Session(self.engine) as session:
+            entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.total_predictions, 1)
+            self.assertEqual(entry.total_score, 40.0)
+            self.assertEqual(entry.avg_score, 40.0)
+            self.assertEqual(entry.best_score, 40.0)
+            self.assertEqual(entry.win_streak, 0)
+
 
 # ── API Validation Tests ─────────────────────────────
 
@@ -439,6 +494,97 @@ class TestScoringService(unittest.TestCase):
                 self.assertIsNotNone(persisted)
                 self.assertIsNone(persisted.score)
                 self.assertIsNone(persisted.scored_at)
+
+    def test_score_prediction_concurrent_calls_only_persist_once(self):
+        """Concurrent scoring should write once and avoid double leaderboard updates."""
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services import scoring as scoring_module
+        from app.services.scoring import score_prediction
+
+        async def _run() -> None:
+            with patch("app.services.scoring.get_engine") as mock_engine:
+                engine = create_engine("sqlite:///:memory:")
+                SQLModel.metadata.create_all(engine)
+                mock_engine.return_value = engine
+
+                with Session(engine) as session:
+                    scenario = Scenario(
+                        question="测试问题",
+                        status=ScenarioStatus.DONE,
+                        parsed_context={"_language": "Chinese"},
+                    )
+                    session.add(scenario)
+                    session.commit()
+                    session.refresh(scenario)
+
+                    session.add(Branch(
+                        scenario_id=scenario.id,
+                        title="主线",
+                        probability=1.0,
+                        story="故事结果",
+                        insight="关键洞察",
+                    ))
+                    pred = Prediction(
+                        scenario_id=scenario.id,
+                        prediction_text="预测文本",
+                        user_id="director-1",
+                        user_name="Alice",
+                    )
+                    session.add(pred)
+                    session.commit()
+                    pred_id = pred.id
+
+                gate = asyncio.Event()
+                entered = 0
+
+                async def _fake_llm(*_args, **_kwargs):
+                    nonlocal entered
+                    entered += 1
+                    if entered >= 2:
+                        gate.set()
+                    await gate.wait()
+                    return {"score": 88, "reason": "命中主线"}
+
+                leaderboard_updates = 0
+                original_update = scoring_module._update_leaderboard
+
+                def _counting_update(*args, **kwargs):
+                    nonlocal leaderboard_updates
+                    leaderboard_updates += 1
+                    return original_update(*args, **kwargs)
+
+                with patch(
+                    "app.services.scoring.llm_call_json",
+                    new_callable=AsyncMock,
+                ) as mock_llm:
+                    mock_llm.side_effect = _fake_llm
+                    with patch(
+                        "app.services.scoring._update_leaderboard",
+                        side_effect=_counting_update,
+                    ):
+                        first, second = await asyncio.gather(
+                            score_prediction(pred_id),
+                            score_prediction(pred_id),
+                        )
+
+                self.assertEqual(first, {"score": 88, "reason": "命中主线"})
+                self.assertEqual(second, {"score": 88, "reason": "命中主线"})
+                self.assertEqual(leaderboard_updates, 1)
+
+                with Session(engine) as session:
+                    persisted = session.get(Prediction, pred_id)
+                    self.assertIsNotNone(persisted)
+                    self.assertEqual(persisted.score, 88)
+                    self.assertEqual(persisted.score_reason, "命中主线")
+                    entry = session.exec(
+                        select(Leaderboard).where(Leaderboard.user_id == "director-1")
+                    ).first()
+                    self.assertIsNotNone(entry)
+                    self.assertEqual(entry.total_predictions, 1)
+                    self.assertEqual(entry.total_score, 88.0)
+                    self.assertEqual(entry.avg_score, 88.0)
+
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":

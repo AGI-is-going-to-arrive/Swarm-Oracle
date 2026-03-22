@@ -7,6 +7,7 @@ memory retrieval. Gracefully degrades when ChromaDB is unavailable.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -39,11 +40,17 @@ class VectorStore:
     - Graceful degradation: all operations are no-ops when ChromaDB unavailable
     """
 
-    def __init__(self, persist_dir: str = "./chroma_data"):
+    def __init__(
+        self,
+        persist_dir: str = "./chroma_data",
+        *,
+        collection_cache_size: int = 128,
+    ):
         _ensure_chromadb()
         self._client = None
         self._persist_dir = persist_dir
-        self._collections: dict[str, Any] = {}
+        self._collection_cache_size = max(1, collection_cache_size)
+        self._collections: OrderedDict[str, Any] = OrderedDict()
 
         if _CHROMA_AVAILABLE:
             try:
@@ -57,30 +64,40 @@ class VectorStore:
         """Check if ChromaDB is operational."""
         return self._client is not None
 
+    @staticmethod
+    def _collection_name(scenario_id: str) -> str:
+        """Build the canonical Chroma collection name for a scenario."""
+        name = f"scenario_{scenario_id.replace('-', '_')}"
+        return name[:63] if len(name) > 63 else name
+
     def _get_collection(self, scenario_id: str):
         """Get or create a ChromaDB collection for a scenario."""
         if not self.available:
             return None
 
         if scenario_id in self._collections:
+            self._collections.move_to_end(scenario_id)
             return self._collections[scenario_id]
 
         try:
-            # Sanitize collection name (ChromaDB requires alphanumeric + _/-)
-            name = f"scenario_{scenario_id.replace('-', '_')}"
-            # ChromaDB collection names: 3-63 chars, alphanumeric + _/-
-            if len(name) > 63:
-                name = name[:63]
-
+            name = self._collection_name(scenario_id)
             collection = self._client.get_or_create_collection(
                 name=name,
                 metadata={"hnsw:space": "cosine"},
             )
-            self._collections[scenario_id] = collection
+            self._remember_collection(scenario_id, collection)
             return collection
         except Exception as exc:
             logger.warning("Failed to get/create collection for %s: %s", scenario_id, exc)
             return None
+
+    def _remember_collection(self, scenario_id: str, collection: Any) -> None:
+        """Track a collection in a bounded LRU cache."""
+        self._collections[scenario_id] = collection
+        self._collections.move_to_end(scenario_id)
+        while len(self._collections) > self._collection_cache_size:
+            evicted_scenario_id, _ = self._collections.popitem(last=False)
+            logger.debug("Evicted cached Chroma collection for scenario %s", evicted_scenario_id)
 
     def store(
         self,
@@ -165,6 +182,19 @@ class VectorStore:
             logger.warning("Vector store retrieval failed (non-fatal): %s", exc)
             return []
 
+    def delete_collection(self, scenario_id: str) -> None:
+        """Delete a scenario collection using the same canonical name as store/retrieve."""
+        if not self.available:
+            return
+
+        collection_name = self._collection_name(scenario_id)
+        self._collections.pop(scenario_id, None)
+        try:
+            self._client.delete_collection(collection_name)
+            logger.info("Deleted ChromaDB collection %s", collection_name)
+        except Exception as exc:
+            logger.warning("Failed to delete collection for %s: %s", scenario_id, exc)
+
     def health_check(self) -> dict:
         """Check ChromaDB connectivity."""
         if not self.available:
@@ -194,3 +224,8 @@ def reset_vector_store() -> None:
     """Reset singleton (for testing)."""
     global _vector_store
     _vector_store = None
+
+
+def collection_name_for_scenario(scenario_id: str) -> str:
+    """Return the canonical Chroma collection name for a scenario."""
+    return VectorStore._collection_name(scenario_id)

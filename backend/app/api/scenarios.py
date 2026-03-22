@@ -41,7 +41,6 @@ from app.models import (
     Branch,
     BranchStatus,
     InterventionLog,
-    Leaderboard,
     Prediction,
     ReplayArtifact,
     Round,
@@ -50,6 +49,8 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.llm_client import health_check
+from app.services.scoring import recompute_leaderboard_entry
+from app.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -704,31 +705,19 @@ async def delete_scenario(scenario_id: str):
             session.exec(sa_delete(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids)))
         session.exec(sa_delete(AgentGroup).where(AgentGroup.scenario_id == scenario_id))
 
-        # 5. Predictions — collect user_ids for leaderboard adjustment
+        # 5. Predictions — collect affected users so leaderboard rows can be rebuilt
         preds = list(session.exec(select(Prediction).where(Prediction.scenario_id == scenario_id)).all())
-        scored_preds_by_user: dict[str, list[float]] = {}
+        affected_prediction_users: dict[str, str] = {}
         for p in preds:
             if p.score is not None:
-                scored_preds_by_user.setdefault(p.user_id, []).append(p.score)
+                affected_prediction_users[p.user_id] = p.user_name
 
         # Batch delete predictions
         session.exec(sa_delete(Prediction).where(Prediction.scenario_id == scenario_id))
 
-        # 5b. Adjust leaderboard entries (C-2 fix)
-        for user_id, scores in scored_preds_by_user.items():
-            lb = session.exec(
-                select(Leaderboard).where(Leaderboard.user_id == user_id)
-            ).first()
-            if lb:
-                for sc in scores:
-                    lb.total_predictions = max(0, lb.total_predictions - 1)
-                    lb.total_score = max(0.0, lb.total_score - sc)
-                lb.avg_score = (
-                    lb.total_score / lb.total_predictions
-                    if lb.total_predictions > 0
-                    else 0.0
-                )
-                session.add(lb)
+        # 5b. Rebuild impacted leaderboard rows after deletion.
+        for user_id, user_name in affected_prediction_users.items():
+            recompute_leaderboard_entry(session, user_id, user_name)
 
         # 6. Branches (batch)
         if branch_ids:
@@ -742,23 +731,7 @@ async def delete_scenario(scenario_id: str):
         session.commit()
 
     # 9. Clean up ChromaDB collection (best-effort)
-    try:
-        import chromadb
-
-        from app.config import settings as _cfg
-        client = chromadb.Client(chromadb.config.Settings(
-            persist_directory=_cfg.CHROMA_PERSIST_DIR,
-            anonymized_telemetry=False,
-        ))
-        col_name = f"scenario_{scenario_id}"
-        try:
-            client.delete_collection(col_name)
-            logger.info("Cleaned up ChromaDB collection %s", col_name)
-        except Exception as chroma_exc:
-            # H-7 fix: Log ChromaDB cleanup failures instead of silent pass
-            logger.warning("ChromaDB cleanup failed for %s: %s", col_name, chroma_exc)
-    except ImportError:
-        pass  # ChromaDB not installed
+    get_vector_store().delete_collection(scenario_id)
 
     logger.info("Deleted scenario %s and all related data", scenario_id)
     return {"status": "deleted", "scenario_id": scenario_id}

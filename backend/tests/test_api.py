@@ -109,12 +109,12 @@ class TestScenarioEndpoints:
     def test_create_scenario_empty_question(self, client):
         """Should reject empty questions."""
         resp = client.post("/api/scenario", json={"question": ""})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_create_scenario_whitespace_only(self, client):
         """Should reject whitespace-only questions."""
         resp = client.post("/api/scenario", json={"question": "   \n\t  "})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_create_scenario_missing_question(self, client):
         """Should reject missing question field."""
@@ -1025,6 +1025,23 @@ class TestDeleteScenario:
         with Session(engine) as session:
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is None
             assert session.exec(select(Agent).where(Agent.scenario_id == sid)).first() is None
+
+    def test_delete_uses_vector_store_cleanup(self, client, monkeypatch):
+        """Scenario deletion should go through the shared VectorStore cleanup path."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        deleted: dict[str, str] = {}
+
+        class _FakeVectorStore:
+            def delete_collection(self, scenario_id: str) -> None:
+                deleted["scenario_id"] = scenario_id
+
+        monkeypatch.setattr(scenarios_api, "get_vector_store", lambda: _FakeVectorStore())
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+        assert deleted["scenario_id"] == sid
 
 
 # ── P4-C: Export Scenario ────────────────────────────────

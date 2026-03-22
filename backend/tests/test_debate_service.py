@@ -19,6 +19,7 @@ from app.services.debate_scoring import (
     _build_phase_deltas,
     _profile_dimension_bias,
 )
+from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
 
 
 @pytest.fixture(autouse=True)
@@ -101,6 +102,28 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
     assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_skips_when_sqlite_runtime_lock_is_held():
+    debate = create_debate_record("如果紧急仲裁官拥有最终裁量权，会更稳定吗？")
+    pushed_events: list[dict] = []
+    lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=60)
+    assert lease is not None
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    try:
+        await run_debate_background(debate.id, ws_callback=_push)
+    finally:
+        release_runtime_lock(lease)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert pushed_events == []
+    assert snapshot["turns"] == []
+    assert snapshot["current_phase"] == "opening"
 
 
 def test_create_debate_record_uses_english_defaults_for_non_chinese_questions():

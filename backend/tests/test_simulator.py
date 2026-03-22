@@ -29,6 +29,7 @@ from app.services.simulator import (
     _get_messages_in_range,
     _get_recent_messages,
     _narrate_branch_data,
+    _resolve_hierarchical_agent_sets,
     _save_message,
     _save_narration,
     _save_round_summary,
@@ -95,6 +96,36 @@ class TestCoerceStanceValue:
 
     def test_unknown_text_stance_falls_back_center(self):
         assert _coerce_stance_value("北伐") == 0.0
+
+
+class TestResolveHierarchicalAgentSets:
+    def test_missing_group_leader_falls_back_to_first_available_member(self, caplog):
+        agents = [
+            {"id": "a1", "name": "Worker Alpha", "role": "strategist"},
+            {"id": "a2", "name": "Worker Beta", "role": "envoy"},
+            {"id": "a3", "name": "Leader Gamma", "role": "judge"},
+        ]
+        group_leaders = {
+            "northern-bloc": "Missing Leader",
+            "southern-bloc": "Leader Gamma",
+        }
+        agent_to_group = {
+            "Worker Alpha": "northern-bloc",
+            "Worker Beta": "northern-bloc",
+            "Leader Gamma": "southern-bloc",
+        }
+
+        leader_agents, worker_agents, effective_group_leaders = _resolve_hierarchical_agent_sets(
+            agents,
+            group_leaders,
+            agent_to_group,
+        )
+
+        assert effective_group_leaders["northern-bloc"] == "Worker Alpha"
+        assert [agent["name"] for agent in leader_agents] == ["Worker Alpha", "Leader Gamma"]
+        assert [agent["name"] for agent in worker_agents] == ["Worker Beta"]
+        assert "Missing Leader" in caplog.text
+        assert "Worker Alpha" in caplog.text
 
 
 class TestGatherAgentMessages:

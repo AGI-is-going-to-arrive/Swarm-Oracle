@@ -1,12 +1,16 @@
 """Tests for app.services.vector_store — ChromaDB vector memory L2."""
 
-import os
 import shutil
 import tempfile
+from collections import OrderedDict
 
 import pytest
 
-from app.services.vector_store import VectorStore, reset_vector_store
+from app.services.vector_store import (
+    VectorStore,
+    collection_name_for_scenario,
+    reset_vector_store,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -197,3 +201,62 @@ class TestVectorStoreEdgeCases:
 
         results = vs.retrieve("s1", "one", top_k=100)
         assert len(results) == 1
+
+    def test_delete_collection_uses_canonical_name_and_clears_cache(self):
+        """Delete should reuse the same sanitized name as store/retrieve."""
+        deleted: dict[str, str] = {}
+
+        class _FakeClient:
+            def delete_collection(self, name: str) -> None:
+                deleted["name"] = name
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = _FakeClient()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 128
+        vs._collections = OrderedDict({"abc-def-123-456": object()})
+
+        vs.delete_collection("abc-def-123-456")
+
+        assert deleted["name"] == collection_name_for_scenario("abc-def-123-456")
+        assert "abc-def-123-456" not in vs._collections
+
+    def test_get_collection_prefers_cache_before_client_lookup(self):
+        """Repeated cache hits should not recreate the same Chroma collection."""
+        created_names: list[str] = []
+
+        class _FakeClient:
+            def get_or_create_collection(self, *, name: str, metadata: dict[str, str]):
+                created_names.append(name)
+                return {"name": name, "metadata": metadata}
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = _FakeClient()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict()
+
+        first = vs._get_collection("scenario-a")
+        second = vs._get_collection("scenario-a")
+
+        assert first == second
+        assert created_names == [collection_name_for_scenario("scenario-a")]
+
+    def test_collection_cache_evicts_oldest_entry_when_limit_exceeded(self):
+        """The bounded cache should evict the least recently used scenario."""
+        class _FakeClient:
+            def get_or_create_collection(self, *, name: str, metadata: dict[str, str]):
+                return {"name": name, "metadata": metadata}
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = _FakeClient()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict()
+
+        vs._get_collection("scenario-a")
+        vs._get_collection("scenario-b")
+        vs._get_collection("scenario-a")
+        vs._get_collection("scenario-c")
+
+        assert list(vs._collections.keys()) == ["scenario-a", "scenario-c"]

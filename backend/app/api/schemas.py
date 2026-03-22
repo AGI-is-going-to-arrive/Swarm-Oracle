@@ -28,6 +28,8 @@ class CreateScenarioRequest(BaseModel):
     @classmethod
     def validate_question(cls, v: str) -> str:
         normalized = v.strip()
+        if not normalized:
+            raise ValueError("question cannot be empty")
         if len(normalized) > 1000:
             raise ValueError("question too long (max 1000 chars)")
         return normalized

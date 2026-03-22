@@ -28,6 +28,11 @@ from app.services.campaign import (
 )
 from app.services.llm_client import llm_request_scope
 from app.services.parser import parse_question
+from app.services.runtime_lock import (
+    acquire_runtime_lock,
+    release_runtime_lock,
+    simulation_lock_key,
+)
 from app.services.simulator import run_simulation
 
 logger = logging.getLogger(__name__)
@@ -67,11 +72,23 @@ async def run_sim_background(scenario_id: str, *, llm_overrides: dict | None = N
         logger.warning("Simulation %s already running — skipping duplicate launch", scenario_id)
         return
     _running_simulations.add(scenario_id)
+    lock_lease = None
 
     from app.api.ws import ws_manager
     try:
         # H-5 fix: total simulation timeout (MAX_ROUNDS * 180s ceiling)
         total_timeout = settings.MAX_ROUNDS * 180
+        lock_lease = acquire_runtime_lock(
+            simulation_lock_key(scenario_id),
+            lease_seconds=total_timeout + 60,
+        )
+        if lock_lease is None:
+            logger.warning(
+                "Simulation %s already running via another worker — skipping duplicate launch",
+                scenario_id,
+            )
+            return
+
         sim_kwargs: dict = {
             "scenario_id": scenario_id,
             "ws_callback": ws_manager.broadcast,
@@ -117,6 +134,7 @@ async def run_sim_background(scenario_id: str, *, llm_overrides: dict | None = N
                 session.add(s)
                 session.commit()
     finally:
+        release_runtime_lock(lock_lease)
         _running_simulations.discard(scenario_id)
 
 

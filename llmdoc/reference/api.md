@@ -23,6 +23,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `interventions` 不能为空
 > - `interventions` 最多 `50` 条；超过时返回 `422`
 >
+> `POST /api/scenario` 当前也由 `CreateScenarioRequest` 在 schema 层校验 `question`：
+> - 空字符串或纯空白：返回 `422`
+> - 超过 `1000` 字符：返回 `422`
+>
 > 当前主模式玩法卡的真实写路径是：
 > - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
 > - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
@@ -37,6 +41,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
 | `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；provider overrides 当前只能走 `POST body`，不能放在 `GET query` 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
+
+> `DELETE /api/scenario/{id}` 当前除了级联删除 SQL 数据外，还会：
+> - 通过 shared `VectorStore` 清理该 scenario 对应的 Chroma collection
+> - 对受影响用户的 leaderboard row 做重建，避免删除已评分 prediction 后留下过期统计
 
 > `GET/POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 prompt wrapper / context 包装：
 > - 英文 scenario 不再收到中文包装文本
@@ -74,6 +82,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `GET /api/scenario/{id}/predictions` 当前会先校验 scenario 是否存在：
 > - 存在：返回该场景预测列表
 > - 不存在：返回 `404 Not Found`
+>
+> `POST /api/scenario/{id}/score-predictions` 当前的内部行为：
+> - 单条 prediction 会先原子认领未评分行，再写入分数
+> - 并发评分同一 prediction 时，只会有一个请求真正刷新 leaderboard
+> - 竞争失败的请求会回读已有分数返回，不会重复覆盖
 
 ### Director Campaign (Track A)
 
@@ -232,6 +245,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `verdict`
 >
 > 当前 Debate 的终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；如果 `DEBATE_USE_LLM = false`、上游暂时不可用，或 LLM 返回坏结构，会退回 deterministic fallback。当前结果 payload 会显式带 `adjudication_mode`。
+>
+> Debate 的后台推进当前还会在同一 SQLite 文件下使用 shared runtime lock 做跨 worker 防重入；这是内部执行约束，不改变现有 REST / WebSocket API 形状。
 >
 > prediction 只支持两类：
 > - `winner`

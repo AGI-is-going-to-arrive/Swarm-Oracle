@@ -38,6 +38,7 @@ from app.services.debate_scoring import (
     build_debate_plan,
 )
 from app.services.llm_client import format_untrusted_text_block, llm_call_json, llm_request_scope
+from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
 
 logger = logging.getLogger(__name__)
 
@@ -1351,8 +1352,20 @@ async def run_debate_background(
         logger.warning("Debate %s already running; skipping duplicate execution", debate_id)
         return
     _running_debates.add(debate_id)
+    lock_lease = None
 
     try:
+        lock_lease = acquire_runtime_lock(
+            debate_lock_key(debate_id),
+            lease_seconds=60 * 60,
+        )
+        if lock_lease is None:
+            logger.warning(
+                "Debate %s already running via another worker; skipping duplicate execution",
+                debate_id,
+            )
+            return
+
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})
         engine = get_engine()
         with Session(engine) as session:
@@ -1560,6 +1573,7 @@ async def run_debate_background(
         )
         raise
     finally:
+        release_runtime_lock(lock_lease)
         _running_debates.discard(debate_id)
 
 
