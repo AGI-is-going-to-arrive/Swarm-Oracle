@@ -490,6 +490,7 @@ class TestScoringService(unittest.TestCase):
             self.assertIn("You are a precise prediction evaluator", prompt)
             self.assertIn("Original Question", prompt)
             self.assertIn("Actual Simulation Outcome", prompt)
+            self.assertIn("UNTRUSTED DATA", prompt)
             self.assertNotIn("你是一个精确的预测评估器", prompt)
 
     def test_score_all_for_scenario_reports_no_pending_predictions(self):

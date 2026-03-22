@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     LLM_CIRCUIT_BREAKER_THRESHOLD: int = 6
     LLM_CIRCUIT_BREAKER_RESET_SECONDS: int = 30
     DEBATE_USE_LLM: bool = True
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"  # json | plain
 
     # ── Database ─────────────────────────────────────────
     DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'swarmoracle.db').resolve()}"
@@ -94,6 +96,15 @@ class Settings(BaseSettings):
                 "LLM_API_KEY must be set to a non-placeholder value for non-local LLM endpoints"
             )
         self.LLM_API_KEY = api_key
+        log_level = self.LOG_LEVEL.strip().upper()
+        if log_level not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}:
+            raise ValueError("LOG_LEVEL must be one of CRITICAL, ERROR, WARNING, INFO, DEBUG")
+        self.LOG_LEVEL = log_level
+
+        log_format = self.LOG_FORMAT.strip().lower()
+        if log_format not in {"json", "plain"}:
+            raise ValueError("LOG_FORMAT must be 'json' or 'plain'")
+        self.LOG_FORMAT = log_format
         return self
 
 

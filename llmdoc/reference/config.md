@@ -23,6 +23,18 @@
 
 > **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8318/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
 
+## 日志
+
+| 变量 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `LOG_LEVEL` | str | `INFO` | root logger 与 `uvicorn / uvicorn.error / uvicorn.access` 的日志级别；支持 `CRITICAL / ERROR / WARNING / INFO / DEBUG` |
+| `LOG_FORMAT` | str | `json` | 日志输出格式；支持 `json` 与 `plain` |
+
+> 当前 backend 启动时会统一配置 root logging：
+> - 默认输出结构化 JSON
+> - `uvicorn / uvicorn.error / uvicorn.access` 会清空自带 handler，统一复用 root formatter
+> - 若 `LOG_FORMAT = plain`，会回到原来的可读文本格式
+
 ## 模拟参数
 
 | 变量 | 类型 | 默认值 | 描述 |
@@ -84,7 +96,10 @@
 
 > `shared/gameplay_contract.v1.json` 当前走 mtime-aware 缓存：文件未变时复用内存结果，文件更新时间变化后会自动重新读取，不再要求后端重启才能看到新的 contract 内容。
 
-> 当前 Alembic 最新 revision 为 `008_add_hot_path_foreign_key_indexes`，用于补齐热路径外键索引。
+> 当前 Alembic 目录里的最新 revision 文件为 `011_add_agent_group_scenario_index`。其中：
+> - `008_add_hot_path_foreign_key_indexes` 补齐大部分热路径外键索引
+> - `011_add_agent_group_scenario_index` 额外补上 `AgentGroup.scenario_id` 索引
+> - 当前仓库内 `backend/swarmoracle.db` 的 `alembic_version` 仍是 `008_add_hot_path_foreign_key_indexes`
 
 ## 服务器
 

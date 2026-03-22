@@ -34,15 +34,15 @@ api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
     │
-main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
+main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理)
-models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理)
+models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A；`scenario_id` 已加索引)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
-config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空)
+config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空；当前额外提供 `LOG_LEVEL / LOG_FORMAT`，默认 `INFO + json`)
 alembic/ ──► Alembic 数据库迁移框架
 ```
 
@@ -122,6 +122,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - collection name 当前统一走 canonical naming：`scenario_{scenario_id.replace('-', '_')}`；创建、读取和删除共用同一套命名规则
   - `_collections` 当前是有上限的 LRU 缓存（默认 128），避免长期运行时无界持有 collection 引用
   - `PersistentClient` 初始化当前有超时上限；超时后会先返回 `unavailable`，避免主线程一直卡住；如果后台初始化稍后完成，同一个 `VectorStore` 实例会在后续访问时接管这份 client
+  - 模块级单例当前会区分“ready”与“仍在后台初始化”：`_store_ready()` 只代表已经可立即使用，`get_vector_store()` 在 init pending 时仍会复用同一个实例，避免并发请求重复拉起多个 Chroma init 线程
   - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
@@ -187,9 +188,19 @@ alembic/ ──► Alembic 数据库迁移框架
 - **启动策略**: 解析阶段固定使用 `reasoning_effort="low"`，优先缩短 Theater 首次可见世界线前的等待窗口
 - **语言检测** (P9): 调用 `lang_detect.detect_language()` 检测输入语言，存入 `result["_language"]` 供下游服务使用
 - **分层模式** (P3-A): `PARSE_PROMPT_HIERARCHICAL` 生成 `groups[]` 分组信息，含 fallback 自动分组逻辑
-- **坏 JSON 兜底**: 若 parse 阶段的 `llm_call_json()` 仍返回不可恢复坏 JSON，parser 当前会退到确定性 fallback 结构，而不是直接让整条 `create scenario -> simulate` 链路中断；fallback 结果仍会按 `requested_agents` 补足最小角色集，并保留同样的 rounds / sensitivity 边界
+- **坏 JSON / 缺字段兜底**: 若 parse 阶段的 `llm_call_json()` 返回不可恢复坏 JSON，或返回了结构不完整的 payload（例如缺少 `agents` / `setting`），parser 当前都会退到确定性 fallback 结构，而不是直接让整条 `create scenario -> simulate` 链路中断；fallback 结果仍会按 `requested_agents` 补足最小角色集，并保留同样的 rounds / sensitivity 边界
 - **fallback rounds**: fallback 轮数当前不再写死 `10`；会优先使用调用方给的默认轮数，再按 `max_rounds` 做 clamp
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
+
+### `logging_utils.py` (≈90行) — 结构化日志配置 (**NEW**)
+- **职责**: 统一 backend 运行时日志格式，不改各模块现有 `logger.info/warning/error` 调用方式
+- **关键API**:
+  - `JsonLogFormatter` — 把标准日志字段、异常、extra 字段统一序列化为 JSON
+  - `configure_logging(level_name, log_format)` — 按配置初始化 root logger，并收口 `uvicorn / uvicorn.error / uvicorn.access`
+- **当前口径**:
+  - 默认 `LOG_FORMAT = json`
+  - 默认 `LOG_LEVEL = INFO`
+  - 如果切回 `LOG_FORMAT = plain`，仍使用原来的人类可读格式
 
 ### `lang_detect.py` (≈70行) — 语言检测 (P9 **NEW**)
 - **职责**: 基于字符比例启发式检测用户输入语言，生成 LLM prompt 语言指令
@@ -432,9 +443,9 @@ alembic/ ──► Alembic 数据库迁移框架
 | `Prediction` | id, scenario_id, user_id, prediction_text, confidence, score | belongs_to: scenario (P3-B) |
 | `Leaderboard` | id, user_id, user_name, avg_score, best_score, win_streak | per-user materialized (P3-B) |
 
-> 这轮又补了 hot-path 外键索引：`AgentMessage.round_id / agent_id`、`Round.branch_id`、`Agent.scenario_id`、`Branch.scenario_id`、`InterventionLog.scenario_id / branch_id`、`Prediction.scenario_id`、`DebateTurn.debate_id`、`DebatePrediction.debate_id`、`DebateCounterplay.prediction_id`。对应 Alembic revision：`008_add_hot_path_foreign_key_indexes`。
+> 这轮又补了 hot-path 外键索引：`AgentMessage.round_id / agent_id`、`Round.branch_id`、`Agent.scenario_id`、`AgentGroup.scenario_id`、`Branch.scenario_id`、`InterventionLog.scenario_id / branch_id`、`Prediction.scenario_id`、`DebateTurn.debate_id`、`DebatePrediction.debate_id`、`DebateCounterplay.prediction_id`。对应 Alembic revision：`008_add_hot_path_foreign_key_indexes` 与 `011_add_agent_group_scenario_index`。
 >
-> 本地仓库 `backend/swarmoracle.db` 已在本 session 迁到 `008_add_hot_path_foreign_key_indexes`。
+> 当前仓库内 `backend/swarmoracle.db` 的 `alembic_version` 仍是 `008_add_hot_path_foreign_key_indexes`；开发 / 测试启动路径会通过 `init_db()` 轻量补上 `AgentGroup.scenario_id` 索引，正式库升级仍应执行 `alembic upgrade head`。
 
 ## 测试覆盖
 
@@ -466,6 +477,14 @@ alembic/ ──► Alembic 数据库迁移框架
   - `tests/test_simulator.py tests/test_intervention.py tests/test_api.py -k 'intervene or pending_intervention or delete_cascade_data or pop_next_pending_intervention_preserves_order or clear_pending_interventions_for_scenario_is_scoped or delete_uses_vector_store_cleanup' -q`：`19 passed in 1.49s`
   - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
   - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
+- 本 session 这轮“review fixes / structured logging / parser incomplete fallback”还额外实跑通过：
+  - `python -m pytest tests/test_backend_code_review_fixes.py -q`：`4 passed in 0.45s`
+  - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`：`64 passed in 71.56s`
+  - `python -m pytest tests/test_logging_utils.py tests/test_config.py -q`：`13 passed in 0.41s`
+  - `python -m pytest tests/test_api.py -k 'test_root or test_health' -q`：`2 passed, 90 deselected in 2.96s`
+  - 扩大定向回归：`23 passed, 215 deselected in 3.75s`
+  - 全量 backend：`998 passed in 223.31s (0:03:43)`
+  - 相关 `ruff check`：通过
 
 覆盖重心：
 
@@ -512,3 +531,4 @@ alembic/ ──► Alembic 数据库迁移框架
 > `CreateScenarioRequest.question` 当前会在 schema 层直接拒绝空字符串和纯空白输入：
 > - 空字符串 / 纯空白：`422`
 > - 超过 `1000` 字符：`422`
+> - `rounds < 1` 或 `rounds > MAX_ROUNDS`：`422`

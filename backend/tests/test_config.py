@@ -11,6 +11,8 @@ def test_settings_defaults():
     assert s.LLM_RESPONSES_URL.startswith("http")
     assert s.LLM_MODEL_NAME  # not empty
     assert s.LLM_REASONING_EFFORT in ("none", "low", "medium", "high")
+    assert s.LOG_LEVEL == "INFO"
+    assert s.LOG_FORMAT == "json"
     assert s.MAX_AGENTS > 0
     assert s.MAX_ROUNDS > 0
     assert s.MAX_BRANCHES > 0
@@ -30,6 +32,17 @@ def test_settings_from_env(monkeypatch):
     assert s.LLM_MODEL_NAME == "test-model-name"
     assert s.MAX_AGENTS == 42
     assert s.LLM_REASONING_EFFORT == "medium"
+
+
+def test_settings_normalize_log_config(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setenv("LOG_FORMAT", "PLAIN")
+
+    from app.config import Settings
+
+    s = Settings()
+    assert s.LOG_LEVEL == "DEBUG"
+    assert s.LOG_FORMAT == "plain"
 
 
 def test_settings_cors_origins():
@@ -78,4 +91,22 @@ def test_settings_reject_blank_model_name(monkeypatch):
     from app.config import Settings
 
     with pytest.raises(ValueError, match="LLM_MODEL_NAME cannot be empty"):
+        Settings()
+
+
+def test_settings_reject_invalid_log_level(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "verbose")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="LOG_LEVEL"):
+        Settings()
+
+
+def test_settings_reject_invalid_log_format(monkeypatch):
+    monkeypatch.setenv("LOG_FORMAT", "xml")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="LOG_FORMAT"):
         Settings()

@@ -17,15 +17,16 @@ from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
 from app.api.ws import router as ws_router
 from app.config import settings
+from app.logging_utils import configure_logging
 from app.models import init_db
 from app.models.database import dispose_engine
 from app.services.llm_client import close_shared_async_client
 
 # ── Logging ──────────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+configure_logging(
+    level_name=settings.LOG_LEVEL,
+    log_format=settings.LOG_FORMAT,
 )
 
 # ── Lifespan ─────────────────────────────────────────────

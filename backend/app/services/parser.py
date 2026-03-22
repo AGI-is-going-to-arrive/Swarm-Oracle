@@ -237,6 +237,18 @@ def _build_agent_plan(target_agents: int) -> str:
     return f"CORE {core} / IMPORTANT {important} / CROWD {crowd}"
 
 
+def _is_parse_result_incomplete(payload: object) -> bool:
+    """Return True when the parser payload is structurally unusable."""
+    if not isinstance(payload, dict):
+        return True
+    if "setting" not in payload:
+        return True
+    agents = payload.get("agents")
+    if not isinstance(agents, list) or len(agents) == 0:
+        return True
+    return False
+
+
 def _parse_result_quality(payload: dict) -> tuple[int, int, int, int]:
     """Score parser payload quality so retries cannot silently degrade it."""
     raw_agents = payload.get("agents", [])
@@ -488,13 +500,19 @@ async def parse_question(
             if _should_replace_parse_result(result, retry_result):
                 result = retry_result
 
-    # Validate structure
-    if "setting" not in result:
-        raise ValueError("Missing 'setting' in parse result")
-    if "agents" not in result:
-        raise ValueError("Missing 'agents' in parse result")
-    if len(result.get("agents", [])) == 0:
-        raise ValueError("No agents generated")
+    if _is_parse_result_incomplete(result):
+        logger.warning(
+            "Parser returned incomplete structure for '%s'; using deterministic fallback",
+            question[:80],
+        )
+        result = _build_parser_fallback_result(
+            question,
+            requested_agents=requested_agents,
+            default_rounds=default_rounds,
+            max_rounds=max_rounds,
+            language=language,
+            hierarchical=hierarchical,
+        )
 
     if not isinstance(result.get("setting"), dict):
         logger.warning("Parser returned non-dict setting; coercing to fallback structure")

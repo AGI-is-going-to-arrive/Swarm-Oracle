@@ -355,10 +355,20 @@ def _store_ready(store: object | None) -> bool:
         return True
 
     try:
-        if bool(getattr(store, "available")):
-            return True
+        return bool(getattr(store, "available"))
     except Exception:
-        pass
+        return False
+
+
+def _store_reusable(store: object | None) -> bool:
+    """Return True when an existing singleton should be reused.
+
+    A store that is still initializing is not "ready" yet, but we still want to
+    reuse the same instance so concurrent callers do not spin up duplicate
+    PersistentClient init threads.
+    """
+    if _store_ready(store):
+        return True
 
     pending = getattr(store, "_client_init_pending", None)
     if callable(pending):
@@ -372,12 +382,12 @@ def _store_ready(store: object | None) -> bool:
 def get_vector_store() -> VectorStore:
     """Get the global VectorStore singleton."""
     global _vector_store
-    if _store_ready(_vector_store):
+    if _store_reusable(_vector_store):
         return _vector_store
     with _vector_store_lock:
-        if _store_ready(_vector_store):
+        if _store_reusable(_vector_store):
             return _vector_store
-        if _vector_store is None or not _store_ready(_vector_store):
+        if _vector_store is None or not _store_reusable(_vector_store):
             from app.config import settings
             _vector_store = VectorStore(persist_dir=settings.CHROMA_PERSIST_DIR)
     return _vector_store

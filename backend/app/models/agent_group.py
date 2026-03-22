@@ -22,7 +22,7 @@ class AgentGroup(SQLModel, table=True):
     __tablename__ = "agent_group"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id")
+    scenario_id: str = Field(foreign_key="scenario.id", index=True)
     name: str
     parent_group_id: Optional[str] = None  # 2-level nesting only
     leader_agent_id: Optional[str] = Field(default=None, foreign_key="agent.id")

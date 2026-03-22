@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-22（backend runtime hardening / AsyncClient + Chroma recovery / llmdoc sync）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-22（backend review fixes / structured JSON logging / full backend green）
 
 ## 阅读顺序
 

@@ -11,6 +11,7 @@ import pytest
 from app.services import vector_store as vector_store_module
 from app.services.vector_store import (
     VectorStore,
+    _store_ready,
     collection_name_for_scenario,
     reset_vector_store,
 )
@@ -184,7 +185,11 @@ class TestVectorStoreGracefulDegradation:
         assert elapsed < 0.1
         assert vs.available is False
 
-    def test_timed_out_init_can_become_available_after_background_finish(self, temp_dir, monkeypatch):
+    def test_timed_out_init_can_become_available_after_background_finish(
+        self,
+        temp_dir,
+        monkeypatch,
+    ):
         """A late-finishing init should be adopted by the same VectorStore instance."""
         fake_client = object()
 
@@ -410,6 +415,17 @@ class TestVectorStoreEdgeCases:
 
 
 class TestVectorStoreSingleton:
+    def test_store_ready_false_while_init_pending(self):
+        class _PendingStore:
+            @property
+            def available(self):
+                return False
+
+            def _client_init_pending(self):
+                return True
+
+        assert _store_ready(_PendingStore()) is False
+
     def test_get_vector_store_initializes_once_under_thread_race(self, monkeypatch):
         created_instances: list[object] = []
         returned_instances: list[object] = []
@@ -484,6 +500,38 @@ class TestVectorStoreSingleton:
         assert second is first
         assert second.available is True
         assert second._client is fake_client
+        assert create_calls == 1
+
+    def test_get_vector_store_reuses_pending_instance_without_duplicate_init(self, monkeypatch):
+        original_vector_store_cls = vector_store_module.VectorStore
+        create_calls = 0
+
+        def _slow_create(_path: str):
+            nonlocal create_calls
+            create_calls += 1
+            time.sleep(0.05)
+            return object()
+
+        class _TimedVectorStore(original_vector_store_cls):
+            def __init__(self, *, persist_dir: str):
+                super().__init__(
+                    persist_dir=persist_dir,
+                    client_init_timeout_seconds=0.01,
+                )
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(vector_store_module, "_create_persistent_client", _slow_create)
+        monkeypatch.setattr(vector_store_module, "VectorStore", _TimedVectorStore)
+        monkeypatch.setattr(
+            "app.config.settings.CHROMA_PERSIST_DIR",
+            "/tmp/chroma-pending-reuse",
+        )
+
+        first = vector_store_module.get_vector_store()
+        second = vector_store_module.get_vector_store()
+
+        assert first is second
         assert create_calls == 1
 
     def test_get_vector_store_retries_after_init_failure(self, monkeypatch):

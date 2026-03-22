@@ -86,6 +86,34 @@ class TestScenarioModel:
             s = session.get(Scenario, sid)
             assert s.parsed_context is None
 
+    def test_scenario_json_fields_track_in_place_mutations(self):
+        """In-place JSON mutations should persist for scenario authority fields."""
+        engine = get_engine()
+        s = Scenario(
+            question="test",
+            parsed_context={"setting": "old"},
+            director_state_json={"revision": 1},
+            gameplay_state_json={"cards_used": 0},
+        )
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            sid = s.id
+
+        with Session(engine) as session:
+            s = session.get(Scenario, sid)
+            s.parsed_context["setting"] = "new"
+            s.director_state_json["revision"] = 2
+            s.gameplay_state_json["cards_used"] = 1
+            session.add(s)
+            session.commit()
+
+        with Session(engine) as session:
+            s = session.get(Scenario, sid)
+            assert s.parsed_context["setting"] == "new"
+            assert s.director_state_json["revision"] == 2
+            assert s.gameplay_state_json["cards_used"] == 1
+
     def test_scenario_unicode_question(self):
         """Should handle unicode, emoji, and special characters."""
         engine = get_engine()
@@ -175,6 +203,7 @@ class TestAgentModel:
             "agent_message": {"ix_agent_message_round_id", "ix_agent_message_agent_id"},
             "round": {"ix_round_branch_id"},
             "agent": {"ix_agent_scenario_id"},
+            "agent_group": {"ix_agent_group_scenario_id"},
             "branch": {"ix_branch_scenario_id"},
             "intervention_log": {
                 "ix_intervention_log_scenario_id",

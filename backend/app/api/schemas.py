@@ -49,6 +49,13 @@ class CreateScenarioRequest(BaseModel):
             raise ValueError(f"num_agents must be between 3 and {settings.MAX_AGENTS}")
         return v
 
+    @field_validator("rounds")
+    @classmethod
+    def validate_rounds(cls, v: int | None) -> int | None:
+        if v is not None and (v < 1 or v > settings.MAX_ROUNDS):
+            raise ValueError(f"rounds must be between 1 and {settings.MAX_ROUNDS}")
+        return v
+
     @field_validator("mode")
     @classmethod
     def validate_mode(cls, v: str | None) -> str | None:

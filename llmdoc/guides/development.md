@@ -26,6 +26,8 @@ uvicorn app.main:app --reload --port 18927
 uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --reload --port 18927
 ```
 
+- backend 当前默认输出结构化 JSON 日志；`uvicorn / uvicorn.error / uvicorn.access` 会统一走同一套 root formatter。
+
 ### Frontend
 
 ```bash
@@ -53,6 +55,7 @@ cp .env.example backend/.env
 - `docker compose` 默认读取仓库根目录 `.env.docker`。
 - `.env.example` 是本地直启 backend 的模板，不再作为 Docker 默认环境文件。
 - 默认模型为 `gpt-5.4-mini`；若本地网关没有该模型映射，需要先更新网关。
+- backend 当前默认输出 JSON 结构化日志；如需切回传统文本，可在 `backend/.env` 里设 `LOG_FORMAT=plain`。`LOG_LEVEL` 默认 `INFO`。
 
 ## 测试写法约定
 
@@ -115,6 +118,14 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
   - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
   - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
+- 本 session 这轮“backend review fixes / structured logging / parser incomplete fallback”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_backend_code_review_fixes.py -q`：`4 passed in 0.45s`
+  - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`：`64 passed in 71.56s`
+  - `python -m pytest tests/test_logging_utils.py tests/test_config.py -q`：`13 passed in 0.41s`
+  - `python -m pytest tests/test_api.py -k 'test_root or test_health' -q`：`2 passed, 90 deselected in 2.96s`
+  - `python -m pytest tests/test_logging_utils.py tests/test_config.py tests/test_api.py tests/test_metrics.py tests/test_vector_store.py tests/test_parser.py tests/test_predictions.py tests/test_models.py tests/test_backend_code_review_fixes.py tests/test_corner_cases.py -k 'init_db_reuses_engine_managed_connection_for_sqlite_migrations or test_root or test_health or test_metrics_endpoint_available or test_score_prediction_uses_english_prompt_for_english_scenario or test_retries_underfilled_agent_plan_and_tops_up_small_shortfall or test_hot_path_foreign_key_indexes_exist or test_store_ready_false_while_init_pending or test_get_vector_store_reuses_pending_instance_without_duplicate_init or test_get_vector_store_recovers_after_late_init_finishes or test_import_replay_scenario_persists_snapshot or test_create_scenario_returns_immediately_and_schedules_background_parse or test_import_replay_scenario_maps_message_agent_by_name_when_agent_id_missing or test_get_groups_returns_leader_and_members or test_settings_defaults or test_settings_from_env or test_settings_normalize_log_config or test_settings_reject_invalid_log_level or test_settings_reject_invalid_log_format or test_json_log_formatter_outputs_structured_payload or test_json_log_formatter_includes_exception_text or test_configure_logging_uses_requested_formatter' -q`：`23 passed, 215 deselected in 3.75s`
+  - `python -m pytest -q`：`998 passed in 223.31s (0:03:43)`
+  - `python -m ruff check --ignore E501 app/main.py app/config.py app/logging_utils.py app/services/vector_store.py app/models/agent_group.py app/models/database.py app/api/scenarios.py app/api/schemas.py tests/test_logging_utils.py tests/test_config.py tests/test_api.py tests/test_metrics.py tests/test_vector_store.py tests/test_parser.py tests/test_predictions.py tests/test_models.py tests/test_backend_code_review_fixes.py tests/test_corner_cases.py alembic/versions/011_add_agent_group_scenario_index.py`：通过
 
 ### Frontend
 

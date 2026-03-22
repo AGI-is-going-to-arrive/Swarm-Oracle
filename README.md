@@ -95,12 +95,15 @@ npm run dev
 | `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
 | `MAX_AGENTS` | Max agents per scenario | `1500` |
 | `MAX_ROUNDS` | Max rounds | `40` |
+| `LOG_LEVEL` | Backend log level | `INFO` |
+| `LOG_FORMAT` | Backend log format (`json` / `plain`) | `json` |
 
 本地直接启动 backend 时读取 `backend/.env`，可由 `.env.example` 初始化；`docker compose` 默认读取仓库根目录 `.env.docker`。
 
 - 占位 `LLM_API_KEY=sk-12345678` 当前只适用于本地网关，例如 `localhost`、`127.0.0.1` 或 `host.docker.internal`。
 - 如果 `LLM_RESPONSES_URL` 指向非本地 LLM 端点，后端会在配置加载阶段直接拒绝占位 key，而不是等到第一次调用时才失败。
 - `LLM_MODEL_NAME` 不能为空；留空会在配置加载阶段直接报错。
+- backend 默认输出结构化 JSON 日志；`uvicorn` 相关日志也会统一走同一套 root formatter。
 
 ## Testing And Signoff
 
@@ -145,6 +148,12 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `backend/tests/test_backend_code_review_fixes.py -q`: `4 passed in 0.45s`
+  - `backend/tests/test_vector_store.py backend/tests/test_parser.py backend/tests/test_models.py -q`: `64 passed in 71.56s`
+  - `backend/tests/test_logging_utils.py backend/tests/test_config.py -q`: `13 passed in 0.41s`
+  - `backend/tests/test_api.py -k 'test_root or test_health' -q`: `2 passed, 90 deselected in 2.96s`
+  - expanded backend targeted regression: `23 passed, 215 deselected in 3.75s`
+  - full backend suite: `998 passed in 223.31s (0:03:43)`
   - `backend/tests/test_llm_client.py + backend/tests/test_campaign_api.py + backend/tests/test_campaign_service.py + backend/tests/test_debate_api.py + backend/tests/test_debate_service.py + backend/tests/test_gameplay_contract_sync.py + backend/tests/test_memory.py + backend/tests/test_models.py + backend/tests/test_narrator.py + backend/tests/test_predictions.py + backend/tests/test_ws.py + backend/tests/test_api.py`: `269 passed`
   - `backend/tests/test_predictions.py + backend/tests/test_gameplay_contract_sync.py + backend/tests/test_memory.py + backend/tests/test_narrator.py`: `86 passed in 1.85s`
   - `backend/tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`: `2 passed in 0.31s`

@@ -361,6 +361,48 @@ class TestSQLitePathParsing:
         assert calls
         assert all(handle is connection for handle, *_ in calls)
 
+    def test_init_db_adds_agent_group_scenario_index(self, monkeypatch):
+        from app.models import database as database_module
+
+        calls: list[tuple[object, str, str]] = []
+
+        class _FakeConnection:
+            pass
+
+        class _FakeBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.dialect = type("Dialect", (), {"name": "sqlite"})()
+                self._connection = connection
+
+            def begin(self):
+                return _FakeBeginContext(self._connection)
+
+        connection = _FakeConnection()
+        fake_engine = _FakeEngine(connection)
+
+        monkeypatch.setattr(database_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(database_module.SQLModel.metadata, "create_all", lambda _engine: None)
+        monkeypatch.setattr(database_module, "_migrate_add_column", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            database_module,
+            "_migrate_create_index",
+            lambda handle, table, index_name, _columns: calls.append((handle, table, index_name)),
+        )
+
+        database_module.init_db()
+
+        assert (connection, "agent_group", "ix_agent_group_scenario_id") in calls
+
 
 # ─────────────────────────────────────────────────────────
 # Additional edge cases from deep review

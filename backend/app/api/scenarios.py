@@ -298,6 +298,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
                 group_id_map[original_group_id] = group.id
 
         agent_id_map: dict[str, str] = {}
+        agent_name_map: dict[str, str] = {}
         pending_group_members: list[tuple[str, str, bool]] = []
         for raw_agent in agents:
             if not isinstance(raw_agent, dict):
@@ -318,6 +319,9 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
             session.flush()
             if original_agent_id:
                 agent_id_map[original_agent_id] = agent.id
+            agent_name = agent.name.strip()
+            if agent_name and agent_name not in agent_name_map:
+                agent_name_map[agent_name] = agent.id
             if group_id and group_id in group_id_map:
                 pending_group_members.append((group_id_map[group_id], agent.id, False))
 
@@ -395,14 +399,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
             mapped_agent_id = agent_id_map.get(original_agent_id)
             if not mapped_agent_id:
                 agent_name = str(raw_message.get("agent", "")).strip()
-                mapped_agent_id = next(
-                    (
-                        agent.id
-                        for agent in session.exec(select(Agent).where(Agent.scenario_id == scenario.id)).all()
-                        if agent.name == agent_name
-                    ),
-                    None,
-                )
+                mapped_agent_id = agent_name_map.get(agent_name)
             if not mapped_agent_id:
                 continue
 
@@ -590,17 +587,35 @@ async def get_groups(scenario_id: str):
             raise HTTPException(404, "Scenario not found")
 
         groups = session.exec(select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)).all()
+        if not groups:
+            return []
+
+        group_ids = [group.id for group in groups]
+        memberships = session.exec(
+            select(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids))
+        ).all()
+        memberships_by_group: dict[str, list[AgentGroupMember]] = {group_id: [] for group_id in group_ids}
+        agent_ids = {
+            membership.agent_id
+            for membership in memberships
+        }
+        agent_ids.update(group.leader_agent_id for group in groups if group.leader_agent_id)
+        for membership in memberships:
+            memberships_by_group.setdefault(membership.group_id, []).append(membership)
+
+        agent_lookup: dict[str, Agent] = {}
+        if agent_ids:
+            agent_lookup = {
+                agent.id: agent
+                for agent in session.exec(select(Agent).where(Agent.id.in_(agent_ids))).all()
+            }
+
         result = []
         for g in groups:
-            # Get leader info
-            leader = session.get(Agent, g.leader_agent_id) if g.leader_agent_id else None
-            # Get members
-            memberships = session.exec(
-                select(AgentGroupMember).where(AgentGroupMember.group_id == g.id)
-            ).all()
+            leader = agent_lookup.get(g.leader_agent_id) if g.leader_agent_id else None
             members = []
-            for m in memberships:
-                agent = session.get(Agent, m.agent_id)
+            for m in memberships_by_group.get(g.id, []):
+                agent = agent_lookup.get(m.agent_id)
                 if agent:
                     members.append({
                         "id": agent.id,

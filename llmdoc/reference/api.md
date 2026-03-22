@@ -27,12 +27,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `POST /api/scenario` 当前也由 `CreateScenarioRequest` 在 schema 层校验 `question`：
 > - 空字符串或纯空白：返回 `422`
 > - 超过 `1000` 字符：返回 `422`
+> - `rounds` 合法范围：`1 <= rounds <= MAX_ROUNDS`；超界时返回 `422`
 >
 > `POST /api/scenario/import-replay` 当前也有导入边界保护：
 > - 整个 `scenario` payload 超过 `1_000_000 bytes`：返回 `422`
 > - `question` 为空：返回 `422`
 > - `question` 超过 `500` 字符：返回 `422`
 > - `groups` 最多 `128` 条、`agents` 最多 `256` 条、`branches` 最多 `256` 条、`messages` 最多 `5_000` 条；超出时返回 `413`
+> - 导入消息时若缺少 `agent_id`，后端会先按本次导入快照里的 agent name map 回退匹配，而不是反复全表扫描当前 scenario agents
 >
 > 当前主模式玩法卡的真实写路径是：
 > - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
@@ -40,6 +42,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，`gameplay-state` 负责 authority / 冷却 / 结算与回放
 >
 > `intervene / retrospective / batch` 当前不改 REST 形状，但待注入文本已经进入后端共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求和模拟不需要落在同一个 worker，干预也能被消费。`batch` 在 SQLite queue 路径下还会把 queue row 和 intervention log 一起原子写入。
+
+> `GET /api/scenario/{id}/groups` 当前会批量加载 group members 与 leader 信息，避免按 group / member 逐条查库。
 
 ### Scenario Management (P4)
 

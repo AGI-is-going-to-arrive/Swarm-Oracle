@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from sqlalchemy import Index
+from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import JSON, Column, Field, Relationship, Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
@@ -159,9 +160,18 @@ class Scenario(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     question: str
-    parsed_context: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    director_state_json: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
-    gameplay_state_json: Optional[dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    parsed_context: Optional[dict] = Field(
+        default=None,
+        sa_column=Column(MutableDict.as_mutable(JSON)),
+    )
+    director_state_json: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(MutableDict.as_mutable(JSON)),
+    )
+    gameplay_state_json: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(MutableDict.as_mutable(JSON)),
+    )
     status: ScenarioStatus = ScenarioStatus.PARSING
     created_at: datetime = Field(default_factory=_now)
     user_id: Optional[str] = None
@@ -253,6 +263,9 @@ def init_db():
                 )
                 _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
                 _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
+                _migrate_create_index(
+                    conn, "agent_group", "ix_agent_group_scenario_id", ["scenario_id"]
+                )
                 _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
                 _migrate_create_index(
                     conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
