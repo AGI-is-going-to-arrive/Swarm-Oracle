@@ -21,6 +21,13 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+SOCIAL_COPY_MAX_CHARS = {
+    "xiaohongshu": 4_000,
+    "weibo": 2_000,
+    "zhihu": 12_000,
+    "reddit": 5_000,
+    "x": 1_600,
+}
 
 
 class SocialCopyRequest(BaseModel):
@@ -176,6 +183,31 @@ def _resolve_social_language(scenario: Scenario) -> str:
     ) or detect_language(scenario.question)
 
 
+def _trim_social_copy(platform: str, copy: str) -> str:
+    limit = SOCIAL_COPY_MAX_CHARS.get(platform)
+    trimmed = copy.strip()
+    if limit is None or len(trimmed) <= limit:
+        return trimmed
+
+    boundary_markers = ("\n", "。", ".", "！", "!", "？", "?", " ")
+    boundary = max(trimmed.rfind(marker, 0, limit) for marker in boundary_markers)
+    if boundary < int(limit * 0.6):
+        boundary = max(limit - 1, 1)
+    return trimmed[:boundary].rstrip() + "…"
+
+
+def _bound_social_generation_buffer(platform: str, copy: str) -> str:
+    limit = SOCIAL_COPY_MAX_CHARS.get(platform)
+    trimmed = copy.strip()
+    if limit is None:
+        return trimmed
+
+    safety_limit = max(limit * 2, limit)
+    if len(trimmed) <= safety_limit:
+        return trimmed
+    return trimmed[: safety_limit - 1].rstrip() + "…"
+
+
 def _build_social_context(
     scenario: Scenario,
     agents: list[Agent],
@@ -301,10 +333,11 @@ async def _generate_social_copy(
     except LLMError as exc:
         raise HTTPException(502, f"LLM generation failed: {exc}") from exc
 
+    copy = _bound_social_generation_buffer(platform, copy)
     return {
         "platform": platform,
         "platform_name": platform_name,
-        "copy": copy.strip(),
+        "copy": _trim_social_copy(platform, copy),
     }
 
 

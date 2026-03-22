@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
@@ -133,7 +133,11 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
 
 
 @router.get("/scenario/{scenario_id}/predictions")
-async def list_predictions(scenario_id: str) -> list[PredictionResponse]:
+async def list_predictions(
+    scenario_id: str,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[PredictionResponse]:
     """List all predictions for a scenario."""
     engine = get_engine()
     with Session(engine) as session:
@@ -141,11 +145,15 @@ async def list_predictions(scenario_id: str) -> list[PredictionResponse]:
         if not scenario:
             raise HTTPException(404, "Scenario not found")
 
-        preds = list(session.exec(
+        query = (
             select(Prediction)
             .where(Prediction.scenario_id == scenario_id)
             .order_by(Prediction.created_at.desc())
-        ).all())
+            .offset(offset)
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        preds = list(session.exec(query).all())
 
         return [
             PredictionResponse(
@@ -200,7 +208,10 @@ async def trigger_scoring(
 
 
 @router.get("/leaderboard")
-async def get_leaderboard(limit: int = 20) -> list[LeaderboardEntry]:
+async def get_leaderboard(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[LeaderboardEntry]:
     """Get the global prediction leaderboard (top N by avg score)."""
     engine = get_engine()
     with Session(engine) as session:
@@ -208,6 +219,7 @@ async def get_leaderboard(limit: int = 20) -> list[LeaderboardEntry]:
             select(Leaderboard)
             .where(Leaderboard.total_predictions >= 1)
             .order_by(Leaderboard.avg_score.desc())
+            .offset(offset)
             .limit(min(limit, 100))
         ).all())
 

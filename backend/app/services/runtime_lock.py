@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _RUNTIME_LOCK_TABLE = "runtime_lock"
+_INPROCESS_LOCKS: dict[str, tuple[str, float]] = {}
+_INPROCESS_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -73,11 +76,21 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
 
     # Fallback for in-memory / non-SQLite test environments.
     if db_path is None:
+        expires_at = now + normalized_lease
+        with _INPROCESS_LOCKS_GUARD:
+            existing = _INPROCESS_LOCKS.get(lock_key)
+            if existing is not None:
+                existing_owner_id, existing_expires_at = existing
+                if existing_expires_at > now:
+                    return None
+                if existing_owner_id:
+                    _INPROCESS_LOCKS.pop(lock_key, None)
+            _INPROCESS_LOCKS[lock_key] = (owner_id, expires_at)
         return RuntimeLockLease(
             lock_key=lock_key,
             owner_id=owner_id,
             db_path=None,
-            expires_at=now + normalized_lease,
+            expires_at=expires_at,
         )
 
     conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
@@ -126,7 +139,12 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
     if lease is None:
         return False
     if lease.db_path is None:
-        return True
+        with _INPROCESS_LOCKS_GUARD:
+            current = _INPROCESS_LOCKS.get(lease.lock_key)
+            if current is None or current[0] != lease.owner_id:
+                return False
+            _INPROCESS_LOCKS.pop(lease.lock_key, None)
+            return True
 
     conn = sqlite3.connect(lease.db_path, timeout=30, isolation_level=None)
     try:

@@ -1,5 +1,7 @@
 """Tests for app.config — Settings loading."""
 
+import pytest
+
 
 def test_settings_defaults():
     """Settings should have sensible defaults."""
@@ -8,7 +10,7 @@ def test_settings_defaults():
     s = Settings()
     assert s.LLM_RESPONSES_URL.startswith("http")
     assert s.LLM_MODEL_NAME  # not empty
-    assert s.LLM_REASONING_EFFORT in ("low", "medium", "high")
+    assert s.LLM_REASONING_EFFORT in ("none", "low", "medium", "high")
     assert s.MAX_AGENTS > 0
     assert s.MAX_ROUNDS > 0
     assert s.MAX_BRANCHES > 0
@@ -48,3 +50,32 @@ def test_settings_normalize_relative_local_paths(monkeypatch):
     s = Settings()
     assert s.DATABASE_URL == f"sqlite:///{(BACKEND_ROOT / 'relative-dev.db').resolve()}"
     assert s.CHROMA_PERSIST_DIR == str((BACKEND_ROOT / "relative-chroma").resolve())
+
+
+def test_settings_reject_placeholder_key_for_non_local_llm(monkeypatch):
+    monkeypatch.setenv("LLM_RESPONSES_URL", "https://api.example.com/v1/chat/completions")
+    monkeypatch.setenv("LLM_API_KEY", "sk-12345678")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="non-placeholder value"):
+        Settings()
+
+
+def test_settings_allow_placeholder_key_for_local_gateway(monkeypatch):
+    monkeypatch.setenv("LLM_RESPONSES_URL", "http://host.docker.internal:8318/v1/chat/completions")
+    monkeypatch.setenv("LLM_API_KEY", "sk-12345678")
+
+    from app.config import Settings
+
+    s = Settings()
+    assert s.LLM_API_KEY == "sk-12345678"
+
+
+def test_settings_reject_blank_model_name(monkeypatch):
+    monkeypatch.setenv("LLM_MODEL_NAME", "   ")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="LLM_MODEL_NAME cannot be empty"):
+        Settings()

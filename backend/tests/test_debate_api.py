@@ -466,6 +466,267 @@ def test_import_replay_debate_rejects_excessive_turn_count(client: TestClient):
     assert "too many turns" in resp.text
 
 
+def test_import_replay_debate_rejects_invalid_winner(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "result": {
+                "winner": "judge",
+                "verdict_tone": "order",
+            },
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "invalid winner" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_verdict_tone(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "result": {
+                "winner": "proposition",
+                "verdict_tone": "chaos",
+            },
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "invalid verdict_tone" in resp.text
+
+
+def test_import_replay_debate_rejects_non_contiguous_turn_sequence(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn 1",
+                },
+                {
+                    "sequence": 3,
+                    "phase": "crossfire",
+                    "speaker_side": "opposition",
+                    "speaker_name": "Opposition",
+                    "content": "Imported turn 3",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "contiguous and unique" in resp.text
+
+
+def test_import_replay_debate_rejects_duplicate_turn_sequence(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn 1",
+                },
+                {
+                    "sequence": 1,
+                    "phase": "crossfire",
+                    "speaker_side": "opposition",
+                    "speaker_name": "Opposition",
+                    "content": "Imported turn 1 duplicate",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "contiguous and unique" in resp.text
+
+
+def test_import_replay_debate_sorts_turns_by_sequence(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 2,
+                    "phase": "crossfire",
+                    "speaker_side": "opposition",
+                    "speaker_name": "Opposition",
+                    "content": "Imported turn 2",
+                },
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn 1",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert [turn["sequence"] for turn in payload["turns"]] == [1, 2]
+    assert payload["turns"][0]["content"] == "Imported turn 1"
+    assert payload["turns"][1]["content"] == "Imported turn 2"
+
+
+def test_import_replay_debate_rejects_invalid_phase_insight_phase(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+            "phase_insights": [
+                {
+                    "phase": "overture",
+                    "commentary": "Bad phase",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "invalid phase_insights.phase" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_phase_insight_direction(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+            "phase_insights": [
+                {
+                    "phase": "opening",
+                    "pressure_side": "judge",
+                    "confidence_drift": {
+                        "direction": "balanced",
+                    },
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "invalid phase_insights.pressure_side" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_phase_insight_confidence_drift_shape(client: TestClient):
+    resp = client.post("/api/debate/import-replay", json={
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+            "phase_insights": [
+                {
+                    "phase": "opening",
+                    "confidence_drift": "bad-shape",
+                },
+            ],
+        },
+    })
+
+    assert resp.status_code == 422
+    assert "confidence_drift must be an object" in resp.text
+
+
 def test_empty_turn_fallbacks_are_readable():
     from app.services import debate as debate_service
 

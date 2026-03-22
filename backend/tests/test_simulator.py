@@ -4,6 +4,8 @@ These tests exercise the database-facing helper functions in simulator.py
 in isolation, using real SQLite test databases.
 """
 
+import json
+
 import pytest
 from sqlmodel import Session, select
 
@@ -26,12 +28,15 @@ from app.services.simulator import (
     _create_round,
     _format_setting,
     _gather_agent_messages,
+    _gather_hierarchical_messages,
     _get_branch,
     _get_messages_in_range,
     _get_recent_messages,
+    _load_latest_compressed_briefing,
     _narrate_branch_data,
     _resolve_hierarchical_agent_sets,
     _save_message,
+    _save_messages,
     _save_narration,
     _save_round_summary,
     _update_branch_status,
@@ -80,6 +85,11 @@ class TestFormatSetting:
         assert "现代" in result
         assert "未知" in result  # location defaults
 
+    def test_english_labels(self):
+        result = _format_setting({"time_period": "Modern"}, language="English")
+        assert "Era: Modern" in result
+        assert "Location: Unknown" in result
+
 
 # ── _coerce_stance_value ───────────────────────────────────
 
@@ -96,6 +106,12 @@ class TestCoerceStanceValue:
 
     def test_unknown_text_stance_falls_back_center(self):
         assert _coerce_stance_value("北伐") == 0.0
+
+    def test_japanese_support_keyword_maps_right(self):
+        assert _coerce_stance_value("賛成") > 0
+
+    def test_korean_oppose_keyword_maps_left(self):
+        assert _coerce_stance_value("반대") < 0
 
 
 class TestResolveHierarchicalAgentSets:
@@ -126,6 +142,54 @@ class TestResolveHierarchicalAgentSets:
         assert [agent["name"] for agent in worker_agents] == ["Worker Beta"]
         assert "Missing Leader" in caplog.text
         assert "Worker Alpha" in caplog.text
+
+
+class TestGatherHierarchicalMessages:
+    @pytest.mark.asyncio
+    async def test_synthesized_worker_messages_are_stored_in_vector_memory(self, monkeypatch):
+        captured: list[dict] = []
+
+        async def _fake_gather_agent_messages(*_args, **_kwargs):
+            return [
+                {
+                    "agent_id": "leader-1",
+                    "agent_name": "Leader Alpha",
+                    "content": "Adopt the compromise route immediately.",
+                    "emotion": "focused",
+                    "diverge": None,
+                }
+            ]
+
+        monkeypatch.setattr(
+            "app.services.simulator._gather_agent_messages",
+            _fake_gather_agent_messages,
+        )
+        monkeypatch.setattr("app.services.simulator._save_messages", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            "app.services.simulator.store_memory",
+            lambda **kwargs: captured.append(kwargs),
+        )
+
+        result = await _gather_hierarchical_messages(
+            engine=object(),
+            scenario_id="scenario-1",
+            branch_id="branch-1",
+            round_id="round-1",
+            round_num=3,
+            leader_agents=[{"id": "leader-1", "name": "Leader Alpha", "role": "Coordinator"}],
+            worker_agents=[{"id": "worker-1", "name": "Worker Beta", "role": "Analyst", "stance": "반대"}],
+            agent_to_group={"Worker Beta": "alpha"},
+            group_leaders={"alpha": "Leader Alpha"},
+            setting_bg="bg",
+            topic="topic",
+        )
+
+        assert len(result) == 2
+        assert len(captured) == 1
+        assert captured[0]["scenario_id"] == "scenario-1"
+        assert captured[0]["agent_name"] == "Worker Beta"
+        assert captured[0]["branch_id"] == "branch-1"
+        assert "Leader Alpha" in captured[0]["content"]
 
 
 class TestGatherAgentMessages:
@@ -345,6 +409,42 @@ class TestSaveMessage:
         with Session(engine) as session:
             msgs = session.exec(select(AgentMessage).where(AgentMessage.round_id == rid)).all()
             assert "🚀" in msgs[0].content
+
+    def test_save_messages_batches_multiple_rows(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        rid = _create_round(engine, bid, 1)
+        a1 = _make_agent(engine, sid, name="A1")
+        a2 = _make_agent(engine, sid, name="A2")
+
+        _save_messages(
+            engine,
+            [
+                {
+                    "round_id": rid,
+                    "agent_id": a1,
+                    "content": "A1发言",
+                    "emotion": "neutral",
+                    "diverge": None,
+                },
+                {
+                    "round_id": rid,
+                    "agent_id": a2,
+                    "content": "A2发言",
+                    "emotion": "tense",
+                    "diverge": "路线分歧",
+                },
+            ],
+        )
+
+        with Session(engine) as session:
+            msgs = session.exec(
+                select(AgentMessage).where(AgentMessage.round_id == rid)
+            ).all()
+            assert len(msgs) == 2
+            assert {msg.content for msg in msgs} == {"A1发言", "A2发言"}
+            assert any(msg.diverge == "路线分歧" for msg in msgs)
 
 
 # ── _get_recent_messages ─────────────────────────────────────
@@ -588,6 +688,17 @@ class TestSaveRoundSummary:
         # No round created — should silently skip
         _save_round_summary(engine, bid, 99, "summary")
 
+    def test_load_latest_summary_supports_legacy_python_repr(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        _create_round(engine, bid, 3)
+        _save_round_summary(engine, bid, 3, str({"situation": "旧摘要"}))
+
+        result = _load_latest_compressed_briefing(engine, bid, before_round=4)
+
+        assert result == {"situation": "旧摘要"}
+
 
 class TestCompressRoundMemory:
     @pytest.mark.asyncio
@@ -689,6 +800,45 @@ class TestCompressRoundMemory:
             "base_url": "https://example.com/v1/chat/completions",
             "model": "gpt-test",
         }
+
+    @pytest.mark.asyncio
+    async def test_compress_round_memory_persists_json_summary(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "最新发言", "neutral", None)
+
+        async def _fake_compress(*_args, **_kwargs):
+            return {
+                "situation": "新局势",
+                "active_debates": ["争点"],
+                "key_quotes": [],
+                "tension_points": [],
+                "consensus": "",
+            }
+
+        monkeypatch.setattr("app.services.simulator.compress_rounds", _fake_compress)
+
+        await _compress_round_memory(engine, bid, 1, language="Chinese")
+
+        with Session(engine) as session:
+            saved = session.exec(
+                select(Round).where(Round.branch_id == bid, Round.round_number == 1)
+            ).first()
+
+        assert saved is not None
+        assert saved.compressed_summary == json.dumps(
+            {
+                "situation": "新局势",
+                "active_debates": ["争点"],
+                "key_quotes": [],
+                "tension_points": [],
+                "consensus": "",
+            },
+            ensure_ascii=False,
+        )
 
 
 class TestNarrateBranchData:

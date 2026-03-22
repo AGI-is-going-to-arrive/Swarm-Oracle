@@ -18,6 +18,7 @@ from app.models import (
     InterventionLog,
     Leaderboard,
     PendingIntervention,
+    Prediction,
     Round,
     Scenario,
     ScenarioCampaignLog,
@@ -458,6 +459,39 @@ class TestPredictionLeaderboardEndpoints:
         assert row["best_score"] == 90.0
         assert row["win_streak"] == 2
 
+    def test_get_leaderboard_supports_offset(self, client):
+        engine = get_engine()
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Leaderboard(
+                        user_id="leader-a",
+                        user_name="LeaderA",
+                        total_predictions=2,
+                        total_score=180.0,
+                        avg_score=90.0,
+                        best_score=95.0,
+                        win_streak=2,
+                    ),
+                    Leaderboard(
+                        user_id="leader-b",
+                        user_name="LeaderB",
+                        total_predictions=2,
+                        total_score=160.0,
+                        avg_score=80.0,
+                        best_score=90.0,
+                        win_streak=1,
+                    ),
+                ]
+            )
+            session.commit()
+
+        resp = client.get("/api/leaderboard?limit=1&offset=1")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload) == 1
+        assert payload[0]["user_id"] == "leader-b"
+
     def test_submit_prediction_rejects_invalid_confidence_via_active_router(self, client):
         """Prediction API should use predictions.py validation rather than legacy dict parsing."""
         engine = get_engine()
@@ -478,6 +512,25 @@ class TestPredictionLeaderboardEndpoints:
         """Prediction listing should now come from predictions.py and validate scenario existence."""
         resp = client.get("/api/scenario/nonexistent/predictions")
         assert resp.status_code == 404
+
+    def test_list_predictions_supports_limit_and_offset(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Prediction(scenario_id=sid, prediction_text="预测 1", user_name="A"),
+                    Prediction(scenario_id=sid, prediction_text="预测 2", user_name="B"),
+                    Prediction(scenario_id=sid, prediction_text="预测 3", user_name="C"),
+                ]
+            )
+            session.commit()
+
+        resp = client.get(f"/api/scenario/{sid}/predictions?limit=1&offset=1")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload) == 1
+        assert payload[0]["prediction_text"] == "预测 2"
 
     def test_submit_prediction_rejects_closed_statuses(self, client):
         engine = get_engine()

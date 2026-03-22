@@ -26,7 +26,8 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 
-SCORING_PROMPT = """你是一个精确的预测评估器。请比较用户的预测与实际推演结果，给出准确率评分。
+SCORING_PROMPTS = {
+    "Chinese": """你是一个精确的预测评估器。请比较用户的预测与实际推演结果，给出准确率评分。
 
 {untrusted_input_guardrail}
 
@@ -53,7 +54,36 @@ SCORING_PROMPT = """你是一个精确的预测评估器。请比较用户的预
 - 0-29: 预测与实际结果基本无关或完全相反
 
 {language_directive}
-"""
+""",
+    "English": """You are a precise prediction evaluator. Compare the user's prediction against the actual simulation outcome and assign an accuracy score.
+
+{untrusted_input_guardrail}
+
+## Original Question
+{question_block}
+
+## User Prediction
+{prediction_block}
+
+## Actual Simulation Outcome
+{actual_result_block}
+
+Return strict JSON:
+{{
+  "score": <integer from 0-100, where 100 means nearly perfect>,
+  "reason": "<one short sentence explaining the score>"
+}}
+
+Scoring rubric:
+- 90-100: Captures the core outcome almost exactly
+- 70-89: Gets most major trends right with some detail gaps
+- 50-69: Directionally right but misses key changes
+- 30-49: Contains some reasonable elements but is broadly off-target
+- 0-29: Mostly unrelated to or opposite from the final outcome
+
+{language_directive}
+""",
+}
 
 
 def _normalize_scoring_result(raw: object) -> tuple[int, str]:
@@ -88,6 +118,10 @@ def _truncate_at_boundary(text: str, max_chars: int) -> str:
     if last_space > max_chars * 0.5:
         return truncated[:last_space] + '…'
     return truncated + '…'
+
+
+def _scoring_label(language: str, chinese: str, english: str) -> str:
+    return chinese if language == "Chinese" else english
 
 
 def _claim_prediction_score(
@@ -216,11 +250,12 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
 
         # Combine branch stories as actual result
         actual_parts = []
+        insight_label = _scoring_label(detected_lang, "洞察", "Insight")
         for b in branches:
             if b.story:
                 actual_parts.append(f"[{b.title}] {b.story}")
             if b.insight:
-                actual_parts.append(f"洞察: {b.insight}")
+                actual_parts.append(f"{insight_label}: {b.insight}")
 
         if not actual_parts:
             logger.warning("No stories found for scenario %s — cannot score", scenario_id)
@@ -236,19 +271,20 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
     quota_key = overrides.get("quota_key") or provider_policy.get("user_id")
 
     try:
-        prompt = SCORING_PROMPT.format(
+        prompt_template = SCORING_PROMPTS.get(detected_lang, SCORING_PROMPTS["English"])
+        prompt = prompt_template.format(
             question_block=format_untrusted_text_block(
-                "原始问题",
+                _scoring_label(detected_lang, "原始问题", "Original Question"),
                 scenario_question,
                 max_chars=1200,
             ),
             prediction_block=format_untrusted_text_block(
-                "用户预测",
+                _scoring_label(detected_lang, "用户预测", "User Prediction"),
                 prediction_text,
                 max_chars=1200,
             ),
             actual_result_block=format_untrusted_text_block(
-                "实际推演结果",
+                _scoring_label(detected_lang, "实际推演结果", "Actual Simulation Outcome"),
                 _truncate_at_boundary(actual_result, 2000),
                 max_chars=2200,
             ),

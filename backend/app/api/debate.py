@@ -46,6 +46,9 @@ _PREDICTION_OPTIONS = {
     DebatePredictionKind.VERDICT_TONE: {"order", "balance", "rupture"},
 }
 _COUNTERPLAY_VARIANTS = {"balanced", "reversal"}
+_PHASE_INSIGHT_DIRECTIONS = {"balanced", "proposition", "opposition"}
+_IMPORT_REPLAY_DEFAULT_WINNER = "proposition"
+_IMPORT_REPLAY_DEFAULT_VERDICT_TONE = "balance"
 
 
 class CreateDebateRequest(BaseModel):
@@ -154,6 +157,128 @@ class ImportReplayDebateRequest(BaseModel):
         return self
 
 
+def _normalize_import_replay_choice(
+    raw_value: Any,
+    *,
+    allowed: set[str],
+    default: str,
+    field_name: str,
+) -> str:
+    cleaned = str(raw_value or "").strip().lower()
+    if not cleaned:
+        return default
+    if cleaned not in allowed:
+        raise HTTPException(
+            422,
+            f"Replay debate has invalid {field_name}: {cleaned}",
+        )
+    return cleaned
+
+
+def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[tuple[int, dict[str, Any]]] = []
+    for raw_turn in turns:
+        if not isinstance(raw_turn, dict):
+            continue
+        try:
+            sequence = int(raw_turn.get("sequence", 1) or 1)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                422,
+                "Replay debate turn sequence must be a positive integer",
+            ) from exc
+        if sequence <= 0:
+            raise HTTPException(
+                422,
+                "Replay debate turn sequence must be a positive integer",
+            )
+        normalized.append((sequence, raw_turn))
+
+    if not normalized:
+        return []
+
+    normalized.sort(key=lambda item: item[0])
+    expected = list(range(1, len(normalized) + 1))
+    actual = [sequence for sequence, _ in normalized]
+    if actual != expected:
+        raise HTTPException(
+            422,
+            "Replay debate turn sequence must be contiguous and unique starting at 1",
+        )
+    return [raw_turn for _, raw_turn in normalized]
+
+
+def _normalize_import_phase_insight_direction(
+    raw_value: Any,
+    *,
+    field_name: str,
+) -> str:
+    cleaned = str(raw_value or "").strip().lower()
+    if not cleaned:
+        return "balanced"
+    if cleaned not in _PHASE_INSIGHT_DIRECTIONS:
+        raise HTTPException(422, f"Replay debate has invalid {field_name}: {cleaned}")
+    return cleaned
+
+
+def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[dict[str, Any]] | None:
+    if phase_insights is None:
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for entry in phase_insights:
+        if not isinstance(entry, dict):
+            raise HTTPException(422, "Replay debate phase_insights entries must be objects")
+
+        phase_raw = str(entry.get("phase", "")).strip().lower()
+        try:
+            phase = DebatePhase(phase_raw)
+        except ValueError as exc:
+            raise HTTPException(422, f"Replay debate has invalid phase_insights.phase: {phase_raw}") from exc
+
+        confidence_drift = entry.get("confidence_drift", {})
+        if confidence_drift is None:
+            confidence_drift = {}
+        if not isinstance(confidence_drift, dict):
+            raise HTTPException(422, "Replay debate phase_insights.confidence_drift must be an object")
+
+        try:
+            pressure_margin = int(entry.get("pressure_margin", 0) or 0)
+            turn_count = int(entry.get("turn_count", 0) or 0)
+            phase_margin = int(confidence_drift.get("phase_margin", 0) or 0)
+            cumulative_margin = int(confidence_drift.get("cumulative_margin", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "Replay debate phase_insights numeric fields must be integers") from exc
+
+        if pressure_margin < 0 or turn_count < 0:
+            raise HTTPException(422, "Replay debate phase_insights numeric fields must be >= 0")
+
+        normalized.append(
+            {
+                "phase": phase.value,
+                "stakes": str(entry.get("stakes", "")).strip(),
+                "judge_focus": str(entry.get("judge_focus", "")).strip(),
+                "commentary": str(entry.get("commentary", "")).strip(),
+                "pressure_side": _normalize_import_phase_insight_direction(
+                    entry.get("pressure_side"),
+                    field_name="phase_insights.pressure_side",
+                ),
+                "pressure_margin": pressure_margin,
+                "turn_count": turn_count,
+                "confidence_drift": {
+                    "direction": _normalize_import_phase_insight_direction(
+                        confidence_drift.get("direction"),
+                        field_name="phase_insights.confidence_drift.direction",
+                    ),
+                    "phase_margin": phase_margin,
+                    "cumulative_margin": cumulative_margin,
+                },
+            }
+        )
+
+    return normalized
+
+
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
@@ -217,6 +342,20 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     score = result.get("score") if isinstance(result.get("score"), dict) else payload.get("score") if isinstance(payload.get("score"), dict) else {}
     counterplay = payload.get("counterplay") if isinstance(payload.get("counterplay"), dict) else None
     rationale = result.get("judge_rationale") if isinstance(result.get("judge_rationale"), dict) else {}
+    winner = _normalize_import_replay_choice(
+        result.get("winner"),
+        allowed=_PREDICTION_OPTIONS[DebatePredictionKind.WINNER],
+        default=_IMPORT_REPLAY_DEFAULT_WINNER,
+        field_name="winner",
+    )
+    verdict_tone = _normalize_import_replay_choice(
+        result.get("verdict_tone"),
+        allowed=_PREDICTION_OPTIONS[DebatePredictionKind.VERDICT_TONE],
+        default=_IMPORT_REPLAY_DEFAULT_VERDICT_TONE,
+        field_name="verdict_tone",
+    )
+    normalized_turns = _normalize_import_replay_turns(turns)
+    normalized_phase_insights = _normalize_import_phase_insights(phase_insights)
 
     engine = get_engine()
     with Session(engine) as session:
@@ -237,8 +376,8 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
             score_proposition=int(score.get("proposition", 0) or 0),
             score_opposition=int(score.get("opposition", 0) or 0),
             audience_meter=int(score.get("audience_meter", 0) or 0),
-            winner=str(result.get("winner", "proposition")).strip() or "proposition",
-            verdict_tone=str(result.get("verdict_tone", "balance")).strip() or "balance",
+            winner=winner,
+            verdict_tone=verdict_tone,
             best_argument=str(result.get("best_argument", "")).strip(),
             best_rebuttal=str(result.get("best_rebuttal", "")).strip(),
             judge_summary=str(result.get("judge_summary", "")).strip(),
@@ -254,7 +393,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
                 "counterplay_explanation": counterplay.get("explanation") if counterplay else "",
                 "metadata": {
                     "adjudication_mode": str(result.get("adjudication_mode", "deterministic")).strip() or "deterministic",
-                    "phase_insights": phase_insights if phase_insights is not None else [],
+                    "phase_insights": normalized_phase_insights if normalized_phase_insights is not None else [],
                 },
             },
         )
@@ -262,7 +401,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
         session.flush()
         debate_id = debate.id
 
-        for raw_turn in turns:
+        for raw_turn in normalized_turns:
             if not isinstance(raw_turn, dict):
                 continue
             try:

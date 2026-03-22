@@ -9,6 +9,7 @@ from app.models import (
     Branch,
     BranchStatus,
     InterventionLog,
+    PendingIntervention,
     Round,
     Scenario,
     ScenarioStatus,
@@ -192,8 +193,9 @@ class TestRetrospectiveIntervention:
 
 
 class TestBatchIntervention:
-    def test_batch_two_branches(self, client):
+    def test_batch_two_branches(self, client, monkeypatch):
         """Should inject into 2 branches simultaneously."""
+        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid1 = _seed_branch(engine, sid, title="分支1")
@@ -219,6 +221,10 @@ class TestBatchIntervention:
                 select(InterventionLog).where(InterventionLog.scenario_id == sid)
             ).all()
             assert len(logs) == 2
+            pending = session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all()
+            assert len(pending) == 2
 
     def test_batch_empty_list(self, client):
         """Should reject empty interventions list."""
@@ -230,8 +236,9 @@ class TestBatchIntervention:
         })
         assert resp.status_code == 400
 
-    def test_batch_partial_invalid(self, client):
+    def test_batch_partial_invalid(self, client, monkeypatch):
         """If one branch is invalid, entire batch should be rejected."""
+        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid)
@@ -243,6 +250,13 @@ class TestBatchIntervention:
             ]
         })
         assert resp.status_code == 400
+        with Session(engine) as session:
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
 
     def test_batch_nonexistent_scenario(self, client):
         """Should return 404 for unknown scenario."""

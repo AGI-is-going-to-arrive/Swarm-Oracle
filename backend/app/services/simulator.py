@@ -99,11 +99,56 @@ def _coerce_stance_value(raw_stance: Any) -> float:
         return max(-1.0, min(1.0, float(text)))
     except ValueError:
         lowered = text.lower()
-        if any(token in lowered for token in ("support", "pro", "favor", "支持", "赞成", "赞同", "拥护", "同意")):
+        if any(
+            token in lowered
+            for token in (
+                "support",
+                "pro",
+                "favor",
+                "支持",
+                "赞成",
+                "赞同",
+                "拥护",
+                "同意",
+                "賛成",
+                "支持する",
+                "찬성",
+                "지지",
+            )
+        ):
             return 0.6
-        if any(token in lowered for token in ("oppose", "against", "con", "反对", "质疑", "抵制", "否决")):
+        if any(
+            token in lowered
+            for token in (
+                "oppose",
+                "against",
+                "con",
+                "反对",
+                "质疑",
+                "抵制",
+                "否决",
+                "反対",
+                "反対する",
+                "반대",
+                "저지",
+            )
+        ):
             return -0.6
-        if any(token in lowered for token in ("neutral", "undecided", "中立", "观望", "摇摆", "保留")):
+        if any(
+            token in lowered
+            for token in (
+                "neutral",
+                "undecided",
+                "中立",
+                "观望",
+                "摇摆",
+                "保留",
+                "中立的",
+                "保留する",
+                "중립",
+                "유보",
+            )
+        ):
             return 0.0
         return 0.0
 
@@ -277,7 +322,7 @@ def _resolve_hierarchical_agent_sets(
     worker_agents = [agent for agent in agents if agent.get("name") not in leader_names]
     return leader_agents, worker_agents, effective_group_leaders
 
-FORK_DETECT_PROMPT = """你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。
+FORK_DETECT_PROMPT_ZH = """你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。
 
 【最近讨论摘要】
 {recent_summary}
@@ -319,6 +364,48 @@ FORK_DETECT_PROMPT = """你是一位敏锐的历史分歧分析师。请分析�
 {language_directive}
 """
 
+FORK_DETECT_PROMPT_EN = """You are a sharp historical divergence analyst. Review the discussion below and decide whether it contains a fundamental disagreement strong enough to split the timeline.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+Decide:
+1. Are these disagreements fundamental strategic splits or merely surface-level arguments?
+2. If a material split exists, how many genuinely different future paths does it create?
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence describing the core disagreement",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+Title requirements:
+- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'
+- Use the most distinctive keywords so the difference is obvious at a glance
+- Good examples: "Total War", "Negotiated Peace", "Tech Breakthrough", "Alliance Collapse"
+- Bad examples: "Aggressive Development Path", "Conservative Response Plan", "First Possibility"
+
+Description requirements:
+- Each branch description must be concrete and different from the others
+- Do not repeat generic language like 'the core disagreement is whether to expand outward'
+- Good example: "Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat"
+- Bad example: "The core disagreement is whether to expand outward"
+
+{language_directive}
+"""
+
 
 # ── Simulation Orchestrator ──────────────────────────────
 
@@ -348,11 +435,11 @@ async def run_simulation(
         if not scenario:
             raise ValueError(f"Scenario {scenario_id} not found")
         ctx = scenario.parsed_context or {}
-        setting_bg = _format_setting(ctx.get("setting", {}))
+        detected_language = ctx.get("_language", "Chinese")
+        setting_bg = _format_setting(ctx.get("setting", {}), language=detected_language)
         sim_rounds = ctx.get("simulation_rounds", 10)
         sensitivity = ctx.get("branch_sensitivity", 0.7)
         key_variable = ctx.get("key_variable", scenario.question)
-        detected_language = ctx.get("_language", "Chinese")
 
         # V2: Initialize visualization mapper if enabled
         viz_enabled = getattr(scenario, "visualization_enabled", False)
@@ -839,9 +926,6 @@ async def _gather_agent_messages(
                 "diverge": diverge,
             }
 
-            # Save to DB
-            _save_message(engine, round_id, agent["id"], content, emotion, diverge)
-
             # Push final parsed message immediately (no batching)
             await push_event({
                 "type": "agent_speak",
@@ -896,6 +980,20 @@ async def _gather_agent_messages(
     results = await asyncio.gather(*tasks)
 
     # Batch-post results to Blackboard (after gather — concurrency-safe)
+    _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": msg["agent_id"],
+                "content": msg["content"],
+                "emotion": msg["emotion"],
+                "diverge": msg.get("diverge"),
+            }
+            for msg in results
+        ],
+    )
+
     if blackboard is not None:
         for msg in results:
             blackboard.post(
@@ -962,6 +1060,7 @@ async def _gather_hierarchical_messages(
         if push:
             await push(event)
 
+    worker_messages: list[dict[str, Any]] = []
     for worker in worker_agents:
         worker_group = agent_to_group.get(worker["name"], "")
         leader_name = group_leaders.get(worker_group, "")
@@ -991,8 +1090,7 @@ async def _gather_hierarchical_messages(
             "synthesized": True,  # Mark as non-LLM
         }
 
-        # Save to DB
-        _save_message(engine, round_id, worker["id"], synth_content, emotion, None)
+        worker_messages.append(msg)
 
         # Push to frontend (but NO agent_speak_start — instant, no "thinking")
         await push_event({
@@ -1022,6 +1120,29 @@ async def _gather_hierarchical_messages(
 
         all_messages.append(msg)
 
+    _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": msg["agent_id"],
+                "content": msg["content"],
+                "emotion": msg["emotion"],
+                "diverge": msg.get("diverge"),
+            }
+            for msg in worker_messages
+        ],
+    )
+    for msg in worker_messages:
+        store_memory(
+            scenario_id=scenario_id,
+            agent_name=msg["agent_name"],
+            content=msg["content"],
+            round_num=round_num,
+            emotion=msg.get("emotion", "neutral"),
+            branch_id=branch_id,
+        )
+
     # Batch-post all results to Blackboard
     if blackboard is not None:
         for msg in all_messages:
@@ -1046,8 +1167,9 @@ async def _detect_fork(engine, branch_id, diverge_signals, sensitivity, *, llm_o
     """Detect if current discussion warrants a branch fork."""
     recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=3)
     recent_text = format_messages_for_context(recent_msgs, max_recent=15)
+    prompt_template = FORK_DETECT_PROMPT_ZH if language == "Chinese" else FORK_DETECT_PROMPT_EN
 
-    prompt = FORK_DETECT_PROMPT.format(
+    prompt = prompt_template.format(
         recent_summary=recent_text,
         diverge_signals="\n".join(f"- {s}" for s in diverge_signals),
         sensitivity=sensitivity,
@@ -1101,7 +1223,12 @@ async def _compress_round_memory(
         model=(llm_overrides or {}).get("model"),
     )
 
-    _save_round_summary(engine, branch_id, current_round, str(summary))
+    _save_round_summary(
+        engine,
+        branch_id,
+        current_round,
+        json.dumps(summary, ensure_ascii=False),
+    )
 
     # Update Blackboard with structured compression output
     if blackboard is not None:
@@ -1125,8 +1252,18 @@ def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: in
         return None
 
     try:
-        parsed = ast.literal_eval(round_row.compressed_summary)
-    except (SyntaxError, ValueError):
+        parsed = json.loads(round_row.compressed_summary)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(round_row.compressed_summary)
+        except (SyntaxError, ValueError):
+            logger.warning(
+                "Failed to parse historical compressed_summary for branch=%s round=%s",
+                branch_id,
+                round_row.round_number,
+            )
+            return None
+    except TypeError:
         logger.warning(
             "Failed to parse historical compressed_summary for branch=%s round=%s",
             branch_id,
@@ -1177,11 +1314,25 @@ def _agent_to_dict(agent: Agent) -> dict:
     }
 
 
-def _format_setting(setting: dict) -> str:
+def _format_setting(setting: dict, *, language: str = "Chinese") -> str:
+    if language == "Chinese":
+        labels = {
+            "time_period": "时代",
+            "location": "地点",
+            "background": "背景",
+            "unknown": "未知",
+        }
+    else:
+        labels = {
+            "time_period": "Era",
+            "location": "Location",
+            "background": "Background",
+            "unknown": "Unknown",
+        }
     return (
-        f"时代: {setting.get('time_period', '未知')}\n"
-        f"地点: {setting.get('location', '未知')}\n"
-        f"背景: {setting.get('background', '')}"
+        f"{labels['time_period']}: {setting.get('time_period', labels['unknown'])}\n"
+        f"{labels['location']}: {setting.get('location', labels['unknown'])}\n"
+        f"{labels['background']}: {setting.get('background', '')}"
     )
 
 
@@ -1229,12 +1380,34 @@ def _create_round(engine, branch_id, round_number) -> str:
 
 
 def _save_message(engine, round_id, agent_id, content, emotion, diverge):
-    msg = AgentMessage(
-        round_id=round_id, agent_id=agent_id,
-        content=content, emotion=emotion, diverge=diverge,
+    _save_messages(
+        engine,
+        [{
+            "round_id": round_id,
+            "agent_id": agent_id,
+            "content": content,
+            "emotion": emotion,
+            "diverge": diverge,
+        }],
     )
+
+
+def _save_messages(engine, messages: list[dict[str, Any]]) -> None:
+    if not messages:
+        return
+
+    rows = [
+        AgentMessage(
+            round_id=message["round_id"],
+            agent_id=message["agent_id"],
+            content=message["content"],
+            emotion=message["emotion"],
+            diverge=message.get("diverge"),
+        )
+        for message in messages
+    ]
     with Session(engine) as session:
-        session.add(msg)
+        session.add_all(rows)
         session.commit()
 
 

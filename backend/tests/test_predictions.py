@@ -444,6 +444,54 @@ class TestScoringService(unittest.TestCase):
             self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
             self.assertEqual(kwargs["model"], "gpt-test")
 
+    def test_score_prediction_uses_english_prompt_for_english_scenario(self):
+        """English scenarios should not receive a Chinese scoring prompt body."""
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services.scoring import score_prediction
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            with Session(engine) as session:
+                scenario = Scenario(
+                    question="What if Rome never fell?",
+                    status=ScenarioStatus.DONE,
+                    parsed_context={"_language": "English"},
+                )
+                session.add(scenario)
+                session.commit()
+                session.refresh(scenario)
+
+                session.add(
+                    Branch(
+                        scenario_id=scenario.id,
+                        title="Imperial Continuity",
+                        probability=1.0,
+                        story="The empire survives.",
+                        insight="Institutions remain stable.",
+                    )
+                )
+                pred = Prediction(
+                    scenario_id=scenario.id,
+                    prediction_text="Rome centralizes power.",
+                )
+                session.add(pred)
+                session.commit()
+                pred_id = pred.id
+
+            with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                mock_llm.return_value = {"score": 90, "reason": "Aligned"}
+                result = asyncio.run(score_prediction(pred_id))
+
+            self.assertEqual(result, {"score": 90, "reason": "Aligned"})
+            prompt = mock_llm.call_args.args[0]
+            self.assertIn("You are a precise prediction evaluator", prompt)
+            self.assertIn("Original Question", prompt)
+            self.assertIn("Actual Simulation Outcome", prompt)
+            self.assertNotIn("你是一个精确的预测评估器", prompt)
+
     def test_score_all_for_scenario_reports_no_pending_predictions(self):
         """Batch scoring should distinguish an empty queue from a failed queue."""
         from app.services.scoring import score_all_for_scenario

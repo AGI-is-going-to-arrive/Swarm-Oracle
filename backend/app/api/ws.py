@@ -48,8 +48,13 @@ class WSManager:
         return True
 
     def disconnect(self, scenario_id: str, websocket: WebSocket):
-        if websocket in self._connections[scenario_id]:
-            self._connections[scenario_id].remove(websocket)
+        connections = self._connections.get(scenario_id)
+        if not connections:
+            return
+        if websocket in connections:
+            connections.remove(websocket)
+        if not connections:
+            self._connections.pop(scenario_id, None)
         logger.info("WS disconnected: scenario=%s", scenario_id)
 
     async def broadcast(self, scenario_id: str, event: dict):

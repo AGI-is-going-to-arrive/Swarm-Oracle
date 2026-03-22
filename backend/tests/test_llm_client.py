@@ -2,6 +2,7 @@
 
 import sqlite3
 
+import httpx
 import pytest
 
 from app.services import llm_client
@@ -13,6 +14,13 @@ from app.services.llm_client import (
     llm_call_json,
     llm_call_json_stream,
 )
+
+
+@pytest.fixture(autouse=True)
+async def reset_shared_async_client():
+    await llm_client.close_shared_async_client()
+    yield
+    await llm_client.close_shared_async_client()
 
 
 class TestLLMCall:
@@ -103,6 +111,8 @@ class TestLLMCall:
         ).fetchone()[0]
         conn.close()
         assert count_before == 1
+        assert llm_client._pending_requests == 0
+        assert llm_client._pending_by_quota == {}
 
         await llm_client._release_runtime_slot(
             quota_key="user:director-2",
@@ -115,6 +125,21 @@ class TestLLMCall:
         ).fetchone()[0]
         conn.close()
         assert count_after == 0
+        assert llm_client._pending_requests == 0
+        assert llm_client._pending_by_quota == {}
+
+    @pytest.mark.asyncio
+    async def test_global_semaphore_is_not_replaced_after_runtime_change(self, monkeypatch):
+        """Changing LLM_CONCURRENCY at runtime should keep the original semaphore alive."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 2)
+        semaphore = llm_client._get_global_semaphore()
+
+        await semaphore.acquire()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+
+        assert llm_client._get_global_semaphore() is semaphore
+        semaphore.release()
 
     @pytest.mark.asyncio
     async def test_basic_call(self):
@@ -141,8 +166,74 @@ class TestLLMCall:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    def test_shared_async_client_is_reused(self):
+        first = llm_client._get_shared_async_client()
+        second = llm_client._get_shared_async_client()
+
+        assert first is second
+
+    @pytest.mark.asyncio
+    async def test_llm_call_stream_retries_before_first_content(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
+                yield "data: [DONE]"
+
+        class _FakeStream:
+            def __init__(self, *, fail: bool):
+                self._fail = fail
+
+            async def __aenter__(self):
+                if self._fail:
+                    raise httpx.RequestError("boom")
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def __init__(self):
+                self.calls = 0
+
+            def stream(self, *args, **kwargs):
+                self.calls += 1
+                return _FakeStream(fail=self.calls == 1)
+
+        fake_client = _FakeClient()
+        sleep_calls: list[float] = []
+
+        async def _fake_sleep(seconds: float):
+            sleep_calls.append(seconds)
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: fake_client)
+        monkeypatch.setattr(llm_client.asyncio, "sleep", _fake_sleep)
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        chunks = []
+        async for chunk in llm_client.llm_call_stream("stream me", reasoning_effort="low"):
+            chunks.append(chunk)
+
+        assert "".join(chunks) == "Hello"
+        assert fake_client.calls == 2
+        assert sleep_calls == [1.0]
+
 
 class TestLLMCallJSON:
+    def test_sanitize_error_masks_generic_secret_patterns(self):
+        sanitized = llm_client._sanitize_error(
+            'api_key="key-abcdef123456" token=pat_secret987654 Bearer abcdefghijklmnop'
+        )
+
+        assert "key-abcdef123456" not in sanitized
+        assert "pat_secret987654" not in sanitized
+        assert "Bearer abcdefghijklmnop" not in sanitized
+        assert 'api_key="****"' in sanitized
+        assert "token=****" in sanitized
+        assert "Bearer ****" in sanitized
+
     def test_format_untrusted_text_block_marks_injection_attempts(self):
         block = format_untrusted_text_block(
             "用户输入",

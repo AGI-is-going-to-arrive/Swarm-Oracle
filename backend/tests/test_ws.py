@@ -57,7 +57,7 @@ class TestWSManager:
         mgr._connections["s1"].append(ws)
 
         mgr.disconnect("s1", ws)
-        assert len(mgr._connections["s1"]) == 0
+        assert "s1" not in mgr._connections
 
     def test_disconnect_nonexistent(self):
         """Should handle disconnecting a WebSocket that's not connected."""
@@ -65,6 +65,7 @@ class TestWSManager:
         ws = MagicMock()
         # Should not raise
         mgr.disconnect("s1", ws)
+        assert "s1" not in mgr._connections
 
     def test_disconnect_wrong_scenario(self):
         """Should not affect other scenarios."""
@@ -143,7 +144,7 @@ class TestWSManager:
 
         await mgr.broadcast("s1", {"type": "test"})
 
-        assert len(mgr._connections["s1"]) == 0
+        assert "s1" not in mgr._connections
 
     @pytest.mark.asyncio
     async def test_send_alias(self):
@@ -181,7 +182,7 @@ class TestWSManager:
 
         await mgr.heartbeat_loop("s1", ws, interval_seconds=0)
 
-        assert ws not in mgr._connections["s1"]
+        assert "s1" not in mgr._connections
 
 
 class TestWSManagerConcurrency:
@@ -216,7 +217,7 @@ class TestWSManagerConcurrency:
         for ws in list(mgr._connections["s1"]):
             mgr.disconnect("s1", ws)
 
-        assert len(mgr._connections["s1"]) == 0
+        assert "s1" not in mgr._connections
 
 
 class TestScenarioWebSocketEndpoint:

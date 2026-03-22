@@ -32,7 +32,7 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
@@ -42,7 +42,7 @@ models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnloc
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
-config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录)
+config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空)
 alembic/ ──► Alembic 数据库迁移框架
 ```
 
@@ -70,9 +70,10 @@ alembic/ ──► Alembic 数据库迁移框架
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；使用单数据库会话优化 (P2-8)
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
 - **并发**: `LLM_CONCURRENCY` 限制并发LLM调用
-- **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入
+- **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入；`setting` 标签与 fork-detect prompt 当前都已按语言切换，不再让英文场景吃中文主体提示
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
-- **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口
+- **消息落库**: 普通 agent 发言与 synthesized Worker 发言当前都改成按批次写入 `AgentMessage`，不再每条消息单独 commit；`_save_message()` 仍保留给旧调用点和测试使用
+- **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口；新的 round summary 已统一按 JSON 持久化，同时保留对旧 `str(dict)` 历史数据的兼容回退读取
 - **干预队列**: API 层与模拟主循环当前都统一走 helper；当多个 worker 共用同一个 SQLite 文件时，待注入干预会先落到 `PendingIntervention` 共享队列表，再由模拟主循环按分支 FIFO 原子取出；scenario 结束或删除时也会一并清理残留队列
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
@@ -104,6 +105,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
 - **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
+- **Prompt 注入边界**: `build_agent_context()` / `_build_crowd_context()` 当前也会把 `shared_briefing / recent_messages` 统一包成 `UNTRUSTED DATA`，不再把共享简报或最近对话裸拼进 agent prompt
 - **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
@@ -120,7 +122,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - collection name 当前统一走 canonical naming：`scenario_{scenario_id.replace('-', '_')}`；创建、读取和删除共用同一套命名规则
   - `_collections` 当前是有上限的 LRU 缓存（默认 128），避免长期运行时无界持有 collection 引用
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
-  - 全局单例，ChromaDB 不可用时静默降级
+  - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
+  - ChromaDB 不可用时静默降级
 
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
 - **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease
@@ -131,7 +134,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **设计**:
   - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
   - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
-  - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内 lease 对象，不引入额外迁移
+  - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内互斥 lease，而不是“永远成功”的空锁；这条 fast path 仍只保证单进程内防重入
 - **集成点**:
   - `api/helpers.py` 的 `run_sim_background()` 当前会在真正启动 simulation 前拿 `simulation:{scenario_id}` 锁
   - `services/debate.py` 的 `run_debate_background()` 当前会在广播 `LIVE` 前拿 `debate:{debate_id}` 锁
@@ -154,6 +157,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `health_check()` — 连通性检查
 - **特性**: 支持 Chat Completions 和 Responses API 两种格式
 - **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s；当前实现直接复用模块级 `asyncio`，5xx 重试路径不会再触发本地 `UnboundLocalError`
+- **HTTP client 生命周期**: `llm_call()` / `llm_call_stream()` 当前复用共享 `httpx.AsyncClient`，并由 `main.py` 的 shutdown/lifespan 在进程退出时统一关闭
 - **JSON 容错**:
   - `_clean_json_text` 会先剥掉 markdown code fence、前后缀和非法控制字符
   - `llm_call_json()` 在常规 `json.loads()` 失败后，会依次尝试：
@@ -162,13 +166,15 @@ alembic/ ──► Alembic 数据库迁移框架
     - `agent_message` 专用 fallback（把带键的坏 JSON 或纯文本尽量恢复成单条 agent 发言）
   - `llm_call_json_stream()` 当前复用同一套恢复链，不再只做一次裸 `json.loads()`
 - **全局治理**:
-  - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`
-  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，还会通过 SQLite reservation 表共享全局/用户级 pending 计数
+  - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`；当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
+  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
+  - `llm_call_stream()` 当前也支持连接阶段重试；只有在首个 content 产出前才会重试，避免重复发出部分流片段
 - **输入防护**:
   - `sanitize_untrusted_text()` / `format_untrusted_text_block()` 会把用户题面、干预文本、评分输入等包成 `UNTRUSTED DATA`
   - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
+- **错误脱敏**: `_sanitize_error()` 当前除了 `Bearer ...`，还会掩码更通用的 key/token-like secret 片段，降低 BYOK/provider 错误回包把凭证打进日志的风险
 - **BYOK (P4-E)**: 所有函数接受 `api_key`/`base_url`/`model` 可选覆盖，用户可自带 OpenAI 兼容 API Key；API Key 仅内存传递不持久化
 - **Provider policy 贯通**: 当前 BYOK/provider policy 已接进 `createScenario / social copy / score-predictions / createDebate`，同一份 `user_id` 也会参与用户级 pending 配额
 - **容器部署提示**: 如果后端在 Docker 容器内运行而 LLM 服务在宿主机本地，`LLM_RESPONSES_URL` 需要改为 `host.docker.internal` 或其他宿主可达地址；`POST /api/health` 会同步探测 LLM，因此容器健康检查现改用 `GET /`
@@ -190,6 +196,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `get_language_directive(language)` → `str` — 生成 prompt 注入的多语言指令文本
   - `get_anonymous_director_name(language)` / `get_anonymous_predictor_name(language)` — 生成 language-aware 的匿名显示名
 - **覆盖范围**: CJK 统一表意文字、日文假名（平假名+片假名）、韩文谚文
+- **日语提示**: 当前还会额外检查常见日语助词/敬体词（如 `の / は / が / を / です / ます`），降低纯汉字占比较高的短日文被误判成 Chinese 的概率
 - **防护**: 空输入默认 English；不计入全角Latin/数字避免误判
 - **集成点**: `parser.py` (检测)、`simulator.py`/`memory.py`/`narrator.py`/`scoring.py` (指令注入)
 
@@ -271,6 +278,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - live snapshot / result payload 顶层当前还会返回 `phase_insights[]`，每个阶段都有 `stakes / judge_focus / commentary / pressure_margin / confidence_drift`
   - `counterplay` 当前不只影响顶层摘要；若某阶段命中了对冲，后端会把这条信息直接织进对应阶段的 `phase_insights.commentary`
   - replay import 当前会把输入 payload 里的 `phase_insights` 一并持久化；后续 live/result 读路径会优先回放这份已导入的阶段洞察，而不是只靠重算
+  - replay import 当前还会校验 `winner / verdict_tone / turns[*].sequence / phase_insights` 的关键字段；坏快照会直接返回 `422`，同时 turn 会按 `sequence` 排序后再落库
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
@@ -293,6 +301,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 若 LLM 返回后发现原场景已被删除，该次写入会直接回滚，不再把孤儿 prediction 落分
   - 若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
   - `score_all_for_scenario()` 当前返回值已细化为 `attempted / scored / failed / all_failed / results`，可以区分“没有待评分 prediction”和“全部评分失败”
+- **语言感知 prompt**: 评分 prompt 当前已拆成中英模板；英文场景会使用英文标题、标签与 rubric，不再只靠中文主体 + language directive 混合驱动
 
 ## API层 (`app/api/`) — P0-1 拆分
 
@@ -328,6 +337,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支；当前单次请求最多 50 条） |
 
 > intervene / retrospective / batch 这三条路由当前仍不改变 REST 形状，但待注入文本已经改成共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求落在哪个 worker、模拟跑在哪个 worker，不再影响干预是否能被真正消费。
+>
+> `batch` 当前在 SQLite pending queue 路径下会把 `InterventionLog` 和 `PendingIntervention` 放进同一个事务提交；若前置校验失败，不会留下半写入的 queue/log 残留。
 
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
@@ -364,9 +375,12 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前；当前 `confidence` 走 Pydantic 范围校验） |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测；若 scenario 不存在则返回 `404` |
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；响应当前会显式带 `attempted / scored / failed / all_failed / results` |
-| `GET /api/leaderboard` | GET | 全局预测排行榜 |
+| `GET /api/leaderboard` | GET | 全局预测排行榜；支持 `limit / offset` |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
 - **提交窗口**: `POST /api/scenario/{id}/predict` 当前只在 `ScenarioStatus.PARSING / SIMULATING` 开放；进入 `NARRATING / DONE / ERROR` 后都会直接拒绝新预测
+- **分页**:
+  - `GET /api/scenario/{id}/predictions` 当前支持可选 `limit / offset`
+  - `GET /api/leaderboard` 当前支持 `limit / offset`
 
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
@@ -430,6 +444,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 - 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**
+- 本轮这类“config 校验 / shared AsyncClient / stream retry / replay import 校验 / simulator batch message writes”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`：`368 passed in 37.64s`
+  - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`：通过
 - 本轮这类 backend review fixes 还额外实跑通过：
   - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`：`86 passed in 1.85s`
   - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`：`2 passed in 0.31s`

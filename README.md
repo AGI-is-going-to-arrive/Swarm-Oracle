@@ -98,6 +98,10 @@ npm run dev
 
 本地直接启动 backend 时读取 `backend/.env`，可由 `.env.example` 初始化；`docker compose` 默认读取仓库根目录 `.env.docker`。
 
+- 占位 `LLM_API_KEY=sk-12345678` 当前只适用于本地网关，例如 `localhost`、`127.0.0.1` 或 `host.docker.internal`。
+- 如果 `LLM_RESPONSES_URL` 指向非本地 LLM 端点，后端会在配置加载阶段直接拒绝占位 key，而不是等到第一次调用时才失败。
+- `LLM_MODEL_NAME` 不能为空；留空会在配置加载阶段直接报错。
+
 ## Testing And Signoff
 
 ```bash
@@ -146,6 +150,8 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - `backend/tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`: `2 passed in 0.31s`
   - `backend/tests/test_debate_api.py + backend/tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`: `2 passed in 0.41s`
   - `backend/tests/test_simulator.py -k reuses_latest_rolling_briefing_before_current_window`: `1 passed`
+  - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`: `368 passed in 37.64s`
+  - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`: `passed`
   - `src/lib/scenarioAuthority.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/hooks/useScreenCapture.test.ts`：`37 passed`
   - `backend/tests/test_parser.py -k fallback_rounds_use_explicit_default_rounds`: `1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`: `38 passed`

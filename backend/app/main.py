@@ -9,16 +9,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
-from app.api.scenarios import router as scenarios_router
-from app.api.interventions import router as interventions_router
-from app.api.social import router as social_router
 from app.api.campaign import router as campaign_router
 from app.api.debate import router as debate_router
+from app.api.interventions import router as interventions_router
 from app.api.predictions import router as predictions_router
+from app.api.scenarios import router as scenarios_router
+from app.api.social import router as social_router
 from app.api.ws import router as ws_router
 from app.config import settings
 from app.models import init_db
 from app.models.database import dispose_engine
+from app.services.llm_client import close_shared_async_client
 
 # ── Logging ──────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
     from app.api.helpers import _background_tasks
     for task in list(_background_tasks):
         task.cancel()
+    await close_shared_async_client()
     dispose_engine()
     logging.getLogger(__name__).info("SwarmOracle shut down gracefully.")
 

@@ -230,6 +230,8 @@ def _build_crowd_context(
     setting_background: str,
     current_topic: str,
     recent_messages: str,
+    *,
+    conversation_label: str = "刚才的对话",
     intervention_text: str = "",
     language: str = "Chinese",
 ) -> str:
@@ -254,6 +256,12 @@ def _build_crowd_context(
 （这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）"""
         intervention_instruction = "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策"
 
+    conversation_block = format_untrusted_text_block(
+        conversation_label,
+        recent_messages,
+        max_chars=2500,
+    )
+
     return f"""你正在扮演角色「{agent['name']}」参与一场群体推演。
 
 【你的身份】{agent.get('role', '')}
@@ -264,7 +272,7 @@ def _build_crowd_context(
 {topic_block}{intervention_block}
 
 【刚才的对话】
-{recent_messages}
+{conversation_block}
 
 现在轮到你发言。请注意:
 1. 用角色真实的口吻说话
@@ -339,7 +347,11 @@ def build_agent_context(
 
     if tier == "CROWD":
         return _build_crowd_context(
-            agent, setting_background, current_topic, conversation_section,
+            agent,
+            setting_background,
+            current_topic,
+            conversation_section,
+            conversation_label="共享态势简报" if shared_briefing else "刚才的对话",
             intervention_text=intervention_text,
             language=language,
         )
@@ -358,6 +370,12 @@ def build_agent_context(
 （这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）"""
         intervention_instruction = "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响"
 
+    conversation_block = format_untrusted_text_block(
+        "共享态势简报" if shared_briefing else "刚才的对话",
+        conversation_section,
+        max_chars=3000,
+    )
+
     return f"""你正在扮演角色「{agent['name']}」参与一场群体推演。
 
 【你的身份】{agent.get('role', '')}
@@ -371,7 +389,7 @@ def build_agent_context(
 {topic_block}{intervention_block}
 
 【刚才的对话】
-{conversation_section}{memories_block}
+{conversation_block}{memories_block}
 
 现在轮到你发言。请注意:
 1. 用角色真实的口吻说话，像真人对话而不是写论文

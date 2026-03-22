@@ -1,12 +1,19 @@
 """SwarmOracle configuration — loads from .env via pydantic-settings."""
 
 from pathlib import Path
+from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
+_PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678"}
+
+
+def _is_local_llm_url(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").strip().lower()
+    return hostname in _LOCAL_LLM_HOSTS
 
 
 class Settings(BaseSettings):
@@ -73,6 +80,21 @@ class Settings(BaseSettings):
         if persist_dir.is_absolute():
             return str(persist_dir)
         return str((BACKEND_ROOT / persist_dir).resolve())
+
+    @model_validator(mode="after")
+    def validate_llm_runtime_settings(self) -> "Settings":
+        model_name = self.LLM_MODEL_NAME.strip()
+        if not model_name:
+            raise ValueError("LLM_MODEL_NAME cannot be empty")
+        self.LLM_MODEL_NAME = model_name
+
+        api_key = self.LLM_API_KEY.strip()
+        if not _is_local_llm_url(self.LLM_RESPONSES_URL) and api_key in _PLACEHOLDER_LLM_API_KEYS:
+            raise ValueError(
+                "LLM_API_KEY must be set to a non-placeholder value for non-local LLM endpoints"
+            )
+        self.LLM_API_KEY = api_key
+        return self
 
 
 settings = Settings()

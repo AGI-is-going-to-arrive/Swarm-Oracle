@@ -341,3 +341,43 @@ class TestVectorStoreEdgeCases:
         vs._get_collection("scenario-c")
 
         assert list(vs._collections.keys()) == ["scenario-a", "scenario-c"]
+
+
+class TestVectorStoreSingleton:
+    def test_get_vector_store_initializes_once_under_thread_race(self, monkeypatch):
+        created_instances: list[object] = []
+        returned_instances: list[object] = []
+        errors: list[BaseException] = []
+        start = threading.Event()
+
+        class _FakeVectorStore:
+            def __init__(self, *, persist_dir: str):
+                self.persist_dir = persist_dir
+                created_instances.append(self)
+                time.sleep(0.02)
+
+        def _call_get_vector_store() -> None:
+            try:
+                start.wait(timeout=1)
+                returned_instances.append(vector_store_module.get_vector_store())
+            except BaseException as exc:  # pragma: no cover - diagnostic path
+                errors.append(exc)
+
+        monkeypatch.setattr(vector_store_module, "VectorStore", _FakeVectorStore)
+        monkeypatch.setattr(
+            "app.config.settings.CHROMA_PERSIST_DIR",
+            "/tmp/chroma-race",
+        )
+
+        threads = [threading.Thread(target=_call_get_vector_store) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        start.set()
+        for thread in threads:
+            thread.join(timeout=1)
+
+        assert not errors
+        assert all(not thread.is_alive() for thread in threads)
+        assert len(created_instances) == 1
+        assert len(returned_instances) == 8
+        assert all(instance is returned_instances[0] for instance in returned_instances)

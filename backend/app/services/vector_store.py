@@ -279,14 +279,18 @@ class VectorStore:
 # ── Module-level singleton ───────────────────────────────
 
 _vector_store: VectorStore | None = None
+_vector_store_lock = threading.Lock()
 
 
 def get_vector_store() -> VectorStore:
     """Get the global VectorStore singleton."""
     global _vector_store
-    if _vector_store is None:
-        from app.config import settings
-        _vector_store = VectorStore(persist_dir=settings.CHROMA_PERSIST_DIR)
+    if _vector_store is not None:
+        return _vector_store
+    with _vector_store_lock:
+        if _vector_store is None:
+            from app.config import settings
+            _vector_store = VectorStore(persist_dir=settings.CHROMA_PERSIST_DIR)
     return _vector_store
 
 

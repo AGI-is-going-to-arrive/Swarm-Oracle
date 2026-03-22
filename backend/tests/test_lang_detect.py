@@ -1,9 +1,6 @@
 """Unit tests for app.services.lang_detect — language detection and directive generation."""
 
-import pytest
-
 from app.services.lang_detect import detect_language, get_language_directive
-
 
 # ── detect_language ──────────────────────────────────────────
 
@@ -44,6 +41,9 @@ class TestDetectLanguage:
 
     def test_japanese_mixed_kanji_kana(self):
         assert detect_language("東京で新しいレストランが開店した") == "Japanese"
+
+    def test_japanese_particle_hint(self):
+        assert detect_language("戦国の未来を考える") == "Japanese"
 
     # -- Korean ----------------------------------------------------
 

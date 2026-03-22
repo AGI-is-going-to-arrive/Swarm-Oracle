@@ -10,12 +10,20 @@ import pytest
 
 from app.api import helpers as helpers_module
 from app.models import database as database_module
+from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
     release_runtime_lock,
     simulation_lock_key,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_inprocess_runtime_locks():
+    runtime_lock_module._INPROCESS_LOCKS.clear()
+    yield
+    runtime_lock_module._INPROCESS_LOCKS.clear()
 
 
 def test_runtime_lock_acquire_release_round_trip(monkeypatch, tmp_path):
@@ -43,6 +51,35 @@ def test_runtime_lock_reclaims_expired_leases(monkeypatch, tmp_path):
     lease = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=0.01)
     assert lease is not None
 
+    time.sleep(0.03)
+
+    reclaimed = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=30)
+    assert reclaimed is not None
+
+
+def test_runtime_lock_fallback_enforces_in_process_mutual_exclusion(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        "postgresql://localhost/swarmoracle",
+    )
+
+    first = acquire_runtime_lock(simulation_lock_key("scenario-1"), lease_seconds=30)
+    second = acquire_runtime_lock(simulation_lock_key("scenario-1"), lease_seconds=30)
+
+    assert first is not None
+    assert second is None
+    assert release_runtime_lock(first) is True
+    assert acquire_runtime_lock(simulation_lock_key("scenario-1"), lease_seconds=30) is not None
+
+
+def test_runtime_lock_fallback_reclaims_expired_in_process_lease(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        "sqlite:///:memory:",
+    )
+
+    first = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=0.01)
+    assert first is not None
     time.sleep(0.03)
 
     reclaimed = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=30)

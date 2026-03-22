@@ -13,6 +13,7 @@ _CJK_RE = re.compile(
 
 # Japanese-specific (Hiragana + Katakana)
 _JA_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+_JA_PARTICLE_RE = re.compile(r"(の|は|が|を|に|へ|と|で|です|ます|でした|ません)")
 
 # Korean Hangul
 _KO_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff]")
@@ -42,6 +43,8 @@ def detect_language(text: str) -> str:
 
     # Japanese: has Hiragana/Katakana
     if ja_count > 2 or (ja_count > 0 and ja_count / total > 0.1):
+        return "Japanese"
+    if cjk_count > 0 and _JA_PARTICLE_RE.search(text):
         return "Japanese"
 
     # Korean: has Hangul

@@ -12,12 +12,13 @@ from app.models import (
     Branch,
     BranchStatus,
     InterventionLog,
+    PendingIntervention,
     Round,
     Scenario,
     ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.services.simulator import add_pending_intervention
+from app.services.simulator import _pending_intervention_db_path, add_pending_intervention
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -223,6 +224,8 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
 
     # Validate ALL branches first (atomic: all-or-nothing)
     results = []
+    use_persisted_queue = _pending_intervention_db_path() is not None
+    memory_queue_entries: list[tuple[str, str]] = []
     with Session(engine) as session:
         for item in req.interventions:
             if not item.text.strip():
@@ -253,7 +256,16 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
             session.flush()  # get log.id
 
             key = f"{scenario_id}:{item.branch_id}"
-            await add_pending_intervention(key, item.text.strip())
+            if use_persisted_queue:
+                session.add(
+                    PendingIntervention(
+                        scenario_id=scenario_id,
+                        branch_id=item.branch_id,
+                        user_input=item.text.strip(),
+                    )
+                )
+            else:
+                memory_queue_entries.append((key, item.text.strip()))
 
             results.append({
                 "branch_id": item.branch_id,
@@ -262,6 +274,10 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
                 "intervention_id": log.id,
             })
         session.commit()
+
+    if not use_persisted_queue:
+        for key, text in memory_queue_entries:
+            await add_pending_intervention(key, text)
 
     # Broadcast batch event
     from app.api.ws import ws_manager

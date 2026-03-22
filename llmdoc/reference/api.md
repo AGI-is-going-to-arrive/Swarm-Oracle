@@ -22,6 +22,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `POST /api/scenario/{id}/intervene/batch` 当前由 `BatchInterveneRequest` 做输入边界校验：
 > - `interventions` 不能为空
 > - `interventions` 最多 `50` 条；超过时返回 `422`
+> - 当 SQLite-backed pending queue 启用时，`InterventionLog` 与 `PendingIntervention` 会在同一个事务里落库；不会再出现“日志已写但 pending queue 未写”的半提交
 >
 > `POST /api/scenario` 当前也由 `CreateScenarioRequest` 在 schema 层校验 `question`：
 > - 空字符串或纯空白：返回 `422`
@@ -38,7 +39,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
 > - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，`gameplay-state` 负责 authority / 冷却 / 结算与回放
 >
-> `intervene / retrospective / batch` 当前不改 REST 形状，但待注入文本已经进入后端共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求和模拟不需要落在同一个 worker，干预也能被消费。
+> `intervene / retrospective / batch` 当前不改 REST 形状，但待注入文本已经进入后端共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求和模拟不需要落在同一个 worker，干预也能被消费。`batch` 在 SQLite queue 路径下还会把 queue row 和 intervention log 一起原子写入。
 
 ### Scenario Management (P4)
 
@@ -64,6 +65,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 英文 scenario 不再收到中文包装文本
 > - `reddit / x` 仍按各自模板要求输出英文文案
 > - `GET` 仍可直接生成文案，但如果把 `llm_api_key / llm_base_url / llm_model / user_id` 放进 query，后端会返回 `400`；这类 provider overrides 必须改走 `POST body`
+> - 响应结构仍是 `{platform, platform_name, copy}`；若模型先返回超大原始文本，后端会先做一次安全缓冲截断，再做平台最终限长截断
 
 ### Replay 分享
 
@@ -81,9 +83,9 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
-| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | — | PredictionResponse[] |
+| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | `?limit=20&offset=0`（均可选） | PredictionResponse[] |
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{attempted, scored, failed, all_failed, results[]}` |
-| `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20` | LeaderboardEntry[] |
+| `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20&offset=0` | LeaderboardEntry[] |
 
 > 这 4 个 endpoint 当前只由专用模块 `app/api/predictions.py` 提供；`scenarios.py` 不再持有 legacy 同名路由。
 >
@@ -102,6 +104,12 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `GET /api/scenario/{id}/predictions` 当前会先校验 scenario 是否存在：
 > - 存在：返回该场景预测列表
 > - 不存在：返回 `404 Not Found`
+> - 也支持可选 `limit` 与 `offset`；未传时保持旧行为，返回该场景的全量预测列表
+>
+> `GET /api/leaderboard` 当前支持：
+> - `limit`：`1-100`
+> - `offset`：`>= 0`
+> - 默认仍按 `avg_score desc` 排序
 >
 > `POST /api/scenario/{id}/score-predictions` 当前的内部行为：
 > - 单条 prediction 会先原子认领未评分行，再写入分数
@@ -273,6 +281,12 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 如果某场 Debate 最终没有足够的 turn 可摘出 `best_argument / best_rebuttal`，后端当前也不会回空字符串；会回退成可读的兜底文案，避免结果页出现空洞句子。
 >
 > Debate 的后台推进当前还会在同一 SQLite 文件下使用 shared runtime lock 做跨 worker 防重入；这是内部执行约束，不改变现有 REST / WebSocket API 形状。
+>
+> `POST /api/debate/import-replay` 当前除了 payload bytes / turn count 上限，还会额外校验：
+> - `result.winner` 必须是 `proposition` 或 `opposition`
+> - `result.verdict_tone` 必须是 `order / balance / rupture`
+> - `turns[*].sequence` 必须是从 `1` 开始、连续且无重复的正整数；合法输入会先按 `sequence` 排序再导入
+> - `phase_insights` 的关键枚举/结构字段若非法（例如坏 `phase`、坏 direction、坏 `confidence_drift` 结构），会返回 `422`
 >
 > prediction 只支持两类：
 > - `winner`

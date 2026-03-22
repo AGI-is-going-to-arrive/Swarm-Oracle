@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from collections import defaultdict
@@ -23,14 +24,25 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # C-3 fix: pattern to detect API keys in error messages
-_KEY_PATTERN = re.compile(r'(sk-[a-zA-Z0-9]{4})[a-zA-Z0-9]+', re.IGNORECASE)
-_BEARER_PATTERN = re.compile(r'(Bearer\s+)[^\s"]+', re.IGNORECASE)
+_PREFIXED_SECRET_PATTERN = re.compile(
+    r"\b((?:sk|pk|rk|pat|key|tok|token)[-_])[A-Za-z0-9._-]{4,}\b",
+    re.IGNORECASE,
+)
+_LABELED_SECRET_PATTERN = re.compile(
+    (
+        r"((?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|token|key)"
+        r"\s*[:=]\s*)([\"']?)([^\s,\"']{6,})(\2)"
+    ),
+    re.IGNORECASE,
+)
+_BEARER_PATTERN = re.compile(r"(Bearer\s+)[^\s\"]+", re.IGNORECASE)
 
 
 def _sanitize_error(msg: str) -> str:
     """Strip API keys and bearer tokens from error messages."""
-    msg = _KEY_PATTERN.sub(r'\1****', msg)
-    msg = _BEARER_PATTERN.sub(r'\1****', msg)
+    msg = _PREFIXED_SECRET_PATTERN.sub(r"\1****", msg)
+    msg = _LABELED_SECRET_PATTERN.sub(r"\1\2****\4", msg)
+    msg = _BEARER_PATTERN.sub(r"\1****", msg)
     return msg
 
 
@@ -116,6 +128,8 @@ _global_semaphore: asyncio.Semaphore | None = None
 _global_semaphore_limit = 0
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
+_shared_async_client: httpx.AsyncClient | None = None
+_shared_async_client_lock = threading.Lock()
 
 
 @contextmanager
@@ -142,9 +156,16 @@ def _provider_key(base_url: str | None) -> str:
 def _get_global_semaphore() -> asyncio.Semaphore:
     global _global_semaphore, _global_semaphore_limit
     limit = max(1, settings.LLM_CONCURRENCY)
-    if _global_semaphore is None or _global_semaphore_limit != limit:
+    if _global_semaphore is None:
         _global_semaphore = asyncio.Semaphore(limit)
         _global_semaphore_limit = limit
+    elif _global_semaphore_limit != limit:
+        logger.warning(
+            "LLM_CONCURRENCY changed at runtime (%s -> %s); "
+            "keeping existing semaphore until process restart",
+            _global_semaphore_limit,
+            limit,
+        )
     return _global_semaphore
 
 
@@ -159,6 +180,25 @@ def _runtime_guard_db_path() -> str | None:
     if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
         return None
     return db_path
+
+
+def _get_shared_async_client() -> httpx.AsyncClient:
+    global _shared_async_client
+    if _shared_async_client is not None:
+        return _shared_async_client
+    with _shared_async_client_lock:
+        if _shared_async_client is None:
+            _shared_async_client = httpx.AsyncClient()
+    return _shared_async_client
+
+
+async def close_shared_async_client() -> None:
+    global _shared_async_client
+    with _shared_async_client_lock:
+        client = _shared_async_client
+        _shared_async_client = None
+    if client is not None:
+        await client.aclose()
 
 
 def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
@@ -258,6 +298,7 @@ async def _reserve_runtime_slot(
     global _pending_requests
     now = monotonic()
     reservation_id: str | None = None
+    use_in_process_counts = False
     async with _guard_lock:
         circuit_until = _provider_circuit_until.get(provider_key, 0.0)
         if circuit_until > now:
@@ -290,10 +331,12 @@ async def _reserve_runtime_slot(
 
             if quota_key and _pending_by_quota[quota_key] >= settings.LLM_USER_MAX_PENDING:
                 raise LLMBackpressureError("Too many in-flight LLM requests for this user")
+            use_in_process_counts = True
 
-        _pending_requests += 1
-        if quota_key:
-            _pending_by_quota[quota_key] += 1
+        if use_in_process_counts:
+            _pending_requests += 1
+            if quota_key:
+                _pending_by_quota[quota_key] += 1
 
     await _get_global_semaphore().acquire()
     return reservation_id
@@ -310,13 +353,14 @@ async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | 
             except sqlite3.Error as exc:
                 logger.warning("SQLite runtime guard release failed: %s", exc)
 
-        _pending_requests = max(0, _pending_requests - 1)
-        if quota_key:
-            next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
-            if next_count == 0:
-                _pending_by_quota.pop(quota_key, None)
-            else:
-                _pending_by_quota[quota_key] = next_count
+        if reservation_id is None:
+            _pending_requests = max(0, _pending_requests - 1)
+            if quota_key:
+                next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
+                if next_count == 0:
+                    _pending_by_quota.pop(quota_key, None)
+                else:
+                    _pending_by_quota[quota_key] = next_count
 
 
 async def _record_provider_success(provider_key: str) -> None:
@@ -395,59 +439,60 @@ async def llm_call(
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
     )
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            max_retries = 3
-            retry_delay = 1.0
-            last_exc: Exception | None = None
+        client = _get_shared_async_client()
+        max_retries = 3
+        retry_delay = 1.0
+        last_exc: Exception | None = None
 
-            for attempt in range(max_retries + 1):
-                try:
-                    resp = await client.post(
-                        target_url,
-                        json=payload,
-                        headers={
-                            "Authorization": f"Bearer {target_key}",
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    resp.raise_for_status()
-                    break  # Success — exit retry loop
-                except httpx.HTTPStatusError as exc:
-                    status_code = exc.response.status_code
-                    # Retry on 429 (rate limit) and 5xx (server errors)
-                    if status_code == 429 or status_code >= 500:
-                        last_exc = exc
-                        if attempt < max_retries:
-                            wait = retry_delay * (2 ** attempt)
-                            logger.warning(
-                                "LLM HTTP %d (attempt %d/%d), retrying in %.1fs",
-                                status_code, attempt + 1, max_retries + 1, wait,
-                            )
-                            await asyncio.sleep(wait)
-                            continue
-                        await _record_provider_failure(provider_key)
-                    # Non-retryable 4xx — raise immediately
-                    logger.error("LLM HTTP error %s: %s", exc.response.status_code,
-                                 _sanitize_error(exc.response.text[:500]))
-                    raise LLMError(f"LLM returned {exc.response.status_code}") from exc
-                except httpx.RequestError as exc:
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await client.post(
+                    target_url,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {target_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                break  # Success — exit retry loop
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                # Retry on 429 (rate limit) and 5xx (server errors)
+                if status_code == 429 or status_code >= 500:
                     last_exc = exc
                     if attempt < max_retries:
                         wait = retry_delay * (2 ** attempt)
                         logger.warning(
-                            "LLM connection error (attempt %d/%d), retrying in %.1fs: %s",
-                            attempt + 1, max_retries + 1, wait, exc,
+                            "LLM HTTP %d (attempt %d/%d), retrying in %.1fs",
+                            status_code, attempt + 1, max_retries + 1, wait,
                         )
                         await asyncio.sleep(wait)
                         continue
                     await _record_provider_failure(provider_key)
-                    logger.error("LLM connection error: %s", _sanitize_error(str(exc)))
-                    raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
-            else:
-                # All retries exhausted
+                # Non-retryable 4xx — raise immediately
+                logger.error("LLM HTTP error %s: %s", exc.response.status_code,
+                             _sanitize_error(exc.response.text[:500]))
+                raise LLMError(f"LLM returned {exc.response.status_code}") from exc
+            except httpx.RequestError as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    wait = retry_delay * (2 ** attempt)
+                    logger.warning(
+                        "LLM connection error (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1, max_retries + 1, wait, exc,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
                 await _record_provider_failure(provider_key)
-                logger.error("LLM call failed after %d attempts", max_retries + 1)
-                raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
+                logger.error("LLM connection error: %s", _sanitize_error(str(exc)))
+                raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
+        else:
+            # All retries exhausted
+            await _record_provider_failure(provider_key)
+            logger.error("LLM call failed after %d attempts", max_retries + 1)
+            raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
@@ -609,12 +654,9 @@ def _parse_json_response(cleaned: str, *, fallback_mode: str | None = None) -> d
     except json.JSONDecodeError:
         pass
 
-    # Strategy 2: try to extract any JSON object or array via regex
-    import re as _re
-
     json_patterns = [
-        _re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", _re.DOTALL),  # nested objects
-        _re.compile(r"\[.*?\]", _re.DOTALL),  # arrays
+        re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL),  # nested objects
+        re.compile(r"\[.*?\]", re.DOTALL),  # arrays
     ]
     for pattern in json_patterns:
         matches = pattern.findall(cleaned)
@@ -714,7 +756,13 @@ async def llm_call_stream(
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
     )
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        client = _get_shared_async_client()
+        max_retries = 3
+        retry_delay = 1.0
+        last_exc: Exception | None = None
+
+        for attempt in range(max_retries + 1):
+            emitted_content = False
             try:
                 async with client.stream(
                     "POST",
@@ -724,6 +772,7 @@ async def llm_call_stream(
                         "Authorization": f"Bearer {target_key}",
                         "Content-Type": "application/json",
                     },
+                    timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -741,20 +790,58 @@ async def llm_call_stream(
                                 # Responses API streaming format
                                 content = chunk.get("delta", "")
                             if content:
+                                emitted_content = True
                                 yield content
                         except (json.JSONDecodeError, IndexError, KeyError):
                             continue
+                await _record_provider_success(provider_key)
+                break
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 429 or exc.response.status_code >= 500:
+                last_exc = exc
+                status_code = exc.response.status_code
+                if (
+                    not emitted_content
+                    and (status_code == 429 or status_code >= 500)
+                    and attempt < max_retries
+                ):
+                    wait = retry_delay * (2 ** attempt)
+                    logger.warning(
+                        "LLM stream HTTP %d (attempt %d/%d), retrying in %.1fs",
+                        status_code,
+                        attempt + 1,
+                        max_retries + 1,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                if status_code == 429 or status_code >= 500:
                     await _record_provider_failure(provider_key)
-                logger.error("LLM stream HTTP error %s: %s",
-                             exc.response.status_code, _sanitize_error(exc.response.text[:500]))
-                raise LLMError(f"LLM returned {exc.response.status_code}") from exc
+                logger.error(
+                    "LLM stream HTTP error %s: %s",
+                    status_code,
+                    _sanitize_error(exc.response.text[:500]),
+                )
+                raise LLMError(f"LLM returned {status_code}") from exc
             except httpx.RequestError as exc:
+                last_exc = exc
+                if not emitted_content and attempt < max_retries:
+                    wait = retry_delay * (2 ** attempt)
+                    logger.warning(
+                        "LLM stream connection error (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1,
+                        max_retries + 1,
+                        wait,
+                        exc,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
                 await _record_provider_failure(provider_key)
                 logger.error("LLM stream connection error: %s", _sanitize_error(str(exc)))
                 raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
-            await _record_provider_success(provider_key)
+        else:
+            await _record_provider_failure(provider_key)
+            logger.error("LLM stream failed after %d attempts", max_retries + 1)
+            raise LLMError(f"LLM stream failed after {max_retries + 1} attempts") from last_exc
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
