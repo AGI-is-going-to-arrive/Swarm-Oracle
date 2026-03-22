@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -221,6 +222,39 @@ def test_finalize_is_idempotent_for_same_scenario():
     assert len(logs) == 1
     assert len(badges) == 1
     assert badges[0].badge_id == "archive_record"
+
+
+def test_finalize_rolls_back_if_refresh_favorite_card_fails():
+    scenario_id = _seed_completed_scenario("rollback favorite card")
+
+    with patch(
+        "app.services.campaign._refresh_favorite_card",
+        side_effect=RuntimeError("favorite card boom"),
+    ):
+        with pytest.raises(RuntimeError, match="favorite card boom"):
+            finalize_scenario_campaign(
+                scenario_id,
+                user_id="director-refresh-error",
+                user_name="Rhea",
+                profile_id="governance",
+                archive_grade="A",
+                profile_resonance="aligned",
+                betting_hit=True,
+                bet_count=1,
+                most_used_card="public_hearing",
+                completed_daily_challenge=True,
+            )
+
+    engine = get_engine()
+    with Session(engine) as session:
+        assert session.exec(
+            select(DirectorProfile).where(DirectorProfile.user_id == "director-refresh-error")
+        ).first() is None
+        assert session.exec(
+            select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
+        ).first() is None
+        assert session.exec(select(ProfileMastery)).first() is None
+        assert session.exec(select(DirectorBadgeUnlock)).first() is None
 
 
 def test_finalize_unlocks_only_matching_badges():

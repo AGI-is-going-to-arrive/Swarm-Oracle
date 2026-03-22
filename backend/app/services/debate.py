@@ -66,6 +66,16 @@ _VALID_VERDICT_TONES = {"order", "balance", "rupture"}
 _VALID_PRESSURE_SIDES = {"balanced", "proposition", "opposition"}
 
 
+def _empty_turn_fallback(language: str, kind: str) -> str:
+    if language == "zh":
+        if kind == "argument":
+            return "本场没有留下可判定的关键论点。"
+        return "本场没有留下可判定的有效反驳。"
+    if kind == "argument":
+        return "No decisive argument was recorded."
+    return "No decisive rebuttal was recorded."
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -922,12 +932,16 @@ async def _generate_judge_analysis(
             ).all()
         )
 
-    best_argument = _pick_best_turn(turns, winner_side=plan.winner, fallback="")
+    best_argument = _pick_best_turn(
+        turns,
+        winner_side=plan.winner,
+        fallback=_empty_turn_fallback(debate.language, "argument"),
+    )
     losing_side = "opposition" if plan.winner == "proposition" else "proposition"
     best_rebuttal = _pick_best_turn(
         turns,
         winner_side=losing_side,
-        fallback=best_argument,
+        fallback=_empty_turn_fallback(debate.language, "rebuttal"),
         phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL},
     )
     counterplay_context = _latest_counterplay_context(
@@ -1750,11 +1764,15 @@ def _finalize_debate(
         debate.audience_meter = plan.audience_meter
         debate.winner = plan.winner
         debate.verdict_tone = plan.verdict_tone
-        debate.best_argument = _pick_best_turn(turns, winner_side=plan.winner, fallback="")
+        debate.best_argument = _pick_best_turn(
+            turns,
+            winner_side=plan.winner,
+            fallback=_empty_turn_fallback(debate.language, "argument"),
+        )
         debate.best_rebuttal = _pick_best_turn(
             turns,
             winner_side="opposition" if plan.winner == "proposition" else "proposition",
-            fallback=debate.best_argument,
+            fallback=_empty_turn_fallback(debate.language, "rebuttal"),
             phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL},
         )
         counterplays = list(

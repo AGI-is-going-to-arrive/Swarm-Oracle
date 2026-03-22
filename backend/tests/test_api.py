@@ -7,19 +7,23 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 import app.api.scenarios as scenarios_api
+import app.api.social as social_api
 from app.main import app
 from app.models import (
     Agent,
     AgentTier,
     Branch,
     BranchStatus,
+    DirectorBadgeUnlock,
     InterventionLog,
     Leaderboard,
     PendingIntervention,
     Round,
     Scenario,
+    ScenarioCampaignLog,
     ScenarioStatus,
 )
+from app.models.campaign import DirectorProfile, ProfileMastery
 from app.models.database import get_engine
 
 
@@ -90,7 +94,6 @@ class TestRootEndpoint:
         data = resp.json()
         assert data["name"] == "SwarmOracle"
         assert data["version"] == "0.1.0"
-
 
 class TestHealthEndpoint:
     def test_health(self, client):
@@ -328,6 +331,48 @@ class TestScenarioEndpoints:
         assert len(data["messages"]) == 1
         assert data["messages"][0]["message"] == "Imported message"
 
+    def test_import_replay_scenario_rejects_excessive_agent_count(self, client):
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": "Imported replay question",
+                "status": "done",
+                "agents": [
+                    {
+                        "id": f"agent-{index}",
+                        "name": f"Agent {index}",
+                    }
+                    for index in range(scenarios_api.MAX_IMPORT_REPLAY_SCENARIO_AGENTS + 1)
+                ],
+                "branches": [],
+                "messages": [],
+            },
+        })
+
+        assert resp.status_code == 413
+        assert "too many agents" in resp.text
+
+    def test_import_replay_scenario_rejects_oversized_payload(self, client):
+        oversized_message = "x" * (scenarios_api.MAX_IMPORT_REPLAY_SCENARIO_BYTES + 1)
+
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": "Imported replay question",
+                "status": "done",
+                "agents": [],
+                "branches": [],
+                "messages": [
+                    {
+                        "agent": "Archivist",
+                        "message": oversized_message,
+                        "round": 1,
+                    },
+                ],
+            },
+        })
+
+        assert resp.status_code == 422
+        assert "payload too large" in resp.text
+
     def test_get_nonexistent_scenario(self, client):
         """Should return 404 for unknown scenario."""
         resp = client.get("/api/scenario/nonexistent-id")
@@ -433,6 +478,22 @@ class TestPredictionLeaderboardEndpoints:
         """Prediction listing should now come from predictions.py and validate scenario existence."""
         resp = client.get("/api/scenario/nonexistent/predictions")
         assert resp.status_code == 404
+
+    def test_submit_prediction_rejects_closed_statuses(self, client):
+        engine = get_engine()
+        for status in (ScenarioStatus.NARRATING, ScenarioStatus.DONE, ScenarioStatus.ERROR):
+            sid = _seed_scenario(engine, status=status)
+
+            resp = client.post(
+                f"/api/scenario/{sid}/predict",
+                json={
+                    "prediction_text": "世界线会逆转",
+                    "confidence": 0.5,
+                },
+            )
+
+            assert resp.status_code == 400
+            assert "predictions are closed" in resp.json()["detail"]
 
     def test_special_characters_in_scenario_id(self, client):
         """Special characters in scenario ID should be handled gracefully."""
@@ -1069,6 +1130,45 @@ class TestDeleteScenario:
                 select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
             ).first() is None
 
+    def test_delete_cascade_removes_campaign_log_and_detaches_badge_source(self, client):
+        from app.services.campaign import finalize_scenario_campaign
+
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+
+        finalize_scenario_campaign(
+            sid,
+            user_id="director-delete",
+            user_name="Delete QA",
+            profile_id="governance",
+            archive_grade="A",
+            profile_resonance="signature",
+            completed_daily_challenge=True,
+        )
+
+        resp = client.delete(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+
+        with Session(engine) as session:
+            assert session.get(Scenario, sid) is None
+            assert session.exec(
+                select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == sid)
+            ).first() is None
+            profile = session.exec(
+                select(DirectorProfile).where(DirectorProfile.user_id == "director-delete")
+            ).first()
+            mastery = session.exec(select(ProfileMastery)).first()
+            assert profile is not None
+            assert profile.total_runs == 0
+            assert profile.completed_challenges == 0
+            assert profile.hit_bets == 0
+            assert mastery is not None
+            assert mastery.runs == 0
+            assert mastery.campaign_score == 0
+            badges = list(session.exec(select(DirectorBadgeUnlock)).all())
+            assert badges
+            assert all(badge.source_scenario_id is None for badge in badges)
+
     def test_delete_uses_vector_store_cleanup(self, client, monkeypatch):
         """Scenario deletion should go through the shared VectorStore cleanup path."""
         engine = get_engine()
@@ -1238,6 +1338,36 @@ class TestSocialCopy:
         assert "llm_api_key" not in names
         assert "llm_base_url" not in names
         assert "llm_model" not in names
+
+    def test_social_copy_trims_output_to_platform_limit(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            question="如果罗马帝国从未衰落？",
+            status=ScenarioStatus.DONE,
+        )
+        _seed_agent(engine, sid, name="奥古斯都", role="皇帝", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="帝国续命",
+            probability=0.7,
+            status=BranchStatus.COMPLETED,
+            story="帝国秩序被延长了三个世纪。",
+            insight="制度惯性比个人寿命更重要。",
+        )
+
+        async def _fake_llm_call(*_args, **_kwargs):
+            return "长微博" * 1000
+
+        monkeypatch.setattr("app.services.llm_client.llm_call", _fake_llm_call)
+
+        resp = client.post(f"/api/scenario/{sid}/social/weibo", json={})
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload["copy"]) <= social_api.SOCIAL_COPY_MAX_CHARS["weibo"]
+        assert payload["copy"].endswith("…")
 
 
 # ── P4-D: Intervention Templates ─────────────────────────

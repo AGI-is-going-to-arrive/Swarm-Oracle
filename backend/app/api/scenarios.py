@@ -9,12 +9,13 @@ Extracted modules:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
@@ -49,6 +50,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import health_check
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.vector_store import get_vector_store
@@ -56,10 +58,28 @@ from app.services.vector_store import get_vector_store
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 _CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+MAX_IMPORT_REPLAY_SCENARIO_BYTES = 1_000_000
+MAX_IMPORT_REPLAY_SCENARIO_GROUPS = 128
+MAX_IMPORT_REPLAY_SCENARIO_AGENTS = 256
+MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
+MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
 
 
 class ImportReplayScenarioRequest(BaseModel):
     scenario: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> "ImportReplayScenarioRequest":
+        try:
+            encoded = json.dumps(self.scenario, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Replay scenario payload must be JSON-serializable") from exc
+        if len(encoded.encode("utf-8")) > MAX_IMPORT_REPLAY_SCENARIO_BYTES:
+            raise ValueError(
+                "Replay scenario payload too large "
+                f"(max {MAX_IMPORT_REPLAY_SCENARIO_BYTES} bytes)"
+            )
+        return self
 
 
 class CreateReplayArtifactRequest(BaseModel):
@@ -220,10 +240,23 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
     question = str(snapshot.get("question", "")).strip()
     if not question:
         raise HTTPException(422, "Replay snapshot is missing question")
+    if len(question) > 500:
+        raise HTTPException(422, "Replay snapshot question too long")
 
     engine = get_engine()
     parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}
+    groups = snapshot.get("groups") if isinstance(snapshot.get("groups"), list) else []
+    agents = snapshot.get("agents") if isinstance(snapshot.get("agents"), list) else []
+    branches = snapshot.get("branches") if isinstance(snapshot.get("branches"), list) else []
     messages = snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
+    if len(groups) > MAX_IMPORT_REPLAY_SCENARIO_GROUPS:
+        raise HTTPException(413, "Replay scenario has too many groups")
+    if len(agents) > MAX_IMPORT_REPLAY_SCENARIO_AGENTS:
+        raise HTTPException(413, "Replay scenario has too many agents")
+    if len(branches) > MAX_IMPORT_REPLAY_SCENARIO_BRANCHES:
+        raise HTTPException(413, "Replay scenario has too many branches")
+    if len(messages) > MAX_IMPORT_REPLAY_SCENARIO_MESSAGES:
+        raise HTTPException(413, "Replay scenario has too many messages")
     if not parsed_context.get("simulation_rounds"):
         max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)
         if max_round > 0:
@@ -248,7 +281,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
         scenario_id = scenario.id
 
         group_id_map: dict[str, str] = {}
-        for raw_group in snapshot.get("groups") or []:
+        for raw_group in groups:
             if not isinstance(raw_group, dict):
                 continue
             original_group_id = str(raw_group.get("id", "")).strip()
@@ -266,7 +299,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 
         agent_id_map: dict[str, str] = {}
         pending_group_members: list[tuple[str, str, bool]] = []
-        for raw_agent in snapshot.get("agents") or []:
+        for raw_agent in agents:
             if not isinstance(raw_agent, dict):
                 continue
             original_agent_id = str(raw_agent.get("id", "")).strip()
@@ -290,7 +323,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 
         branch_id_map: dict[str, str] = {}
         pending_parent_links: list[tuple[str, str]] = []
-        for raw_branch in snapshot.get("branches") or []:
+        for raw_branch in branches:
             if not isinstance(raw_branch, dict):
                 continue
             original_branch_id = str(raw_branch.get("id", "")).strip()
@@ -322,7 +355,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
             branch.parent_branch_id = branch_id_map.get(parent_original_id)
             session.add(branch)
 
-        for raw_group in snapshot.get("groups") or []:
+        for raw_group in groups:
             if not isinstance(raw_group, dict):
                 continue
             original_group_id = str(raw_group.get("id", "")).strip()
@@ -676,7 +709,6 @@ async def delete_scenario(scenario_id: str):
                 f"Cannot delete: scenario is still '{scenario.status.value}'. "
                 "Only 'done', 'error', or 'parsing' scenarios can be deleted.",
             )
-
         # Collect branch/round IDs for batch deletion
         branch_ids = list(session.exec(
             select(Branch.id).where(Branch.scenario_id == scenario_id)
@@ -722,6 +754,9 @@ async def delete_scenario(scenario_id: str):
         # 5b. Rebuild impacted leaderboard rows after deletion.
         for user_id, user_name in affected_prediction_users.items():
             recompute_leaderboard_entry(session, user_id, user_name)
+
+        # 5c. Remove scenario-scoped campaign artifacts and refresh derived aggregates.
+        remove_scenario_campaign_artifacts(session, scenario)
 
         # 6. Branches (batch)
         if branch_ids:

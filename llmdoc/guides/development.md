@@ -98,6 +98,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
   - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
   - 对应两组 `ruff check`：通过
+- 本轮这类“engine 初始化竞态 / scenario replay import 边界 / prediction 提交窗口 / scenario 删除回滚 campaign side effects / Debate 空 turn fallback”改动，当前还额外实跑通过：
+  - `pytest -q backend/tests/test_models.py backend/tests/test_api.py backend/tests/test_debate_service.py backend/tests/test_predictions.py -k 'get_engine_initializes_once_under_concurrency or import_replay_scenario or submit_prediction_rejects or delete_cascade_removes_campaign_log_and_detaches_badge_source or social_copy_trims_output_to_platform_limit or run_debate_background_finishes_with_structured_result or concurrent_calls_only_persist_once'`：`9 passed, 145 deselected in 1.07s`
+  - `python -m ruff check --ignore E501 backend/app/models/database.py backend/app/api/predictions.py backend/app/api/scenarios.py backend/app/services/debate.py backend/tests/test_api.py backend/tests/test_models.py`：通过
 
 ### Frontend
 

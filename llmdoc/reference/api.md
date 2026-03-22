@@ -27,6 +27,12 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 空字符串或纯空白：返回 `422`
 > - 超过 `1000` 字符：返回 `422`
 >
+> `POST /api/scenario/import-replay` 当前也有导入边界保护：
+> - 整个 `scenario` payload 超过 `1_000_000 bytes`：返回 `422`
+> - `question` 为空：返回 `422`
+> - `question` 超过 `500` 字符：返回 `422`
+> - `groups` 最多 `128` 条、`agents` 最多 `256` 条、`branches` 最多 `256` 条、`messages` 最多 `5_000` 条；超出时返回 `413`
+>
 > 当前主模式玩法卡的真实写路径是：
 > - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
 > - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
@@ -48,6 +54,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 清理该 scenario 残留的 `pending_intervention` 队列项
 > - 通过 shared `VectorStore` 清理该 scenario 对应的 Chroma collection
 > - 对受影响用户的 leaderboard row 做重建，避免删除已评分 prediction 后留下过期统计
+> - 若该 scenario 已写入 campaign 进度，还会同步删除对应 `ScenarioCampaignLog`
+> - 若某个 badge 的 `source_scenario_id` 指向这局 scenario，会把这条来源指针清空
+> - 会按删除后的剩余日志重算受影响的 `DirectorProfile / ProfileMastery` 聚合值，不再把这局继续算进累计结果
+>
+> `DELETE /api/scenario/{id}` 当前不会因为该 scenario 已经 finalize 到 campaign 就拒删；只要场景状态本身允许删除，后端会先回滚这局的 campaign side effects，再继续删主记录。
 
 > `GET/POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 prompt wrapper / context 包装：
 > - 英文 scenario 不再收到中文包装文本
@@ -77,6 +88,12 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 这 4 个 endpoint 当前只由专用模块 `app/api/predictions.py` 提供；`scenarios.py` 不再持有 legacy 同名路由。
 >
 > `POST /api/scenario/{id}/predict` 当前请求体仍接受可选 `user_id`；若 `user_name` 留空，后端会按 scenario / question 语言补匿名昵称（中文场景用 `匿名预言家`，英文场景用 `Anonymous Predictor`），再把 `user_id` 缺省回退到 `"anonymous"`。当前 `PredictionResponse` 不回显 `user_id`。
+>
+> `POST /api/scenario/{id}/predict` 当前只在这两种状态开放：
+> - `parsing`
+> - `simulating`
+>
+> 进入 `narrating / done / error` 后，后端都会返回 `400` 关闭预测入口。
 >
 > `POST /api/scenario/{id}/predict` 当前通过 Pydantic 校验 `confidence`：
 > - 合法范围：`0.0 <= confidence <= 1.0`
@@ -252,6 +269,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `verdict`
 >
 > 当前 Debate 的终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；如果 `DEBATE_USE_LLM = false`、上游暂时不可用，或 LLM 返回坏结构，会退回 deterministic fallback。当前结果 payload 会显式带 `adjudication_mode`。
+>
+> 如果某场 Debate 最终没有足够的 turn 可摘出 `best_argument / best_rebuttal`，后端当前也不会回空字符串；会回退成可读的兜底文案，避免结果页出现空洞句子。
 >
 > Debate 的后台推进当前还会在同一 SQLite 文件下使用 shared runtime lock 做跨 worker 防重入；这是内部执行约束，不改变现有 REST / WebSocket API 形状。
 >

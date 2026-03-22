@@ -14,6 +14,7 @@ from app.main import app
 from app.models import Debate, DebatePhase, DebateStatus
 from app.models.database import get_engine
 from app.services.debate import create_debate_record, run_debate_background
+from app.services.debate_scoring import build_debate_plan
 
 
 @pytest.fixture
@@ -220,6 +221,31 @@ def test_get_result_distinguishes_error_terminal_state(client: TestClient):
 
     assert resp.status_code == 500
     assert "ended with an error" in resp.json()["detail"]
+
+
+def test_judge_analysis_fallback_uses_nonempty_turn_placeholders():
+    from app.services.debate import _build_judge_analysis_fallback, _empty_turn_fallback
+    from app.services.debate_scoring import build_debate_plan
+
+    debate = Debate(
+        question="Should every emergency tribunal expose its failed ruling chain?",
+        motion="Motion",
+        language="en",
+    )
+    plan = build_debate_plan(debate.question)
+
+    fallback = _build_judge_analysis_fallback(
+        debate=debate,
+        plan=plan,
+        best_argument=_empty_turn_fallback("en", "argument"),
+        best_rebuttal=_empty_turn_fallback("en", "rebuttal"),
+        counterplay_context=None,
+    )
+
+    assert "No decisive argument was recorded." in fallback["summary"]
+    assert "No decisive rebuttal was recorded." in fallback["summary"]
+    assert "No decisive argument was recorded." in fallback["winner_reason"]
+    assert "No decisive rebuttal was recorded." in fallback["loser_gap"]
 
 
 @pytest.mark.asyncio
@@ -438,3 +464,27 @@ def test_import_replay_debate_rejects_excessive_turn_count(client: TestClient):
 
     assert resp.status_code == 413
     assert "too many turns" in resp.text
+
+
+def test_empty_turn_fallbacks_are_readable():
+    from app.services import debate as debate_service
+
+    best_argument = debate_service._empty_turn_fallback("en", "argument")
+    best_rebuttal = debate_service._empty_turn_fallback("en", "rebuttal")
+
+    assert debate_service._pick_best_turn(
+        [],
+        winner_side="proposition",
+        fallback=best_argument,
+    ) == best_argument
+
+    summary = debate_service._build_judge_summary_fallback(
+        debate=Debate(question="Should the council centralize trade?", motion="Motion", language="en"),
+        plan=build_debate_plan("Should the council centralize trade?"),
+        best_argument=best_argument,
+        best_rebuttal=best_rebuttal,
+    )
+
+    assert "was: ." not in summary
+    assert best_argument in summary
+    assert best_rebuttal in summary

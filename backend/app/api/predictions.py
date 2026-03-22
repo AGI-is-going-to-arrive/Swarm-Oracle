@@ -21,6 +21,10 @@ from app.services.lang_detect import detect_language, get_anonymous_predictor_na
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["predictions"])
+OPEN_PREDICTION_STATUSES = {
+    ScenarioStatus.PARSING,
+    ScenarioStatus.SIMULATING,
+}
 
 
 # ── Request / Response Schemas ─────────────────────────
@@ -92,9 +96,11 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
         if not scenario:
             raise HTTPException(404, "Scenario not found")
 
-        # Don't allow predictions after simulation is done
-        if scenario.status == ScenarioStatus.DONE:
-            raise HTTPException(400, "Scenario already completed — predictions are closed")
+        if scenario.status not in OPEN_PREDICTION_STATUSES:
+            raise HTTPException(
+                400,
+                f"Scenario is '{scenario.status.value}' — predictions are closed",
+            )
 
         scenario_language = (
             scenario.parsed_context.get("_language")

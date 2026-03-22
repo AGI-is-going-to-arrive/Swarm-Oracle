@@ -5,6 +5,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any, Optional
 
 from sqlalchemy import Index
@@ -186,23 +187,27 @@ class ReplayArtifact(SQLModel, table=True):
 
 
 _engine = None
+_engine_lock = Lock()
 
 
 def get_engine():
     global _engine
     if _engine is None:
         from app.config import settings
-        _engine = create_engine(settings.DATABASE_URL, echo=False)
+        with _engine_lock:
+            if _engine is None:
+                _engine = create_engine(settings.DATABASE_URL, echo=False)
     return _engine
 
 
 def dispose_engine():
     """M-2 fix: Dispose engine and reset singleton for graceful shutdown."""
     global _engine
-    if _engine is not None:
-        _engine.dispose()
-        _engine = None
-        logger.info("Database engine disposed.")
+    with _engine_lock:
+        if _engine is not None:
+            _engine.dispose()
+            _engine = None
+            logger.info("Database engine disposed.")
 
 
 def init_db():

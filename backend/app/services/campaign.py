@@ -531,6 +531,102 @@ def _refresh_favorite_card(session: Session, mastery: ProfileMastery) -> None:
     )[0][0]
 
 
+def _scenario_bet_count(gameplay_state_json: dict[str, Any] | None) -> int:
+    state = normalize_scenario_gameplay_state(gameplay_state_json)
+    return len(state["betting"]["bets"])
+
+
+def _recompute_director_profile(session: Session, director_profile: DirectorProfile) -> None:
+    logs = list(
+        session.exec(
+            select(ScenarioCampaignLog).where(
+                ScenarioCampaignLog.director_profile_id == director_profile.id
+            )
+        ).all()
+    )
+    scenario_ids = [log.scenario_id for log in logs]
+    scenarios_by_id = {
+        item.id: item
+        for item in session.exec(select(Scenario).where(Scenario.id.in_(scenario_ids))).all()
+    } if scenario_ids else {}
+
+    highest_archive_grade: str | None = None
+    total_bets = 0
+    for log in logs:
+        highest_archive_grade = _better_archive_grade(highest_archive_grade, log.archive_grade)
+        scenario = scenarios_by_id.get(log.scenario_id)
+        total_bets += _scenario_bet_count(
+            scenario.gameplay_state_json if scenario is not None else None
+        )
+
+    director_profile.total_runs = len(logs)
+    director_profile.completed_challenges = sum(
+        int(log.completed_daily_challenge) for log in logs
+    )
+    director_profile.total_bets = total_bets
+    director_profile.hit_bets = sum(int(log.betting_hit is True) for log in logs)
+    director_profile.highest_archive_grade = highest_archive_grade
+    director_profile.updated_at = _now()
+    session.add(director_profile)
+
+
+def _recompute_profile_mastery(session: Session, mastery: ProfileMastery) -> None:
+    logs = list(
+        session.exec(
+            select(ScenarioCampaignLog).where(
+                ScenarioCampaignLog.director_profile_id == mastery.director_profile_id,
+                ScenarioCampaignLog.profile_id == mastery.profile_id,
+            )
+        ).all()
+    )
+
+    best_archive_grade: str | None = None
+    for log in logs:
+        best_archive_grade = _better_archive_grade(best_archive_grade, log.archive_grade)
+
+    mastery.runs = len(logs)
+    mastery.challenge_completions = sum(int(log.completed_daily_challenge) for log in logs)
+    mastery.signature_hits = sum(int(log.profile_resonance == "signature") for log in logs)
+    mastery.aligned_hits = sum(int(log.profile_resonance == "aligned") for log in logs)
+    mastery.campaign_score = sum(log.campaign_score_delta for log in logs)
+    mastery.level = calculate_mastery_level(mastery.campaign_score) if logs else 1
+    mastery.best_archive_grade = best_archive_grade
+    mastery.updated_at = _now()
+    _refresh_favorite_card(session, mastery)
+    session.add(mastery)
+
+
+def remove_scenario_campaign_artifacts(session: Session, scenario: Scenario) -> None:
+    """Drop one scenario's campaign provenance and refresh derived aggregates."""
+    log = session.exec(
+        select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario.id)
+    ).first()
+    if log is None:
+        return
+
+    director_profile = session.get(DirectorProfile, log.director_profile_id)
+    mastery = session.exec(
+        select(ProfileMastery).where(
+            ProfileMastery.director_profile_id == log.director_profile_id,
+            ProfileMastery.profile_id == log.profile_id,
+        )
+    ).first()
+
+    session.delete(log)
+    for badge in session.exec(
+        select(DirectorBadgeUnlock).where(DirectorBadgeUnlock.source_scenario_id == scenario.id)
+    ).all():
+        badge.source_scenario_id = None
+        session.add(badge)
+
+    session.flush()
+
+    if director_profile is not None:
+        _recompute_director_profile(session, director_profile)
+    if mastery is not None:
+        _recompute_profile_mastery(session, mastery)
+
+
 def _get_last_daily_challenge_log(
     session: Session,
     director_profile_id: str,
@@ -952,10 +1048,9 @@ def finalize_scenario_campaign(
             betting_hit=betting_hit,
         )
 
-        session.flush()
-        _refresh_favorite_card(session, mastery)
-
         try:
+            session.flush()
+            _refresh_favorite_card(session, mastery)
             session.commit()
         except IntegrityError:
             session.rollback()
@@ -979,6 +1074,9 @@ def finalize_scenario_campaign(
                 already_finalized=True,
                 newly_unlocked_badges=[],
             )
+        except Exception:
+            session.rollback()
+            raise
 
         session.refresh(director_profile)
         session.refresh(mastery)

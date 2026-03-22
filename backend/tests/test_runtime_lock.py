@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.api import helpers as helpers_module
+from app.models import database as database_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
@@ -45,6 +47,48 @@ def test_runtime_lock_reclaims_expired_leases(monkeypatch, tmp_path):
 
     reclaimed = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=30)
     assert reclaimed is not None
+
+
+def test_get_engine_initializes_singleton_once_under_thread_race(monkeypatch):
+    database_module.dispose_engine()
+    created_engines: list[object] = []
+    results: list[object] = []
+    errors: list[BaseException] = []
+    start = threading.Event()
+
+    class _FakeEngine:
+        def dispose(self) -> None:
+            return None
+
+    def _fake_create_engine(*_args, **_kwargs):
+        engine = _FakeEngine()
+        created_engines.append(engine)
+        time.sleep(0.02)
+        return engine
+
+    def _call_get_engine():
+        try:
+            start.wait(timeout=1)
+            results.append(database_module.get_engine())
+        except BaseException as exc:  # pragma: no cover - diagnostic path
+            errors.append(exc)
+
+    monkeypatch.setattr(database_module, "create_engine", _fake_create_engine)
+
+    try:
+        threads = [threading.Thread(target=_call_get_engine) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        start.set()
+        for thread in threads:
+            thread.join(timeout=1)
+    finally:
+        database_module.dispose_engine()
+
+    assert not errors
+    assert len(created_engines) == 1
+    assert len(results) == 8
+    assert all(result is created_engines[0] for result in results)
 
 
 @pytest.mark.asyncio

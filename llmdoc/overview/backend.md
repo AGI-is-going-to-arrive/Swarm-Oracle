@@ -36,7 +36,7 @@ api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop �
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
@@ -216,6 +216,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 管理导演 campaign 进度结算、档案积分、题材 mastery 与 badge 解锁，以及单局 `director_state / gameplay_state` 权威态
 - **关键函数**:
   - `finalize_scenario_campaign(...)` — 对已完成 scenario 做一次性结算；同一 scenario 对同一导演幂等，若绑定到不同导演则抛 `CampaignConflictError`
+  - `remove_scenario_campaign_artifacts(session, scenario)` — 在 scenario 删除时回滚这局留下的 campaign 副作用：删 `ScenarioCampaignLog`、解除 badge 的 `source_scenario_id`，并重算 `DirectorProfile / ProfileMastery`
   - `calculate_campaign_score_delta(...)` — 按 archive grade / profile resonance / bet / daily challenge 规则计算积分增量
   - `get_scenario_director_state(scenario_id)` — 读取单局 goals / commitment 权威态
   - `save_scenario_director_state(scenario_id, director_state)` — 写入单局 goals / commitment 权威态；当前要求 `revision` 匹配，stale 写入会抛 `CampaignConflictError`
@@ -258,6 +259,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - Debate 不复用通用 `scenario` 链路，而是独立走 `Debate / DebateTurn / DebatePrediction / DebateCounterplay`
   - 当前固定 5 个阶段：`opening / crossfire / rebuttal / closing / verdict`
   - prediction 只支持 `winner` 与 `verdict_tone`
+  - 若整场没有合适的 winner / rebuttal turn，`best_argument / best_rebuttal` 当前会回退到可读文案，而不是空字符串
   - `counterplay` 当前已提升成 Debate 域内的显式记录：提交时会同时写 `DebatePrediction + DebateCounterplay`，live snapshot / result payload / WS 会优先读独立 `DebateCounterplay`，仅在缺失时回退到旧的 prediction metadata
   - 当前终局裁决已升级为 `LLM hybrid`：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`；结果 payload 当前会显式带 `adjudication_mode`，若 LLM 不可用或输出无效则退回 deterministic fallback
   - `debate_prompts.py` 现在不再只是换 profile 标签：`law / governance / trade / faith / ecology / war` 都有各自 deterministic 语义锚点，同时会生成更强的 LLM prompt，要求回应上一轮、避免套话，并压缩长句、保留更像现场回击的节奏
@@ -306,13 +308,13 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate |
 | `GET /scenario/{id}` | GET | 获取场景详情；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state` 与 `gameplay_state`，供前端直开 `/sim/:id` 时恢复 Theater 状态、导演层权威态，以及主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 权威态 |
-| `POST /scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario；当前给 `/result/replay` 与 `/sim/replay` 的“导入为本地运行”按钮使用 |
+| `POST /scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario；当前给 `/result/replay` 与 `/sim/replay` 的“导入为本地运行”按钮使用；请求体会先做 payload bytes、`question` 长度，以及 `groups / agents / branches / messages` 数量上限校验 |
 | `GET /scenario/{id}/branches` | GET | 获取分支列表 |
 | `GET /scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） |
 | `GET /scenario/{id}/story` | GET | 获取叙事结果；若尚无 completed branches，会回退返回该场景现有 branches，并为根分支补 placeholder title |
 | `GET /scenario/{id}/groups` | GET | 获取分层分组信息 (P3-A) |
 | `GET /scenarios` | GET | 场景列表（分页+状态筛选，JOIN优化 P0-2）(P4-A) |
-| `DELETE /scenario/{id}` | DELETE | 删除场景（批量 SQL DELETE P2-7 + Leaderboard + pending intervention queue + ChromaDB 清理）(P4-A) |
+| `DELETE /scenario/{id}` | DELETE | 删除场景（批量 SQL DELETE P2-7 + Leaderboard + pending intervention queue + ChromaDB 清理）；若该局已经写入 campaign，也会同步回滚这局留下的 campaign side effects (P4-A) |
 | `GET /scenario/{id}/export` | GET | 导出场景 Markdown (P4-C) |
 | `POST /replay-artifact` | POST | 持久化 replay payload，返回短 `share id`；当前主模式优先用它生成 `/result/replay?share=...` 与 `/sim/replay?share=...` |
 | `GET /replay-artifact/{id}` | GET | 读取 replay payload；供 replay 页面 hydrate |
@@ -352,7 +354,7 @@ alembic/ ──► Alembic 数据库迁移框架
 **安全防护**:
 - simulation / debate 当前都同时有进程内 fast path 和 SQLite shared runtime lock；当多个 worker 共用同一个 SQLite 文件时，同一 `scenario_id / debate_id` 不会被重复启动
 - 总模拟超时 `MAX_ROUNDS × 180s`
-- 删除校验拒绝非终态场景（PARSING / NARRATING）
+- 删除校验当前只允许 `DONE / ERROR / PARSING` 场景通过；仍在 `SIMULATING / NARRATING` 的场景会拒绝删除
 
 ### `predictions.py` — 预测与排行榜路由 (P3-B **NEW**)
 > 当前 `/api/scenario/{id}/predict`、`/predictions`、`/score-predictions` 与 `/api/leaderboard` 只由本模块持有；`scenarios.py` 内的旧实现已移除，不再存在 shadow route。
@@ -364,6 +366,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；响应当前会显式带 `attempted / scored / failed / all_failed / results` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
+- **提交窗口**: `POST /api/scenario/{id}/predict` 当前只在 `ScenarioStatus.PARSING / SIMULATING` 开放；进入 `NARRATING / DONE / ERROR` 后都会直接拒绝新预测
 
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
