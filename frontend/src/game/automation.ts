@@ -1,4 +1,6 @@
 
+import type { AutomationErrorState } from '../lib/apiErrorMessage';
+
 export interface AutomationStoreState {
   question: string | null;
   status: string;
@@ -36,6 +38,7 @@ export interface AutomationReplayState {
 export interface AutomationPageState {
   route: string;
   kind: string;
+  error?: AutomationErrorState | null;
   replay_state?: AutomationReplayState | null;
   [key: string]: unknown;
 }

@@ -170,6 +170,8 @@
       "success_retrospective": "回溯重演已加入队列！",
       "success_batch": "批量干预已加入队列！",
       "error": "干预失败",
+      "error_unavailable": "当前分支暂时无法接受干预。",
+      "error_branch_missing": "你选择的分支已经不存在了。",
       "empty_text": "请输入干预文本",
       "templates_label": "快捷模板",
       "templates_hint": "点击模板快速填充，可自行修改"
@@ -264,6 +266,8 @@
       "permalink_label": "固定链接",
       "copied": "✓ 已复制",
       "error": "生成失败",
+      "error_llm_unavailable": "文案生成服务暂时不可用，请稍后重试。",
+      "error_generation_failed": "文案生成失败，请稍后再试。",
       "platform_xiaohongshu": "小红书",
       "platform_weibo": "微博",
       "platform_zhihu": "知乎",
@@ -336,6 +340,7 @@
       "cancel": "取消",
       "success": "预测已提交！",
       "error": "提交失败",
+      "error_closed": "当前场景的预测窗口已经关闭。",
       "confidence_low": "猜测",
       "confidence_mid": "有根据",
       "confidence_high": "确信"
@@ -574,13 +579,26 @@
       "result_predictions": "下注结算",
       "result_empty_predictions": "本场辩论暂无下注记录。",
       "result_load_failed": "加载辩论结果失败",
+      "result_pending": "这场辩论的结果仍在生成中。",
       "result_missing": "该场辩论暂时没有可展示的结果。",
+      "bet_error_locked": "这场辩论的下注窗口已经锁定。",
       "share_title": "辩论分享文案"
     },
     "common": {
       "loading": "加载中…",
       "cancel": "取消",
       "close": "关闭",
+      "api_errors": {
+        "scenario_not_found": "找不到对应的推演场景。",
+        "debate_not_found": "找不到对应的辩论局。",
+        "sync_conflict": "当前视图已过期，请刷新后重试。",
+        "llm_unavailable": "AI 服务暂时不可用，请稍后重试。",
+        "llm_generation_failed": "AI 服务生成结果失败，请稍后再试。",
+        "simulation_start_failed": "启动推演失败。",
+        "scenario_load_failed": "加载推演场景失败。",
+        "debate_start_failed": "启动辩论失败。",
+        "debate_load_failed": "加载辩论失败。"
+      },
       "theme_hooks_aria": "题材钩子",
       "daily_challenge_art_alt": "每日挑战像素插画",
       "archive_seal_alt": "因果档案印章插画"

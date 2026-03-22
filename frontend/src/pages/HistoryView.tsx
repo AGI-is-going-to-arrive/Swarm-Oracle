@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { listScenarios, deleteScenario } from '../api/client';
 import { stringifyAutomationPayload } from '../game/automation';
+import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { ScenarioListItem } from '../api/client';
 import './HistoryView.css';
 
@@ -33,6 +34,7 @@ export default function HistoryView() {
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [loadErrorCode, setLoadErrorCode] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -40,13 +42,15 @@ export default function HistoryView() {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError('');
+    setLoadErrorCode(null);
     try {
       const statusParam = filter === 'all' ? undefined : filter;
       const data = await listScenarios(statusParam, PAGE_SIZE, offset);
       setScenarios(data.scenarios ?? []);
       setTotal(data.total ?? 0);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load scenarios');
+      setLoadErrorCode(getApiErrorCode(err));
+      setLoadError(getLocalizedApiErrorMessage(err, t, 'Failed to load scenarios'));
       setScenarios([]);
       setTotal(0);
     } finally {
@@ -79,7 +83,7 @@ export default function HistoryView() {
         await load(); // refresh list
       }
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Delete failed');
+      setDeleteError(getLocalizedApiErrorMessage(err, t, 'Delete failed'));
     } finally {
       setDeleting(false);
     }
@@ -116,7 +120,7 @@ export default function HistoryView() {
         route: window.location.pathname,
         kind: 'history',
         loading,
-        error: loadError || null,
+        error: buildAutomationErrorState(loadErrorCode, loadError),
         filter,
         total,
         current_page: currentPage,
@@ -137,7 +141,7 @@ export default function HistoryView() {
         delete win.render_game_to_text;
       }
     };
-  }, [currentPage, filter, loadError, loading, scenarios, total, totalPages]);
+  }, [currentPage, filter, loadError, loadErrorCode, loading, scenarios, total, totalPages]);
 
   return (
     <div className="history-view">

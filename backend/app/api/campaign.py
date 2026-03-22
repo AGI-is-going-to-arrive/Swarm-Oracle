@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.api.errors import api_error_from_exception
 from app.services.campaign import (
     CampaignConflictError,
     CampaignError,
@@ -525,7 +526,7 @@ async def get_scenario_summary(scenario_id: str) -> CampaignScenarioSummaryRespo
     try:
         summary = get_scenario_campaign_summary(scenario_id)
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "CAMPAIGN_SCENARIO_SUMMARY_NOT_FOUND", exc) from exc
 
     return CampaignScenarioSummaryResponse(**summary)
 
@@ -538,7 +539,7 @@ async def get_director_state(scenario_id: str) -> ScenarioDirectorStateResponse:
     try:
         state = get_scenario_director_state(scenario_id)
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "DIRECTOR_STATE_NOT_FOUND", exc) from exc
 
     return ScenarioDirectorStateResponse(scenario_id=scenario_id, **state)
 
@@ -554,11 +555,11 @@ async def put_director_state(
     try:
         state = save_scenario_director_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "DIRECTOR_STATE_NOT_FOUND", exc) from exc
     except CampaignConflictError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise api_error_from_exception(409, "DIRECTOR_STATE_CONFLICT", exc) from exc
     except CampaignError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "DIRECTOR_STATE_INVALID", exc) from exc
 
     return ScenarioDirectorStateResponse(scenario_id=scenario_id, **state)
 
@@ -571,7 +572,7 @@ async def get_gameplay_state(scenario_id: str) -> ScenarioGameplayStateResponse:
     try:
         state = get_scenario_gameplay_state(scenario_id)
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "GAMEPLAY_STATE_NOT_FOUND", exc) from exc
 
     return ScenarioGameplayStateResponse(scenario_id=scenario_id, **state)
 
@@ -587,11 +588,11 @@ async def put_gameplay_state(
     try:
         state = save_scenario_gameplay_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "GAMEPLAY_STATE_NOT_FOUND", exc) from exc
     except CampaignConflictError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise api_error_from_exception(409, "GAMEPLAY_STATE_CONFLICT", exc) from exc
     except CampaignError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "GAMEPLAY_STATE_INVALID", exc) from exc
 
     return ScenarioGameplayStateResponse(scenario_id=scenario_id, **state)
 
@@ -607,7 +608,7 @@ async def get_challenge_rotation_endpoint(
     try:
         rotation = get_challenge_rotation(local_date, weekly_count=weekly_count)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "CHALLENGE_ROTATION_INVALID", exc) from exc
 
     return CampaignChallengeRotationResponse(**rotation)
 
@@ -630,7 +631,7 @@ async def get_daily_status(
             timezone_offset_minutes=timezone_offset_minutes,
         )
     except CampaignError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "DAILY_STATUS_INVALID", exc) from exc
 
     return CampaignDailyChallengeResponse(**summary)
 
@@ -651,7 +652,7 @@ async def get_weekly_summary(
             timezone_offset_minutes=timezone_offset_minutes,
         )
     except CampaignError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "WEEKLY_SUMMARY_INVALID", exc) from exc
 
     return CampaignWeeklySummaryResponse(**summary)
 
@@ -681,12 +682,12 @@ async def finalize_campaign(
             commitment_outcome=req.commitment_outcome,
         )
     except CampaignNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise api_error_from_exception(404, "CAMPAIGN_FINALIZE_NOT_FOUND", exc) from exc
     except CampaignStateError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "CAMPAIGN_FINALIZE_STATE_INVALID", exc) from exc
     except CampaignConflictError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise api_error_from_exception(409, "CAMPAIGN_FINALIZE_CONFLICT", exc) from exc
     except CampaignError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise api_error_from_exception(400, "CAMPAIGN_FINALIZE_INVALID", exc) from exc
 
     return CampaignFinalizeResponse(**result)

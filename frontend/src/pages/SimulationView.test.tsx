@@ -142,6 +142,7 @@ const mockStore = {
   ],
   status: 'done' as 'done' | 'simulating',
   error: null,
+  errorCode: null as string | null,
   loadScenario: vi.fn(),
   isSimulationComplete: true,
   visualizationEnabled: true,
@@ -157,6 +158,7 @@ const mockStore = {
     mockStore.isSimulationComplete = scenario.status === 'done';
     mockStore.visualizationEnabled = scenario.visualization_enabled ?? false;
     mockStore.currentRound = Math.max(0, ...((scenario.messages ?? []).map((message) => message.round ?? 0)));
+    mockStore.errorCode = null;
   }),
 };
 
@@ -180,15 +182,19 @@ vi.mock('../hooks/useSimulationWS', () => ({
   useSimulationWS: () => undefined,
 }));
 
-vi.mock('../api/client', () => ({
-  createReplayArtifact: createReplayArtifactMock,
-  getScenarioDirectorState: getScenarioDirectorStateMock,
-  getScenarioGameplayState: getScenarioGameplayStateMock,
-  getReplayArtifact: getReplayArtifactMock,
-  importReplayScenario: importReplayScenarioMock,
-  upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
-  upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
-}));
+vi.mock('../api/client', async () => {
+  const actual = await import('../api/client');
+  return {
+    ...actual,
+    createReplayArtifact: createReplayArtifactMock,
+    getScenarioDirectorState: getScenarioDirectorStateMock,
+    getScenarioGameplayState: getScenarioGameplayStateMock,
+    getReplayArtifact: getReplayArtifactMock,
+    importReplayScenario: importReplayScenarioMock,
+    upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
+    upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
+  };
+});
 
 vi.mock('../hooks/useScreenCapture', () => ({
   captureCompositeElementBlob: vi.fn(async () => null),
@@ -519,6 +525,41 @@ describe('SimulationView replay automation output', () => {
 
     expect(await screen.findByLabelText('sim.panel_expand')).toBeInTheDocument();
     expect(mockStore.setScenario).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the live scenario URL when artifact storage fails and the token is too large', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+    createReplayArtifactMock.mockRejectedValueOnce(new Error('artifact offline'));
+    mockStore.messages = Array.from({ length: 220 }, (_, index) => ({
+      agent: `Agent ${index}`,
+      agent_id: `agent-${index}`,
+      message: `message-${index}-${'abcdefghij'.repeat(8)}`,
+      emotion: 'calm',
+      branch: 'b1',
+      round: index + 1,
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByRole('button', { name: 'share.copy_permalink_btn' });
+    await user.click(button);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/sim\/scenario-1$/));
+    });
   });
 
   it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {

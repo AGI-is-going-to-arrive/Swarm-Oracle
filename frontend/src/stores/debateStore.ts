@@ -1,3 +1,5 @@
+import i18n from '../i18n/config';
+import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { create } from 'zustand';
 
 import { createDebate, getDebate } from '../api/client';
@@ -13,6 +15,7 @@ interface DebateState {
   debate: DebateSnapshot | null;
   status: 'idle' | 'loading' | 'live' | 'done' | 'error';
   error: string | null;
+  errorCode: string | null;
   startDebate: (question: string) => Promise<string>;
   loadDebate: (id: string) => Promise<void>;
   setDebate: (debate: DebateSnapshot) => void;
@@ -21,7 +24,7 @@ interface DebateState {
   setScore: (score: DebateScore) => void;
   setCounterplay: (counterplay: DebateCounterplayResult) => void;
   setVerdict: (verdict: DebateVerdictEventPayload) => void;
-  setError: (message: string) => void;
+  setError: (message: unknown) => void;
   reset: () => void;
 }
 
@@ -29,10 +32,75 @@ const initialState = {
   debate: null,
   status: 'idle' as const,
   error: null as string | null,
+  errorCode: null as string | null,
 };
+
+const PHASE_ORDER: DebateSnapshot['current_phase'][] = [
+  'opening',
+  'crossfire',
+  'rebuttal',
+  'closing',
+  'verdict',
+];
 
 function sortTurns(turns: DebateTurn[]): DebateTurn[] {
   return [...turns].sort((a, b) => a.sequence - b.sequence);
+}
+
+function mergeTurns(current: DebateTurn[], incoming: DebateTurn[]): DebateTurn[] {
+  const merged = new Map<string, DebateTurn>();
+  for (const turn of current) {
+    merged.set(turn.id, turn);
+  }
+  for (const turn of incoming) {
+    merged.set(turn.id, turn);
+  }
+  return sortTurns([...merged.values()]);
+}
+
+function laterPhase(
+  left: DebateSnapshot['current_phase'],
+  right: DebateSnapshot['current_phase'],
+): DebateSnapshot['current_phase'] {
+  return PHASE_ORDER.indexOf(left) >= PHASE_ORDER.indexOf(right) ? left : right;
+}
+
+function moreFinalStatus(
+  left: DebateSnapshot['status'],
+  right: DebateSnapshot['status'],
+): DebateSnapshot['status'] {
+  const rank: Record<DebateSnapshot['status'], number> = {
+    queued: 0,
+    live: 1,
+    done: 2,
+    error: 3,
+  };
+  return rank[left] >= rank[right] ? left : right;
+}
+
+function mergeDebateSnapshot(
+  current: DebateSnapshot | null,
+  incoming: DebateSnapshot,
+): DebateSnapshot {
+  if (!current || current.id !== incoming.id) {
+    return { ...incoming, turns: sortTurns(incoming.turns) };
+  }
+
+  return {
+    ...incoming,
+    turns: mergeTurns(current.turns, incoming.turns),
+    current_phase: laterPhase(current.current_phase, incoming.current_phase),
+    status: moreFinalStatus(current.status, incoming.status),
+    result_ready: current.result_ready || incoming.result_ready,
+    phase_insights: incoming.phase_insights?.length
+      ? incoming.phase_insights
+      : current.phase_insights,
+    counterplay: incoming.counterplay ?? current.counterplay,
+  };
+}
+
+function translate(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, options as never) as unknown as string;
 }
 
 export const useDebateStore = create<DebateState>((set) => ({
@@ -46,12 +114,18 @@ export const useDebateStore = create<DebateState>((set) => ({
         debate,
         status: debate.status === 'done' ? 'done' : debate.status === 'error' ? 'error' : 'live',
         error: null,
+        errorCode: null,
       });
       return debate.id;
     } catch (error) {
       set({
         status: 'error',
-        error: error instanceof Error ? error.message : 'Failed to start debate',
+        errorCode: getApiErrorCode(error),
+        error: getLocalizedApiErrorMessage(
+          error,
+          translate,
+          translate('common.api_errors.debate_start_failed'),
+        ),
       });
       throw error;
     }
@@ -61,23 +135,36 @@ export const useDebateStore = create<DebateState>((set) => ({
     set((state) => ({ status: state.debate?.id === id ? state.status : 'loading', error: null }));
     try {
       const debate = await getDebate(id);
-      set({
-        debate: { ...debate, turns: sortTurns(debate.turns) },
-        status: debate.status === 'done' ? 'done' : debate.status === 'error' ? 'error' : 'live',
-        error: null,
+      set((state) => {
+        const merged = mergeDebateSnapshot(state.debate, debate);
+        return {
+          debate: merged,
+          status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
+          error: null,
+          errorCode: null,
+        };
       });
     } catch (error) {
       set({
         status: 'error',
-        error: error instanceof Error ? error.message : 'Failed to load debate',
+        errorCode: getApiErrorCode(error),
+        error: getLocalizedApiErrorMessage(
+          error,
+          translate,
+          translate('common.api_errors.debate_load_failed'),
+        ),
       });
     }
   },
 
-  setDebate: (debate) => set({
-    debate: { ...debate, turns: sortTurns(debate.turns) },
-    status: debate.status === 'done' ? 'done' : debate.status === 'error' ? 'error' : 'live',
-    error: null,
+  setDebate: (debate) => set((state) => {
+    const merged = mergeDebateSnapshot(state.debate, debate);
+    return {
+      debate: merged,
+      status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
+      error: null,
+      errorCode: null,
+    };
   }),
 
   appendTurn: (turn) => set((state) => {
@@ -143,7 +230,12 @@ export const useDebateStore = create<DebateState>((set) => ({
   setError: (message) => set((state) => ({
     debate: state.debate ? { ...state.debate, status: 'error' } : state.debate,
     status: 'error',
-    error: message,
+    errorCode: getApiErrorCode(message),
+    error: getLocalizedApiErrorMessage(
+      message,
+      translate,
+      translate('common.api_errors.debate_load_failed'),
+    ),
   })),
 
   reset: () => set(initialState),

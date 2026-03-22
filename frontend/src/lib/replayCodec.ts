@@ -2,6 +2,15 @@ export function normalizeReplayOrigin(origin: string): string {
   return origin.replace(/\/$/, '');
 }
 
+export const MAX_REPLAY_TOKEN_CHARS = 1800;
+
+export class ReplayTokenTooLargeError extends Error {
+  constructor(length: number) {
+    super(`Replay token too large for URL sharing (${length} chars)`);
+    this.name = 'ReplayTokenTooLargeError';
+  }
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   bytes.forEach((byte) => {
@@ -67,7 +76,11 @@ export async function encodeReplayEnvelope<T>(kind: string, payload: T): Promise
   const json = JSON.stringify({ kind, payload });
   const bytes = new TextEncoder().encode(json);
   const compressed = await compressBytes(bytes);
-  return `${compressed.prefix}.${toBase64Url(bytesToBase64(compressed.bytes))}`;
+  const token = `${compressed.prefix}.${toBase64Url(bytesToBase64(compressed.bytes))}`;
+  if (token.length > MAX_REPLAY_TOKEN_CHARS) {
+    throw new ReplayTokenTooLargeError(token.length);
+  }
+  return token;
 }
 
 export async function decodeReplayEnvelope<T>(token: string, expectedKind: string): Promise<T | null> {

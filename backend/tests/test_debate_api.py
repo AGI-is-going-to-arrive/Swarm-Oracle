@@ -155,7 +155,8 @@ def test_predict_rejects_when_closing_arguments_have_started(client: TestClient)
     )
 
     assert resp.status_code == 400
-    assert "closing arguments" in resp.json()["detail"]
+    assert resp.json()["detail"]["code"] == "DEBATE_PREDICTIONS_LOCKED"
+    assert "closing arguments" in resp.json()["detail"]["message"]
 
 
 def test_predict_rejects_when_debate_is_in_error_state(client: TestClient):
@@ -178,7 +179,8 @@ def test_predict_rejects_when_debate_is_in_error_state(client: TestClient):
     )
 
     assert resp.status_code == 400
-    assert "not accepting predictions" in resp.json()["detail"]
+    assert resp.json()["detail"]["code"] == "DEBATE_PREDICTIONS_CLOSED"
+    assert "not accepting predictions" in resp.json()["detail"]["message"]
 
 
 def test_predict_counterplay_still_succeeds_when_broadcast_fails(monkeypatch):
@@ -220,7 +222,8 @@ def test_get_result_distinguishes_error_terminal_state(client: TestClient):
     resp = client.get(f"/api/debate/{debate.id}/result")
 
     assert resp.status_code == 500
-    assert "ended with an error" in resp.json()["detail"]
+    assert resp.json()["detail"]["code"] == "DEBATE_RESULT_ERROR_STATE"
+    assert "ended with an error" in resp.json()["detail"]["message"]
 
 
 def test_judge_analysis_fallback_uses_nonempty_turn_placeholders():
@@ -250,6 +253,7 @@ def test_judge_analysis_fallback_uses_nonempty_turn_placeholders():
 
 @pytest.mark.asyncio
 async def test_debate_websocket_disconnects_on_generic_exception(monkeypatch):
+    debate = create_debate_record("Should a tribunal keep its audit websocket private?")
     websocket = AsyncMock()
     websocket.receive_text.side_effect = RuntimeError("boom")
     connect = AsyncMock(return_value=True)
@@ -259,14 +263,15 @@ async def test_debate_websocket_disconnects_on_generic_exception(monkeypatch):
     monkeypatch.setattr(debate_api.debate_ws_manager, "disconnect", disconnect)
 
     with pytest.raises(RuntimeError, match="boom"):
-        await debate_api.debate_websocket_endpoint(websocket, "debate-1")
+        await debate_api.debate_websocket_endpoint(websocket, debate.id)
 
-    connect.assert_awaited_once_with("debate-1", websocket)
-    disconnect.assert_called_once_with("debate-1", websocket)
+    connect.assert_awaited_once_with(debate.id, websocket)
+    disconnect.assert_called_once_with(debate.id, websocket)
 
 
 @pytest.mark.asyncio
 async def test_debate_websocket_disconnects_on_normal_close(monkeypatch):
+    debate = create_debate_record("Should a tribunal keep its audit websocket private?")
     websocket = AsyncMock()
     websocket.receive_text.side_effect = WebSocketDisconnect()
     connect = AsyncMock(return_value=True)
@@ -275,10 +280,10 @@ async def test_debate_websocket_disconnects_on_normal_close(monkeypatch):
     monkeypatch.setattr(debate_api.debate_ws_manager, "connect", connect)
     monkeypatch.setattr(debate_api.debate_ws_manager, "disconnect", disconnect)
 
-    await debate_api.debate_websocket_endpoint(websocket, "debate-2")
+    await debate_api.debate_websocket_endpoint(websocket, debate.id)
 
-    connect.assert_awaited_once_with("debate-2", websocket)
-    disconnect.assert_called_once_with("debate-2", websocket)
+    connect.assert_awaited_once_with(debate.id, websocket)
+    disconnect.assert_called_once_with(debate.id, websocket)
 
 
 def test_import_replay_debate_persists_snapshot(client: TestClient):

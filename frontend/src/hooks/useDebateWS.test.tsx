@@ -181,6 +181,34 @@ describe('useDebateWS', () => {
     expect(storeState.setVerdict).not.toHaveBeenCalled();
   });
 
+  it('forwards structured runtime errors into the store', () => {
+    render(<Harness debateId="debate-error" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            status: 'error',
+            error: {
+              code: 'DEBATE_RUNTIME_FAILED',
+              message: 'Debate failed unexpectedly. Please retry.',
+            },
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setError).toHaveBeenCalledWith({
+      code: 'DEBATE_RUNTIME_FAILED',
+      message: 'Debate failed unexpectedly. Please retry.',
+    });
+  });
+
   it('forwards debate_verdict phase insights into the store', () => {
     render(<Harness debateId="debate-5" />);
 

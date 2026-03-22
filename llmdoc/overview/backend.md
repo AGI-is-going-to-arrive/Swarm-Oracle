@@ -32,7 +32,7 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter
     │
@@ -124,6 +124,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `PersistentClient` 初始化当前有超时上限；超时后会先返回 `unavailable`，避免主线程一直卡住；如果后台初始化稍后完成，同一个 `VectorStore` 实例会在后续访问时接管这份 client
   - 模块级单例当前会区分“ready”与“仍在后台初始化”：`_store_ready()` 只代表已经可立即使用，`get_vector_store()` 在 init pending 时仍会复用同一个实例，避免并发请求重复拉起多个 Chroma init 线程
   - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
+  - 如果 Chroma 在运行期才出错（例如 collection lookup / query / health check 才失败），当前会主动失效本地 `client + collection cache`；下一次 `get_vector_store()` 会重建单例，而不是让同一个坏 client 无限 warning
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
   - ChromaDB 不可用时静默降级
@@ -306,6 +307,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - replay import 当前会把输入 payload 里的 `phase_insights` 一并持久化；后续 live/result 读路径会优先回放这份已导入的阶段洞察，而不是只靠重算
   - replay import 当前还会校验 `winner / verdict_tone / turns[*].sequence / phase_insights` 的关键字段；坏快照会直接返回 `422`，同时 turn 会按 `sequence` 排序后再落库
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
+  - 如果 debate background runner 失败，当前发给前端的 `status=error` 事件也已统一成结构化 `error = {code, message}`；详细异常仍只留在后端日志，不再把原始 `str(exc)` 直接透给前端
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
   - `POST /api/debate/{id}/predict` 当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；若 WebSocket 广播失败，只会记 warning，不会把已落库请求翻成假 `500`
@@ -337,6 +339,10 @@ alembic/ ──► Alembic 数据库迁移框架
 > - `helpers.py` — 后台任务管理、工具函数 (`_background_tasks` set)
 > - `interventions.py` — 干预路由（标准/回溯/批量）
 > - `social.py` — 社交媒体文案路由 (P6)
+>
+> **错误返回口径**：这批 REST 路由当前都统一走结构化 `HTTPException.detail = {code, message}`。已经覆盖 `campaign / interventions / predictions / social / scenarios / debate`，前端现在按 `status / code / message` 消费，不再把自由文本错误字符串当协议。
+>
+> **helpers 运行口径**：`api/helpers.py` 里的 fire-and-forget background task 当前会在 done callback 中主动记录未捕获异常，不再静默吞掉；simulation 失败时发给前端的 `simulation_error` 事件，也已经升级成结构化 `error = {code, message}`。
 
 ### `scenarios.py` — 核心 REST 路由
 | 端点 | 方法 | 描述 |
@@ -370,6 +376,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；当前 wrapper / instruction 会跟随场景语言，英文场景不再收到中文包装文案 |
+
+> social 路由当前也已纳入结构化错误口径；像 `LLM temporarily unavailable / generation failed` 这类失败，仍保留原 message 含义，但现在会通过 `{code, message}` 对外返回，而不是混用自由文本 detail。
 
 ### `campaign.py` — Campaign 路由 (Track A / Phase A1 **NEW**)
 | 端点 | 方法 | 描述 |
@@ -422,16 +430,19 @@ alembic/ ──► Alembic 数据库迁移框架
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
 - **事件类型**: `heartbeat`, `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
+- **接入边界**: scenario / debate 两条 WS 当前都会先检查目标资源是否存在；不存在就直接拒绝接入。这里只收住“无效 id 也能监听”的问题，还不等于完整鉴权。
 - **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里；空闲期还会发送应用层 `heartbeat`，让半断开连接在发送路径上更快暴露并清理
 - **广播语义**: `broadcast()` 当前会先把 payload 序列化一次，再并行 `gather` 发给所有连接；单个慢连接不会再阻塞同一 scenario 的其它连接，但发送异常的 socket 仍会在广播后统一清理
 - **事件类型**:
   - `heartbeat`（客户端可忽略；主要用于 idle keepalive / dead socket cleanup）
   - `status`
+  - `simulation_error`（当前 payload 已升级成 `error = {code, message}`，不再只给一段自由文本）
   - `agent_speak`
   - `debate_phase_change`
   - `debate_score_update`
   - `debate_counterplay`
   - `debate_verdict`（当前 payload = `DebateResultSummary + phase_insights`）
+  - `status=error`（Debate 路径当前也走结构化 `error = {code, message}`）
 
 ## 模型层 (`app/models/`)
 

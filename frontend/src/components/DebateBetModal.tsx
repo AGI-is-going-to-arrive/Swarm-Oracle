@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   type DebatePredictionKind,
   getDebateSideLabel,
@@ -71,7 +72,7 @@ export function DebateBetModal({
     try {
       await onSubmit({ kind, targetValue, confidence });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : t('debate.bet_error'));
+      setError(getLocalizedApiErrorMessage(nextError, t, t('debate.bet_error')));
     }
   };
 

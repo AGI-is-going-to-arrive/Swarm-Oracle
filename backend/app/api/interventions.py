@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from sqlmodel import Session, func, select
 
+from app.api.errors import api_error
 from app.api.schemas import BatchInterveneRequest, InterveneRequest, RetrospectiveInterveneRequest
 from app.models import (
     Branch,
@@ -53,9 +54,9 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     """Butterfly effect — inject a user event into an active simulation branch."""
     text = req.text.strip()
     if not text:
-        raise HTTPException(400, "Intervention text cannot be empty")
+        raise api_error(400, "INTERVENTION_TEXT_EMPTY", "Intervention text cannot be empty")
     if len(text) > 2000:
-        raise HTTPException(400, "Intervention text too long (max 2000 characters)")
+        raise api_error(400, "INTERVENTION_TEXT_TOO_LONG", "Intervention text too long (max 2000 characters)")
 
     engine = get_engine()
 
@@ -63,16 +64,24 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
-            raise HTTPException(400, f"Cannot intervene: scenario status is '{scenario.status.value}'")
+            raise api_error(
+                400,
+                "INTERVENTION_SCENARIO_STATUS_INVALID",
+                f"Cannot intervene: scenario status is '{scenario.status.value}'",
+            )
 
         # Validate the branch exists, belongs to this scenario, and is active
         branch = session.get(Branch, req.branch_id)
         if not branch or branch.scenario_id != scenario_id:
-            raise HTTPException(400, "Branch not found in this scenario")
+            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")
         if branch.status != BranchStatus.ACTIVE:
-            raise HTTPException(400, f"Cannot intervene: branch status is '{branch.status.value}'")
+            raise api_error(
+                400,
+                "INTERVENTION_BRANCH_STATUS_INVALID",
+                f"Cannot intervene: branch status is '{branch.status.value}'",
+            )
 
         # Determine current round from the branch's rounds
         max_round = session.exec(
@@ -124,18 +133,18 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
     simulation with the intervention injected at that point.
     """
     if not req.text.strip():
-        raise HTTPException(400, "Intervention text cannot be empty")
+        raise api_error(400, "INTERVENTION_TEXT_EMPTY", "Intervention text cannot be empty")
 
     engine = get_engine()
 
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         branch = session.get(Branch, req.branch_id)
         if not branch or branch.scenario_id != scenario_id:
-            raise HTTPException(400, "Branch not found in this scenario")
+            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")
 
         # Validate round_number exists in this branch
         max_round = session.exec(
@@ -144,9 +153,10 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
         max_round = max_round if max_round is not None else 0
 
         if req.round_number > max_round:
-            raise HTTPException(
+            raise api_error(
                 422,
-                f"round_number {req.round_number} exceeds max round {max_round} for this branch"
+                "RETROSPECTIVE_ROUND_OUT_OF_RANGE",
+                f"round_number {req.round_number} exceeds max round {max_round} for this branch",
             )
 
         # Create a new branch forked at the specified round
@@ -210,7 +220,7 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
 async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
     """Batch butterfly effect — inject events into multiple branches simultaneously."""
     if not req.interventions:
-        raise HTTPException(400, "Interventions list cannot be empty")
+        raise api_error(400, "INTERVENTIONS_EMPTY", "Interventions list cannot be empty")
 
     engine = get_engine()
 
@@ -218,9 +228,13 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
-            raise HTTPException(400, f"Cannot intervene: scenario status is '{scenario.status.value}'")
+            raise api_error(
+                400,
+                "INTERVENTION_SCENARIO_STATUS_INVALID",
+                f"Cannot intervene: scenario status is '{scenario.status.value}'",
+            )
 
     # Validate ALL branches first (atomic: all-or-nothing)
     results = []
@@ -229,14 +243,24 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
     with Session(engine) as session:
         for item in req.interventions:
             if not item.text.strip():
-                raise HTTPException(400, f"Empty intervention text for branch {item.branch_id}")
+                raise api_error(
+                    400,
+                    "INTERVENTION_TEXT_EMPTY",
+                    f"Empty intervention text for branch {item.branch_id}",
+                )
 
             branch = session.get(Branch, item.branch_id)
             if not branch or branch.scenario_id != scenario_id:
-                raise HTTPException(400, f"Branch {item.branch_id} not found in this scenario")
+                raise api_error(
+                    400,
+                    "INTERVENTION_BRANCH_NOT_FOUND",
+                    f"Branch {item.branch_id} not found in this scenario",
+                )
             if branch.status != BranchStatus.ACTIVE:
-                raise HTTPException(
-                    400, f"Cannot intervene: branch {item.branch_id} status is '{branch.status.value}'"
+                raise api_error(
+                    400,
+                    "INTERVENTION_BRANCH_STATUS_INVALID",
+                    f"Cannot intervene: branch {item.branch_id} status is '{branch.status.value}'",
                 )
 
         # All valid — apply all interventions

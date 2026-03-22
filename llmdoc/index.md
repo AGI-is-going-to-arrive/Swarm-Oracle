@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-22（backend review fixes / structured JSON logging / full backend green）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-23（structured API errors / ws error envelope / frontend ApiError localization / automation error object）
 
 ## 阅读顺序
 

@@ -14,9 +14,11 @@ import {
     getScenarioGameplayState,
     getReplayArtifact,
     importReplayScenario,
+    isApiError,
     upsertScenarioDirectorState,
   upsertScenarioGameplayState,
 } from '../api/client';
+import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import {
   captureCompositeElementBlob,
   captureCompositeElementDataUrl,
@@ -212,6 +214,7 @@ export function SimulationView() {
   const messages = useSimulationStore((s) => s.messages);
   const status = useSimulationStore((s) => s.status);
   const error = useSimulationStore((s) => s.error);
+  const errorCode = useSimulationStore((s) => s.errorCode);
   const loadScenario = useSimulationStore((s) => s.loadScenario);
   const isSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
   const visualizationEnabled = useSimulationStore((s) => s.visualizationEnabled);
@@ -251,6 +254,7 @@ export function SimulationView() {
   );
   const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const [replayLinkUnavailable, setReplayLinkUnavailable] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
 
   // Sidebar collapse state (default: open in classic, collapsed in theater)
@@ -426,6 +430,10 @@ export function SimulationView() {
   }, [isReplayMode]);
 
   useEffect(() => {
+    setReplayLinkUnavailable(false);
+  }, [replayShareId, replayToken, scenario?.id]);
+
+  useEffect(() => {
     if (viewMode !== 'theater' || !visualizationEnabled) return;
 
     const preload = () => {
@@ -477,7 +485,7 @@ export function SimulationView() {
       const persisted = await upsertScenarioDirectorState(id, nextState);
       setBackendDirectorState(persisted);
     } catch (err) {
-      if (err instanceof Error && err.message.includes('API 409:')) {
+      if (isApiError(err) && err.status === 409) {
         const latest = await getScenarioDirectorState(id).catch(() => null);
         if (latest) {
           setBackendDirectorState(latest);
@@ -498,7 +506,7 @@ export function SimulationView() {
       const persisted = await upsertScenarioGameplayState(id, nextState);
       setBackendGameplayState(persisted);
     } catch (err) {
-      if (err instanceof Error && err.message.includes('API 409:')) {
+      if (isApiError(err) && err.status === 409) {
         const latest = await getScenarioGameplayState(id).catch(() => null);
         if (latest) {
           setBackendGameplayState(latest);
@@ -556,6 +564,9 @@ export function SimulationView() {
   const replayRounds = useMemo(
     () => getReplayRounds(messages, branches, selectedReplayBranchId),
     [branches, messages, selectedReplayBranchId],
+  );
+  const canCopyReplayLink = Boolean(
+    replayUrl || (scenario && storedScenarioMeta && !replayLinkUnavailable),
   );
   const timelineRoundMarkers = useMemo(() => {
     if (!scenario?.total_rounds) return [];
@@ -683,7 +694,7 @@ export function SimulationView() {
         route: window.location.pathname,
         kind: 'simulation',
         replay_source: isReplayMode ? 'token' : 'api',
-        error: error || null,
+        error: buildAutomationErrorState(errorCode, error),
         director: scenarioMeta && systemTracks
           ? {
             completed_objectives: completedObjectiveCount,
@@ -730,7 +741,7 @@ export function SimulationView() {
           can_preview_gameplay_cards: canPreviewGameplayCardsNow,
           can_open_prediction: !isReplayMode && !isSimulationComplete,
           can_view_results: !isReplayMode && isSimulationComplete,
-          can_copy_replay_link: Boolean(replayUrl || (scenario && storedScenarioMeta)),
+          can_copy_replay_link: canCopyReplayLink,
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
           can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
           capture_mode: captureMode,
@@ -787,6 +798,7 @@ export function SimulationView() {
     evaluatedObjectives,
     detailBranch,
     error,
+    errorCode,
     scenarioMeta,
     systemTracks,
     interventionTarget,
@@ -923,20 +935,8 @@ export function SimulationView() {
       stripDirectorAuthority: hasScenarioDirectorAuthority(snapshot.director_state ?? null),
       stripGameplayAuthority: hasScenarioGameplayAuthority(snapshot.gameplay_state ?? null),
     });
-    const artifact = await createReplayArtifact('simulation_view_v1', {
-      scenario: snapshot,
-      scenarioMeta: compactReplayMeta,
-      uiState: {
-        selectedReplayBranchId,
-        selectedReplayRound,
-        playbackMode,
-        replaySpeed,
-        panelCollapsed,
-      },
-    }).catch(() => null);
-    const url = artifact
-      ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
-      : await buildSimulationReplayUrl(window.location.origin, {
+    const artifact = await Promise.resolve()
+      .then(() => createReplayArtifact('simulation_view_v1', {
         scenario: snapshot,
         scenarioMeta: compactReplayMeta,
         uiState: {
@@ -946,9 +946,32 @@ export function SimulationView() {
           replaySpeed,
           panelCollapsed,
         },
-      });
-    setReplayUrl(url);
-    await copyText(url);
+      }))
+      .catch(() => null);
+    try {
+      const url = artifact
+        ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
+        : await buildSimulationReplayUrl(window.location.origin, {
+          scenario: snapshot,
+          scenarioMeta: compactReplayMeta,
+          uiState: {
+            selectedReplayBranchId,
+            selectedReplayRound,
+            playbackMode,
+            replaySpeed,
+            panelCollapsed,
+          },
+        });
+      setReplayUrl(url);
+      setReplayLinkUnavailable(false);
+      await copyText(url);
+    } catch (error) {
+      console.warn('[SimulationView] Failed to build replay URL', error);
+      const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/sim/${scenario.id}`;
+      setReplayUrl(fallbackUrl);
+      setReplayLinkUnavailable(false);
+      await copyText(fallbackUrl);
+    }
   }, [agents, backendDirectorState, backendGameplayState, branches, messages, panelCollapsed, playbackMode, replaySpeed, replayUrl, scenario, scenarioMeta, selectedReplayBranchId, selectedReplayRound, storedScenarioMeta]);
 
   const handleImportReplay = useCallback(async () => {
@@ -1135,7 +1158,7 @@ export function SimulationView() {
         route: window.location.pathname,
         kind: 'simulation',
         replay_source: isReplayMode ? 'token' : 'api',
-        error: error || null,
+        error: buildAutomationErrorState(errorCode, error),
         director: scenarioMeta && systemTracks
           ? {
             completed_objectives: completedObjectiveCount,
@@ -1182,7 +1205,7 @@ export function SimulationView() {
           can_preview_gameplay_cards: canPreviewGameplayCards,
           can_open_prediction: !isReplayMode && !isSimulationComplete,
           can_view_results: !isReplayMode && isSimulationComplete,
-          can_copy_replay_link: Boolean(replayUrl || (scenario && storedScenarioMeta)),
+          can_copy_replay_link: canCopyReplayLink,
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
           can_capture_gif: viewMode === 'theater' && captureStatus === 'idle',
           capture_mode: captureMode,
@@ -1229,6 +1252,7 @@ export function SimulationView() {
     currentRound,
     detailBranch,
     error,
+    errorCode,
     evaluatedObjectives,
     hasActiveModal,
     interventionTarget,
@@ -1238,6 +1262,7 @@ export function SimulationView() {
     panelCollapsed,
     canPreviewGameplayCards,
     canUseGameplayCards,
+    canCopyReplayLink,
     gameplayAutomation,
     predictionAutomation,
     replayAutomationState,
@@ -1346,7 +1371,7 @@ export function SimulationView() {
               {t('sim.status.view_results')}
             </button>
           )}
-          {(replayUrl || (scenario && storedScenarioMeta)) && (
+          {canCopyReplayLink && (
             <button
               className="btn btn-ghost"
               onClick={() => void handleCopyReplayLink()}

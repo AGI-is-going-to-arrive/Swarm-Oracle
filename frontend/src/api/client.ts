@@ -17,6 +17,70 @@ const BASE = '/api';
 const DEFAULT_TIMEOUT = 30000; // M-5 fix: 30s default request timeout
 const SOCIAL_COPY_TIMEOUT = 90000;
 
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
+
+export class ApiError extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(`API ${status} ${code}: ${message}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
+async function parseJsonResponse<T>(res: Response, path: string): Promise<T> {
+  const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('json')) {
+    const body = await res.text().catch(() => '');
+    const detail = body ? `: ${body.slice(0, 200)}` : '';
+    throw new Error(
+      `API returned non-JSON response for ${path} (${contentType || 'unknown'})${detail}`,
+    );
+  }
+  const body = await res.text().catch(() => '');
+  try {
+    return JSON.parse(body) as T;
+  } catch (error) {
+    throw new Error(
+      `API returned invalid JSON for ${path}: ${error instanceof Error ? error.message : 'parse failed'}`,
+    );
+  }
+}
+
+async function parseErrorResponse(res: Response): Promise<Error> {
+  const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+  const body = await res.text().catch(() => '');
+
+  if (contentType.includes('json')) {
+    try {
+      const parsed = JSON.parse(body) as {
+        detail?: string | { code?: string; message?: string };
+      };
+      if (typeof parsed.detail === 'object' && parsed.detail !== null) {
+        const code = typeof parsed.detail.code === 'string' ? parsed.detail.code : 'UNKNOWN_ERROR';
+        const message = typeof parsed.detail.message === 'string' ? parsed.detail.message : 'Request failed';
+        return new ApiError(res.status, code, message);
+      }
+      if (typeof parsed.detail === 'string' && parsed.detail) {
+        return new ApiError(res.status, 'UNSTRUCTURED_ERROR', parsed.detail);
+      }
+    } catch {
+      // Fall through to the raw body text below.
+    }
+  }
+
+  return new ApiError(res.status, 'UNSTRUCTURED_ERROR', body);
+}
+
 export interface LlmProviderRequestOptions {
   llmApiKey?: string;
   llmBaseUrl?: string;
@@ -25,40 +89,64 @@ export interface LlmProviderRequestOptions {
   userId?: string;
 }
 
+async function fetchWithTimeout(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT,
+): Promise<Response> {
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  const abortFromExternal = () => {
+    controller.abort();
+  };
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
+
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      if (externalSignal?.aborted) {
+        throw new Error(`API request aborted: ${path}`);
+      }
+      throw new Error(`API request timed out after ${timeoutMs}ms: ${path}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT): Promise<T> {
   // M-9 fix: only set Content-Type for requests with a body
   const headers: Record<string, string> = {};
   if (init?.body) {
     headers['Content-Type'] = 'application/json';
   }
-  // M-5 fix: AbortController-based timeout
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${BASE}${path}`, {
-      ...init,
-      // H-3 fix: spread init.headers AFTER defaults so user overrides win
-      headers: { ...headers, ...(init?.headers as Record<string, string>) },
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`API ${res.status}: ${body}`);
-    }
-    return res.json();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`API request timed out after ${timeoutMs}ms: ${path}`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
+  const res = await fetchWithTimeout(path, {
+    ...init,
+    // H-3 fix: spread init.headers AFTER defaults so user overrides win
+    headers: { ...headers, ...(init?.headers as Record<string, string>) },
+  }, timeoutMs);
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
   }
+  return parseJsonResponse<T>(res, path);
 }
 
 /** Fetch response as raw text (for Markdown export). */
 async function requestText(path: string): Promise<string> {
-  const res = await fetch(`${BASE}${path}`);
+  const res = await fetchWithTimeout(path, undefined, DEFAULT_TIMEOUT);
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`API ${res.status}: ${body}`);
@@ -386,16 +474,25 @@ export async function finalizeCampaign(
   });
 }
 
-export async function getCampaignProfile(userId: string): Promise<CampaignProfileSummary> {
-  return request(`/campaign/profile/${userId}`);
+export async function getCampaignProfile(
+  userId: string,
+  options?: RequestOptions,
+): Promise<CampaignProfileSummary> {
+  return request(`/campaign/profile/${userId}`, { signal: options?.signal });
 }
 
-export async function getCampaignMastery(userId: string): Promise<CampaignMastery[]> {
-  return request(`/campaign/profile/${userId}/mastery`);
+export async function getCampaignMastery(
+  userId: string,
+  options?: RequestOptions,
+): Promise<CampaignMastery[]> {
+  return request(`/campaign/profile/${userId}/mastery`, { signal: options?.signal });
 }
 
-export async function getCampaignBadges(userId: string): Promise<CampaignBadge[]> {
-  return request(`/campaign/profile/${userId}/badges`);
+export async function getCampaignBadges(
+  userId: string,
+  options?: RequestOptions,
+): Promise<CampaignBadge[]> {
+  return request(`/campaign/profile/${userId}/badges`, { signal: options?.signal });
 }
 
 export async function getCampaignScenarioSummary(
@@ -441,36 +538,45 @@ export async function getCampaignDailyChallengeStatus(
   profileId: string,
   localDate: string,
   timezoneOffsetMinutes: number,
+  options?: RequestOptions,
 ): Promise<CampaignDailyChallengeStatus> {
   const params = new URLSearchParams({
     profile_id: profileId,
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`);
+  return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`, {
+    signal: options?.signal,
+  });
 }
 
 export async function getCampaignChallengeRotation(
   localDate: string,
   weeklyCount = 3,
+  options?: RequestOptions,
 ): Promise<CampaignChallengeRotation> {
   const params = new URLSearchParams({
     local_date: localDate,
     weekly_count: String(weeklyCount),
   });
-  return request(`/campaign/challenges/rotation?${params.toString()}`);
+  return request(`/campaign/challenges/rotation?${params.toString()}`, {
+    signal: options?.signal,
+  });
 }
 
 export async function getCampaignWeeklySummary(
   userId: string,
   localDate: string,
   timezoneOffsetMinutes: number,
+  options?: RequestOptions,
 ): Promise<CampaignWeeklySummary> {
   const params = new URLSearchParams({
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return request(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`);
+  return request(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`, {
+    signal: options?.signal,
+  });
 }
 
 /** Intervention template from backend */

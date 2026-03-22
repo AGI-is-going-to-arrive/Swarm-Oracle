@@ -122,6 +122,11 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `python -m pytest tests/test_ws.py -q`：`21 passed in 0.96s`
   - `python -m pytest tests/test_campaign_api.py -q`：`14 passed in 0.88s`
   - `python -m ruff check --ignore E501 app/api/campaign.py app/services/daily_challenges.py tests/test_campaign_api.py`：通过
+- 本 session 这轮“structured API errors / replay artifact structured detail / ws resource guard”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_api.py tests/test_debate_api.py tests/test_campaign_api.py tests/test_ws.py -q`：`157 passed in 7.01s`
+  - `python -m ruff check --ignore E501 app/api app/services/debate.py app/services/vector_store.py tests/test_api.py tests/test_debate_api.py tests/test_campaign_api.py tests/test_ws.py tests/test_debate_service.py tests/test_corner_cases.py tests/test_vector_store.py`：通过
+- 本 session 这轮“debate/simulation ws structured error payload + vector store self-heal”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_debate_service.py tests/test_corner_cases.py tests/test_ws.py -q`：`72 passed in 2.29s`
 - 本 session 这轮“backend review fixes / structured logging / parser incomplete fallback”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_backend_code_review_fixes.py -q`：`4 passed in 0.45s`
   - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`：`64 passed in 71.56s`
@@ -161,6 +166,10 @@ npm run assets:provenance:check
   - `src/lib/scenarioMeta.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/lib/scenarioReplay.test.ts`：`47 passed`
 - 本 session 这轮“daily challenge rotation 后端化 / WorldScene ambient mote 池化 / GameplayCardsModal 联动收敛”改动，当前还额外实跑通过：
   - `src/pages/InputView.test.tsx + src/lib/dailyChallenge.test.ts + src/game/scenes/WorldScene.test.ts + src/components/GameplayCardsModal.test.tsx`：`34 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“ApiError.code 本地化映射 / Input+stores 错误收口 / ws error envelope / automation error object”改动，当前还额外实跑通过：
+  - `src/pages/InputView.test.tsx + src/stores/simulationStore.test.ts + src/stores/debateStore.test.ts + src/hooks/useDebateWS.test.tsx + src/lib/apiErrorMessage.test.ts + src/api/client.test.ts`：`48 passed`
+  - `src/pages/InputView.test.tsx + src/pages/SimulationView.test.tsx + src/pages/DebateArenaView.test.tsx + src/pages/ResultView.test.tsx + src/pages/DebateResultView.test.tsx + src/game/automation.test.ts + src/lib/apiErrorMessage.test.ts + src/stores/simulationStore.test.ts + src/stores/debateStore.test.ts + src/hooks/useDebateWS.test.tsx + src/api/client.test.ts`：`87 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
 
 ### 视频素材采集

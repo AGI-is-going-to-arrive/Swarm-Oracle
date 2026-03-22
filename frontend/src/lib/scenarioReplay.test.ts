@@ -16,7 +16,7 @@ import {
   encodeScenarioReplayToken,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
-import { encodeReplayEnvelope } from './replayCodec';
+import { encodeReplayEnvelope, ReplayTokenTooLargeError } from './replayCodec';
 
 const scenario: Scenario = {
   id: 'scenario-1',
@@ -229,6 +229,30 @@ describe('scenarioReplay helpers', () => {
   it('builds a replay route url', async () => {
     const url = await buildScenarioReplayUrl('https://example.com/', replayPayload);
     expect(url).toContain('/result/replay?replay=');
+  });
+
+  it('rejects oversized scenario replay payloads before building a URL', async () => {
+    const oversizedPayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      storyData: {
+        ...replayPayload.storyData,
+        branches: Array.from({ length: 260 }, (_, index) => ({
+          id: `branch-${index}`,
+          title: `Branch ${index}`,
+          probability: 1,
+          status: 'COMPLETED',
+          story: `story-${index}-${index.toString(36).repeat(4)}-${'abcdefghij'.repeat(4)}`,
+          insight: `insight-${index}-${'klmnopqrst'.repeat(3)}`,
+          key_moments: [`Moment ${index}`],
+          parent_branch_id: null,
+          fork_reason: '',
+        })),
+      },
+    };
+
+    await expect(
+      buildScenarioReplayUrl('https://example.com/', oversizedPayload),
+    ).rejects.toBeInstanceOf(ReplayTokenTooLargeError);
   });
 
   it('rejects malformed scenario replay payloads', async () => {

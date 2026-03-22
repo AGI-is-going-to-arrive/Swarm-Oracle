@@ -38,7 +38,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
             break;
           case 'status':
             if (payload.data.status === 'error') {
-              store.setError(payload.data.error ?? 'Debate runtime error');
+              store.setError(payload.data.error ?? { code: 'UNSTRUCTURED_ERROR' });
             } else if (payload.data.status === 'done' && store.debate) {
               store.setDebate({
                 ...store.debate,

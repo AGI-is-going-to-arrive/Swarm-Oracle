@@ -5,6 +5,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { getDirectorIdentity, updateDirectorName } from '../lib/directorIdentity';
 import {
   buildStructuredPredictionText,
@@ -179,7 +180,7 @@ export default function PredictionModal({
       closeTimerRef.current = setTimeout(() => onClose(), 1200);
     } catch (err) {
       setStatus('error');
-      setErrorMsg(err instanceof Error ? err.message : t('prediction.error'));
+      setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error')));
     }
   };
 

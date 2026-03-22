@@ -42,6 +42,12 @@ from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, rel
 
 logger = logging.getLogger(__name__)
 
+GENERIC_DEBATE_ERROR_MESSAGE = "Debate failed unexpectedly. Please retry."
+GENERIC_DEBATE_ERROR = {
+    "code": "DEBATE_RUNTIME_FAILED",
+    "message": GENERIC_DEBATE_ERROR_MESSAGE,
+}
+
 DebateBroadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 _running_debates: set[str] = set()
@@ -1583,7 +1589,13 @@ async def run_debate_background(
         _mark_debate_error(debate_id)
         await ws_callback(
             debate_id,
-            {"type": "status", "data": {"status": DebateStatus.ERROR.value, "error": str(exc)}},
+            {
+                "type": "status",
+                "data": {
+                    "status": DebateStatus.ERROR.value,
+                    "error": GENERIC_DEBATE_ERROR,
+                },
+            },
         )
         raise
     finally:

@@ -276,6 +276,39 @@ class TestVectorStoreEdgeCases:
         results = vs.retrieve("s1", "one", top_k=100)
         assert len(results) == 1
 
+    def test_runtime_collection_failure_invalidates_client_and_cache(self):
+        class _BrokenClient:
+            def get_or_create_collection(self, *, name: str, metadata: dict[str, str]):
+                raise RuntimeError("chroma broke after init")
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = _BrokenClient()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict({"cached-scenario": object()})
+
+        result = vs._get_collection("scenario-a")
+
+        assert result is None
+        assert vs._client is None
+        assert vs._collections == OrderedDict()
+
+    def test_runtime_retrieve_failure_invalidates_client(self):
+        class _BrokenCollection:
+            def count(self) -> int:
+                raise RuntimeError("query failed")
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = object()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict()
+        vs._get_collection = lambda _scenario_id: _BrokenCollection()
+
+        assert vs.retrieve("scenario-a", "query", top_k=3) == []
+        assert vs._client is None
+        assert vs._collections == OrderedDict()
+
     def test_store_serializes_concurrent_writes_with_process_lock(self, monkeypatch):
         """Concurrent store calls should not overlap inside one process."""
         state = {"active": 0, "max_active": 0, "calls": 0}

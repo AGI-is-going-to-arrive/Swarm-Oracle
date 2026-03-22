@@ -3,6 +3,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import * as apiClient from '../api/client';
+import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
 import type { Scenario } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
@@ -22,7 +24,7 @@ const {
     kind: 'scenario_result_v1',
     created_at: '2026-03-19T00:00:00Z',
   })),
-  finalizeCampaignMock: vi.fn(),
+  finalizeCampaignMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => null),
   findChallengeProgressByScenarioIdMock: vi.fn(),
   getReplayArtifactMock: vi.fn(async () => null),
   importReplayScenarioMock: vi.fn(async (scenario: { id: string }) => ({
@@ -60,12 +62,15 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('../api/client', () => ({
-  createReplayArtifact: createReplayArtifactMock,
-  getStory: vi.fn(async () => ({
-    scenario_id: 'scenario-1',
-    question: 'What if the archive had to sync?',
-    status: 'done',
+vi.mock('../api/client', async () => {
+  const actual = await import('../api/client');
+  return {
+    ...actual,
+    createReplayArtifact: createReplayArtifactMock,
+    getStory: vi.fn(async () => ({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
     branches: [{
       id: 'branch-1',
       title: 'Archive Branch',
@@ -115,9 +120,10 @@ vi.mock('../api/client', () => ({
   scorePredictions: vi.fn(async () => ({ scored: 0 })),
   finalizeCampaign: finalizeCampaignMock,
   getCampaignScenarioSummary: vi.fn(async () => null),
-  upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
-  upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
-}));
+    upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
+    upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
+  };
+});
 
 vi.mock('../lib/directorIdentity', () => ({
   getDirectorIdentity: () => ({
@@ -665,6 +671,80 @@ describe('ResultView campaign summary', () => {
     });
   });
 
+  it('falls back to the scenario result URL when artifact storage fails and the replay token is too large', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+    createReplayArtifactMock.mockRejectedValueOnce(new Error('artifact offline'));
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 5,
+      profile: {
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 0,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-19T00:00:00Z',
+        updated_at: '2026-03-19T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 5,
+        level: 2,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 10,
+        score_to_next_level: 5,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: Array.from({ length: 260 }, (_, index) => ({
+        id: `branch-${index}`,
+        title: `Archive Branch ${index}`,
+        probability: 1,
+        status: 'COMPLETED',
+        story: `A very long branch story ${index} ${'abcdefghij'.repeat(10)}`,
+        insight: `A durable insight ${'klmnopqrst'.repeat(6)}`,
+        key_moments: [`Moment ${index}`],
+        parent_branch_id: null,
+        fork_reason: '',
+      })),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'result.copy_permalink_btn' })).toBeEnabled();
+    });
+    await user.click(screen.getByRole('button', { name: 'result.copy_permalink_btn' }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/result/scenario-1'));
+  });
+
   it('marks finalize requests as daily challenge runs when the scenario came from a stored challenge', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue({
       challengeDay: '2026-03-17',
@@ -777,7 +857,9 @@ describe('ResultView campaign summary', () => {
         campaign_score_delta: 4,
         finalized_at: '2026-03-18T00:00:00Z',
       });
-    finalizeCampaignMock.mockRejectedValue(new Error('API 409: already finalized elsewhere'));
+    finalizeCampaignMock.mockRejectedValue(
+      new ApiError(409, 'CAMPAIGN_CONFLICT', 'already finalized elsewhere'),
+    );
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
 
     render(

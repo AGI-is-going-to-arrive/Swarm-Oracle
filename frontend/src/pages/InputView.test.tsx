@@ -1,10 +1,12 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InputView } from './InputView';
 
 const {
+  testLlmConnectionMock,
   getCampaignProfileMock,
   getCampaignMasteryMock,
   getCampaignBadgesMock,
@@ -13,6 +15,7 @@ const {
   getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
 } = vi.hoisted(() => ({
+  testLlmConnectionMock: vi.fn(),
   getCampaignProfileMock: vi.fn(),
   getCampaignMasteryMock: vi.fn(),
   getCampaignBadgesMock: vi.fn(),
@@ -50,16 +53,18 @@ vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (store: {
     startSimulation: () => Promise<string>;
     error: string;
+    errorCode: string | null;
     reset: () => void;
   }) => unknown) => selector({
     startSimulation: async () => 'scenario-1',
     error: '',
+    errorCode: null,
     reset: () => {},
   }),
 }));
 
 vi.mock('../api/client', () => ({
-  testLlmConnection: vi.fn(),
+  testLlmConnection: testLlmConnectionMock,
   getCampaignProfile: getCampaignProfileMock,
   getCampaignMastery: getCampaignMasteryMock,
   getCampaignBadges: getCampaignBadgesMock,
@@ -174,6 +179,7 @@ describe('InputView campaign progress', () => {
   ];
 
   beforeEach(() => {
+    testLlmConnectionMock.mockReset();
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
     getCampaignBadgesMock.mockResolvedValue(campaignBadges);
@@ -307,11 +313,14 @@ describe('InputView campaign progress', () => {
     );
 
     expect(await screen.findByText('Remote daily question en')).toBeInTheDocument();
-    expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
+    expect(getCampaignDailyChallengeStatusMock).toHaveBeenLastCalledWith(
       'director-1',
       'law',
       '2026-03-17',
       expect.any(Number),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -350,6 +359,26 @@ describe('InputView campaign progress', () => {
     expect(await screen.findByText('home.shared_challenge_label')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
+  });
+
+  it('maps structured BYOK connection errors to localized keys', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockRejectedValueOnce({
+      status: 503,
+      code: 'LLM_TEMPORARILY_UNAVAILABLE',
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/ }));
+    await user.type(screen.getByLabelText('API Key'), 'sk-test');
+    await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
+
+    expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
   });
 
   it('publishes homepage challenge and growth summaries inside render_game_to_text', async () => {

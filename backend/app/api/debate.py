@@ -7,10 +7,11 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, WebSocket
 from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import Session
 
+from app.api.errors import api_error
 from app.api.helpers import schedule_background_task
 from app.api.ws import WSManager, run_websocket_session
 from app.models import (
@@ -49,6 +50,12 @@ _COUNTERPLAY_VARIANTS = {"balanced", "reversal"}
 _PHASE_INSIGHT_DIRECTIONS = {"balanced", "proposition", "opposition"}
 _IMPORT_REPLAY_DEFAULT_WINNER = "proposition"
 _IMPORT_REPLAY_DEFAULT_VERDICT_TONE = "balance"
+
+
+async def _debate_exists(debate_id: str) -> bool:
+    engine = get_engine()
+    with Session(engine) as session:
+        return session.get(Debate, debate_id) is not None
 
 
 class CreateDebateRequest(BaseModel):
@@ -168,8 +175,9 @@ def _normalize_import_replay_choice(
     if not cleaned:
         return default
     if cleaned not in allowed:
-        raise HTTPException(
+        raise api_error(
             422,
+            "REPLAY_DEBATE_FIELD_INVALID",
             f"Replay debate has invalid {field_name}: {cleaned}",
         )
     return cleaned
@@ -183,13 +191,15 @@ def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
         try:
             sequence = int(raw_turn.get("sequence", 1) or 1)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(
+            raise api_error(
                 422,
+                "REPLAY_DEBATE_TURN_SEQUENCE_INVALID",
                 "Replay debate turn sequence must be a positive integer",
             ) from exc
         if sequence <= 0:
-            raise HTTPException(
+            raise api_error(
                 422,
+                "REPLAY_DEBATE_TURN_SEQUENCE_INVALID",
                 "Replay debate turn sequence must be a positive integer",
             )
         normalized.append((sequence, raw_turn))
@@ -201,8 +211,9 @@ def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
     expected = list(range(1, len(normalized) + 1))
     actual = [sequence for sequence, _ in normalized]
     if actual != expected:
-        raise HTTPException(
+        raise api_error(
             422,
+            "REPLAY_DEBATE_TURN_SEQUENCE_NONCONTIGUOUS",
             "Replay debate turn sequence must be contiguous and unique starting at 1",
         )
     return [raw_turn for _, raw_turn in normalized]
@@ -217,7 +228,7 @@ def _normalize_import_phase_insight_direction(
     if not cleaned:
         return "balanced"
     if cleaned not in _PHASE_INSIGHT_DIRECTIONS:
-        raise HTTPException(422, f"Replay debate has invalid {field_name}: {cleaned}")
+        raise api_error(422, "REPLAY_DEBATE_FIELD_INVALID", f"Replay debate has invalid {field_name}: {cleaned}")
     return cleaned
 
 
@@ -228,19 +239,19 @@ def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[d
     normalized: list[dict[str, Any]] = []
     for entry in phase_insights:
         if not isinstance(entry, dict):
-            raise HTTPException(422, "Replay debate phase_insights entries must be objects")
+            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHTS_INVALID", "Replay debate phase_insights entries must be objects")
 
         phase_raw = str(entry.get("phase", "")).strip().lower()
         try:
             phase = DebatePhase(phase_raw)
         except ValueError as exc:
-            raise HTTPException(422, f"Replay debate has invalid phase_insights.phase: {phase_raw}") from exc
+            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_PHASE_INVALID", f"Replay debate has invalid phase_insights.phase: {phase_raw}") from exc
 
         confidence_drift = entry.get("confidence_drift", {})
         if confidence_drift is None:
             confidence_drift = {}
         if not isinstance(confidence_drift, dict):
-            raise HTTPException(422, "Replay debate phase_insights.confidence_drift must be an object")
+            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_DRIFT_INVALID", "Replay debate phase_insights.confidence_drift must be an object")
 
         try:
             pressure_margin = int(entry.get("pressure_margin", 0) or 0)
@@ -248,10 +259,10 @@ def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[d
             phase_margin = int(confidence_drift.get("phase_margin", 0) or 0)
             cumulative_margin = int(confidence_drift.get("cumulative_margin", 0) or 0)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(422, "Replay debate phase_insights numeric fields must be integers") from exc
+            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_INVALID", "Replay debate phase_insights numeric fields must be integers") from exc
 
         if pressure_margin < 0 or turn_count < 0:
-            raise HTTPException(422, "Replay debate phase_insights numeric fields must be >= 0")
+            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_RANGE_INVALID", "Replay debate phase_insights numeric fields must be >= 0")
 
         normalized.append(
             {
@@ -305,7 +316,7 @@ async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     )
     payload = load_debate_snapshot(debate.id)
     if payload is None:
-        raise HTTPException(500, "Failed to load newly created debate")
+        raise api_error(500, "DEBATE_CREATE_RESPONSE_MISSING", "Failed to load newly created debate")
     return payload
 
 
@@ -315,7 +326,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     question = str(payload.get("question", "")).strip()
     motion = str(payload.get("motion", "")).strip()
     if not question or not motion:
-        raise HTTPException(422, "Replay debate is missing question or motion")
+        raise api_error(422, "REPLAY_DEBATE_MISSING_QUESTION_OR_MOTION", "Replay debate is missing question or motion")
 
     participants = payload.get("participants") if isinstance(payload.get("participants"), list) else []
     turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
@@ -323,11 +334,11 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     phase_insights = payload.get("phase_insights") if isinstance(payload.get("phase_insights"), list) else None
 
     if len(turns) > MAX_IMPORT_REPLAY_TURNS:
-        raise HTTPException(413, "Replay debate has too many turns")
+        raise api_error(413, "REPLAY_DEBATE_TOO_MANY_TURNS", "Replay debate has too many turns")
     if len(predictions) > MAX_IMPORT_REPLAY_PREDICTIONS:
-        raise HTTPException(413, "Replay debate has too many predictions")
+        raise api_error(413, "REPLAY_DEBATE_TOO_MANY_PREDICTIONS", "Replay debate has too many predictions")
     if phase_insights is not None and len(phase_insights) > MAX_IMPORT_REPLAY_PHASE_INSIGHTS:
-        raise HTTPException(413, "Replay debate has too many phase insights")
+        raise api_error(413, "REPLAY_DEBATE_TOO_MANY_PHASE_INSIGHTS", "Replay debate has too many phase insights")
 
     def _participant(side: str) -> dict[str, Any]:
         for item in participants:
@@ -471,7 +482,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
 
     result_payload = load_debate_snapshot(debate_id)
     if result_payload is None:
-        raise HTTPException(500, "Failed to load imported replay debate")
+        raise api_error(500, "REPLAY_DEBATE_RESPONSE_MISSING", "Failed to load imported replay debate")
     return result_payload
 
 
@@ -479,7 +490,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
 async def get_debate(debate_id: str) -> dict[str, Any]:
     payload = load_debate_snapshot(debate_id)
     if payload is None:
-        raise HTTPException(404, "Debate not found")
+        raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
     return payload
 
 
@@ -489,14 +500,14 @@ async def get_debate_result(debate_id: str) -> dict[str, Any]:
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
         if debate is None:
-            raise HTTPException(404, "Debate not found")
+            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
         if debate.status == DebateStatus.ERROR:
-            raise HTTPException(500, "Debate ended with an error")
+            raise api_error(500, "DEBATE_RESULT_ERROR_STATE", "Debate ended with an error")
         if debate.status != DebateStatus.DONE:
-            raise HTTPException(409, "Debate result is not ready yet")
+            raise api_error(409, "DEBATE_RESULT_NOT_READY", "Debate result is not ready yet")
     payload = load_debate_result_payload(debate_id)
     if payload is None:
-        raise HTTPException(500, "Failed to load debate result")
+        raise api_error(500, "DEBATE_RESULT_RESPONSE_MISSING", "Failed to load debate result")
     return payload
 
 
@@ -504,17 +515,21 @@ async def get_debate_result(debate_id: str) -> dict[str, Any]:
 async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[str, Any]:
     allowed = _PREDICTION_OPTIONS[req.kind]
     if req.target_value not in allowed:
-        raise HTTPException(422, f"Unsupported target_value for {req.kind.value}: {req.target_value}")
+        raise api_error(
+            422,
+            "DEBATE_PREDICTION_TARGET_VALUE_UNSUPPORTED",
+            f"Unsupported target_value for {req.kind.value}: {req.target_value}",
+        )
 
     engine = get_engine()
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
         if debate is None:
-            raise HTTPException(404, "Debate not found")
+            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
         if debate.status != DebateStatus.LIVE:
-            raise HTTPException(400, "Debate is not accepting predictions")
+            raise api_error(400, "DEBATE_PREDICTIONS_CLOSED", "Debate is not accepting predictions")
         if debate.current_phase in {DebatePhase.CLOSING, DebatePhase.VERDICT}:
-            raise HTTPException(400, "Predictions lock once closing arguments begin")
+            raise api_error(400, "DEBATE_PREDICTIONS_LOCKED", "Predictions lock once closing arguments begin")
 
         prediction = DebatePrediction(
             debate_id=debate_id,
@@ -593,4 +608,10 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
 
 @router.websocket("/ws/debate/{debate_id}")
 async def debate_websocket_endpoint(websocket: WebSocket, debate_id: str) -> None:
-    await run_websocket_session(debate_ws_manager, debate_id, websocket)
+    await run_websocket_session(
+        debate_ws_manager,
+        debate_id,
+        websocket,
+        exists_check=_debate_exists,
+        missing_resource_name="debate",
+    )

@@ -163,6 +163,7 @@ class VectorStore:
             self._remember_collection(scenario_id, collection)
             return collection
         except Exception as exc:
+            self._invalidate_client(reason=f"collection lookup failed for {scenario_id}", exc=exc)
             logger.warning("Failed to get/create collection for %s: %s", scenario_id, exc)
             return None
 
@@ -173,6 +174,15 @@ class VectorStore:
         while len(self._collections) > self._collection_cache_size:
             evicted_scenario_id, _ = self._collections.popitem(last=False)
             logger.debug("Evicted cached Chroma collection for scenario %s", evicted_scenario_id)
+
+    def _invalidate_client(self, *, reason: str, exc: Exception | None = None) -> None:
+        """Mark the current client unusable so the singleton can self-heal next time."""
+        self._client = None
+        self._collections.clear()
+        if exc is None:
+            logger.warning("Vector store client invalidated: %s", reason)
+        else:
+            logger.warning("Vector store client invalidated: %s: %s", reason, exc)
 
     def _acquire_write_lease(self, scenario_id: str, operation: str):
         """Wait briefly for the shared runtime lease that serializes Chroma writes."""
@@ -266,6 +276,7 @@ class VectorStore:
                     ids=[doc_id],
                 )
             except Exception as exc:
+                self._invalidate_client(reason=f"store failed for {scenario_id}", exc=exc)
                 logger.warning("Vector store write failed (non-fatal): %s", exc)
 
         self._run_serialized_write(scenario_id, "store", _write)
@@ -313,6 +324,7 @@ class VectorStore:
                     })
             return memories
         except Exception as exc:
+            self._invalidate_client(reason=f"retrieve failed for {scenario_id}", exc=exc)
             logger.warning("Vector store retrieval failed (non-fatal): %s", exc)
             return []
 
@@ -338,6 +350,7 @@ class VectorStore:
             heartbeat = self._client.heartbeat()
             return {"status": "ok", "heartbeat": heartbeat}
         except Exception as exc:
+            self._invalidate_client(reason="health check failed", exc=exc)
             return {"status": "error", "reason": str(exc)}
 
 

@@ -6,10 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
+from sqlmodel import Session
 
 import app.api.debate as debate_api
+import app.api.helpers as helpers_api
 import app.api.ws as ws_api
 from app.api.ws import WSManager
+from app.models import Debate, Scenario, ScenarioStatus
+from app.models.database import get_engine
 
 
 class TestWSManager:
@@ -274,7 +278,25 @@ class TestWSManagerConcurrency:
 
 class TestScenarioWebSocketEndpoint:
     @pytest.mark.asyncio
+    async def test_rejects_missing_scenario_before_accept(self, monkeypatch):
+        websocket = AsyncMock()
+        connect = AsyncMock(return_value=True)
+
+        monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
+
+        await ws_api.websocket_endpoint(websocket, "missing-scenario")
+
+        connect.assert_not_called()
+        websocket.close.assert_awaited_once_with(code=4404, reason="scenario not found")
+
+    @pytest.mark.asyncio
     async def test_disconnects_on_generic_exception(self, monkeypatch):
+        with Session(get_engine()) as session:
+            scenario = Scenario(question="ws test", status=ScenarioStatus.SIMULATING)
+            session.add(scenario)
+            session.commit()
+            scenario_id = scenario.id
+
         websocket = AsyncMock()
         websocket.receive_text.side_effect = RuntimeError("boom")
         connect = AsyncMock(return_value=True)
@@ -284,13 +306,19 @@ class TestScenarioWebSocketEndpoint:
         monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
 
         with pytest.raises(RuntimeError, match="boom"):
-            await ws_api.websocket_endpoint(websocket, "scenario-1")
+            await ws_api.websocket_endpoint(websocket, scenario_id)
 
-        connect.assert_awaited_once_with("scenario-1", websocket)
-        disconnect.assert_called_once_with("scenario-1", websocket)
+        connect.assert_awaited_once_with(scenario_id, websocket)
+        disconnect.assert_called_once_with(scenario_id, websocket)
 
     @pytest.mark.asyncio
     async def test_disconnects_on_normal_websocket_close(self, monkeypatch):
+        with Session(get_engine()) as session:
+            scenario = Scenario(question="ws close test", status=ScenarioStatus.SIMULATING)
+            session.add(scenario)
+            session.commit()
+            scenario_id = scenario.id
+
         websocket = AsyncMock()
         websocket.receive_text.side_effect = WebSocketDisconnect()
         connect = AsyncMock(return_value=True)
@@ -299,15 +327,33 @@ class TestScenarioWebSocketEndpoint:
         monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
         monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
 
-        await ws_api.websocket_endpoint(websocket, "scenario-2")
+        await ws_api.websocket_endpoint(websocket, scenario_id)
 
-        connect.assert_awaited_once_with("scenario-2", websocket)
-        disconnect.assert_called_once_with("scenario-2", websocket)
+        connect.assert_awaited_once_with(scenario_id, websocket)
+        disconnect.assert_called_once_with(scenario_id, websocket)
 
 
 class TestDebateWebSocketEndpoint:
     @pytest.mark.asyncio
+    async def test_rejects_missing_debate_before_accept(self, monkeypatch):
+        websocket = AsyncMock()
+        connect = AsyncMock(return_value=True)
+
+        monkeypatch.setattr(debate_api.debate_ws_manager, "connect", connect)
+
+        await debate_api.debate_websocket_endpoint(websocket, "missing-debate")
+
+        connect.assert_not_called()
+        websocket.close.assert_awaited_once_with(code=4404, reason="debate not found")
+
+    @pytest.mark.asyncio
     async def test_disconnects_on_generic_exception(self, monkeypatch):
+        with Session(get_engine()) as session:
+            debate = Debate(question="debate ws test", motion="Motion", language="en")
+            session.add(debate)
+            session.commit()
+            debate_id = debate.id
+
         websocket = AsyncMock()
         websocket.receive_text.side_effect = RuntimeError("boom")
         connect = AsyncMock(return_value=True)
@@ -317,7 +363,25 @@ class TestDebateWebSocketEndpoint:
         monkeypatch.setattr(debate_api.debate_ws_manager, "disconnect", disconnect)
 
         with pytest.raises(RuntimeError, match="boom"):
-            await debate_api.debate_websocket_endpoint(websocket, "debate-1")
+            await debate_api.debate_websocket_endpoint(websocket, debate_id)
 
-        connect.assert_awaited_once_with("debate-1", websocket)
-        disconnect.assert_called_once_with("debate-1", websocket)
+        connect.assert_awaited_once_with(debate_id, websocket)
+        disconnect.assert_called_once_with(debate_id, websocket)
+
+
+class TestBackgroundTaskScheduling:
+    @pytest.mark.asyncio
+    async def test_schedule_background_task_logs_failure_and_discards_task(self, caplog):
+        async def fail() -> None:
+            raise RuntimeError("background boom")
+
+        caplog.set_level("ERROR", logger="app.api.helpers")
+
+        task = helpers_api.schedule_background_task(fail())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert task.done()
+        assert task not in helpers_api._background_tasks
+        assert "Background task failed" in caplog.text
+        assert "background boom" in caplog.text

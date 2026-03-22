@@ -8,8 +8,13 @@ import logging
 from collections import defaultdict
 from contextlib import suppress
 from datetime import datetime, timezone
+from typing import Awaitable, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlmodel import Session
+
+from app.models import Scenario
+from app.models.database import get_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -112,14 +117,39 @@ class WSManager:
 ws_manager = WSManager()
 
 
+async def _scenario_exists(scenario_id: str) -> bool:
+    engine = get_engine()
+    with Session(engine) as session:
+        return session.get(Scenario, scenario_id) is not None
+
+
+async def _close_missing_resource(
+    websocket: WebSocket,
+    *,
+    resource_name: str,
+    resource_id: str,
+) -> None:
+    logger.info("WS rejected: missing %s=%s", resource_name, resource_id)
+    await websocket.close(code=4404, reason=f"{resource_name} not found")
+
+
 async def run_websocket_session(
     manager: WSManager,
     scenario_id: str,
     websocket: WebSocket,
     *,
+    exists_check: Callable[[str], Awaitable[bool]] | None = None,
+    missing_resource_name: str = "scenario",
     log_client_messages: bool = False,
 ) -> None:
     """Run a WebSocket receive loop with background heartbeats and guaranteed cleanup."""
+    if exists_check is not None and not await exists_check(scenario_id):
+        await _close_missing_resource(
+            websocket,
+            resource_name=missing_resource_name,
+            resource_id=scenario_id,
+        )
+        return
     connected = await manager.connect(scenario_id, websocket)
     if not connected:
         return
@@ -147,5 +177,7 @@ async def websocket_endpoint(websocket: WebSocket, scenario_id: str):
         ws_manager,
         scenario_id,
         websocket,
+        exists_check=_scenario_exists,
+        missing_resource_name="scenario",
         log_client_messages=True,
     )

@@ -250,6 +250,92 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(second.objectives.goals[0].id).toBe('goal-1');
   });
 
+  it('waits for a busy lock to clear before rebasing on the latest persisted state', () => {
+    const scenarioId = 'scenario-busy-lock';
+    const storageKey = 'swarmoracle:scenario-meta:v1';
+    const lockKey = `swarmoracle:scenario-meta:v1:lock:${scenarioId}`;
+    const backingStore = new Map<string, string>();
+    backingStore.set(storageKey, JSON.stringify({
+      version: 1,
+      scenarios: {},
+    }));
+
+    let now = 1_000;
+    let released = false;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+      const current = now;
+      now += 5;
+      return current;
+    });
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => {
+          if (key === lockKey && !released) {
+            if (now >= 1_040) {
+              released = true;
+              backingStore.set(storageKey, JSON.stringify({
+                version: 1,
+                scenarios: {
+                  [scenarioId]: {
+                    _rev: 1,
+                    betting: {
+                      bets: [
+                        {
+                          betId: 'bet-1',
+                          kind: 'branch_winner',
+                          targetId: 'branch-1',
+                          targetLabel: 'Open Hearing',
+                          confidence: 0.7,
+                          userName: 'Archivist',
+                          placedAtRound: 2,
+                          placedAt: '2026-03-19T00:01:00Z',
+                          resolved: false,
+                        },
+                      ],
+                    },
+                  },
+                },
+              }));
+              backingStore.delete(lockKey);
+              return null;
+            }
+
+            return JSON.stringify({
+              ownerId: 'other-tab',
+              token: 'foreign-lock',
+              expiresAt: 9_999,
+            });
+          }
+
+          return backingStore.get(key) ?? null;
+        },
+        setItem: (key: string, value: string) => {
+          backingStore.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backingStore.delete(key);
+        },
+      },
+    });
+
+    const committed = setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    });
+
+    const persisted = JSON.parse(backingStore.get(storageKey) ?? '{"scenarios":{}}').scenarios[scenarioId];
+
+    expect(committed.betting.bets).toHaveLength(1);
+    expect(committed.betting.bets[0]?.betId).toBe('bet-1');
+    expect(committed.commitment.active).toBe(true);
+    expect(persisted._rev).toBe(2);
+
+    nowSpy.mockRestore();
+  });
+
   it('merges archive patches in memory without touching storage helpers', () => {
     const scenarioId = 'scenario-archive-in-memory';
     const meta = loadScenarioMeta(scenarioId);

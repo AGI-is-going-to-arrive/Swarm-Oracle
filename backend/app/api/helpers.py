@@ -37,12 +37,45 @@ from app.services.simulator import run_simulation
 
 logger = logging.getLogger(__name__)
 
+GENERIC_SIMULATION_ERROR_MESSAGE = "Simulation failed unexpectedly. Please retry."
+GENERIC_SIMULATION_ERROR = {
+    "code": "SIMULATION_RUNTIME_FAILED",
+    "message": GENERIC_SIMULATION_ERROR_MESSAGE,
+}
+GENERIC_SIMULATION_TIMEOUT_ERROR = {
+    "code": "SIMULATION_TIMEOUT",
+    "message": "Simulation timed out. Please retry.",
+}
+GENERIC_SIMULATION_PARSE_ERROR = {
+    "code": "SCENARIO_PARSE_FAILED",
+    "message": "Failed to parse the scenario. Please revise the prompt and retry.",
+}
+
 # Hold references to background tasks to prevent GC from silently discarding them
 _background_tasks: set[asyncio.Task] = set()
 
 # C-1 fix: Anti-reentrancy now uses DB-level Scenario status instead of in-memory set.
 # The in-memory set is kept only as a fast-path check; the DB is the source of truth.
 _running_simulations: set[str] = set()
+
+
+def _finalize_background_task(task: asyncio.Task) -> None:
+    """Drop completed tasks and surface background failures in logs."""
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    except Exception:  # pragma: no cover - defensive callback guard
+        logger.exception("Failed to inspect background task completion")
+        return
+    if exc is not None:
+        logger.error(
+            "Background task failed",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
 
 
 def parse_key_moments(raw: str | None) -> list[str]:
@@ -58,7 +91,12 @@ def parse_key_moments(raw: str | None) -> list[str]:
         return []
 
 
-async def run_sim_background(scenario_id: str, *, llm_overrides: dict | None = None, branch_id: str | None = None):
+async def run_sim_background(
+    scenario_id: str,
+    *,
+    llm_overrides: dict | None = None,
+    branch_id: str | None = None,
+):
     """Run simulation as a background task with anti-reentrancy guard.
 
     Args:
@@ -105,7 +143,7 @@ async def run_sim_background(scenario_id: str, *, llm_overrides: dict | None = N
         try:
             await ws_manager.broadcast(scenario_id, {
                 "type": "simulation_error",
-                "data": {"error": f"Simulation timed out after {settings.MAX_ROUNDS * 180}s"},
+                "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
             })
         except Exception:
             pass
@@ -122,7 +160,7 @@ async def run_sim_background(scenario_id: str, *, llm_overrides: dict | None = N
         try:
             await ws_manager.broadcast(scenario_id, {
                 "type": "simulation_error",
-                "data": {"error": str(exc)},
+                "data": {"error": GENERIC_SIMULATION_ERROR},
             })
         except Exception:
             pass  # WS broadcast is best-effort
@@ -142,7 +180,7 @@ def schedule_background_task(coro):
     """Schedule a coroutine as a fire-and-forget background task."""
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(_finalize_background_task)
     return task
 
 
@@ -211,7 +249,7 @@ async def parse_and_run_background(
         try:
             await ws_manager.broadcast(scenario_id, {
                 "type": "simulation_error",
-                "data": {"error": f"Failed to parse question: {exc}"},
+                "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
             })
         except Exception:
             pass

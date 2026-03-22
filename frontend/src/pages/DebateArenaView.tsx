@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { predictDebate } from '../api/client';
+import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { DebateBetModal } from '../components/DebateBetModal';
 import { DebateMomentumBar } from '../components/DebateMomentumBar';
 import { DebateScoreCard } from '../components/DebateScoreCard';
@@ -65,6 +66,7 @@ export function DebateArenaView() {
   const debate = useDebateStore((state) => state.debate);
   const status = useDebateStore((state) => state.status);
   const error = useDebateStore((state) => state.error);
+  const errorCode = useDebateStore((state) => state.errorCode);
   const loadDebate = useDebateStore((state) => state.loadDebate);
 
   const [revealCount, setRevealCount] = useState(0);
@@ -474,6 +476,7 @@ export function DebateArenaView() {
       {
         route: window.location.pathname,
         kind: 'debate',
+        error: buildAutomationErrorState(errorCode, error),
         phase: currentPhase,
         selected_phase: selectedPhase,
         is_phase_locked: phaseLocked,
@@ -657,7 +660,7 @@ export function DebateArenaView() {
       });
       setBetNotice(t('debate.counterplay_success'));
     } catch (nextError) {
-      setBetNotice(nextError instanceof Error ? nextError.message : t('debate.bet_error'));
+      setBetNotice(getLocalizedApiErrorMessage(nextError, t, t('debate.bet_error')));
     } finally {
       setBetSubmitting(false);
     }

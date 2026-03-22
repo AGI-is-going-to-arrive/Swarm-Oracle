@@ -159,4 +159,26 @@ describe('ShareModal automation callback', () => {
       expect(screen.getByText(/share\.copy_error/)).toBeInTheDocument();
     });
   });
+
+  it('maps structured API errors to localized generation messages', async () => {
+    generateSocialCopyMock.mockRejectedValueOnce({
+      status: 503,
+      code: 'LLM_TEMPORARILY_UNAVAILABLE',
+    });
+
+    const user = userEvent.setup();
+
+    render(
+      <ShareModal
+        scenarioId="scenario-4"
+        onClose={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/share\.error_llm_unavailable/).length).toBeGreaterThan(0);
+    });
+  });
 });

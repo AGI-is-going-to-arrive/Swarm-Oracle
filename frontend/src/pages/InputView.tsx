@@ -30,6 +30,7 @@ import {
   loadLlmProviderPolicy,
   saveLlmProviderPolicy,
 } from '../lib/llmProviderPolicy';
+import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
@@ -115,6 +116,7 @@ export function InputView() {
   const providerPolicyHydrated = useRef(false);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
+  const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
@@ -268,9 +270,12 @@ export function InputView() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     const loadChallengeRotation = async () => {
-      const rotation = await getCampaignChallengeRotation(localDate, 3).catch(() => null);
+      const rotation = await getCampaignChallengeRotation(localDate, 3, {
+        signal: controller.signal,
+      }).catch(() => null);
       if (cancelled) return;
       setCampaignChallengeRotation(rotation);
     };
@@ -278,14 +283,18 @@ export function InputView() {
     void loadChallengeRotation();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [localDate]);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     const loadCampaign = async () => {
-      const profile = await getCampaignProfile(directorIdentity.userId).catch(() => null);
+      const profile = await getCampaignProfile(directorIdentity.userId, {
+        signal: controller.signal,
+      }).catch(() => null);
       if (!profile) {
         if (!cancelled) {
           setCampaignProfile(null);
@@ -298,20 +307,26 @@ export function InputView() {
       }
 
       const [mastery, badges, dailyStatus, weeklySummary] = await Promise.all([
-        getCampaignMastery(directorIdentity.userId).catch(() => [] as CampaignMastery[]),
-        getCampaignBadges(directorIdentity.userId).catch(() => [] as CampaignBadge[]),
+        getCampaignMastery(directorIdentity.userId, {
+          signal: controller.signal,
+        }).catch(() => [] as CampaignMastery[]),
+        getCampaignBadges(directorIdentity.userId, {
+          signal: controller.signal,
+        }).catch(() => [] as CampaignBadge[]),
         todayChallenge
           ? getCampaignDailyChallengeStatus(
               directorIdentity.userId,
               todayChallenge.profileId,
               localDate,
               new Date().getTimezoneOffset(),
+              { signal: controller.signal },
             ).catch(() => null)
           : Promise.resolve(null),
         getCampaignWeeklySummary(
           directorIdentity.userId,
           localDate,
           new Date().getTimezoneOffset(),
+          { signal: controller.signal },
         ).catch(() => null),
       ]);
       if (cancelled) return;
@@ -325,6 +340,7 @@ export function InputView() {
     void loadCampaign();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [directorIdentity.userId, localDate, todayChallenge?.profileId]);
 
@@ -413,7 +429,17 @@ export function InputView() {
       }
     } catch (err) {
       setTestStatus('fail');
-      setTestError(err instanceof Error ? err.message : 'Network error');
+      setTestError(
+        getLocalizedApiErrorMessage(
+          err,
+          t,
+          t('common.api_errors.llm_unavailable'),
+          {
+            LLM_TEMPORARILY_UNAVAILABLE: 'common.api_errors.llm_unavailable',
+            LLM_GENERATION_FAILED: 'common.api_errors.llm_generation_failed',
+          },
+        ),
+      );
     }
     // Auto-reset after 5s
     setTimeout(() => setTestStatus('idle'), 5000);
@@ -561,7 +587,8 @@ export function InputView() {
         reasoning_effort: reasoningEffort || null,
         byok_expanded: showByok,
         byok_test_status: testStatus,
-        error: submitError || null,
+        error: buildAutomationErrorState(submitErrorCode, submitError),
+        byok_test_error: buildAutomationErrorState(null, testStatus === 'fail' ? testError : null),
         challenge_progress: todayChallengeProgress
           ? {
               source: todayChallengeProgress.source,
@@ -637,6 +664,7 @@ export function InputView() {
     rounds,
     showByok,
     submitError,
+    submitErrorCode,
     testStatus,
     todayChallengeProgress,
     vizEnabled,

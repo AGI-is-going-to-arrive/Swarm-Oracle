@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { getDebateResult, importReplayDebate } from '../api/client';
+import { getDebateResult, importReplayDebate, isApiError } from '../api/client';
+import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { DebateShareModal } from '../components/DebateShareModal';
 import { DebateScoreCard } from '../components/DebateScoreCard';
 import { captureElementDataUrl } from '../hooks/useScreenCapture';
@@ -43,6 +44,7 @@ export function DebateResultView() {
   const [payload, setPayload] = useState<DebateResultPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [showShare, setShowShare] = useState(false);
   const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
@@ -56,11 +58,13 @@ export function DebateResultView() {
     if (replayPayload) {
       setPayload(replayPayload);
       setError('');
+      setErrorCode(null);
       setLoading(false);
       return;
     }
     if (!id) {
       setError(t('debate.result_missing'));
+      setErrorCode('DEBATE_RESULT_MISSING');
       setLoading(false);
       return;
     }
@@ -73,15 +77,17 @@ export function DebateResultView() {
         if (cancelled) return;
         setPayload(nextPayload);
         setError('');
+        setErrorCode(null);
         setLoading(false);
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : t('debate.result_load_failed');
-        if (message.includes('API 409:')) {
+        if (isApiError(nextError) && nextError.status === 409) {
           timer = window.setTimeout(() => void load(), 1200);
           return;
         }
         if (!cancelled) {
-          setError(message);
+          setErrorCode(getApiErrorCode(nextError) ?? 'DEBATE_RESULT_LOAD_FAILED');
+          setError(getLocalizedApiErrorMessage(nextError, t, message));
           setLoading(false);
         }
       }
@@ -272,7 +278,7 @@ export function DebateResultView() {
         route: window.location.pathname,
         kind: 'debate_result',
         loading,
-        error: error || null,
+        error: buildAutomationErrorState(errorCode, error),
         replay_source: replayPayload ? 'token' : 'api',
         controls: {
           can_open_share_modal: Boolean(payload),
@@ -311,7 +317,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, judgeRationale, loading, payload, phaseSummaries, predictionStats, replayPayload, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, errorCode, judgeRationale, loading, payload, phaseSummaries, predictionStats, replayPayload, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;

@@ -126,6 +126,31 @@ async def test_run_debate_background_skips_when_sqlite_runtime_lock_is_held():
     assert snapshot["current_phase"] == "opening"
 
 
+@pytest.mark.asyncio
+async def test_run_debate_background_sends_generic_error_to_clients(monkeypatch):
+    debate = create_debate_record("Should a tribunal leak upstream details on failure?")
+    pushed_events: list[dict] = []
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("secret upstream detail")
+
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _boom)
+
+    with pytest.raises(RuntimeError, match="secret upstream detail"):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
+
+
 def test_create_debate_record_uses_english_defaults_for_non_chinese_questions():
     debate = create_debate_record("Should a permanent moon tribunal be allowed to veto Earth treaties?")
     snapshot = load_debate_snapshot(debate.id)

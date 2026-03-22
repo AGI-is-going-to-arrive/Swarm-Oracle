@@ -6,13 +6,30 @@
  * and MAX_MESSAGES cap.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const createScenarioMock = vi.fn();
+const getScenarioMock = vi.fn();
+
+vi.mock("../api/client", () => ({
+  createScenario: (...args: unknown[]) => createScenarioMock(...args),
+  getScenario: (...args: unknown[]) => getScenarioMock(...args),
+}));
+
+vi.mock("../i18n/config", () => ({
+  default: {
+    t: (key: string) => key,
+  },
+}));
+
 import { useSimulationStore } from "./simulationStore";
 import type { WSEvent } from "../types";
 
 // Helper: reset store before each test
 beforeEach(() => {
   useSimulationStore.getState().reset();
+  createScenarioMock.mockReset();
+  getScenarioMock.mockReset();
 });
 
 describe("simulationStore — initial state", () => {
@@ -280,11 +297,57 @@ describe("simulationStore — handleWSEvent", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({
       type: "simulation_error",
-      data: { error: "LLM timeout" },
+      data: {
+        error: {
+          code: "SIMULATION_TIMEOUT",
+          message: "Simulation timed out. Please retry.",
+        },
+      },
     } as WSEvent);
 
     expect(store.getState().status).toBe("error");
-    expect(store.getState().error).toBe("LLM timeout");
+    expect(store.getState().error).toBe("common.api_errors.simulation_start_failed");
+  });
+});
+
+describe("simulationStore — api error mapping", () => {
+  it("maps structured start errors to localized keys", async () => {
+    createScenarioMock.mockRejectedValueOnce({
+      status: 503,
+      code: "LLM_TEMPORARILY_UNAVAILABLE",
+    });
+
+    await expect(
+      useSimulationStore.getState().startSimulation("question"),
+    ).rejects.toMatchObject({ code: "LLM_TEMPORARILY_UNAVAILABLE" });
+
+    expect(useSimulationStore.getState().error).toBe("common.api_errors.llm_unavailable");
+  });
+
+  it("maps structured load errors to localized keys", async () => {
+    getScenarioMock.mockRejectedValueOnce({
+      status: 404,
+      code: "SCENARIO_NOT_FOUND",
+    });
+
+    await useSimulationStore.getState().loadScenario("missing-scenario");
+
+    expect(useSimulationStore.getState().error).toBe("common.api_errors.scenario_not_found");
+  });
+
+  it("maps structured simulation_error ws payloads to localized keys", () => {
+    useSimulationStore.getState().handleWSEvent({
+      type: "simulation_error",
+      data: {
+        error: {
+          code: "GAMEPLAY_STATE_REVISION_MISMATCH",
+          message: "Gameplay state revision mismatch",
+        },
+      },
+    } as WSEvent);
+
+    expect(useSimulationStore.getState().error).toBe("common.api_errors.sync_conflict");
+    expect(useSimulationStore.getState().status).toBe("error");
   });
 });
 

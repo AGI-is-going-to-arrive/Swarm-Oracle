@@ -170,6 +170,8 @@
       "success_retrospective": "Retrospective replay queued!",
       "success_batch": "Batch intervention queued!",
       "error": "Failed to apply intervention",
+      "error_unavailable": "This branch cannot accept interventions right now.",
+      "error_branch_missing": "The selected branch is no longer available.",
       "empty_text": "Please enter intervention text",
       "templates_label": "Quick Templates",
       "templates_hint": "Click a template to auto-fill, then customize"
@@ -264,6 +266,8 @@
       "permalink_label": "Permalink",
       "copied": "✓ Copied",
       "error": "Generation failed",
+      "error_llm_unavailable": "The copy generator is temporarily unavailable. Please try again shortly.",
+      "error_generation_failed": "The copy generator failed to produce a result. Please try again.",
       "platform_xiaohongshu": "Xiaohongshu",
       "platform_weibo": "Weibo",
       "platform_zhihu": "Zhihu",
@@ -336,6 +340,7 @@
       "cancel": "Cancel",
       "success": "Prediction submitted!",
       "error": "Failed to submit",
+      "error_closed": "Predictions are closed for this scenario.",
       "confidence_low": "Guess",
       "confidence_mid": "Informed",
       "confidence_high": "Certain"
@@ -574,13 +579,26 @@
       "result_predictions": "Prediction Settlement",
       "result_empty_predictions": "No bets were placed for this debate.",
       "result_load_failed": "Failed to load debate result",
+      "result_pending": "This debate result is still being prepared.",
       "result_missing": "This debate does not have a result payload yet.",
+      "bet_error_locked": "Betting is already locked for this debate.",
       "share_title": "Debate Share Copy"
     },
     "common": {
       "loading": "Loading…",
       "cancel": "Cancel",
       "close": "Close",
+      "api_errors": {
+        "scenario_not_found": "This scenario could not be found.",
+        "debate_not_found": "This debate could not be found.",
+        "sync_conflict": "This view is out of date. Refresh and try again.",
+        "llm_unavailable": "The AI service is temporarily unavailable. Please try again shortly.",
+        "llm_generation_failed": "The AI service failed to produce a result. Please try again.",
+        "simulation_start_failed": "Failed to start the simulation.",
+        "scenario_load_failed": "Failed to load the scenario.",
+        "debate_start_failed": "Failed to start the debate.",
+        "debate_load_failed": "Failed to load the debate."
+      },
       "theme_hooks_aria": "Theme hooks",
       "daily_challenge_art_alt": "Daily challenge pixel illustration",
       "archive_seal_alt": "Archive seal illustration"

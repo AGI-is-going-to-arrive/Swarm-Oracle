@@ -13,6 +13,7 @@ import {
   getCampaignScenarioSummary,
   getReplayArtifact,
   getScenario,
+  isApiError,
   importReplayScenario,
   getStory,
   listPredictions,
@@ -22,6 +23,7 @@ import { stringifyAutomationPayload, type AutomationWindow } from '../game/autom
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { buildSharedChallengeUrl } from '../lib/challengeShare';
 import { copyText } from '../lib/copyText';
+import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
   findChallengeProgressByScenarioId,
@@ -134,9 +136,8 @@ function getCampaignBadgeCopy(badgeId: string, isZh: boolean) {
 }
 
 function classifyCampaignFinalizeError(err: unknown): 'missing' | 'conflict' | 'other' {
-  if (!(err instanceof Error)) return 'other';
-  if (err.message.includes('API 404:')) return 'missing';
-  if (err.message.includes('API 409:')) return 'conflict';
+  if (isApiError(err) && err.status === 404) return 'missing';
+  if (isApiError(err) && err.status === 409) return 'conflict';
   return 'other';
 }
 
@@ -203,6 +204,7 @@ export default function ResultView() {
   const [expandedBranch, setExpandedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
   const [showShare, setShowShare] = useState(false);
@@ -250,10 +252,13 @@ export default function ResultView() {
 
     const load = async () => {
       if (replayShareId) {
-        const artifact = await getReplayArtifact(replayShareId).catch(() => null);
+        const artifact = await Promise.resolve()
+          .then(() => getReplayArtifact(replayShareId))
+          .catch(() => null);
         if (cancelled) return;
         if (!artifact || artifact.kind !== 'scenario_result_v1' || !artifact.payload) {
           setError(replayInvalidMessage);
+          setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
         }
@@ -261,6 +266,7 @@ export default function ResultView() {
         const replay = normalizeScenarioResultReplayPayload(artifact.payload);
         if (!replay) {
           setError(replayInvalidMessage);
+          setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
         }
@@ -284,6 +290,7 @@ export default function ResultView() {
         if (cancelled) return;
         if (!replay) {
           setError(replayInvalidMessage);
+          setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
         }
@@ -303,6 +310,7 @@ export default function ResultView() {
       setReplayPayload(null);
       if (!id) {
         setError(loadResultErrorMessage);
+        setErrorCode('RESULT_LOAD_FAILED');
         setLoading(false);
         return;
       }
@@ -313,8 +321,12 @@ export default function ResultView() {
           getStory(id),
           getAgents(id),
           getScenario(id),
-          listPredictions(id).catch(() => [] as PredictionInfo[]),
-          getCampaignScenarioSummary(id).catch(() => null),
+          Promise.resolve()
+            .then(() => listPredictions(id))
+            .catch(() => [] as PredictionInfo[]),
+          Promise.resolve()
+            .then(() => getCampaignScenarioSummary(id))
+            .catch(() => null),
         ]);
         if (cancelled) return;
 
@@ -477,7 +489,8 @@ export default function ResultView() {
         }
       } catch (err) {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to load results');
+        setErrorCode(getApiErrorCode(err) ?? 'RESULT_LOAD_FAILED');
+        setError(getLocalizedApiErrorMessage(err, t, 'Failed to load results'));
       } finally {
         if (!cancelled && retryTimer == null) {
           setLoading(false);
@@ -487,6 +500,7 @@ export default function ResultView() {
 
     setLoading(true);
     setError('');
+    setErrorCode(null);
     setStoryData(null);
     setCampaignSummary(null);
     setCampaignScenarioSummary(null);
@@ -816,15 +830,24 @@ export default function ResultView() {
           stripGameplayAuthority: hasScenarioGameplayAuthority(replaySnapshot.scenario.gameplay_state ?? null),
         }),
       };
-      const artifact = await createReplayArtifact(
-        'scenario_result_v1',
-        compactReplaySnapshot as unknown as Record<string, unknown>,
-      ).catch(() => null);
-      const url = artifact
-        ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
-        : await buildScenarioReplayUrl(window.location.origin, compactReplaySnapshot);
-      if (!cancelled) {
-        setReplayUrl(url);
+      const artifact = await Promise.resolve()
+        .then(() => createReplayArtifact(
+          'scenario_result_v1',
+          compactReplaySnapshot as unknown as Record<string, unknown>,
+        ))
+        .catch(() => null);
+      try {
+        const url = artifact
+          ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
+          : await buildScenarioReplayUrl(window.location.origin, compactReplaySnapshot);
+        if (!cancelled) {
+          setReplayUrl(url);
+        }
+      } catch (error) {
+        console.warn('[ResultView] Failed to build replay URL', error);
+        if (!cancelled) {
+          setReplayUrl(`${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`);
+        }
       }
     };
 
@@ -917,7 +940,7 @@ export default function ResultView() {
         kind: 'result',
         replay_source: isReplayMode ? 'token' : 'api',
         loading,
-        error: error || null,
+        error: buildAutomationErrorState(errorCode, error),
         question: storyData?.question ?? null,
         branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
         predictions_count: predictions.length,
@@ -992,7 +1015,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
 
   if (loading) {
     return (

@@ -10,6 +10,7 @@ import {
   interveneBatch,
   interveneRetrospective,
 } from '../api/client';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { InterventionTemplate } from '../api/client';
 import type { BranchInfo } from '../types';
 import './InterventionModal.css';
@@ -191,7 +192,7 @@ export default function InterventionModal({
       closeTimerRef.current = setTimeout(() => onClose(), 1200);
     } catch (error) {
       setStatus('error');
-      setErrorMsg(error instanceof Error ? error.message : t('intervention.error'));
+      setErrorMsg(getLocalizedApiErrorMessage(error, t, t('intervention.error')));
     }
   };
 

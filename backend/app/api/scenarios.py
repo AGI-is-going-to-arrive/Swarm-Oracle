@@ -14,12 +14,13 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, model_validator
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
 
+from app.api.errors import api_error
 from app.api.helpers import (
     load_scenario_response,
     parse_and_run_background,
@@ -63,6 +64,7 @@ MAX_IMPORT_REPLAY_SCENARIO_GROUPS = 128
 MAX_IMPORT_REPLAY_SCENARIO_AGENTS = 256
 MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
 MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
+MAX_REPLAY_ARTIFACT_BYTES = 2_000_000
 
 
 class ImportReplayScenarioRequest(BaseModel):
@@ -153,7 +155,7 @@ async def api_health_test(req: TestLlmRequest):
 async def create_scenario(req: CreateScenarioRequest):
     """Create a new scenario and offload parsing to a background task."""
     if not req.question.strip():
-        raise HTTPException(400, "Question cannot be empty")
+        raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
 
     engine = get_engine()
     question = req.question.strip()
@@ -226,7 +228,7 @@ async def create_scenario(req: CreateScenarioRequest):
     # populated once the background parse finishes.
     result = load_scenario_response(engine, scenario_id)
     if not result:
-        raise HTTPException(500, "Failed to load newly created scenario")
+        raise api_error(500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario")
     result.mode = mode
     result.hierarchical = use_hierarchical
     result.visualization_enabled = viz_enabled
@@ -239,9 +241,9 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
     snapshot = req.scenario if isinstance(req.scenario, dict) else {}
     question = str(snapshot.get("question", "")).strip()
     if not question:
-        raise HTTPException(422, "Replay snapshot is missing question")
+        raise api_error(422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question")
     if len(question) > 500:
-        raise HTTPException(422, "Replay snapshot question too long")
+        raise api_error(422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long")
 
     engine = get_engine()
     parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}
@@ -250,13 +252,13 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
     branches = snapshot.get("branches") if isinstance(snapshot.get("branches"), list) else []
     messages = snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
     if len(groups) > MAX_IMPORT_REPLAY_SCENARIO_GROUPS:
-        raise HTTPException(413, "Replay scenario has too many groups")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_GROUPS", "Replay scenario has too many groups")
     if len(agents) > MAX_IMPORT_REPLAY_SCENARIO_AGENTS:
-        raise HTTPException(413, "Replay scenario has too many agents")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_AGENTS", "Replay scenario has too many agents")
     if len(branches) > MAX_IMPORT_REPLAY_SCENARIO_BRANCHES:
-        raise HTTPException(413, "Replay scenario has too many branches")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_BRANCHES", "Replay scenario has too many branches")
     if len(messages) > MAX_IMPORT_REPLAY_SCENARIO_MESSAGES:
-        raise HTTPException(413, "Replay scenario has too many messages")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_MESSAGES", "Replay scenario has too many messages")
     if not parsed_context.get("simulation_rounds"):
         max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)
         if max_round > 0:
@@ -416,7 +418,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 
     result = load_scenario_response(engine, scenario_id)
     if not result:
-        raise HTTPException(500, "Failed to load imported replay scenario")
+        raise api_error(500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario")
     return result
 
 
@@ -424,11 +426,20 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 async def create_replay_artifact(req: CreateReplayArtifactRequest):
     kind = req.kind.strip()
     if not kind:
-        raise HTTPException(422, "Replay artifact kind is required")
+        raise api_error(422, "REPLAY_ARTIFACT_KIND_REQUIRED", "Replay artifact kind is required")
 
-    payload_size = len(str(req.payload))
-    if payload_size > 2_000_000:
-        raise HTTPException(413, "Replay artifact payload too large")
+    try:
+        encoded_payload = json.dumps(req.payload, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise api_error(
+            422,
+            "REPLAY_ARTIFACT_PAYLOAD_INVALID",
+            "Replay artifact payload must be JSON-serializable",
+        ) from exc
+
+    payload_size = len(encoded_payload.encode("utf-8"))
+    if payload_size > MAX_REPLAY_ARTIFACT_BYTES:
+        raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")
 
     engine = get_engine()
     with Session(engine) as session:
@@ -452,7 +463,7 @@ async def get_replay_artifact(artifact_id: str):
     with Session(engine) as session:
         artifact = session.get(ReplayArtifact, artifact_id)
         if artifact is None:
-            raise HTTPException(404, "Replay artifact not found")
+            raise api_error(404, "REPLAY_ARTIFACT_NOT_FOUND", "Replay artifact not found")
         return {
             "id": artifact.id,
             "kind": artifact.kind,
@@ -467,7 +478,7 @@ async def get_scenario(scenario_id: str):
     engine = get_engine()
     result = load_scenario_response(engine, scenario_id)
     if not result:
-        raise HTTPException(404, "Scenario not found")
+        raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
     return result
 
 
@@ -503,7 +514,7 @@ async def get_story(scenario_id: str):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         branches = session.exec(
             select(Branch).where(
@@ -551,7 +562,7 @@ async def get_agents(scenario_id: str):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
 
@@ -584,7 +595,7 @@ async def get_groups(scenario_id: str):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         groups = session.exec(select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)).all()
         if not groups:
@@ -678,7 +689,11 @@ async def list_scenarios(
                 status_enum = ScenarioStatus(status)
                 query = query.where(Scenario.status == status_enum)
             except ValueError:
-                raise HTTPException(422, f"Invalid status: '{status}'. Valid values: {[s.value for s in ScenarioStatus]}")
+                raise api_error(
+                    422,
+                    "SCENARIO_STATUS_FILTER_INVALID",
+                    f"Invalid status: '{status}'. Valid values: {[s.value for s in ScenarioStatus]}",
+                )
 
         rows = session.exec(query.offset(offset).limit(limit)).all()
 
@@ -715,12 +730,13 @@ async def delete_scenario(scenario_id: str):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         # M-7 fix: Allow deleting PARSING/ERROR/DONE scenarios
         if scenario.status not in (ScenarioStatus.DONE, ScenarioStatus.ERROR, ScenarioStatus.PARSING):
-            raise HTTPException(
+            raise api_error(
                 400,
+                "SCENARIO_DELETE_STATUS_INVALID",
                 f"Cannot delete: scenario is still '{scenario.status.value}'. "
                 "Only 'done', 'error', or 'parsing' scenarios can be deleted.",
             )

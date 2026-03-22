@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
+from app.api.errors import api_error
 from app.models import Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
@@ -94,11 +95,12 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         if scenario.status not in OPEN_PREDICTION_STATUSES:
-            raise HTTPException(
+            raise api_error(
                 400,
+                "PREDICTIONS_CLOSED",
                 f"Scenario is '{scenario.status.value}' — predictions are closed",
             )
 
@@ -143,7 +145,7 @@ async def list_predictions(
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         query = (
             select(Prediction)
@@ -180,9 +182,13 @@ async def trigger_scoring(
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
         if scenario.status != ScenarioStatus.DONE:
-            raise HTTPException(400, "Scenario not yet completed — cannot score predictions")
+            raise api_error(
+                400,
+                "SCENARIO_NOT_COMPLETED",
+                "Scenario not yet completed — cannot score predictions",
+            )
 
     from app.services.scoring import score_all_for_scenario
 

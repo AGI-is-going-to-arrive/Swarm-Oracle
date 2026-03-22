@@ -4,6 +4,28 @@
 
 Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
+> 当前 backend 里由路由层主动抛出的业务错误，已统一收口为：
+>
+> ```json
+> {
+>   "detail": {
+>     "code": "SOME_ERROR_CODE",
+>     "message": "Human-readable message"
+>   }
+> }
+> ```
+>
+> 这条口径当前已覆盖：
+> - `campaign`
+> - `interventions`
+> - `predictions`
+> - `social`
+> - `scenarios`
+> - `debate`
+> - `replay-artifact`
+>
+> FastAPI / Pydantic 自带的 schema 校验 `422` 仍保持框架默认错误体；这里说的是项目自定义业务错误。
+
 ### Scenarios
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
@@ -82,6 +104,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 主模式 `ResultView / SimulationView` 优先使用 `ReplayArtifact` 生成 `/result/replay?share=...` 与 `/sim/replay?share=...`
 > - 如果后端短链创建失败，前端会回退到本地 token
 > - 当前 share 读路径会先校验 `scenario_result_v1 / simulation_view_v1` payload 结构；若 payload 非法，前端会直接拒绝 hydrate，而不是继续把坏数据灌进页面状态
+> - `POST /api/replay-artifact` 与 `GET /api/replay-artifact/{id}` 的业务错误当前也走统一 `detail.code/detail.message`：
+>   - `REPLAY_ARTIFACT_KIND_REQUIRED`
+>   - `REPLAY_ARTIFACT_PAYLOAD_INVALID`
+>   - `REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE`
+>   - `REPLAY_ARTIFACT_NOT_FOUND`
 
 ### Predictions & Leaderboard (P3-B)
 
@@ -124,6 +151,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >   - `attempted = 0`：没有待评分 prediction
 >   - `attempted > 0 && all_failed = true`：本次尝试过，但全都没成功
 >   - `failed > 0 && scored > 0`：部分成功、部分失败
+>
+> 这组 predictions 路由当前的业务错误也都走统一 `detail.code/detail.message`；例如：
+> - `SCENARIO_NOT_FOUND`
+> - `PREDICTIONS_CLOSED`
+> - `SCENARIO_NOT_COMPLETED`
 
 ### Director Campaign (Track A)
 
@@ -149,6 +181,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `404 Not Found`：目标场景不存在，或命中旧日志但关联导演档案不存在。
 > - `409 Conflict`：该场景已被另一位导演档案结算。
 > - `400 Bad Request`：场景尚未完成，或 `user_id / profile_id / archive_grade / profile_resonance / bet_count` 等请求字段不合法。
+> - 上面这些业务错误当前都会通过 `detail.code/detail.message` 返回；例如：
+>   - `CAMPAIGN_FINALIZE_NOT_FOUND`
+>   - `CAMPAIGN_FINALIZE_STATE_INVALID`
+>   - `CAMPAIGN_FINALIZE_CONFLICT`
+>   - `CAMPAIGN_FINALIZE_INVALID`
 >
 > `GET /api/campaign/scenario/{scenario_id}/summary` 的边界行为：
 > - `200 OK`：该 scenario 已有 finalized campaign log。
@@ -178,6 +215,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 周窗口按调用方传入的 `local_date + timezone_offset_minutes` 计算；
 > - 当前不改 schema，直接基于 `ScenarioCampaignLog.created_at` 做聚合；
 > - 返回值适合首页 Lite 展示，不是赛季系统的最终数据结构。
+>
+> `director-state` / `gameplay-state` 这两组 authority 写接口当前也都走统一业务错误格式；如果 revision 过期，后端会返回 `409` 且带结构化 code，例如：
+> - `DIRECTOR_STATE_CONFLICT`
+> - `GAMEPLAY_STATE_CONFLICT`
 
 > `CampaignProfileResponse` 当前额外包含：
 > - `last_daily_challenge_completed_at`
@@ -351,6 +392,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 若 Debate 是通过 `import-replay` 导入，后端会优先回放导入时持久化下来的 `phase_insights`，不再只靠运行时重算近似版本
 >
 > `GET /api/debate/{id}/result` 在裁决未生成前返回 `409 Conflict`，前端会轮询等待 verdict 落稳；若 Debate 已进入 `ERROR` 终态，则返回 `500`，前端会直接显示终态错误。
+> 当前这些 Debate 业务错误也统一走 `detail.code/detail.message`；高频 code 包括：
+> - `DEBATE_NOT_FOUND`
+> - `DEBATE_RESULT_NOT_READY`
+> - `DEBATE_RESULT_ERROR_STATE`
+> - `DEBATE_PREDICTIONS_CLOSED`
+> - `DEBATE_PREDICTIONS_LOCKED`
+> - `DEBATE_PREDICTION_TARGET_VALUE_UNSUPPORTED`
+> - 一组 `REPLAY_DEBATE_*` 导入校验 code
 
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 
@@ -386,7 +435,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `retrospective_start` | `{branch_id, source_branch_id, from_round, text}` | S→C | 回溯干预开始 |
 | `batch_intervention_applied` | `{interventions[]}` | S→C | 批量干预已应用 |
 | `simulation_done` | — | S→C | 模拟完成 |
-| `simulation_error` | `{error}` | S→C | 模拟出错 |
+| `simulation_error` | `{error: {code, message}}` | S→C | 模拟出错 |
 
 ### Debate Arena WebSocket
 
@@ -395,9 +444,18 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | type | data | 方向 | 描述 |
 |------|------|------|------|
 | `heartbeat` | `{ts}` | S→C | 应用层 keepalive；客户端可忽略 |
-| `status` | `{status, error?}` | S→C | Debate 状态变更 |
+| `status` | `{status, error?}` | S→C | Debate 状态变更；若 `status = error`，`error` 当前是 `{code, message}` |
 | `agent_speak` | `{id, sequence, phase, speaker_side, speaker_name, content, score_delta, created_at?}` | S→C | 单条阶段发言 |
 | `debate_phase_change` | `{phase}` | S→C | 当前阶段切换 |
 | `debate_score_update` | `{score: {proposition, opposition}, audience_meter}` | S→C | 势能 / 分数更新 |
 | `debate_counterplay` | DebateCounterplayResult | S→C | live counterplay 记录已创建/更新 |
 | `debate_verdict` | DebateVerdictEventPayload | S→C | 最终 verdict 就绪；当前 payload = `DebateResultSummary + phase_insights[]` |
+
+> 当前 WebSocket 错误事件口径：
+> - scenario `simulation_error` 会返回结构化 `error` 对象，而不是纯字符串
+> - 目前已验证的 code 有：
+>   - `SCENARIO_PARSE_FAILED`
+>   - `SIMULATION_TIMEOUT`
+>   - `SIMULATION_RUNTIME_FAILED`
+> - Debate 的 `status = error` 当前也会带结构化 `error` 对象；目前已验证的 code 为：
+>   - `DEBATE_RUNTIME_FAILED`

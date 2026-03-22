@@ -3,8 +3,10 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 
 const InputView = lazy(() =>
@@ -30,23 +32,25 @@ function RouteFallback() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/" element={<InputView />} />
-          <Route path="/sim/replay" element={<SimulationView />} />
-          <Route path="/sim/:id" element={<SimulationView />} />
-          <Route path="/debate/:id" element={<DebateArenaView />} />
-          <Route path="/debate/:id/result" element={<DebateResultView />} />
-          <Route path="/debate/replay/result" element={<DebateResultView />} />
-          <Route path="/result/:id" element={<ResultView />} />
-          <Route path="/result/replay" element={<ResultView />} />
-          <Route path="/history" element={<HistoryView />} />
-          <Route path="/leaderboard" element={<LeaderboardView />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
-      <LanguageSwitcher />
-    </BrowserRouter>
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<InputView />} />
+            <Route path="/sim/replay" element={<SimulationView />} />
+            <Route path="/sim/:id" element={<SimulationView />} />
+            <Route path="/debate/:id" element={<DebateArenaView />} />
+            <Route path="/debate/:id/result" element={<DebateResultView />} />
+            <Route path="/debate/replay/result" element={<DebateResultView />} />
+            <Route path="/result/:id" element={<ResultView />} />
+            <Route path="/result/replay" element={<ResultView />} />
+            <Route path="/history" element={<HistoryView />} />
+            <Route path="/leaderboard" element={<LeaderboardView />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+        <LanguageSwitcher />
+      </BrowserRouter>
+    </AppErrorBoundary>
   );
 }

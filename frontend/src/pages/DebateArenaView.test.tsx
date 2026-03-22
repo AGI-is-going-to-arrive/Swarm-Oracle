@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../api/client';
 import type { DebateSnapshot } from '../types';
 import { DebateArenaView } from './DebateArenaView';
 
@@ -14,6 +15,7 @@ const mockDebateStore: {
   debate: DebateSnapshot;
   status: 'loading' | 'live' | 'done' | 'error';
   error: string | null;
+  errorCode: string | null;
   loadDebate: ReturnType<typeof vi.fn>;
 } = {
   debate: {
@@ -133,6 +135,7 @@ const mockDebateStore: {
   },
   status: 'done' as const,
   error: null,
+  errorCode: null,
   loadDebate: vi.fn(),
 };
 
@@ -165,6 +168,7 @@ function resetMockDebateStore() {
     ],
   };
   mockDebateStore.status = 'done';
+  mockDebateStore.errorCode = null;
 }
 
 vi.mock('react-i18next', () => ({
@@ -175,9 +179,13 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('../api/client', () => ({
-  predictDebate: (...args: unknown[]) => predictDebateMock(...args),
-}));
+vi.mock('../api/client', async () => {
+  const actual = await import('../api/client');
+  return {
+    ...actual,
+    predictDebate: (...args: unknown[]) => predictDebateMock(...args),
+  };
+});
 
 vi.mock('../hooks/useScreenCapture', () => ({
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
@@ -376,5 +384,44 @@ describe('DebateArenaView', () => {
     expect(payload?.page?.debate?.counterplay?.kind).toBe('winner');
     expect(payload?.page?.debate?.counterplay?.target_value).toBe('opposition');
     expect(payload?.page?.debate?.counterplay_used).toBe(true);
+  });
+
+  it('maps structured betting errors to a localized notice', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+    predictDebateMock.mockRejectedValueOnce(
+      new ApiError(400, 'DEBATE_PREDICTIONS_LOCKED', 'Predictions lock once closing arguments begin'),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'debate.counterplay_submit' }));
+
+    expect(await screen.findByText('debate.bet_error_locked')).toBeInTheDocument();
   });
 });

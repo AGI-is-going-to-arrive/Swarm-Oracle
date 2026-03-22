@@ -15,6 +15,10 @@ import sqlite3
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlmodel import Session
+
+from app.models import Scenario, ScenarioStatus
+from app.models.database import get_engine
 
 # ─────────────────────────────────────────────────────────
 # Bug 1: Background task GC protection
@@ -50,6 +54,36 @@ class TestBackgroundTaskGC:
         assert task not in tasks
         assert completed
 
+    @pytest.mark.asyncio
+    async def test_run_sim_background_sends_generic_error_to_clients(self, monkeypatch):
+        from app.api import helpers
+
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="Will background errors leak secrets?",
+                status=ScenarioStatus.SIMULATING,
+            )
+            session.add(scenario)
+            session.commit()
+            scenario_id = scenario.id
+
+        pushed_events: list[dict] = []
+
+        async def _push(_scenario_id: str, event: dict) -> None:
+            pushed_events.append(event)
+
+        async def _boom(**_kwargs):
+            raise RuntimeError("secret upstream detail")
+
+        monkeypatch.setattr(helpers, "run_simulation", _boom)
+        monkeypatch.setattr("app.api.ws.ws_manager.broadcast", _push)
+
+        await helpers.run_sim_background(scenario_id)
+
+        assert pushed_events[-1] == {
+            "type": "simulation_error",
+            "data": {"error": helpers.GENERIC_SIMULATION_ERROR},
+        }
 
 # ─────────────────────────────────────────────────────────
 # Bug 2: Safe tier access

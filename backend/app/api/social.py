@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.api.errors import api_error, api_error_from_exception
 from app.api.helpers import parse_key_moments
 from app.models import Agent, Branch, BranchStatus, Scenario
 from app.models.database import get_engine
@@ -263,8 +264,9 @@ async def _generate_social_copy(
     )
 
     if platform not in SOCIAL_PLATFORM_PROMPTS:
-        raise HTTPException(
+        raise api_error(
             400,
+            "SOCIAL_PLATFORM_UNSUPPORTED",
             f"Unsupported platform '{platform}'. "
             f"Supported: {', '.join(SOCIAL_PLATFORM_PROMPTS.keys())}",
         )
@@ -274,7 +276,7 @@ async def _generate_social_copy(
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         branches = list(session.exec(
             select(Branch).where(Branch.scenario_id == scenario_id)
@@ -332,9 +334,9 @@ async def _generate_social_copy(
                 model=effective_model,
             )
     except (LLMBackpressureError, LLMCircuitOpenError) as exc:
-        raise HTTPException(503, f"LLM temporarily unavailable: {exc}") from exc
+        raise api_error_from_exception(503, "SOCIAL_LLM_TEMPORARILY_UNAVAILABLE", exc) from exc
     except LLMError as exc:
-        raise HTTPException(502, f"LLM generation failed: {exc}") from exc
+        raise api_error_from_exception(502, "SOCIAL_LLM_GENERATION_FAILED", exc) from exc
 
     copy = _bound_social_generation_buffer(platform, copy)
     return {
@@ -374,7 +376,7 @@ async def export_scenario(scenario_id: str):
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
-            raise HTTPException(404, "Scenario not found")
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
         branches = list(session.exec(

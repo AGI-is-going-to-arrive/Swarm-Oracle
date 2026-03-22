@@ -237,11 +237,13 @@ def test_challenge_rotation_endpoint_rejects_invalid_local_date(client: TestClie
     )
 
     assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "CHALLENGE_ROTATION_INVALID"
 
 
 def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
     response = client.get("/api/campaign/scenario/missing-scenario/summary")
     assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "CAMPAIGN_SCENARIO_SUMMARY_NOT_FOUND"
 
 
 def test_weekly_summary_endpoint_returns_aggregated_progress(client: TestClient):
@@ -485,6 +487,7 @@ def test_director_state_endpoint_rejects_stale_revision_conflict(client: TestCli
         },
     )
     assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "DIRECTOR_STATE_CONFLICT"
 
 
 def test_gameplay_state_endpoint_rejects_stale_revision_conflict(client: TestClient):
@@ -525,3 +528,4 @@ def test_gameplay_state_endpoint_rejects_stale_revision_conflict(client: TestCli
         },
     )
     assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "GAMEPLAY_STATE_CONFLICT"

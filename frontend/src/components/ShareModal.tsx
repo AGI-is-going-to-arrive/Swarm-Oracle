@@ -5,6 +5,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { generateSocialCopy } from '../api/client';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import { buildShareCopyEnvelope, type ShareFlavorContext } from '../lib/shareEnvelope';
@@ -66,7 +67,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
       setPlatformName(result.platform_name);
       setStatus('success');
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('share.error'));
+      setError(getLocalizedApiErrorMessage(err, t, t('share.error')));
       setStatus('error');
     } finally {
       setLoading(false);

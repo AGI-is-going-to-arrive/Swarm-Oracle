@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../api/client';
 import { DebateResultView } from './DebateResultView';
 import { encodeDebateReplayToken } from '../lib/debateReplay';
 import type { DebateResultPayload } from '../types';
@@ -174,10 +175,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('../api/client', () => ({
-  getDebateResult: (...args: unknown[]) => getDebateResultMock(...args),
-  importReplayDebate: (...args: unknown[]) => importReplayDebateMock(...args),
-}));
+vi.mock('../api/client', async () => {
+  const actual = await import('../api/client');
+  return {
+    ...actual,
+    getDebateResult: (...args: unknown[]) => getDebateResultMock(...args),
+    importReplayDebate: (...args: unknown[]) => importReplayDebateMock(...args),
+  };
+});
 
 vi.mock('../hooks/useScreenCapture', () => ({
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
@@ -309,7 +314,9 @@ describe('DebateResultView', () => {
   it('retries result polling after API 409 and eventually renders', async () => {
     vi.useFakeTimers();
     getDebateResultMock
-      .mockRejectedValueOnce(new Error('API 409: Debate result is not ready yet'))
+      .mockRejectedValueOnce(
+        new ApiError(409, 'DEBATE_RESULT_NOT_READY', 'Debate result is not ready yet'),
+      )
       .mockResolvedValue(buildPayload());
 
     render(

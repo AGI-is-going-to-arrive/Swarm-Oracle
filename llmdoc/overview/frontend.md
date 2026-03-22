@@ -8,15 +8,16 @@
 React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + Phaser.js
 
 - 交付形态：浏览器优先的 Web 应用。当前“跨平台”指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+- 入口当前由 `App.tsx` 挂 `BrowserRouter`，外层再包一层 `AppErrorBoundary`；页面级渲染错误会落到统一兜底页，不再直接白屏。
 
 ## 页面 (`src/pages/`)
 
 | 页面 | 文件 | 描述 |
 |------|------|------|
-| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；today/weekly challenge 定义当前优先来自后端 `GET /api/campaign/challenges/rotation`，前端不再维护本地 challenge catalog；若 rotation 不可用，首页也不再本地合成 today/weekly challenge 内容；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；首页现在只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用；首页 automation 摘要当前还会稳定输出 `daily_challenge / weekly_challenge / director_growth`，方便移动端首页签收 |
-| DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证；当前 live 页会优先读取后端显式 `counterplay` snapshot/WS 数据，本地 helper 只做兜底；本轮又补了赛况总览卡、房间席位图、阶段地图，以及后端 `phase_insights` 直出的阶段解读；`debate_verdict` 到来时，这批阶段洞察会直接进 store，而不是等结果页二次拉取 |
-| DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、结构化 `judge_rationale`、`supporting_turns`、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标；当前结果页会优先读取后端显式 `counterplay` 字段，展示反制摘要、命中/未中结果、`explanation`，并继续传给 share copy；share copy 现还会带 1-2 条关键引文；本轮又补了结果信号卡与阶段地图，并优先消费后端顶层 `phase_insights`，所以 live / result 的阶段 stakes、judge focus 和 commentary 现在是同一套口径；同一组件当前还负责 `/debate/replay/result`，会从 replay token 直接 hydrate 结果、显示 `adjudication_mode`，并支持“导入为本地运行”；若 replay 是通过 `import-replay` 导入的，结果页当前会优先展示那份已持久化的 `phase_insights`，避免把原始阶段解读重算成近似版本 |
-| SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；当前 `InterventionModal` 已支持 `即时 / 回溯 / 批量` 三模式，页面会把活动分支、分支历史轮次上限和当前轮次传给 modal；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；当前导演层会在 Theater 面板内显示 2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺选择与锁定/取消按钮；这部分 goals / commitment 现在走后端 `director_state` 权威态，主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 都走后端 `gameplay_state` 权威态，本地 `scenarioMeta` 退为缓存/兼容层；结构化下注提交成功后会立刻把新 meta 回传父层并回写后端；authority 写入链路当前已补齐 `revision` 版乐观并发控制：页面写入会带上当前 revision，若命中 `409`，会先回读最新 `director_state / gameplay_state` 再继续；本 session 又去掉了把后端 authority 反向 apply 到 localStorage 的镜像链路，页面内只做 authority 优先的内存合并与 replay payload 组装；玩法卡 modal 现会显示题材专属三段式连锁事件、`风险 / 资源` 两条轻量状态，以及 profile-specific 的打法说明；桌面端 Theater 本轮又做了“场景优先”的可读性修复：右栏收成固定窄宽、`game-wrapper` 提前到 replay filters/timeline 前、导演目标改成双列、compact timeline 隐藏二级 stats，气泡文字也同步放大和加清晰化样式；移动端 Theater 当前会把顶部动作区、状态条、导演摘要和 replay filters 收成单行横向滚动条带，本轮又继续压缩了 card/chip/button padding，并把主剧场高度再让出更多首屏空间；页面切进 Theater 时也会重新收起 agent panel，避免隐藏侧栏继续占高把首屏主剧场顶出视口；视图切换仍收成图标胶囊，避免控件裁切；Theater 背景现为 30 个 Theater 语义主题 + 3 个 Debate 专属主题，共 33 个 registry 条目；当前 Phaser 预热只会在用户真正切进 Theater 后再触发，并优先走 idle 时机；Classic 视图下只有在页面可见、设备允许且用户 hover/focus 到 Theater toggle 时，才会轻量预取 loader chunk；当前默认前端 build / vitest 也已通过 alias 指向本地精简 Phaser 入口 `experiments/phaser-custom/entry.cjs`；`BootScene` 当前只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载，后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载；截图自动化摘要现还会带 `capture_result_kind`，便于区分 `gif` 与 `gif_fallback_png`；同一组件当前还负责 `/sim/replay`，replay 模式会关闭 WS、下注、干预和玩法卡写操作，只保留回放 / 截图 / 复制 replay 链接 / 导入为本地运行 |
+| InputView | `InputView.tsx/.css` | 首页：输入"What-If"问题，Agent数量滑块(3-100)，推演模式切换(RAW/Blackboard)，BYOK 自定义 LLM 折叠面板 (P4-E)，快速开始卡片；问题输入在移动端使用自动增高多行 textarea，长问题会换行而非裁切；每日挑战卡支持中英文文案与完成态/已用卡数/下注态反馈，并会显示当前题材 label、signature hooks 与题材回响反馈；today/weekly challenge 定义当前优先来自后端 `GET /api/campaign/challenges/rotation`，前端不再维护本地 challenge catalog；若 rotation 不可用，首页也不再本地合成 today/weekly challenge 内容；首页会同时读取 director campaign `profile / mastery / badges / daily-status / weekly-summary`，把后端真值与本地缓存合并显示；当前还补了 `weekly challenge` 与 `director growth` 两张 Lite 卡，以及从分享 challenge URL 预填 `question / rounds / agents / mode / viz / profile` 的 banner；首页现在只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接 runtime 引完整玩法策略表；BYOK/provider policy 当前也会本地持久化，供 createScenario / createDebate / social copy / scorePredictions 共用；首页里的 BYOK 测试错误、启动错误与 automation 摘要当前都已收口到同一套结构化错误映射，签收时看到的不再是原始后端报错字符串 |
+| DebateArenaView | `DebateArenaView.tsx/.css` | Debate live 页：首页 `Debate Arena` 入口会创建独立 debate，会场首屏展示辩题、阶段条、势能条、三方 score card、阶段发言和结果 CTA；当前先用 DOM 舞台复用 Theater 场景图与 Debate 专属 UI 资产，不把 Debate 硬塞进 Phaser 场景；live 页现已支持阶段锁定回看、`Arena Read / 局势解读` 面板、移动端固定底部主 CTA，并会按 `debate.language` 自动同步整页 UI 语言；当前移动端同屏只保留一个主 CTA，避免 hero CTA 与底部 rail 重叠；页面已接 `render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()`，方便桌面/移动端自动化取证；当前 live 页会优先读取后端显式 `counterplay` snapshot/WS 数据，本地 helper 只做兜底；本轮又补了赛况总览卡、房间席位图、阶段地图，以及后端 `phase_insights` 直出的阶段解读；`debate_verdict` 到来时，这批阶段洞察会直接进 store，而不是等结果页二次拉取；live 页下注与 counterplay 失败提示当前也已改成按 `ApiError.code` 映射本地化文案 |
+| DebateResultView | `DebateResultView.tsx/.css` | Debate 结果页：展示 winner、scoreline、维度 breakdown、best argument / best rebuttal / judge summary、结构化 `judge_rationale`、`supporting_turns`、phase replay digest、prediction settlement 与 share modal；顶部 hero、verdict panel、quote frame、side badge 等都已接入 Debate D4 资产；结果页会按 payload `language` 自动同步 UI 语言，若 result API 返回终态错误会直接展示，不再无限轮询；分享弹窗按钮与生成文案首行现会按平台带 emoji 图标；当前结果页会优先读取后端显式 `counterplay` 字段，展示反制摘要、命中/未中结果、`explanation`，并继续传给 share copy；share copy 现还会带 1-2 条关键引文；本轮又补了结果信号卡与阶段地图，并优先消费后端顶层 `phase_insights`，所以 live / result 的阶段 stakes、judge focus 和 commentary 现在是同一套口径；同一组件当前还负责 `/debate/replay/result`，会从 replay token 直接 hydrate 结果、显示 `adjudication_mode`，并支持“导入为本地运行”；若 replay 是通过 `import-replay` 导入的，结果页当前会优先展示那份已持久化的 `phase_insights`，避免把原始阶段解读重算成近似版本；结果页 automation 当前也会把错误字段收成 `{code, label}`，和 UI 口径一致 |
+| SimulationView | `SimulationView.tsx/.css` | 模拟进行中：实时agent对话流 + 干预入口 + 可收起侧边栏（磨砂玻璃药丸Toggle） + 分支卡片实时讨论动态脉冲；当前 `InterventionModal` 已支持 `即时 / 回溯 / 批量` 三模式，页面会把活动分支、分支历史轮次上限和当前轮次传给 modal；Theater 顶部包含 live status HUD、玩法卡入口、结构化下注入口、显式截图模式切换（`Panel/Canvas/Modal`）以及“当前截取目标”提示；完成态支持世界线/轮次回放筛选、重播/跳到最新/倍速控制，并把 compact TimelineBar 直接嵌回 Theater 面板内；live warmup 会显示“导演准备中”状态，玩法卡支持只读预览；当前导演层会在 Theater 面板内显示 2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺选择与锁定/取消按钮；这部分 goals / commitment 现在走后端 `director_state` 权威态，主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 都走后端 `gameplay_state` 权威态，本地 `scenarioMeta` 退为缓存/兼容层；结构化下注提交成功后会立刻把新 meta 回传父层并回写后端；authority 写入链路当前已补齐 `revision` 版乐观并发控制：页面写入会带上当前 revision，若命中 `409`，会先回读最新 `director_state / gameplay_state` 再继续；本 session 又去掉了把后端 authority 反向 apply 到 localStorage 的镜像链路，页面内只做 authority 优先的内存合并与 replay payload 组装；玩法卡 modal 现会显示题材专属三段式连锁事件、`风险 / 资源` 两条轻量状态，以及 profile-specific 的打法说明；桌面端 Theater 本轮又做了“场景优先”的可读性修复：右栏收成固定窄宽、`game-wrapper` 提前到 replay filters/timeline 前、导演目标改成双列、compact timeline 隐藏二级 stats，气泡文字也同步放大和加清晰化样式；移动端 Theater 当前会把顶部动作区、状态条、导演摘要和 replay filters 收成单行横向滚动条带，本轮又继续压缩了 card/chip/button padding，并把主剧场高度再让出更多首屏空间；页面切进 Theater 时也会重新收起 agent panel，避免隐藏侧栏继续占高把首屏主剧场顶出视口；视图切换仍收成图标胶囊，避免控件裁切；Theater 背景现为 30 个 Theater 语义主题 + 3 个 Debate 专属主题，共 33 个 registry 条目；当前 Phaser 预热只会在用户真正切进 Theater 后再触发，并优先走 idle 时机；Classic 视图下只有在页面可见、设备允许且用户 hover/focus 到 Theater toggle 时，才会轻量预取 loader chunk；当前默认前端 build / vitest 也已通过 alias 指向本地精简 Phaser 入口 `experiments/phaser-custom/entry.cjs`；`BootScene` 当前只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载，后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载；截图自动化摘要现还会带 `capture_result_kind`，便于区分 `gif` 与 `gif_fallback_png`；同一组件当前还负责 `/sim/replay`，replay 模式会关闭 WS、下注、干预和玩法卡写操作，只保留回放 / 截图 / 复制 replay 链接 / 导入为本地运行；页面 automation 当前会把 error 字段统一输出成 `{code, label}`，和页面实际展示文案一致 |
 | ResultView | `ResultView.tsx/.css` | 结果页：分支树 + 叙事对比 + 社交媒体文案生成 (P6)；如果用户在 narration 完成前过早打开 `/result/:id`，页面会先停在 loading，等故事真正生成完再展示；故事与档案摘要就绪后会调用 `finalizeCampaign()` 结算导演生涯，并渲染 `Campaign Progress` 区块（积分增量 / 等级 / 下次解锁 / 徽章）；结构化下注与“因果档案”区块现已支持按单条下注显示 `命中 / 未中 / 待判定`，档案摘要会展示命中比，并保留 `dominantBranchTitle`、`dominantTone`、`mostUsedCard`、`archiveGrade`、`directorStyleTag`、`profileResonance`；本轮新增的归档字段包括导演目标完成度、worldline 承诺结果，以及最终 `风险 / 资源` 轨道；结果页现在会把远端 `betting / archive` raw state 合并回展示层，`key moments` 会按当前 UI 语言格式化展示，并新增 `branch snapshots` 区块；导出 Markdown 和分享文案会附带题材档案前缀；页面当前会先读后端 `director_state`、`gameplay_state`，再并行读取后端 `/api/campaign/scenario/{id}/summary` 回填 `archive_grade / profile_resonance / most_used_card / betting_hit / completed_daily_challenge`，并避免把默认 `3/3` 导演点数误当成真值展示；当前结果页对 authority 已进一步收口：远端 `director_state / gameplay_state / campaign summary` 会作为展示基线，只有缺字段时才回退本地 `scenarioMeta` 兼容内容；如果远端只显式带某个 gameplay 分区，也只替换那一块，不会把其它本地兼容字段顺手清空；结果页当前会先用 `story.branches / usages / bets / commitment / campaign summary` 现算 `displayArchive / displayBranchSnapshots`，再把本地 `scenarioMeta.archive` 降成最后兜底；`/result/replay` 当前也会优先依赖 replay payload 里的 `storyData` 与精简版 `scenarioMeta`，并在读路径里把 usage-derived 状态补回运行态，不再把整包 archive 摘要副本带进 replay；本轮又补了 `分享挑战` 按钮，可直接复制 challenge URL，把同题同参数带回首页预填；同一组件当前还负责 `/result/replay`，会优先从后端短 `share id` 读取 replay，失败时回退 token，并跳过 `finalizeCampaign()` 与后端 authority 回写，必要时可直接“导入为本地运行” |
 
 ## 组件 (`src/components/`)
@@ -40,19 +41,29 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；结果区会显示题材 label / 回响 / hooks，复制与导出版本会带题材档案前缀；当前如果页面已有 replay permalink，也会一起放进分享 envelope；弹窗现在会明确区分 `idle / loading / success / error`，生成中会显示等待提示，生成完成后会给出“文案已生成 / 可直接复制或切平台”的结果提示，automation state 里也会带 `status` 字段；当前社交文案请求已走更长的前端超时窗口，避免正常 LLM 延迟下前端先于后端中断；复制失败时不会再走废弃的 `execCommand('copy')` fallback，而是直接提示用户手动复制 |
 | `LanguageSwitcher` | 全局语言切换器（EN/ZH）；桌面端固定右下角，移动端普通页面移到右上安全区，Theater 页继续贴右下安全区 |
 
+### `App.tsx` / `AppErrorBoundary.tsx`
+- 路由入口当前统一挂在 `App.tsx`
+- 外层 `AppErrorBoundary` 会兜住页面级渲染异常，避免单页组件报错时直接白屏
+
+### `api/client.ts`
+- 前端 REST 客户端当前统一抛 `ApiError(status, code, message)`
+- `content-type` 不是 JSON、JSON 结构损坏、以及后端返回的 `detail.code / detail.message`，现在都会先被标准化，再交给页面层消费
+- 当前大部分用户可见 API 错误已不再直接展示原始后端字符串，而是先按 `ApiError.code` 映射到 i18n 文案
+
 ## 状态管理 (`src/stores/`)
 
 ### `simulationStore.ts` (Zustand)
-- **状态**: scenario, agents, branches, messages, groups (P3-A), hierarchical (P3-A), status, error, visualizationEnabled, viewMode
+- **状态**: scenario, agents, branches, messages, groups (P3-A), hierarchical (P3-A), status, error, errorCode, visualizationEnabled, viewMode
 - **Actions**: `startSimulation(question, rounds?, numAgents?, mode?, hierarchical?, llmApiKey?, llmBaseUrl?, llmModel?, reasoningEffort?, visualizationEnabled?, userId?)`，当前会把 `userId` 一起透传给后端，用于 provider policy / 用户级配额
 - **特性**: 不可变更新、WebSocket事件驱动
 - **场景 hydration**: `setScenario()` / `loadScenario()` 会读取 `Scenario.visualization_enabled`，并在直开 `/sim/:id` 时自动恢复 `viewMode='theater'`，避免已启用像素剧场的场景回落到 Classic
 - **高级干预事件**: `retrospective_start` 会补一条占位分支并写入 intervention log，`batch_intervention_applied` 会把整批分支干预一起写入 intervention log
 - **防护**: `MAX_MESSAGES=5000` 消息上限 + composite-key dedup 防止内存无限增长
+- **错误口径**: `startSimulation()` / `loadScenario()` 与 `simulation_error` 当前都会同时落 `errorCode + error`；页面 UI 走本地化文案，automation 则可继续读取同一份 code
 - **WS keepalive**: `heartbeat` 当前会被显式当作 no-op 事件忽略，不再落进默认 `unhandled event` warning，也不会污染 simulation 状态
 
 ### `debateStore.ts` (Zustand)
-- **状态**: `debate`、`status`、`error`
+- **状态**: `debate`、`status`、`error`、`errorCode`
 - **Actions**:
   - `startDebate(question)` — 创建独立 Debate Arena
   - `loadDebate(id)` — 拉取 live snapshot
@@ -60,6 +71,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - **特点**:
   - 与 `simulationStore` 完全分离，不把 Debate 状态继续塞回 scenario 主 store
   - `agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict` 只更新 Debate 闭环需要的最小状态
+  - `startDebate()` / `loadDebate()` / `setError()` 当前也会统一维护 `errorCode + error`，不再把 runtime/API 原始字符串直接灌给页面
   - `setVerdict()` 当前还会把 `debate_verdict` 事件里一并带回来的 `phase_insights` 落进 store，保证 live 页在 verdict 到来时就能拿到完整阶段洞察
 
 ## 本地玩法元数据 (`src/lib/`)
@@ -74,7 +86,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - Result replay 仍需要的最小 archive 输入（当前主要是 `keyMoments`；`branchSnapshots` 已优先改由 `storyData.branches` 重建）
 - 读取阶段会为旧 localStorage 自动补默认值，避免因新增字段让旧本地状态直接崩页
 - 当前口径：
-  - `scenarioMeta` 当前已补 per-scenario localStorage 写锁（短租约）与 `_rev` 递增记录；多个标签页对同一 scenario 的常规写入会先串行化，再基于最新快照落盘；拿锁超时才会带 warning 退回 optimistic 路径
+  - `scenarioMeta` 当前已补 per-scenario localStorage 写锁（短租约）与 `_rev` 递增记录；多个标签页对同一 scenario 的常规写入会先等待锁释放，再基于最新快照落盘；只有等锁超时才会带 warning 退回 optimistic 路径，所以能收住大多数跨标签覆盖，但并不承诺彻底强一致
   - `subscribeScenarioMeta()` 当前统一监听原生 `storage` 与同窗 `custom-event`；`SimulationView / ResultView` 已接入这条订阅，打开中的页面会在本地玩法/承诺/归档写入后主动刷新
   - `cards.usageLog` 已不再是纯本地 authority；前端会优先用后端 `gameplay_state.cards.usage_log` 回填，再把本地当缓存/兼容层
   - `betting.bets`、`archive.keyMoments` 与 `archive.branchSnapshots` 也已进入后端 `gameplay_state`；`scenarioMeta` 继续保留缓存/兼容层，但 localStorage 当前已不再长期保存 usage-derived 的 `director/cooldowns/profileId/counterplay` 等重复字段，读取时会按 usage/bets 现算回补
@@ -216,6 +228,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - `debate_counterplay`
   - `debate_verdict`
 - 出错时会保留 `error` 状态，而不是把整个 Debate store 清空，便于前端显示可读错误
+- `status.error` 当前已支持后端 structured error object（`{code, message}`）；hook 会直接把它透传进 `debateStore.setError()`
 - `debate_verdict` 当前除了 winner / score / judge summary 这些 verdict 字段，还会把后端 `phase_insights` 一起透传给 `debateStore.setVerdict()`
 - `heartbeat` 当前显式走 no-op，不会触发 `setDebate / setPhase / setScore / setVerdict`
 - 初始连接和重连都已补 cleanup：
@@ -292,6 +305,9 @@ GSAP 动画工具函数，用于页面转场和元素入场动画。
 ## 自动化可观测性
 
 - `render_game_to_text()` 已覆盖 `InputView`、`SimulationView`、`ResultView`、`HistoryView`、`LeaderboardView`、`DebateArenaView`、`DebateResultView`
+- automation payload 里的 `page.error` 当前统一是 `{code, label}`：
+  - `label` 是页面实际显示给用户的本地化文案
+  - `code` 在当前页面能拿到结构化错误来源时会透出；如果此刻只有 fallback 文案，`code` 允许为 `null`
 - `InputView` 的自动化摘要现会带 `campaign`（`user_id / total_runs / badge_count / daily_profile_level / daily_profile_score_to_next_level`），可直接取证首页 director campaign 进展
 - `InputView` 现在还会把 daily challenge 的后端真值合并进 `page.challenge_progress`，但不会凭空伪造本地未知的卡牌/下注细节
 - `InputView` 当前还会输出：
@@ -498,7 +514,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 | Weather 对象池 | acquireWeatherDot/releaseWeatherDot — 120 个 Graphics 对象回收复用，减少 GC 压力 |
 | 视口裁剪 | cullAgent — VIEWPORT_MARGIN 40px 外 Agent 隐藏，减少 GPU 绘制调用 |
 | Pool 清理 | shutdown() 中销毁 `weatherPool / ambientMotePool` 与活跃 ambient mote，防止内存泄漏 |
-| Automation Hooks | `render_game_to_text()` + `advanceTime(ms)` + `preserveDrawingBuffer=true`，提升浏览器黑盒测试的状态读取与截图稳定性；已覆盖页面级控件摘要、warmup 摘要、capture mode、modal 内部状态摘要与分享上下文摘要 |
+| Automation Hooks | `render_game_to_text()` + `advanceTime(ms)` + `preserveDrawingBuffer=true`，提升浏览器黑盒测试的状态读取与截图稳定性；已覆盖页面级控件摘要、warmup 摘要、capture mode、modal 内部状态摘要与分享上下文摘要；当前 automation payload 里的错误字段也已统一成 `{code, label}`，和 UI 口径一致 |
 | WorldScene.test.ts | 21 断言 — 30 主题 + 15 事件 + 4 阵营 + 10 气泡 + 4 时段 + 双语 + 性能常量（含 `AMBIENT_MOTE_POOL_SIZE`） |
 | EndingScene.test.ts | 14 断言 — 6 结局配置 + 3 类型映射 + resolveEndingId 逻辑 |
 

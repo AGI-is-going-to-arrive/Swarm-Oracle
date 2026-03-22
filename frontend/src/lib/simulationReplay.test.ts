@@ -11,7 +11,7 @@ import {
   readSimulationReplayPayload,
   type SimulationReplayPayload,
 } from './simulationReplay';
-import { encodeReplayEnvelope } from './replayCodec';
+import { encodeReplayEnvelope, ReplayTokenTooLargeError } from './replayCodec';
 
 const scenario: Scenario = {
   id: 'scenario-1',
@@ -159,6 +159,27 @@ describe('simulationReplay helpers', () => {
   it('builds a simulation replay url', async () => {
     const url = await buildSimulationReplayUrl('https://example.com/', payload);
     expect(url).toContain('/sim/replay?replay=');
+  });
+
+  it('rejects oversized simulation replay payloads before building a URL', async () => {
+    const oversizedPayload: SimulationReplayPayload = {
+      ...payload,
+      scenario: {
+        ...payload.scenario,
+        messages: Array.from({ length: 220 }, (_, index) => ({
+          agent: `Agent ${index}`,
+          agent_id: `agent-${index}`,
+          message: `message-${index}-${`${index}`.padStart(4, '0')}-${'abcdefghijklmnopqrstuvwxyz'.slice(index % 10)}-${index.toString(36).repeat(3)}`,
+          emotion: 'calm',
+          branch: 'b1',
+          round: index + 1,
+        })),
+      },
+    };
+
+    await expect(
+      buildSimulationReplayUrl('https://example.com/', oversizedPayload),
+    ).rejects.toBeInstanceOf(ReplayTokenTooLargeError);
   });
 
   it('rejects replay payloads with an invalid scenario shape', () => {

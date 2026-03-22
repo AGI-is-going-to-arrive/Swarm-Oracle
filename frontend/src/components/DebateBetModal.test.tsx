@@ -60,4 +60,21 @@ describe('DebateBetModal automation callback', () => {
     expect(latestState.preset_kind).toBe('verdict_tone');
     expect(latestState.preset_target).toBe('balance');
   });
+
+  it('maps structured API errors to localized debate bet messages', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <DebateBetModal
+        onClose={() => {}}
+        onSubmit={vi.fn(async () => {
+          throw { status: 400, code: 'DEBATE_PREDICTIONS_LOCKED' };
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'debate.bet_submit' }));
+
+    expect(await screen.findByText('debate.bet_error_locked')).toBeInTheDocument();
+  });
 });

@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getLeaderboard } from '../api/client';
 import { stringifyAutomationPayload } from '../game/automation';
+import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { LeaderboardEntry } from '../types';
 import './LeaderboardView.css';
 
@@ -18,15 +19,18 @@ export default function LeaderboardView() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
+    setErrorCode(null);
     try {
       const data = await getLeaderboard(50);
       setEntries(data ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load leaderboard');
+      setErrorCode(getApiErrorCode(err));
+      setError(getLocalizedApiErrorMessage(err, t, 'Failed to load leaderboard'));
     } finally {
       setLoading(false);
     }
@@ -56,7 +60,7 @@ export default function LeaderboardView() {
         route: window.location.pathname,
         kind: 'leaderboard',
         loading,
-        error: error || null,
+        error: buildAutomationErrorState(errorCode, error),
         entry_count: entries.length,
         top_entries: entries.slice(0, 10).map((entry, index) => ({
           rank: index + 1,
@@ -75,7 +79,7 @@ export default function LeaderboardView() {
         delete win.render_game_to_text;
       }
     };
-  }, [entries, error, loading]);
+  }, [entries, error, errorCode, loading]);
 
   return (
     <div className="leaderboard-view">

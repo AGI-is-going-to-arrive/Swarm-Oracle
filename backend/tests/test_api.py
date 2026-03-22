@@ -84,6 +84,16 @@ def _seed_round(engine, branch_id, round_number):
         return r.id
 
 
+def _detail_message(resp) -> str:
+    detail = resp.json()["detail"]
+    return detail["message"] if isinstance(detail, dict) else detail
+
+
+def _detail_code(resp) -> str | None:
+    detail = resp.json()["detail"]
+    return detail.get("code") if isinstance(detail, dict) else None
+
+
 # ── Root / Health ────────────────────────────────────────
 
 
@@ -148,6 +158,38 @@ class TestScenarioEndpoints:
         """num_agents=100 (maximum) should be accepted."""
         resp = client.post("/api/scenario", json={"question": "test?", "num_agents": 100})
         assert resp.status_code in (200, 500)
+
+
+class TestReplayArtifactEndpoints:
+    def test_create_replay_artifact_returns_structured_payload_too_large_error(self, client):
+        resp = client.post(
+            "/api/replay-artifact",
+            json={
+                "kind": "scenario_result_v1",
+                "payload": {
+                    "blob": "x" * 2_100_000,
+                },
+            },
+        )
+
+        assert resp.status_code == 413
+        assert resp.json() == {
+            "detail": {
+                "code": "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE",
+                "message": "Replay artifact payload too large",
+            },
+        }
+
+    def test_get_replay_artifact_returns_structured_not_found_error(self, client):
+        resp = client.get("/api/replay-artifact/missing-artifact")
+
+        assert resp.status_code == 404
+        assert resp.json() == {
+            "detail": {
+                "code": "REPLAY_ARTIFACT_NOT_FOUND",
+                "message": "Replay artifact not found",
+            },
+        }
 
     def test_create_scenario_num_agents_below_min(self, client):
         """num_agents=2 should be rejected (below minimum 3)."""
@@ -546,7 +588,8 @@ class TestPredictionLeaderboardEndpoints:
             )
 
             assert resp.status_code == 400
-            assert "predictions are closed" in resp.json()["detail"]
+            assert resp.json()["detail"]["code"] == "PREDICTIONS_CLOSED"
+            assert "predictions are closed" in resp.json()["detail"]["message"]
 
     def test_special_characters_in_scenario_id(self, client):
         """Special characters in scenario ID should be handled gracefully."""
@@ -664,7 +707,8 @@ class TestInterveneEndpoint:
             "branch_id": bid, "text": "test",
         })
         assert resp.status_code == 400
-        assert "Cannot intervene" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
+        assert "Cannot intervene" in resp.json()["detail"]["message"]
 
     def test_intervene_error_scenario(self, client):
         """Should reject intervention on ERROR scenario."""
@@ -688,7 +732,8 @@ class TestInterveneEndpoint:
             "branch_id": bid_other, "text": "test",
         })
         assert resp.status_code == 400
-        assert "Branch not found" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "INTERVENTION_BRANCH_NOT_FOUND"
+        assert "Branch not found" in resp.json()["detail"]["message"]
 
     def test_intervene_completed_branch(self, client):
         """Should reject intervention on a COMPLETED branch."""
@@ -700,7 +745,8 @@ class TestInterveneEndpoint:
             "branch_id": bid, "text": "test",
         })
         assert resp.status_code == 400
-        assert "Cannot intervene" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "INTERVENTION_BRANCH_STATUS_INVALID"
+        assert "Cannot intervene" in resp.json()["detail"]["message"]
 
     def test_intervene_pruned_branch(self, client):
         """Should reject intervention on a PRUNED branch."""
@@ -1151,7 +1197,8 @@ class TestDeleteScenario:
 
         resp = client.delete(f"/api/scenario/{sid}")
         assert resp.status_code == 400
-        assert "simulating" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["code"] == "SCENARIO_DELETE_STATUS_INVALID"
+        assert "simulating" in resp.json()["detail"]["message"].lower()
 
     def test_delete_error_scenario(self, client):
         """Should allow deletion of errored scenario."""

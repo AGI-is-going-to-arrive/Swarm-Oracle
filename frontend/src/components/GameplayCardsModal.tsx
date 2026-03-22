@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { intervene } from '../api/client';
 import { dispatchVizEvent } from '../game';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   applyCardUsage,
   canUseCard,
@@ -395,7 +396,7 @@ export default function GameplayCardsModal({
       closeTimerRef.current = setTimeout(() => onClose(), 1200);
     } catch (error) {
       setStatus('error');
-      setErrorMsg(error instanceof Error ? error.message : t('intervention.error'));
+      setErrorMsg(getLocalizedApiErrorMessage(error, t, t('intervention.error')));
     }
   };
 

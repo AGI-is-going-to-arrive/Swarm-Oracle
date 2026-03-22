@@ -4,8 +4,10 @@
 
 const MAX_MESSAGES = 5000; // H-3 fix: prevent unbounded memory growth
 
+import i18n from '../i18n/config';
 import { create } from 'zustand';
 import { createScenario, getScenario } from '../api/client';
+import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent } from '../types';
 
 /** Agent currently thinking (waiting for LLM response). */
@@ -26,6 +28,7 @@ export interface SimulationState {
   hierarchical: boolean;  // P3-A
   status: 'idle' | 'parsing' | 'simulating' | 'narrating' | 'done' | 'error';
   error: string | null;
+  errorCode: string | null;
 
   // V2: Pixel visualization
   visualizationEnabled: boolean;
@@ -67,6 +70,7 @@ const initialState = {
   hierarchical: false,
   status: 'idle' as const,
   error: null as string | null,
+  errorCode: null as string | null,
   // V2: Pixel visualization
   visualizationEnabled: false,
   viewMode: 'classic' as const,
@@ -83,6 +87,10 @@ function appendInterventionLog(
   next: InterventionLogEntry[],
 ): InterventionLogEntry[] {
   return [...current, ...next];
+}
+
+function translate(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, options as never) as unknown as string;
 }
 
 export const useSimulationStore = create<SimulationState>((set) => ({
@@ -102,12 +110,18 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         viewMode: visualizationEnabled ? 'theater' : 'classic',
         status: scenario.status as SimulationState['status'],
         error: null,
+        errorCode: null,
       });
       return scenario.id;
     } catch (err) {
       set({
         status: 'error',
-        error: err instanceof Error ? err.message : 'Failed to start simulation',
+        errorCode: getApiErrorCode(err),
+        error: getLocalizedApiErrorMessage(
+          err,
+          translate,
+          translate('common.api_errors.simulation_start_failed'),
+        ),
       });
       throw err;
     }
@@ -145,9 +159,17 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         currentRound: Math.max(0, ...((s.messages || []).map((message) => message.round ?? 0))),
         isSimulationComplete: s.status === 'done',
         error: null,
+        errorCode: null,
       });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to load scenario' });
+      set({
+        errorCode: getApiErrorCode(err),
+        error: getLocalizedApiErrorMessage(
+          err,
+          translate,
+          translate('common.api_errors.scenario_load_failed'),
+        ),
+      });
     }
   },
 
@@ -415,7 +437,12 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       case 'simulation_error':
         set({
           status: 'error',
-          error: event.data.error || 'Simulation failed',
+          errorCode: getApiErrorCode(event.data.error),
+          error: getLocalizedApiErrorMessage(
+            event.data.error,
+            translate,
+            translate('common.api_errors.simulation_start_failed'),
+          ),
           thinkingAgents: [],
         });
         break;

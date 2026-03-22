@@ -513,9 +513,20 @@ export interface DebatePredictionRequest {
   counterplayVariant?: 'balanced' | 'reversal';
 }
 
+export interface StructuredWsError {
+  code?: string;
+  message?: string;
+}
+
 export type DebateWSEvent =
   | { type: 'heartbeat'; data: { ts: string } }
-  | { type: 'status'; data: { status: DebateSnapshot['status']; error?: string } }
+  | {
+      type: 'status';
+      data: {
+        status: DebateSnapshot['status'];
+        error?: string | StructuredWsError;
+      };
+    }
   | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
   | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
   | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
@@ -541,7 +552,10 @@ export type WSEvent =
   | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
   | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
   | { type: 'simulation_done' }
-  | { type: 'simulation_error'; data: { error: string } };
+  | {
+      type: 'simulation_error';
+      data: { error: string | StructuredWsError };
+    };
 
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';

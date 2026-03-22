@@ -6,9 +6,10 @@
    active connections and preventing duplicate WebSocket instances.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useRef, useCallback } from 'react';
-import { useSimulationStore } from '../stores/simulationStore';
+import { useCallback, useEffect, useRef } from 'react';
+
 import { dispatchVizEvent } from '../game/managers/EventBridge';
+import { useSimulationStore } from '../stores/simulationStore';
 import type { WSEvent } from '../types';
 
 const BASE_RECONNECT_DELAY = 2000;
@@ -24,12 +25,10 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
 
   const connect = useCallback(() => {
     if (!scenarioId || !ready) return;
-    // Prevent double-connect (React StrictMode double-mount)
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
 
     cleanedUp.current = false;
 
-    // Build WS URL (Vite dev proxy handles /ws → backend)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/scenario/${scenarioId}`;
 
@@ -38,46 +37,45 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
 
     ws.onopen = () => {
       console.log(`[WS] Connected to scenario ${scenarioId}`);
-      // H-1 fix: Poll backend status on reconnect to catch missed events
       if (reconnectCount.current > 0) {
         console.log('[WS] Reconnected — polling backend for missed state...');
-        import('../api/client').then(({ getScenario }) => {
-          getScenario(scenarioId!).then((s) => {
-            useSimulationStore.getState().setScenario(s);
-          }).catch((err) => console.warn('[WS] Status poll failed:', err));
-        });
+        import('../api/client')
+          .then(({ getScenario }) => getScenario(scenarioId!))
+          .then((scenario) => {
+            useSimulationStore.getState().setScenario(scenario);
+          })
+          .catch((error) => console.warn('[WS] Status poll failed:', error));
       }
       reconnectCount.current = 0;
     };
 
-    ws.onmessage = (ev) => {
-      if (cleanedUp.current) return; // ignore events after cleanup
+    ws.onmessage = (event) => {
+      if (cleanedUp.current) return;
       try {
-        const raw = JSON.parse(ev.data) as { type: string; data?: Record<string, unknown> };
-
-        // V2: Route viz:* events directly to Phaser EventBridge
-        // These bypass Zustand entirely for performance
+        const raw = JSON.parse(event.data) as { type: string; data?: Record<string, unknown> };
         if (raw.type.startsWith('viz:')) {
           dispatchVizEvent(raw.type, raw.data ?? {});
           return;
         }
-
-        // Use getState() to avoid stale closure
         useSimulationStore.getState().handleWSEvent(raw as WSEvent);
-      } catch (err) {
-        console.error('[WS] Failed to parse message:', err);
+      } catch (error) {
+        console.error('[WS] Failed to parse message:', error);
       }
     };
 
-    ws.onclose = (ev) => {
-      console.log(`[WS] Disconnected (code=${ev.code})`);
+    ws.onclose = (event) => {
+      console.log(`[WS] Disconnected (code=${event.code})`);
       wsRef.current = null;
 
-      // Auto-reconnect with exponential backoff (M-2 fix)
-      if (!cleanedUp.current && ev.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
+      if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
-        const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1), MAX_RECONNECT_DELAY);
-        console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectCount.current}/${MAX_RECONNECTS})...`);
+        const delay = Math.min(
+          BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1),
+          MAX_RECONNECT_DELAY,
+        );
+        console.log(
+          `[WS] Reconnecting in ${delay}ms (attempt ${reconnectCount.current}/${MAX_RECONNECTS})...`,
+        );
         if (reconnectTimerRef.current) {
           window.clearTimeout(reconnectTimerRef.current);
         }
@@ -85,9 +83,9 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
       }
     };
 
-    ws.onerror = (err) => {
+    ws.onerror = (error) => {
       if (cleanedUp.current) return;
-      console.error('[WS] Error:', err);
+      console.error('[WS] Error:', error);
     };
   }, [scenarioId, ready]);
 
