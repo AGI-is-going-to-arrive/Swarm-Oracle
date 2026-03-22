@@ -258,6 +258,7 @@
       "retry": "Retry",
       "copy_label": "{{platform}} Copy",
       "copy_btn": "📋 Copy",
+      "copy_error": "Automatic copy is unavailable here. Please select the text and copy it manually.",
       "copy_permalink_btn": "🔗 Copy Permalink",
       "permalink_copied": "✅ Permalink Copied",
       "permalink_label": "Permalink",

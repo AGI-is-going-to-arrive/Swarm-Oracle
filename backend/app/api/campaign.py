@@ -24,6 +24,7 @@ from app.services.campaign import (
     save_scenario_director_state,
     save_scenario_gameplay_state,
 )
+from app.services.daily_challenges import get_challenge_rotation
 
 router = APIRouter(prefix="/api/campaign", tags=["campaign"])
 
@@ -100,6 +101,26 @@ class CampaignWeeklySummaryResponse(BaseModel):
     best_archive_grade: str | None = None
     top_profile_id: str | None = None
     profile_runs: dict[str, int] = Field(default_factory=dict)
+
+
+class CampaignChallengeDefinitionResponse(BaseModel):
+    id: str
+    question: str
+    question_en: str | None = None
+    subtitle_zh: str
+    subtitle_en: str
+    profile_id: str
+    rounds: int
+    num_agents: int
+    mode: Literal["blackboard", "raw"]
+    visualization_enabled: bool
+
+
+class CampaignChallengeRotationResponse(BaseModel):
+    local_date: str
+    week_key: str
+    today_challenge: CampaignChallengeDefinitionResponse
+    weekly_challenges: list[CampaignChallengeDefinitionResponse]
 
 
 class CampaignFinalizeRequest(BaseModel):
@@ -573,6 +594,22 @@ async def put_gameplay_state(
         raise HTTPException(400, str(exc)) from exc
 
     return ScenarioGameplayStateResponse(scenario_id=scenario_id, **state)
+
+
+@router.get(
+    "/challenges/rotation",
+    response_model=CampaignChallengeRotationResponse,
+)
+async def get_challenge_rotation_endpoint(
+    local_date: str,
+    weekly_count: int = 3,
+) -> CampaignChallengeRotationResponse:
+    try:
+        rotation = get_challenge_rotation(local_date, weekly_count=weekly_count)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return CampaignChallengeRotationResponse(**rotation)
 
 
 @router.get(

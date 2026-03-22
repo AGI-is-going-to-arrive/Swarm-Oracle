@@ -83,6 +83,19 @@ class Settings(BaseSettings):
             return str(persist_dir)
         return str((BACKEND_ROOT / persist_dir).resolve())
 
+    @field_validator("CORS_ORIGINS", mode="after")
+    @classmethod
+    def validate_cors_origins(cls, value: list[str]) -> list[str]:
+        normalized = [origin.strip() for origin in value if origin and origin.strip()]
+        if "*" in normalized:
+            raise ValueError(
+                "CORS_ORIGINS cannot contain '*' while the app enables credentialed CORS; "
+                "list explicit origins instead"
+            )
+        if not normalized:
+            raise ValueError("CORS_ORIGINS must contain at least one explicit origin")
+        return normalized
+
     @model_validator(mode="after")
     def validate_llm_runtime_settings(self) -> "Settings":
         model_name = self.LLM_MODEL_NAME.strip()
@@ -105,6 +118,15 @@ class Settings(BaseSettings):
         if log_format not in {"json", "plain"}:
             raise ValueError("LOG_FORMAT must be 'json' or 'plain'")
         self.LOG_FORMAT = log_format
+
+        cors_origins = [origin.strip() for origin in self.CORS_ORIGINS if origin.strip()]
+        if not cors_origins:
+            raise ValueError("CORS_ORIGINS cannot be empty")
+        if "*" in cors_origins:
+            raise ValueError(
+                "CORS_ORIGINS cannot include '*' while allow_credentials is enabled"
+            )
+        self.CORS_ORIGINS = cors_origins
         return self
 
 

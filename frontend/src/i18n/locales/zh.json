@@ -258,6 +258,7 @@
       "retry": "重试",
       "copy_label": "{{platform}} 文案",
       "copy_btn": "📋 复制文案",
+      "copy_error": "当前环境无法自动复制，请手动选择文案后复制。",
       "copy_permalink_btn": "🔗 复制固定链接",
       "permalink_copied": "✅ 固定链接已复制",
       "permalink_label": "固定链接",

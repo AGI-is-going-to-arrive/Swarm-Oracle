@@ -113,17 +113,19 @@ export default function GameplayCardsModal({
     [activeBranches, meta.commitment.active, meta.commitment.branchId],
   );
   const [cardId, setCardId] = useState<GameplayCardId>(recommendedCards[0] ?? defaultCardId);
-  const [targetBranchId, setTargetBranchId] = useState(defaultTargetBranchId);
-  const initialAgentSuggestion = useMemo(
+  const [targetBranchIdOverride, setTargetBranchIdOverride] = useState<string | null>(defaultTargetBranchId);
+  const suggestedAgents = useMemo(
     () => getSuggestedGameplayAgents(recommendedCards[0] ?? defaultCardId, agents, gameplayProfile.id),
     [agents, defaultCardId, gameplayProfile.id, recommendedCards],
   );
-  const [primaryAgentId, setPrimaryAgentId] = useState(initialAgentSuggestion.primaryAgentId);
-  const [secondaryAgentId, setSecondaryAgentId] = useState(
-    initialAgentSuggestion.secondaryAgentId ?? agents[1]?.id ?? agents[0]?.id ?? '',
+  const [primaryAgentIdOverride, setPrimaryAgentIdOverride] = useState<string | null>(suggestedAgents.primaryAgentId);
+  const [secondaryAgentIdOverride, setSecondaryAgentIdOverride] = useState<string | null>(
+    suggestedAgents.secondaryAgentId ?? agents[1]?.id ?? agents[0]?.id ?? '',
   );
-  const [sourceBranchId, setSourceBranchId] = useState(getSuggestedSourceBranchId(branches, defaultTargetBranchId, gameplayProfile.id));
-  const [customDirective, setCustomDirective] = useState('');
+  const [sourceBranchIdOverride, setSourceBranchIdOverride] = useState<string | null>(
+    getSuggestedSourceBranchId(branches, defaultTargetBranchId, gameplayProfile.id),
+  );
+  const [customDirectiveOverride, setCustomDirectiveOverride] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -131,6 +133,61 @@ export default function GameplayCardsModal({
   const normalizedCurrentRound = Math.max(1, currentRound);
 
   const agentsById = useMemo(() => buildAgentsById(agents), [agents]);
+  const autoDirective = useMemo(
+    () => buildGameplayAutoDirective({
+      cardId,
+      question,
+      sceneTheme,
+      profileId: gameplayProfile.id,
+      isZh,
+    }),
+    [cardId, gameplayProfile.id, isZh, question, sceneTheme],
+  );
+  const targetBranchId = useMemo(
+    () => (
+      targetBranchIdOverride && activeBranches.some((branch) => branch.id === targetBranchIdOverride)
+        ? targetBranchIdOverride
+        : defaultTargetBranchId
+    ),
+    [activeBranches, defaultTargetBranchId, targetBranchIdOverride],
+  );
+  const agentSuggestion = useMemo(
+    () => getSuggestedGameplayAgents(cardId, agents, gameplayProfile.id),
+    [agents, cardId, gameplayProfile.id],
+  );
+  const primaryAgentId = useMemo(
+    () => (
+      primaryAgentIdOverride && agents.some((agent) => agent.id === primaryAgentIdOverride)
+        ? primaryAgentIdOverride
+        : agentSuggestion.primaryAgentId
+    ),
+    [agentSuggestion.primaryAgentId, agents, primaryAgentIdOverride],
+  );
+  const secondaryAgentId = useMemo(() => {
+    const fallbackAgentId =
+      agentSuggestion.secondaryAgentId
+      ?? agents[1]?.id
+      ?? agents.find((agent) => agent.id !== primaryAgentId)?.id
+      ?? agents[0]?.id
+      ?? '';
+    return secondaryAgentIdOverride && agents.some((agent) => agent.id === secondaryAgentIdOverride)
+      ? secondaryAgentIdOverride
+      : fallbackAgentId;
+  }, [agentSuggestion.secondaryAgentId, agents, primaryAgentId, secondaryAgentIdOverride]);
+  const suggestedSourceBranchId = useMemo(
+    () => getSuggestedSourceBranchId(branches, targetBranchId, gameplayProfile.id),
+    [branches, gameplayProfile.id, targetBranchId],
+  );
+  const sourceBranchId = useMemo(
+    () => (
+      sourceBranchIdOverride
+      && branches.some((branch) => branch.id === sourceBranchIdOverride && branch.id !== targetBranchId)
+        ? sourceBranchIdOverride
+        : suggestedSourceBranchId
+    ),
+    [branches, sourceBranchIdOverride, suggestedSourceBranchId, targetBranchId],
+  );
+  const customDirective = customDirectiveOverride ?? autoDirective;
   const targetBranch = activeBranches.find((branch) => branch.id === targetBranchId) ?? activeBranches[0] ?? null;
   const sourceBranch = branches.find((branch) => branch.id === sourceBranchId) ?? null;
   const cardDef = getGameplayCardDefinition(cardId);
@@ -147,22 +204,6 @@ export default function GameplayCardsModal({
   const systemTrackSummary = isZh
     ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6；${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`
     : `${systemTracks.riskLabel} ${systemTracks.riskValue}/6; ${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`;
-  const autoDirective = useMemo(
-    () => buildGameplayAutoDirective({
-      cardId,
-      question,
-      sceneTheme,
-      profileId: gameplayProfile.id,
-      isZh,
-    }),
-    [cardId, gameplayProfile.id, isZh, question, sceneTheme],
-  );
-
-  useEffect(() => {
-    if (!targetBranchId && activeBranches.length > 0) {
-      setTargetBranchId(activeBranches[0].id);
-    }
-  }, [activeBranches, targetBranchId]);
 
   useEffect(() => {
     setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
@@ -173,21 +214,12 @@ export default function GameplayCardsModal({
   }, [defaultCardId, recommendedCards]);
 
   useEffect(() => {
-    const suggestion = getSuggestedGameplayAgents(cardId, agents, gameplayProfile.id);
-    if (suggestion.primaryAgentId) {
-      setPrimaryAgentId(suggestion.primaryAgentId);
-    }
-    if (suggestion.secondaryAgentId) {
-      setSecondaryAgentId(suggestion.secondaryAgentId);
-    }
+    setPrimaryAgentIdOverride(null);
+    setSecondaryAgentIdOverride(null);
   }, [agents, cardId, gameplayProfile.id]);
 
   useEffect(() => {
-    setSourceBranchId(getSuggestedSourceBranchId(branches, targetBranchId, gameplayProfile.id));
-  }, [branches, gameplayProfile.id, targetBranchId]);
-
-  useEffect(() => {
-    setCustomDirective(autoDirective);
+    setCustomDirectiveOverride(null);
   }, [autoDirective]);
 
   useEffect(() => {
@@ -512,7 +544,7 @@ export default function GameplayCardsModal({
             <select
               className="gameplay-select"
               value={targetBranchId ?? ''}
-              onChange={(event) => setTargetBranchId(event.target.value)}
+              onChange={(event) => setTargetBranchIdOverride(event.target.value)}
               disabled={isDisabled}
             >
               {activeBranches.length > 0 ? (
@@ -533,7 +565,7 @@ export default function GameplayCardsModal({
               <select
                 className="gameplay-select"
                 value={primaryAgentId}
-                onChange={(event) => setPrimaryAgentId(event.target.value)}
+                onChange={(event) => setPrimaryAgentIdOverride(event.target.value)}
                 disabled={isDisabled}
               >
                 {agents.length > 0 ? (
@@ -555,7 +587,7 @@ export default function GameplayCardsModal({
               <select
                 className="gameplay-select"
                 value={secondaryAgentId}
-                onChange={(event) => setSecondaryAgentId(event.target.value)}
+                onChange={(event) => setSecondaryAgentIdOverride(event.target.value)}
                 disabled={isDisabled}
               >
                 {agents.length > 0 ? (
@@ -577,7 +609,7 @@ export default function GameplayCardsModal({
               <select
                 className="gameplay-select"
                 value={sourceBranchId}
-                onChange={(event) => setSourceBranchId(event.target.value)}
+                onChange={(event) => setSourceBranchIdOverride(event.target.value)}
                 disabled={isDisabled}
               >
                 {branches.filter((branch) => branch.id !== targetBranchId).length > 0 ? (
@@ -600,7 +632,7 @@ export default function GameplayCardsModal({
             className="intervention-input gameplay-modal__textarea"
             placeholder={placeholder}
             value={customDirective}
-            onChange={(event) => setCustomDirective(event.target.value)}
+            onChange={(event) => setCustomDirectiveOverride(event.target.value)}
             disabled={isDisabled}
             rows={4}
           />

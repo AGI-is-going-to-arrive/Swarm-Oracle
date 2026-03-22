@@ -118,6 +118,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
   - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
   - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
+- 本 session 这轮“WS 并行广播 / challenge rotation API”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_ws.py -q`：`21 passed in 0.96s`
+  - `python -m pytest tests/test_campaign_api.py -q`：`14 passed in 0.88s`
+  - `python -m ruff check --ignore E501 app/api/campaign.py app/services/daily_challenges.py tests/test_campaign_api.py`：通过
 - 本 session 这轮“backend review fixes / structured logging / parser incomplete fallback”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_backend_code_review_fixes.py -q`：`4 passed in 0.45s`
   - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`：`64 passed in 71.56s`
@@ -151,6 +155,12 @@ npm run assets:provenance:check
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`：`38 passed`
 - 本轮这类“前端显式忽略 WS heartbeat keepalive，保持 live 页面无状态噪声”改动，当前还额外实跑通过：
   - `src/hooks/useDebateWS.test.tsx + src/stores/simulationStore.test.ts`：`22 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“截图 URL 回收 / replay 校验 / scenarioMeta 跨标签协议”改动，当前还额外实跑通过：
+  - `src/hooks/useScreenCapture.test.ts + src/lib/simulationReplay.test.ts + src/pages/SimulationView.test.tsx`：`28 passed`
+  - `src/lib/scenarioMeta.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/lib/scenarioReplay.test.ts`：`47 passed`
+- 本 session 这轮“daily challenge rotation 后端化 / WorldScene ambient mote 池化 / GameplayCardsModal 联动收敛”改动，当前还额外实跑通过：
+  - `src/pages/InputView.test.tsx + src/lib/dailyChallenge.test.ts + src/game/scenes/WorldScene.test.ts + src/components/GameplayCardsModal.test.tsx`：`34 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
 
 ### 视频素材采集

@@ -11,6 +11,16 @@ import {
 import { CONTRACT_CARD_RULES } from './gameplayContract';
 
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
+const LOCK_KEY_PREFIX = `${STORAGE_KEY}:lock:`;
+const LOCK_LEASE_MS = 150;
+const LOCK_WAIT_TIMEOUT_MS = 240;
+const LOCK_RETRY_DELAY_MS = 8;
+
+type ScenarioMetaLockRecord = {
+  ownerId: string;
+  token: string;
+  expiresAt: number;
+};
 
 export interface StructuredBetRecord {
   betId: string;
@@ -108,10 +118,25 @@ type PersistedScenarioMeta =
     objectives?: Partial<ScenarioMeta['objectives']>;
   };
 
+type PersistedScenarioMetaRecord = PersistedScenarioMeta & {
+  _rev?: number;
+};
+
 interface RootStore {
   version: number;
-  scenarios: Record<string, PersistedScenarioMeta>;
+  scenarios: Record<string, PersistedScenarioMetaRecord>;
 }
+
+const SCENARIO_META_OWNER_ID = (() => {
+  try {
+    if (typeof crypto?.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // Ignore and fall back to a best-effort owner id below.
+  }
+  return `scenario-meta-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+})();
 
 export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
 
@@ -275,6 +300,23 @@ function compactScenarioMetaForStorage(meta: ScenarioMeta): PersistedScenarioMet
   };
 }
 
+function getScenarioMetaRevision(record: PersistedScenarioMetaRecord | undefined): number {
+  if (!record || !Number.isInteger(record._rev) || (record._rev ?? 0) < 0) {
+    return 0;
+  }
+  return record._rev ?? 0;
+}
+
+function serializeScenarioMetaRecord(
+  meta: ScenarioMeta,
+  revision: number,
+): PersistedScenarioMetaRecord {
+  return {
+    ...compactScenarioMetaForStorage(meta),
+    _rev: revision,
+  };
+}
+
 export function mergeScenarioArchive(
   meta: ScenarioMeta,
   patch: Partial<ScenarioArchiveState>,
@@ -381,24 +423,177 @@ function safeWriteStore(store: RootStore) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
 }
 
+function getLockKey(scenarioId: string): string {
+  return `${LOCK_KEY_PREFIX}${scenarioId}`;
+}
+
+function parseStoreRevision(raw: string | null, scenarioId: string): number {
+  if (!raw) return 0;
+  try {
+    const parsed = JSON.parse(raw) as RootStore;
+    return getScenarioMetaRevision(parsed.scenarios?.[scenarioId]);
+  } catch {
+    return 0;
+  }
+}
+
+function readScenarioMetaLock(scenarioId: string): ScenarioMetaLockRecord | null {
+  try {
+    const raw = window.localStorage.getItem(getLockKey(scenarioId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ScenarioMetaLockRecord>;
+    if (
+      typeof parsed.ownerId !== 'string'
+      || typeof parsed.token !== 'string'
+      || typeof parsed.expiresAt !== 'number'
+      || !Number.isFinite(parsed.expiresAt)
+    ) {
+      return null;
+    }
+    return {
+      ownerId: parsed.ownerId,
+      token: parsed.token,
+      expiresAt: parsed.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function tryAcquireScenarioMetaLock(scenarioId: string): ScenarioMetaLockRecord | null {
+  const current = readScenarioMetaLock(scenarioId);
+  const now = Date.now();
+  if (current && current.ownerId !== SCENARIO_META_OWNER_ID && current.expiresAt > now) {
+    return null;
+  }
+
+  const next: ScenarioMetaLockRecord = {
+    ownerId: SCENARIO_META_OWNER_ID,
+    token: `${SCENARIO_META_OWNER_ID}:${now}:${Math.random().toString(16).slice(2)}`,
+    expiresAt: now + LOCK_LEASE_MS,
+  };
+  window.localStorage.setItem(getLockKey(scenarioId), JSON.stringify(next));
+
+  const confirmed = readScenarioMetaLock(scenarioId);
+  if (
+    confirmed
+    && confirmed.ownerId === next.ownerId
+    && confirmed.token === next.token
+  ) {
+    return confirmed;
+  }
+  return null;
+}
+
+function releaseScenarioMetaLock(scenarioId: string, lock: ScenarioMetaLockRecord) {
+  const current = readScenarioMetaLock(scenarioId);
+  if (
+    current
+    && current.ownerId === lock.ownerId
+    && current.token === lock.token
+  ) {
+    window.localStorage.removeItem(getLockKey(scenarioId));
+  }
+}
+
+function waitForScenarioMetaLockTurn() {
+  const deadline = Date.now() + LOCK_RETRY_DELAY_MS;
+  while (Date.now() < deadline) {
+    // Intentionally empty: bounded sync wait for a cooperating tab to finish its write.
+  }
+}
+
+function withScenarioMetaLock<T>(scenarioId: string, work: () => T): T {
+  const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
+
+  while (Date.now() <= deadline) {
+    const lock = tryAcquireScenarioMetaLock(scenarioId);
+    if (lock) {
+      try {
+        return work();
+      } finally {
+        releaseScenarioMetaLock(scenarioId, lock);
+      }
+    }
+    waitForScenarioMetaLockTurn();
+  }
+
+  console.warn('[scenarioMeta] Falling back to optimistic write after lock timeout', scenarioId);
+  return work();
+}
+
+function notifyScenarioMetaSubscribers(scenarioId: string) {
+  const currentRevision = getScenarioMetaRevision(safeReadStore().scenarios[scenarioId]);
+  window.dispatchEvent(new CustomEvent('swarmoracle:scenario-meta:local-write', {
+    detail: {
+      scenarioId,
+      revision: currentRevision,
+    },
+  }));
+}
+
+export function subscribeScenarioMeta(
+  scenarioId: string,
+  listener: () => void,
+): () => void {
+  let lastRevision = getScenarioMetaRevision(safeReadStore().scenarios[scenarioId]);
+
+  const maybeNotify = (nextRevision: number) => {
+    if (nextRevision <= lastRevision) return;
+    lastRevision = nextRevision;
+    listener();
+  };
+
+  const handleStorage = (event: Event) => {
+    const storageEvent = event as StorageEvent;
+    if (storageEvent.key !== STORAGE_KEY) return;
+    maybeNotify(parseStoreRevision(storageEvent.newValue, scenarioId));
+  };
+
+  const handleLocalWrite = (event: Event) => {
+    const customEvent = event as CustomEvent<{ scenarioId?: string; revision?: number }>;
+    if (customEvent.detail?.scenarioId !== scenarioId) return;
+    maybeNotify(customEvent.detail.revision ?? 0);
+  };
+
+  window.addEventListener('storage', handleStorage);
+  window.addEventListener('swarmoracle:scenario-meta:local-write', handleLocalWrite as EventListener);
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+    window.removeEventListener('swarmoracle:scenario-meta:local-write', handleLocalWrite as EventListener);
+  };
+}
+
 export function loadScenarioMeta(scenarioId: string): ScenarioMeta {
   const store = safeReadStore();
   return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
 }
 
 export function saveScenarioMeta(scenarioId: string, next: ScenarioMeta): ScenarioMeta {
-  const store = safeReadStore();
-  store.scenarios[scenarioId] = compactScenarioMetaForStorage(next);
-  safeWriteStore(store);
-  return loadScenarioMeta(scenarioId);
+  return withScenarioMetaLock(scenarioId, () => {
+    const store = safeReadStore();
+    const nextRevision = getScenarioMetaRevision(store.scenarios[scenarioId]) + 1;
+    store.scenarios[scenarioId] = serializeScenarioMetaRecord(next, nextRevision);
+    safeWriteStore(store);
+    notifyScenarioMetaSubscribers(scenarioId);
+    return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
+  });
 }
 
 export function updateScenarioMeta(
   scenarioId: string,
   updater: (current: ScenarioMeta) => ScenarioMeta,
 ): ScenarioMeta {
-  const next = updater(loadScenarioMeta(scenarioId));
-  return saveScenarioMeta(scenarioId, next);
+  return withScenarioMetaLock(scenarioId, () => {
+    const store = safeReadStore();
+    const currentRecord = store.scenarios[scenarioId];
+    const next = updater(hydrateScenarioMetaSnapshot(currentRecord));
+    const nextRevision = getScenarioMetaRevision(currentRecord) + 1;
+    store.scenarios[scenarioId] = serializeScenarioMetaRecord(next, nextRevision);
+    safeWriteStore(store);
+    notifyScenarioMetaSubscribers(scenarioId);
+    return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
+  });
 }
 
 export function canUseCard(meta: ScenarioMeta, cardId: GameplayCardId, currentRound: number) {

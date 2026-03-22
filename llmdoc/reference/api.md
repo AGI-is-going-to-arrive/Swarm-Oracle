@@ -81,6 +81,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > 当前口径：
 > - 主模式 `ResultView / SimulationView` 优先使用 `ReplayArtifact` 生成 `/result/replay?share=...` 与 `/sim/replay?share=...`
 > - 如果后端短链创建失败，前端会回退到本地 token
+> - 当前 share 读路径会先校验 `scenario_result_v1 / simulation_view_v1` payload 结构；若 payload 非法，前端会直接拒绝 hydrate，而不是继续把坏数据灌进页面状态
 
 ### Predictions & Leaderboard (P3-B)
 
@@ -137,6 +138,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演档案概要 | — | CampaignProfileResponse |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取题材熟练度列表 | — | CampaignMasteryResponse[] |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁徽章 | — | CampaignBadgeResponse[] |
+| `GET /api/campaign/challenges/rotation` | GET | 返回首页 challenge 定义轮换；当前会直接给出 `today_challenge + weekly_challenges[]`，供首页决定今日题目和本周赛道 | `?local_date=2026-03-17&weekly_count=3` | `{"local_date", "week_key", "today_challenge", "weekly_challenges[]"}` |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 查询指定题材在调用方本地日期上的 daily challenge 完成态；供首页把后端真值与本地缓存合并显示 | `?profile_id=governance&local_date=2026-03-17&timezone_offset_minutes=-480` | CampaignDailyChallengeResponse |
 | `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 查询调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 | `?local_date=2026-03-19&timezone_offset_minutes=-480` | `{"user_id", "week_start", "week_end", "timezone_offset_minutes", "total_runs", "completed_daily_challenges", "hit_bets", "campaign_score_delta", "best_archive_grade", "top_profile_id", "profile_runs"}` |
 
@@ -156,6 +158,16 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `profile` 返回空摘要（`total_runs = 0`）
 > - `mastery / badges` 返回空数组
 > - `daily-status` 返回 `completed = false`
+>
+> 首页 current-truth 现在分三层读取 challenge 相关数据：
+> - `GET /api/campaign/challenges/rotation`：给出 today / weekly challenge 的定义与轮换结果
+> - `GET /api/campaign/profile/{user_id}/daily-status`：给出某个题材在调用方本地日期上的完成态
+> - `GET /api/campaign/profile/{user_id}/weekly-summary`：给出本地周窗口内的 runs / score / top profile 聚合态
+>
+> `GET /api/campaign/challenges/rotation` 的边界行为：
+> - `200 OK`：返回 `local_date` 对应的 `today_challenge` 与 `weekly_challenges`
+> - `400 Bad Request`：`local_date` 不是合法 `YYYY-MM-DD`
+> - `weekly_count` 当前会被后端 clamp 到合法范围，不会因为传大值直接报错
 >
 > `GET /api/campaign/profile/{user_id}/daily-status` 的边界行为：
 > - `200 OK`：返回该题材在调用方本地日期上的完成态；若当日没有完成记录，会返回 `completed = false`，而不是报错。
@@ -350,6 +362,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 正常 `WebSocketDisconnect` 会清理连接
 > - `receive_text()` 抛出的非正常异常也会清理连接，然后继续向上抛错
 > - 空闲期还会发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露；客户端收到这类事件后可以直接忽略
+> - `scenario` 广播当前已改成并行发送；单个慢连接不会再阻塞同场景其它连接收消息，但发送失败的 dead connection 仍会在同一轮 broadcast 后被清理
 
 > `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 wrapper / instruction：
 > - 中文 scenario 继续使用中文 wrapper

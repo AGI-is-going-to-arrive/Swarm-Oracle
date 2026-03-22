@@ -31,6 +31,7 @@ import {
   getScenarioArchiveKeyMoments,
   loadScenarioMeta,
   setBranchCommitment,
+  subscribeScenarioMeta,
 } from '../lib/scenarioMeta';
 import { copyText } from '../lib/copyText';
 import {
@@ -374,10 +375,12 @@ export function SimulationView() {
       if (replayShareId) {
         const artifact = await getReplayArtifact(replayShareId).catch(() => null);
         if (cancelled || !artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) return;
-        const { normalizeSimulationReplayPayload } = await loadSimulationReplayHelpers();
-        const replay = normalizeSimulationReplayPayload(
-          artifact.payload as unknown as SimulationReplayPayload,
-        );
+        const { coerceSimulationReplayPayload } = await loadSimulationReplayHelpers();
+        const replay = coerceSimulationReplayPayload(artifact.payload);
+        if (!replay) {
+          console.warn('[SimulationView] Ignoring invalid replay artifact payload');
+          return;
+        }
         setReplayPayload(replay);
         setScenario(replay.scenario);
         setBackendDirectorState(replay.scenario.director_state ?? null);
@@ -447,6 +450,11 @@ export function SimulationView() {
   const refreshLocalMeta = useCallback(() => {
     setLocalMetaRevision((current) => current + 1);
   }, []);
+
+  useEffect(() => {
+    if (!id || isReplayMode) return;
+    return subscribeScenarioMeta(id, refreshLocalMeta);
+  }, [id, isReplayMode, refreshLocalMeta]);
 
   useEffect(() => {
     if (isReplayMode) return;

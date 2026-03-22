@@ -59,14 +59,22 @@ class WSManager:
 
     async def broadcast(self, scenario_id: str, event: dict):
         """Send an event to all connected clients for a scenario."""
-        dead = []
         # Copy list to avoid mutation-during-iteration under concurrent broadcasts
         connections = list(self._connections.get(scenario_id, []))
-        for ws in connections:
-            try:
-                await ws.send_text(json.dumps(event, ensure_ascii=False))
-            except Exception:
-                dead.append(ws)
+        if not connections:
+            return
+
+        payload = json.dumps(event, ensure_ascii=False)
+        results = await asyncio.gather(
+            *(ws.send_text(payload) for ws in connections),
+            return_exceptions=True,
+        )
+
+        dead = [
+            ws
+            for ws, result in zip(connections, results, strict=True)
+            if isinstance(result, Exception)
+        ]
         for ws in dead:
             self.disconnect(scenario_id, ws)
 
@@ -85,7 +93,10 @@ class WSManager:
         *,
         interval_seconds: float = WS_HEARTBEAT_INTERVAL_SECONDS,
     ) -> None:
-        """Periodically probe idle connections so dead sockets are cleaned without client traffic."""
+        """Periodically probe idle connections.
+
+        This surfaces dead sockets during idle periods without waiting for client traffic.
+        """
         try:
             while True:
                 await asyncio.sleep(interval_seconds)

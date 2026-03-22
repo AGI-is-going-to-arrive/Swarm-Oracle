@@ -112,3 +112,9 @@ export const EventBridge = new EventBridgeClass();
 export function dispatchVizEvent(type: string, data: Record<string, unknown>): void {
   EventBridgeClass.dispatch(type, data);
 }
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    EventBridge.stop();
+  });
+}

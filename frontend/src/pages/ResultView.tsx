@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -34,6 +34,7 @@ import {
   loadScenarioMeta,
   mergeScenarioArchive,
   parseScenarioMoment,
+  subscribeScenarioMeta,
   type ScenarioMeta,
 } from '../lib/scenarioMeta';
 import { hasScenarioDirectorAuthority } from '../lib/scenarioDirectorState';
@@ -218,6 +219,7 @@ export default function ResultView() {
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
   const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
+  const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const isReplayMode = Boolean(replayPayload);
   const hasUnscored = predictions.some((p) => p.score == null);
   const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
@@ -233,6 +235,14 @@ export default function ResultView() {
     || replayPayload?.isDailyChallenge,
   );
   const challengeProgress = challengeMatch?.progress ?? null;
+  const refreshLocalMeta = useCallback(() => {
+    setLocalMetaRevision((current) => current + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!id || isReplayMode) return;
+    return subscribeScenarioMeta(id, refreshLocalMeta);
+  }, [id, isReplayMode, refreshLocalMeta]);
 
   useEffect(() => {
     let cancelled = false;
@@ -248,9 +258,12 @@ export default function ResultView() {
           return;
         }
         const { normalizeScenarioResultReplayPayload } = await loadScenarioReplayHelpers();
-        const replay = normalizeScenarioResultReplayPayload(
-          artifact.payload as unknown as ScenarioResultReplayPayload,
-        );
+        const replay = normalizeScenarioResultReplayPayload(artifact.payload);
+        if (!replay) {
+          setError(replayInvalidMessage);
+          setLoading(false);
+          return;
+        }
         setReplayPayload(replay);
         setStoryData(replay.storyData);
         setScenario(replay.scenario);
@@ -572,7 +585,7 @@ export default function ResultView() {
       return null;
     }
     return loadScenarioMeta(id);
-  }, [derivedScenarioMeta, id, replayPayload?.scenarioMeta]);
+  }, [derivedScenarioMeta, id, localMetaRevision, replayPayload?.scenarioMeta]);
   const storedScenarioMeta = derivedScenarioMeta ?? replayPayload?.scenarioMeta ?? fallbackScenarioMeta;
   const inferredProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),

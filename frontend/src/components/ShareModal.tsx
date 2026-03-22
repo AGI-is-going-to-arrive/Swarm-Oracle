@@ -41,6 +41,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
   const [platformName, setPlatformName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [copyError, setCopyError] = useState('');
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
@@ -49,6 +50,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     setActivePlatform(platform);
     setCopy('');
     setError('');
+    setCopyError('');
     setStatus('loading');
     setLoading(true);
     setCopied(false);
@@ -72,22 +74,19 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
   }, [scenarioId, loading, shareContext, isZh, t]);
 
   const handleCopy = useCallback(async () => {
+    setCopyError('');
     try {
+      if (typeof navigator.clipboard?.writeText !== 'function') {
+        throw new Error('clipboard-unavailable');
+      }
       await navigator.clipboard.writeText(copy);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
-      const ta = document.createElement('textarea');
-      ta.value = copy;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopied(false);
+      setCopyError(t('share.copy_error'));
     }
-  }, [copy]);
+  }, [copy, t]);
 
   const activePlatformLabel = PLATFORMS.find(p => p.key === activePlatform);
 
@@ -100,6 +99,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
       loading,
       error: error || null,
       copied,
+      copy_error: copyError || null,
       has_copy: Boolean(copy),
       copy_length: copy.length,
       share_context: shareContext ?? null,
@@ -109,7 +109,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, error, loading, onAutomationStateChange, platformName, shareContext, status]);
+  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status]);
 
   return (
     <div className="share-overlay" onClick={onClose}>
@@ -185,6 +185,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
                   {copied ? t('share.copied') : t('share.copy_btn')}
                 </button>
               </div>
+              {copyError && <p className="share-modal__error-text">⚠️ {copyError}</p>}
               <pre className="share-result-text">{copy}</pre>
             </div>
           )}

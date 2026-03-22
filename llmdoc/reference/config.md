@@ -108,3 +108,9 @@
 | `HOST` | str | `0.0.0.0` | 监听地址 |
 | `PORT` | int | 18927 | 监听端口 |
 | `CORS_ORIGINS` | list[str] | `["http://localhost:5173", "http://localhost:9528", "http://localhost:18928"]` | CORS允许的源；Docker compose 运行时通常会额外补 `http://127.0.0.1` 与 `http://127.0.0.1:18928` |
+
+> `CORS_ORIGINS` 当前只接受显式 origin 列表：
+> - 不能为空
+> - 不能包含 `"*"`
+>
+> 原因是 app 当前启用了 `allow_credentials=True`；继续允许 wildcard 会让配置口径自相矛盾。生产环境应继续维护明确白名单。

@@ -16,6 +16,7 @@ import {
   encodeScenarioReplayToken,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
+import { encodeReplayEnvelope } from './replayCodec';
 
 const scenario: Scenario = {
   id: 'scenario-1',
@@ -185,7 +186,14 @@ describe('scenarioReplay helpers', () => {
 
   it('round-trips a scenario result replay token', async () => {
     const token = await encodeScenarioReplayToken(replayPayload);
-    await expect(decodeScenarioReplayToken(token)).resolves.toEqual(replayPayload);
+    const decoded = await decodeScenarioReplayToken(token);
+
+    expect(decoded?.scenario.id).toBe(replayPayload.scenario.id);
+    expect(decoded?.storyData.scenario_id).toBe(replayPayload.storyData.scenario_id);
+    expect(decoded?.agents).toHaveLength(replayPayload.agents.length);
+    expect(decoded?.predictions).toHaveLength(replayPayload.predictions.length);
+    expect(decoded?.scenarioMeta.director.remainingPoints).toBe(2);
+    expect(decoded?.scenarioMeta.archive.profileId).toBe('law');
   });
 
   it('drops authority-backed runtime state when replay snapshot already carries authority', () => {
@@ -221,5 +229,17 @@ describe('scenarioReplay helpers', () => {
   it('builds a replay route url', async () => {
     const url = await buildScenarioReplayUrl('https://example.com/', replayPayload);
     expect(url).toContain('/result/replay?replay=');
+  });
+
+  it('rejects malformed scenario replay payloads', async () => {
+    const token = await encodeReplayEnvelope('scenario_result_v1', {
+      ...replayPayload,
+      storyData: {
+        ...replayPayload.storyData,
+        branches: [42],
+      },
+    });
+
+    await expect(decodeScenarioReplayToken(token)).resolves.toBeNull();
   });
 });

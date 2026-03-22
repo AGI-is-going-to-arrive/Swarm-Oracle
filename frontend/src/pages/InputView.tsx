@@ -10,6 +10,7 @@ import { useSimulationStore } from '../stores/simulationStore';
 import {
   createDebate,
   getCampaignBadges,
+  getCampaignChallengeRotation,
   getCampaignDailyChallengeStatus,
   getCampaignMastery,
   getCampaignProfile,
@@ -19,11 +20,7 @@ import {
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import {
   challengeDateKey,
-  challengeWeekKey,
-  getChallengeQuestion,
   getChallengeProgress,
-  getTodayChallenge,
-  getWeeklyChallenges,
   markChallengeStarted,
   resolveChallengeProgress,
 } from '../lib/dailyChallenge';
@@ -38,9 +35,11 @@ import {
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
 } from '../lib/gameplayProfileSummary';
+import type { GameplayProfileId } from '../components/gameplayCards';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import type {
   CampaignBadge,
+  CampaignChallengeRotation,
   CampaignDailyChallengeStatus,
   CampaignMastery,
   CampaignProfileSummary,
@@ -58,6 +57,34 @@ function LoadingStep({ label, active, done }: { label: string; active: boolean; 
       <span className="loading-step__label">{label}</span>
     </div>
   );
+}
+
+function normalizeChallengeDefinition(
+  challenge: CampaignChallengeRotation['today_challenge'],
+): {
+  id: string;
+  question: string;
+  questionEn: string;
+  subtitleZh: string;
+  subtitleEn: string;
+  profileId: GameplayProfileId;
+  rounds: number;
+  numAgents: number;
+  mode: 'blackboard' | 'raw';
+  visualizationEnabled: boolean;
+} {
+  return {
+    id: challenge.id,
+    question: challenge.question,
+    questionEn: challenge.question_en ?? challenge.question,
+    subtitleZh: challenge.subtitle_zh,
+    subtitleEn: challenge.subtitle_en,
+    profileId: challenge.profile_id as GameplayProfileId,
+    rounds: challenge.rounds,
+    numAgents: challenge.num_agents,
+    mode: challenge.mode,
+    visualizationEnabled: challenge.visualization_enabled,
+  };
 }
 
 export function InputView() {
@@ -91,21 +118,33 @@ export function InputView() {
   const reset = useSimulationStore((s) => s.reset);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
-  const todayChallenge = getTodayChallenge();
-  const todayChallengeQuestion = getChallengeQuestion(todayChallenge, isZh);
-  const cachedChallengeProgress = getChallengeProgress(todayChallenge.id);
-  const challengeProfileLabel = getGameplayProfileLabel(todayChallenge.profileId, isZh);
-  const challengeHooks = getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2);
-  const weeklyChallenges = getWeeklyChallenges();
+  const localDate = challengeDateKey();
   const [campaignProfile, setCampaignProfile] = useState<CampaignProfileSummary | null>(null);
   const [campaignMastery, setCampaignMastery] = useState<CampaignMastery[]>([]);
   const [campaignBadges, setCampaignBadges] = useState<CampaignBadge[]>([]);
   const [campaignDailyStatus, setCampaignDailyStatus] = useState<CampaignDailyChallengeStatus | null>(null);
   const [campaignWeeklySummary, setCampaignWeeklySummary] = useState<CampaignWeeklySummary | null>(null);
+  const [campaignChallengeRotation, setCampaignChallengeRotation] = useState<CampaignChallengeRotation | null>(null);
   const [sharedChallengeBanner, setSharedChallengeBanner] = useState<{
     question: string;
     profileId?: string | null;
   } | null>(null);
+  const todayChallenge = campaignChallengeRotation
+    ? normalizeChallengeDefinition(campaignChallengeRotation.today_challenge)
+    : null;
+  const weeklyChallenges = campaignChallengeRotation
+    ? campaignChallengeRotation.weekly_challenges.map(normalizeChallengeDefinition)
+    : [];
+  const todayChallengeQuestion = todayChallenge
+    ? (isZh ? todayChallenge.question : todayChallenge.questionEn)
+    : '';
+  const cachedChallengeProgress = todayChallenge ? getChallengeProgress(todayChallenge.id) : null;
+  const challengeProfileLabel = todayChallenge
+    ? getGameplayProfileLabel(todayChallenge.profileId, isZh)
+    : null;
+  const challengeHooks = todayChallenge
+    ? getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2)
+    : [];
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -230,6 +269,21 @@ export function InputView() {
   useEffect(() => {
     let cancelled = false;
 
+    const loadChallengeRotation = async () => {
+      const rotation = await getCampaignChallengeRotation(localDate, 3).catch(() => null);
+      if (cancelled) return;
+      setCampaignChallengeRotation(rotation);
+    };
+
+    void loadChallengeRotation();
+    return () => {
+      cancelled = true;
+    };
+  }, [localDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     const loadCampaign = async () => {
       const profile = await getCampaignProfile(directorIdentity.userId).catch(() => null);
       if (!profile) {
@@ -246,15 +300,17 @@ export function InputView() {
       const [mastery, badges, dailyStatus, weeklySummary] = await Promise.all([
         getCampaignMastery(directorIdentity.userId).catch(() => [] as CampaignMastery[]),
         getCampaignBadges(directorIdentity.userId).catch(() => [] as CampaignBadge[]),
-        getCampaignDailyChallengeStatus(
-          directorIdentity.userId,
-          todayChallenge.profileId,
-          challengeDateKey(),
-          new Date().getTimezoneOffset(),
-        ).catch(() => null),
+        todayChallenge
+          ? getCampaignDailyChallengeStatus(
+              directorIdentity.userId,
+              todayChallenge.profileId,
+              localDate,
+              new Date().getTimezoneOffset(),
+            ).catch(() => null)
+          : Promise.resolve(null),
         getCampaignWeeklySummary(
           directorIdentity.userId,
-          challengeDateKey(),
+          localDate,
           new Date().getTimezoneOffset(),
         ).catch(() => null),
       ]);
@@ -270,9 +326,11 @@ export function InputView() {
     return () => {
       cancelled = true;
     };
-  }, [directorIdentity.userId, todayChallenge.profileId]);
+  }, [directorIdentity.userId, localDate, todayChallenge?.profileId]);
 
-  const dailyMastery = campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null;
+  const dailyMastery = todayChallenge
+    ? (campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null)
+    : null;
   const topMasteries = [...campaignMastery]
     .sort((left, right) => (
       right.campaign_score - left.campaign_score
@@ -448,6 +506,7 @@ export function InputView() {
   };
 
   const handleStartChallenge = async () => {
+    if (!todayChallenge) return;
     if (todayChallengeProgress?.scenarioId) {
       navigate(`/sim/${todayChallengeProgress.scenarioId}`);
       return;
@@ -515,23 +574,25 @@ export function InputView() {
               betting_hit: todayChallengeProgress.bettingHit ?? null,
             }
           : null,
-        daily_challenge: {
-          challenge_id: todayChallenge.id,
-          profile_id: todayChallenge.profileId,
-          question: todayChallengeQuestion,
-          subtitle: isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn,
-          profile_label: challengeProfileLabel,
-          hooks: challengeHooks,
-          hook_count: challengeHooks.length,
-          mastery_level: dailyMastery?.level ?? 0,
-          score_to_next_level: dailyMastery?.score_to_next_level ?? null,
-          action_state: dailyChallengeActionState,
-          progress_status: dailyChallengeProgressStatus,
-          completed: Boolean(todayChallengeProgress?.completed),
-          scenario_id: todayChallengeProgress?.scenarioId ?? null,
-        },
+        daily_challenge: todayChallenge
+          ? {
+              challenge_id: todayChallenge.id,
+              profile_id: todayChallenge.profileId,
+              question: todayChallengeQuestion,
+              subtitle: isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn,
+              profile_label: challengeProfileLabel,
+              hooks: challengeHooks,
+              hook_count: challengeHooks.length,
+              mastery_level: dailyMastery?.level ?? 0,
+              score_to_next_level: dailyMastery?.score_to_next_level ?? null,
+              action_state: dailyChallengeActionState,
+              progress_status: dailyChallengeProgressStatus,
+              completed: Boolean(todayChallengeProgress?.completed),
+              scenario_id: todayChallengeProgress?.scenarioId ?? null,
+            }
+          : null,
         weekly_challenge: {
-          week_key: challengeWeekKey(),
+          week_key: campaignChallengeRotation?.week_key ?? null,
           challenge_count: weeklyChallenges.length,
           total_runs: campaignWeeklySummary?.total_runs ?? null,
           campaign_score_delta: campaignWeeklySummary?.campaign_score_delta ?? null,
@@ -579,10 +640,10 @@ export function InputView() {
     testStatus,
     todayChallengeProgress,
     vizEnabled,
-    todayChallenge.id,
-    todayChallenge.profileId,
-    todayChallenge.subtitleEn,
-    todayChallenge.subtitleZh,
+    todayChallenge?.id,
+    todayChallenge?.profileId,
+    todayChallenge?.subtitleEn,
+    todayChallenge?.subtitleZh,
     todayChallengeQuestion,
     challengeProfileLabel,
     challengeHooks,
@@ -671,6 +732,7 @@ export function InputView() {
             </section>
           )}
 
+          {todayChallenge && (
           <section className="daily-challenge-card">
             <img
               className="daily-challenge-card__art"
@@ -756,14 +818,16 @@ export function InputView() {
                   : t('home.daily_challenge_start')}
             </button>
           </section>
+          )}
 
+          {campaignChallengeRotation && (
           <section className="weekly-challenge-card">
             <div className="weekly-challenge-card__copy">
               <span className="daily-challenge-card__eyebrow">
                 {t('home.weekly_challenge_label')}
               </span>
               <strong className="daily-challenge-card__title">
-                {t('home.weekly_challenge_title', { week: challengeWeekKey() })}
+                {t('home.weekly_challenge_title', { week: campaignChallengeRotation.week_key })}
               </strong>
               <span className="daily-challenge-card__subtitle">
                 {campaignWeeklySummary
@@ -798,6 +862,7 @@ export function InputView() {
               </div>
             </div>
           </section>
+          )}
 
           <section className="weekly-challenge-card weekly-challenge-card--growth">
             <div className="weekly-challenge-card__copy">

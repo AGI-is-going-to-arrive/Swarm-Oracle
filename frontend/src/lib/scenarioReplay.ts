@@ -16,6 +16,7 @@ import {
   encodeReplayEnvelope,
   normalizeReplayOrigin,
 } from './replayCodec';
+import { coerceSimulationReplayPayload } from './simulationReplay';
 
 const REPLAY_QUERY_KEY = 'replay';
 const REPLAY_KIND = 'scenario_result_v1';
@@ -34,6 +35,100 @@ export interface ScenarioResultReplayPayload {
 export interface CompactScenarioMetaForReplayOptions {
   stripDirectorAuthority?: boolean;
   stripGameplayAuthority?: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNullableString(value: unknown): boolean {
+  return value == null || typeof value === 'string';
+}
+
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isStoryBranchPayload(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string'
+    && typeof value.title === 'string'
+    && isFiniteNumber(value.probability)
+    && typeof value.status === 'string'
+    && typeof value.story === 'string'
+    && typeof value.insight === 'string'
+    && isStringArray(value.key_moments)
+    && isNullableString(value.parent_branch_id)
+    && typeof value.fork_reason === 'string'
+  );
+}
+
+function isStoryDataPayload(value: unknown): value is StoryData {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.scenario_id === 'string'
+    && typeof value.question === 'string'
+    && typeof value.status === 'string'
+    && Array.isArray(value.branches)
+    && value.branches.every(isStoryBranchPayload)
+  );
+}
+
+function isAgentInfoPayload(value: unknown): value is AgentInfo {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.role === 'string'
+    && typeof value.tier === 'string'
+    && typeof value.emotion === 'string'
+  );
+}
+
+function isPredictionPayload(value: unknown): value is PredictionInfo {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string'
+    && typeof value.scenario_id === 'string'
+    && typeof value.user_name === 'string'
+    && typeof value.prediction_text === 'string'
+    && isFiniteNumber(value.confidence)
+    && (value.score === null || value.score === undefined || isFiniteNumber(value.score))
+    && isNullableString(value.score_reason)
+    && typeof value.created_at === 'string'
+  );
+}
+
+function isCampaignScenarioSummaryPayload(value: unknown): value is CampaignScenarioSummary | null | undefined {
+  if (value == null) return true;
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.scenario_id === 'string'
+    && typeof value.profile_id === 'string'
+    && typeof value.archive_grade === 'string'
+    && typeof value.profile_resonance === 'string'
+    && typeof value.completed_daily_challenge === 'boolean'
+    && isFiniteNumber(value.campaign_score_delta)
+  );
+}
+
+function isCampaignFinalizePayload(value: unknown): value is CampaignFinalizeResult | null | undefined {
+  if (value == null) return true;
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.scenario_id === 'string'
+    && typeof value.already_finalized === 'boolean'
+    && isFiniteNumber(value.campaign_score_delta)
+    && isRecord(value.profile)
+    && isRecord(value.mastery)
+    && Array.isArray(value.newly_unlocked_badges)
+    && Array.isArray(value.badges)
+  );
 }
 
 function compactReplayObjectives(meta: ScenarioMeta['objectives']): ScenarioMeta['objectives'] {
@@ -91,11 +186,41 @@ export function compactScenarioMetaForReplay(
 }
 
 export function normalizeScenarioResultReplayPayload(
-  payload: ScenarioResultReplayPayload,
-): ScenarioResultReplayPayload {
+  payload: unknown,
+): ScenarioResultReplayPayload | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const simulationPayload = coerceSimulationReplayPayload({
+    scenario: payload.scenario,
+    scenarioMeta: payload.scenarioMeta,
+  });
+  if (!simulationPayload) {
+    return null;
+  }
+  if (
+    !isStoryDataPayload(payload.storyData)
+    || !Array.isArray(payload.agents)
+    || !payload.agents.every(isAgentInfoPayload)
+    || !Array.isArray(payload.predictions)
+    || !payload.predictions.every(isPredictionPayload)
+    || !isCampaignScenarioSummaryPayload(payload.campaignScenarioSummary)
+    || !isCampaignFinalizePayload(payload.campaignSummary)
+    || (payload.isDailyChallenge !== undefined && typeof payload.isDailyChallenge !== 'boolean')
+  ) {
+    return null;
+  }
+
   return {
-    ...payload,
-    scenarioMeta: hydrateScenarioMetaSnapshot(payload.scenarioMeta),
+    scenario: simulationPayload.scenario,
+    storyData: payload.storyData,
+    agents: payload.agents,
+    predictions: payload.predictions,
+    scenarioMeta: hydrateScenarioMetaSnapshot(simulationPayload.scenarioMeta),
+    campaignScenarioSummary: (payload.campaignScenarioSummary ?? null) as CampaignScenarioSummary | null,
+    campaignSummary: (payload.campaignSummary ?? null) as CampaignFinalizeResult | null,
+    isDailyChallenge: payload.isDailyChallenge as boolean | undefined,
   };
 }
 
@@ -104,7 +229,8 @@ export async function encodeScenarioReplayToken(payload: ScenarioResultReplayPay
 }
 
 export async function decodeScenarioReplayToken(token: string): Promise<ScenarioResultReplayPayload | null> {
-  return decodeReplayEnvelope<ScenarioResultReplayPayload>(token, REPLAY_KIND);
+  const payload = await decodeReplayEnvelope<unknown>(token, REPLAY_KIND);
+  return normalizeScenarioResultReplayPayload(payload);
 }
 
 export async function buildScenarioReplayUrl(
@@ -120,6 +246,5 @@ export async function readScenarioReplayPayload(
 ): Promise<ScenarioResultReplayPayload | null> {
   const token = params.get(REPLAY_QUERY_KEY)?.trim();
   if (!token) return null;
-  const payload = await decodeScenarioReplayToken(token);
-  return payload ? normalizeScenarioResultReplayPayload(payload) : null;
+  return decodeScenarioReplayToken(token);
 }

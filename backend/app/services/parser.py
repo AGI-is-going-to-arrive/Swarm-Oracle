@@ -543,10 +543,11 @@ async def parse_question(
         logger.warning("LLM returned %d agents, clamping to %d", len(result["agents"]), max_agents)
         result["agents"] = result["agents"][:max_agents]
 
-    # Small underfills are especially visible in the UI because the user explicitly
+    # Underfills are especially visible in the UI because the user explicitly
     # asked for a concrete agent count. Top them up with deterministic extras so the
-    # gameplay surface matches the requested size.
-    if len(result["agents"]) < requested_agents and requested_agents <= 12:
+    # gameplay surface matches the requested size even when the LLM keeps returning
+    # too few agents after the retry path.
+    if len(result["agents"]) < requested_agents:
         logger.warning(
             "Parser still under-filled after retry: got %d, requested %d. Synthesizing extras.",
             len(result["agents"]), requested_agents,

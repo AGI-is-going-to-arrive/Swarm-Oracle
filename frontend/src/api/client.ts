@@ -8,7 +8,7 @@ import type {
   RetrospectiveInterventionResponse, BatchInterventionPayload, BatchInterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
-  CampaignBadge, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
+  CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
 
@@ -448,6 +448,17 @@ export async function getCampaignDailyChallengeStatus(
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
   return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`);
+}
+
+export async function getCampaignChallengeRotation(
+  localDate: string,
+  weeklyCount = 3,
+): Promise<CampaignChallengeRotation> {
+  const params = new URLSearchParams({
+    local_date: localDate,
+    weekly_count: String(weeklyCount),
+  });
+  return request(`/campaign/challenges/rotation?${params.toString()}`);
 }
 
 export async function getCampaignWeeklySummary(

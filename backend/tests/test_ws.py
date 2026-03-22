@@ -1,5 +1,6 @@
 """Tests for app.api.ws — WebSocket manager."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -116,6 +117,30 @@ class TestWSManager:
         await mgr.broadcast("nonexistent", {"type": "test"})
 
     @pytest.mark.asyncio
+    async def test_broadcast_sends_to_clients_concurrently(self):
+        """Slow clients should not serialize the entire fanout."""
+        mgr = WSManager()
+        active_calls = 0
+        max_active_calls = 0
+
+        async def delayed_send(_: str):
+            nonlocal active_calls, max_active_calls
+            active_calls += 1
+            max_active_calls = max(max_active_calls, active_calls)
+            await asyncio.sleep(0)
+            active_calls -= 1
+
+        ws1 = AsyncMock()
+        ws1.send_text.side_effect = delayed_send
+        ws2 = AsyncMock()
+        ws2.send_text.side_effect = delayed_send
+        mgr._connections["s1"].extend([ws1, ws2])
+
+        await mgr.broadcast("s1", {"type": "test"})
+
+        assert max_active_calls == 2
+
+    @pytest.mark.asyncio
     async def test_broadcast_dead_connection_cleanup(self):
         """Dead connections should be cleaned up during broadcast."""
         mgr = WSManager()
@@ -202,6 +227,33 @@ class TestWSManagerConcurrency:
         sent2 = json.loads(ws2.send_text.call_args[0][0])
         assert sent1["type"] == "event1"
         assert sent2["type"] == "event2"
+
+    @pytest.mark.asyncio
+    async def test_broadcast_does_not_block_fast_connections_on_slow_one(self):
+        """A slow socket should not delay delivery to faster peers."""
+        mgr = WSManager()
+        slow_started = asyncio.Event()
+        slow_release = asyncio.Event()
+        fast_sent = asyncio.Event()
+
+        class SlowSocket:
+            async def send_text(self, _payload: str) -> None:
+                slow_started.set()
+                await slow_release.wait()
+
+        class FastSocket:
+            async def send_text(self, _payload: str) -> None:
+                fast_sent.set()
+
+        mgr._connections["s1"].extend([SlowSocket(), FastSocket()])
+
+        task = asyncio.create_task(mgr.broadcast("s1", {"type": "event"}))
+        await slow_started.wait()
+        await asyncio.sleep(0)
+        assert fast_sent.is_set()
+
+        slow_release.set()
+        await task
 
     @pytest.mark.asyncio
     async def test_rapid_connect_disconnect(self):

@@ -26,13 +26,13 @@ api/scenarios.py ──► api/schemas.py (Pydantic 模型)
     │       ├── scene_selector.py (双签名 → 30 场景语义池；原始题面优先，含 `law_court_variant` / `faith_temple_variant` / `switchboard_forum_variant`)
     │       └── card_events.py (卡牌事件触发 + 可视化映射；卡牌定义由 `services/gameplay_contract.py` 装载 shared contract)
     │
-api/campaign.py ──► services/campaign.py (Track A / Phase A1 + A3 daily-status)
+api/campaign.py ──► services/campaign.py / daily_challenges.py (Track A / Phase A1 + challenge rotation)
     │
 api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.py (Track D)
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter
     │
@@ -189,6 +189,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **语言检测** (P9): 调用 `lang_detect.detect_language()` 检测输入语言，存入 `result["_language"]` 供下游服务使用
 - **分层模式** (P3-A): `PARSE_PROMPT_HIERARCHICAL` 生成 `groups[]` 分组信息，含 fallback 自动分组逻辑
 - **坏 JSON / 缺字段兜底**: 若 parse 阶段的 `llm_call_json()` 返回不可恢复坏 JSON，或返回了结构不完整的 payload（例如缺少 `agents` / `setting`），parser 当前都会退到确定性 fallback 结构，而不是直接让整条 `create scenario -> simulate` 链路中断；fallback 结果仍会按 `requested_agents` 补足最小角色集，并保留同样的 rounds / sensitivity 边界
+- **人数补足**: 如果 parser 在重试后仍少吐角色，当前会继续用确定性 extras 把 agent 数补到 `requested_agents`，不再只在 `requested_agents <= 12` 时才补齐
 - **fallback rounds**: fallback 轮数当前不再写死 `10`；会优先使用调用方给的默认轮数，再按 `max_rounds` 做 clamp
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
 
@@ -269,6 +270,18 @@ alembic/ ──► Alembic 数据库迁移框架
 - **默认名策略**: finalize 时若 `user_name` 为空，当前会按 scenario 语言回退到匿名导演显示名，而不是固定中文
 - **徽章解锁**: `badge` 当前通过 SQLite `on_conflict_do_nothing` 风格的幂等写入保证唯一性；重复命中不会再靠“先查后插”判断
 - **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
+
+### `daily_challenges.py` (≈190行) — 每日/每周挑战轮换服务 (**NEW**)
+- **职责**: 提供首页 today / weekly challenge 的定义与轮换口径，不再让前端自己维护静态 challenge catalog
+- **关键函数**:
+  - `challenge_week_key(local_date)` — 计算调用方本地周窗口 key
+  - `get_today_challenge_definition(local_date)` — 返回某个本地日期对应的 today challenge 定义
+  - `get_weekly_challenge_definitions(local_date, count)` — 返回本地周窗口下的 featured profiles / challenge 列表
+  - `get_challenge_rotation(local_date, weekly_count)` — 汇总 today + weekly challenge rotation payload
+- **当前口径**:
+  - challenge 定义源头现在在 backend；首页只负责消费 rotation API，不再自己轮换 12 条静态 challenge 题库
+  - `daily-status / weekly-summary` 继续负责 campaign 真值，`challenge rotation` 则负责题目定义和 weekly featured profiles
+  - challenge catalog 目前仍是后端内置数据，不依赖数据库；改 challenge 文案、轮换口径时只需要改 backend 这一处
 
 ### `debate.py` / `debate_prompts.py` / `debate_scoring.py` — Debate Arena 领域服务 (**NEW**)
 - **职责**:
@@ -369,11 +382,12 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/campaign/profile/{user_id}` | GET | 获取导演 campaign 总览 |
 | `GET /api/campaign/profile/{user_id}/mastery` | GET | 获取该导演的题材 mastery 列表 |
 | `GET /api/campaign/profile/{user_id}/badges` | GET | 获取已解锁 badge 列表 |
+| `GET /api/campaign/challenges/rotation` | GET | 返回调用方本地日期下的 today challenge 与 weekly featured challenge 定义；供首页生成 daily / weekly challenge 卡片 |
 | `GET /api/campaign/profile/{user_id}/daily-status` | GET | 获取某个题材在调用方本地日期上的 daily challenge 完成态；内部会先把 SQLite round-trip 的 naive UTC 时间按 UTC 归一后再做本地日期换算 |
 | `GET /api/campaign/profile/{user_id}/weekly-summary` | GET | 获取调用方本地周窗口内的轻量周汇总；供首页的 weekly challenge / director growth Lite 展示 |
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
-> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。`finalize` 若传空 `user_name`，会按场景语言落匿名导演名。
+> 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。`finalize` 若传空 `user_name`，会按场景语言落匿名导演名。`challenges/rotation` 当前只依赖 `local_date` 和可选 `weekly_count`；日期非法时返回 `400`，challenge 定义 payload 里会直接带 `question / question_en / subtitle_zh / subtitle_en / profile_id / rounds / num_agents / mode / visualization_enabled`。
 
 **安全防护**:
 - simulation / debate 当前都同时有进程内 fast path 和 SQLite shared runtime lock；当多个 worker 共用同一个 SQLite 文件时，同一 `scenario_id / debate_id` 不会被重复启动
@@ -409,6 +423,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **事件类型**: `heartbeat`, `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
 - **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里；空闲期还会发送应用层 `heartbeat`，让半断开连接在发送路径上更快暴露并清理
+- **广播语义**: `broadcast()` 当前会先把 payload 序列化一次，再并行 `gather` 发给所有连接；单个慢连接不会再阻塞同一 scenario 的其它连接，但发送异常的 socket 仍会在广播后统一清理
 - **事件类型**:
   - `heartbeat`（客户端可忽略；主要用于 idle keepalive / dead socket cleanup）
   - `status`
@@ -485,6 +500,11 @@ alembic/ ──► Alembic 数据库迁移框架
   - 扩大定向回归：`23 passed, 215 deselected in 3.75s`
   - 全量 backend：`998 passed in 223.31s (0:03:43)`
   - 相关 `ruff check`：通过
+- 本 session 这轮“WS 并行广播 / challenge rotation API”还额外实跑通过：
+  - `python -m pytest tests/test_ws.py -q`：`21 passed in 0.96s`
+  - `python -m ruff check app/api/ws.py tests/test_ws.py`：通过
+  - `python -m pytest tests/test_campaign_api.py -q`：`14 passed in 0.88s`
+  - `python -m ruff check --ignore E501 app/api/campaign.py app/services/daily_challenges.py tests/test_campaign_api.py`：通过
 
 覆盖重心：
 
@@ -502,7 +522,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `test_campaign_service.py`
   - `test_config.py`
   - `test_gameplay_contract_sync.py`
-  - 覆盖 `campaign` router / service 的 finalize 流程、幂等返回、`daily-status` 查询、`scenario summary` 路由、backend-root 路径归一，以及 `card_events.py` 与 `shared/gameplay_contract.v1.json` 的同步约束
+  - 覆盖 `campaign` router / service 的 finalize 流程、幂等返回、`daily-status` / `weekly-summary` 查询、`challenges/rotation` 定义接口、`scenario summary` 路由、backend-root 路径归一，以及 `card_events.py` 与 `shared/gameplay_contract.v1.json` 的同步约束
 - E2E 样本契约回归：
   - `test_e2e_sample_matrix.py`
   - 校验 `frontend/output/e2e/sample_matrix.json` 与 `sample_matrix_variants.json` 的 `scene_theme` 和当前 `select_scene(question)` 保持一致，避免旧样本主题漂移

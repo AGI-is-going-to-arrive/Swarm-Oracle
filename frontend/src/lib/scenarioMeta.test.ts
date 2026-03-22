@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyCardUsage,
@@ -12,6 +12,7 @@ import {
   mergeScenarioArchive,
   placeBet,
   setBranchCommitment,
+  subscribeScenarioMeta,
   updateArchive,
 } from './scenarioMeta';
 
@@ -24,6 +25,9 @@ describe('scenarioMeta gameplay card rules', () => {
         getItem: (key: string) => store.get(key) ?? null,
         setItem: (key: string, value: string) => {
           store.set(key, value);
+        },
+        removeItem: (key: string) => {
+          store.delete(key);
         },
       },
     });
@@ -289,5 +293,117 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(next.objectives.goals).toHaveLength(1);
     expect(next.objectives.goals[0].id).toBe('goal-memory-1');
     expect(loadScenarioMeta(scenarioId).objectives.goals).toEqual([]);
+  });
+
+  it('applies scenario meta updates on top of the latest serialized snapshot', () => {
+    const scenarioId = 'scenario-cross-tab-race';
+    const storageKey = 'swarmoracle:scenario-meta:v1';
+    const backingStore = new Map<string, string>();
+    backingStore.set(storageKey, JSON.stringify({
+      version: 1,
+      scenarios: {
+        [scenarioId]: {
+          _rev: 1,
+          betting: {
+            bets: [
+              {
+                betId: 'bet-1',
+                kind: 'branch_winner',
+                targetId: 'branch-1',
+                targetLabel: 'Open Hearing',
+                confidence: 0.7,
+                userName: 'Archivist',
+                placedAtRound: 2,
+                placedAt: '2026-03-19T00:01:00Z',
+                resolved: false,
+              },
+            ],
+          },
+        },
+      },
+    }));
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => {
+          return backingStore.get(key) ?? null;
+        },
+        setItem: (key: string, value: string) => {
+          backingStore.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backingStore.delete(key);
+        },
+      },
+    });
+
+    const committed = setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    });
+
+    const persisted = JSON.parse(backingStore.get(storageKey) ?? '{"scenarios":{}}').scenarios[scenarioId];
+
+    expect(persisted._rev).toBe(2);
+    expect(committed.commitment.active).toBe(true);
+    expect(committed.commitment.branchId).toBe('branch-9');
+    expect(committed.betting.bets).toHaveLength(1);
+    expect(committed.betting.bets[0]?.betId).toBe('bet-1');
+  });
+
+  it('notifies subscribers when the same scenario changes', () => {
+    const scenarioId = 'scenario-subscribe';
+    const listener = vi.fn();
+    const unsubscribe = subscribeScenarioMeta(scenarioId, listener);
+
+    placeBet(scenarioId, {
+      betId: 'bet-1',
+      kind: 'branch_winner',
+      targetId: 'branch-1',
+      targetLabel: 'Open Hearing',
+      confidence: 0.7,
+      userName: 'Archivist',
+      placedAtRound: 2,
+      placedAt: '2026-03-19T00:01:00Z',
+      resolved: false,
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('ignores scenarioMeta updates from other scenarios', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeScenarioMeta('scenario-a', listener);
+
+    updateArchive('scenario-b', {
+      updatedAt: '2026-03-19T00:05:00Z',
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('recovers from an expired scenarioMeta write lock', () => {
+    const scenarioId = 'scenario-stale-lock';
+    window.localStorage.setItem(
+      `swarmoracle:scenario-meta:v1:lock:${scenarioId}`,
+      JSON.stringify({
+        ownerId: 'other-tab',
+        token: 'stale-token',
+        expiresAt: Date.now() - 1_000,
+      }),
+    );
+
+    const committed = setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    });
+
+    expect(committed.commitment.active).toBe(true);
+    expect(window.localStorage.getItem(`swarmoracle:scenario-meta:v1:lock:${scenarioId}`)).toBeNull();
   });
 });

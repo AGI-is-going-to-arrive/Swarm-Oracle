@@ -210,6 +210,35 @@ def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient)
     assert weekly.json()["profile_runs"] == {}
 
 
+def test_challenge_rotation_endpoint_returns_today_and_weekly_challenges(client: TestClient):
+    response = client.get(
+        "/api/campaign/challenges/rotation",
+        params={
+            "local_date": "2026-03-17",
+            "weekly_count": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["local_date"] == "2026-03-17"
+    assert data["week_key"] == "2026-03-16"
+    assert data["today_challenge"]["id"] == "daily-mythic-pact"
+    assert data["today_challenge"]["profile_id"] == "mythic"
+    assert len(data["weekly_challenges"]) == 3
+
+
+def test_challenge_rotation_endpoint_rejects_invalid_local_date(client: TestClient):
+    response = client.get(
+        "/api/campaign/challenges/rotation",
+        params={
+            "local_date": "not-a-date",
+        },
+    )
+
+    assert response.status_code == 400
+
+
 def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
     response = client.get("/api/campaign/scenario/missing-scenario/summary")
     assert response.status_code == 404

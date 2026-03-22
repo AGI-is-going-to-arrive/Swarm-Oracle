@@ -138,6 +138,7 @@ const TIME_TINTS: Record<string, { color: number; alpha: number }> = {
 
 // ── Phase 4: Performance Constants ──────────────────────
 const WEATHER_POOL_SIZE = 120;   // Max recycled weather particle Graphics
+const AMBIENT_MOTE_POOL_SIZE = 24;
 const VIEWPORT_MARGIN = 40;     // px outside viewport before culling agent
 
 // ── Idle-Wander Constants ───────────────────────────────
@@ -168,7 +169,7 @@ export class WorldScene extends Phaser.Scene {
 
   // Phase 4: Object pools for performance
   private weatherPool: Phaser.GameObjects.Graphics[] = [];
-  private bubblePool: Phaser.GameObjects.Container[] = [];
+  private ambientMotePool: Phaser.GameObjects.Graphics[] = [];
   private pendingSceneTextureLoads: Set<string> = new Set();
   private pendingSpriteTextureLoads: Set<string> = new Set();
 
@@ -437,11 +438,12 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private spawnAmbientMote(w: number, h: number, accent: number): void {
-    const mote = this.add.graphics();
+    const mote = this.acquireAmbientMote();
     const size = 0.5 + Math.random() * 1.5;
     const alpha = 0.1 + Math.random() * 0.2;
     const color = Math.random() > 0.5 ? accent : 0xffffff;
 
+    mote.clear();
     mote.fillStyle(color, alpha);
     mote.fillCircle(0, 0, size);
     if (size > 1) {
@@ -465,11 +467,41 @@ export class WorldScene extends Phaser.Scene {
       duration: 6000 + Math.random() * 4000,
       ease: 'Sine.easeInOut',
       onComplete: () => {
-        mote.destroy();
         const idx = this.ambientMotes.indexOf(mote);
         if (idx >= 0) this.ambientMotes.splice(idx, 1);
+        this.releaseAmbientMote(mote);
       },
     });
+  }
+
+  /** Acquire an ambient mote graphics object from pool or create a new one. */
+  private acquireAmbientMote(): Phaser.GameObjects.Graphics {
+    const pooled = this.ambientMotePool.pop();
+    if (pooled && pooled.scene) {
+      pooled.clear();
+      pooled.setAlpha(1);
+      pooled.setScale(1);
+      pooled.setVisible(true);
+      pooled.setDepth(5);
+      return pooled;
+    }
+    const mote = this.add.graphics();
+    mote.setDepth(5);
+    return mote;
+  }
+
+  /** Return an ambient mote graphics object to the pool. */
+  private releaseAmbientMote(mote: Phaser.GameObjects.Graphics): void {
+    if (!mote.scene) return;
+    mote.clear();
+    mote.setVisible(false);
+    mote.setAlpha(1);
+    mote.setPosition(-100, -100);
+    if (this.ambientMotePool.length < AMBIENT_MOTE_POOL_SIZE) {
+      this.ambientMotePool.push(mote);
+      return;
+    }
+    mote.destroy();
   }
 
   /** Darken a hex color by a factor (0=no change, 1=black). */
@@ -1776,8 +1808,8 @@ export class WorldScene extends Phaser.Scene {
     // 5b. Phase 4: Destroy object pools
     for (const p of this.weatherPool) { if (p.scene) p.destroy(); }
     this.weatherPool = [];
-    for (const b of this.bubblePool) { if (b.scene) b.destroy(); }
-    this.bubblePool = [];
+    for (const m of this.ambientMotePool) { if (m.scene) m.destroy(); }
+    this.ambientMotePool = [];
 
     // 5c. V3: Cleanup ambient motes
     if (this.ambientTimer) {

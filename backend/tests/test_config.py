@@ -53,6 +53,13 @@ def test_settings_cors_origins():
     assert len(s.CORS_ORIGINS) > 0
 
 
+def test_settings_reject_wildcard_cors_origin():
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="cannot contain '\\*'"):
+        Settings(CORS_ORIGINS=["*"])
+
+
 def test_settings_normalize_relative_local_paths(monkeypatch):
     """Relative local paths should resolve against backend root, not cwd."""
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./relative-dev.db")

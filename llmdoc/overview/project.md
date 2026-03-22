@@ -15,18 +15,18 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Branching Timelines | 决策产生平行分支，附概率追踪 |
 | Butterfly Effect | 支持实时、回溯与批量干预；前端当前已有统一干预弹窗闭环；当多个 backend worker 共用同一个 SQLite 文件时，待注入干预也会先落到共享 pending queue，再由模拟主循环按分支 FIFO 消费 |
 | Multi-Ending Comparison | 跨分支比较结局、洞察、关键时刻 |
-| Real-time WebSocket | 实时观看 agent 发言流；`scenario / debate` 两条 WS 当前都会在空闲期发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露并清理 |
+| Real-time WebSocket | 实时观看 agent 发言流；`scenario / debate` 两条 WS 当前都会在空闲期发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露并清理；同场景广播当前也已改成并行发送，单个慢连接不会再拖住其它在线客户端 |
 | Hierarchical Agents (P3-A) | Leader-Worker分层架构，支持千人规模模拟 |
 | Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜；当 `user_name` 留空时，后端会按场景语言回退到匿名预言家 / `Anonymous Predictor`；批量评分接口当前也会显式返回 `attempted / scored / failed / all_failed`，能区分“没有待评分 prediction”和“本次全失败” |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
-| Gameplay Cards | 当前共有 14 张玩法卡：10 张原始导演卡 + 4 张反制卡（`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`）；玩法卡会按题目画像动态推荐，弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件、profile-specific 打法说明，以及常驻 `风险 / 资源` 轨道；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
+| Gameplay Cards | 当前共有 14 张玩法卡：10 张原始导演卡 + 4 张反制卡（`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`）；玩法卡会按题目画像动态推荐，弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件、profile-specific 打法说明，以及常驻 `风险 / 资源` 轨道；目标分支 / 角色 / 来源分支 / 自动文案当前也已收成 `override + derived` 口径，减少 modal 内部级联重算；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
 | Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；前端 `gameplayContract.ts` 直接消费卡牌规则、modal 输入契约与 prompt 语义，后端 `card_events.py` 当前主要消费 card event 映射与 `branching_bonus`，并有同步测试覆盖 |
 | Director Goals & Worldline Commitment | Theater 局内现有最小导演层：2 个短目标、常驻 `风险 / 资源` 轨道、worldline 承诺，以及结果页中的目标完成度 / 承诺命中或落空结算；这批状态当前已后端化到 `Scenario.director_state_json`，并补上 `revision` 版乐观并发控制：前端写入会带上当前 revision，后端若发现 stale 写入会返回 `409`，页面随后会回读最新 authority，而不是静默覆盖 |
-| Gameplay State Authority | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 当前都已后端化到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填 usage log、下注列表与 archive raw，再基于这些真值重算导演点数、卡牌冷却、`mostUsedCard`、`counterplayCardCount` 与 `lastCounterplayCard`；结果页当前也已改成远端 authority 优先，只有远端缺字段时才回退本地 `scenarioMeta`，而且远端只显式带某个 gameplay 分区时，不会顺手清掉其它本地兼容字段；`SimulationView` 当前也只会在 backend `gameplay_state` 仍为空时才把本地 compat 回写后端，一旦远端 `gameplay_state` 已有有效内容，就不再把 stale local `usageLog / bets` 混回 authority 链路；authority 写路径当前已补齐 `revision` 版乐观并发控制，stale PUT 会得到 `409` 并自动刷新最新 authority；同时 `scenarioMeta` 的 localStorage / replay 输入也继续压缩：archive 摘要重复字段、usage-derived director/cooldown 与大部分 replay 冗余状态都不再长期保真，读路径按 usage/bets 现算回补；当 replay snapshot 已自带远端 authority 时，`scenario_result_v1 / simulation_view_v1` 现在还会进一步剔除 authority-backed `cards / bets / branchSnapshots`，只保留最小兼容输入 |
+| Gameplay State Authority | 主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 当前都已后端化到 `Scenario.gameplay_state_json`；前端会优先从远端 `gameplay_state` 回填 usage log、下注列表与 archive raw，再基于这些真值重算导演点数、卡牌冷却、`mostUsedCard`、`counterplayCardCount` 与 `lastCounterplayCard`；结果页当前也已改成远端 authority 优先，只有远端缺字段时才回退本地 `scenarioMeta`，而且远端只显式带某个 gameplay 分区时，不会顺手清掉其它本地兼容字段；`SimulationView` 当前也只会在 backend `gameplay_state` 仍为空时才把本地 compat 回写后端，一旦远端 `gameplay_state` 已有有效内容，就不再把 stale local `usageLog / bets` 混回 authority 链路；authority 写路径当前已补齐 `revision` 版乐观并发控制，stale PUT 会得到 `409` 并自动刷新最新 authority；同时 `scenarioMeta` 的 localStorage / replay 输入也继续压缩：archive 摘要重复字段、usage-derived director/cooldown 与大部分 replay 冗余状态都不再长期保真，写路径还补上了按 `scenarioId` 维度的跨标签写锁与订阅刷新协议，减少同一局多标签页互相覆盖本地缓存；当 replay snapshot 已自带远端 authority 时，`scenario_result_v1 / simulation_view_v1` 现在还会进一步剔除 authority-backed `cards / bets / branchSnapshots`，只保留最小兼容输入 |
 | On-Demand Theater Loading | Theater 现在只会在用户真正切进 Pixel Theater 后，按 idle 时机预热 Phaser；`PhaserGameLoader` 本身已在 Theater 动态边界，且当前会跳过隐藏页面、`prefers-reduced-data`、`saveData`、`2g/slow-2g`，以及低内存 / 低并发设备下的无谓预热；Classic 视图下只有在页面可见、设备允许且用户 hover/focus 到 Theater 切换按钮时，才会轻量预取 loader chunk；`BootScene` 当前只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载；后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载；默认前端构建 / 测试链路当前还会通过 alias 将 `phaser` 指向本地精简入口 `frontend/experiments/phaser-custom/entry.cjs`，把 `phaser` chunk 收口到约 `718 kB / 202 kB gzip`；截图链路也继续拆成 screenshot / GIF 两条 runtime，构建产物从单块 `capture-vendor` 收口到 `capture-html / capture-gif` |
 | Landing Route Summary Split | 首页当前只读取轻量题材摘要 helper（`label / hooks / badge`），不再直接依赖完整玩法策略表；深层玩法 contract / strategy helper 仍由 `gameplayCards` 与导演层链路在后续路由里消费 |
 | Causal Archive | 结果页沉淀玩法记录、下注记录、关键记录、世界线快照与画像摘要；现已包含 `mostUsedCard`、`bettingHit`、`archiveGrade`、`dominantBranchTitle`、`dominantTone`、`directorStyleTag`、`profileResonance`，并会把题材档案前缀写进导出 Markdown 与分享文案；结果页当前会先读取后端 `director_state`、`gameplay_state` 与 `campaign summary`，并以远端 authority 作为展示基线；只有远端缺字段时，才会回退本地 `scenarioMeta` 的兼容内容；如果远端只回某个 gameplay 分区，也只替换那一块，不会误清空无关的本地兼容字段；当前派生出的 archive/objectives 只保留在内存里用于展示，`displayArchive` 与 `displayBranchSnapshots` 会优先按 story/usages/bets/campaign summary 现算；`result / simulation replay` payload 里的 `scenarioMeta` 也继续精简，读路径会在进入 replay 页面时把 usage-derived 状态补回运行态 |
-| Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池现为 12 条，已覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用；题面与副标题都支持 `zh/en`，首页会把后端 `campaign daily-status` 真值与本地缓存合并显示完成态、已用卡数、下注态与题材回响反馈；本轮又补了 `weekly challenge` Lite，首页会显示本周 3 个轮换题材与本地周窗口内的轻量周汇总 |
+| Daily Challenge | 首页每日挑战卡，一键带入题目/轮数/Agent 数/Theater 参数；挑战池仍为 12 条，覆盖治理/帝国/战争/工业/边疆/贸易/法律/信仰/生态/神话/生存/通用，但 today / weekly challenge 定义当前已改由后端 `challenge rotation` API 下发；前端 localStorage 只保留 `started / completed / usedCards / betPlaced` 这类本地进度，并继续把后端 `campaign daily-status` 真值合并成首页完成态、已用卡数、下注态与题材回响反馈 |
 | Director Campaign (Track A) | 导演生涯最小闭环已落地：后端已有 `director_profile / profile_mastery / director_badge_unlock / scenario_campaign_log` 与 `finalize/profile/mastery/badges/daily-status/weekly-summary/scenario/{id}/summary/director-state` API；结果页会在完成后结算并展示本局 campaign 增量、等级与新徽章；首页现还会显示 `director growth` Lite，总结累计 runs、badge 数和 Top mastery；结果页可直接复制分享 challenge 链接，让别人按同题同参数再打一遍；当 `user_name` 留空时，后端会按场景语言回退到匿名导演 / `Anonymous Director` |
 | Debate Arena (Track D) | 已落地独立 Debate domain：`/api/debate` + `/ws/debate/{id}` 后端竖切、首页 `Debate Arena` 入口、`/debate/:id` live 页、`/debate/:id/result` 结果页、结构化押注（`winner / verdict_tone`）、`render_game_to_text()` / `advanceTime(ms)` / `capture_game_screenshot()` 自动化钩子；当前终局裁决已升级为 **LLM hybrid**：后端会优先读取 judge analysis 里的 `adjudication` scorecard，与 deterministic plan 混合后生成最终 `winner / verdict_tone / breakdown`，结果 payload 会显式带 `adjudication_mode`；若 LLM 不可用或输出无效，会退回 deterministic fallback；live / result 顶层现还会返回每阶段 `phase_insights`（`stakes / judge_focus / commentary / confidence_drift`），`debate_verdict` WS 事件也会一起带上这批阶段洞察；结果页会继续返回 `supporting_turns`，分享文案会带 1-2 条关键引文；创建后仍保留短暂 pre-roll 供 live 页下注，但当前只在 `DebateStatus.LIVE + opening/crossfire/rebuttal` 接受新押注，`QUEUED / ERROR / DONE / closing / verdict` 都会拒绝新押注；`counterplay` 现在除了 `phase_score / explanation`，还会显式改写对应阶段的 `phase_insights.commentary`，并同步进入 replay digest 与 share copy；本 session 又把 replay import 的 `phase_insights` 做成持久化保真，同时把 `winner / verdict_tone / turn sequence / phase_insights` 的关键字段收成显式导入校验，坏快照会直接返回 `422`，而不是静默落库 |
 | Portable Replay & Import | 主模式 `ResultView / SimulationView` 与 Debate `DebateResultView` 当前都支持 replay 页面。主模式优先走后端 `ReplayArtifact` 短 `share id`（`/result/replay?share=...`、`/sim/replay?share=...`），失败时再回退到本地 token；Debate 结果页当前使用 `/debate/replay/result?replay=...`。主模式 `scenario_result_v1 / simulation_view_v1` 当前都会先压缩 `scenarioMeta`，当 snapshot 已自带 authority 时还会去掉 authority-backed `cards / bets / branchSnapshots`，并把 `objectives / commitment` 收成更小的 replay 形态；读路径再按 usage/bets 现算回补 usage-derived 状态。三条 replay 页默认都是只读模式，但都支持“导入为本地运行”，把当前快照落成真实本地 scenario / debate 记录；其中 Debate replay import 当前除了保留 `phase_insights`，也会先校验关键枚举和 turn 顺序，再决定是否入库 |
@@ -34,7 +34,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
 | BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model |
-| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本 |
+| Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本；若浏览器 Clipboard API 不可用，分享弹窗现在会明确提示手动复制，而不再回退到过时的 `execCommand('copy')` 路径 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
 | Language Switcher (P9) | 全局 EN/ZH 切换器；桌面端固定右下角，小屏普通页面会移到右上安全区，Theater 小屏继续贴底部安全区 |
 | Collapsible Sidebar (P7) | 可收起Agent面板，磨砂玻璃药丸Toggle，无边框残留 |
@@ -66,7 +66,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Generated Gameplay Art | 使用 Gemini 图像模型生成并接入玩法卡专属 frame、Theater 场景背景、徽章和因果档案装饰面板；Track D 本轮另生成了辩论专用背景、stage banner、verdict panel、score meter、三方 badge 与 quote frame；当前 `frontend/public/assets/ui/generated + frontend/public/assets/scenes` 下 62 张 PNG 都已有同名 `.meta.json` sidecar，其中较新的 Debate 资产保留完整生成字段，较早的 legacy 资产则使用诚实回填的 provenance 记录；这里的 backfill 代表 sidecar 补齐，不代表恢复了原始生成时间、模型或 prompt |
 | Theme Registry & Asset Manifest | 前端已把 33 个 Theater / Debate 场景主题、关键词、题材画像归属，以及玩法 / 辩论 frame / badge 资产统一收进 `themeRegistry.ts`，减少扩主题时的多处手工同步；Track D 的 `DEBATE_UI_ASSETS` 也走同一套 registry。本轮又把 7 张原先只在库存里的 sprite（`alchemist / assassin / bard / knight / monk / thief / witch`）接入运行时角色池，并同步收口了前后端 persona/role 映射；当前 `BootScene` 只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载；后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载，旧 `bet_panel / leaderboard / title_screen / minimap_frame` 也不再是 Theater 首次进入硬依赖 |
 | Theater Readability Pass | Theater 本轮又做了一轮“上方更薄、中间更大、气泡更清楚”的可读性修复：右栏改为固定窄宽，`game-wrapper` 提前到 replay filters/timeline 前，compact TimelineBar 隐藏二级 stats，bubble 字号/换行宽度/描边/分辨率也一并提高 |
-| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + 视口裁剪 + `ASSET_CREDITS` 现已同步到 Debate Arena 新资产；`generate-ui-assets.mjs` 会继续为新图像写入完整 sidecar，而 `assets:provenance:backfill` / `assets:provenance:check` 则负责把 legacy UI/scenes 资产补成可审计的 sidecar 完整态，但不会伪造原始生成记录 |
+| Open Source Polish (Phase 4) | 开源准备 — Weather 粒子对象池 + ambient mote 对象池 + 视口裁剪 + `ASSET_CREDITS` 现已同步到 Debate Arena 新资产；`generate-ui-assets.mjs` 会继续为新图像写入完整 sidecar，而 `assets:provenance:backfill` / `assets:provenance:check` 则负责把 legacy UI/scenes 资产补成可审计的 sidecar 完整态，但不会伪造原始生成记录 |
 | Platform Scope | 当前交付形态是浏览器优先的 Web 应用；主模式现已有 `e2e:cross-browser` 与 `e2e:safari` 正式 smoke 入口，并已实跑 Chromium/Chrome、Firefox、WebKit 与 Safari 的主模式状态回读；桌面/移动浏览器视口也已做响应式与 E2E 复验，但不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳 |
 | i18n | 中英文支持 |
 
@@ -145,6 +145,15 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
   - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
   - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
   - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
+- 本 session 这轮“WS 广播并行发送 / replay & scenarioMeta 加固 / ShareModal 复制提示 / ambient mote 池化 / GameplayCardsModal 联动收敛 / daily challenge 后端 rotation”改动，当前还额外实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ws.py -q`：`21 passed in 0.96s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py -q`：`14 passed in 0.88s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/campaign.py app/services/daily_challenges.py tests/test_campaign_api.py`：通过
+  - `cd frontend && npm test -- --run src/hooks/useScreenCapture.test.ts src/lib/simulationReplay.test.ts src/pages/SimulationView.test.tsx`：`28 passed in 0.999s`
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/lib/scenarioReplay.test.ts`：`47 passed in 1.03s`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/lib/dailyChallenge.test.ts src/game/scenes/WorldScene.test.ts src/components/GameplayCardsModal.test.tsx`：`34 passed in 0.66s`
+  - `cd frontend && npm test -- --run src/components/ShareModal.test.tsx src/components/BranchTree.test.tsx`：`5 passed in 0.60s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
 
 ## 目录结构
 
@@ -175,6 +184,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 │   │       ├── llm_client.py    # LLM 调用封装
 │   │       ├── parser.py        # 问题解析
 │   │       ├── narrator.py      # 叙事生成
+│   │       ├── daily_challenges.py # 每日/每周挑战定义与轮换
 │   │       ├── runtime_lock.py  # SQLite 跨 worker 运行锁
 │   │       ├── vector_store.py  # ChromaDB 向量记忆 L2
 │   │       ├── debate.py        # Debate Arena 运行与结算 (Track D)

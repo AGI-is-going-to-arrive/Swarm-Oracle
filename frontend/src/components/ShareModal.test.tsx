@@ -47,6 +47,11 @@ describe('ShareModal automation callback', () => {
         store.delete(key);
       }),
     });
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    });
     generateSocialCopyMock.mockClear();
   });
 
@@ -128,6 +133,30 @@ describe('ShareModal automation callback', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/稍后完成的文案/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows an explicit copy error when Clipboard API is unavailable', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ShareModal
+        scenarioId="scenario-3"
+        onClose={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/生成好的文案/)).toBeInTheDocument();
+    });
+
+    const writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'));
+    await user.click(screen.getByRole('button', { name: 'share.copy_btn' }));
+
+    expect(writeTextSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByText(/share\.copy_error/)).toBeInTheDocument();
     });
   });
 });

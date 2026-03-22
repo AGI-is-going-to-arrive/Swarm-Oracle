@@ -247,6 +247,26 @@ export interface CampaignWeeklySummary {
   profile_runs: Record<string, number>;
 }
 
+export interface CampaignChallengeDefinition {
+  id: string;
+  question: string;
+  question_en?: string | null;
+  subtitle_zh: string;
+  subtitle_en: string;
+  profile_id: string;
+  rounds: number;
+  num_agents: number;
+  mode: 'blackboard' | 'raw';
+  visualization_enabled: boolean;
+}
+
+export interface CampaignChallengeRotation {
+  local_date: string;
+  week_key: string;
+  today_challenge: CampaignChallengeDefinition;
+  weekly_challenges: CampaignChallengeDefinition[];
+}
+
 export interface BranchInfo {
   id: string;
   parent_branch_id: string | null;

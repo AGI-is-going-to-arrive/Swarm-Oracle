@@ -188,9 +188,12 @@ def _trim_social_copy(platform: str, copy: str) -> str:
     trimmed = copy.strip()
     if limit is None or len(trimmed) <= limit:
         return trimmed
+    if limit <= 1:
+        return "…" if trimmed else ""
 
     boundary_markers = ("\n", "。", ".", "！", "!", "？", "?", " ")
     boundary = max(trimmed.rfind(marker, 0, limit) for marker in boundary_markers)
+    boundary = max(boundary, 0)
     if boundary < int(limit * 0.6):
         boundary = max(limit - 1, 1)
     return trimmed[:boundary].rstrip() + "…"

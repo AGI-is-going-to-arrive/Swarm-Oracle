@@ -146,6 +146,7 @@ describe('WorldScene — getLocalizedLabel (bilingual)', () => {
 
 describe('WorldScene — Phase 4: Performance constants', () => {
   const WEATHER_POOL_SIZE = 120;
+  const AMBIENT_MOTE_POOL_SIZE = 24;
   const BUBBLE_POOL_SIZE = 8;
   const VIEWPORT_MARGIN = 40;
 
@@ -155,6 +156,10 @@ describe('WorldScene — Phase 4: Performance constants', () => {
 
   it('BUBBLE_POOL_SIZE is 8', () => {
     expect(BUBBLE_POOL_SIZE).toBe(8);
+  });
+
+  it('AMBIENT_MOTE_POOL_SIZE is 24', () => {
+    expect(AMBIENT_MOTE_POOL_SIZE).toBe(24);
   });
 
   it('VIEWPORT_MARGIN is 40px', () => {

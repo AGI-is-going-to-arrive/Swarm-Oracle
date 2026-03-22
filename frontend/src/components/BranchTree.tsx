@@ -66,11 +66,33 @@ function getLayoutedElements(rawNodes: Node[], rawEdges: Edge[]) {
   return { nodes: layoutedNodes, edges: rawEdges };
 }
 
+function buildBranchNodeData(
+  branch: Branch,
+  agentNames: string[],
+  branchActivity: { thinking: number; recent: number },
+  onIntervene?: (branchId: string, title: string) => void,
+  onDetail?: (branchId: string) => void,
+) {
+  return {
+    title: branch.title || '',
+    description: branch.description,
+    probability: branch.probability,
+    status: branch.status,
+    forkReason: branch.fork_reason,
+    story: branch.story,
+    agentNames,
+    branchId: branch.id,
+    thinkingCount: branchActivity.thinking,
+    recentMessageCount: branchActivity.recent,
+    onIntervene,
+    onDetail,
+  };
+}
+
 // ── Convert branches to React Flow elements ─────────────────
-function branchesToFlow(
+function layoutBranchesToFlow(
   branches: Branch[],
   agents: { id: string; name: string }[],
-  branchActivity: Record<string, { thinking: number; recent: number }>,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
 ): {
@@ -81,26 +103,13 @@ function branchesToFlow(
     return { nodes: [], edges: [] };
   }
 
+  const agentNames = agents.slice(0, 6).map((agent) => agent.name);
   const rawNodes: Node[] = branches.map((b) => {
-    const activity = branchActivity[b.id] || { thinking: 0, recent: 0 };
     return {
       id: b.id,
       type: 'branchNode',
       position: { x: 0, y: 0 },
-      data: {
-        title: b.title || '',
-        description: b.description,
-        probability: b.probability,
-        status: b.status,
-        forkReason: b.fork_reason,
-        story: b.story,
-        agentNames: agents.slice(0, 6).map((a) => a.name),
-        branchId: b.id,
-        thinkingCount: activity.thinking,
-        recentMessageCount: activity.recent,
-        onIntervene,
-        onDetail,
-      },
+      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, onIntervene, onDetail),
     };
   });
 
@@ -115,6 +124,28 @@ function branchesToFlow(
     }));
 
   return getLayoutedElements(rawNodes, rawEdges);
+}
+
+function applyBranchActivityToNodes(
+  nodes: Node[],
+  branches: Branch[],
+  agents: { id: string; name: string }[],
+  branchActivity: Record<string, { thinking: number; recent: number }>,
+  onIntervene?: (branchId: string, title: string) => void,
+  onDetail?: (branchId: string) => void,
+): Node[] {
+  const agentNames = agents.slice(0, 6).map((agent) => agent.name);
+  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+
+  return nodes.map((node) => {
+    const branch = branchById.get(node.id);
+    if (!branch) return node;
+    const activity = branchActivity[branch.id] || { thinking: 0, recent: 0 };
+    return {
+      ...node,
+      data: buildBranchNodeData(branch, agentNames, activity, onIntervene, onDetail),
+    };
+  });
 }
 
 // ── Component ───────────────────────────────────────────────
@@ -147,25 +178,35 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
     return activity;
   }, [thinkingAgents, messages]);
 
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(
-    () => branchesToFlow(branches, agents, branchActivity, onIntervene, onDetail),
-    [branches, agents, branchActivity, onIntervene, onDetail],
+  const { nodes: structuralNodes, edges: structuralEdges } = useMemo(
+    () => layoutBranchesToFlow(branches, agents, onIntervene, onDetail),
+    [branches, agents, onIntervene, onDetail],
+  );
+
+  const layoutedNodes = useMemo(
+    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, onIntervene, onDetail),
+    [agents, branchActivity, branches, onDetail, onIntervene, structuralNodes],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(structuralEdges);
 
-  // Sync when branches update
   useEffect(() => {
     setNodes(layoutedNodes);
-    setEdges(layoutedEdges);
+  }, [layoutedNodes, setNodes]);
 
+  useEffect(() => {
+    setEdges(structuralEdges);
+  }, [setEdges, structuralEdges]);
+
+  // Only refit when the graph structure changes, not when branch activity updates.
+  useEffect(() => {
     // Delay fitView to let all fork-related nodes settle
     const timer = setTimeout(() => {
       fitView({ padding: 0.4, duration: 400, includeHiddenNodes: true });
     }, 500);
     return () => clearTimeout(timer);
-  }, [layoutedNodes, layoutedEdges, setNodes, setEdges, fitView]);
+  }, [fitView, structuralEdges, structuralNodes]);
 
   const onInit = useCallback(() => {
     fitView({ padding: 0.3, duration: 800 });

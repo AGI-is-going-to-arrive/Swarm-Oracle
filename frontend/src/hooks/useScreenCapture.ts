@@ -4,7 +4,7 @@
  * Keeps the heavy capture runtime behind a dynamic import so pages that only
  * expose capture affordances do not eagerly pay for DOM snapshot logic.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type CaptureStatus = 'idle' | 'capturing' | 'recording' | 'done' | 'error';
 export type CaptureResultKind = 'screenshot_png' | 'gif' | 'gif_fallback_png';
@@ -98,6 +98,22 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [lastCaptureKind, setLastCaptureKind] = useState<CaptureResultKind | null>(null);
   const recordingRef = useRef(false);
+  const blobUrlRef = useRef<string | null>(null);
+
+  const replaceBlobUrl = useCallback((nextUrl: string) => {
+    if (blobUrlRef.current && blobUrlRef.current !== nextUrl) {
+      URL.revokeObjectURL(blobUrlRef.current);
+    }
+    blobUrlRef.current = nextUrl;
+    setBlobUrl(nextUrl);
+  }, []);
+
+  useEffect(() => () => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+  }, []);
 
   const captureScreenshot = useCallback(async (requestOptions?: CaptureRequestOptions) => {
     setLastCaptureKind(null);
@@ -114,7 +130,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
       const downloadFile = `swarmoracle_${runtime.timestamp()}.png`;
       const normalizedBlob = await runtime.normalizeDownloadBlob(blob, downloadFile);
       const url = runtime.downloadBlob(normalizedBlob, downloadFile);
-      setBlobUrl(url);
+      replaceBlobUrl(url);
       setLastCaptureKind('screenshot_png');
       setStatus('done');
       window.setTimeout(() => setStatus('idle'), 2000);
@@ -123,7 +139,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
       setStatus('error');
       window.setTimeout(() => setStatus('idle'), 2000);
     }
-  }, [selector]);
+  }, [replaceBlobUrl, selector]);
 
   const captureGIF = useCallback(async (requestOptions?: CaptureRequestOptions) => {
     if (recordingRef.current) return;
@@ -148,7 +164,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
       const downloadFile = `swarmoracle_${runtime.timestamp()}.${extension}`;
       const normalizedBlob = await runtime.normalizeDownloadBlob(capture.blob, downloadFile);
       const url = runtime.downloadBlob(normalizedBlob, downloadFile);
-      setBlobUrl(url);
+      replaceBlobUrl(url);
       setLastCaptureKind(capture.kind);
       setStatus('done');
       window.setTimeout(() => setStatus('idle'), 2000);
@@ -159,7 +175,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}): UseScre
     } finally {
       recordingRef.current = false;
     }
-  }, [gifDuration, gifFrameInterval, selector]);
+  }, [gifDuration, gifFrameInterval, replaceBlobUrl, selector]);
 
   return { status, blobUrl, lastCaptureKind, captureScreenshot, captureGIF };
 }

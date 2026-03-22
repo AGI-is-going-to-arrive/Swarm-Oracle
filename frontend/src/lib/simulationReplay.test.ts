@@ -4,11 +4,14 @@ import type { Scenario } from '../types';
 import type { ScenarioMeta } from './scenarioMeta';
 import {
   buildSimulationReplayUrl,
+  coerceSimulationReplayPayload,
   decodeSimulationReplayToken,
   encodeSimulationReplayToken,
   normalizeSimulationReplayPayload,
+  readSimulationReplayPayload,
   type SimulationReplayPayload,
 } from './simulationReplay';
+import { encodeReplayEnvelope } from './replayCodec';
 
 const scenario: Scenario = {
   id: 'scenario-1',
@@ -99,7 +102,12 @@ const payload: SimulationReplayPayload = {
 describe('simulationReplay helpers', () => {
   it('round-trips a simulation replay token', async () => {
     const token = await encodeSimulationReplayToken(payload);
-    await expect(decodeSimulationReplayToken(token)).resolves.toEqual(payload);
+    const decoded = await decodeSimulationReplayToken(token);
+
+    expect(decoded?.scenario.id).toBe(payload.scenario.id);
+    expect(decoded?.uiState?.replaySpeed).toBe(2);
+    expect(decoded?.scenarioMeta.director.remainingPoints).toBe(2);
+    expect(decoded?.scenarioMeta.archive.profileId).toBe('empire');
   });
 
   it('rehydrates compact replay meta back into usage-derived runtime state', () => {
@@ -116,14 +124,64 @@ describe('simulationReplay helpers', () => {
       },
     });
 
-    expect(normalized.scenarioMeta.director.remainingPoints).toBe(2);
-    expect(normalized.scenarioMeta.director.spentPoints).toBe(1);
-    expect(normalized.scenarioMeta.cooldowns.public_hearing?.lastUsedRound).toBe(1);
-    expect(normalized.scenarioMeta.archive.profileId).toBe('empire');
+    expect(normalized).not.toBeNull();
+    expect(normalized!.scenarioMeta.director.remainingPoints).toBe(2);
+    expect(normalized!.scenarioMeta.director.spentPoints).toBe(1);
+    expect(normalized!.scenarioMeta.cooldowns.public_hearing?.lastUsedRound).toBe(1);
+    expect(normalized!.scenarioMeta.archive.profileId).toBe('empire');
+  });
+
+  it('rejects replay payloads with invalid branch/message shapes', async () => {
+    const token = await encodeSimulationReplayToken({
+      ...payload,
+      scenario: {
+        ...payload.scenario,
+        branches: [123],
+      },
+    } as unknown as SimulationReplayPayload);
+
+    await expect(decodeSimulationReplayToken(token)).resolves.toBeNull();
+  });
+
+  it('ignores invalid replay ui state in query payloads', async () => {
+    const token = await encodeSimulationReplayToken({
+      ...payload,
+      uiState: {
+        ...payload.uiState,
+        replaySpeed: 3,
+      },
+    } as unknown as SimulationReplayPayload);
+    const params = new URLSearchParams({ replay: token });
+
+    await expect(readSimulationReplayPayload(params)).resolves.toBeNull();
   });
 
   it('builds a simulation replay url', async () => {
     const url = await buildSimulationReplayUrl('https://example.com/', payload);
     expect(url).toContain('/sim/replay?replay=');
+  });
+
+  it('rejects replay payloads with an invalid scenario shape', () => {
+    expect(coerceSimulationReplayPayload({
+      ...payload,
+      scenario: {
+        ...payload.scenario,
+        agents: 'invalid',
+      },
+    } as unknown as SimulationReplayPayload)).toBeNull();
+  });
+
+  it('returns null for replay tokens with invalid uiState data', async () => {
+    const token = await encodeReplayEnvelope('simulation_view_v1', {
+      ...payload,
+      uiState: {
+        ...payload.uiState,
+        replaySpeed: 3,
+      },
+    });
+
+    await expect(
+      readSimulationReplayPayload(new URLSearchParams(`replay=${token}`)),
+    ).resolves.toBeNull();
   });
 });

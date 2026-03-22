@@ -15,6 +15,12 @@ const captureElementDataUrlMock = vi.fn();
 const captureCompositeElementDataUrlMock = vi.fn();
 let mockCaptureStatus: 'idle' | 'capturing' | 'recording' | 'done' | 'error' = 'idle';
 let mockLastCaptureKind: 'screenshot_png' | 'gif' | 'gif_fallback_png' | null = null;
+type ReplayArtifactMock = {
+  id: string;
+  kind: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+};
 const {
   upsertScenarioDirectorStateMock,
   upsertScenarioGameplayStateMock,
@@ -66,7 +72,7 @@ const {
     kind: 'simulation_view_v1',
     created_at: '2026-03-19T00:00:00Z',
   })),
-  getReplayArtifactMock: vi.fn(async () => null),
+  getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
 }));
 
 const emptyDirectorState: ScenarioDirectorState = {
@@ -484,6 +490,35 @@ describe('SimulationView replay automation output', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: '导入为本地运行' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/sim/imported-sim-1');
+  });
+
+  it('ignores an invalid replay share artifact without crashing the page', async () => {
+    getReplayArtifactMock.mockResolvedValue({
+      id: 'share-invalid',
+      kind: 'simulation_view_v1',
+      created_at: '2026-03-19T00:00:00Z',
+      payload: {
+        scenario: {
+          ...mockStore.scenario,
+          agents: 'invalid',
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/sim/replay?share=share-invalid']}>
+        <Routes>
+          <Route path="/sim/replay" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(getReplayArtifactMock).toHaveBeenCalledWith('share-invalid');
+    });
+
+    expect(await screen.findByLabelText('sim.panel_expand')).toBeInTheDocument();
+    expect(mockStore.setScenario).not.toHaveBeenCalled();
   });
 
   it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {

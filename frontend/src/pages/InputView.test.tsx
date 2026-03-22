@@ -8,6 +8,7 @@ const {
   getCampaignProfileMock,
   getCampaignMasteryMock,
   getCampaignBadgesMock,
+  getCampaignChallengeRotationMock,
   getCampaignDailyChallengeStatusMock,
   getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
@@ -15,6 +16,7 @@ const {
   getCampaignProfileMock: vi.fn(),
   getCampaignMasteryMock: vi.fn(),
   getCampaignBadgesMock: vi.fn(),
+  getCampaignChallengeRotationMock: vi.fn(),
   getCampaignDailyChallengeStatusMock: vi.fn(),
   getCampaignWeeklySummaryMock: vi.fn(),
   getChallengeProgressMock: vi.fn(),
@@ -61,6 +63,7 @@ vi.mock('../api/client', () => ({
   getCampaignProfile: getCampaignProfileMock,
   getCampaignMastery: getCampaignMasteryMock,
   getCampaignBadges: getCampaignBadgesMock,
+  getCampaignChallengeRotation: getCampaignChallengeRotationMock,
   getCampaignDailyChallengeStatus: getCampaignDailyChallengeStatusMock,
   getCampaignWeeklySummary: getCampaignWeeklySummaryMock,
 }));
@@ -74,61 +77,7 @@ vi.mock('../lib/directorIdentity', () => ({
 
 vi.mock('../lib/dailyChallenge', () => ({
   challengeDateKey: () => '2026-03-17',
-  challengeWeekKey: () => '2026-03-16',
-  getTodayChallenge: () => ({
-    id: 'challenge-1',
-    question: 'What if AI ruled every city?',
-    questionEn: 'What if AI ruled every city?',
-    subtitleZh: '治理博弈',
-    subtitleEn: 'Governance Conflict',
-    profileId: 'governance',
-    rounds: 3,
-    numAgents: 3,
-    mode: 'blackboard',
-    visualizationEnabled: true,
-  }),
   getChallengeProgress: getChallengeProgressMock,
-  getWeeklyChallenges: () => [
-    {
-      id: 'weekly-1',
-      question: 'Weekly challenge 1',
-      questionEn: 'Weekly challenge 1',
-      subtitleZh: '治理博弈',
-      subtitleEn: 'Governance Conflict',
-      profileId: 'governance',
-      rounds: 3,
-      numAgents: 3,
-      mode: 'blackboard',
-      visualizationEnabled: true,
-    },
-    {
-      id: 'weekly-2',
-      question: 'Weekly challenge 2',
-      questionEn: 'Weekly challenge 2',
-      subtitleZh: '法律红线',
-      subtitleEn: 'Legal Red Lines',
-      profileId: 'law',
-      rounds: 3,
-      numAgents: 3,
-      mode: 'blackboard',
-      visualizationEnabled: true,
-    },
-    {
-      id: 'weekly-3',
-      question: 'Weekly challenge 3',
-      questionEn: 'Weekly challenge 3',
-      subtitleZh: '贸易绞盘',
-      subtitleEn: 'Trade Leverage',
-      profileId: 'trade',
-      rounds: 3,
-      numAgents: 3,
-      mode: 'blackboard',
-      visualizationEnabled: true,
-    },
-  ],
-  getChallengeQuestion: (challenge: { questionEn?: string; question: string }, isZh: boolean) => (
-    isZh ? challenge.question : (challenge.questionEn ?? challenge.question)
-  ),
   markChallengeStarted: vi.fn(),
   resolveChallengeProgress: (
     localProgress: {
@@ -228,6 +177,60 @@ describe('InputView campaign progress', () => {
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
     getCampaignBadgesMock.mockResolvedValue(campaignBadges);
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17',
+      week_key: '2026-03-16',
+      today_challenge: {
+        id: 'challenge-1',
+        question: 'What if AI ruled every city?',
+        question_en: 'What if AI ruled every city?',
+        subtitle_zh: '治理博弈',
+        subtitle_en: 'Governance Conflict',
+        profile_id: 'governance',
+        rounds: 3,
+        num_agents: 3,
+        mode: 'blackboard',
+        visualization_enabled: true,
+      },
+      weekly_challenges: [
+        {
+          id: 'weekly-1',
+          question: 'Weekly challenge 1',
+          question_en: 'Weekly challenge 1',
+          subtitle_zh: '治理博弈',
+          subtitle_en: 'Governance Conflict',
+          profile_id: 'governance',
+          rounds: 3,
+          num_agents: 3,
+          mode: 'blackboard',
+          visualization_enabled: true,
+        },
+        {
+          id: 'weekly-2',
+          question: 'Weekly challenge 2',
+          question_en: 'Weekly challenge 2',
+          subtitle_zh: '法律红线',
+          subtitle_en: 'Legal Red Lines',
+          profile_id: 'law',
+          rounds: 3,
+          num_agents: 3,
+          mode: 'blackboard',
+          visualization_enabled: true,
+        },
+        {
+          id: 'weekly-3',
+          question: 'Weekly challenge 3',
+          question_en: 'Weekly challenge 3',
+          subtitle_zh: '贸易绞盘',
+          subtitle_en: 'Trade Leverage',
+          profile_id: 'trade',
+          rounds: 3,
+          num_agents: 3,
+          mode: 'blackboard',
+          visualization_enabled: true,
+        },
+      ],
+    });
     getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
     getCampaignWeeklySummaryMock.mockResolvedValue({
       user_id: 'director-1',
@@ -263,6 +266,53 @@ describe('InputView campaign progress', () => {
     expect(screen.getAllByText((content) => content.includes('3 points to next unlock')).length).toBeGreaterThan(0);
     expect(screen.getByText('2 badges unlocked · 4 completed runs')).toBeInTheDocument();
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
+  });
+
+  it('prefers backend challenge rotation when the API returns remote definitions', async () => {
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17',
+      week_key: '2026-03-16',
+      today_challenge: {
+        id: 'remote-daily-1',
+        question: 'Remote daily question zh',
+        question_en: 'Remote daily question en',
+        subtitle_zh: '远端副标题',
+        subtitle_en: 'Remote subtitle',
+        profile_id: 'law',
+        rounds: 4,
+        num_agents: 5,
+        mode: 'raw',
+        visualization_enabled: false,
+      },
+      weekly_challenges: [
+        {
+          id: 'remote-weekly-1',
+          question: 'Remote weekly 1 zh',
+          question_en: 'Remote weekly 1 en',
+          subtitle_zh: '远端法律',
+          subtitle_en: 'Remote law',
+          profile_id: 'law',
+          rounds: 4,
+          num_agents: 5,
+          mode: 'raw',
+          visualization_enabled: false,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Remote daily question en')).toBeInTheDocument();
+    expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
+      'director-1',
+      'law',
+      '2026-03-17',
+      expect.any(Number),
+    );
   });
 
   it('treats today challenge as completed when backend campaign data is the source of truth', async () => {

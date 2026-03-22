@@ -1422,6 +1422,14 @@ class TestSocialCopy:
         assert len(payload["copy"]) <= social_api.SOCIAL_COPY_MAX_CHARS["weibo"]
         assert payload["copy"].endswith("…")
 
+    def test_trim_social_copy_handles_non_positive_limits(self):
+        original_limit = social_api.SOCIAL_COPY_MAX_CHARS["x"]
+        social_api.SOCIAL_COPY_MAX_CHARS["x"] = 0
+        try:
+            assert social_api._trim_social_copy("x", "Long text that should not leak past the limit") == "…"
+        finally:
+            social_api.SOCIAL_COPY_MAX_CHARS["x"] = original_limit
+
 
 # ── P4-D: Intervention Templates ─────────────────────────
 

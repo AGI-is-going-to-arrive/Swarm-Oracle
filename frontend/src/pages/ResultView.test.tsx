@@ -206,6 +206,7 @@ vi.mock('../lib/scenarioMeta', () => {
         value: decodeURIComponent(encodedValue),
       };
     }),
+    subscribeScenarioMeta: vi.fn(() => () => {}),
     updateScenarioMeta: vi.fn((_scenarioId: string, updater: (current: ScenarioMeta) => ScenarioMeta) => updater(meta)),
   };
 });
