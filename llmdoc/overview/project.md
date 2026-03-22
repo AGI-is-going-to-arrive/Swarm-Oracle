@@ -139,6 +139,12 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 - 本轮这类“LLM config guard / shared AsyncClient / stream retry / replay import validation / batched message writes”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`：`368 passed in 37.64s`
   - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`：通过
+- 本轮这类“engine-managed SQLite 轻量迁移 / shared AsyncClient 跨 event loop 隔离 / stale client 后台关闭 / Chroma init 超时后接管与重试恢复”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_corner_cases.py -k init_db_reuses_engine_managed_connection_for_sqlite_migrations -q`：`1 passed, 33 deselected in 0.21s`
+  - `python -m pytest tests/test_llm_client.py -k 'shared_async_client or event_loop_closed_runtime_error' -q`：`3 passed in 0.32s`
+  - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
+  - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
+  - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
 
 ## 目录结构
 
