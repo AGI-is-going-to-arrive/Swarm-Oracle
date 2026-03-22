@@ -89,6 +89,15 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - 本轮这类“SQLite runtime lock / leaderboard incremental update / vector cache LRU / whitespace question validation / hierarchical leader fallback”改动，当前还额外实跑通过：
   - `tests/test_predictions.py + tests/test_vector_store.py + tests/test_runtime_lock.py + tests/test_debate_service.py + tests/test_debate_api.py + tests/test_api.py + tests/test_simulator.py`：`206 passed in 61.40s`
   - `ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/debate.py app/services/runtime_lock.py app/services/scoring.py app/services/vector_store.py tests/test_api.py tests/test_debate_service.py tests/test_predictions.py tests/test_runtime_lock.py tests/test_vector_store.py`：通过
+- 本轮这类“campaign finalize / rolling briefing + compression override / intervention queue cleanup / vector store / runtime lock”改动，当前还额外实跑通过：
+  - `tests/test_predictions.py tests/test_parser.py tests/test_memory.py tests/test_campaign_service.py tests/test_gameplay_contract_sync.py -q`：`106 passed in 101.36s`
+  - `tests/test_campaign_api.py -q`：`12 passed in 0.72s`
+  - `tests/test_simulator.py -k 'reuses_latest_rolling_briefing_before_current_window or passes_llm_overrides_into_compression' -q`：`2 passed in 0.31s`
+  - `tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`60 passed in 1.79s`
+  - `tests/test_simulator.py tests/test_intervention.py tests/test_api.py -k 'intervene or pending_intervention or delete_cascade_data or pop_next_pending_intervention_preserves_order or clear_pending_interventions_for_scenario_is_scoped or delete_uses_vector_store_cleanup' -q`：`19 passed in 1.49s`
+  - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
+  - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
+  - 对应两组 `ruff check`：通过
 
 ### Frontend
 

@@ -7,14 +7,24 @@ memory retrieval. Gracefully degrades when ChromaDB is unavailable.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import Any
+
+from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
 
 logger = logging.getLogger(__name__)
 
 # Lazy import to allow graceful degradation
 _chromadb = None
 _CHROMA_AVAILABLE = True
+_CHROMA_WRITE_LOCK = threading.Lock()
+_CHROMA_WRITE_LOCK_KEY = "vector-store:chroma-write"
+_CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
+_CHROMA_WRITE_LOCK_TIMEOUT_SECONDS = 10.0
+_CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
 
 
 def _ensure_chromadb():
@@ -99,6 +109,62 @@ class VectorStore:
             evicted_scenario_id, _ = self._collections.popitem(last=False)
             logger.debug("Evicted cached Chroma collection for scenario %s", evicted_scenario_id)
 
+    def _acquire_write_lease(self, scenario_id: str, operation: str):
+        """Wait briefly for the shared runtime lease that serializes Chroma writes."""
+        deadline = time.monotonic() + _CHROMA_WRITE_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                lease = acquire_runtime_lock(
+                    _CHROMA_WRITE_LOCK_KEY,
+                    lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Vector store %s lock acquisition failed for %s: %s",
+                    operation,
+                    scenario_id,
+                    exc,
+                )
+                return None
+
+            if lease is not None:
+                return lease
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "Vector store %s skipped for %s because shared Chroma write lock stayed busy",
+                    operation,
+                    scenario_id,
+                )
+                return None
+            time.sleep(_CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS)
+
+    def _run_serialized_write(
+        self,
+        scenario_id: str,
+        operation: str,
+        write_call: Callable[[], None],
+    ) -> None:
+        """Serialize Chroma writes inside one process and across SQLite-backed workers."""
+        if not self.available:
+            return
+
+        with _CHROMA_WRITE_LOCK:
+            lease = self._acquire_write_lease(scenario_id, operation)
+            if lease is None:
+                return
+            try:
+                write_call()
+            finally:
+                try:
+                    release_runtime_lock(lease)
+                except Exception as exc:
+                    logger.warning(
+                        "Vector store %s lock release failed for %s: %s",
+                        operation,
+                        scenario_id,
+                        exc,
+                    )
+
     def store(
         self,
         scenario_id: str,
@@ -116,25 +182,28 @@ class VectorStore:
         if not content or not content.strip():
             return
 
-        collection = self._get_collection(scenario_id)
-        if collection is None:
-            return
+        def _write() -> None:
+            collection = self._get_collection(scenario_id)
+            if collection is None:
+                return
 
-        try:
-            import uuid
-            doc_id = str(uuid.uuid4())
-            collection.add(
-                documents=[content],
-                metadatas=[{
-                    "agent_name": agent_name,
-                    "round": round_num,
-                    "emotion": emotion,
-                    "branch_id": branch_id,
-                }],
-                ids=[doc_id],
-            )
-        except Exception as exc:
-            logger.warning("Vector store write failed (non-fatal): %s", exc)
+            try:
+                import uuid
+                doc_id = str(uuid.uuid4())
+                collection.add(
+                    documents=[content],
+                    metadatas=[{
+                        "agent_name": agent_name,
+                        "round": round_num,
+                        "emotion": emotion,
+                        "branch_id": branch_id,
+                    }],
+                    ids=[doc_id],
+                )
+            except Exception as exc:
+                logger.warning("Vector store write failed (non-fatal): %s", exc)
+
+        self._run_serialized_write(scenario_id, "store", _write)
 
     def retrieve(
         self,
@@ -184,16 +253,17 @@ class VectorStore:
 
     def delete_collection(self, scenario_id: str) -> None:
         """Delete a scenario collection using the same canonical name as store/retrieve."""
-        if not self.available:
-            return
-
         collection_name = self._collection_name(scenario_id)
-        self._collections.pop(scenario_id, None)
-        try:
-            self._client.delete_collection(collection_name)
-            logger.info("Deleted ChromaDB collection %s", collection_name)
-        except Exception as exc:
-            logger.warning("Failed to delete collection for %s: %s", scenario_id, exc)
+
+        def _delete() -> None:
+            self._collections.pop(scenario_id, None)
+            try:
+                self._client.delete_collection(collection_name)
+                logger.info("Deleted ChromaDB collection %s", collection_name)
+            except Exception as exc:
+                logger.warning("Failed to delete collection for %s: %s", scenario_id, exc)
+
+        self._run_serialized_write(scenario_id, "delete_collection", _delete)
 
     def health_check(self) -> dict:
         """Check ChromaDB connectivity."""

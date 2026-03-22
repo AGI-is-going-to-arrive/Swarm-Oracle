@@ -97,6 +97,49 @@ class TestParseQuestion:
         assert result["agents"][-1]["tier"] == "IMPORTANT"
 
     @pytest.mark.asyncio
+    async def test_retry_does_not_replace_with_lower_quality_payload(self, monkeypatch):
+        """Retry results must not win on agent count alone when structure degrades."""
+        first_result = {
+            "setting": {"time_period": "未来", "location": "边疆星域", "background": "测试背景"},
+            "key_variable": "自治城邦",
+            "initial_title": "边疆风暴",
+            "agents": [
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        }
+        degraded_retry = {
+            **first_result,
+            "setting": {"time_period": "未来", "location": "", "background": ""},
+            "agents": [
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
+                {"name": "张启航", "role": "", "persona": "", "stance": "支持", "tier": "IMPORTANT"},
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "路人甲", "role": "", "persona": "", "stance": "", "tier": ""},
+            ],
+        }
+
+        llm_mock = AsyncMock(side_effect=[first_result, degraded_retry])
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "如果一支远征舰队在荒芜边疆建立流动自治城邦，会发生什么？",
+            max_agents=5,
+            target_agents=5,
+            max_rounds=8,
+        )
+
+        assert llm_mock.await_count == 2
+        assert result["setting"]["background"] == "测试背景"
+        assert result["setting"]["location"] == "边疆星域"
+        assert len(result["agents"]) == 5
+        assert len({agent["name"] for agent in result["agents"]}) == 5
+        assert "路人甲" not in {agent["name"] for agent in result["agents"]}
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_deterministic_parse_when_llm_json_is_invalid(self, monkeypatch):
         """Parser should degrade to a deterministic scenario instead of failing the whole run."""
         llm_mock = AsyncMock(side_effect=LLMError("Invalid JSON from LLM after recovery attempts"))

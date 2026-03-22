@@ -7,6 +7,7 @@ L2: ChromaDB vector store (cross-session semantic retrieval)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.services.lang_detect import get_language_directive
@@ -19,13 +20,14 @@ from app.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
+_COMPRESS_ROUNDS_TIMEOUT_SECONDS = 20.0
+
 COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧和转折信号:
 
 【此前滚动态势简报】
 {previous_briefing_block}
 
-【当前窗口原始对话】
-{messages_text}
+{messages_text_block}
 
 输出严格 JSON:
 {{
@@ -157,18 +159,40 @@ async def compress_rounds(
 
     prompt = COMPRESS_PROMPT.format(
         previous_briefing_block=_format_previous_briefing(previous_briefing),
-        messages_text=messages_text,
+        messages_text_block=format_untrusted_text_block(
+            "当前窗口原始对话",
+            messages_text,
+            max_chars=max(4000, len(messages_text)),
+        ),
         language_directive=get_language_directive(language),
     )
 
     logger.debug("Compressing %d chars of messages", len(messages_text))
-    result = await llm_call_json(
-        prompt,
-        reasoning_effort="low",
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-    )
+    fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)
+    try:
+        result = await asyncio.wait_for(
+            llm_call_json(
+                prompt,
+                reasoning_effort="low",
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            ),
+            timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "compress_rounds timed out after %.1fs; using fallback briefing",
+            _COMPRESS_ROUNDS_TIMEOUT_SECONDS,
+        )
+        return fallback
+    except Exception as exc:
+        logger.warning("compress_rounds fallback due to LLM error: %s", exc)
+        return fallback
+
+    if not isinstance(result, dict):
+        logger.warning("compress_rounds received non-dict payload; using fallback briefing")
+        return fallback
 
     return _validate_compress_result(result)
 

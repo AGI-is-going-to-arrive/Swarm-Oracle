@@ -2,10 +2,13 @@
 
 import shutil
 import tempfile
+import threading
+import time
 from collections import OrderedDict
 
 import pytest
 
+from app.services import vector_store as vector_store_module
 from app.services.vector_store import (
     VectorStore,
     collection_name_for_scenario,
@@ -202,13 +205,86 @@ class TestVectorStoreEdgeCases:
         results = vs.retrieve("s1", "one", top_k=100)
         assert len(results) == 1
 
-    def test_delete_collection_uses_canonical_name_and_clears_cache(self):
-        """Delete should reuse the same sanitized name as store/retrieve."""
+    def test_store_serializes_concurrent_writes_with_process_lock(self, monkeypatch):
+        """Concurrent store calls should not overlap inside one process."""
+        state = {"active": 0, "max_active": 0, "calls": 0}
+        state_lock = threading.Lock()
+        start_barrier = threading.Barrier(2)
+        runtime_lock_calls: list[str] = []
+        released_leases: list[object] = []
+
+        class _FakeCollection:
+            def add(self, *, documents, metadatas, ids):
+                with state_lock:
+                    state["active"] += 1
+                    state["max_active"] = max(state["max_active"], state["active"])
+                    state["calls"] += 1
+                time.sleep(0.05)
+                with state_lock:
+                    state["active"] -= 1
+
+        def _fake_acquire(lock_key: str, *, lease_seconds: float):
+            runtime_lock_calls.append(lock_key)
+            return object()
+
+        monkeypatch.setattr(vector_store_module, "acquire_runtime_lock", _fake_acquire)
+        monkeypatch.setattr(
+            vector_store_module,
+            "release_runtime_lock",
+            lambda lease: released_leases.append(lease) or True,
+        )
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = object()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 128
+        vs._collections = OrderedDict()
+        vs._get_collection = lambda scenario_id: _FakeCollection()
+
+        def _worker(index: int) -> None:
+            start_barrier.wait()
+            vs.store("scenario-lock", f"Agent{index}", f"Content {index}", round_num=index)
+
+        threads = [
+            threading.Thread(target=_worker, args=(index,))
+            for index in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=1)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert state["calls"] == 2
+        assert state["max_active"] == 1
+        assert runtime_lock_calls == [vector_store_module._CHROMA_WRITE_LOCK_KEY] * 2
+        assert len(released_leases) == 2
+
+    def test_delete_collection_uses_canonical_name_clears_cache_and_wraps_runtime_lock(
+        self,
+        monkeypatch,
+    ):
+        """Delete should reuse the same sanitized name and serialized write guard."""
         deleted: dict[str, str] = {}
+        acquired: list[tuple[str, float]] = []
+        released: list[object] = []
 
         class _FakeClient:
             def delete_collection(self, name: str) -> None:
                 deleted["name"] = name
+
+        lease = object()
+
+        def _fake_acquire(lock_key: str, *, lease_seconds: float):
+            acquired.append((lock_key, lease_seconds))
+            return lease
+
+        monkeypatch.setattr(vector_store_module, "acquire_runtime_lock", _fake_acquire)
+        monkeypatch.setattr(
+            vector_store_module,
+            "release_runtime_lock",
+            lambda current_lease: released.append(current_lease) or True,
+        )
 
         vs = VectorStore.__new__(VectorStore)
         vs._client = _FakeClient()
@@ -220,6 +296,11 @@ class TestVectorStoreEdgeCases:
 
         assert deleted["name"] == collection_name_for_scenario("abc-def-123-456")
         assert "abc-def-123-456" not in vs._collections
+        assert acquired == [(
+            vector_store_module._CHROMA_WRITE_LOCK_KEY,
+            vector_store_module._CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )]
+        assert released == [lease]
 
     def test_get_collection_prefers_cache_before_client_lookup(self):
         """Repeated cache hits should not recreate the same Chroma collection."""

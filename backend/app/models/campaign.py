@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from app.models.database import _now, _uuid
@@ -85,6 +85,20 @@ class ScenarioCampaignLog(SQLModel, table=True):
     """The immutable finalize record for one completed scenario."""
 
     __tablename__ = "scenario_campaign_log"
+    __table_args__ = (
+        Index(
+            "ix_scenario_campaign_log_director_profile_id_created_at",
+            "director_profile_id",
+            "created_at",
+        ),
+        Index(
+            "ix_scenario_campaign_log_daily_lookup",
+            "director_profile_id",
+            "profile_id",
+            "completed_daily_challenge",
+            "created_at",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     scenario_id: str = Field(index=True, unique=True)

@@ -36,7 +36,7 @@ api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop �
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
@@ -73,7 +73,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
 - **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口
-- **干预队列**: API 层与模拟主循环当前都统一走 async-safe helper；每轮每分支只会按顺序原子取出一条待注入干预，scenario 结束时也会按 helper 统一清理残留 key
+- **干预队列**: API 层与模拟主循环当前都统一走 helper；当多个 worker 共用同一个 SQLite 文件时，待注入干预会先落到 `PendingIntervention` 共享队列表，再由模拟主循环按分支 FIFO 原子取出；scenario 结束或删除时也会一并清理残留队列
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
 - **职责**: 中央共享黑板，所有 Agent 共读同一份信息
@@ -103,6 +103,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 玩法卡当前不是从 `gameplay_state` 直接反向注入 prompt；前端 `GameplayCardsModal` 会先把 card prompt 作为 `/intervene` 文本发给后端，再把 `usage_log` 同步进 `gameplay_state`
 - **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
+- **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
 - **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
@@ -118,6 +119,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **设计**:
   - collection name 当前统一走 canonical naming：`scenario_{scenario_id.replace('-', '_')}`；创建、读取和删除共用同一套命名规则
   - `_collections` 当前是有上限的 LRU 缓存（默认 128），避免长期运行时无界持有 collection 引用
+  - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
   - 全局单例，ChromaDB 不可用时静默降级
 
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
@@ -138,6 +140,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约
 - **关键API**:
   - `load_gameplay_contract()` → `dict[str, Any]` — 基于文件 `mtime_ns` 的轻量缓存；文件未变更时复用缓存，变更后自动重读
+- **缓存保护**: contract cache 当前已补上进程内锁，避免多线程 / 多请求同时 miss cache 时重复读同一个文件
 - **缺文件报错**: 若 `shared/gameplay_contract.v1.json` 缺失，当前会直接抛出清晰 `RuntimeError`，提示先恢复 shared contract，而不是让后端在 `Path.stat()` 上抛裸异常
 - **集成点**: `visualization/card_events.py` 启动时据此构建 `CARD_TYPES`，后端测试 `test_gameplay_contract_sync.py` 会校验卡牌 ID 与触发模式和 shared contract 保持一致
 
@@ -229,6 +232,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **档案摘要**: profile summary 现会带 `last_daily_challenge_completed_at / profile_id / scenario_id`，供首页把后端真值与本地缓存合并显示
 - **单局摘要**: scenario summary 会返回 `profile_id / archive_grade / profile_resonance / betting_hit / most_used_card / completed_daily_challenge / campaign_score_delta / finalized_at`
 - **周汇总**: `weekly-summary` 当前不改 schema，直接按 `ScenarioCampaignLog.created_at` + 调用方本地时区聚合 `total_runs / completed_daily_challenges / hit_bets / campaign_score_delta / best_archive_grade / top_profile_id / profile_runs`
+- **查询下推**: `daily-status` / `weekly-summary` 当前会先把调用方本地日期窗口换算成 UTC `[start, end)`，再把 `created_at >= ... AND created_at < ...` 下推到 SQL；`ScenarioCampaignLog` 也已补上 daily/weekly lookup 复合索引
 - **director state**:
   - goals / commitment 当前落在 `Scenario.director_state_json`
   - live/result 前端会优先读取这一份
@@ -284,7 +288,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - **原子持久化**:
   - `score_prediction()` 当前会先用单条 `UPDATE ... WHERE score IS NULL` 原子 claim 未评分 prediction，再落 leaderboard 事务
   - 若并发 scorer 已经先写入，该请求会回读已有分数返回，不再重复覆盖
+  - 若 LLM 返回后发现原场景已被删除，该次写入会直接回滚，不再把孤儿 prediction 落分
   - 若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
+  - `score_all_for_scenario()` 当前返回值已细化为 `attempted / scored / failed / all_failed / results`，可以区分“没有待评分 prediction”和“全部评分失败”
 
 ## API层 (`app/api/`) — P0-1 拆分
 
@@ -306,7 +312,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /scenario/{id}/story` | GET | 获取叙事结果；若尚无 completed branches，会回退返回该场景现有 branches，并为根分支补 placeholder title |
 | `GET /scenario/{id}/groups` | GET | 获取分层分组信息 (P3-A) |
 | `GET /scenarios` | GET | 场景列表（分页+状态筛选，JOIN优化 P0-2）(P4-A) |
-| `DELETE /scenario/{id}` | DELETE | 删除场景（批量 SQL DELETE P2-7 + Leaderboard + ChromaDB 清理）(P4-A) |
+| `DELETE /scenario/{id}` | DELETE | 删除场景（批量 SQL DELETE P2-7 + Leaderboard + pending intervention queue + ChromaDB 清理）(P4-A) |
 | `GET /scenario/{id}/export` | GET | 导出场景 Markdown (P4-C) |
 | `POST /replay-artifact` | POST | 持久化 replay payload，返回短 `share id`；当前主模式优先用它生成 `/result/replay?share=...` 与 `/sim/replay?share=...` |
 | `GET /replay-artifact/{id}` | GET | 读取 replay payload；供 replay 页面 hydrate |
@@ -318,6 +324,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符） |
 | `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演） |
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支；当前单次请求最多 50 条） |
+
+> intervene / retrospective / batch 这三条路由当前仍不改变 REST 形状，但待注入文本已经改成共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求落在哪个 worker、模拟跑在哪个 worker，不再影响干预是否能被真正消费。
 
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
@@ -353,7 +361,7 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前；当前 `confidence` 走 Pydantic 范围校验） |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测；若 scenario 不存在则返回 `404` |
-| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分 |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；响应当前会显式带 `attempted / scored / failed / all_failed / results` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
 
@@ -423,6 +431,13 @@ alembic/ ──► Alembic 数据库迁移框架
   - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`：`86 passed in 1.85s`
   - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`：`2 passed in 0.31s`
   - `tests/test_debate_api.py + tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`：`2 passed in 0.41s`
+- 本轮这类“shared pending queue / campaign summary indexes / batch scoring summary / Chroma write guard”改动，当前还额外实跑通过：
+  - `tests/test_predictions.py tests/test_parser.py tests/test_memory.py tests/test_campaign_service.py tests/test_gameplay_contract_sync.py -q`：`106 passed in 101.36s`
+  - `tests/test_campaign_api.py -q`：`12 passed in 0.72s`
+  - `tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`60 passed in 1.79s`
+  - `tests/test_simulator.py tests/test_intervention.py tests/test_api.py -k 'intervene or pending_intervention or delete_cascade_data or pop_next_pending_intervention_preserves_order or clear_pending_interventions_for_scenario_is_scoped or delete_uses_vector_store_cleanup' -q`：`19 passed in 1.49s`
+  - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
+  - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
 
 覆盖重心：
 

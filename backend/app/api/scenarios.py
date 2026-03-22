@@ -41,6 +41,7 @@ from app.models import (
     Branch,
     BranchStatus,
     InterventionLog,
+    PendingIntervention,
     Prediction,
     ReplayArtifact,
     Round,
@@ -697,8 +698,11 @@ async def delete_scenario(scenario_id: str):
         if branch_ids:
             session.exec(sa_delete(Round).where(Round.branch_id.in_(branch_ids)))
 
-        # 3. Intervention logs
+        # 3. Intervention logs + pending queue
         session.exec(sa_delete(InterventionLog).where(InterventionLog.scenario_id == scenario_id))
+        session.exec(
+            sa_delete(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
+        )
 
         # 4. Agent group members → agent groups
         if group_ids:

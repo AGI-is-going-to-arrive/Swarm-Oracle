@@ -6,6 +6,7 @@ import ast
 import asyncio
 import json
 import logging
+import sqlite3
 from typing import Any
 
 from sqlmodel import Session, select
@@ -16,6 +17,7 @@ from app.models import (
     AgentMessage,
     Branch,
     BranchStatus,
+    PendingIntervention,
     Round,
     Scenario,
     ScenarioStatus,
@@ -49,13 +51,32 @@ except ImportError:
     _VIZ_AVAILABLE = False
 
 # ── Intervention Queue ───────────────────────────────────
-# Key: "scenario_id:branch_id" → list of intervention texts
-# The API layer appends here; the sim loop pops before each round.
-# C-4 fix: use asyncio.Lock for thread-safe access
+# File-backed SQLite deployments use a shared DB queue so different workers
+# can see the same pending interventions. In-memory fallback is kept only
+# for tests / non-file SQLite URLs.
 pending_interventions: dict[str, list[str]] = {}
 _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
+
+
+def _pending_intervention_db_path() -> str | None:
+    db_url = settings.DATABASE_URL.strip()
+    prefix = "sqlite:///"
+    if not db_url.startswith(prefix):
+        return None
+
+    db_path = db_url[len(prefix):].split("?", 1)[0]
+    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+        return None
+    return db_path
+
+
+def _split_intervention_key(key: str) -> tuple[str, str]:
+    scenario_id, separator, branch_id = key.partition(":")
+    if not separator or not scenario_id or not branch_id:
+        raise ValueError(f"Invalid intervention key: {key!r}")
+    return scenario_id, branch_id
 
 
 def _coerce_stance_value(raw_stance: Any) -> float:
@@ -88,13 +109,70 @@ def _coerce_stance_value(raw_stance: Any) -> float:
 
 
 async def get_pending_interventions(key: str) -> list[str]:
-    """C-4 fix: Thread-safe pop of pending interventions for a key."""
+    """Pop all queued interventions for a branch in FIFO order."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        scenario_id, branch_id = _split_intervention_key(key)
+        engine = get_engine()
+        with Session(engine) as session:
+            queued = list(
+                session.exec(
+                    select(PendingIntervention)
+                    .where(
+                        PendingIntervention.scenario_id == scenario_id,
+                        PendingIntervention.branch_id == branch_id,
+                    )
+                    .order_by(PendingIntervention.id.asc())
+                ).all()
+            )
+            if not queued:
+                return []
+            texts = [item.user_input for item in queued]
+            for item in queued:
+                session.delete(item)
+            session.commit()
+            return texts
+
     async with _intervention_lock:
         return pending_interventions.pop(key, [])
 
 
 async def pop_next_pending_intervention(key: str) -> str | None:
     """Atomically pop the next intervention while preserving per-branch order."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        scenario_id, branch_id = _split_intervention_key(key)
+        conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, user_input
+                FROM pending_intervention
+                WHERE scenario_id = ? AND branch_id = ?
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (scenario_id, branch_id),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            conn.execute(
+                "DELETE FROM pending_intervention WHERE id = ?",
+                (row[0],),
+            )
+            conn.execute("COMMIT")
+            return str(row[1])
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.DatabaseError:
+                pass
+            raise
+        finally:
+            conn.close()
+
     async with _intervention_lock:
         queue = pending_interventions.get(key)
         if not queue:
@@ -106,7 +184,22 @@ async def pop_next_pending_intervention(key: str) -> str | None:
 
 
 async def add_pending_intervention(key: str, text: str) -> None:
-    """C-4 fix: Thread-safe append of intervention text."""
+    """Append one intervention while preserving FIFO order across workers."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        scenario_id, branch_id = _split_intervention_key(key)
+        engine = get_engine()
+        with Session(engine) as session:
+            session.add(
+                PendingIntervention(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    user_input=text,
+                )
+            )
+            session.commit()
+        return
+
     async with _intervention_lock:
         if key not in pending_interventions:
             pending_interventions[key] = []
@@ -115,6 +208,19 @@ async def add_pending_intervention(key: str, text: str) -> None:
 
 async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
     """Remove any leftover queued interventions for a finished scenario."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        engine = get_engine()
+        with Session(engine) as session:
+            queued = list(
+                session.exec(
+                    select(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
+                ).all()
+            )
+            for item in queued:
+                session.delete(item)
+            session.commit()
+
     prefix = f"{scenario_id}:"
     async with _intervention_lock:
         keys_to_remove = [key for key in pending_interventions if key.startswith(prefix)]

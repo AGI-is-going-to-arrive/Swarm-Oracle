@@ -648,6 +648,30 @@ def _build_local_timezone(offset_minutes: int) -> timezone:
     return timezone(timedelta(minutes=-offset_minutes))
 
 
+def _build_local_date_utc_window(
+    start_date: date,
+    end_date: date,
+    *,
+    local_timezone: timezone,
+) -> tuple[datetime, datetime]:
+    local_start = datetime(
+        start_date.year,
+        start_date.month,
+        start_date.day,
+        tzinfo=local_timezone,
+    )
+    next_local_start = datetime(
+        end_date.year,
+        end_date.month,
+        end_date.day,
+        tzinfo=local_timezone,
+    ) + timedelta(days=1)
+    return (
+        local_start.astimezone(timezone.utc),
+        next_local_start.astimezone(timezone.utc),
+    )
+
+
 def _build_daily_challenge_summary(
     *,
     user_id: str,
@@ -1136,6 +1160,11 @@ def get_daily_challenge_summary(
 
     target_date = _parse_local_date(local_date)
     local_timezone = _build_local_timezone(timezone_offset_minutes)
+    day_start_utc, day_end_utc = _build_local_date_utc_window(
+        target_date,
+        target_date,
+        local_timezone=local_timezone,
+    )
 
     engine = get_engine()
     with Session(engine) as session:
@@ -1157,6 +1186,8 @@ def get_daily_challenge_summary(
                     ScenarioCampaignLog.director_profile_id == profile.id,
                     ScenarioCampaignLog.profile_id == normalized_profile_id,
                     ScenarioCampaignLog.completed_daily_challenge.is_(True),
+                    ScenarioCampaignLog.created_at >= day_start_utc,
+                    ScenarioCampaignLog.created_at < day_end_utc,
                 )
                 .order_by(ScenarioCampaignLog.created_at.desc())
             ).all()
@@ -1193,6 +1224,11 @@ def get_weekly_campaign_summary(
     local_timezone = _build_local_timezone(timezone_offset_minutes)
     week_start = target_date - timedelta(days=target_date.weekday())
     week_end = week_start + timedelta(days=6)
+    week_start_utc, week_end_utc = _build_local_date_utc_window(
+        week_start,
+        week_end,
+        local_timezone=local_timezone,
+    )
 
     engine = get_engine()
     with Session(engine) as session:
@@ -1215,7 +1251,11 @@ def get_weekly_campaign_summary(
         logs = list(
             session.exec(
                 select(ScenarioCampaignLog)
-                .where(ScenarioCampaignLog.director_profile_id == profile.id)
+                .where(
+                    ScenarioCampaignLog.director_profile_id == profile.id,
+                    ScenarioCampaignLog.created_at >= week_start_utc,
+                    ScenarioCampaignLog.created_at < week_end_utc,
+                )
                 .order_by(ScenarioCampaignLog.created_at.desc())
             ).all()
         )

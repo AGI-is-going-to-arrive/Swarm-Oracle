@@ -237,6 +237,47 @@ def _build_agent_plan(target_agents: int) -> str:
     return f"CORE {core} / IMPORTANT {important} / CROWD {crowd}"
 
 
+def _parse_result_quality(payload: dict) -> tuple[int, int, int, int]:
+    """Score parser payload quality so retries cannot silently degrade it."""
+    raw_agents = payload.get("agents", [])
+    agents = raw_agents if isinstance(raw_agents, list) else []
+    unique_names = {
+        str(agent.get("name", "")).strip()
+        for agent in agents
+        if isinstance(agent, dict) and str(agent.get("name", "")).strip()
+    }
+    complete_agents = sum(
+        1
+        for agent in agents
+        if isinstance(agent, dict)
+        and all(str(agent.get(field, "")).strip() for field in ("name", "role", "persona", "stance", "tier"))
+    )
+    setting = payload.get("setting", {})
+    if not isinstance(setting, dict):
+        setting = {}
+    setting_fields = sum(
+        1
+        for field in ("time_period", "location", "background")
+        if str(setting.get(field, "")).strip()
+    )
+    return len(agents), len(unique_names), complete_agents, setting_fields
+
+
+def _should_replace_parse_result(current: dict, retry: dict) -> bool:
+    """Allow retry results to improve coverage without overwriting better structure."""
+    current_quality = _parse_result_quality(current)
+    retry_quality = _parse_result_quality(retry)
+    if retry_quality[0] < current_quality[0]:
+        return False
+    if retry_quality[1] < current_quality[1]:
+        return False
+    if retry_quality[2] < current_quality[2]:
+        return False
+    if retry_quality[3] < current_quality[3]:
+        return False
+    return retry_quality > current_quality
+
+
 def _fallback_initial_title(question: str, language: str) -> str:
     stripped = question.strip()
     if language == "Chinese":
@@ -444,7 +485,7 @@ async def parse_question(
         except (LLMError, ValueError, TypeError) as exc:
             logger.warning("Parser retry failed for '%s'; keeping best-effort result: %s", question[:80], exc)
         else:
-            if len(retry_result.get("agents", [])) >= len(result.get("agents", [])):
+            if _should_replace_parse_result(result, retry_result):
                 result = retry_result
 
     # Validate structure

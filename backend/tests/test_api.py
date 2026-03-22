@@ -15,6 +15,7 @@ from app.models import (
     BranchStatus,
     InterventionLog,
     Leaderboard,
+    PendingIntervention,
     Round,
     Scenario,
     ScenarioStatus,
@@ -476,6 +477,15 @@ class TestInterveneEndpoint:
             ).all()
             assert len(logs) == 1
             assert logs[0].user_input == "突然下大雨"
+            queued = list(
+                session.exec(
+                    select(PendingIntervention)
+                    .where(PendingIntervention.scenario_id == sid)
+                    .order_by(PendingIntervention.id.asc())
+                ).all()
+            )
+            assert [item.user_input for item in queued] == ["突然下大雨"]
+            assert queued[0].branch_id == bid
 
     def test_intervene_nonexistent_scenario(self, client):
         """Should return 404 for unknown scenario."""
@@ -502,6 +512,33 @@ class TestInterveneEndpoint:
 
         assert resp.status_code == 422
         assert "at most 50 items" in resp.text
+
+    def test_intervene_batch_enqueues_fifo_per_branch(self, client):
+        """Batch intervene should persist queue rows in request order for each branch."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {"branch_id": bid, "text": "第一条批量干预"},
+                    {"branch_id": bid, "text": "第二条批量干预"},
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        with Session(engine) as session:
+            queued = list(
+                session.exec(
+                    select(PendingIntervention)
+                    .where(PendingIntervention.scenario_id == sid)
+                    .order_by(PendingIntervention.id.asc())
+                ).all()
+            )
+        assert [item.user_input for item in queued] == ["第一条批量干预", "第二条批量干预"]
 
     def test_intervene_finished_scenario(self, client):
         """Should reject intervention on DONE scenario."""
@@ -1017,6 +1054,9 @@ class TestDeleteScenario:
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
         _seed_agent(engine, sid, name="Agent1")
         _seed_round(engine, bid, 1)
+        with Session(engine) as session:
+            session.add(PendingIntervention(scenario_id=sid, branch_id=bid, user_input="待处理干预"))
+            session.commit()
 
         resp = client.delete(f"/api/scenario/{sid}")
         assert resp.status_code == 200
@@ -1025,6 +1065,9 @@ class TestDeleteScenario:
         with Session(engine) as session:
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is None
             assert session.exec(select(Agent).where(Agent.scenario_id == sid)).first() is None
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).first() is None
 
     def test_delete_uses_vector_store_cleanup(self, client, monkeypatch):
         """Scenario deletion should go through the shared VectorStore cleanup path."""

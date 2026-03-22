@@ -10,8 +10,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from app.main import app
+from app.models import Scenario, ScenarioStatus
 from app.models.predictions import Leaderboard, Prediction
 from app.services.scoring import _update_leaderboard, recompute_leaderboard_entry
 
@@ -441,6 +444,61 @@ class TestScoringService(unittest.TestCase):
             self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
             self.assertEqual(kwargs["model"], "gpt-test")
 
+    def test_score_all_for_scenario_reports_no_pending_predictions(self):
+        """Batch scoring should distinguish an empty queue from a failed queue."""
+        from app.services.scoring import score_all_for_scenario
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            result = asyncio.run(score_all_for_scenario("scenario-1"))
+
+        self.assertEqual(
+            result,
+            {
+                "attempted": 0,
+                "scored": 0,
+                "failed": 0,
+                "all_failed": False,
+                "results": [],
+            },
+        )
+
+    def test_score_all_for_scenario_reports_all_failed(self):
+        """Batch scoring should report when every attempted prediction failed."""
+        from app.services.scoring import score_all_for_scenario
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            with Session(engine) as session:
+                scenario = Scenario(question="测试问题", status=ScenarioStatus.DONE)
+                session.add(scenario)
+                session.commit()
+                session.refresh(scenario)
+                scenario_id = scenario.id
+                session.add_all(
+                    [
+                        Prediction(scenario_id=scenario_id, prediction_text="预测一"),
+                        Prediction(scenario_id=scenario_id, prediction_text="预测二"),
+                    ]
+                )
+                session.commit()
+
+            with patch("app.services.scoring.score_prediction", new_callable=AsyncMock) as mock_score:
+                mock_score.side_effect = [None, RuntimeError("boom")]
+                result = asyncio.run(score_all_for_scenario(scenario_id))
+
+        self.assertEqual(result["attempted"], 2)
+        self.assertEqual(result["scored"], 0)
+        self.assertEqual(result["failed"], 2)
+        self.assertIs(result["all_failed"], True)
+        self.assertEqual(result["results"], [])
+
     def test_score_prediction_rolls_back_if_leaderboard_update_fails(self):
         """Prediction score and leaderboard should commit atomically."""
         from app.models import Branch, Scenario, ScenarioStatus
@@ -494,6 +552,70 @@ class TestScoringService(unittest.TestCase):
                 self.assertIsNotNone(persisted)
                 self.assertIsNone(persisted.score)
                 self.assertIsNone(persisted.scored_at)
+
+    def test_score_prediction_aborts_when_scenario_disappears_before_persist(self):
+        """A prediction should stay unscored if its scenario is deleted mid-flight."""
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services.scoring import score_prediction
+
+        async def _run() -> None:
+            with patch("app.services.scoring.get_engine") as mock_engine:
+                engine = create_engine("sqlite:///:memory:")
+                SQLModel.metadata.create_all(engine)
+                mock_engine.return_value = engine
+
+                with Session(engine) as session:
+                    scenario = Scenario(
+                        question="测试问题",
+                        status=ScenarioStatus.DONE,
+                        parsed_context={"_language": "Chinese"},
+                    )
+                    session.add(scenario)
+                    session.commit()
+                    session.refresh(scenario)
+
+                    session.add(Branch(
+                        scenario_id=scenario.id,
+                        title="主线",
+                        probability=1.0,
+                        story="故事结果",
+                        insight="关键洞察",
+                    ))
+                    pred = Prediction(
+                        scenario_id=scenario.id,
+                        prediction_text="预测文本",
+                        user_id="director-1",
+                    )
+                    session.add(pred)
+                    session.commit()
+                    scenario_id = scenario.id
+                    pred_id = pred.id
+
+                async def _delete_scenario_then_score(*_args, **_kwargs):
+                    with Session(engine) as session:
+                        doomed = session.get(Scenario, scenario_id)
+                        self.assertIsNotNone(doomed)
+                        session.delete(doomed)
+                        session.commit()
+                    return {"score": 88, "reason": "命中主线"}
+
+                with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                    mock_llm.side_effect = _delete_scenario_then_score
+                    result = await score_prediction(pred_id)
+
+                self.assertIsNone(result)
+
+                with Session(engine) as session:
+                    persisted = session.get(Prediction, pred_id)
+                    self.assertIsNotNone(persisted)
+                    self.assertIsNone(persisted.score)
+                    self.assertIsNone(persisted.scored_at)
+                    entry = session.exec(
+                        select(Leaderboard).where(Leaderboard.user_id == "director-1")
+                    ).first()
+                    self.assertIsNone(entry)
+
+        asyncio.run(_run())
 
     def test_score_prediction_concurrent_calls_only_persist_once(self):
         """Concurrent scoring should write once and avoid double leaderboard updates."""
@@ -585,6 +707,41 @@ class TestScoringService(unittest.TestCase):
                     self.assertEqual(entry.avg_score, 88.0)
 
         asyncio.run(_run())
+
+
+def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
+    client = TestClient(app)
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'predictions-api.db'}")
+    SQLModel.metadata.create_all(engine)
+
+    with patch("app.api.predictions.get_engine", return_value=engine):
+        with Session(engine) as session:
+            scenario = Scenario(question="测试问题", status=ScenarioStatus.DONE)
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+
+        with patch("app.services.scoring.score_all_for_scenario", new_callable=AsyncMock) as mock_score_all:
+            mock_score_all.return_value = {
+                "attempted": 3,
+                "scored": 1,
+                "failed": 2,
+                "all_failed": False,
+                "results": [{"prediction_id": "p-1", "score": 88, "reason": "命中主线"}],
+            }
+
+            response = client.post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "attempted": 3,
+        "scored": 1,
+        "failed": 2,
+        "all_failed": False,
+        "results": [{"prediction_id": "p-1", "score": 88, "reason": "命中主线"}],
+    }
 
 
 if __name__ == "__main__":

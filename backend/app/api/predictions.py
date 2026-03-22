@@ -92,7 +92,7 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
         if not scenario:
             raise HTTPException(404, "Scenario not found")
 
-        # Don't allow predictions after simulation is done 
+        # Don't allow predictions after simulation is done
         if scenario.status == ScenarioStatus.DONE:
             raise HTTPException(400, "Scenario already completed — predictions are closed")
 
@@ -182,11 +182,14 @@ async def trigger_scoring(
             "quota_key": req.user_id,
         }
 
-    results = await score_all_for_scenario(scenario_id, llm_overrides=llm_overrides)
+    summary = await score_all_for_scenario(scenario_id, llm_overrides=llm_overrides)
 
     return {
-        "scored": len(results),
-        "results": results,
+        "attempted": summary["attempted"],
+        "scored": summary["scored"],
+        "failed": summary["failed"],
+        "all_failed": summary["all_failed"],
+        "results": summary["results"],
     }
 
 

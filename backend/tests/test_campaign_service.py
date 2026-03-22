@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -37,6 +38,37 @@ def _seed_completed_scenario(question: str = "测试 campaign") -> str:
         session.commit()
         session.refresh(scenario)
         return scenario.id
+
+
+def _set_campaign_log_created_at(scenario_id: str, created_at: datetime) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        log = session.exec(
+            select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
+        ).first()
+        assert log is not None
+        log.created_at = created_at
+        session.add(log)
+        session.commit()
+
+
+def _normalize_compiled_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def test_campaign_summary_indexes_exist():
+    engine = get_engine()
+    db_path = engine.url.database
+    assert db_path is not None
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("PRAGMA index_list('scenario_campaign_log')").fetchall()
+
+    index_names = {row[1] for row in rows}
+    assert "ix_scenario_campaign_log_director_profile_id_created_at" in index_names
+    assert "ix_scenario_campaign_log_daily_lookup" in index_names
 
 
 def test_finalize_accumulates_campaign_score_and_summaries():
@@ -329,6 +361,56 @@ def test_daily_challenge_summary_returns_incomplete_when_no_matching_log():
     }
 
 
+def test_daily_challenge_summary_pushes_utc_window_into_sql(monkeypatch):
+    scenario_id = _seed_completed_scenario("daily boundary")
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-day-window",
+        user_name="Ivy",
+        profile_id="law",
+        archive_grade="A",
+        profile_resonance="aligned",
+        completed_daily_challenge=True,
+    )
+    _set_campaign_log_created_at(
+        scenario_id,
+        datetime(2026, 3, 21, 16, 0, tzinfo=timezone.utc),
+    )
+
+    captured_statement = None
+    original_exec = Session.exec
+
+    def tracking_exec(self, statement, *args, **kwargs):
+        nonlocal captured_statement
+        if "scenario_campaign_log" in str(statement) and "completed_daily_challenge" in str(statement):
+            captured_statement = statement
+        return original_exec(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", tracking_exec)
+
+    summary = get_daily_challenge_summary(
+        "director-day-window",
+        profile_id="law",
+        local_date="2026-03-22",
+        timezone_offset_minutes=-480,
+    )
+
+    assert summary["completed"] is True
+    assert summary["scenario_id"] == scenario_id
+    assert captured_statement is not None
+    sql_text = str(captured_statement)
+    assert "scenario_campaign_log.created_at >=" in sql_text
+    assert "scenario_campaign_log.created_at <" in sql_text
+    datetime_params = {
+        _normalize_compiled_datetime(value)
+        for value in captured_statement.compile().params.values()
+        if isinstance(value, datetime)
+    }
+    assert datetime(2026, 3, 21, 16, 0, tzinfo=timezone.utc) in datetime_params
+    assert datetime(2026, 3, 22, 16, 0, tzinfo=timezone.utc) in datetime_params
+
+
 def test_weekly_campaign_summary_aggregates_logs_by_local_week():
     scenario_id_1 = _seed_completed_scenario("weekly one")
     scenario_id_2 = _seed_completed_scenario("weekly two")
@@ -373,6 +455,55 @@ def test_weekly_campaign_summary_aggregates_logs_by_local_week():
     assert summary["top_profile_id"] in {"governance", "trade"}
     assert summary["profile_runs"] == {"governance": 1, "trade": 1}
     assert summary["campaign_score_delta"] == 13
+
+
+def test_weekly_campaign_summary_pushes_utc_window_into_sql(monkeypatch):
+    scenario_id = _seed_completed_scenario("weekly boundary")
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-week-window",
+        user_name="Quinn",
+        profile_id="trade",
+        archive_grade="S",
+        profile_resonance="signature",
+        completed_daily_challenge=False,
+    )
+    _set_campaign_log_created_at(
+        scenario_id,
+        datetime(2026, 3, 22, 16, 0, tzinfo=timezone.utc),
+    )
+
+    captured_statement = None
+    original_exec = Session.exec
+
+    def tracking_exec(self, statement, *args, **kwargs):
+        nonlocal captured_statement
+        if "scenario_campaign_log" in str(statement) and "ORDER BY scenario_campaign_log.created_at" in str(statement):
+            captured_statement = statement
+        return original_exec(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "exec", tracking_exec)
+
+    summary = get_weekly_campaign_summary(
+        "director-week-window",
+        local_date="2026-03-25",
+        timezone_offset_minutes=-480,
+    )
+
+    assert summary["total_runs"] == 1
+    assert summary["top_profile_id"] == "trade"
+    assert captured_statement is not None
+    sql_text = str(captured_statement)
+    assert "scenario_campaign_log.created_at >=" in sql_text
+    assert "scenario_campaign_log.created_at <" in sql_text
+    datetime_params = {
+        _normalize_compiled_datetime(value)
+        for value in captured_statement.compile().params.values()
+        if isinstance(value, datetime)
+    }
+    assert datetime(2026, 3, 22, 16, 0, tzinfo=timezone.utc) in datetime_params
+    assert datetime(2026, 3, 29, 16, 0, tzinfo=timezone.utc) in datetime_params
 
 
 def test_scenario_summary_persists_objectives_and_commitment_outcome():

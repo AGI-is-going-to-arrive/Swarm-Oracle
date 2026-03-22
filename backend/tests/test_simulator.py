@@ -13,6 +13,7 @@ from app.models import (
     AgentTier,
     Branch,
     BranchStatus,
+    PendingIntervention,
     Round,
     Scenario,
 )
@@ -36,7 +37,6 @@ from app.services.simulator import (
     _update_branch_status,
     add_pending_intervention,
     clear_pending_interventions_for_scenario,
-    pending_interventions,
     pop_next_pending_intervention,
 )
 from app.visualization.mapper import VisualizationMapper
@@ -868,46 +868,53 @@ class TestCornerCases:
         result = _get_recent_messages(engine, bid, max_rounds=0)
         assert result == []
 
-    def test_intervention_cleanup(self):
-        """pending_interventions should be cleaned after keys are removed."""
-        # Simulate adding interventions
-        pending_interventions["test-scenario:branch-1"] = ["干预文本1"]
-        pending_interventions["test-scenario:branch-2"] = ["干预文本2"]
-        pending_interventions["other-scenario:branch-3"] = ["其他"]
-
-        # Simulate cleanup logic (same as simulator.py L213-215)
-        keys_to_remove = [k for k in pending_interventions if k.startswith("test-scenario:")]
-        for k in keys_to_remove:
-            del pending_interventions[k]
-
-        assert "test-scenario:branch-1" not in pending_interventions
-        assert "test-scenario:branch-2" not in pending_interventions
-        assert "other-scenario:branch-3" in pending_interventions
-
-        # Clean up test state
-        del pending_interventions["other-scenario:branch-3"]
-
     @pytest.mark.asyncio
     async def test_pop_next_pending_intervention_preserves_order(self):
-        key = "queued-scenario:branch-1"
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        key = f"{sid}:{bid}"
         await add_pending_intervention(key, "第一条")
         await add_pending_intervention(key, "第二条")
 
         assert await pop_next_pending_intervention(key) == "第一条"
-        assert pending_interventions[key] == ["第二条"]
+        with Session(engine) as session:
+            queued = list(
+                session.exec(
+                    select(PendingIntervention)
+                    .where(
+                        PendingIntervention.scenario_id == sid,
+                        PendingIntervention.branch_id == bid,
+                    )
+                    .order_by(PendingIntervention.id.asc())
+                ).all()
+            )
+        assert [item.user_input for item in queued] == ["第二条"]
         assert await pop_next_pending_intervention(key) == "第二条"
-        assert key not in pending_interventions
+        with Session(engine) as session:
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).first() is None
 
     @pytest.mark.asyncio
     async def test_clear_pending_interventions_for_scenario_is_scoped(self):
-        pending_interventions["cleanup-scenario:branch-1"] = ["干预文本1"]
-        pending_interventions["cleanup-scenario:branch-2"] = ["干预文本2"]
-        pending_interventions["other-scenario:branch-3"] = ["其他"]
+        engine = get_engine()
+        cleanup_sid = _make_scenario(engine)
+        other_sid = _make_scenario(engine)
+        cleanup_bid_1 = _create_branch(engine, cleanup_sid)
+        cleanup_bid_2 = _create_branch(engine, cleanup_sid)
+        other_bid = _create_branch(engine, other_sid)
 
-        await clear_pending_interventions_for_scenario("cleanup-scenario")
+        await add_pending_intervention(f"{cleanup_sid}:{cleanup_bid_1}", "干预文本1")
+        await add_pending_intervention(f"{cleanup_sid}:{cleanup_bid_2}", "干预文本2")
+        await add_pending_intervention(f"{other_sid}:{other_bid}", "其他")
 
-        assert "cleanup-scenario:branch-1" not in pending_interventions
-        assert "cleanup-scenario:branch-2" not in pending_interventions
-        assert pending_interventions["other-scenario:branch-3"] == ["其他"]
+        await clear_pending_interventions_for_scenario(cleanup_sid)
 
-        del pending_interventions["other-scenario:branch-3"]
+        with Session(engine) as session:
+            remaining = list(
+                session.exec(
+                    select(PendingIntervention).order_by(PendingIntervention.id.asc())
+                ).all()
+            )
+        assert [item.user_input for item in remaining] == ["其他"]

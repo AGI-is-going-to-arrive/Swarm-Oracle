@@ -31,6 +31,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
 > - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
 > - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，`gameplay-state` 负责 authority / 冷却 / 结算与回放
+>
+> `intervene / retrospective / batch` 当前不改 REST 形状，但待注入文本已经进入后端共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求和模拟不需要落在同一个 worker，干预也能被消费。
 
 ### Scenario Management (P4)
 
@@ -43,6 +45,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
 
 > `DELETE /api/scenario/{id}` 当前除了级联删除 SQL 数据外，还会：
+> - 清理该 scenario 残留的 `pending_intervention` 队列项
 > - 通过 shared `VectorStore` 清理该 scenario 对应的 Chroma collection
 > - 对受影响用户的 leaderboard row 做重建，避免删除已评分 prediction 后留下过期统计
 
@@ -68,7 +71,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | — | PredictionResponse[] |
-| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{scored, results[]}` |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{attempted, scored, failed, all_failed, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20` | LeaderboardEntry[] |
 
 > 这 4 个 endpoint 当前只由专用模块 `app/api/predictions.py` 提供；`scenarios.py` 不再持有 legacy 同名路由。
@@ -87,6 +90,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 单条 prediction 会先原子认领未评分行，再写入分数
 > - 并发评分同一 prediction 时，只会有一个请求真正刷新 leaderboard
 > - 竞争失败的请求会回读已有分数返回，不会重复覆盖
+> - 批量评分响应当前会显式区分：
+>   - `attempted = 0`：没有待评分 prediction
+>   - `attempted > 0 && all_failed = true`：本次尝试过，但全都没成功
+>   - `failed > 0 && scored > 0`：部分成功、部分失败
 
 ### Director Campaign (Track A)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import func, update
 from sqlmodel import Session, select
@@ -201,10 +202,16 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
             logger.error("Scenario %s not found for prediction %s", pred.scenario_id, prediction_id)
             return None
 
+        prediction_text = pred.prediction_text
+        scenario_id = pred.scenario_id
+        scenario_question = scenario.question
+        provider_policy = dict(scenario.parsed_context or {})
+        detected_lang = provider_policy.get("_language", "English")
+
         # Get actual result from branches' stories
         from app.models import Branch
         branches = list(session.exec(
-            select(Branch).where(Branch.scenario_id == pred.scenario_id)
+            select(Branch).where(Branch.scenario_id == scenario_id)
         ).all())
 
         # Combine branch stories as actual result
@@ -216,19 +223,12 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                 actual_parts.append(f"洞察: {b.insight}")
 
         if not actual_parts:
-            logger.warning("No stories found for scenario %s — cannot score", pred.scenario_id)
+            logger.warning("No stories found for scenario %s — cannot score", scenario_id)
             return None
 
         actual_result = "\n".join(actual_parts)
 
-        # Read detected language from parsed context (set by parser.py)
-        detected_lang = (
-            scenario.parsed_context.get("_language", "English")
-            if scenario.parsed_context else "English"
-        )
-
     # Call LLM for scoring
-    provider_policy = scenario.parsed_context or {}
     overrides = llm_overrides or {}
     effective_base_url = overrides.get("base_url") or provider_policy.get("llm_base_url")
     effective_model = overrides.get("model") or provider_policy.get("llm_model")
@@ -239,12 +239,12 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         prompt = SCORING_PROMPT.format(
             question_block=format_untrusted_text_block(
                 "原始问题",
-                scenario.question,
+                scenario_question,
                 max_chars=1200,
             ),
             prediction_block=format_untrusted_text_block(
                 "用户预测",
-                pred.prediction_text,
+                prediction_text,
                 max_chars=1200,
             ),
             actual_result_block=format_untrusted_text_block(
@@ -275,6 +275,8 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
 
     # Persist score + leaderboard in one transaction so they cannot drift apart.
     with Session(engine) as session:
+        from app.models import Scenario
+
         scored_at = datetime.now(timezone.utc)
         try:
             pred, claimed = _claim_prediction_score(
@@ -288,6 +290,14 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                 session.rollback()
                 return None
             if claimed:
+                if session.get(Scenario, scenario_id) is None:
+                    logger.warning(
+                        "Scenario %s disappeared before scoring persisted for prediction %s",
+                        scenario_id,
+                        prediction_id,
+                    )
+                    session.rollback()
+                    return None
                 _update_leaderboard(session, pred.user_id, pred.user_name, score)
                 session.commit()
             else:
@@ -310,7 +320,7 @@ async def score_all_for_scenario(
     scenario_id: str,
     *,
     llm_overrides: dict | None = None,
-) -> list[dict]:
+) -> dict[str, Any]:
     """Score all unscored predictions for a completed scenario.
 
     Called after narration finishes.
@@ -327,6 +337,15 @@ async def score_all_for_scenario(
                 Prediction.score == None,  # noqa: E711
             )
         ).all())
+    attempted = len(unscored)
+    if attempted == 0:
+        return {
+            "attempted": 0,
+            "scored": 0,
+            "failed": 0,
+            "all_failed": False,
+            "results": [],
+        }
 
     # M-9 fix: Score concurrently with a semaphore to limit LLM concurrency
     sem = asyncio.Semaphore(5)
@@ -339,14 +358,32 @@ async def score_all_for_scenario(
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     results = []
+    failed = 0
     for pred, result in zip(unscored, raw_results):
         if isinstance(result, Exception):
             logger.error("Scoring failed for %s: %s", pred.id, result)
+            failed += 1
         elif result:
             results.append({"prediction_id": pred.id, **result})
+        else:
+            failed += 1
 
-    logger.info("Scored %d predictions for scenario %s", len(results), scenario_id)
-    return results
+    scored = len(results)
+    all_failed = attempted > 0 and scored == 0 and failed == attempted
+    logger.info(
+        "Scored %d/%d predictions for scenario %s (failed=%d)",
+        scored,
+        attempted,
+        scenario_id,
+        failed,
+    )
+    return {
+        "attempted": attempted,
+        "scored": scored,
+        "failed": failed,
+        "all_failed": all_failed,
+        "results": results,
+    }
 
 
 def _update_leaderboard(session: Session, user_id: str, user_name: str, new_score: float) -> None:

@@ -1,9 +1,11 @@
 """Tests for app.services.memory — Memory management."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import app.services.memory as memory_module
 from app.services.memory import (
     _COMPRESS_DEFAULTS,
     _TIER_MAX_RECENT,
@@ -248,6 +250,9 @@ class TestCompressRounds:
         assert len(result["active_debates"]) == 1
         assert "[诸葛亮]" in result["key_quotes"][0]
         mock_llm.assert_called_once()
+        prompt = mock_llm.call_args[0][0]
+        assert "当前窗口原始对话 / UNTRUSTED DATA" in prompt
+        assert "```text" in prompt
 
     @pytest.mark.asyncio
     async def test_partial_fields_from_llm(self):
@@ -281,12 +286,39 @@ class TestCompressRounds:
         mock_llm.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_llm_error_propagates(self):
-        """LLM errors should propagate to caller (simulator handles them)."""
+    async def test_llm_error_returns_previous_briefing_fallback(self):
+        """LLM errors should fall back to the last valid rolling briefing."""
+        previous_briefing = {
+            "situation": "旧局势",
+            "active_debates": ["旧焦点"],
+            "key_quotes": ["[A]: 旧原话"],
+            "tension_points": ["旧紧张点"],
+            "consensus": "旧共识",
+        }
         with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM connection failed")
-            with pytest.raises(Exception, match="LLM connection failed"):
-                await compress_rounds("[A]: some message")
+            result = await compress_rounds(
+                "[A]: some message",
+                previous_briefing=previous_briefing,
+            )
+
+        assert result == _validate_compress_result(previous_briefing)
+        mock_llm.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_defaults_fallback(self, monkeypatch):
+        """Service-level timeout should return safe defaults instead of raising."""
+        monkeypatch.setattr(memory_module, "_COMPRESS_ROUNDS_TIMEOUT_SECONDS", 0.01)
+
+        async def _slow_llm(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return {"situation": "来不及返回"}
+
+        with patch("app.services.memory.llm_call_json", side_effect=_slow_llm) as mock_llm:
+            result = await compress_rounds("[A]: some message")
+
+        assert result == _COMPRESS_DEFAULTS
+        assert mock_llm.call_count == 1
 
     @pytest.mark.asyncio
     async def test_very_long_input(self):
@@ -307,6 +339,7 @@ class TestCompressRounds:
         # Verify LLM was called with the full text embedded in prompt
         call_args = mock_llm.call_args
         assert len(call_args[0][0]) > 35000  # prompt should contain the full text
+        assert "当前窗口原始对话 / UNTRUSTED DATA" in call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_previous_briefing_is_carried_into_next_compaction(self):

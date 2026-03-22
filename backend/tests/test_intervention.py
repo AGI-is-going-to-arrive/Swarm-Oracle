@@ -6,8 +6,12 @@ from sqlmodel import Session, select
 
 from app.main import app
 from app.models import (
-    Agent, AgentTier, Branch, BranchStatus, InterventionLog,
-    Round, Scenario, ScenarioStatus,
+    Branch,
+    BranchStatus,
+    InterventionLog,
+    Round,
+    Scenario,
+    ScenarioStatus,
 )
 from app.models.database import get_engine
 

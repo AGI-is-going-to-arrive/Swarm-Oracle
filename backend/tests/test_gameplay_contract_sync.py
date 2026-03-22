@@ -1,6 +1,10 @@
 """Sync checks between the shared gameplay contract and backend card events."""
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Lock
 
 import pytest
 
@@ -57,3 +61,32 @@ def test_gameplay_contract_missing_file_raises_clear_error(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="Gameplay contract file is missing"):
         load_gameplay_contract()
+
+
+def test_gameplay_contract_cache_refresh_is_thread_safe(tmp_path, monkeypatch):
+    contract_path = tmp_path / "gameplay_contract.v1.json"
+    contract_path.write_text('{"cards": [{"id": "alpha"}]}', encoding="utf-8")
+
+    monkeypatch.setattr("app.services.gameplay_contract.CONTRACT_PATH", contract_path)
+    monkeypatch.setattr("app.services.gameplay_contract._CONTRACT_CACHE", None)
+
+    real_open = Path.open
+    open_count = 0
+    open_count_lock = Lock()
+
+    def delayed_open(self, *args, **kwargs):
+        nonlocal open_count
+        if self == contract_path:
+            with open_count_lock:
+                open_count += 1
+            time.sleep(0.05)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", delayed_open)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: load_gameplay_contract(), range(8)))
+
+    assert open_count == 1
+    assert all(result is results[0] for result in results)
+    assert results[0]["cards"][0]["id"] == "alpha"

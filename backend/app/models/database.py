@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from sqlalchemy import Index
 from sqlmodel import JSON, Column, Field, Relationship, Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,26 @@ class InterventionLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class PendingIntervention(SQLModel, table=True):
+    """Cross-worker pending intervention queue persisted in SQLite."""
+
+    __tablename__ = "pending_intervention"
+    __table_args__ = (
+        Index(
+            "ix_pending_intervention_queue",
+            "scenario_id",
+            "branch_id",
+            "id",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    scenario_id: str = Field(foreign_key="scenario.id")
+    branch_id: str = Field(foreign_key="branch.id")
+    user_input: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
 class Scenario(SQLModel, table=True):
     """A single 'What-If' scenario."""
 
@@ -235,6 +256,29 @@ def init_db():
             )
             _migrate_create_index(
                 cursor, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
+            )
+            _migrate_create_index(
+                cursor,
+                "pending_intervention",
+                "ix_pending_intervention_queue",
+                ["scenario_id", "branch_id", "id"],
+            )
+            _migrate_create_index(
+                cursor,
+                "scenario_campaign_log",
+                "ix_scenario_campaign_log_director_profile_id_created_at",
+                ["director_profile_id", "created_at"],
+            )
+            _migrate_create_index(
+                cursor,
+                "scenario_campaign_log",
+                "ix_scenario_campaign_log_daily_lookup",
+                [
+                    "director_profile_id",
+                    "profile_id",
+                    "completed_daily_challenge",
+                    "created_at",
+                ],
             )
             conn.commit()
             conn.close()
