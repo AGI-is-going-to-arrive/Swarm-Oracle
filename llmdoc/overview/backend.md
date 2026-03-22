@@ -36,7 +36,7 @@ api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop �
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，hot-path 外键已补索引；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
@@ -121,6 +121,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - **设计**:
   - collection name 当前统一走 canonical naming：`scenario_{scenario_id.replace('-', '_')}`；创建、读取和删除共用同一套命名规则
   - `_collections` 当前是有上限的 LRU 缓存（默认 128），避免长期运行时无界持有 collection 引用
+  - `PersistentClient` 初始化当前有超时上限；超时后会先返回 `unavailable`，避免主线程一直卡住；如果后台初始化稍后完成，同一个 `VectorStore` 实例会在后续访问时接管这份 client
+  - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
   - ChromaDB 不可用时静默降级
@@ -157,7 +159,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `health_check()` — 连通性检查
 - **特性**: 支持 Chat Completions 和 Responses API 两种格式
 - **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s；当前实现直接复用模块级 `asyncio`，5xx 重试路径不会再触发本地 `UnboundLocalError`
-- **HTTP client 生命周期**: `llm_call()` / `llm_call_stream()` 当前复用共享 `httpx.AsyncClient`，并由 `main.py` 的 shutdown/lifespan 在进程退出时统一关闭
+- **HTTP client 生命周期**: `llm_call()` / `llm_call_stream()` 当前复用共享 `httpx.AsyncClient`，但这份 client 现在是按 event loop 归属隔离的：切到新 loop 时会重建 client，旧 client 走后台 best-effort 关闭；进程退出时仍由 `main.py` 的 shutdown/lifespan 统一关闭当前共享 client
 - **JSON 容错**:
   - `_clean_json_text` 会先剥掉 markdown code fence、前后缀和非法控制字符
   - `llm_call_json()` 在常规 `json.loads()` 失败后，会依次尝试：
@@ -447,6 +449,12 @@ alembic/ ──► Alembic 数据库迁移框架
 - 本轮这类“config 校验 / shared AsyncClient / stream retry / replay import 校验 / simulator batch message writes”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`：`368 passed in 37.64s`
   - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`：通过
+- 本轮这类“engine-managed SQLite migration / shared AsyncClient event-loop 隔离 / vector store init timeout 恢复”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_models.py -k test_init_db_uses_engine_managed_sqlite_connection -q`：`1 passed in 0.25s`
+  - `python -m pytest tests/test_llm_client.py -k 'shared_async_client or event_loop_closed_runtime_error' -q`：`3 passed in 0.32s`
+  - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
+  - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
+  - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
 - 本轮这类 backend review fixes 还额外实跑通过：
   - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`：`86 passed in 1.85s`
   - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`：`2 passed in 0.31s`

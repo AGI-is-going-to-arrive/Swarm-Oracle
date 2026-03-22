@@ -1,6 +1,7 @@
 """Tests for app.services.llm_client — LLM API integration."""
 
 import sqlite3
+import threading
 
 import httpx
 import pytest
@@ -171,6 +172,59 @@ class TestLLMCall:
         second = llm_client._get_shared_async_client()
 
         assert first is second
+
+    def test_shared_async_client_is_recreated_for_a_new_event_loop(self, monkeypatch):
+        created_clients: list[object] = []
+        closed_clients: list[threading.Event] = []
+
+        class _FakeLoop:
+            def __init__(self, name: str):
+                self.name = name
+
+            def __repr__(self) -> str:
+                return f"<fake-loop {self.name}>"
+
+        class _FakeClient:
+            def __init__(self):
+                self.closed = threading.Event()
+                created_clients.append(self)
+                closed_clients.append(self.closed)
+
+            async def aclose(self):
+                self.closed.set()
+
+        monkeypatch.setattr(llm_client.httpx, "AsyncClient", _FakeClient)
+        loop_a = _FakeLoop("a")
+        loop_b = _FakeLoop("b")
+        current_loop = {"value": loop_a}
+
+        monkeypatch.setattr(
+            llm_client.asyncio,
+            "get_running_loop",
+            lambda: current_loop["value"],
+        )
+
+        first = llm_client._get_shared_async_client()
+        current_loop["value"] = loop_b
+        second = llm_client._get_shared_async_client()
+
+        assert first is not second
+        assert len(created_clients) == 2
+        assert closed_clients[0].wait(timeout=0.2) is True
+
+    @pytest.mark.asyncio
+    async def test_close_shared_async_client_ignores_event_loop_closed_runtime_error(self):
+        class _BrokenClient:
+            async def aclose(self):
+                raise RuntimeError("Event loop is closed")
+
+        llm_client._shared_async_client = _BrokenClient()
+        llm_client._shared_async_client_loop = object()
+
+        await llm_client.close_shared_async_client()
+
+        assert llm_client._shared_async_client is None
+        assert llm_client._shared_async_client_loop is None
 
     @pytest.mark.asyncio
     async def test_llm_call_stream_retries_before_first_content(self, monkeypatch):

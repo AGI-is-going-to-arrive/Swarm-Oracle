@@ -140,6 +140,72 @@ class TestVectorStore:
 
 
 class TestVectorStoreGracefulDegradation:
+    def test_init_uses_client_when_factory_returns_before_timeout(self, temp_dir, monkeypatch):
+        """Client init should succeed when PersistentClient returns within the timeout."""
+        fake_client = object()
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(
+            vector_store_module,
+            "_create_persistent_client",
+            lambda _path: fake_client,
+        )
+
+        vs = VectorStore(
+            persist_dir=temp_dir,
+            client_init_timeout_seconds=0.05,
+        )
+
+        assert vs.available is True
+        assert vs._client is fake_client
+
+    def test_init_times_out_and_disables_client(self, temp_dir, monkeypatch):
+        """Client init should degrade gracefully when Chroma blocks during startup."""
+        init_started = threading.Event()
+
+        def _slow_create(_path: str):
+            init_started.set()
+            time.sleep(0.2)
+            return object()
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(vector_store_module, "_create_persistent_client", _slow_create)
+
+        started_at = time.monotonic()
+        vs = VectorStore(
+            persist_dir=temp_dir,
+            client_init_timeout_seconds=0.01,
+        )
+        elapsed = time.monotonic() - started_at
+
+        assert init_started.wait(timeout=0.05) is True
+        assert elapsed < 0.1
+        assert vs.available is False
+
+    def test_timed_out_init_can_become_available_after_background_finish(self, temp_dir, monkeypatch):
+        """A late-finishing init should be adopted by the same VectorStore instance."""
+        fake_client = object()
+
+        def _slow_create(_path: str):
+            time.sleep(0.05)
+            return fake_client
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(vector_store_module, "_create_persistent_client", _slow_create)
+
+        vs = VectorStore(
+            persist_dir=temp_dir,
+            client_init_timeout_seconds=0.01,
+        )
+
+        assert vs.available is False
+        time.sleep(0.08)
+        assert vs.available is True
+        assert vs._client is fake_client
+
     def test_unavailable_store_no_crash(self):
         """Store should not crash when ChromaDB unavailable."""
         vs = VectorStore.__new__(VectorStore)
@@ -381,3 +447,79 @@ class TestVectorStoreSingleton:
         assert len(created_instances) == 1
         assert len(returned_instances) == 8
         assert all(instance is returned_instances[0] for instance in returned_instances)
+
+    def test_get_vector_store_recovers_after_late_init_finishes(self, monkeypatch):
+        original_vector_store_cls = vector_store_module.VectorStore
+        fake_client = object()
+        create_calls = 0
+
+        def _slow_create(_path: str):
+            nonlocal create_calls
+            create_calls += 1
+            time.sleep(0.05)
+            return fake_client
+
+        class _TimedVectorStore(original_vector_store_cls):
+            def __init__(self, *, persist_dir: str):
+                super().__init__(
+                    persist_dir=persist_dir,
+                    client_init_timeout_seconds=0.01,
+                )
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(vector_store_module, "_create_persistent_client", _slow_create)
+        monkeypatch.setattr(vector_store_module, "VectorStore", _TimedVectorStore)
+        monkeypatch.setattr(
+            "app.config.settings.CHROMA_PERSIST_DIR",
+            "/tmp/chroma-recover",
+        )
+
+        first = vector_store_module.get_vector_store()
+        assert first.available is False
+
+        time.sleep(0.08)
+        second = vector_store_module.get_vector_store()
+
+        assert second is first
+        assert second.available is True
+        assert second._client is fake_client
+        assert create_calls == 1
+
+    def test_get_vector_store_retries_after_init_failure(self, monkeypatch):
+        original_vector_store_cls = vector_store_module.VectorStore
+        create_calls = 0
+        fake_client = object()
+
+        def _flaky_create(_path: str):
+            nonlocal create_calls
+            create_calls += 1
+            if create_calls == 1:
+                raise RuntimeError("boom")
+            return fake_client
+
+        class _TimedVectorStore(original_vector_store_cls):
+            def __init__(self, *, persist_dir: str):
+                super().__init__(
+                    persist_dir=persist_dir,
+                    client_init_timeout_seconds=0.01,
+                )
+
+        monkeypatch.setattr(vector_store_module, "_ensure_chromadb", lambda: None)
+        monkeypatch.setattr(vector_store_module, "_CHROMA_AVAILABLE", True)
+        monkeypatch.setattr(vector_store_module, "_create_persistent_client", _flaky_create)
+        monkeypatch.setattr(vector_store_module, "VectorStore", _TimedVectorStore)
+        monkeypatch.setattr(
+            "app.config.settings.CHROMA_PERSIST_DIR",
+            "/tmp/chroma-retry",
+        )
+
+        first = vector_store_module.get_vector_store()
+        assert first.available is False
+
+        second = vector_store_module.get_vector_store()
+
+        assert second is not first
+        assert second.available is True
+        assert second._client is fake_client
+        assert create_calls == 2

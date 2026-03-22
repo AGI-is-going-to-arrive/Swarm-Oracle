@@ -107,6 +107,12 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - 本轮这类“config 启动期校验 / shared AsyncClient / stream 首包前重试 / debate replay import 收紧 / simulator 批量写消息”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`：`368 passed in 37.64s`
   - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`：通过
+- 本轮这类“engine-managed SQLite migration / shared AsyncClient event-loop 隔离 / vector store init timeout 恢复”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_models.py -k test_init_db_uses_engine_managed_sqlite_connection -q`：`1 passed in 0.25s`
+  - `python -m pytest tests/test_llm_client.py -k 'shared_async_client or event_loop_closed_runtime_error' -q`：`3 passed in 0.32s`
+  - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
+  - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
+  - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
 
 ### Frontend
 

@@ -11,12 +11,10 @@ Tests 7 specific issues found by manual audit:
 """
 
 import asyncio
-import json
-import os
-import pytest
 import sqlite3
-import tempfile
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 # ─────────────────────────────────────────────────────────
 # Bug 1: Background task GC protection
@@ -248,7 +246,7 @@ class TestSQLitePathParsing:
 
     def test_init_db_with_relative_path(self, tmp_path):
         """init_db should work with typical relative SQLite paths."""
-        from sqlmodel import create_engine, SQLModel
+        from sqlmodel import SQLModel, create_engine
         db_file = tmp_path / "test.db"
         engine = create_engine(f"sqlite:///{db_file}", echo=False)
         SQLModel.metadata.create_all(engine)
@@ -260,7 +258,7 @@ class TestSQLitePathParsing:
 
     def test_init_db_with_absolute_path(self, tmp_path):
         """init_db should work with absolute SQLite paths (4 slashes)."""
-        from sqlmodel import create_engine, SQLModel
+        from sqlmodel import SQLModel, create_engine
         db_file = tmp_path / "abs_test.db"
         engine = create_engine(f"sqlite:///{db_file}", echo=False)
         SQLModel.metadata.create_all(engine)
@@ -291,6 +289,77 @@ class TestSQLitePathParsing:
         cols = {row[1] for row in cursor.fetchall()}
         assert "new_col" in cols
         conn.close()
+
+    def test_init_db_reuses_engine_managed_connection_for_sqlite_migrations(self, monkeypatch):
+        """init_db should route migrations through engine.begin(), not sqlite3.connect()."""
+        from types import SimpleNamespace
+
+        from app.models import database as database_module
+
+        calls: list[tuple[object, str, str]] = []
+
+        class _FakeResult:
+            def fetchall(self):
+                return []
+
+        class _FakeConnection:
+            def __init__(self):
+                self.executed: list[str] = []
+
+            def exec_driver_sql(self, statement: str):
+                self.executed.append(statement)
+                return _FakeResult()
+
+        class _FakeBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+                self.entered = False
+
+            def __enter__(self):
+                self.entered = True
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.dialect = SimpleNamespace(name="sqlite")
+                self._connection = connection
+                self.begin_calls = 0
+
+            def begin(self):
+                self.begin_calls += 1
+                return _FakeBeginContext(self._connection)
+
+        connection = _FakeConnection()
+        fake_engine = _FakeEngine(connection)
+
+        monkeypatch.setattr(database_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(database_module.SQLModel.metadata, "create_all", lambda _engine: None)
+        monkeypatch.setattr(
+            database_module,
+            "_migrate_add_column",
+            lambda handle, table, column, _col_type: calls.append((handle, table, column)),
+        )
+        monkeypatch.setattr(
+            database_module,
+            "_migrate_create_index",
+            lambda handle, table, index_name, _columns: calls.append((handle, table, index_name)),
+        )
+        monkeypatch.setattr(
+            sqlite3,
+            "connect",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("init_db should reuse the engine-managed connection")
+            ),
+        )
+
+        database_module.init_db()
+
+        assert fake_engine.begin_calls == 1
+        assert calls
+        assert all(handle is connection for handle, *_ in calls)
 
 
 # ─────────────────────────────────────────────────────────
@@ -383,8 +452,8 @@ class TestSimulatorHelperEdgeCases:
 
     def test_agent_to_dict_minimal(self):
         """Agent with only required fields should convert safely."""
-        from app.services.simulator import _agent_to_dict
         from app.models import Agent, AgentTier
+        from app.services.simulator import _agent_to_dict
 
         agent = Agent(
             id="a1", scenario_id="s1", name="Test",

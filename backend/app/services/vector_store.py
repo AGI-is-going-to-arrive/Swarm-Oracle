@@ -25,6 +25,7 @@ _CHROMA_WRITE_LOCK_KEY = "vector-store:chroma-write"
 _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 _CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
+_CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 
 
 def _ensure_chromadb():
@@ -38,6 +39,10 @@ def _ensure_chromadb():
     except ImportError:
         _CHROMA_AVAILABLE = False
         logger.warning("chromadb not installed — vector memory L2 disabled")
+
+
+def _create_persistent_client(path: str):
+    return _chromadb.PersistentClient(path=path)
 
 
 class VectorStore:
@@ -55,23 +60,83 @@ class VectorStore:
         persist_dir: str = "./chroma_data",
         *,
         collection_cache_size: int = 128,
+        client_init_timeout_seconds: float = _CHROMA_INIT_TIMEOUT_SECONDS,
     ):
         _ensure_chromadb()
         self._client = None
         self._persist_dir = persist_dir
         self._collection_cache_size = max(1, collection_cache_size)
         self._collections: OrderedDict[str, Any] = OrderedDict()
+        self._client_init_timeout_seconds = max(float(client_init_timeout_seconds), 0.01)
+        self._client_init_holder: dict[str, Any] | None = None
+        self._client_init_thread: threading.Thread | None = None
+        self._client_init_state_lock = threading.Lock()
 
         if _CHROMA_AVAILABLE:
+            init_thread = self._start_client_init_thread()
+            init_thread.join(self._client_init_timeout_seconds)
+
+            if init_thread.is_alive():
+                logger.warning(
+                    "ChromaDB init timed out after %.2fs at %s (L2 disabled)",
+                    self._client_init_timeout_seconds,
+                    persist_dir,
+                )
+                return
+
+            self._finalize_client_init()
+
+    def _start_client_init_thread(self) -> threading.Thread:
+        holder: dict[str, Any] = {}
+
+        def _init_client() -> None:
             try:
-                self._client = _chromadb.PersistentClient(path=persist_dir)
-                logger.info("ChromaDB initialized at %s", persist_dir)
+                holder["client"] = _create_persistent_client(self._persist_dir)
             except Exception as exc:
-                logger.warning("ChromaDB init failed (L2 disabled): %s", exc)
+                holder["error"] = exc
+
+        init_thread = threading.Thread(
+            target=_init_client,
+            name="chromadb-persistent-client-init",
+            daemon=True,
+        )
+        self._client_init_holder = holder
+        self._client_init_thread = init_thread
+        init_thread.start()
+        return init_thread
+
+    def _finalize_client_init(self) -> None:
+        init_lock = getattr(self, "_client_init_state_lock", None)
+        if init_lock is None:
+            return
+
+        with init_lock:
+            init_thread = getattr(self, "_client_init_thread", None)
+            holder = getattr(self, "_client_init_holder", None)
+            if init_thread is None or holder is None:
+                return
+            if init_thread.is_alive():
+                return
+            self._client_init_thread = None
+            self._client_init_holder = None
+
+        if "error" in holder:
+            logger.warning("ChromaDB init failed (L2 disabled): %s", holder["error"])
+            return
+
+        client = holder.get("client")
+        if client is not None:
+            self._client = client
+            logger.info("ChromaDB initialized at %s", self._persist_dir)
+
+    def _client_init_pending(self) -> bool:
+        init_thread = getattr(self, "_client_init_thread", None)
+        return init_thread is not None and init_thread.is_alive()
 
     @property
     def available(self) -> bool:
         """Check if ChromaDB is operational."""
+        self._finalize_client_init()
         return self._client is not None
 
     @staticmethod
@@ -282,13 +347,37 @@ _vector_store: VectorStore | None = None
 _vector_store_lock = threading.Lock()
 
 
+def _store_ready(store: object | None) -> bool:
+    if store is None:
+        return False
+
+    if not hasattr(store, "available") and not hasattr(store, "_client_init_pending"):
+        return True
+
+    try:
+        if bool(getattr(store, "available")):
+            return True
+    except Exception:
+        pass
+
+    pending = getattr(store, "_client_init_pending", None)
+    if callable(pending):
+        try:
+            return bool(pending())
+        except Exception:
+            return False
+    return False
+
+
 def get_vector_store() -> VectorStore:
     """Get the global VectorStore singleton."""
     global _vector_store
-    if _vector_store is not None:
+    if _store_ready(_vector_store):
         return _vector_store
     with _vector_store_lock:
-        if _vector_store is None:
+        if _store_ready(_vector_store):
+            return _vector_store
+        if _vector_store is None or not _store_ready(_vector_store):
             from app.config import settings
             _vector_store = VectorStore(persist_dir=settings.CHROMA_PERSIST_DIR)
     return _vector_store

@@ -220,76 +220,79 @@ def init_db():
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
 
-    # Lightweight migration: add columns that create_all() can't add to existing tables
-    import sqlite3
-    db_url = str(engine.url)
-    if db_url.startswith("sqlite"):
-        db_path = str(engine.url.database) if engine.url.database else db_url.split("///", 1)[-1]
+    # Lightweight migration: add columns that create_all() can't add to existing tables.
+    # Reuse an engine-managed SQLAlchemy connection so migrations share the same
+    # pool, transaction handling, and SQLite connection settings as the rest of the app.
+    if engine.dialect.name == "sqlite":
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            # Check and add missing columns
-            _migrate_add_column(cursor, "branch", "key_moments", "TEXT")
-            _migrate_add_column(cursor, "agent", "group_id", "TEXT")
-            # V2: Visualization fields
-            _migrate_add_column(cursor, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
-            _migrate_add_column(cursor, "scenario", "scene_theme", "TEXT")
-            _migrate_add_column(cursor, "scenario", "director_state_json", "TEXT")
-            _migrate_add_column(cursor, "scenario", "gameplay_state_json", "TEXT")
-            # Track A follow-up: commitment/objective settlement fields
-            _migrate_add_column(
-                cursor, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
-            )
-            _migrate_add_column(
-                cursor, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"
-            )
-            _migrate_add_column(cursor, "scenario_campaign_log", "commitment_outcome", "TEXT")
-            _migrate_add_column(cursor, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
-            _migrate_add_column(cursor, "debate_prediction", "counterplay_phase", "TEXT")
-            _migrate_add_column(cursor, "debate_prediction", "counterplay_variant", "TEXT")
-            _migrate_create_index(
-                cursor, "agent_message", "ix_agent_message_round_id", ["round_id"]
-            )
-            _migrate_create_index(
-                cursor, "agent_message", "ix_agent_message_agent_id", ["agent_id"]
-            )
-            _migrate_create_index(cursor, "round", "ix_round_branch_id", ["branch_id"])
-            _migrate_create_index(cursor, "agent", "ix_agent_scenario_id", ["scenario_id"])
-            _migrate_create_index(cursor, "branch", "ix_branch_scenario_id", ["scenario_id"])
-            _migrate_create_index(
-                cursor, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
-            )
-            _migrate_create_index(
-                cursor, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
-            )
-            _migrate_create_index(
-                cursor,
-                "pending_intervention",
-                "ix_pending_intervention_queue",
-                ["scenario_id", "branch_id", "id"],
-            )
-            _migrate_create_index(
-                cursor,
-                "scenario_campaign_log",
-                "ix_scenario_campaign_log_director_profile_id_created_at",
-                ["director_profile_id", "created_at"],
-            )
-            _migrate_create_index(
-                cursor,
-                "scenario_campaign_log",
-                "ix_scenario_campaign_log_daily_lookup",
-                [
-                    "director_profile_id",
-                    "profile_id",
-                    "completed_daily_challenge",
-                    "created_at",
-                ],
-            )
-            conn.commit()
-            conn.close()
+            with engine.begin() as conn:
+                # Check and add missing columns
+                _migrate_add_column(conn, "branch", "key_moments", "TEXT")
+                _migrate_add_column(conn, "agent", "group_id", "TEXT")
+                # V2: Visualization fields
+                _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
+                _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
+                _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
+                _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
+                # Track A follow-up: commitment/objective settlement fields
+                _migrate_add_column(
+                    conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
+                )
+                _migrate_add_column(
+                    conn, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"
+                )
+                _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
+                _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
+                _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
+                _migrate_add_column(conn, "debate_prediction", "counterplay_variant", "TEXT")
+                _migrate_create_index(
+                    conn, "agent_message", "ix_agent_message_round_id", ["round_id"]
+                )
+                _migrate_create_index(
+                    conn, "agent_message", "ix_agent_message_agent_id", ["agent_id"]
+                )
+                _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
+                _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
+                _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
+                _migrate_create_index(
+                    conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
+                )
+                _migrate_create_index(
+                    conn, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
+                )
+                _migrate_create_index(
+                    conn,
+                    "pending_intervention",
+                    "ix_pending_intervention_queue",
+                    ["scenario_id", "branch_id", "id"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "scenario_campaign_log",
+                    "ix_scenario_campaign_log_director_profile_id_created_at",
+                    ["director_profile_id", "created_at"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "scenario_campaign_log",
+                    "ix_scenario_campaign_log_daily_lookup",
+                    [
+                        "director_profile_id",
+                        "profile_id",
+                        "completed_daily_challenge",
+                        "created_at",
+                    ],
+                )
         except Exception as exc:
             # M-1 fix: log migration failures instead of silently passing
             logger.warning("Schema migration failed (best-effort): %s", exc)
+
+
+def _sqlite_exec(handle: Any, statement: str):
+    """Execute SQLite SQL against either a DBAPI cursor or a SQLAlchemy connection."""
+    if hasattr(handle, "exec_driver_sql"):
+        return handle.exec_driver_sql(statement)
+    return handle.execute(statement)
 
 
 def _migrate_add_column(cursor, table: str, column: str, col_type: str):
@@ -302,10 +305,10 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     for token in col_type.split():
         if not _SAFE_IDENTIFIER.match(token) and token not in ('0', '1'):
             raise ValueError(f"Unsafe SQL type token rejected: {token!r}")
-    cursor.execute(f"PRAGMA table_info({table})")
-    existing = {row[1] for row in cursor.fetchall()}
+    result = _sqlite_exec(cursor, f"PRAGMA table_info({table})")
+    existing = {row[1] for row in result.fetchall()}
     if column not in existing:
-        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        _sqlite_exec(cursor, f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
         logger.info("Migrated: added %s.%s", table, column)
 
 
@@ -315,7 +318,7 @@ def _migrate_create_index(cursor, table: str, index_name: str, columns: list[str
         if not _SAFE_IDENTIFIER.match(identifier):
             raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
     column_sql = ", ".join(columns)
-    cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column_sql})")
+    _sqlite_exec(cursor, f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column_sql})")
 
 
 def get_session():

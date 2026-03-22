@@ -129,6 +129,7 @@ _global_semaphore_limit = 0
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
 _shared_async_client: httpx.AsyncClient | None = None
+_shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
 
 
@@ -182,23 +183,77 @@ def _runtime_guard_db_path() -> str | None:
     return db_path
 
 
+def _current_event_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+async def _close_async_client_safely(client: httpx.AsyncClient) -> None:
+    try:
+        await client.aclose()
+    except RuntimeError as exc:
+        if "Event loop is closed" not in str(exc):
+            raise
+        logger.warning("Shared AsyncClient close skipped after loop shutdown: %s", exc)
+
+
+def _close_async_client_in_background(client: httpx.AsyncClient) -> None:
+    def _runner() -> None:
+        try:
+            asyncio.run(_close_async_client_safely(client))
+        except Exception:  # pragma: no cover - defensive background cleanup
+            logger.exception("Background AsyncClient close failed")
+
+    threading.Thread(
+        target=_runner,
+        name="llm-shared-client-close",
+        daemon=True,
+    ).start()
+
+
 def _get_shared_async_client() -> httpx.AsyncClient:
-    global _shared_async_client
-    if _shared_async_client is not None:
+    global _shared_async_client, _shared_async_client_loop
+    current_loop = _current_event_loop()
+    if (
+        _shared_async_client is not None
+        and _shared_async_client_loop is current_loop
+    ):
         return _shared_async_client
+    stale_client: httpx.AsyncClient | None = None
     with _shared_async_client_lock:
-        if _shared_async_client is None:
+        if (
+            _shared_async_client is not None
+            and _shared_async_client_loop is current_loop
+        ):
+            return _shared_async_client
+        if _shared_async_client is not None and _shared_async_client_loop is not current_loop:
+            logger.info(
+                "Recreating shared AsyncClient for a new event loop "
+                "(old=%s, new=%s)",
+                _shared_async_client_loop,
+                current_loop,
+            )
+            stale_client = _shared_async_client
             _shared_async_client = httpx.AsyncClient()
+            _shared_async_client_loop = current_loop
+        elif _shared_async_client is None:
+            _shared_async_client = httpx.AsyncClient()
+            _shared_async_client_loop = current_loop
+    if stale_client is not None:
+        _close_async_client_in_background(stale_client)
     return _shared_async_client
 
 
 async def close_shared_async_client() -> None:
-    global _shared_async_client
+    global _shared_async_client, _shared_async_client_loop
     with _shared_async_client_lock:
         client = _shared_async_client
         _shared_async_client = None
+        _shared_async_client_loop = None
     if client is not None:
-        await client.aclose()
+        await _close_async_client_safely(client)
 
 
 def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
