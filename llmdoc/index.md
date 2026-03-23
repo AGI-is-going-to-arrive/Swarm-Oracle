@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-23（BYOK sessionStorage / WS meta envelope + debug / ResultView score BYOK regression）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-23（leaderboard 全量重算 / vector-store 场景级隔离 / debate-llm-simulator hardening / scenarioMeta lock 收口 / DebateArena-ResultView-i18n 回归）
 
 ## 阅读顺序
 

@@ -138,6 +138,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `python -m pytest tests/test_logging_utils.py tests/test_config.py tests/test_api.py tests/test_metrics.py tests/test_vector_store.py tests/test_parser.py tests/test_predictions.py tests/test_models.py tests/test_backend_code_review_fixes.py tests/test_corner_cases.py -k 'init_db_reuses_engine_managed_connection_for_sqlite_migrations or test_root or test_health or test_metrics_endpoint_available or test_score_prediction_uses_english_prompt_for_english_scenario or test_retries_underfilled_agent_plan_and_tops_up_small_shortfall or test_hot_path_foreign_key_indexes_exist or test_store_ready_false_while_init_pending or test_get_vector_store_reuses_pending_instance_without_duplicate_init or test_get_vector_store_recovers_after_late_init_finishes or test_import_replay_scenario_persists_snapshot or test_create_scenario_returns_immediately_and_schedules_background_parse or test_import_replay_scenario_maps_message_agent_by_name_when_agent_id_missing or test_get_groups_returns_leader_and_members or test_settings_defaults or test_settings_from_env or test_settings_normalize_log_config or test_settings_reject_invalid_log_level or test_settings_reject_invalid_log_format or test_json_log_formatter_outputs_structured_payload or test_json_log_formatter_includes_exception_text or test_configure_logging_uses_requested_formatter' -q`：`23 passed, 215 deselected in 3.75s`
   - `python -m pytest -q`：`998 passed in 223.31s (0:03:43)`
   - `python -m ruff check --ignore E501 app/main.py app/config.py app/logging_utils.py app/services/vector_store.py app/models/agent_group.py app/models/database.py app/api/scenarios.py app/api/schemas.py tests/test_logging_utils.py tests/test_config.py tests/test_api.py tests/test_metrics.py tests/test_vector_store.py tests/test_parser.py tests/test_predictions.py tests/test_models.py tests/test_backend_code_review_fixes.py tests/test_corner_cases.py alembic/versions/011_add_agent_group_scenario_index.py`：通过
+- 本 session 这轮“review 收口 + leaderboard 重算 + vector store 场景级失效隔离 + debate/llm/simulator hardening”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_predictions.py tests/test_vector_store.py tests/test_debate_service.py tests/test_llm_client.py tests/test_simulator.py -q`：`161 passed in 25.52s`
+  - `python -m ruff check --ignore E501 app/services/scoring.py app/services/vector_store.py app/services/debate.py app/services/llm_client.py app/services/simulator.py tests/test_predictions.py tests/test_vector_store.py tests/test_debate_service.py tests/test_llm_client.py tests/test_simulator.py`：通过
 - 本 session 这轮“WS event meta / BYOK session policy / WS debug observability”改动，当前还额外实跑通过：
   - `source .venv/bin/activate && cd backend && python -m pytest tests/test_ws.py -q`：`28 passed in 1.17s`
   - `source .venv/bin/activate && cd backend && python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过
@@ -185,6 +188,10 @@ npm run assets:provenance:check
   - `cd backend && python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过
   - `cd frontend && npm test -- --run src/lib/llmProviderPolicy.test.ts src/components/ShareModal.test.tsx src/hooks/useSimulationWS.test.tsx src/hooks/useDebateWS.test.tsx src/pages/InputView.test.tsx`：`30 passed`
   - `cd frontend && npm test -- --run src/lib/wsDebug.test.ts src/pages/ResultView.test.tsx src/hooks/useSimulationWS.test.tsx src/hooks/useDebateWS.test.tsx`：`33 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“scenarioMeta 锁竞争收口 / DebateArena stale counterplay + bet error / Result replay import error / History+Leaderboard i18n 回归”改动，当前还额外实跑通过：
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx`：`41 passed in 1.80s`
+  - `cd frontend && npm test -- --run src/pages/HistoryView.test.tsx src/pages/LeaderboardView.test.tsx`：`2 passed in 496ms`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
 
 ### WebSocket 调试

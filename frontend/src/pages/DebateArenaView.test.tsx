@@ -424,4 +424,97 @@ describe('DebateArenaView', () => {
 
     expect(await screen.findByText('debate.bet_error_locked')).toBeInTheDocument();
   });
+
+  it('surfaces manual bet submission failures as a localized notice', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+    predictDebateMock.mockRejectedValueOnce(
+      new ApiError(503, 'LLM_TEMPORARILY_UNAVAILABLE', 'Provider unavailable'),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click((await screen.findAllByRole('button', { name: 'debate.open_bet' }))[0]);
+    await user.click(await screen.findByRole('button', { name: 'debate.bet_submit' }));
+
+    expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
+  });
+
+  it('ignores stale counterplay data from a different debate before the fresh load arrives', async () => {
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      id: 'debate-old',
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      counterplay: {
+        debate_id: 'debate-old',
+        user_name: 'Local Director',
+        kind: 'winner',
+        target_value: 'opposition',
+        confidence: 0.82,
+        phase: 'crossfire',
+        variant: 'reversal',
+        outcome: 'hit',
+        explanation: 'stale counterplay',
+        created_at: new Date().toISOString(),
+        phase_score: { proposition: 2, opposition: 5 },
+      } as NonNullable<DebateSnapshot['counterplay']>,
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'debate.counterplay_submit' })).toBeInTheDocument();
+    expect(screen.queryByText('debate.counterplay_used')).not.toBeInTheDocument();
+
+    const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    const payload = raw ? JSON.parse(raw) : null;
+    expect(payload?.page?.controls?.counterplay_used).toBe(false);
+    expect(payload?.page?.debate?.counterplay_used).toBe(false);
+  });
 });

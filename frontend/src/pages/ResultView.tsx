@@ -214,6 +214,7 @@ export default function ResultView() {
   const [replayPayload, setReplayPayload] = useState<ScenarioResultReplayPayload | null>(null);
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
+  const [importError, setImportError] = useState('');
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState('');
   const [campaignSummary, setCampaignSummary] = useState<CampaignFinalizeResult | null>(null);
@@ -596,9 +597,18 @@ export default function ResultView() {
   const handleImportReplay = async () => {
     if (!replayPayload || importingReplay) return;
     setImportingReplay(true);
+    setImportError('');
     try {
       const imported = await importReplayScenario(replayPayload.scenario);
       navigate(`/sim/${imported.id}`);
+    } catch (nextError) {
+      setImportError(
+        getLocalizedApiErrorMessage(
+          nextError,
+          t,
+          isZh ? '导入回放失败' : 'Failed to import replay',
+        ),
+      );
     } finally {
       setImportingReplay(false);
     }
@@ -1142,6 +1152,7 @@ export default function ResultView() {
           </button>
         </div>
         {exportError && <p className="result-error result-error--spaced">{exportError}</p>}
+        {importError && <p className="result-error result-error--spaced">{importError}</p>}
       </header>
 
       {/* Ending Cards Grid */}

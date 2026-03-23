@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.main import app
-from app.models import Scenario, ScenarioStatus
+from app.models import Branch, Scenario, ScenarioStatus
 from app.models.predictions import Leaderboard, Prediction
 from app.services.scoring import _update_leaderboard, recompute_leaderboard_entry
 
@@ -294,6 +294,38 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.total_score, 40.0)
             self.assertEqual(entry.avg_score, 40.0)
             self.assertEqual(entry.best_score, 40.0)
+            self.assertEqual(entry.win_streak, 0)
+
+    def test_update_recomputes_from_predictions_instead_of_incrementing_stale_row(self):
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=80.0, minutes=1)
+        self._create_scored_prediction(user_id="u1", user_name="Alice", score=40.0, minutes=2)
+
+        with Session(self.engine) as session:
+            session.add(
+                Leaderboard(
+                    user_id="u1",
+                    user_name="Stale Name",
+                    total_predictions=99,
+                    total_score=9999.0,
+                    avg_score=101.0,
+                    best_score=101.0,
+                    win_streak=99,
+                )
+            )
+            session.commit()
+
+        with Session(self.engine) as session:
+            _update_leaderboard(session, "u1", "Alice", 40.0)
+            session.commit()
+
+        with Session(self.engine) as session:
+            entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.total_predictions, 2)
+            self.assertEqual(entry.total_score, 120.0)
+            self.assertEqual(entry.avg_score, 60.0)
+            self.assertEqual(entry.best_score, 80.0)
+            self.assertEqual(entry.user_name, "Alice")
             self.assertEqual(entry.win_streak, 0)
 
 
@@ -757,6 +789,98 @@ class TestScoringService(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_concurrent_scores_for_same_user_keep_leaderboard_consistent(self):
+        from app.services import scoring as scoring_module
+        from app.services.scoring import score_prediction
+
+        async def _run():
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+
+            with patch("app.services.scoring.get_engine", return_value=engine):
+                with Session(engine) as session:
+                    scenario = Scenario(
+                        question="测试问题",
+                        status=ScenarioStatus.DONE,
+                        outcome_text="实际结果",
+                    )
+                    session.add(scenario)
+                    session.flush()
+                    scenario_id = scenario.id
+
+                    historical = Prediction(
+                        scenario_id=scenario_id,
+                        prediction_text="已评分",
+                        user_id="director-1",
+                        user_name="Alice",
+                        score=70.0,
+                        score_reason="已命中",
+                        scored_at=datetime.now(timezone.utc),
+                    )
+                    first_pending = Prediction(
+                        scenario_id=scenario_id,
+                        prediction_text="预测一",
+                        user_id="director-1",
+                        user_name="Alice",
+                    )
+                    second_pending = Prediction(
+                        scenario_id=scenario_id,
+                        prediction_text="预测二",
+                        user_id="director-1",
+                        user_name="Alice",
+                    )
+                    branch = Branch(
+                        scenario_id=scenario_id,
+                        title="主线",
+                        story="系统最终收敛到稳定结局",
+                        probability=1.0,
+                        status="COMPLETED",
+                    )
+                    session.add(historical)
+                    session.add(first_pending)
+                    session.add(second_pending)
+                    session.add(branch)
+                    session.commit()
+
+                    scoring_module.recompute_leaderboard_entry(session, "director-1", "Alice")
+                    session.commit()
+                    first_id = first_pending.id
+                    second_id = second_pending.id
+
+                gate = asyncio.Event()
+                entered = 0
+
+                async def _fake_llm(*_args, **_kwargs):
+                    nonlocal entered
+                    entered += 1
+                    if entered >= 2:
+                        gate.set()
+                    await gate.wait()
+                    return {"score": 88, "reason": "命中主线"}
+
+                with patch(
+                    "app.services.scoring.llm_call_json",
+                    new_callable=AsyncMock,
+                ) as mock_llm:
+                    mock_llm.side_effect = _fake_llm
+                    first, second = await asyncio.gather(
+                        score_prediction(first_id),
+                        score_prediction(second_id),
+                    )
+
+                self.assertEqual(first, {"score": 88, "reason": "命中主线"})
+                self.assertEqual(second, {"score": 88, "reason": "命中主线"})
+
+                with Session(engine) as session:
+                    entry = session.exec(
+                        select(Leaderboard).where(Leaderboard.user_id == "director-1")
+                    ).first()
+                    self.assertIsNotNone(entry)
+                    self.assertEqual(entry.total_predictions, 3)
+                    self.assertEqual(entry.total_score, 246.0)
+                    self.assertAlmostEqual(entry.avg_score, 82.0)
+
+        asyncio.run(_run())
 
 def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
     client = TestClient(app)

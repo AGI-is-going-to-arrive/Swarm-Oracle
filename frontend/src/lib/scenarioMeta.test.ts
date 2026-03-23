@@ -487,6 +487,56 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(window.localStorage.getItem(`swarmoracle:scenario-meta:v1:lock:${scenarioId}`)).toBeNull();
   });
 
+  it('falls back after a bounded number of lock retries instead of spinning on the main thread', () => {
+    const scenarioId = 'scenario-permanent-lock';
+    const storeKey = 'swarmoracle:scenario-meta:v1';
+    const lockKey = `swarmoracle:scenario-meta:v1:lock:${scenarioId}`;
+    const backingStore = new Map<string, string>();
+    backingStore.set(storeKey, JSON.stringify({ version: 1, scenarios: {} }));
+    let lockReads = 0;
+    let nowTick = 0;
+
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      nowTick += 1;
+      return nowTick;
+    });
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => {
+          if (key === lockKey) {
+            lockReads += 1;
+            return JSON.stringify({
+              ownerId: 'other-tab',
+              token: 'foreign-lock',
+              expiresAt: 9_999,
+            });
+          }
+          return backingStore.get(key) ?? null;
+        },
+        setItem: (key: string, value: string) => {
+          backingStore.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backingStore.delete(key);
+        },
+      },
+    });
+
+    const committed = setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    });
+    const persisted = JSON.parse(backingStore.get(storeKey) ?? '{"scenarios":{}}').scenarios[scenarioId];
+
+    expect(committed.commitment.active).toBe(true);
+    expect(persisted._rev).toBe(1);
+    expect(persisted.commitment.active).toBe(true);
+    expect(lockReads).toBeLessThanOrEqual(3);
+  });
+
   it('falls back gracefully when localStorage writes fail', () => {
     const scenarioId = 'scenario-storage-failure';
     const getItem = window.localStorage.getItem.bind(window.localStorage);

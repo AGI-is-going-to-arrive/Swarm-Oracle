@@ -792,11 +792,18 @@ async def run_simulation(
         # 5) Normalize active branch probabilities (H-1 fix)
         # P2-8: Single session for all probability updates
         active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
-        prob_sum = sum(b["probability"] for b in active_branches)
-        if prob_sum > 0 and abs(prob_sum - 1.0) > 0.01:
+        normalized_probabilities, used_uniform_fallback = _normalized_active_branch_probabilities(
+            active_branches,
+        )
+        if normalized_probabilities is not None:
+            if used_uniform_fallback:
+                logger.warning(
+                    "Active branches for scenario %s summed to <= 0; falling back to uniform probabilities",
+                    scenario_id,
+                )
             with Session(engine) as session:
-                for b in active_branches:
-                    b["probability"] = round(b["probability"] / prob_sum, 4)
+                for b, normalized_probability in zip(active_branches, normalized_probabilities):
+                    b["probability"] = normalized_probability
                     db_branch = session.get(Branch, b["id"])
                     if db_branch:
                         db_branch.probability = b["probability"]
@@ -1442,6 +1449,29 @@ def _create_round(engine, branch_id, round_number) -> str:
         session.commit()
         session.refresh(r)
         return r.id
+
+
+def _normalized_active_branch_probabilities(
+    active_branches: list[dict[str, Any]],
+) -> tuple[list[float] | None, bool]:
+    if not active_branches:
+        return None, False
+
+    prob_sum = sum(float(branch.get("probability", 0.0) or 0.0) for branch in active_branches)
+    if prob_sum <= 0:
+        fallback = [round(1.0 / len(active_branches), 4) for _ in active_branches]
+        fallback[-1] = round(1.0 - sum(fallback[:-1]), 4)
+        return fallback, True
+
+    if abs(prob_sum - 1.0) <= 0.01:
+        return None, False
+
+    normalized = [
+        round(float(branch.get("probability", 0.0) or 0.0) / prob_sum, 4)
+        for branch in active_branches
+    ]
+    normalized[-1] = round(1.0 - sum(normalized[:-1]), 4)
+    return normalized, False
 
 
 def _save_message(engine, round_id, agent_id, content, emotion, diverge):

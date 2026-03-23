@@ -423,19 +423,6 @@ async def score_all_for_scenario(
 
 
 def _update_leaderboard(session: Session, user_id: str, user_name: str, new_score: float) -> None:
-    """Incrementally update leaderboard stats and only recompute the streak."""
-    entry = session.exec(
-        select(Leaderboard).where(Leaderboard.user_id == user_id)
-    ).first()
-
-    if entry is None:
-        recompute_leaderboard_entry(session, user_id, user_name)
-        return
-    entry.total_predictions += 1
-    entry.total_score += float(new_score)
-    entry.avg_score = entry.total_score / entry.total_predictions
-    entry.best_score = max(entry.best_score, float(new_score))
-    entry.user_name = user_name
-    entry.updated_at = datetime.now(timezone.utc)
-    entry.win_streak = _calculate_win_streak(session, user_id)
-    session.add(entry)
+    """Recompute the leaderboard row from scored predictions to avoid drift."""
+    del new_score
+    recompute_leaderboard_entry(session, user_id, user_name)

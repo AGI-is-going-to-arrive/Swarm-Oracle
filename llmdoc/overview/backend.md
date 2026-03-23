@@ -67,7 +67,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **占位根分支复用**: `_get_or_create_root_branch()` 会复用 `POST /api/scenario` 阶段创建的 provisional root branch，避免启动期前端世界线骨架与模拟期真实根分支重复
 - **viz_push 辅助函数**: 统一所有 viz 广播调用，含 `viz_mapper is not None` 安全守卫
 - **Fork 抑制**: 最后一轮不 fork，保证所有叶子分支都有 Agent 发言
-- **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；使用单数据库会话优化 (P2-8)
+- **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning，避免后续剪枝/叙事继续吃坏概率；使用单数据库会话优化 (P2-8)
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
 - **并发**: `LLM_CONCURRENCY` 限制并发LLM调用
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入；`setting` 标签与 fork-detect prompt 当前都已按语言切换，不再让英文场景吃中文主体提示
@@ -124,7 +124,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `PersistentClient` 初始化当前有超时上限；超时后会先返回 `unavailable`，避免主线程一直卡住；如果后台初始化稍后完成，同一个 `VectorStore` 实例会在后续访问时接管这份 client
   - 模块级单例当前会区分“ready”与“仍在后台初始化”：`_store_ready()` 只代表已经可立即使用，`get_vector_store()` 在 init pending 时仍会复用同一个实例，避免并发请求重复拉起多个 Chroma init 线程
   - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
-  - 如果 Chroma 在运行期才出错（例如 collection lookup / query / health check 才失败），当前会主动失效本地 `client + collection cache`；下一次 `get_vector_store()` 会重建单例，而不是让同一个坏 client 无限 warning
+  - 如果 Chroma 在运行期才出错，当前会优先按场景隔离：`collection lookup / store / query` 这类单场景故障只会清掉对应 scenario 的 cache，不会顺手把整个共享 client 置空；`health_check` / 初始化这类更广义故障仍会失效本地 `client + collection cache`
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock；shared lock key 现已按 `scenario_id` 分片，不同 scenario 的 Chroma 写入不再被全局单 key 串成一条队列
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
   - ChromaDB 不可用时静默降级
@@ -173,6 +173,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **全局治理**:
   - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`；当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
   - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
+  - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
   - `llm_call_stream()` 当前也支持连接阶段重试；只有在首个 content 产出前才会重试，避免重复发出部分流片段
@@ -313,16 +314,17 @@ alembic/ ──► Alembic 数据库迁移框架
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
   - `POST /api/debate/{id}/predict` 当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；若 WebSocket 广播失败，只会记 warning，不会把已落库请求翻成假 `500`
   - `run_debate_background()` 当前会在广播 `LIVE` 前先拿 SQLite shared runtime lock；同一 `debate_id` 若已被另一 worker 持锁，会直接返回，不会重复推进回合
+  - 除了 shared runtime lock，进程内 `_running_debates` 当前也有 thread lock 原子保护；同一进程里若未来出现线程/回调并发进入，也不会在 check-add 之间重复起同一场 debate
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
 - **职责**: LLM 对比用户预测与模拟实际结果，给出 0-100 准确度评分
 - **关键函数**:
   - `score_prediction(prediction_id)` — 评估单条预测，自动读取场景 `_language` 匹配输出语言
   - `score_all_for_scenario(scenario_id)` — 批量评分场景所有未评预测
-  - `_update_leaderboard(session, user_id, user_name, score)` — 增量更新排行榜计数/总分/最高分，并按稳定顺序重算 streak
+  - `_update_leaderboard(session, user_id, user_name, score)` — 按已评分 `Prediction` 真值全量重算单个排行榜行，不再继续信任旧聚合值
   - `recompute_leaderboard_entry(session, user_id, user_name)` — 在删 scenario / 删 prediction 后按剩余已评分预测重建单个排行榜行
 - **排行榜物化**:
-  - `total_predictions / total_score / avg_score / best_score` 当前走增量更新；`win_streak` 仍按稳定顺序（`created_at desc / scored_at desc / id desc`）重算
+  - `total_predictions / total_score / avg_score / best_score / win_streak` 当前都按已评分 `Prediction` 真值重算；即使 `Leaderboard` 行先前是 stale 值，也会在下一次更新时被纠正
   - `entry.user_name` 当前始终使用本次请求传入的显示名，不再回跳到历史 prediction 上的旧名字
 - **原子持久化**:
   - `score_prediction()` 当前会先用单条 `UPDATE ... WHERE score IS NULL` 原子 claim 未评分 prediction，再落 leaderboard 事务
@@ -485,6 +487,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 - 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**
+- 本 session 这轮“leaderboard 全量重算 / vector-store 场景级故障隔离 / debate 进程内防重入 / sqlite runtime guard 快速降级 / zero-sum 概率兜底”还额外实跑通过：
+  - `python -m pytest tests/test_predictions.py tests/test_vector_store.py tests/test_debate_service.py tests/test_llm_client.py tests/test_simulator.py -q`：`161 passed in 25.52s`
+  - `python -m ruff check --ignore E501 app/services/scoring.py app/services/vector_store.py app/services/debate.py app/services/llm_client.py app/services/simulator.py tests/test_predictions.py tests/test_vector_store.py tests/test_debate_service.py tests/test_llm_client.py tests/test_simulator.py`：通过
 - 本 session 这轮“WS meta envelope + debug broadcast log”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_ws.py -q`：`28 passed in 1.17s`
   - `python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过

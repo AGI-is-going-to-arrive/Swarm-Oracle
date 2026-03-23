@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from sqlmodel import Session
 
@@ -9,6 +11,8 @@ import app.services.debate as debate_module
 from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
 from app.models.database import get_engine
 from app.services.debate import (
+    _clear_running_debate,
+    _try_mark_debate_running,
     create_debate_record,
     load_debate_result_payload,
     load_debate_snapshot,
@@ -25,6 +29,26 @@ from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, rel
 @pytest.fixture(autouse=True)
 def _disable_debate_llm(monkeypatch):
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", False)
+    _clear_running_debate("debate-thread-race")
+
+
+def test_try_mark_debate_running_is_thread_safe():
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+
+    def _claim() -> None:
+        barrier.wait()
+        results.append(_try_mark_debate_running("debate-thread-race"))
+
+    threads = [threading.Thread(target=_claim) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == [False, True]
+    _clear_running_debate("debate-thread-race")
+    assert "debate-thread-race" not in debate_module._running_debates
 
 
 @pytest.mark.asyncio

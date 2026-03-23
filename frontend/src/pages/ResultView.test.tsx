@@ -723,6 +723,109 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
+  it('shows an inline error when replay import fails', async () => {
+    const user = userEvent.setup();
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    importReplayScenarioMock.mockReset();
+    importReplayScenarioMock.mockRejectedValueOnce(
+      new ApiError(503, 'LLM_TEMPORARILY_UNAVAILABLE', 'Provider unavailable'),
+    );
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: ['Moment 1'],
+          profileId: 'law',
+          dominantBranchTitle: 'Archive Branch',
+          dominantTone: 'order',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'A',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      },
+      campaignScenarioSummary: null,
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('sim-import-destination')).not.toBeInTheDocument();
+  });
+
   it('prefers replay snapshot authority over compact local scenarioMeta on the result page', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockReset();

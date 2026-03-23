@@ -104,7 +104,7 @@ export function DebateArenaView() {
     if (!id) return;
     void loadDebate(id);
     setCounterplayRecord(resolveDebateCounterplayRecord({
-      resultCounterplay: debate?.counterplay ?? null,
+      resultCounterplay: null,
       localRecord: loadDebateCounterplay(id),
     }));
   }, [id, loadDebate]);
@@ -112,10 +112,10 @@ export function DebateArenaView() {
   useEffect(() => {
     if (!id) return;
     setCounterplayRecord(resolveDebateCounterplayRecord({
-      resultCounterplay: debate?.counterplay ?? null,
+      resultCounterplay: debate?.id === id ? debate.counterplay ?? null : null,
       localRecord: loadDebateCounterplay(id),
     }));
-  }, [debate?.counterplay, id]);
+  }, [debate?.counterplay, debate?.id, id]);
 
   useEffect(() => {
     if (!debate?.language) return;
@@ -614,6 +614,8 @@ export function DebateArenaView() {
       setBetNotice(t('debate.bet_success'));
       setBetPreset(null);
       setShowBetModal(false);
+    } catch (nextError) {
+      setBetNotice(getLocalizedApiErrorMessage(nextError, t, t('debate.bet_error')));
     } finally {
       setBetSubmitting(false);
     }

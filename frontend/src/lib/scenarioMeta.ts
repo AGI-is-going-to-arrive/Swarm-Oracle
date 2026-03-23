@@ -13,8 +13,7 @@ import { CONTRACT_CARD_RULES } from './gameplayContract';
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
 const LOCK_KEY_PREFIX = `${STORAGE_KEY}:lock:`;
 const LOCK_LEASE_MS = 150;
-const LOCK_WAIT_TIMEOUT_MS = 40;
-const LOCK_RETRY_DELAY_MS = 8;
+const LOCK_RETRY_ATTEMPTS = 3;
 
 type ScenarioMetaLockRecord = {
   ownerId: string;
@@ -522,17 +521,8 @@ function releaseScenarioMetaLock(scenarioId: string, lock: ScenarioMetaLockRecor
   }
 }
 
-function waitForScenarioMetaLockTurn() {
-  const deadline = Date.now() + LOCK_RETRY_DELAY_MS;
-  while (Date.now() < deadline) {
-    // Intentionally empty: bounded sync wait for a cooperating tab to finish its write.
-  }
-}
-
 function withScenarioMetaLock<T>(scenarioId: string, work: () => T): T {
-  const deadline = Date.now() + LOCK_WAIT_TIMEOUT_MS;
-
-  while (Date.now() <= deadline) {
+  for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS; attempt += 1) {
     const lock = tryAcquireScenarioMetaLock(scenarioId);
     if (lock) {
       try {
@@ -541,11 +531,10 @@ function withScenarioMetaLock<T>(scenarioId: string, work: () => T): T {
         releaseScenarioMetaLock(scenarioId, lock);
       }
     }
-    waitForScenarioMetaLockTurn();
   }
 
   console.warn(
-    '[scenarioMeta] Falling back to optimistic write after lock timeout',
+    '[scenarioMeta] Falling back to optimistic write while lock is busy',
     scenarioId,
   );
   return work();

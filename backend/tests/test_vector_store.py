@@ -276,16 +276,17 @@ class TestVectorStoreEdgeCases:
         results = vs.retrieve("s1", "one", top_k=100)
         assert len(results) == 1
 
-    def test_runtime_collection_failure_invalidates_client_and_cache(self):
+    def test_runtime_collection_failure_invalidates_client_when_health_cannot_be_verified(self):
         class _BrokenClient:
             def get_or_create_collection(self, *, name: str, metadata: dict[str, str]):
                 raise RuntimeError("chroma broke after init")
 
+        cached = object()
         vs = VectorStore.__new__(VectorStore)
         vs._client = _BrokenClient()
         vs._persist_dir = "/nonexistent"
         vs._collection_cache_size = 2
-        vs._collections = OrderedDict({"cached-scenario": object()})
+        vs._collections = OrderedDict({"cached-scenario": cached})
 
         result = vs._get_collection("scenario-a")
 
@@ -293,21 +294,79 @@ class TestVectorStoreEdgeCases:
         assert vs._client is None
         assert vs._collections == OrderedDict()
 
-    def test_runtime_retrieve_failure_invalidates_client(self):
+    def test_runtime_collection_failure_keeps_healthy_client_and_other_cache_entries(self):
+        class _FlakyClient:
+            def get_or_create_collection(self, *, name: str, metadata: dict[str, str]):
+                raise RuntimeError("scenario-specific collection issue")
+
+            def heartbeat(self) -> int:
+                return 1
+
+        client = _FlakyClient()
+        cached = object()
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = client
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict({"cached-scenario": cached})
+
+        result = vs._get_collection("scenario-a")
+
+        assert result is None
+        assert vs._client is client
+        assert vs._collections == OrderedDict({"cached-scenario": cached})
+
+    def test_runtime_retrieve_failure_only_evicts_failed_collection_cache(self):
+        class _HealthyClient:
+            def heartbeat(self) -> int:
+                return 1
+
         class _BrokenCollection:
             def count(self) -> int:
                 raise RuntimeError("query failed")
 
         vs = VectorStore.__new__(VectorStore)
-        vs._client = object()
+        cached = object()
+        vs._client = _HealthyClient()
         vs._persist_dir = "/nonexistent"
         vs._collection_cache_size = 2
-        vs._collections = OrderedDict()
-        vs._get_collection = lambda _scenario_id: _BrokenCollection()
+        vs._collections = OrderedDict({
+            "scenario-a": _BrokenCollection(),
+            "scenario-b": cached,
+        })
+        vs._get_collection = lambda _scenario_id: vs._collections["scenario-a"]
 
         assert vs.retrieve("scenario-a", "query", top_k=3) == []
-        assert vs._client is None
-        assert vs._collections == OrderedDict()
+        assert vs._client is not None
+        assert "scenario-a" not in vs._collections
+        assert vs._collections["scenario-b"] is cached
+
+    def test_runtime_store_failure_only_evicts_failed_collection_cache(self):
+        class _HealthyClient:
+            def heartbeat(self) -> int:
+                return 1
+
+        class _BrokenCollection:
+            def add(self, *, documents, metadatas, ids):
+                raise RuntimeError("write failed")
+
+        vs = VectorStore.__new__(VectorStore)
+        cached = object()
+        vs._client = _HealthyClient()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict({
+            "scenario-a": _BrokenCollection(),
+            "scenario-b": cached,
+        })
+        vs._run_serialized_write = lambda _scenario_id, _operation, write_call: write_call()
+        vs._get_collection = lambda _scenario_id: vs._collections["scenario-a"]
+
+        vs.store("scenario-a", "A", "Content", round_num=1)
+
+        assert vs._client is not None
+        assert "scenario-a" not in vs._collections
+        assert vs._collections["scenario-b"] is cached
 
     def test_store_serializes_concurrent_writes_with_process_lock(self, monkeypatch):
         """Concurrent store calls should not overlap inside one process."""

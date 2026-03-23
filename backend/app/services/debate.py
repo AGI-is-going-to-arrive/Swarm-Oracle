@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -51,6 +52,7 @@ GENERIC_DEBATE_ERROR = {
 DebateBroadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 _running_debates: set[str] = set()
+_running_debates_lock = threading.Lock()
 
 _DEBATE_DIMENSION_LABELS = {
     "zh": {
@@ -70,6 +72,21 @@ _DEBATE_DIMENSION_LABELS = {
 _VALID_DEBATE_WINNERS = {"proposition", "opposition"}
 _VALID_VERDICT_TONES = {"order", "balance", "rupture"}
 _VALID_PRESSURE_SIDES = {"balanced", "proposition", "opposition"}
+
+
+def _try_mark_debate_running(debate_id: str) -> bool:
+    """Claim one in-process debate slot atomically."""
+    with _running_debates_lock:
+        if debate_id in _running_debates:
+            return False
+        _running_debates.add(debate_id)
+        return True
+
+
+def _clear_running_debate(debate_id: str) -> None:
+    """Release one in-process debate slot."""
+    with _running_debates_lock:
+        _running_debates.discard(debate_id)
 
 
 def _empty_turn_fallback(language: str, kind: str) -> str:
@@ -1368,10 +1385,9 @@ async def run_debate_background(
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
 ) -> None:
-    if debate_id in _running_debates:
+    if not _try_mark_debate_running(debate_id):
         logger.warning("Debate %s already running; skipping duplicate execution", debate_id)
         return
-    _running_debates.add(debate_id)
     lock_lease = None
 
     try:
@@ -1600,7 +1616,7 @@ async def run_debate_background(
         raise
     finally:
         release_runtime_lock(lock_lease)
-        _running_debates.discard(debate_id)
+        _clear_running_debate(debate_id)
 
 
 def score_prediction(prediction: DebatePrediction, debate: Debate) -> tuple[float, str]:

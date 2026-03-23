@@ -35,6 +35,7 @@ from app.services.simulator import (
     _get_recent_messages,
     _load_latest_compressed_briefing,
     _narrate_branch_data,
+    _normalized_active_branch_probabilities,
     _resolve_hierarchical_agent_sets,
     _save_message,
     _save_messages,
@@ -114,6 +115,27 @@ class TestCoerceStanceValue:
 
     def test_korean_oppose_keyword_maps_left(self):
         assert _coerce_stance_value("반대") < 0
+
+
+class TestNormalizedActiveBranchProbabilities:
+    def test_zero_sum_falls_back_to_uniform_distribution(self):
+        normalized, used_uniform_fallback = _normalized_active_branch_probabilities([
+            {"id": "b1", "probability": 0.0},
+            {"id": "b2", "probability": 0.0},
+            {"id": "b3", "probability": 0.0},
+        ])
+
+        assert normalized == [0.3333, 0.3333, 0.3334]
+        assert used_uniform_fallback is True
+
+    def test_already_normalized_probabilities_skip_writeback(self):
+        normalized, used_uniform_fallback = _normalized_active_branch_probabilities([
+            {"id": "b1", "probability": 0.5},
+            {"id": "b2", "probability": 0.5},
+        ])
+
+        assert normalized is None
+        assert used_uniform_fallback is False
 
 
 class TestRunSimulation:

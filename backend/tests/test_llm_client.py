@@ -130,6 +130,28 @@ class TestLLMCall:
         assert llm_client._pending_requests == 0
         assert llm_client._pending_by_quota == {}
 
+    def test_sqlite_runtime_guard_uses_short_sqlite_timeout(self, monkeypatch, tmp_path):
+        """SQLite runtime guard should fail fast before falling back."""
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard_timeout.db"
+        connect_calls: list[float] = []
+        real_connect = sqlite3.connect
+
+        def _recording_connect(path, timeout, isolation_level=None):
+            connect_calls.append(timeout)
+            return real_connect(path, timeout=timeout, isolation_level=isolation_level)
+
+        monkeypatch.setattr(llm_client.sqlite3, "connect", _recording_connect)
+
+        reservation_id = llm_client._reserve_sqlite_runtime_slot(
+            db_path=str(db_path),
+            quota_key=None,
+            lease_seconds=30,
+        )
+
+        assert reservation_id
+        assert connect_calls == [llm_client._SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS]
+
     @pytest.mark.asyncio
     async def test_global_semaphore_is_not_replaced_after_runtime_change(self, monkeypatch):
         """Changing LLM_CONCURRENCY at runtime should keep the original semaphore alive."""

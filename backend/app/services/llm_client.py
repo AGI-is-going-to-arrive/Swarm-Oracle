@@ -128,6 +128,7 @@ _global_semaphore: asyncio.Semaphore | None = None
 _global_semaphore_limit = 0
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
+_SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS = 1.0
 _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
@@ -291,7 +292,11 @@ def _reserve_sqlite_runtime_slot(
     reservation_id = uuid.uuid4().hex
     now = time.time()
     expires_at = now + max(lease_seconds, 30.0)
-    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    conn = sqlite3.connect(
+        db_path,
+        timeout=_SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS,
+        isolation_level=None,
+    )
 
     try:
         conn.execute("BEGIN IMMEDIATE")

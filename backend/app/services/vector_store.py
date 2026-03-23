@@ -163,7 +163,11 @@ class VectorStore:
             self._remember_collection(scenario_id, collection)
             return collection
         except Exception as exc:
-            self._invalidate_client(reason=f"collection lookup failed for {scenario_id}", exc=exc)
+            self._handle_operation_failure(
+                scenario_id=scenario_id,
+                reason=f"collection lookup failed for {scenario_id}",
+                exc=exc,
+            )
             logger.warning("Failed to get/create collection for %s: %s", scenario_id, exc)
             return None
 
@@ -183,6 +187,34 @@ class VectorStore:
             logger.warning("Vector store client invalidated: %s", reason)
         else:
             logger.warning("Vector store client invalidated: %s: %s", reason, exc)
+
+    def _handle_operation_failure(
+        self,
+        *,
+        scenario_id: str,
+        reason: str,
+        exc: Exception,
+    ) -> None:
+        """Prefer scenario-local recovery, but invalidate the client when health cannot be verified."""
+        self._collections.pop(scenario_id, None)
+        client = self._client
+        heartbeat = getattr(client, "heartbeat", None)
+        if callable(heartbeat):
+            try:
+                heartbeat()
+            except Exception as health_exc:
+                self._invalidate_client(
+                    reason=f"{reason} and client health check failed",
+                    exc=health_exc,
+                )
+                return
+            logger.warning("Vector store scenario cache cleared: %s: %s", reason, exc)
+            return
+
+        self._invalidate_client(
+            reason=f"{reason} and client health could not be verified",
+            exc=exc,
+        )
 
     def _acquire_write_lease(self, scenario_id: str, operation: str):
         """Wait briefly for the shared runtime lease that serializes Chroma writes."""
@@ -277,7 +309,11 @@ class VectorStore:
                     ids=[doc_id],
                 )
             except Exception as exc:
-                self._invalidate_client(reason=f"store failed for {scenario_id}", exc=exc)
+                self._handle_operation_failure(
+                    scenario_id=scenario_id,
+                    reason=f"store failed for {scenario_id}",
+                    exc=exc,
+                )
                 logger.warning("Vector store write failed (non-fatal): %s", exc)
 
         self._run_serialized_write(scenario_id, "store", _write)
@@ -325,7 +361,11 @@ class VectorStore:
                     })
             return memories
         except Exception as exc:
-            self._invalidate_client(reason=f"retrieve failed for {scenario_id}", exc=exc)
+            self._handle_operation_failure(
+                scenario_id=scenario_id,
+                reason=f"retrieve failed for {scenario_id}",
+                exc=exc,
+            )
             logger.warning("Vector store retrieval failed (non-fatal): %s", exc)
             return []
 
