@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 import app.api.scenarios as scenarios_api
 import app.api.social as social_api
+from app.api.schemas import CreateScenarioRequest
 from app.main import app
 from app.models import (
     Agent,
@@ -121,6 +122,11 @@ class TestHealthEndpoint:
 
 
 class TestScenarioEndpoints:
+    def test_create_scenario_request_defaults_mode_to_blackboard(self):
+        payload = CreateScenarioRequest(question="What if timelines drift?")
+
+        assert payload.mode == "blackboard"
+
     def test_create_scenario_empty_question(self, client):
         """Should reject empty questions."""
         resp = client.post("/api/scenario", json={"question": ""})
@@ -1351,6 +1357,34 @@ class TestExportScenario:
         resp = client.get(f"/api/scenario/{sid}/export")
         assert "决战时刻" in resp.text
         assert "转折点" in resp.text
+
+    def test_export_localizes_labels_for_english_scenarios(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            question="What if Rome never fell?",
+            status=ScenarioStatus.DONE,
+        )
+        _seed_agent(engine, sid, name="Augustus", role="Emperor", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="Imperial continuity",
+            probability=0.75,
+            status=BranchStatus.COMPLETED,
+            story="The senate keeps the empire intact.",
+            insight="Institutions matter.",
+        )
+
+        resp = client.get(f"/api/scenario/{sid}/export")
+
+        assert resp.status_code == 200
+        assert "## Participants" in resp.text
+        assert "| Role | Name | Stance | Tier |" in resp.text
+        assert "## Ending 1: Imperial continuity" in resp.text
+        assert "**Probability**: 75.0%" in resp.text
+        assert "### Story" in resp.text
+        assert "### Insight" in resp.text
 
 
 class TestSocialCopy:

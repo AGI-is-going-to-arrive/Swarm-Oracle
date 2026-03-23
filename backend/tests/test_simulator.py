@@ -18,6 +18,7 @@ from app.models import (
     PendingIntervention,
     Round,
     Scenario,
+    ScenarioStatus,
 )
 from app.models.database import get_engine
 from app.services.simulator import (
@@ -43,6 +44,7 @@ from app.services.simulator import (
     add_pending_intervention,
     clear_pending_interventions_for_scenario,
     pop_next_pending_intervention,
+    run_simulation,
 )
 from app.visualization.mapper import VisualizationMapper
 
@@ -112,6 +114,124 @@ class TestCoerceStanceValue:
 
     def test_korean_oppose_keyword_maps_left(self):
         assert _coerce_stance_value("반대") < 0
+
+
+class TestRunSimulation:
+    @pytest.mark.asyncio
+    async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        target_branch_id = ""
+        sibling_branch_id = ""
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 3,
+                "branch_sensitivity": 1.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+
+            root_branch = Branch(
+                scenario_id=scenario_id,
+                title="Root",
+                probability=1.0,
+                status=BranchStatus.COMPLETED,
+            )
+            session.add(root_branch)
+            session.flush()
+
+            target_branch = Branch(
+                scenario_id=scenario_id,
+                parent_branch_id=root_branch.id,
+                fork_round=1,
+                title="Retrospective",
+                probability=0.8,
+                status=BranchStatus.ACTIVE,
+            )
+            sibling_branch = Branch(
+                scenario_id=scenario_id,
+                parent_branch_id=root_branch.id,
+                fork_round=1,
+                title="Sibling",
+                probability=0.2,
+                status=BranchStatus.ACTIVE,
+            )
+            session.add(target_branch)
+            session.add(sibling_branch)
+            session.flush()
+
+            target_round = Round(branch_id=target_branch.id, round_number=1)
+            session.add(target_round)
+            session.flush()
+
+            agent = Agent(
+                scenario_id=scenario_id,
+                name="Archivist",
+                role="Recorder",
+                tier=AgentTier.CORE,
+            )
+            session.add(agent)
+            session.flush()
+            session.add(
+                AgentMessage(
+                    round_id=target_round.id,
+                    agent_id=agent.id,
+                    content="Existing branch history",
+                    emotion="calm",
+                )
+            )
+            session.commit()
+
+            target_branch_id = target_branch.id
+            sibling_branch_id = sibling_branch.id
+
+        await add_pending_intervention(f"{scenario_id}:{target_branch_id}", "Retrospective event")
+        await add_pending_intervention(f"{scenario_id}:{sibling_branch_id}", "Sibling event")
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "Resume from the fork point.",
+                "emotion": "focused",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Retrospective result",
+                "story": "Replay finished successfully.",
+                "insight": "Continuity survived the fork.",
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+
+        await run_simulation(scenario_id, branch_id=target_branch_id)
+
+        with Session(engine) as session:
+            target_round_numbers = session.exec(
+                select(Round.round_number)
+                .where(Round.branch_id == target_branch_id)
+                .order_by(Round.round_number)
+            ).all()
+            assert target_round_numbers == [1, 2, 3]
+
+            sibling_pending = session.exec(
+                select(PendingIntervention).where(
+                    PendingIntervention.scenario_id == scenario_id,
+                    PendingIntervention.branch_id == sibling_branch_id,
+                )
+            ).all()
+            assert [item.user_input for item in sibling_pending] == ["Sibling event"]
 
 
 class TestResolveHierarchicalAgentSets:

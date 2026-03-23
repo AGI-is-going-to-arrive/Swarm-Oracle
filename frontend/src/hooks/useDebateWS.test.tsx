@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDebateWS } from './useDebateWS';
 
+const getDebateMock = vi.fn();
 const storeState = {
   setError: vi.fn(),
   setDebate: vi.fn(),
@@ -18,6 +19,10 @@ vi.mock('../stores/debateStore', () => ({
   useDebateStore: {
     getState: () => storeState,
   },
+}));
+
+vi.mock('../api/client', () => ({
+  getDebate: (...args: unknown[]) => getDebateMock(...args),
 }));
 
 class MockWebSocket {
@@ -65,6 +70,17 @@ describe('useDebateWS', () => {
     vi.useFakeTimers();
     MockWebSocket.reset();
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+    const sessionStore = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', {
+      getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        sessionStore.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        sessionStore.delete(key);
+      }),
+    });
+    getDebateMock.mockReset();
     Object.values(storeState).forEach((value) => {
       if (typeof value === 'function') {
         value.mockReset();
@@ -145,6 +161,7 @@ describe('useDebateWS', () => {
             user_name: 'QA',
             created_at: new Date().toISOString(),
           },
+          meta: { stream_id: 'debate-4', sequence: 1, event_id: 'debate-4:1' },
         }),
       } as MessageEvent<string>);
     });
@@ -199,6 +216,7 @@ describe('useDebateWS', () => {
               message: 'Debate failed unexpectedly. Please retry.',
             },
           },
+          meta: { stream_id: 'debate-error', sequence: 1, event_id: 'debate-error:1' },
         }),
       } as MessageEvent<string>);
     });
@@ -246,6 +264,7 @@ describe('useDebateWS', () => {
               },
             ],
           },
+          meta: { stream_id: 'debate-5', sequence: 1, event_id: 'debate-5:1' },
         }),
       } as MessageEvent<string>);
     });
@@ -254,5 +273,121 @@ describe('useDebateWS', () => {
       winner: 'proposition',
       phase_insights: expect.any(Array),
     }));
+  });
+
+  it('drops duplicate or stale debate events by sequence', () => {
+    render(<Harness debateId="debate-seq" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'crossfire' },
+          meta: { stream_id: 'debate-seq', sequence: 2, event_id: 'debate-seq:2' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'verdict' },
+          meta: { stream_id: 'debate-seq', sequence: 2, event_id: 'debate-seq:2' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'opening' },
+          meta: { stream_id: 'debate-seq', sequence: 1, event_id: 'debate-seq:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setPhase).toHaveBeenCalledTimes(1);
+    expect(storeState.setPhase).toHaveBeenCalledWith('crossfire');
+  });
+
+  it('polls the latest debate snapshot when a sequence gap is detected', async () => {
+    getDebateMock.mockResolvedValue({
+      id: 'debate-gap',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: true,
+    });
+
+    render(<Harness debateId="debate-gap" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'opening' },
+          meta: { stream_id: 'debate-gap', sequence: 1, event_id: 'debate-gap:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'closing' },
+          meta: { stream_id: 'debate-gap', sequence: 3, event_id: 'debate-gap:3' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getDebateMock).toHaveBeenCalledWith('debate-gap');
+    expect(storeState.setDebate).toHaveBeenCalled();
+  });
+
+  it('emits debug logs with ws metadata when the debug switch is enabled', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    window.sessionStorage.setItem('swarmoracle.ws-debug', '1');
+
+    render(<Harness debateId="debate-debug" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'opening' },
+          meta: {
+            stream_id: 'debate-debug',
+            sequence: 1,
+            event_id: 'debate-debug:1',
+            manager_instance_id: 'manager-1',
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      '[DebateWS] receive',
+      expect.objectContaining({
+        streamId: 'debate-debug',
+        sequence: 1,
+        eventId: 'debate-debug:1',
+      }),
+    );
+    debugSpy.mockRestore();
   });
 });

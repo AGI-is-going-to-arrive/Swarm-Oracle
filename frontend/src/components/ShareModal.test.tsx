@@ -31,20 +31,20 @@ vi.mock('../lib/directorIdentity', () => ({
 
 describe('ShareModal automation callback', () => {
   beforeEach(() => {
-    const store = new Map<string, string>();
-    store.set('swarmoracle.llm-provider-policy.v1', JSON.stringify({
+    const sessionStore = new Map<string, string>();
+    sessionStore.set('swarmoracle.llm-provider-policy.v1', JSON.stringify({
       apiKey: 'sk-test',
       baseUrl: 'https://example.com/v1/chat/completions',
       model: 'gpt-test',
       reasoningEffort: 'medium',
     }));
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn((key: string) => store.get(key) ?? null),
+    vi.stubGlobal('sessionStorage', {
+      getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
       setItem: vi.fn((key: string, value: string) => {
-        store.set(key, value);
+        sessionStore.set(key, value);
       }),
       removeItem: vi.fn((key: string) => {
-        store.delete(key);
+        sessionStore.delete(key);
       }),
     });
     vi.stubGlobal('navigator', {
@@ -178,7 +178,7 @@ describe('ShareModal automation callback', () => {
     await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
 
     await waitFor(() => {
-      expect(screen.getAllByText(/share\.error_llm_unavailable/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/common\.api_errors\.llm_unavailable/).length).toBeGreaterThan(0);
     });
   });
 });

@@ -6,6 +6,8 @@ from sqlmodel import Session, select
 
 from app.main import app
 from app.models import (
+    Agent,
+    AgentMessage,
     Branch,
     BranchStatus,
     InterventionLog,
@@ -52,6 +54,22 @@ def _seed_round(engine, branch_id, round_number):
         session.add(r)
         session.commit()
         return r.id
+
+
+def _seed_message(engine, scenario_id, round_id, *, content: str):
+    with Session(engine) as session:
+        agent = Agent(scenario_id=scenario_id, name=f"Agent {content[:8]}", role="tester")
+        session.add(agent)
+        session.flush()
+        message = AgentMessage(
+            round_id=round_id,
+            agent_id=agent.id,
+            content=content,
+            emotion="neutral",
+        )
+        session.add(message)
+        session.commit()
+        return message.id
 
 
 # ── Retrospective Intervention Tests ─────────────────────
@@ -162,7 +180,7 @@ class TestRetrospectiveIntervention:
             assert logs[0].round_number == 1
 
     def test_new_branch_probability(self, client):
-        """New branch should have lower probability than parent."""
+        """Single-branch retrospective rerun normalizes probability to 1.0."""
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid, probability=0.8)
@@ -175,7 +193,7 @@ class TestRetrospectiveIntervention:
 
         with Session(engine) as session:
             new_branch = session.get(Branch, data["new_branch_id"])
-            assert new_branch.probability < 0.8  # 0.8 * 0.8 = 0.64
+            assert new_branch.probability == 1.0
 
     def test_no_rounds_branch(self, client):
         """Branch with no rounds: round_number=1 should exceed max_round=0."""
@@ -187,6 +205,45 @@ class TestRetrospectiveIntervention:
             "branch_id": bid, "round_number": 1, "text": "test",
         })
         assert resp.status_code == 422
+
+    def test_retro_branch_clones_history_through_selected_round(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        round_1 = _seed_round(engine, bid, 1)
+        round_2 = _seed_round(engine, bid, 2)
+        _seed_round(engine, bid, 3)
+        _seed_message(engine, sid, round_1, content="round-one context")
+        _seed_message(engine, sid, round_2, content="round-two context")
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": bid,
+            "round_number": 2,
+            "text": "在第二轮后插入变量",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+
+        with Session(engine) as session:
+            cloned_rounds = list(
+                session.exec(
+                    select(Round)
+                    .where(Round.branch_id == data["new_branch_id"])
+                    .order_by(Round.round_number)
+                ).all()
+            )
+            assert [round_item.round_number for round_item in cloned_rounds[:2]] == [1, 2]
+            assert cloned_rounds[-1].round_number >= 2
+
+            cloned_messages = list(
+                session.exec(
+                    select(AgentMessage)
+                    .where(AgentMessage.round_id.in_([round_item.id for round_item in cloned_rounds]))
+                    .order_by(AgentMessage.content)
+                ).all()
+            )
+            assert "round-one context" in [message.content for message in cloned_messages]
+            assert "round-two context" in [message.content for message in cloned_messages]
 
 
 # ── Batch Intervention Tests ─────────────────────────────

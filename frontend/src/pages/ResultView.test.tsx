@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
@@ -41,24 +41,46 @@ const {
   })),
 }));
 
+const {
+  setMockLanguage,
+  getMockLanguage,
+  stableTranslator,
+} = vi.hoisted(() => {
+  let currentLanguage = 'en';
+  const setMockLanguage = (language: string) => {
+    currentLanguage = language;
+  };
+  const getMockLanguage = () => currentLanguage;
+  const stableTranslator = (key: string, options?: Record<string, unknown>) => {
+    if (key === 'home.campaign_mastery_level') {
+      return `Lv.${options?.level}`;
+    }
+    if (key === 'home.campaign_next_unlock') {
+      return `${options?.count} points to next unlock`;
+    }
+    if (key === 'result.archive_bet_miss') {
+      return 'Bet Missed';
+    }
+    if (key === 'result.archive_resonance_aligned') {
+      return 'Direction aligned';
+    }
+    return key;
+  };
+  return {
+    setMockLanguage,
+    getMockLanguage,
+    stableTranslator,
+  };
+});
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => {
-      if (key === 'home.campaign_mastery_level') {
-        return `Lv.${options?.level}`;
-      }
-      if (key === 'home.campaign_next_unlock') {
-        return `${options?.count} points to next unlock`;
-      }
-      if (key === 'result.archive_bet_miss') {
-        return 'Bet Missed';
-      }
-      if (key === 'result.archive_resonance_aligned') {
-        return 'Direction aligned';
-      }
-      return key;
+    t: stableTranslator,
+    i18n: {
+      get language() {
+        return getMockLanguage();
+      },
     },
-    i18n: { language: 'en' },
   }),
 }));
 
@@ -254,6 +276,20 @@ vi.mock('../components/ShareModal', () => ({
   default: () => null,
 }));
 
+beforeEach(() => {
+  setMockLanguage('en');
+  const sessionStore = new Map<string, string>();
+  vi.stubGlobal('sessionStorage', {
+    getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      sessionStore.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      sessionStore.delete(key);
+    }),
+  });
+});
+
 describe('ResultView campaign summary', () => {
   it('finalizes campaign progress and renders the summary block', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
@@ -323,6 +359,187 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByText('Lv.2')).toBeInTheDocument();
     expect(screen.getByText('5 points to next unlock')).toBeInTheDocument();
     expect(screen.getByText('Archive Record')).toBeInTheDocument();
+  });
+
+  it('does not refetch or finalize again when only the language changes', async () => {
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    const getAgentsMock = vi.mocked(apiClient.getAgents);
+    const getScenarioMock = vi.mocked(apiClient.getScenario);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+    const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
+
+    finalizeCampaignMock.mockClear();
+    getStoryMock.mockClear();
+    getAgentsMock.mockClear();
+    getScenarioMock.mockClear();
+    listPredictionsMock.mockClear();
+    getCampaignScenarioSummaryMock.mockClear();
+
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 5,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 0,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 5,
+        level: 2,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 10,
+        score_to_next_level: 5,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(finalizeCampaignMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(getStoryMock).toHaveBeenCalledTimes(1);
+    expect(getAgentsMock).toHaveBeenCalledTimes(1);
+    expect(getScenarioMock).toHaveBeenCalledTimes(1);
+    expect(listPredictionsMock).toHaveBeenCalledTimes(1);
+    expect(getCampaignScenarioSummaryMock).toHaveBeenCalledTimes(1);
+
+    setMockLanguage('zh-CN');
+    rerender(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('result.title')).toBeInTheDocument();
+    });
+
+    expect(finalizeCampaignMock).toHaveBeenCalledTimes(1);
+    expect(getStoryMock).toHaveBeenCalledTimes(1);
+    expect(getAgentsMock).toHaveBeenCalledTimes(1);
+    expect(getScenarioMock).toHaveBeenCalledTimes(1);
+    expect(listPredictionsMock).toHaveBeenCalledTimes(1);
+    expect(getCampaignScenarioSummaryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('scores predictions with BYOK overrides loaded from sessionStorage', async () => {
+    const user = userEvent.setup();
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+
+    window.sessionStorage.setItem('swarmoracle.llm-provider-policy.v1', JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: 'https://example.com/v1/chat/completions',
+      model: 'gpt-test',
+      reasoningEffort: 'medium',
+    }));
+
+    listPredictionsMock
+      .mockResolvedValueOnce([
+        {
+          id: 'prediction-1',
+          scenario_id: 'scenario-1',
+          user_name: 'Reader',
+          prediction_text: 'The archive settles in favor of the law branch.',
+          confidence: 0.7,
+          score: null,
+          score_reason: null,
+          created_at: '2026-03-17T00:00:00Z',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'prediction-1',
+          scenario_id: 'scenario-1',
+          user_name: 'Reader',
+          prediction_text: 'The archive settles in favor of the law branch.',
+          confidence: 0.7,
+          score: 88,
+          score_reason: 'Matched the final branch.',
+          created_at: '2026-03-17T00:00:00Z',
+        },
+      ]);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const scoreButton = await screen.findByRole('button', { name: 'result.score_predictions' });
+    await user.click(scoreButton);
+
+    await waitFor(() => {
+      expect(scorePredictionsMock).toHaveBeenCalledWith('scenario-1', {
+        llmApiKey: 'sk-test',
+        llmBaseUrl: 'https://example.com/v1/chat/completions',
+        llmModel: 'gpt-test',
+        userId: 'director-1',
+      });
+    });
+  });
+
+  it('shows an explicit score error when scoring predictions fails', async () => {
+    const user = userEvent.setup();
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+
+    listPredictionsMock.mockResolvedValueOnce([
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Reader',
+        prediction_text: 'The archive settles in favor of the law branch.',
+        confidence: 0.7,
+        score: null,
+        score_reason: null,
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+    scorePredictionsMock.mockRejectedValueOnce(new Error('score failed'));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const scoreButton = await screen.findByRole('button', { name: 'result.score_predictions' });
+    await user.click(scoreButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('score failed')).toBeInTheDocument();
+    });
   });
 
   it('copies a shareable challenge link for the current scenario', async () => {

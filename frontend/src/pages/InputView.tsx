@@ -2,7 +2,7 @@
    SwarmOracle — InputView (Landing Page)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
@@ -62,6 +62,7 @@ export function InputView() {
   const reset = useSimulationStore((s) => s.reset);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
+  const typewriterTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const {
     showByok,
     setShowByok,
@@ -146,11 +147,11 @@ export function InputView() {
   }, []);
 
   // Dynamic placeholders from i18n
-  const placeholders = [
+  const placeholders = useMemo(() => [
     t('home.placeholder_1'),
     t('home.placeholder_2'),
     t('home.placeholder_3')
-  ];
+  ], [i18n.language, t]);
 
   const loadingSteps = [
     t('home.loading_step_1'),
@@ -192,7 +193,15 @@ export function InputView() {
     let textIdx = 0;
     let charIdx = 0;
     let isDeleting = false;
-    let timeout: ReturnType<typeof setTimeout>;
+
+    if (typewriterTimeoutRef.current) {
+      clearTimeout(typewriterTimeoutRef.current);
+      typewriterTimeoutRef.current = null;
+    }
+
+    const scheduleTick = (callback: () => void, delay: number) => {
+      typewriterTimeoutRef.current = setTimeout(callback, delay);
+    };
 
     const tick = () => {
       const currentText = placeholders[textIdx] || '';
@@ -201,7 +210,7 @@ export function InputView() {
         charIdx++;
         setPlaceholder(currentText.slice(0, charIdx));
         if (charIdx >= currentText.length) {
-          timeout = setTimeout(() => {
+          scheduleTick(() => {
             isDeleting = true;
             tick();
           }, 2000);
@@ -216,12 +225,17 @@ export function InputView() {
         }
       }
 
-      timeout = setTimeout(tick, isDeleting ? 30 : 80);
+      scheduleTick(tick, isDeleting ? 30 : 80);
     };
 
     tick();
-    return () => clearTimeout(timeout);
-  }, [t]);
+    return () => {
+      if (typewriterTimeoutRef.current) {
+        clearTimeout(typewriterTimeoutRef.current);
+        typewriterTimeoutRef.current = null;
+      }
+    };
+  }, [placeholders]);
 
   useEffect(() => {
     resizeQuestionField();
@@ -236,9 +250,10 @@ export function InputView() {
         { y: 0, opacity: 1, duration: 0.8, ease: 'power2.out' },
       );
     }
-    if (questionRef.current) {
+    const questionField = questionRef.current?.parentElement;
+    if (questionField) {
       gsap.fromTo(
-        questionRef.current.parentElement!,
+        questionField,
         { y: 20, opacity: 0 },
         { y: 0, opacity: 1, duration: 0.8, delay: 0.3, ease: 'power2.out' },
       );
@@ -938,6 +953,7 @@ export function InputView() {
                   )}
                 </div>
                 <p className="byok-hint">{t('home.byok_hint')}</p>
+                <p className="byok-hint">{t('home.byok_storage_notice')}</p>
               </div>
             )}
           </div>

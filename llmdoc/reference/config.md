@@ -14,7 +14,7 @@
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
 | `DEBATE_USE_LLM` | bool | `true` | Debate Arena 回合文案是否优先走 LLM；关闭时会退回 deterministic 文案 |
 
-> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。
+> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。前端这份 provider policy 现在按标签页会话保存在 `sessionStorage`，关闭该标签页后会清空；若用户浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次。
 
 > **启动期校验**:
 > - 占位 `LLM_API_KEY = sk-12345678` 当前只允许用于本地 LLM 网关（如 `localhost / 127.0.0.1 / host.docker.internal`）
@@ -34,6 +34,7 @@
 > - 默认输出结构化 JSON
 > - `uvicorn / uvicorn.error / uvicorn.access` 会清空自带 handler，统一复用 root formatter
 > - 若 `LOG_FORMAT = plain`，会回到原来的可读文本格式
+> - 当 `LOG_LEVEL = DEBUG` 时，`WSManager.broadcast()` 现在还会为每条非 `heartbeat` 的出站 WebSocket 事件记录 `stream / type / seq / event_id / clients`，便于本地排查 scenario / debate 的事件时序
 
 ## 模拟参数
 

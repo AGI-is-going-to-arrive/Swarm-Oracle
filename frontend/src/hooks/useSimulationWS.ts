@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 import { dispatchVizEvent } from '../game/managers/EventBridge';
+import { logWsDebug } from '../lib/wsDebug';
 import { useSimulationStore } from '../stores/simulationStore';
 import type { WSEvent } from '../types';
 
@@ -24,6 +25,37 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   const reconnectTimerRef = useRef<number | null>(null);
   const stateMessageVersionRef = useRef(0);
   const resyncRequestVersionRef = useRef(0);
+  const lastSequenceRef = useRef(0);
+  const lastStreamIdentityRef = useRef<string | null>(null);
+  const seenEventIdsRef = useRef<string[]>([]);
+
+  const rememberEventId = useCallback((eventId: string) => {
+    seenEventIdsRef.current.push(eventId);
+    if (seenEventIdsRef.current.length > 500) {
+      seenEventIdsRef.current.shift();
+    }
+  }, []);
+
+  const requestScenarioResync = useCallback((
+    currentScenarioId: string,
+    socket: WebSocket,
+    messageVersionAtOpen: number,
+  ) => {
+    const resyncVersion = resyncRequestVersionRef.current + 1;
+    resyncRequestVersionRef.current = resyncVersion;
+    import('../api/client')
+      .then(({ getScenario }) => getScenario(currentScenarioId))
+      .then((scenario) => {
+        const socketStillCurrent = wsRef.current === socket && socket.readyState === WebSocket.OPEN;
+        const requestStillCurrent = resyncRequestVersionRef.current === resyncVersion;
+        const noStateMessagesArrived = stateMessageVersionRef.current === messageVersionAtOpen;
+        if (!socketStillCurrent || !requestStillCurrent || !noStateMessagesArrived) {
+          return;
+        }
+        useSimulationStore.getState().setScenario(scenario);
+      })
+      .catch((error) => console.warn('[WS] Status poll failed:', error));
+  }, []);
 
   const connect = useCallback(() => {
     if (!scenarioId || !ready) return;
@@ -47,27 +79,89 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
 
       if (shouldResync) {
         console.log('[WS] Reconnected — polling backend for missed state...');
-        const resyncVersion = resyncRequestVersionRef.current + 1;
-        resyncRequestVersionRef.current = resyncVersion;
-        import('../api/client')
-          .then(({ getScenario }) => getScenario(currentScenarioId))
-          .then((scenario) => {
-            const socketStillCurrent = wsRef.current === ws && ws.readyState === WebSocket.OPEN;
-            const requestStillCurrent = resyncRequestVersionRef.current === resyncVersion;
-            const noStateMessagesArrived = stateMessageVersionRef.current === messageVersionAtOpen;
-            if (!socketStillCurrent || !requestStillCurrent || !noStateMessagesArrived) {
-              return;
-            }
-            useSimulationStore.getState().setScenario(scenario);
-          })
-          .catch((error) => console.warn('[WS] Status poll failed:', error));
+        logWsDebug('SimulationWS', 'resync_on_reconnect', {
+          streamId: currentScenarioId,
+          reconnectCount: reconnectCount.current,
+          messageVersionAtOpen,
+        });
+        requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
       }
     };
 
     ws.onmessage = (event) => {
       if (cleanedUp.current || wsRef.current !== ws) return;
       try {
-        const raw = JSON.parse(event.data) as { type: string; data?: Record<string, unknown> };
+        const raw = JSON.parse(event.data) as WSEvent & {
+          type: string;
+          data?: Record<string, unknown>;
+        };
+        const meta = raw.meta;
+        if (meta) {
+          logWsDebug('SimulationWS', 'receive', {
+            type: raw.type,
+            streamId: meta.stream_id ?? currentScenarioId,
+            sequence: meta.sequence ?? null,
+            eventId: meta.event_id ?? null,
+            managerInstanceId: meta.manager_instance_id ?? null,
+          });
+
+          const streamIdentity = [
+            meta.manager_instance_id ?? 'manager',
+            meta.stream_id ?? currentScenarioId,
+          ].join(':');
+          if (lastStreamIdentityRef.current !== streamIdentity) {
+            lastStreamIdentityRef.current = streamIdentity;
+            lastSequenceRef.current = 0;
+            seenEventIdsRef.current = [];
+          }
+
+          if (meta.event_id && seenEventIdsRef.current.includes(meta.event_id)) {
+            logWsDebug('SimulationWS', 'drop_duplicate_event_id', {
+              type: raw.type,
+              streamId: meta.stream_id ?? currentScenarioId,
+              sequence: meta.sequence ?? null,
+              eventId: meta.event_id,
+            });
+            return;
+          }
+
+          if (typeof meta.sequence === 'number') {
+            if (meta.sequence <= lastSequenceRef.current) {
+              logWsDebug('SimulationWS', 'drop_stale_sequence', {
+                type: raw.type,
+                streamId: meta.stream_id ?? currentScenarioId,
+                sequence: meta.sequence,
+                lastSequence: lastSequenceRef.current,
+                eventId: meta.event_id ?? null,
+              });
+              return;
+            }
+            if (meta.sequence > lastSequenceRef.current + 1) {
+              console.warn(
+                '[WS] Sequence gap detected — polling backend for missed state',
+                { expected: lastSequenceRef.current + 1, received: meta.sequence },
+              );
+              logWsDebug('SimulationWS', 'sequence_gap', {
+                type: raw.type,
+                streamId: meta.stream_id ?? currentScenarioId,
+                sequence: meta.sequence,
+                expectedSequence: lastSequenceRef.current + 1,
+                eventId: meta.event_id ?? null,
+              });
+              requestScenarioResync(
+                currentScenarioId,
+                ws,
+                stateMessageVersionRef.current + (raw.type !== 'heartbeat' ? 1 : 0),
+              );
+            }
+            lastSequenceRef.current = meta.sequence;
+          }
+
+          if (meta.event_id) {
+            rememberEventId(meta.event_id);
+          }
+        }
+
         if (raw.type.startsWith('viz:')) {
           dispatchVizEvent(raw.type, raw.data ?? {});
           return;
@@ -84,6 +178,10 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
     ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       console.log(`[WS] Disconnected (code=${event.code})`);
+      logWsDebug('SimulationWS', 'close', {
+        streamId: currentScenarioId,
+        code: event.code,
+      });
       wsRef.current = null;
 
       if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
@@ -105,10 +203,19 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
     ws.onerror = (error) => {
       if (cleanedUp.current || wsRef.current !== ws) return;
       console.error('[WS] Error:', error);
+      logWsDebug('SimulationWS', 'error', {
+        streamId: currentScenarioId,
+      });
     };
-  }, [scenarioId, ready]);
+  }, [scenarioId, ready, rememberEventId, requestScenarioResync]);
 
   useEffect(() => {
+    lastSequenceRef.current = 0;
+    lastStreamIdentityRef.current = null;
+    seenEventIdsRef.current = [];
+    stateMessageVersionRef.current = 0;
+    resyncRequestVersionRef.current = 0;
+
     connectTimerRef.current = window.setTimeout(connect, 0);
     return () => {
       cleanedUp.current = true;
@@ -125,7 +232,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, scenarioId]);
 
   return wsRef;
 }

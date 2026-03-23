@@ -100,6 +100,12 @@ class TestWSManager:
         sent = json.loads(ws1.send_text.call_args[0][0])
         assert sent["type"] == "test"
         assert sent["data"]["msg"] == "hello"
+        assert sent["meta"]["stream_id"] == "s1"
+        assert sent["meta"]["sequence"] == 1
+        assert sent["meta"]["event_id"] == "s1:1"
+        assert sent["meta"]["manager_instance_id"]
+        assert sent["meta"]["emitted_at"]
+        assert "meta" not in event
 
     @pytest.mark.asyncio
     async def test_broadcast_ensure_ascii_false(self):
@@ -200,6 +206,50 @@ class TestWSManager:
         sent = json.loads(ws.send_text.call_args[0][0])
         assert sent["type"] == "heartbeat"
         assert sent["data"]["ts"]
+        assert "meta" not in sent
+
+    @pytest.mark.asyncio
+    async def test_broadcast_sequence_is_monotonic_per_stream(self):
+        mgr = WSManager()
+        ws = AsyncMock()
+        mgr._connections["s1"].append(ws)
+
+        await mgr.broadcast("s1", {"type": "first"})
+        await mgr.broadcast("s1", {"type": "second"})
+
+        first = json.loads(ws.send_text.call_args_list[0][0][0])
+        second = json.loads(ws.send_text.call_args_list[1][0][0])
+        assert first["meta"]["sequence"] == 1
+        assert second["meta"]["sequence"] == 2
+
+    @pytest.mark.asyncio
+    async def test_broadcast_sequence_is_isolated_per_stream(self):
+        mgr = WSManager()
+        ws1 = AsyncMock()
+        ws2 = AsyncMock()
+        mgr._connections["s1"].append(ws1)
+        mgr._connections["s2"].append(ws2)
+
+        await mgr.broadcast("s1", {"type": "first"})
+        await mgr.broadcast("s2", {"type": "second"})
+
+        first = json.loads(ws1.send_text.call_args[0][0])
+        second = json.loads(ws2.send_text.call_args[0][0])
+        assert first["meta"]["sequence"] == 1
+        assert second["meta"]["sequence"] == 1
+
+    @pytest.mark.asyncio
+    async def test_broadcast_emits_debug_log_with_event_metadata(self, caplog):
+        mgr = WSManager()
+        ws = AsyncMock()
+        mgr._connections["scenario-debug"].append(ws)
+        caplog.set_level("DEBUG", logger="app.api.ws")
+
+        await mgr.broadcast("scenario-debug", {"type": "status", "data": {"status": "simulating"}})
+
+        assert "WS broadcast: stream=scenario-debug" in caplog.text
+        assert "type=status" in caplog.text
+        assert "event_id=scenario-debug:1" in caplog.text
 
     @pytest.mark.asyncio
     async def test_heartbeat_loop_cleans_dead_connection(self):

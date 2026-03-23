@@ -386,15 +386,33 @@ async def export_scenario(scenario_id: str):
             )
         ).all())
 
+    language = _resolve_social_language(scenario)
+    labels = {
+        "status": "状态" if language == "Chinese" else "Status",
+        "created_at": "创建时间" if language == "Chinese" else "Created",
+        "participants": "参与角色" if language == "Chinese" else "Participants",
+        "role": "角色" if language == "Chinese" else "Role",
+        "name": "名称" if language == "Chinese" else "Name",
+        "stance": "定位" if language == "Chinese" else "Stance",
+        "tier": "层级" if language == "Chinese" else "Tier",
+        "no_branches": "尚无已完成的分支。" if language == "Chinese" else "No completed branches yet.",
+        "ending": "结局" if language == "Chinese" else "Ending",
+        "probability": "概率" if language == "Chinese" else "Probability",
+        "fork_reason": "分歧原因" if language == "Chinese" else "Fork Reason",
+        "story": "故事" if language == "Chinese" else "Story",
+        "insight": "洞察" if language == "Chinese" else "Insight",
+        "key_moments": "关键时刻" if language == "Chinese" else "Key Moments",
+    }
+
     # Build Markdown
     lines = [
         f"# SwarmOracle — {scenario.question}",
         "",
-        f"> 状态: {scenario.status.value} | 创建时间: {scenario.created_at.isoformat()}",
+        f"> {labels['status']}: {scenario.status.value} | {labels['created_at']}: {scenario.created_at.isoformat()}",
         "",
-        "## 参与角色",
+        f"## {labels['participants']}",
         "",
-        "| 角色 | 名称 | 定位 | 层级 |",
+        f"| {labels['role']} | {labels['name']} | {labels['stance']} | {labels['tier']} |",
         "|------|------|------|------|",
     ]
     for a in agents:
@@ -405,27 +423,27 @@ async def export_scenario(scenario_id: str):
     lines.append("")
 
     if not branches:
-        lines.append("*尚无已完成的分支。*")
+        lines.append(f"*{labels['no_branches']}*")
     else:
         for i, b in enumerate(branches, 1):
-            lines.append(f"## 结局 {i}: {b.title}")
+            lines.append(f"## {labels['ending']} {i}: {b.title}")
             lines.append("")
-            lines.append(f"**概率**: {b.probability * 100:.1f}%")
+            lines.append(f"**{labels['probability']}**: {b.probability * 100:.1f}%")
             if b.fork_reason:
-                lines.append(f"**分歧原因**: {b.fork_reason}")
+                lines.append(f"**{labels['fork_reason']}**: {b.fork_reason}")
             lines.append("")
-            lines.append("### 故事")
+            lines.append(f"### {labels['story']}")
             lines.append("")
             lines.append(b.story or "—")
             lines.append("")
             if b.insight:
-                lines.append("### 洞察")
+                lines.append(f"### {labels['insight']}")
                 lines.append("")
                 lines.append(f"> {b.insight}")
                 lines.append("")
             moments = parse_key_moments(b.key_moments)
             if moments:
-                lines.append("### 关键时刻")
+                lines.append(f"### {labels['key_moments']}")
                 lines.append("")
                 for j, m in enumerate(moments, 1):
                     lines.append(f"{j}. {m}")

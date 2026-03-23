@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -332,6 +332,7 @@ describe('SimulationView replay automation output', () => {
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
     getReplayArtifactMock.mockResolvedValue(null);
+    mockStore.loadScenario.mockClear();
     mockStore.setScenario.mockClear();
     mockStore.scenario = { ...baseScenario };
     mockStore.status = 'done';
@@ -560,6 +561,40 @@ describe('SimulationView replay automation output', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/sim\/scenario-1$/));
     });
+  });
+
+  it('stops warmup hydration polling after the retry cap when live data stays empty', async () => {
+    vi.useFakeTimers();
+    try {
+      mockStore.scenario = {
+        ...baseScenario,
+        status: 'simulating',
+      };
+      mockStore.status = 'simulating';
+      mockStore.isSimulationComplete = false;
+      mockStore.agents = [];
+      mockStore.branches = [];
+      mockStore.messages = [];
+      mockStore.loadScenario = vi.fn(async () => undefined);
+
+      render(
+        <MemoryRouter initialEntries={['/sim/scenario-1']}>
+          <Routes>
+            <Route path="/sim/:id" element={<SimulationView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(mockStore.loadScenario).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000);
+      });
+
+      expect(mockStore.loadScenario).toHaveBeenCalledTimes(10);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {

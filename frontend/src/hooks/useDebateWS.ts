@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
+import { getDebate } from '../api/client';
+import { logWsDebug } from '../lib/wsDebug';
 import { useDebateStore } from '../stores/debateStore';
 import type { DebateWSEvent } from '../types';
 
@@ -13,6 +15,38 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
   const cleanedUp = useRef(false);
   const connectTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const stateMessageVersionRef = useRef(0);
+  const resyncRequestVersionRef = useRef(0);
+  const lastSequenceRef = useRef(0);
+  const lastStreamIdentityRef = useRef<string | null>(null);
+  const seenEventIdsRef = useRef<string[]>([]);
+
+  const rememberEventId = useCallback((eventId: string) => {
+    seenEventIdsRef.current.push(eventId);
+    if (seenEventIdsRef.current.length > 500) {
+      seenEventIdsRef.current.shift();
+    }
+  }, []);
+
+  const requestDebateResync = useCallback((
+    currentDebateId: string,
+    socket: WebSocket,
+    messageVersionAtOpen: number,
+  ) => {
+    const resyncVersion = resyncRequestVersionRef.current + 1;
+    resyncRequestVersionRef.current = resyncVersion;
+    Promise.resolve(getDebate(currentDebateId))
+      .then((debate) => {
+        const socketStillCurrent = wsRef.current === socket && socket.readyState === WebSocket.OPEN;
+        const requestStillCurrent = resyncRequestVersionRef.current === resyncVersion;
+        const noStateMessagesArrived = stateMessageVersionRef.current === messageVersionAtOpen;
+        if (!socketStillCurrent || !requestStillCurrent || !noStateMessagesArrived) {
+          return;
+        }
+        useDebateStore.getState().setDebate(debate);
+      })
+      .catch((error) => console.warn('[DebateWS] Debate poll failed:', error));
+  }, []);
 
   const connect = useCallback(() => {
     if (!debateId || !ready) return;
@@ -25,13 +59,94 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      const shouldResync = reconnectCount.current > 0;
+      const messageVersionAtOpen = stateMessageVersionRef.current;
       reconnectCount.current = 0;
+
+      if (shouldResync) {
+        logWsDebug('DebateWS', 'resync_on_reconnect', {
+          streamId: debateId,
+          reconnectCount: reconnectCount.current,
+          messageVersionAtOpen,
+        });
+        requestDebateResync(debateId, ws, messageVersionAtOpen);
+      }
     };
 
     ws.onmessage = (event) => {
       if (cleanedUp.current) return;
       try {
         const payload = JSON.parse(event.data) as DebateWSEvent;
+        const meta = payload.meta;
+        if (meta) {
+          logWsDebug('DebateWS', 'receive', {
+            type: payload.type,
+            streamId: meta.stream_id ?? debateId,
+            sequence: meta.sequence ?? null,
+            eventId: meta.event_id ?? null,
+            managerInstanceId: meta.manager_instance_id ?? null,
+          });
+
+          const streamIdentity = [
+            meta.manager_instance_id ?? 'manager',
+            meta.stream_id ?? debateId,
+          ].join(':');
+          if (lastStreamIdentityRef.current !== streamIdentity) {
+            lastStreamIdentityRef.current = streamIdentity;
+            lastSequenceRef.current = 0;
+            seenEventIdsRef.current = [];
+          }
+
+          if (meta.event_id && seenEventIdsRef.current.includes(meta.event_id)) {
+            logWsDebug('DebateWS', 'drop_duplicate_event_id', {
+              type: payload.type,
+              streamId: meta.stream_id ?? debateId,
+              sequence: meta.sequence ?? null,
+              eventId: meta.event_id,
+            });
+            return;
+          }
+
+          if (typeof meta.sequence === 'number') {
+            if (meta.sequence <= lastSequenceRef.current) {
+              logWsDebug('DebateWS', 'drop_stale_sequence', {
+                type: payload.type,
+                streamId: meta.stream_id ?? debateId,
+                sequence: meta.sequence,
+                lastSequence: lastSequenceRef.current,
+                eventId: meta.event_id ?? null,
+              });
+              return;
+            }
+            if (meta.sequence > lastSequenceRef.current + 1 && debateId) {
+              console.warn(
+                '[DebateWS] Sequence gap detected — polling backend for missed debate state',
+                { expected: lastSequenceRef.current + 1, received: meta.sequence },
+              );
+              logWsDebug('DebateWS', 'sequence_gap', {
+                type: payload.type,
+                streamId: meta.stream_id ?? debateId,
+                sequence: meta.sequence,
+                expectedSequence: lastSequenceRef.current + 1,
+                eventId: meta.event_id ?? null,
+              });
+              requestDebateResync(
+                debateId,
+                ws,
+                stateMessageVersionRef.current + (payload.type !== 'heartbeat' ? 1 : 0),
+              );
+            }
+            lastSequenceRef.current = meta.sequence;
+          }
+
+          if (meta.event_id) {
+            rememberEventId(meta.event_id);
+          }
+        }
+
+        if (payload.type !== 'heartbeat') {
+          stateMessageVersionRef.current += 1;
+        }
         const store = useDebateStore.getState();
         switch (payload.type) {
           case 'heartbeat':
@@ -78,6 +193,10 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     };
 
     ws.onclose = (event) => {
+      logWsDebug('DebateWS', 'close', {
+        streamId: debateId,
+        code: event.code,
+      });
       wsRef.current = null;
       if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
@@ -95,10 +214,19 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     ws.onerror = (error) => {
       if (cleanedUp.current) return;
       console.error('[DebateWS] Error', error);
+      logWsDebug('DebateWS', 'error', {
+        streamId: debateId,
+      });
     };
-  }, [debateId, ready]);
+  }, [debateId, ready, rememberEventId, requestDebateResync]);
 
   useEffect(() => {
+    lastSequenceRef.current = 0;
+    lastStreamIdentityRef.current = null;
+    seenEventIdsRef.current = [];
+    stateMessageVersionRef.current = 0;
+    resyncRequestVersionRef.current = 0;
+
     connectTimerRef.current = window.setTimeout(connect, 0);
     return () => {
       cleanedUp.current = true;
@@ -115,7 +243,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, debateId]);
 
   return wsRef;
 }

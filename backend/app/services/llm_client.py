@@ -604,20 +604,56 @@ def _clean_json_text(raw: str) -> str:
     # which are allowed whitespace in JSON strings.
     cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', cleaned)
 
-    # M-6 fix: fallback — extract first '{' to last '}' if cleaned doesn't
-    # start with '{' or '[', indicating LLM added preamble text
+    def _extract_balanced_json_snippet(text: str) -> str | None:
+        start = -1
+        open_char = ""
+        close_char = ""
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index, char in enumerate(text):
+            if start == -1:
+                if char not in ("{", "["):
+                    continue
+                start = index
+                open_char = char
+                close_char = "}" if char == "{" else "]"
+                depth = 1
+                in_string = False
+                escaped = False
+                continue
+
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+
+            if char == open_char:
+                depth += 1
+            elif char == close_char:
+                depth -= 1
+                if depth == 0:
+                    return text[start:index + 1]
+
+        return None
+
+    # Extract the first balanced JSON object/array when LLMs wrap JSON with
+    # prose or append a second payload after the first valid one.
     stripped = cleaned.strip()
-    if stripped and stripped[0] not in ('{', '['):
-        first_brace = cleaned.find('{')
-        last_brace = cleaned.rfind('}')
-        if first_brace != -1 and last_brace > first_brace:
-            cleaned = cleaned[first_brace:last_brace + 1]
-        else:
-            # Try array extraction
-            first_bracket = cleaned.find('[')
-            last_bracket = cleaned.rfind(']')
-            if first_bracket != -1 and last_bracket > first_bracket:
-                cleaned = cleaned[first_bracket:last_bracket + 1]
+    balanced_json = _extract_balanced_json_snippet(cleaned)
+    if balanced_json is not None:
+        balanced_stripped = balanced_json.strip()
+        if stripped and (stripped[0] not in ('{', '[') or stripped != balanced_stripped):
+            cleaned = balanced_json
 
     return cleaned
 

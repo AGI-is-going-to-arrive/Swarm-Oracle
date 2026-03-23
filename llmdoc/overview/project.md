@@ -15,9 +15,9 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Branching Timelines | 决策产生平行分支，附概率追踪 |
 | Butterfly Effect | 支持实时、回溯与批量干预；前端当前已有统一干预弹窗闭环；当多个 backend worker 共用同一个 SQLite 文件时，待注入干预也会先落到共享 pending queue，再由模拟主循环按分支 FIFO 消费 |
 | Multi-Ending Comparison | 跨分支比较结局、洞察、关键时刻 |
-| Real-time WebSocket | 实时观看 agent 发言流；`scenario / debate` 两条 WS 当前都会在空闲期发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露并清理；同场景广播当前也已改成并行发送，单个慢连接不会再拖住其它在线客户端 |
+| Real-time WebSocket | 实时观看 agent 发言流；`scenario / debate` 两条 WS 当前都会在空闲期发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露并清理；同场景广播当前也已改成并行发送，单个慢连接不会再拖住其它在线客户端；除 `heartbeat` 外，后端当前还会给所有出站事件统一补顶层 `meta`（`stream_id / sequence / event_id / manager_instance_id / emitted_at`），前端 scenario / debate hook 会按 `sequence/event_id` 做重复丢弃和 gap 补拉；本地排查时还可用 `?wsDebug=1` 或 `sessionStorage['swarmoracle.ws-debug']=1` 打开前端时序日志 |
 | Hierarchical Agents (P3-A) | Leader-Worker分层架构，支持千人规模模拟 |
-| Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜；当 `user_name` 留空时，后端会按场景语言回退到匿名预言家 / `Anonymous Predictor`；批量评分接口当前也会显式返回 `attempted / scored / failed / all_failed`，能区分“没有待评分 prediction”和“本次全失败” |
+| Prediction Leaderboard (P3-B) | 用户竞猜 + LLM评分 + 排行榜；当 `user_name` 留空时，后端会按场景语言回退到匿名预言家 / `Anonymous Predictor`；批量评分接口当前也会显式返回 `attempted / scored / failed / all_failed`，能区分“没有待评分 prediction”和“本次全失败”；结果页手动触发评分时，当前也会复用同一份前端会话级 provider policy |
 | Structured Betting 2.x | 结构化押注世界线 / 结局倾向 / 题材回响，Theater HUD 可直接打开下注入口 |
 | Gameplay Cards | 当前共有 14 张玩法卡：10 张原始导演卡 + 4 张反制卡（`审计清算 / 情报反噬 / 民意回摆 / 停火委员会`）；玩法卡会按题目画像动态推荐，弹窗现会显示题材 hooks、题材导向文案、三段式题材连锁事件、profile-specific 打法说明，以及常驻 `风险 / 资源` 轨道；目标分支 / 角色 / 来源分支 / 自动文案当前也已收成 `override + derived` 口径，减少 modal 内部级联重算；玩法卡注入仍会被 LLM 当成高优先级、持续生效的导演事件 |
 | Shared Gameplay Contract | 玩法卡与题材画像已有共享契约 `shared/gameplay_contract.v1.json`；前端 `gameplayContract.ts` 直接消费卡牌规则、modal 输入契约与 prompt 语义，后端 `card_events.py` 当前主要消费 card event 映射与 `branching_bonus`，并有同步测试覆盖 |
@@ -33,7 +33,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Generic Quick Start | 首页 generic 题材现有 3 条 `switchboard_forum` 题库，并会一键带入推荐预设（Theater / 4 rounds / 4 agents / blackboard） |
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
-| BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model |
+| BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model；前端 provider policy 当前按标签页会话保存在 `sessionStorage`，关闭标签页后清空；若浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次；同一份 policy 仍会贯通 `createScenario / createDebate / social copy / scorePredictions` |
 | Frontend State Split | 首页当前已按 `useInputByokSettings / useInputCampaignState / useSharedChallengePrefill` 三组 hook 收边界；模拟页当前也按 `useSimulationReplayState` 与 `useSimulationViewState` 分开 replay、截图和 director authority 状态；`simulationStore.startSimulation()` 与 `api/client.ts#createScenario()` 现统一走 options 对象，不再靠长位置参数串联 |
 | Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本；若浏览器 Clipboard API 不可用，分享弹窗现在会明确提示手动复制，而不再回退到过时的 `execCommand('copy')` 路径 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |

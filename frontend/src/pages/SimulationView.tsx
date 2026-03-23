@@ -91,6 +91,9 @@ const THEATER_TIME_LABELS: Record<string, string> = {
   night: 'sim.theater_time.night',
 };
 
+const WARMUP_RECOVERY_INTERVAL_MS = 1500;
+const WARMUP_RECOVERY_MAX_ATTEMPTS = 10;
+
 function formatTheaterLabel(
   key: string | null | undefined,
   labels: Record<string, string>,
@@ -186,6 +189,7 @@ export function SimulationView() {
   const [replayLinkUnavailable, setReplayLinkUnavailable] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
   const recoveryLogEmitted = useRef(false);
+  const warmupRecoveryAttempts = useRef(0);
   const activeBranches = useMemo(
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
@@ -439,6 +443,11 @@ export function SimulationView() {
   // ── Warmup recovery: hydrate missing agents / branches while live WS catches up ──
   const hydrationInFlight = useRef(false);
   useEffect(() => {
+    warmupRecoveryAttempts.current = 0;
+    recoveryLogEmitted.current = false;
+  }, [id, isReplayMode]);
+
+  useEffect(() => {
     if (isReplayMode) return;
     if (!id || status === 'idle' || status === 'error' || status === 'parsing') return;
     if (branches.length > 0 && agents.length > 0) return;
@@ -446,11 +455,13 @@ export function SimulationView() {
     let cancelled = false;
     const hydrateMissingScenarioData = async () => {
       if (cancelled || hydrationInFlight.current) return;
+      if (warmupRecoveryAttempts.current >= WARMUP_RECOVERY_MAX_ATTEMPTS) return;
 
       const state = useSimulationStore.getState();
       if (state.branches.length > 0 && state.agents.length > 0) return;
 
       hydrationInFlight.current = true;
+      warmupRecoveryAttempts.current += 1;
       try {
         if (!recoveryLogEmitted.current) {
           console.info('[Recovery] Warmup missing agents/branches — hydrating from API...');
@@ -463,8 +474,12 @@ export function SimulationView() {
     };
 
     const timer = window.setInterval(() => {
+      if (warmupRecoveryAttempts.current >= WARMUP_RECOVERY_MAX_ATTEMPTS) {
+        window.clearInterval(timer);
+        return;
+      }
       void hydrateMissingScenarioData();
-    }, 1500);
+    }, WARMUP_RECOVERY_INTERVAL_MS);
 
     void hydrateMissingScenarioData();
     return () => {
@@ -475,6 +490,7 @@ export function SimulationView() {
 
   useEffect(() => {
     if (branches.length > 0 && agents.length > 0) {
+      warmupRecoveryAttempts.current = 0;
       recoveryLogEmitted.current = false;
     }
   }, [agents.length, branches.length]);

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections import defaultdict
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -38,6 +39,24 @@ class WSManager:
 
     def __init__(self):
         self._connections: dict[str, list[WebSocket]] = defaultdict(list)
+        self._sequence_by_stream: dict[str, int] = defaultdict(int)
+        self._manager_instance_id = uuid.uuid4().hex
+
+    def _wrap_event(self, stream_id: str, event: dict) -> dict:
+        if event.get("type") == "heartbeat":
+            return dict(event)
+
+        sequence = self._sequence_by_stream[stream_id] + 1
+        self._sequence_by_stream[stream_id] = sequence
+        envelope = dict(event)
+        envelope["meta"] = {
+            "stream_id": stream_id,
+            "sequence": sequence,
+            "event_id": f"{stream_id}:{sequence}",
+            "manager_instance_id": self._manager_instance_id,
+            "emitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return envelope
 
     async def connect(self, scenario_id: str, websocket: WebSocket):
         # M-4 fix: Reject connections exceeding per-scenario limit
@@ -69,7 +88,16 @@ class WSManager:
         if not connections:
             return
 
-        payload = json.dumps(event, ensure_ascii=False)
+        wrapped_event = self._wrap_event(scenario_id, event)
+        logger.debug(
+            "WS broadcast: stream=%s type=%s seq=%s event_id=%s clients=%d",
+            scenario_id,
+            wrapped_event.get("type"),
+            wrapped_event.get("meta", {}).get("sequence"),
+            wrapped_event.get("meta", {}).get("event_id"),
+            len(connections),
+        )
+        payload = json.dumps(wrapped_event, ensure_ascii=False)
         results = await asyncio.gather(
             *(ws.send_text(payload) for ws in connections),
             return_exceptions=True,

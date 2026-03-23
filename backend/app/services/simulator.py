@@ -9,6 +9,7 @@ import logging
 import sqlite3
 from typing import Any
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -273,6 +274,29 @@ async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
             pending_interventions.pop(key, None)
 
 
+async def clear_pending_interventions_for_branch(scenario_id: str, branch_id: str) -> None:
+    """Remove leftover queued interventions for a single finished branch."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        engine = get_engine()
+        with Session(engine) as session:
+            queued = list(
+                session.exec(
+                    select(PendingIntervention).where(
+                        PendingIntervention.scenario_id == scenario_id,
+                        PendingIntervention.branch_id == branch_id,
+                    )
+                ).all()
+            )
+            for item in queued:
+                session.delete(item)
+            session.commit()
+
+    key = f"{scenario_id}:{branch_id}"
+    async with _intervention_lock:
+        pending_interventions.pop(key, None)
+
+
 def _resolve_hierarchical_agent_sets(
     agents: list[dict[str, Any]],
     group_leaders: dict[str, str],
@@ -414,6 +438,7 @@ async def run_simulation(
     scenario_id: str,
     ws_callback: Any = None,
     llm_overrides: dict | None = None,
+    branch_id: str | None = None,
 ):
     """Execute the full simulation pipeline (Stage 2 + Stage 3).
 
@@ -535,22 +560,47 @@ async def run_simulation(
         if viz_mapper is not None:
             await push(event)
 
-    # ── Create root branch ───────────────────────────
-    root_title = ctx.get("initial_title", "历史拐点")
-    root_branch_id = _get_or_create_root_branch(engine, scenario_id, title=root_title)
-    all_branches = [{"id": root_branch_id, "status": "ACTIVE", "probability": 1.0}]
+    start_round = 1
+    resume_parent_branch_id: str | None = None
+    active_branch_id: str
+    if branch_id is None:
+        root_title = ctx.get("initial_title", "历史拐点")
+        active_branch_id = _get_or_create_root_branch(engine, scenario_id, title=root_title)
+        all_branches = [{"id": active_branch_id, "status": "ACTIVE", "probability": 1.0}]
 
-    # Push root branch to frontend so tree renders before agent_speak events
-    await push({
-        "type": "branch_init",
-        "data": {
-            "id": root_branch_id,
-            "title": root_title,
-            "probability": 1.0,
-            "status": "ACTIVE",
-            "parent_branch_id": None,
-        },
-    })
+        # Push root branch to frontend so tree renders before agent_speak events
+        await push({
+            "type": "branch_init",
+            "data": {
+                "id": active_branch_id,
+                "title": root_title,
+                "probability": 1.0,
+                "status": "ACTIVE",
+                "parent_branch_id": None,
+            },
+        })
+    else:
+        with Session(engine) as session:
+            target_branch = session.get(Branch, branch_id)
+            if target_branch is None or target_branch.scenario_id != scenario_id:
+                raise ValueError(f"Branch {branch_id} not found in scenario {scenario_id}")
+
+            target_branch.status = BranchStatus.ACTIVE
+            session.add(target_branch)
+            session.commit()
+
+            last_round = session.exec(
+                select(func.max(Round.round_number)).where(Round.branch_id == branch_id)
+            ).one_or_none()
+            completed_rounds = int(last_round or 0)
+            start_round = max(completed_rounds + 1, (target_branch.fork_round or 0) + 1, 1)
+            active_branch_id = target_branch.id
+            resume_parent_branch_id = target_branch.parent_branch_id
+            all_branches = [{
+                "id": active_branch_id,
+                "status": BranchStatus.ACTIVE.value,
+                "probability": target_branch.probability,
+            }]
 
     # ── Blackboard per branch (only in blackboard mode) ─
     mode = ctx.get("mode", "blackboard")
@@ -561,12 +611,20 @@ async def run_simulation(
             for agent_name, group_name in agent_to_group.items():
                 bb_init.set_agent_group(agent_name, group_name)
                 bb_init.set_agent_faction(agent_name, group_name)
-        blackboards: dict[str, Blackboard] = {root_branch_id: bb_init}
+        if branch_id is not None and resume_parent_branch_id:
+            parent_summary = _load_latest_compressed_briefing(
+                engine,
+                resume_parent_branch_id,
+                before_round=start_round,
+            )
+            if parent_summary:
+                bb_init.update_global_summary(parent_summary)
+        blackboards: dict[str, Blackboard] = {active_branch_id: bb_init}
     else:
         blackboards = {}  # RAW mode — no blackboard, agents read DB directly
 
     # ── Simulation loop ──────────────────────────────
-    for round_num in range(1, sim_rounds + 1):
+    for round_num in range(start_round, sim_rounds + 1):
         active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
         if not active_branches:
             break
@@ -756,7 +814,8 @@ async def run_simulation(
                 })
 
     # ── Stage 3: Narrate ─────────────────────────────
-    await push({"type": "status", "data": {"status": "narrating"}})
+    if branch_id is None:
+        await push({"type": "status", "data": {"status": "narrating"}})
 
     for b in all_branches:
         if b["status"] in ("ACTIVE", "COMPLETED"):
@@ -792,17 +851,23 @@ async def run_simulation(
 
     # ── Done ─────────────────────────────────────────
     # Cleanup pending interventions for this scenario (prevent memory leak)
-    await clear_pending_interventions_for_scenario(scenario_id)
+    if branch_id is None:
+        await clear_pending_interventions_for_scenario(scenario_id)
+    else:
+        await clear_pending_interventions_for_branch(scenario_id, branch_id)
 
-    with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario:
-            scenario.status = ScenarioStatus.DONE
-            session.add(scenario)
-            session.commit()
+    if branch_id is None:
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario:
+                scenario.status = ScenarioStatus.DONE
+                session.add(scenario)
+                session.commit()
 
-    await push({"type": "simulation_done"})
-    logger.info("Simulation complete for scenario %s", scenario_id)
+        await push({"type": "simulation_done"})
+        logger.info("Simulation complete for scenario %s", scenario_id)
+    else:
+        logger.info("Branch-only simulation complete for scenario %s branch %s", scenario_id, branch_id)
 
 
 # ── Internal helpers ─────────────────────────────────────

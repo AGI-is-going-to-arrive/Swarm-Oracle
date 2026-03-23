@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -231,6 +231,10 @@ export default function ResultView() {
   const loadResultErrorMessage = isZh
     ? '加载结果失败'
     : 'Failed to load results';
+  const replayInvalidMessageRef = useRef(replayInvalidMessage);
+  const loadResultErrorMessageRef = useRef(loadResultErrorMessage);
+  const isZhRef = useRef(isZh);
+  const translationRef = useRef(t);
   const isDailyChallenge = Boolean(
     challengeMatch
     || campaignScenarioSummary?.completed_daily_challenge
@@ -247,6 +251,13 @@ export default function ResultView() {
   }, [id, isReplayMode, refreshLocalMeta]);
 
   useEffect(() => {
+    replayInvalidMessageRef.current = replayInvalidMessage;
+    loadResultErrorMessageRef.current = loadResultErrorMessage;
+    isZhRef.current = isZh;
+    translationRef.current = t;
+  }, [isZh, loadResultErrorMessage, replayInvalidMessage, t]);
+
+  useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
 
@@ -257,7 +268,7 @@ export default function ResultView() {
           .catch(() => null);
         if (cancelled) return;
         if (!artifact || artifact.kind !== 'scenario_result_v1' || !artifact.payload) {
-          setError(replayInvalidMessage);
+          setError(replayInvalidMessageRef.current);
           setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
@@ -265,7 +276,7 @@ export default function ResultView() {
         const { normalizeScenarioResultReplayPayload } = await loadScenarioReplayHelpers();
         const replay = normalizeScenarioResultReplayPayload(artifact.payload);
         if (!replay) {
-          setError(replayInvalidMessage);
+          setError(replayInvalidMessageRef.current);
           setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
@@ -289,7 +300,7 @@ export default function ResultView() {
         const replay = await readScenarioReplayPayload(replayParams);
         if (cancelled) return;
         if (!replay) {
-          setError(replayInvalidMessage);
+          setError(replayInvalidMessageRef.current);
           setErrorCode('REPLAY_INVALID');
           setLoading(false);
           return;
@@ -309,7 +320,7 @@ export default function ResultView() {
 
       setReplayPayload(null);
       if (!id) {
-        setError(loadResultErrorMessage);
+        setError(loadResultErrorMessageRef.current);
         setErrorCode('RESULT_LOAD_FAILED');
         setLoading(false);
         return;
@@ -386,7 +397,7 @@ export default function ResultView() {
           const objectiveArc = getGameplaySignatureArcState(
             profile.id,
             workingMeta.cards.usageLog,
-            isZh,
+            isZhRef.current,
           );
           workingMeta = ensureScenarioObjectivesInMemory(workingMeta, {
             question: scenario.question,
@@ -402,7 +413,7 @@ export default function ResultView() {
           objectives: workingMeta.objectives.goals,
           meta: workingMeta,
           dominantBranch: dominantBranchForArchive,
-          isZh,
+          isZh: isZhRef.current,
           isFinal: true,
         });
         const completedObjectiveCount = countCompletedObjectives(evaluatedObjectives);
@@ -415,7 +426,7 @@ export default function ResultView() {
           profile.id,
           workingMeta.cards.usageLog,
           workingMeta.commitment,
-          isZh,
+          isZhRef.current,
         );
         const archiveSummary = buildArchiveSummary({
           branches: story.branches,
@@ -461,7 +472,7 @@ export default function ResultView() {
           if (!cancelled) {
             const kind = classifyCampaignFinalizeError(err);
             if (kind === 'missing' || kind === 'conflict') {
-              setCampaignNotice(getCampaignBoundaryMessage(kind, isZh));
+              setCampaignNotice(getCampaignBoundaryMessage(kind, isZhRef.current));
             } else {
               setCampaignError(err instanceof Error ? err.message : 'Failed to finalize campaign');
             }
@@ -490,7 +501,7 @@ export default function ResultView() {
       } catch (err) {
         if (cancelled) return;
         setErrorCode(getApiErrorCode(err) ?? 'RESULT_LOAD_FAILED');
-        setError(getLocalizedApiErrorMessage(err, t, 'Failed to load results'));
+        setError(getLocalizedApiErrorMessage(err, translationRef.current, 'Failed to load results'));
       } finally {
         if (!cancelled && retryTimer == null) {
           setLoading(false);
@@ -513,7 +524,7 @@ export default function ResultView() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [directorIdentity.userId, directorIdentity.userName, id, isZh, loadResultErrorMessage, replayInvalidMessage, replayShareId, replayToken]);
+  }, [directorIdentity.userId, directorIdentity.userName, id, replayShareId, replayToken]);
 
   const handleExport = async () => {
     if (!id || exporting || isReplayMode) return;

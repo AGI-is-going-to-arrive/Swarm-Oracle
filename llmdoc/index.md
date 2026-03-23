@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-23（frontend Input/Simulation hook split / startSimulation options object / Simulation i18n cleanup / vector-store per-scenario lock）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-23（BYOK sessionStorage / WS meta envelope + debug / ResultView score BYOK regression）
 
 ## 阅读顺序
 

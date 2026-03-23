@@ -32,7 +32,7 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；空闲期还会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；除 `heartbeat` 外，当前还会给所有出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`；空闲期仍会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key；`LOG_LEVEL = DEBUG` 时，broadcast 还会记录 `stream/type/seq/event_id/client count` 便于排查)
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter
     │
@@ -433,7 +433,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
 - **接入边界**: scenario / debate 两条 WS 当前都会先检查目标资源是否存在；不存在就直接拒绝接入。这里只收住“无效 id 也能监听”的问题，还不等于完整鉴权。
 - **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里；空闲期还会发送应用层 `heartbeat`，让半断开连接在发送路径上更快暴露并清理
-- **广播语义**: `broadcast()` 当前会先把 payload 序列化一次，再并行 `gather` 发给所有连接；单个慢连接不会再阻塞同一 scenario 的其它连接，但发送异常的 socket 仍会在广播后统一清理
+- **广播语义**: `broadcast()` 当前会先给所有非 `heartbeat` 出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`，再把 payload 序列化一次并并行 `gather` 发给所有连接；单个慢连接不会再阻塞同一 scenario 的其它连接，但发送异常的 socket 仍会在广播后统一清理
+- **调试口径**: `LOG_LEVEL = DEBUG` 时，`broadcast()` 当前还会为每条非 `heartbeat` 出站事件记录 `stream / type / seq / event_id / clients`；connect / disconnect / heartbeat 本身的行为不变
 - **事件类型**:
   - `heartbeat`（客户端可忽略；主要用于 idle keepalive / dead socket cleanup）
   - `status`
@@ -484,6 +485,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 - 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**
+- 本 session 这轮“WS meta envelope + debug broadcast log”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_ws.py -q`：`28 passed in 1.17s`
+  - `python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过
 - 本轮这类“config 校验 / shared AsyncClient / stream retry / replay import 校验 / simulator batch message writes”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py tests/test_memory.py tests/test_lang_detect.py tests/test_vector_store.py tests/test_runtime_lock.py tests/test_ws.py tests/test_intervention.py tests/test_api.py tests/test_predictions.py -q`：`368 passed in 37.64s`
   - `python -m ruff check --ignore E501 app/config.py app/main.py app/api/debate.py app/services/llm_client.py app/services/simulator.py tests/test_config.py tests/test_debate_api.py tests/test_llm_client.py tests/test_simulator.py`：通过

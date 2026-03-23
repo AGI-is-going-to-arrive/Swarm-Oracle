@@ -412,6 +412,13 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `receive_text()` 抛出的非正常异常也会清理连接，然后继续向上抛错
 > - 空闲期还会发送轻量 `heartbeat`，让半断开连接能更快在发送路径上暴露；客户端收到这类事件后可以直接忽略
 > - `scenario` 广播当前已改成并行发送；单个慢连接不会再阻塞同场景其它连接收消息，但发送失败的 dead connection 仍会在同一轮 broadcast 后被清理
+>
+> 当前 WebSocket 传输层口径：
+> - 除 `heartbeat` 外，`scenario / debate` 两条 WS 的所有服务端下行事件现在都会在顶层额外带 `meta`
+> - `meta` 当前包含：`stream_id / sequence / event_id / manager_instance_id / emitted_at`
+> - 这层 `meta` 不改变原有业务 `data` 形状；不关心传输层顺序的客户端可以继续忽略
+> - 前端当前会用 `sequence / event_id` 做重复/旧事件丢弃，以及 gap 触发的补拉 resync
+> - `heartbeat` 仍保持轻量 `{type, data.ts}` 形状，不带 `meta`
 
 > `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 wrapper / instruction：
 > - 中文 scenario 继续使用中文 wrapper
@@ -450,6 +457,24 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `debate_score_update` | `{score: {proposition, opposition}, audience_meter}` | S→C | 势能 / 分数更新 |
 | `debate_counterplay` | DebateCounterplayResult | S→C | live counterplay 记录已创建/更新 |
 | `debate_verdict` | DebateVerdictEventPayload | S→C | 最终 verdict 就绪；当前 payload = `DebateResultSummary + phase_insights[]` |
+
+> 非 `heartbeat` 事件的顶层 envelope 示例：
+>
+> ```json
+> {
+>   "type": "status",
+>   "data": {
+>     "status": "simulating"
+>   },
+>   "meta": {
+>     "stream_id": "scenario-123",
+>     "sequence": 7,
+>     "event_id": "scenario-123:7",
+>     "manager_instance_id": "abc123...",
+>     "emitted_at": "2026-03-23T00:00:00+00:00"
+>   }
+> }
+> ```
 
 > 当前 WebSocket 错误事件口径：
 > - scenario `simulation_error` 会返回结构化 `error` 对象，而不是纯字符串

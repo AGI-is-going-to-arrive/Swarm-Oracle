@@ -10,6 +10,7 @@ from sqlmodel import Session, func, select
 from app.api.errors import api_error
 from app.api.schemas import BatchInterveneRequest, InterveneRequest, RetrospectiveInterveneRequest
 from app.models import (
+    AgentMessage,
     Branch,
     BranchStatus,
     InterventionLog,
@@ -23,6 +24,54 @@ from app.services.simulator import _pending_intervention_db_path, add_pending_in
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+
+
+def _clone_branch_history(
+    session: Session,
+    *,
+    source_branch_id: str,
+    target_branch_id: str,
+    through_round: int,
+) -> None:
+    """Clone rounds/messages so retrospective replay can continue from the fork point."""
+    source_rounds = list(
+        session.exec(
+            select(Round)
+            .where(
+                Round.branch_id == source_branch_id,
+                Round.round_number <= through_round,
+            )
+            .order_by(Round.round_number)
+        ).all()
+    )
+
+    for source_round in source_rounds:
+        cloned_round = Round(
+            branch_id=target_branch_id,
+            round_number=source_round.round_number,
+            compressed_summary=source_round.compressed_summary,
+        )
+        session.add(cloned_round)
+        session.flush()
+
+        source_messages = list(
+            session.exec(
+                select(AgentMessage)
+                .where(AgentMessage.round_id == source_round.id)
+                .order_by(AgentMessage.id)
+            ).all()
+        )
+        for source_message in source_messages:
+            session.add(
+                AgentMessage(
+                    round_id=cloned_round.id,
+                    agent_id=source_message.agent_id,
+                    content=source_message.content,
+                    emotion=source_message.emotion,
+                    diverge=source_message.diverge,
+                    tokens_used=source_message.tokens_used,
+                )
+            )
 
 
 # ── Intervention Templates (P4-D) ────────────────────────
@@ -169,6 +218,13 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
             probability=branch.probability * 0.8,  # slightly lower than parent
         )
         session.add(new_branch)
+        session.flush()
+        _clone_branch_history(
+            session,
+            source_branch_id=req.branch_id,
+            target_branch_id=new_branch.id,
+            through_round=req.round_number,
+        )
 
         # Log the intervention
         log = InterventionLog(

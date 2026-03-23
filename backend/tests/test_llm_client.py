@@ -1,5 +1,6 @@
 """Tests for app.services.llm_client — LLM API integration."""
 
+import json
 import sqlite3
 import threading
 
@@ -295,6 +296,20 @@ class TestLLMCallJSON:
         )
         assert "UNTRUSTED DATA" in block
         assert "Potential prompt-injection markers detected" in block
+
+    def test_clean_json_text_extracts_only_first_balanced_object_from_mixed_text(self):
+        cleaned = llm_client._clean_json_text(
+            'Sure, here is: {"payload": {"nested": true}} and also {"extra": true}'
+        )
+
+        assert json.loads(cleaned) == {"payload": {"nested": True}}
+
+    def test_clean_json_text_trims_trailing_chatter_after_json_payload(self):
+        cleaned = llm_client._clean_json_text(
+            '{"answer": "hello"}\nextra explanation that should not be parsed'
+        )
+
+        assert json.loads(cleaned) == {"answer": "hello"}
 
     @pytest.mark.asyncio
     async def test_json_output(self):

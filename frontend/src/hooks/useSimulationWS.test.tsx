@@ -88,6 +88,16 @@ describe('useSimulationWS', () => {
     storeState.setScenario.mockReset();
     storeState.handleWSEvent.mockReset();
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+    const sessionStore = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', {
+      getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        sessionStore.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        sessionStore.delete(key);
+      }),
+    });
   });
 
   afterEach(() => {
@@ -147,6 +157,7 @@ describe('useSimulationWS', () => {
         data: JSON.stringify({
           type: 'status',
           data: { status: 'done' },
+          meta: { stream_id: 'scenario-2', sequence: 1, event_id: 'scenario-2:1' },
         }),
       } as MessageEvent<string>);
     });
@@ -169,6 +180,7 @@ describe('useSimulationWS', () => {
     expect(storeState.handleWSEvent).toHaveBeenCalledWith({
       type: 'status',
       data: { status: 'done' },
+      meta: { stream_id: 'scenario-2', sequence: 1, event_id: 'scenario-2:1' },
     });
     expect(storeState.setScenario).not.toHaveBeenCalled();
   });
@@ -208,6 +220,7 @@ describe('useSimulationWS', () => {
         data: JSON.stringify({
           type: 'status',
           data: { status: 'done' },
+          meta: { stream_id: 'scenario-3', sequence: 1, event_id: 'scenario-3:1' },
         }),
       } as MessageEvent<string>);
       MockWebSocket.instances[0]?.emitClose(1006);
@@ -216,5 +229,117 @@ describe('useSimulationWS', () => {
 
     expect(storeState.handleWSEvent).not.toHaveBeenCalled();
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('drops duplicate or stale sequence events from the same stream', () => {
+    render(<Harness scenarioId="scenario-4" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'simulating' },
+          meta: { stream_id: 'scenario-4', sequence: 2, event_id: 'scenario-4:2' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'done' },
+          meta: { stream_id: 'scenario-4', sequence: 2, event_id: 'scenario-4:2' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'error' },
+          meta: { stream_id: 'scenario-4', sequence: 1, event_id: 'scenario-4:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.handleWSEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('polls the latest scenario snapshot when a sequence gap is detected', async () => {
+    const scenario = {
+      id: 'scenario-gap',
+      question: 'Q',
+      status: 'done',
+      created_at: '2026-03-23T00:00:00Z',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    } satisfies Scenario;
+    getScenarioMock.mockResolvedValue(scenario);
+
+    render(<Harness scenarioId="scenario-gap" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'simulating' },
+          meta: { stream_id: 'scenario-gap', sequence: 1, event_id: 'scenario-gap:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'done' },
+          meta: { stream_id: 'scenario-gap', sequence: 3, event_id: 'scenario-gap:3' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    expect(getScenarioMock).toHaveBeenCalledWith('scenario-gap');
+    expect(storeState.setScenario).toHaveBeenCalledWith(scenario);
+  });
+
+  it('emits debug logs with ws metadata when the debug switch is enabled', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    window.sessionStorage.setItem('swarmoracle.ws-debug', '1');
+
+    render(<Harness scenarioId="scenario-debug" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'simulating' },
+          meta: {
+            stream_id: 'scenario-debug',
+            sequence: 1,
+            event_id: 'scenario-debug:1',
+            manager_instance_id: 'manager-1',
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      '[SimulationWS] receive',
+      expect.objectContaining({
+        streamId: 'scenario-debug',
+        sequence: 1,
+        eventId: 'scenario-debug:1',
+      }),
+    );
+    debugSpy.mockRestore();
   });
 });

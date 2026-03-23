@@ -14,7 +14,7 @@ class CreateScenarioRequest(BaseModel):
     user_id: str | None = None
     num_agents: int | None = None  # User-specified agent count, range 3-1500
     rounds: int | None = None      # User-specified round count (overrides parsed default)
-    mode: str | None = None         # "raw" | "blackboard", default "blackboard"
+    mode: str | None = "blackboard"  # "raw" | "blackboard"
     hierarchical: bool | None = None  # P3-A: force hierarchical mode (auto-detected if num_agents > threshold)
     reasoning_effort: str | None = None  # "low" | "medium" | "high" | None (= use server default or disabled)
     # P4-E: BYOK — bring your own key

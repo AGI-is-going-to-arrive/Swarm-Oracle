@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,16 +14,53 @@ const {
   getCampaignDailyChallengeStatusMock,
   getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
-} = vi.hoisted(() => ({
-  testLlmConnectionMock: vi.fn(),
-  getCampaignProfileMock: vi.fn(),
-  getCampaignMasteryMock: vi.fn(),
-  getCampaignBadgesMock: vi.fn(),
-  getCampaignChallengeRotationMock: vi.fn(),
-  getCampaignDailyChallengeStatusMock: vi.fn(),
-  getCampaignWeeklySummaryMock: vi.fn(),
-  getChallengeProgressMock: vi.fn(),
-}));
+  setMockLanguage,
+  getMockLanguage,
+  stableTranslator,
+} = vi.hoisted(() => {
+  const translations: Record<string, Record<string, string>> = {
+    en: {
+      'home.placeholder_1': 'English placeholder one',
+      'home.placeholder_2': 'English placeholder two',
+      'home.placeholder_3': 'English placeholder three',
+    },
+    'zh-CN': {
+      'home.placeholder_1': '中文占位文案一',
+      'home.placeholder_2': '中文占位文案二',
+      'home.placeholder_3': '中文占位文案三',
+    },
+  };
+  let currentLanguage = 'en';
+  const setMockLanguage = (language: string) => {
+    currentLanguage = language;
+  };
+  const getMockLanguage = () => currentLanguage;
+  const stableTranslator = (key: string, options?: Record<string, unknown>) => {
+    if (key === 'home.campaign_mastery_level') {
+      return `Lv.${options?.level}`;
+    }
+    if (key === 'home.campaign_next_unlock') {
+      return `${options?.count} points to next unlock`;
+    }
+    if (key === 'home.campaign_quickstart_unlocks') {
+      return `${options?.count} badges unlocked · ${options?.runs} completed runs`;
+    }
+    return translations[currentLanguage]?.[key] ?? key;
+  };
+  return {
+    testLlmConnectionMock: vi.fn(),
+    getCampaignProfileMock: vi.fn(),
+    getCampaignMasteryMock: vi.fn(),
+    getCampaignBadgesMock: vi.fn(),
+    getCampaignChallengeRotationMock: vi.fn(),
+    getCampaignDailyChallengeStatusMock: vi.fn(),
+    getCampaignWeeklySummaryMock: vi.fn(),
+    getChallengeProgressMock: vi.fn(),
+    setMockLanguage,
+    getMockLanguage,
+    stableTranslator,
+  };
+});
 
 vi.mock('gsap', () => ({
   default: {
@@ -33,19 +70,15 @@ vi.mock('gsap', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => {
-      if (key === 'home.campaign_mastery_level') {
-        return `Lv.${options?.level}`;
-      }
-      if (key === 'home.campaign_next_unlock') {
-        return `${options?.count} points to next unlock`;
-      }
-      if (key === 'home.campaign_quickstart_unlocks') {
-        return `${options?.count} badges unlocked · ${options?.runs} completed runs`;
-      }
-      return key;
+    t: stableTranslator,
+    i18n: {
+      get language() {
+        return getMockLanguage();
+      },
+      changeLanguage: vi.fn((language: string) => {
+        setMockLanguage(language);
+      }),
     },
-    i18n: { language: 'en', changeLanguage: vi.fn() },
   }),
 }));
 
@@ -179,6 +212,7 @@ describe('InputView campaign progress', () => {
   ];
 
   beforeEach(() => {
+    setMockLanguage('en');
     testLlmConnectionMock.mockReset();
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
@@ -433,5 +467,38 @@ describe('InputView campaign progress', () => {
         score_to_next_level: 3,
       },
     ]);
+  });
+
+  it('restarts the typewriter placeholder when only the language changes', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = render(
+        <MemoryRouter initialEntries={['/']}>
+          <InputView />
+        </MemoryRouter>,
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(80);
+      });
+
+      const questionField = document.querySelector('textarea');
+      expect(questionField?.getAttribute('placeholder')).toContain('E');
+
+      setMockLanguage('zh-CN');
+      view.rerender(
+        <MemoryRouter initialEntries={['/']}>
+          <InputView />
+        </MemoryRouter>,
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(80);
+      });
+
+      expect(questionField?.getAttribute('placeholder')).toContain('中');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

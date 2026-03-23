@@ -33,6 +33,7 @@
       "mode_raw_desc": "Each agent reads the full database directly — richer context but slower and more token-intensive",
       "byok_toggle": "🔑 Custom LLM",
       "byok_hint": "Supports all OpenAI-compatible APIs (leave empty to use server defaults)",
+      "byok_storage_notice": "Saved only for the current tab session and cleared when the tab closes",
       "byok_test": "🔗 Test Connection",
       "byok_testing": "Testing...",
       "byok_test_ok": "✅ Connected",

@@ -518,44 +518,56 @@ export interface StructuredWsError {
   message?: string;
 }
 
+export interface WsEventMeta {
+  stream_id?: string;
+  sequence?: number;
+  event_id?: string;
+  manager_instance_id?: string;
+  emitted_at?: string;
+}
+
 export type DebateWSEvent =
-  | { type: 'heartbeat'; data: { ts: string } }
-  | {
+  (
+    | { type: 'heartbeat'; data: { ts: string } }
+    | {
       type: 'status';
       data: {
         status: DebateSnapshot['status'];
         error?: string | StructuredWsError;
       };
-    }
-  | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
-  | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
-  | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
-  | { type: 'debate_counterplay'; data: DebateCounterplayResult }
-  | { type: 'debate_verdict'; data: DebateVerdictEventPayload };
+      }
+    | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
+    | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
+    | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
+    | { type: 'debate_counterplay'; data: DebateCounterplayResult }
+    | { type: 'debate_verdict'; data: DebateVerdictEventPayload }
+  ) & { meta?: WsEventMeta };
 
 // ── WebSocket Events ─────────────────────────────────────
 
 export type WSEvent =
-  | { type: 'heartbeat'; data: { ts: string } }
-  | { type: 'status'; data: { status: string; hierarchical?: boolean } }
-  | { type: 'agent_speak_start'; data: { agent: string; agent_id: string; branch: string; round: number } }
-  | { type: 'agent_speak_delta'; data: { agent: string; agent_id: string; delta: string; branch: string; round: number } }
-  | { type: 'agent_speak'; data: AgentMessage }
-  | { type: 'round_summary'; data: { branch_id: string; round: number; summary: string } }
-  | { type: 'branch_init'; data: { id: string; title: string; probability: number; status: string; parent_branch_id: string | null } }
-  | { type: 'branch_fork'; data: { parent: string; children: Array<{ id: string; title: string; description?: string; probability: number }>; reason: string } }
-  | { type: 'branch_prune'; data: { branch_id: string; reason: string } }
-  | { type: 'branch_update'; data: { branch_id: string; status: string } }
-  | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }
-  | { type: 'intervention_applied'; data: { branch_id: string; text: string; round: number; intervention_id: string } }
-  | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string } }
-  | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
-  | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
-  | { type: 'simulation_done' }
-  | {
+  (
+    | { type: 'heartbeat'; data: { ts: string } }
+    | { type: 'status'; data: { status: string; hierarchical?: boolean } }
+    | { type: 'agent_speak_start'; data: { agent: string; agent_id: string; branch: string; round: number } }
+    | { type: 'agent_speak_delta'; data: { agent: string; agent_id: string; delta: string; branch: string; round: number } }
+    | { type: 'agent_speak'; data: AgentMessage }
+    | { type: 'round_summary'; data: { branch_id: string; round: number; summary: string } }
+    | { type: 'branch_init'; data: { id: string; title: string; probability: number; status: string; parent_branch_id: string | null } }
+    | { type: 'branch_fork'; data: { parent: string; children: Array<{ id: string; title: string; description?: string; probability: number }>; reason: string } }
+    | { type: 'branch_prune'; data: { branch_id: string; reason: string } }
+    | { type: 'branch_update'; data: { branch_id: string; status: string } }
+    | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }
+    | { type: 'intervention_applied'; data: { branch_id: string; text: string; round: number; intervention_id: string } }
+    | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string } }
+    | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
+    | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
+    | { type: 'simulation_done' }
+    | {
       type: 'simulation_error';
       data: { error: string | StructuredWsError };
-    };
+      }
+  ) & { meta?: WsEventMeta };
 
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';

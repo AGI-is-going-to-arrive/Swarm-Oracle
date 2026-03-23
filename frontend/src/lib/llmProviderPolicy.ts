@@ -18,8 +18,8 @@ function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function canUseStorage(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+function canUseWindow(): boolean {
+  return typeof window !== 'undefined';
 }
 
 function canReadStorage(storage: Storage): storage is Storage & { getItem: (key: string) => string | null } {
@@ -34,13 +34,22 @@ function canRemoveFromStorage(storage: Storage): storage is Storage & { removeIt
   return typeof storage.removeItem === 'function';
 }
 
-export function loadLlmProviderPolicy(): LlmProviderPolicy {
-  if (!canUseStorage()) return { ...EMPTY_POLICY };
-  if (!canReadStorage(window.localStorage)) return { ...EMPTY_POLICY };
+function getSessionPolicyStorage(): Storage | null {
+  if (!canUseWindow() || typeof window.sessionStorage === 'undefined') return null;
+  return window.sessionStorage;
+}
+
+function getLegacyPolicyStorage(): Storage | null {
+  if (!canUseWindow() || typeof window.localStorage === 'undefined') return null;
+  return window.localStorage;
+}
+
+function readPolicyRecord(storage: Storage | null): LlmProviderPolicy | null {
+  if (!storage || !canReadStorage(storage)) return null;
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...EMPTY_POLICY };
+    const raw = storage.getItem(STORAGE_KEY);
+    if (!raw) return null;
 
     const parsed = JSON.parse(raw) as Partial<LlmProviderPolicy>;
     return {
@@ -50,12 +59,44 @@ export function loadLlmProviderPolicy(): LlmProviderPolicy {
       reasoningEffort: normalizeText(parsed.reasoningEffort),
     };
   } catch {
-    return { ...EMPTY_POLICY };
+    return null;
   }
 }
 
+function migrateLegacyPolicy(sessionStorage: Storage): LlmProviderPolicy | null {
+  const legacyStorage = getLegacyPolicyStorage();
+  if (!legacyStorage || legacyStorage === sessionStorage) return null;
+
+  const legacyPolicy = readPolicyRecord(legacyStorage);
+  if (!legacyPolicy) return null;
+
+  const hasContent = Object.values(legacyPolicy).some(Boolean);
+  if (!hasContent) return null;
+
+  try {
+    if (canWriteStorage(sessionStorage)) {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(legacyPolicy));
+    }
+    if (canRemoveFromStorage(legacyStorage)) {
+      legacyStorage.removeItem(STORAGE_KEY);
+    }
+  } catch (error) {
+    console.warn('[llmProviderPolicy] Failed to migrate provider policy', error);
+  }
+
+  return legacyPolicy;
+}
+
+export function loadLlmProviderPolicy(): LlmProviderPolicy {
+  const storage = getSessionPolicyStorage();
+  if (!storage) return { ...EMPTY_POLICY };
+
+  return readPolicyRecord(storage) ?? migrateLegacyPolicy(storage) ?? { ...EMPTY_POLICY };
+}
+
 export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void {
-  if (!canUseStorage()) return;
+  const storage = getSessionPolicyStorage();
+  if (!storage) return;
 
   const normalized: LlmProviderPolicy = {
     apiKey: normalizeText(policy.apiKey),
@@ -66,9 +107,9 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
 
   const hasContent = Object.values(normalized).some(Boolean);
   if (!hasContent) {
-    if (canRemoveFromStorage(window.localStorage)) {
+    if (canRemoveFromStorage(storage)) {
       try {
-        window.localStorage.removeItem(STORAGE_KEY);
+        storage.removeItem(STORAGE_KEY);
       } catch (error) {
         console.warn('[llmProviderPolicy] Failed to clear provider policy', error);
       }
@@ -76,9 +117,9 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
     return;
   }
 
-  if (!canWriteStorage(window.localStorage)) return;
+  if (!canWriteStorage(storage)) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    storage.setItem(STORAGE_KEY, JSON.stringify(normalized));
   } catch (error) {
     console.warn('[llmProviderPolicy] Failed to persist provider policy', error);
   }
