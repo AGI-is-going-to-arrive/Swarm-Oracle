@@ -140,7 +140,38 @@
       "switch_to_theater_aria": "切换到像素剧场",
       "switch_to_classic_aria": "切换到经典视图",
       "theater_unavailable_hint": "该场景未启用像素剧场，请返回首页开启像素剧场后重新开始推演。",
-      "theater_status_aria": "剧场实时状态"
+      "theater_status_aria": "剧场实时状态",
+      "replay": {
+        "importing": "导入中...",
+        "import_local": "导入为本地运行",
+        "read_only": "只读回放模式：已关闭实时写操作。"
+      },
+      "director": {
+        "title": "导演目标",
+        "done": "完成 {{completed}}/{{total}}",
+        "commitment_label": "承诺世界线",
+        "commit": "锁定承诺",
+        "clear": "取消承诺"
+      },
+      "theater_scene": {
+        "boot": "启动场景",
+        "title": "标题场景",
+        "world": "世界场景",
+        "ending": "结局演出"
+      },
+      "theater_weather": {
+        "clear": "晴朗",
+        "rain": "降雨",
+        "snow": "降雪",
+        "storm": "雷暴",
+        "sandstorm": "沙尘"
+      },
+      "theater_time": {
+        "dawn": "黎明",
+        "noon": "正午",
+        "dusk": "黄昏",
+        "night": "夜晚"
+      }
     },
     "intervention": {
       "title": "蝴蝶效应",

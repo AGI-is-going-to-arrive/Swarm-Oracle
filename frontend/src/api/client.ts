@@ -89,6 +89,15 @@ export interface LlmProviderRequestOptions {
   userId?: string;
 }
 
+export interface CreateScenarioOptions extends LlmProviderRequestOptions {
+  question: string;
+  rounds?: number;
+  numAgents?: number;
+  mode?: 'raw' | 'blackboard';
+  hierarchical?: boolean;
+  visualizationEnabled?: boolean;
+}
+
 async function fetchWithTimeout(
   path: string,
   init?: RequestInit,
@@ -177,18 +186,21 @@ export async function testLlmConnection(
 
 /** POST /api/scenario — create a new "What If…" scenario */
 export async function createScenario(
-  question: string,
-  rounds?: number,
-  numAgents?: number,
-  mode?: 'raw' | 'blackboard',
-  hierarchical?: boolean,
-  llmApiKey?: string,
-  llmBaseUrl?: string,
-  llmModel?: string,
-  reasoningEffort?: string,
-  visualizationEnabled?: boolean,
-  userId?: string,
+  options: CreateScenarioOptions,
 ): Promise<Scenario> {
+  const {
+    question,
+    rounds,
+    numAgents,
+    mode,
+    hierarchical,
+    llmApiKey,
+    llmBaseUrl,
+    llmModel,
+    reasoningEffort,
+    visualizationEnabled,
+    userId,
+  } = options;
   return request('/scenario', {
     method: 'POST',
     body: JSON.stringify({

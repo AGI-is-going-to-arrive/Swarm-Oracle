@@ -179,4 +179,23 @@ describe('dailyChallenge progress storage', () => {
       },
     });
   });
+
+  it('swallows storage write failures', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    Object.defineProperty(window, 'localStorage', {
+      value: {
+        getItem: () => null,
+        setItem: () => {
+          throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        },
+        clear: () => undefined,
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    expect(() => markChallengeStarted(challengeId, 'scenario-quota', fixedDate)).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });

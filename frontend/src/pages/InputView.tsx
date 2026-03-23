@@ -9,43 +9,24 @@ import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import {
   createDebate,
-  getCampaignBadges,
-  getCampaignChallengeRotation,
-  getCampaignDailyChallengeStatus,
-  getCampaignMastery,
-  getCampaignProfile,
-  getCampaignWeeklySummary,
-  testLlmConnection,
 } from '../api/client';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import {
-  challengeDateKey,
-  getChallengeProgress,
   markChallengeStarted,
-  resolveChallengeProgress,
 } from '../lib/dailyChallenge';
-import { readSharedChallengePayload } from '../lib/challengeShare';
 import { stringifyAutomationPayload } from '../game/automation';
-import {
-  loadLlmProviderPolicy,
-  saveLlmProviderPolicy,
-} from '../lib/llmProviderPolicy';
-import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
 } from '../lib/gameplayProfileSummary';
-import type { GameplayProfileId } from '../components/gameplayCards';
+import {
+  useInputByokSettings,
+  useInputCampaignState,
+  useSharedChallengePrefill,
+} from '../hooks/useInputViewState';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
-import type {
-  CampaignBadge,
-  CampaignChallengeRotation,
-  CampaignDailyChallengeStatus,
-  CampaignMastery,
-  CampaignProfileSummary,
-  CampaignWeeklySummary,
-} from '../types';
 import './InputView.css';
 
 /* ── Loading Step Component ───────────────────────────────── */
@@ -60,34 +41,6 @@ function LoadingStep({ label, active, done }: { label: string; active: boolean; 
   );
 }
 
-function normalizeChallengeDefinition(
-  challenge: CampaignChallengeRotation['today_challenge'],
-): {
-  id: string;
-  question: string;
-  questionEn: string;
-  subtitleZh: string;
-  subtitleEn: string;
-  profileId: GameplayProfileId;
-  rounds: number;
-  numAgents: number;
-  mode: 'blackboard' | 'raw';
-  visualizationEnabled: boolean;
-} {
-  return {
-    id: challenge.id,
-    question: challenge.question,
-    questionEn: challenge.question_en ?? challenge.question,
-    subtitleZh: challenge.subtitle_zh,
-    subtitleEn: challenge.subtitle_en,
-    profileId: challenge.profile_id as GameplayProfileId,
-    rounds: challenge.rounds,
-    numAgents: challenge.num_agents,
-    mode: challenge.mode,
-    visualizationEnabled: challenge.visualization_enabled,
-  };
-}
-
 export function InputView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
@@ -98,55 +51,86 @@ export function InputView() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [placeholder, setPlaceholder] = useState('');
-  // P4-E: BYOK
-  const [showByok, setShowByok] = useState(false);
-  const [llmApiKey, setLlmApiKey] = useState('');
-  const [llmBaseUrl, setLlmBaseUrl] = useState('');
-  const [llmModel, setLlmModel] = useState('');
-  // BYOK test connection
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
-  const [testError, setTestError] = useState('');
-  // Reasoning effort
-  const [reasoningEffort, setReasoningEffort] = useState<string>('');
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
-  const providerPolicyHydrated = useRef(false);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
-  const localDate = challengeDateKey();
-  const [campaignProfile, setCampaignProfile] = useState<CampaignProfileSummary | null>(null);
-  const [campaignMastery, setCampaignMastery] = useState<CampaignMastery[]>([]);
-  const [campaignBadges, setCampaignBadges] = useState<CampaignBadge[]>([]);
-  const [campaignDailyStatus, setCampaignDailyStatus] = useState<CampaignDailyChallengeStatus | null>(null);
-  const [campaignWeeklySummary, setCampaignWeeklySummary] = useState<CampaignWeeklySummary | null>(null);
-  const [campaignChallengeRotation, setCampaignChallengeRotation] = useState<CampaignChallengeRotation | null>(null);
-  const [sharedChallengeBanner, setSharedChallengeBanner] = useState<{
-    question: string;
-    profileId?: string | null;
-  } | null>(null);
-  const todayChallenge = campaignChallengeRotation
-    ? normalizeChallengeDefinition(campaignChallengeRotation.today_challenge)
-    : null;
-  const weeklyChallenges = campaignChallengeRotation
-    ? campaignChallengeRotation.weekly_challenges.map(normalizeChallengeDefinition)
-    : [];
+  const {
+    showByok,
+    setShowByok,
+    llmApiKey,
+    setLlmApiKey,
+    llmBaseUrl,
+    setLlmBaseUrl,
+    llmModel,
+    setLlmModel,
+    testStatus,
+    testError,
+    reasoningEffort,
+    setReasoningEffort,
+    handleTestConnection,
+  } = useInputByokSettings(t);
+  const {
+    campaignProfile,
+    campaignBadges,
+    campaignWeeklySummary,
+    campaignChallengeRotation,
+    todayChallenge,
+    weeklyChallenges,
+    todayChallengeProgress,
+    dailyMastery,
+    topMasteries,
+  } = useInputCampaignState({
+    directorUserId: directorIdentity.userId,
+  });
+  const { sharedChallenge, sharedChallengeBanner } = useSharedChallengePrefill(searchParams);
   const todayChallengeQuestion = todayChallenge
     ? (isZh ? todayChallenge.question : todayChallenge.questionEn)
     : '';
-  const cachedChallengeProgress = todayChallenge ? getChallengeProgress(todayChallenge.id) : null;
   const challengeProfileLabel = todayChallenge
     ? getGameplayProfileLabel(todayChallenge.profileId, isZh)
     : null;
   const challengeHooks = todayChallenge
     ? getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2)
     : [];
+  const nextUnlockLabel = dailyMastery?.score_to_next_level != null
+    ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
+    : t('home.campaign_mastered');
+  const sharedChallengeProfileLabel = sharedChallengeBanner?.profileId
+    ? getGameplayProfileLabel(sharedChallengeBanner.profileId as never, isZh)
+    : null;
+  const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
+    ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
+    : null;
+  const weeklyChallengeEntries = weeklyChallenges.map((challenge) => ({
+    challenge_id: challenge.id,
+    profile_id: challenge.profileId,
+    profile_label: getGameplayProfileLabel(challenge.profileId, isZh),
+    runs: campaignWeeklySummary?.profile_runs?.[challenge.profileId] ?? 0,
+  }));
+  const dailyChallengeActionState = todayChallengeProgress?.completed
+    ? 'replay'
+    : todayChallengeProgress
+      ? 'continue'
+      : 'start';
+  const dailyChallengeProgressStatus = todayChallengeProgress?.completed
+    ? 'completed'
+    : todayChallengeProgress
+      ? 'in_progress'
+      : 'not_started';
+  const topMasteryEntries = topMasteries.map((mastery) => ({
+    profile_id: mastery.profile_id,
+    profile_label: getGameplayProfileLabel(mastery.profile_id as never, isZh),
+    level: mastery.level,
+    score_to_next_level: mastery.score_to_next_level ?? null,
+  }));
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -181,38 +165,13 @@ export function InputView() {
   }, [reset]);
 
   useEffect(() => {
-    const storedPolicy = loadLlmProviderPolicy();
-    setLlmApiKey(storedPolicy.apiKey);
-    setLlmBaseUrl(storedPolicy.baseUrl);
-    setLlmModel(storedPolicy.model);
-    setReasoningEffort(storedPolicy.reasoningEffort);
-    setShowByok(Boolean(storedPolicy.apiKey || storedPolicy.baseUrl || storedPolicy.model));
-    providerPolicyHydrated.current = true;
-  }, []);
-
-  useEffect(() => {
-    if (!providerPolicyHydrated.current) return;
-    saveLlmProviderPolicy({
-      apiKey: llmApiKey,
-      baseUrl: llmBaseUrl,
-      model: llmModel,
-      reasoningEffort,
-    });
-  }, [llmApiKey, llmBaseUrl, llmModel, reasoningEffort]);
-
-  useEffect(() => {
-    const sharedChallenge = readSharedChallengePayload(searchParams);
     if (!sharedChallenge) return;
     setQuestion(sharedChallenge.question);
     setRounds(sharedChallenge.rounds);
     setNumAgents(sharedChallenge.numAgents);
     setMode(sharedChallenge.mode);
     setVizEnabled(sharedChallenge.visualizationEnabled);
-    setSharedChallengeBanner({
-      question: sharedChallenge.question,
-      profileId: sharedChallenge.profileId,
-    });
-  }, [searchParams]);
+  }, [sharedChallenge]);
 
   // Animate loading steps while submitting
   useEffect(() => {
@@ -268,132 +227,6 @@ export function InputView() {
     resizeQuestionField();
   }, [question, placeholder, resizeQuestionField]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const loadChallengeRotation = async () => {
-      const rotation = await getCampaignChallengeRotation(localDate, 3, {
-        signal: controller.signal,
-      }).catch(() => null);
-      if (cancelled) return;
-      setCampaignChallengeRotation(rotation);
-    };
-
-    void loadChallengeRotation();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [localDate]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const loadCampaign = async () => {
-      const profile = await getCampaignProfile(directorIdentity.userId, {
-        signal: controller.signal,
-      }).catch(() => null);
-      if (!profile) {
-        if (!cancelled) {
-          setCampaignProfile(null);
-          setCampaignMastery([]);
-          setCampaignBadges([]);
-          setCampaignDailyStatus(null);
-          setCampaignWeeklySummary(null);
-        }
-        return;
-      }
-
-      const [mastery, badges, dailyStatus, weeklySummary] = await Promise.all([
-        getCampaignMastery(directorIdentity.userId, {
-          signal: controller.signal,
-        }).catch(() => [] as CampaignMastery[]),
-        getCampaignBadges(directorIdentity.userId, {
-          signal: controller.signal,
-        }).catch(() => [] as CampaignBadge[]),
-        todayChallenge
-          ? getCampaignDailyChallengeStatus(
-              directorIdentity.userId,
-              todayChallenge.profileId,
-              localDate,
-              new Date().getTimezoneOffset(),
-              { signal: controller.signal },
-            ).catch(() => null)
-          : Promise.resolve(null),
-        getCampaignWeeklySummary(
-          directorIdentity.userId,
-          localDate,
-          new Date().getTimezoneOffset(),
-          { signal: controller.signal },
-        ).catch(() => null),
-      ]);
-      if (cancelled) return;
-      setCampaignProfile(profile);
-      setCampaignMastery(mastery);
-      setCampaignBadges(badges);
-      setCampaignDailyStatus(dailyStatus);
-      setCampaignWeeklySummary(weeklySummary);
-    };
-
-    void loadCampaign();
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [directorIdentity.userId, localDate, todayChallenge?.profileId]);
-
-  const dailyMastery = todayChallenge
-    ? (campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null)
-    : null;
-  const topMasteries = [...campaignMastery]
-    .sort((left, right) => (
-      right.campaign_score - left.campaign_score
-      || right.level - left.level
-      || left.profile_id.localeCompare(right.profile_id)
-    ))
-    .slice(0, 3);
-  const todayChallengeProgress = resolveChallengeProgress(
-    cachedChallengeProgress,
-    campaignDailyStatus,
-  );
-  const nextUnlockLabel = dailyMastery?.score_to_next_level != null
-    ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
-    : t('home.campaign_mastered');
-  const sharedChallengeProfileLabel = sharedChallengeBanner?.profileId
-    ? getGameplayProfileLabel(sharedChallengeBanner.profileId as never, isZh)
-    : null;
-  const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
-    ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
-    : null;
-  const weeklyChallengeProgress = weeklyChallenges.map((challenge) => ({
-    challenge,
-    runs: campaignWeeklySummary?.profile_runs?.[challenge.profileId] ?? 0,
-  }));
-  const dailyChallengeActionState = todayChallengeProgress?.completed
-    ? 'replay'
-    : todayChallengeProgress
-      ? 'continue'
-      : 'start';
-  const dailyChallengeProgressStatus = todayChallengeProgress?.completed
-    ? 'completed'
-    : todayChallengeProgress
-      ? 'in_progress'
-      : 'not_started';
-  const weeklyChallengeEntries = weeklyChallengeProgress.map(({ challenge, runs }) => ({
-    challenge_id: challenge.id,
-    profile_id: challenge.profileId,
-    profile_label: getGameplayProfileLabel(challenge.profileId, isZh),
-    runs,
-  }));
-  const topMasteryEntries = topMasteries.map((mastery) => ({
-    profile_id: mastery.profile_id,
-    profile_label: getGameplayProfileLabel(mastery.profile_id as never, isZh),
-    level: mastery.level,
-    score_to_next_level: mastery.score_to_next_level ?? null,
-  }));
-
   // Entry animations
   useEffect(() => {
     if (titleRef.current) {
@@ -411,39 +244,6 @@ export function InputView() {
       );
     }
   }, []);
-
-  const handleTestConnection = async () => {
-    setTestStatus('testing');
-    setTestError('');
-    try {
-      const res = await testLlmConnection(
-        llmApiKey || undefined,
-        llmBaseUrl || undefined,
-        llmModel || undefined,
-      );
-      if (res.llm.status === 'ok') {
-        setTestStatus('ok');
-      } else {
-        setTestStatus('fail');
-        setTestError(res.llm.error || 'Unknown error');
-      }
-    } catch (err) {
-      setTestStatus('fail');
-      setTestError(
-        getLocalizedApiErrorMessage(
-          err,
-          t,
-          t('common.api_errors.llm_unavailable'),
-          {
-            LLM_TEMPORARILY_UNAVAILABLE: 'common.api_errors.llm_unavailable',
-            LLM_GENERATION_FAILED: 'common.api_errors.llm_generation_failed',
-          },
-        ),
-      );
-    }
-    // Auto-reset after 5s
-    setTimeout(() => setTestStatus('idle'), 5000);
-  };
 
   const launchSimulation = async ({
     nextQuestion,
@@ -465,15 +265,18 @@ export function InputView() {
 
     setIsSubmitting(true);
     try {
-      const id = await startSimulation(
-        trimmed, nextRounds, nextAgents, nextMode, undefined,
-        llmApiKey || undefined,
-        llmBaseUrl || undefined,
-        llmModel || undefined,
-        reasoningEffort || undefined,
-        nextVisualization,
-        directorIdentity.userId,
-      );
+      const id = await startSimulation({
+        question: trimmed,
+        rounds: nextRounds,
+        numAgents: nextAgents,
+        mode: nextMode,
+        llmApiKey: llmApiKey || undefined,
+        llmBaseUrl: llmBaseUrl || undefined,
+        llmModel: llmModel || undefined,
+        reasoningEffort: reasoningEffort || undefined,
+        visualizationEnabled: nextVisualization,
+        userId: directorIdentity.userId,
+      });
       if (challengeId) {
         markChallengeStarted(challengeId, id);
       }
@@ -866,13 +669,13 @@ export function InputView() {
                   : t('home.weekly_challenge_fallback')}
               </span>
               <div className="daily-challenge-card__hooks">
-                {weeklyChallengeProgress.map(({ challenge, runs }) => (
+                {weeklyChallengeEntries.map((entry) => (
                   <span
-                    key={challenge.id}
-                    className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
+                    key={entry.challenge_id}
+                    className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${entry.runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
                   >
-                    {getGameplayProfileLabel(challenge.profileId, isZh)}
-                    {runs > 0 ? ` · ${t('home.weekly_challenge_runs', { count: runs })}` : ''}
+                    {entry.profile_label}
+                    {entry.runs > 0 ? ` · ${t('home.weekly_challenge_runs', { count: entry.runs })}` : ''}
                   </span>
                 ))}
               </div>
@@ -1048,9 +851,9 @@ export function InputView() {
               <div className="mode-options">
                 {[
                   { value: '', label: t('home.reasoning_off') },
-                  { value: 'low', label: 'Low' },
-                  { value: 'medium', label: 'Medium' },
-                  { value: 'high', label: 'High' },
+                  { value: 'low', label: t('home.reasoning_low') },
+                  { value: 'medium', label: t('home.reasoning_medium') },
+                  { value: 'high', label: t('home.reasoning_high') },
                 ].map((opt) => (
                   <button
                     key={opt.value}
@@ -1082,7 +885,7 @@ export function InputView() {
             {showByok && (
               <div className="byok-fields">
                 <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-key">API Key</label>
+                  <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
                   <input
                     id="byok-key"
                     type="password"
@@ -1095,7 +898,7 @@ export function InputView() {
                   />
                 </div>
                 <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-url">Base URL</label>
+                  <label className="byok-label" htmlFor="byok-url">{t('home.byok_base_url_label')}</label>
                   <input
                     id="byok-url"
                     type="url"
@@ -1107,7 +910,7 @@ export function InputView() {
                   />
                 </div>
                 <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-model">Model</label>
+                  <label className="byok-label" htmlFor="byok-model">{t('home.byok_model_label')}</label>
                   <input
                     id="byok-model"
                     type="text"

@@ -51,7 +51,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (store: {
-    startSimulation: () => Promise<string>;
+    startSimulation: (options: { question: string }) => Promise<string>;
     error: string;
     errorCode: string | null;
     reset: () => void;
@@ -357,7 +357,9 @@ describe('InputView campaign progress', () => {
     );
 
     expect(await screen.findByText('home.shared_challenge_label')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
+    });
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
   });
 
@@ -375,7 +377,7 @@ describe('InputView campaign progress', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /home\.byok_toggle/ }));
-    await user.type(screen.getByLabelText('API Key'), 'sk-test');
+    await user.type(screen.getByLabelText('home.byok_api_key_label'), 'sk-test');
     await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
 
     expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();

@@ -101,6 +101,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
   - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
   - 对应两组 `ruff check`：通过
+- 本 session 这轮“vector-store per-scenario write lock / runtime-lock cleanup”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_runtime_lock.py tests/test_vector_store.py -q`：`38 passed in 4.86s`
+  - `python -m ruff check --ignore E501 app/services/runtime_lock.py app/services/vector_store.py tests/test_runtime_lock.py tests/test_vector_store.py`：通过
 - 本轮这类“engine 初始化竞态 / scenario replay import 边界 / prediction 提交窗口 / scenario 删除回滚 campaign side effects / Debate 空 turn fallback”改动，当前还额外实跑通过：
   - `pytest -q backend/tests/test_models.py backend/tests/test_api.py backend/tests/test_debate_service.py backend/tests/test_predictions.py -k 'get_engine_initializes_once_under_concurrency or import_replay_scenario or submit_prediction_rejects or delete_cascade_removes_campaign_log_and_detaches_badge_source or social_copy_trims_output_to_platform_limit or run_debate_background_finishes_with_structured_result or concurrent_calls_only_persist_once'`：`9 passed, 145 deselected in 1.07s`
   - `python -m ruff check --ignore E501 backend/app/models/database.py backend/app/api/predictions.py backend/app/api/scenarios.py backend/app/services/debate.py backend/tests/test_api.py backend/tests/test_models.py`：通过
@@ -150,6 +153,9 @@ npm run assets:provenance:check
 - 当前 targeted frontend set：`107 passed`
 - 这组扩展回归适用于本轮这类“authority 写入 / 结果页 authority / scenarioMeta-replay 收口”改动；更贴近本 session 的前端相关子集实跑为 `32 passed`。
 - 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx`、`src/components/ShareModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
+- 本 session 这轮“Input/Simulation hook 拆分 + `startSimulation(options)` + Simulation i18n 收口”改动，当前还额外实跑通过：
+  - `src/lib/directorIdentity.test.ts + src/lib/debateCounterplay.test.ts + src/lib/scenarioMeta.test.ts + src/lib/dailyChallenge.test.ts + src/lib/llmProviderPolicy.test.ts + src/pages/InputView.test.tsx + src/pages/SimulationView.test.tsx + src/stores/simulationStore.test.ts + src/hooks/useSimulationWS.test.tsx`：`81 passed in 1.57s`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
 - 本轮这类“`scenarioMeta` 继续收口 + replay helper 动态加载 + Theater 首屏/截图兜底 + BootScene/WorldScene 资源加载优化”改动，当前还额外实跑通过：
   - `src/hooks/useScreenCapture.test.ts + src/lib/scenarioMeta.test.ts + src/lib/scenarioReplay.test.ts + src/pages/ResultView.test.tsx + src/pages/SimulationView.test.tsx`：`42 passed`
   - `src/lib/simulationReplay.test.ts + src/lib/scenarioReplay.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`：`32 passed`

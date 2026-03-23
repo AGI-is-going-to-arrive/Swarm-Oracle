@@ -6,9 +6,28 @@ const MAX_MESSAGES = 5000; // H-3 fix: prevent unbounded memory growth
 
 import i18n from '../i18n/config';
 import { create } from 'zustand';
-import { createScenario, getScenario } from '../api/client';
+import { createScenario, getScenario, type CreateScenarioOptions } from '../api/client';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent } from '../types';
+
+let seenMessageKeys = new Set<string>();
+
+function messageDedupKey(message: Pick<AgentMessage, 'agent_id' | 'branch' | 'round' | 'message'>): string {
+  return `${message.agent_id}::${message.branch}::${message.round}::${message.message}`;
+}
+
+function rebuildSeenMessageKeys(messages: AgentMessage[]) {
+  seenMessageKeys = new Set(messages.map((message) => messageDedupKey(message)));
+}
+
+const STATUS_RANK: Record<SimulationState['status'], number> = {
+  idle: 0,
+  parsing: 1,
+  simulating: 2,
+  narrating: 3,
+  done: 4,
+  error: 4,
+};
 
 /** Agent currently thinking (waiting for LLM response). */
 export interface ThinkingAgent {
@@ -17,6 +36,8 @@ export interface ThinkingAgent {
   branch: string;
   round: number;
 }
+
+type ActiveSimulationStatus = Exclude<SimulationState['status'], 'idle'>;
 
 export interface SimulationState {
   // Data
@@ -47,7 +68,7 @@ export interface SimulationState {
   isSimulationComplete: boolean;
 
   // Actions
-  startSimulation: (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean, userId?: string) => Promise<string>;
+  startSimulation: (options: CreateScenarioOptions) => Promise<string>;
   setScenario: (s: Scenario) => void;
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent) => void;
@@ -93,25 +114,114 @@ function translate(key: string, options?: Record<string, unknown>): string {
   return i18n.t(key, options as never) as unknown as string;
 }
 
+function mergeMessages(current: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
+  if (current.length === 0) return incoming.slice(-MAX_MESSAGES);
+  if (incoming.length === 0) return current.slice(-MAX_MESSAGES);
+
+  const merged = [...incoming];
+  const seen = new Set(incoming.map((message) => messageDedupKey(message)));
+  for (const message of current) {
+    const key = messageDedupKey(message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(message);
+  }
+  return merged.slice(-MAX_MESSAGES);
+}
+
+function mergeBranch(current: BranchInfo, incoming: BranchInfo): BranchInfo {
+  return {
+    ...current,
+    ...incoming,
+    status: current.status !== 'ACTIVE' && incoming.status === 'ACTIVE'
+      ? current.status
+      : incoming.status,
+  };
+}
+
+function mergeBranches(current: BranchInfo[], incoming: BranchInfo[]): BranchInfo[] {
+  if (current.length === 0) return incoming;
+  if (incoming.length === 0) return current;
+
+  const currentById = new Map(current.map((branch) => [branch.id, branch]));
+  const merged = incoming.map((branch) => {
+    const existing = currentById.get(branch.id);
+    if (!existing) return branch;
+    currentById.delete(branch.id);
+    return mergeBranch(existing, branch);
+  });
+  return [...merged, ...currentById.values()];
+}
+
+function mergeScenarioStatus(
+  current: SimulationState['status'],
+  incoming: ActiveSimulationStatus,
+): ActiveSimulationStatus {
+  if (current === 'done' && incoming !== 'error') return current;
+  if (current === 'error' && incoming !== 'done') return current;
+  return STATUS_RANK[current] > STATUS_RANK[incoming] ? (current as ActiveSimulationStatus) : incoming;
+}
+
+function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Partial<SimulationState> {
+  const incomingStatus = scenario.status as ActiveSimulationStatus;
+  const sameScenario = state.scenario?.id === scenario.id;
+  const mergedMessages = sameScenario
+    ? mergeMessages(state.messages, (scenario.messages || []) as AgentMessage[])
+    : ((scenario.messages || []) as AgentMessage[]);
+  const mergedBranches = sameScenario
+    ? mergeBranches(state.branches, scenario.branches as BranchInfo[])
+    : (scenario.branches as BranchInfo[]);
+  const mergedStatus = sameScenario
+    ? mergeScenarioStatus(state.status, incomingStatus)
+    : incomingStatus;
+  const highestRound = Math.max(0, ...mergedMessages.map((message) => message.round ?? 0));
+
+  rebuildSeenMessageKeys(mergedMessages);
+
+  const nextScenarioStatus = mergedStatus as Scenario['status'];
+  return {
+    scenario: {
+      ...scenario,
+      status: nextScenarioStatus,
+      branches: mergedBranches,
+      messages: mergedMessages,
+    },
+    agents: scenario.agents as AgentInfo[],
+    branches: mergedBranches,
+    groups: (scenario.groups || []) as GroupInfo[],
+    hierarchical: scenario.hierarchical ?? false,
+    visualizationEnabled: scenario.visualization_enabled ?? false,
+    viewMode: scenario.visualization_enabled ? 'theater' : 'classic',
+    messages: mergedMessages,
+    status: mergedStatus,
+    currentRound: sameScenario ? Math.max(state.currentRound, highestRound) : highestRound,
+    isSimulationComplete: mergedStatus === 'done',
+    error: null,
+    errorCode: null,
+  };
+}
+
 export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
 
-  startSimulation: async (question: string, rounds?: number, numAgents?: number, mode?: 'raw' | 'blackboard', hierarchical?: boolean, llmApiKey?: string, llmBaseUrl?: string, llmModel?: string, reasoningEffort?: string, visualizationEnabled?: boolean, userId?: string) => {
+  startSimulation: async (options: CreateScenarioOptions) => {
     set({ status: 'parsing', error: null });
     try {
-      const scenario = await createScenario(question, rounds, numAgents, mode, hierarchical, llmApiKey, llmBaseUrl, llmModel, reasoningEffort, visualizationEnabled, userId);
+      const scenario = await createScenario(options);
+      const resolvedVisualizationEnabled = scenario.visualization_enabled ?? options.visualizationEnabled ?? false;
       set({
         scenario,
         agents: scenario.agents as AgentInfo[],
         branches: scenario.branches as BranchInfo[],
         groups: (scenario.groups || []) as GroupInfo[],
         hierarchical: scenario.hierarchical ?? false,
-        visualizationEnabled: visualizationEnabled ?? false,
-        viewMode: visualizationEnabled ? 'theater' : 'classic',
+        visualizationEnabled: resolvedVisualizationEnabled,
+        viewMode: resolvedVisualizationEnabled ? 'theater' : 'classic',
         status: scenario.status as SimulationState['status'],
         error: null,
         errorCode: null,
       });
+      rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[]);
       return scenario.id;
     } catch (err) {
       set({
@@ -127,40 +237,14 @@ export const useSimulationStore = create<SimulationState>((set) => ({
     }
   },
 
-  setScenario: (s: Scenario) =>
-    set({
-      scenario: s,
-      agents: s.agents as AgentInfo[],
-      branches: s.branches as BranchInfo[],
-      groups: (s.groups || []) as GroupInfo[],
-      hierarchical: s.hierarchical ?? false,
-      visualizationEnabled: s.visualization_enabled ?? false,
-      viewMode: s.visualization_enabled ? 'theater' : 'classic',
-      messages: (s.messages || []) as AgentMessage[],
-      status: s.status as SimulationState['status'],
-      currentRound: Math.max(0, ...((s.messages || []).map((message) => message.round ?? 0))),
-      isSimulationComplete: s.status === 'done',
-      error: null,
-    }),
+  setScenario: (s: Scenario) => {
+    set((state) => applyScenarioSnapshot(state, s));
+  },
 
   loadScenario: async (id: string) => {
     try {
       const s = await getScenario(id);
-      set({
-        scenario: s,
-        agents: s.agents as AgentInfo[],
-        branches: s.branches as BranchInfo[],
-        groups: (s.groups || []) as GroupInfo[],
-        hierarchical: s.hierarchical ?? false,
-        visualizationEnabled: s.visualization_enabled ?? false,
-        viewMode: s.visualization_enabled ? 'theater' : 'classic',
-        messages: (s.messages || []) as AgentMessage[],
-        status: s.status as SimulationState['status'],
-        currentRound: Math.max(0, ...((s.messages || []).map((message) => message.round ?? 0))),
-        isSimulationComplete: s.status === 'done',
-        error: null,
-        errorCode: null,
-      });
+      set((state) => applyScenarioSnapshot(state, s));
     } catch (err) {
       set({
         errorCode: getApiErrorCode(err),
@@ -213,14 +297,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         // Final message — add to messages (with dedup + cap), remove from thinking
         set((state) => {
           const d = event.data;
-          // Dedup guard: reject if identical (agent_id + branch + round + message) already exists
-          const isDuplicate = state.messages.some(
-            (m) =>
-              m.agent_id === d.agent_id &&
-              m.branch === d.branch &&
-              m.round === d.round &&
-              m.message === d.message,
-          );
+          const dedupKey = messageDedupKey(d);
+          const isDuplicate = seenMessageKeys.has(dedupKey);
           if (isDuplicate) {
             return {
               thinkingAgents: state.thinkingAgents.filter(
@@ -230,8 +308,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           }
           // H-3 fix: cap messages to prevent memory leak
           let newMessages = [...state.messages, d];
+          seenMessageKeys.add(dedupKey);
           if (newMessages.length > MAX_MESSAGES) {
             newMessages = newMessages.slice(newMessages.length - MAX_MESSAGES);
+            rebuildSeenMessageKeys(newMessages);
           }
           return {
             messages: newMessages,
@@ -468,5 +548,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       };
     }),
 
-  reset: () => set(initialState),
+  reset: () => {
+    rebuildSeenMessageKeys([]);
+    set(initialState);
+  },
 }));

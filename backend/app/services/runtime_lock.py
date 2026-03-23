@@ -67,6 +67,14 @@ def _ensure_runtime_lock_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _sweep_expired_inprocess_locks(now: float) -> None:
+    expired_keys = [
+        key for key, (_owner_id, expires_at) in _INPROCESS_LOCKS.items() if expires_at <= now
+    ]
+    for key in expired_keys:
+        _INPROCESS_LOCKS.pop(key, None)
+
+
 def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockLease | None:
     """Acquire a crash-safe runtime lock lease backed by SQLite when available."""
     now = time.time()
@@ -78,6 +86,7 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
     if db_path is None:
         expires_at = now + normalized_lease
         with _INPROCESS_LOCKS_GUARD:
+            _sweep_expired_inprocess_locks(now)
             existing = _INPROCESS_LOCKS.get(lock_key)
             if existing is not None:
                 existing_owner_id, existing_expires_at = existing

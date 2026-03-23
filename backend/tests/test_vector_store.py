@@ -361,7 +361,9 @@ class TestVectorStoreEdgeCases:
         assert all(not thread.is_alive() for thread in threads)
         assert state["calls"] == 2
         assert state["max_active"] == 1
-        assert runtime_lock_calls == [vector_store_module._CHROMA_WRITE_LOCK_KEY] * 2
+        assert runtime_lock_calls == [
+            f"{vector_store_module._CHROMA_WRITE_LOCK_KEY_PREFIX}:scenario-lock"
+        ] * 2
         assert len(released_leases) == 2
 
     def test_delete_collection_uses_canonical_name_clears_cache_and_wraps_runtime_lock(
@@ -401,7 +403,7 @@ class TestVectorStoreEdgeCases:
         assert deleted["name"] == collection_name_for_scenario("abc-def-123-456")
         assert "abc-def-123-456" not in vs._collections
         assert acquired == [(
-            vector_store_module._CHROMA_WRITE_LOCK_KEY,
+            f"{vector_store_module._CHROMA_WRITE_LOCK_KEY_PREFIX}:abc-def-123-456",
             vector_store_module._CHROMA_WRITE_LOCK_LEASE_SECONDS,
         )]
         assert released == [lease]

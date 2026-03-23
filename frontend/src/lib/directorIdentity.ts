@@ -25,7 +25,11 @@ function readStoredIdentity(): DirectorIdentity | null {
 
 function writeStoredIdentity(identity: DirectorIdentity) {
   if (typeof window.localStorage?.setItem !== 'function') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(identity));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(identity));
+  } catch (error) {
+    console.warn('[directorIdentity] Failed to persist identity', error);
+  }
 }
 
 export function getDirectorIdentity(): DirectorIdentity {

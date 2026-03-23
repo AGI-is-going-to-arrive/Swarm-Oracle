@@ -1,9 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DebatePrediction } from '../types';
-import { resolveDebateCounterplayRecord } from './debateCounterplay';
+import {
+  loadDebateCounterplay,
+  resolveDebateCounterplayRecord,
+  saveDebateCounterplay,
+} from './debateCounterplay';
 
 describe('debateCounterplay helpers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('prefers backend counterplay metadata over a local record', () => {
     const backendPrediction: DebatePrediction = {
       id: 'prediction-1',
@@ -76,5 +84,25 @@ describe('debateCounterplay helpers', () => {
       phase: 'opening',
       variant: 'balanced',
     });
+  });
+
+  it('swallows storage write failures when saving local counterplay state', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      }),
+    });
+
+    expect(() => saveDebateCounterplay({
+      debateId: 'debate-2',
+      kind: 'winner',
+      targetValue: 'proposition',
+      confidence: 0.55,
+      phase: 'crossfire',
+      variant: 'reversal',
+      createdAt: '2026-03-18T11:00:00Z',
+    })).not.toThrow();
+    expect(loadDebateCounterplay('debate-2')).toBeNull();
   });
 });

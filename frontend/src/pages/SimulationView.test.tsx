@@ -493,7 +493,7 @@ describe('SimulationView replay automation output', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'sim.predict_btn' })).not.toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: '导入为本地运行' }));
+    await userEvent.setup().click(screen.getByRole('button', { name: 'sim.replay.import_local' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/sim/imported-sim-1');
   });

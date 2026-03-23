@@ -44,7 +44,11 @@ function safeReadStore(): DebateCounterplayStore {
 }
 
 function safeWriteStore(store: DebateCounterplayStore) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch (error) {
+    console.warn('[debateCounterplay] Failed to persist counterplay state', error);
+  }
 }
 
 export function saveDebateCounterplay(record: DebateCounterplayRecord): DebateCounterplayRecord {

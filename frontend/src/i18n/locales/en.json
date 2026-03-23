@@ -140,7 +140,38 @@
       "switch_to_theater_aria": "Switch to Pixel Theater",
       "switch_to_classic_aria": "Switch to Classic View",
       "theater_unavailable_hint": "Pixel Theater was not enabled for this scenario. Go back and start it with Pixel Theater enabled.",
-      "theater_status_aria": "Theater live status"
+      "theater_status_aria": "Theater live status",
+      "replay": {
+        "importing": "Importing...",
+        "import_local": "Import as Local Run",
+        "read_only": "Read-only replay mode: live write actions are disabled."
+      },
+      "director": {
+        "title": "Director Goals",
+        "done": "Done {{completed}}/{{total}}",
+        "commitment_label": "Committed worldline",
+        "commit": "Commit",
+        "clear": "Clear"
+      },
+      "theater_scene": {
+        "boot": "Boot Scene",
+        "title": "Title Scene",
+        "world": "World Scene",
+        "ending": "Ending Scene"
+      },
+      "theater_weather": {
+        "clear": "Clear",
+        "rain": "Rain",
+        "snow": "Snow",
+        "storm": "Storm",
+        "sandstorm": "Sandstorm"
+      },
+      "theater_time": {
+        "dawn": "Dawn",
+        "noon": "Noon",
+        "dusk": "Dusk",
+        "night": "Night"
+      }
     },
     "intervention": {
       "title": "Butterfly Effect",

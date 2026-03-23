@@ -34,6 +34,7 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
 | BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model |
+| Frontend State Split | 首页当前已按 `useInputByokSettings / useInputCampaignState / useSharedChallengePrefill` 三组 hook 收边界；模拟页当前也按 `useSimulationReplayState` 与 `useSimulationViewState` 分开 replay、截图和 director authority 状态；`simulationStore.startSimulation()` 与 `api/client.ts#createScenario()` 现统一走 options 对象，不再靠长位置参数串联 |
 | Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本；若浏览器 Clipboard API 不可用，分享弹窗现在会明确提示手动复制，而不再回退到过时的 `execCommand('copy')` 路径 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
 | Language Switcher (P9) | 全局 EN/ZH 切换器；桌面端固定右下角，小屏普通页面会移到右上安全区，Theater 小屏继续贴底部安全区 |
@@ -154,6 +155,11 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
   - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/lib/dailyChallenge.test.ts src/game/scenes/WorldScene.test.ts src/components/GameplayCardsModal.test.tsx`：`34 passed in 0.66s`
   - `cd frontend && npm test -- --run src/components/ShareModal.test.tsx src/components/BranchTree.test.tsx`：`5 passed in 0.60s`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“frontend Input/Simulation hook 拆分 + `startSimulation(options)` + Simulation i18n 收口 / backend vector-store per-scenario write lock”改动，当前还额外实跑通过：
+  - `cd frontend && npm test -- --run src/lib/directorIdentity.test.ts src/lib/debateCounterplay.test.ts src/lib/scenarioMeta.test.ts src/lib/dailyChallenge.test.ts src/lib/llmProviderPolicy.test.ts src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/hooks/useSimulationWS.test.tsx`：`81 passed in 1.57s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd backend && source ../.venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_vector_store.py -q`：`38 passed in 4.86s`
+  - `cd backend && source ../.venv/bin/activate && python -m ruff check --ignore E501 app/services/runtime_lock.py app/services/vector_store.py tests/test_runtime_lock.py tests/test_vector_store.py`：通过
 
 ## 目录结构
 

@@ -147,6 +147,147 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().messages).toHaveLength(1);
   });
 
+  it("merges same-scenario hydration without overwriting newer websocket state", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario({
+      id: "scenario-1",
+      question: "What if?",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [
+        {
+          id: "branch-1",
+          parent_branch_id: null,
+          fork_round: 0,
+          fork_reason: "",
+          title: "Root",
+          description: "",
+          summary: "",
+          story: "",
+          insight: "",
+          key_moments: [],
+          probability: 1,
+          status: "ACTIVE",
+        },
+      ],
+      groups: [],
+      hierarchical: false,
+      messages: [
+        {
+          agent: "Alpha",
+          agent_id: "a1",
+          branch: "branch-1",
+          round: 1,
+          message: "older snapshot",
+          emotion: "neutral",
+        },
+      ],
+    });
+
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "Beta",
+        agent_id: "a2",
+        branch: "branch-1",
+        round: 2,
+        message: "newer ws message",
+        emotion: "confident",
+      },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "done" },
+    } as WSEvent);
+
+    store.getState().setScenario({
+      id: "scenario-1",
+      question: "What if?",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [
+        {
+          id: "branch-1",
+          parent_branch_id: null,
+          fork_round: 0,
+          fork_reason: "",
+          title: "Root",
+          description: "",
+          summary: "",
+          story: "",
+          insight: "",
+          key_moments: [],
+          probability: 1,
+          status: "ACTIVE",
+        },
+      ],
+      groups: [],
+      hierarchical: false,
+      messages: [
+        {
+          agent: "Alpha",
+          agent_id: "a1",
+          branch: "branch-1",
+          round: 1,
+          message: "older snapshot",
+          emotion: "neutral",
+        },
+      ],
+    });
+
+    expect(store.getState().status).toBe("done");
+    expect(store.getState().messages.map((message) => message.message)).toEqual([
+      "older snapshot",
+      "newer ws message",
+    ]);
+    expect(store.getState().currentRound).toBe(2);
+  });
+
+  it("deduplicates repeated agent_speak events against preloaded scenario history", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [{
+        agent: "曹操",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "吾当南下取荆州！",
+        emotion: "confident",
+      }],
+    });
+
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "曹操",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "吾当南下取荆州！",
+        emotion: "confident",
+      },
+    } as WSEvent);
+
+    expect(store.getState().messages).toHaveLength(1);
+  });
+
   it("handles 'round_summary' → advances currentRound", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({
@@ -311,6 +452,48 @@ describe("simulationStore — handleWSEvent", () => {
 });
 
 describe("simulationStore — api error mapping", () => {
+  it("forwards startSimulation options into createScenario", async () => {
+    createScenarioMock.mockResolvedValueOnce({
+      id: "scenario-1",
+      question: "question",
+      status: "parsing",
+      created_at: new Date().toISOString(),
+      total_rounds: 5,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    await useSimulationStore.getState().startSimulation({
+      question: "question",
+      rounds: 7,
+      numAgents: 12,
+      mode: "raw",
+      llmApiKey: "sk-test",
+      llmBaseUrl: "https://example.com/v1",
+      llmModel: "gpt-test",
+      reasoningEffort: "high",
+      visualizationEnabled: true,
+      userId: "director-1",
+    });
+
+    expect(createScenarioMock).toHaveBeenCalledWith({
+      question: "question",
+      rounds: 7,
+      numAgents: 12,
+      mode: "raw",
+      llmApiKey: "sk-test",
+      llmBaseUrl: "https://example.com/v1",
+      llmModel: "gpt-test",
+      reasoningEffort: "high",
+      visualizationEnabled: true,
+      userId: "director-1",
+    });
+  });
+
   it("maps structured start errors to localized keys", async () => {
     createScenarioMock.mockRejectedValueOnce({
       status: 503,
@@ -318,7 +501,7 @@ describe("simulationStore — api error mapping", () => {
     });
 
     await expect(
-      useSimulationStore.getState().startSimulation("question"),
+      useSimulationStore.getState().startSimulation({ question: "question" }),
     ).rejects.toMatchObject({ code: "LLM_TEMPORARILY_UNAVAILABLE" });
 
     expect(useSimulationStore.getState().error).toBe("common.api_errors.llm_unavailable");

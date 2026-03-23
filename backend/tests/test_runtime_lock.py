@@ -86,6 +86,21 @@ def test_runtime_lock_fallback_reclaims_expired_in_process_lease(monkeypatch):
     assert reclaimed is not None
 
 
+def test_runtime_lock_fallback_sweeps_expired_unrelated_keys(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        "sqlite:///:memory:",
+    )
+
+    expired = acquire_runtime_lock(simulation_lock_key("scenario-expired"), lease_seconds=0.01)
+    assert expired is not None
+    time.sleep(0.03)
+
+    fresh = acquire_runtime_lock(simulation_lock_key("scenario-fresh"), lease_seconds=30)
+    assert fresh is not None
+    assert simulation_lock_key("scenario-expired") not in runtime_lock_module._INPROCESS_LOCKS
+
+
 def test_get_engine_initializes_singleton_once_under_thread_race(monkeypatch):
     database_module.dispose_engine()
     created_engines: list[object] = []

@@ -13,7 +13,7 @@ import { CONTRACT_CARD_RULES } from './gameplayContract';
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
 const LOCK_KEY_PREFIX = `${STORAGE_KEY}:lock:`;
 const LOCK_LEASE_MS = 150;
-const LOCK_WAIT_TIMEOUT_MS = 240;
+const LOCK_WAIT_TIMEOUT_MS = 40;
 const LOCK_RETRY_DELAY_MS = 8;
 
 type ScenarioMetaLockRecord = {
@@ -420,7 +420,31 @@ function safeReadStore(): RootStore {
 }
 
 function safeWriteStore(store: RootStore) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    return true;
+  } catch (error) {
+    console.warn('[scenarioMeta] Failed to persist store', error);
+    return false;
+  }
+}
+
+function safeWriteLockRecord(scenarioId: string, lock: ScenarioMetaLockRecord): boolean {
+  try {
+    window.localStorage.setItem(getLockKey(scenarioId), JSON.stringify(lock));
+    return true;
+  } catch (error) {
+    console.warn('[scenarioMeta] Failed to persist lock', scenarioId, error);
+    return false;
+  }
+}
+
+function safeRemoveLockRecord(scenarioId: string) {
+  try {
+    window.localStorage.removeItem(getLockKey(scenarioId));
+  } catch (error) {
+    console.warn('[scenarioMeta] Failed to clear lock', scenarioId, error);
+  }
 }
 
 function getLockKey(scenarioId: string): string {
@@ -472,7 +496,9 @@ function tryAcquireScenarioMetaLock(scenarioId: string): ScenarioMetaLockRecord 
     token: `${SCENARIO_META_OWNER_ID}:${now}:${Math.random().toString(16).slice(2)}`,
     expiresAt: now + LOCK_LEASE_MS,
   };
-  window.localStorage.setItem(getLockKey(scenarioId), JSON.stringify(next));
+  if (!safeWriteLockRecord(scenarioId, next)) {
+    return null;
+  }
 
   const confirmed = readScenarioMetaLock(scenarioId);
   if (
@@ -492,7 +518,7 @@ function releaseScenarioMetaLock(scenarioId: string, lock: ScenarioMetaLockRecor
     && current.ownerId === lock.ownerId
     && current.token === lock.token
   ) {
-    window.localStorage.removeItem(getLockKey(scenarioId));
+    safeRemoveLockRecord(scenarioId);
   }
 }
 
@@ -518,7 +544,10 @@ function withScenarioMetaLock<T>(scenarioId: string, work: () => T): T {
     waitForScenarioMetaLockTurn();
   }
 
-  console.warn('[scenarioMeta] Falling back to optimistic write after lock timeout', scenarioId);
+  console.warn(
+    '[scenarioMeta] Falling back to optimistic write after lock timeout',
+    scenarioId,
+  );
   return work();
 }
 
@@ -574,8 +603,9 @@ export function saveScenarioMeta(scenarioId: string, next: ScenarioMeta): Scenar
     const store = safeReadStore();
     const nextRevision = getScenarioMetaRevision(store.scenarios[scenarioId]) + 1;
     store.scenarios[scenarioId] = serializeScenarioMetaRecord(next, nextRevision);
-    safeWriteStore(store);
-    notifyScenarioMetaSubscribers(scenarioId);
+    if (safeWriteStore(store)) {
+      notifyScenarioMetaSubscribers(scenarioId);
+    }
     return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
   });
 }
@@ -590,8 +620,9 @@ export function updateScenarioMeta(
     const next = updater(hydrateScenarioMetaSnapshot(currentRecord));
     const nextRevision = getScenarioMetaRevision(currentRecord) + 1;
     store.scenarios[scenarioId] = serializeScenarioMetaRecord(next, nextRevision);
-    safeWriteStore(store);
-    notifyScenarioMetaSubscribers(scenarioId);
+    if (safeWriteStore(store)) {
+      notifyScenarioMetaSubscribers(scenarioId);
+    }
     return hydrateScenarioMetaSnapshot(store.scenarios[scenarioId]);
   });
 }

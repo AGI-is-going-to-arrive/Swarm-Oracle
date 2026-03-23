@@ -250,7 +250,7 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(second.objectives.goals[0].id).toBe('goal-1');
   });
 
-  it('waits for a busy lock to clear before rebasing on the latest persisted state', () => {
+  it('rebases on the latest persisted state when a contended lock clears on retry', () => {
     const scenarioId = 'scenario-busy-lock';
     const storageKey = 'swarmoracle:scenario-meta:v1';
     const lockKey = `swarmoracle:scenario-meta:v1:lock:${scenarioId}`;
@@ -260,20 +260,16 @@ describe('scenarioMeta gameplay card rules', () => {
       scenarios: {},
     }));
 
-    let now = 1_000;
     let released = false;
-    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
-      const current = now;
-      now += 5;
-      return current;
-    });
+    let lockReads = 0;
 
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
         getItem: (key: string) => {
           if (key === lockKey && !released) {
-            if (now >= 1_040) {
+            lockReads += 1;
+            if (lockReads >= 2) {
               released = true;
               backingStore.set(storageKey, JSON.stringify({
                 version: 1,
@@ -332,8 +328,6 @@ describe('scenarioMeta gameplay card rules', () => {
     expect(committed.betting.bets[0]?.betId).toBe('bet-1');
     expect(committed.commitment.active).toBe(true);
     expect(persisted._rev).toBe(2);
-
-    nowSpy.mockRestore();
   });
 
   it('merges archive patches in memory without touching storage helpers', () => {
@@ -491,5 +485,28 @@ describe('scenarioMeta gameplay card rules', () => {
 
     expect(committed.commitment.active).toBe(true);
     expect(window.localStorage.getItem(`swarmoracle:scenario-meta:v1:lock:${scenarioId}`)).toBeNull();
+  });
+
+  it('falls back gracefully when localStorage writes fail', () => {
+    const scenarioId = 'scenario-storage-failure';
+    const getItem = window.localStorage.getItem.bind(window.localStorage);
+    const removeItem = window.localStorage.removeItem.bind(window.localStorage);
+
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem,
+        setItem: () => {
+          throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        },
+        removeItem,
+      },
+    });
+
+    expect(() => setBranchCommitment(scenarioId, {
+      branchId: 'branch-9',
+      branchTitle: '自治同盟',
+      currentRound: 2,
+    })).not.toThrow();
   });
 });

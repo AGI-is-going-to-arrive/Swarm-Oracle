@@ -57,4 +57,44 @@ describe('llmProviderPolicy', () => {
       reasoningEffort: '',
     });
   });
+
+  it('swallows storage write failures', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      }),
+      removeItem: vi.fn(),
+    });
+
+    expect(() => saveLlmProviderPolicy({
+      apiKey: 'sk-test',
+      baseUrl: 'https://example.com/v1',
+      model: 'gpt-test',
+      reasoningEffort: 'medium',
+    })).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('swallows storage remove failures', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(() => {
+        throw new Error('remove failed');
+      }),
+    });
+
+    expect(() => saveLlmProviderPolicy({
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+    })).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });

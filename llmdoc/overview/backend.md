@@ -125,7 +125,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 模块级单例当前会区分“ready”与“仍在后台初始化”：`_store_ready()` 只代表已经可立即使用，`get_vector_store()` 在 init pending 时仍会复用同一个实例，避免并发请求重复拉起多个 Chroma init 线程
   - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
   - 如果 Chroma 在运行期才出错（例如 collection lookup / query / health check 才失败），当前会主动失效本地 `client + collection cache`；下一次 `get_vector_store()` 会重建单例，而不是让同一个坏 client 无限 warning
-  - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock，把本地 `PersistentClient` 的写操作串行化，降低多 worker 共写同一 `chroma_data/` 目录时的撞库风险
+  - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock；shared lock key 现已按 `scenario_id` 分片，不同 scenario 的 Chroma 写入不再被全局单 key 串成一条队列
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
   - ChromaDB 不可用时静默降级
 
@@ -139,6 +139,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
   - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
   - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内互斥 lease，而不是“永远成功”的空锁；这条 fast path 仍只保证单进程内防重入
+  - 进程内 fallback 当前会在每次 `acquire` 前顺手清理过期 key，不再把已失效 lease 永远留在内存字典里
 - **集成点**:
   - `api/helpers.py` 的 `run_sim_background()` 当前会在真正启动 simulation 前拿 `simulation:{scenario_id}` 锁
   - `services/debate.py` 的 `run_debate_background()` 当前会在广播 `LIVE` 前拿 `debate:{debate_id}` 锁
@@ -503,6 +504,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - `tests/test_simulator.py tests/test_intervention.py tests/test_api.py -k 'intervene or pending_intervention or delete_cascade_data or pop_next_pending_intervention_preserves_order or clear_pending_interventions_for_scenario_is_scoped or delete_uses_vector_store_cleanup' -q`：`19 passed in 1.49s`
   - `tests/test_vector_store.py -q`：`21 passed in 3.50s`
   - `tests/test_runtime_lock.py tests/test_vector_store.py tests/test_predictions.py tests/test_campaign_service.py tests/test_campaign_api.py -q`：`84 passed in 4.82s`
+- 本 session 这轮“vector-store per-scenario write lock / runtime-lock cleanup”还额外实跑通过：
+  - `python -m pytest tests/test_runtime_lock.py tests/test_vector_store.py -q`：`38 passed in 4.86s`
+  - `python -m ruff check --ignore E501 app/services/runtime_lock.py app/services/vector_store.py tests/test_runtime_lock.py tests/test_vector_store.py`：通过
 - 本 session 这轮“review fixes / structured logging / parser incomplete fallback”还额外实跑通过：
   - `python -m pytest tests/test_backend_code_review_fixes.py -q`：`4 passed in 0.45s`
   - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`：`64 passed in 71.56s`

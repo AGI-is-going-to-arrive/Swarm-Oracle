@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _chromadb = None
 _CHROMA_AVAILABLE = True
 _CHROMA_WRITE_LOCK = threading.Lock()
-_CHROMA_WRITE_LOCK_KEY = "vector-store:chroma-write"
+_CHROMA_WRITE_LOCK_KEY_PREFIX = "vector-store:chroma-write"
 _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_WRITE_LOCK_TIMEOUT_SECONDS = 10.0
 _CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
@@ -187,10 +187,11 @@ class VectorStore:
     def _acquire_write_lease(self, scenario_id: str, operation: str):
         """Wait briefly for the shared runtime lease that serializes Chroma writes."""
         deadline = time.monotonic() + _CHROMA_WRITE_LOCK_TIMEOUT_SECONDS
+        lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:{scenario_id}"
         while True:
             try:
                 lease = acquire_runtime_lock(
-                    _CHROMA_WRITE_LOCK_KEY,
+                    lock_key,
                     lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
                 )
             except Exception as exc:

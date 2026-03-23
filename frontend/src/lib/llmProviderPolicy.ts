@@ -67,11 +67,19 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
   const hasContent = Object.values(normalized).some(Boolean);
   if (!hasContent) {
     if (canRemoveFromStorage(window.localStorage)) {
-      window.localStorage.removeItem(STORAGE_KEY);
+      try {
+        window.localStorage.removeItem(STORAGE_KEY);
+      } catch (error) {
+        console.warn('[llmProviderPolicy] Failed to clear provider policy', error);
+      }
     }
     return;
   }
 
   if (!canWriteStorage(window.localStorage)) return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  } catch (error) {
+    console.warn('[llmProviderPolicy] Failed to persist provider policy', error);
+  }
 }

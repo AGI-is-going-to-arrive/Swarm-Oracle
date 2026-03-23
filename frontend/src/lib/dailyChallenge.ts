@@ -36,7 +36,11 @@ function loadProgressStore(): Record<string, Record<string, ChallengeProgressEnt
 }
 
 function saveProgressStore(store: Record<string, Record<string, ChallengeProgressEntry>>) {
-  window.localStorage.setItem(CHALLENGE_STORAGE_KEY, JSON.stringify(store));
+  try {
+    window.localStorage.setItem(CHALLENGE_STORAGE_KEY, JSON.stringify(store));
+  } catch (error) {
+    console.warn('[dailyChallenge] Failed to persist challenge progress', error);
+  }
 }
 
 export function getChallengeProgress(challengeId: string, date = new Date()) {

@@ -8,47 +8,23 @@ import { useTranslation } from 'react-i18next';
 
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
+import { useSimulationReplayState } from '../hooks/useSimulationReplayState';
 import {
-    createReplayArtifact,
-    getScenarioDirectorState,
-    getScenarioGameplayState,
-    getReplayArtifact,
-    importReplayScenario,
-    isApiError,
-    upsertScenarioDirectorState,
-  upsertScenarioGameplayState,
+  useSimulationCaptureControls,
+  useSimulationDirectorState,
+} from '../hooks/useSimulationViewState';
+import {
+  createReplayArtifact,
+  importReplayScenario,
 } from '../api/client';
 import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import {
-  captureCompositeElementBlob,
-  captureCompositeElementDataUrl,
-  captureElementDataUrl,
-  isLikelyWebKitCaptureUserAgent,
-  type CaptureMode,
-  useScreenCapture,
-} from '../hooks/useScreenCapture';
-import {
-  clearBranchCommitment,
   ensureScenarioObjectives,
   getScenarioArchiveKeyMoments,
-  loadScenarioMeta,
-  setBranchCommitment,
-  subscribeScenarioMeta,
 } from '../lib/scenarioMeta';
 import { copyText } from '../lib/copyText';
-import {
-  hasScenarioDirectorAuthority,
-  hasMeaningfulScenarioDirectorState,
-  scenarioMetaToDirectorState,
-} from '../lib/scenarioDirectorState';
-import {
-  areScenarioGameplayStatesEquivalent,
-  hasScenarioGameplayAuthority,
-  hasMeaningfulScenarioGameplayState,
-  mergeScenarioMetaWithGameplayState,
-  scenarioMetaToGameplayState,
-} from '../lib/scenarioGameplayState';
-import { mergeScenarioMetaAuthority } from '../lib/scenarioAuthority';
+import { hasScenarioDirectorAuthority } from '../lib/scenarioDirectorState';
+import { hasScenarioGameplayAuthority } from '../lib/scenarioGameplayState';
 import {
   getGameplayCardDefinition,
   getGameplaySignatureArcState,
@@ -77,86 +53,55 @@ const loadPhaserGameLoaderModule = () => import('../game/PhaserGameLoader');
 const LazyPhaserGameLoader = lazy(() =>
   loadPhaserGameLoaderModule().then((mod) => ({ default: mod.PhaserGameLoader }))
 );
+const loadSimulationReplayHelpers = () => import('../lib/simulationReplay');
+const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 import {
-  buildReplayBranchOptions,
   filterReplayMessages,
-  getLatestReplayRound,
-  getReplayRounds,
 } from '../game/replaySelection';
 import {
   stringifyAutomationPayload,
-  type AutomationSceneState,
   type AutomationWindow,
 } from '../game/automation';
 import { HudOverlay } from '../game/HudOverlay';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
 import type {
   BranchInfo,
-  ScenarioDirectorState,
-  ScenarioGameplayState,
 } from '../types';
-import type { SimulationReplayPayload } from '../lib/simulationReplay';
 import './SimulationView.css';
 
-const loadSimulationReplayHelpers = () => import('../lib/simulationReplay');
-const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
-
 const THEATER_SCENE_LABELS = {
-  BootScene: { zh: '启动场景', en: 'Boot Scene' },
-  TitleScene: { zh: '标题场景', en: 'Title Scene' },
-  WorldScene: { zh: '世界场景', en: 'World Scene' },
-  EndingScene: { zh: '结局演出', en: 'Ending Scene' },
+  BootScene: 'sim.theater_scene.boot',
+  TitleScene: 'sim.theater_scene.title',
+  WorldScene: 'sim.theater_scene.world',
+  EndingScene: 'sim.theater_scene.ending',
 } as const;
 
-const THEATER_WEATHER_LABELS: Record<string, { zh: string; en: string }> = {
-  clear: { zh: '晴朗', en: 'Clear' },
-  rain: { zh: '降雨', en: 'Rain' },
-  snow: { zh: '降雪', en: 'Snow' },
-  storm: { zh: '雷暴', en: 'Storm' },
-  sandstorm: { zh: '沙尘', en: 'Sandstorm' },
+const THEATER_WEATHER_LABELS: Record<string, string> = {
+  clear: 'sim.theater_weather.clear',
+  rain: 'sim.theater_weather.rain',
+  snow: 'sim.theater_weather.snow',
+  storm: 'sim.theater_weather.storm',
+  sandstorm: 'sim.theater_weather.sandstorm',
 };
 
-const THEATER_TIME_LABELS: Record<string, { zh: string; en: string }> = {
-  dawn: { zh: '黎明', en: 'Dawn' },
-  noon: { zh: '正午', en: 'Noon' },
-  dusk: { zh: '黄昏', en: 'Dusk' },
-  night: { zh: '夜晚', en: 'Night' },
+const THEATER_TIME_LABELS: Record<string, string> = {
+  dawn: 'sim.theater_time.dawn',
+  noon: 'sim.theater_time.noon',
+  dusk: 'sim.theater_time.dusk',
+  night: 'sim.theater_time.night',
 };
-
-const MODAL_CAPTURE_SELECTORS = [
-  '.gameplay-modal',
-  '.share-modal',
-  '.modal-content',
-  '.share-overlay',
-  '.modal-overlay',
-];
-
-function buildSimulationSnapshot(
-  scenario: NonNullable<ReturnType<typeof useSimulationStore.getState>['scenario']>,
-  agents: ReturnType<typeof useSimulationStore.getState>['agents'],
-  branches: ReturnType<typeof useSimulationStore.getState>['branches'],
-  messages: ReturnType<typeof useSimulationStore.getState>['messages'],
-  directorState: ScenarioDirectorState | null,
-  gameplayState: ScenarioGameplayState | null,
-): typeof scenario {
-  return {
-    ...scenario,
-    agents,
-    branches,
-    messages,
-    director_state: directorState ?? scenario.director_state ?? null,
-    gameplay_state: gameplayState ?? scenario.gameplay_state ?? null,
-  };
-}
 
 function formatTheaterLabel(
   key: string | null | undefined,
-  labels: Record<string, { zh: string; en: string }>,
-  isZh: boolean,
+  labels: Record<string, string>,
+  t: (key: string) => string,
 ): string | null {
   if (!key) return null;
   const match = labels[key];
-  if (match) return isZh ? match.zh : match.en;
+  if (match) {
+    const translated = t(match);
+    return translated === match ? key.replace(/_/g, ' ') : translated;
+  }
   return key.replace(/_/g, ' ');
 }
 
@@ -237,38 +182,9 @@ export function SimulationView() {
   const [predictionAutomation, setPredictionAutomation] = useState<Record<string, unknown> | null>(null);
   const [showGameplayCards, setShowGameplayCards] = useState(false);
   const [gameplayAutomation, setGameplayAutomation] = useState<Record<string, unknown> | null>(null);
-  const [captureMode, setCaptureMode] = useState<CaptureMode>('panel');
-  const [theaterSceneState, setTheaterSceneState] = useState<AutomationSceneState | null>(null);
-  const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 4>(1);
-  const [playbackMode, setPlaybackMode] = useState<'replay' | 'skip'>('replay');
-  const [theaterMountKey, setTheaterMountKey] = useState(0);
-  const [selectedReplayBranchId, setSelectedReplayBranchId] = useState<string | null>(null);
-  const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
-  const [localMetaRevision, setLocalMetaRevision] = useState(0);
-  const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
-  const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(
-    () => scenario?.director_state ?? null,
-  );
-  const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(
-    () => scenario?.gameplay_state ?? null,
-  );
-  const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [replayLinkUnavailable, setReplayLinkUnavailable] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
-
-  // Sidebar collapse state (default: open in classic, collapsed in theater)
-  const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
-
-  useEffect(() => {
-    setPanelCollapsed(viewMode === 'theater');
-  }, [viewMode]);
-
-  // Phase 3 Batch 3: Screen capture
-  const { status: captureStatus, lastCaptureKind, captureScreenshot, captureGIF } = useScreenCapture({
-    selector: '.phaser-game-container',
-  });
-  const lastTheaterSceneSignature = useRef<string | null>(null);
   const recoveryLogEmitted = useRef(false);
   const activeBranches = useMemo(
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
@@ -283,22 +199,78 @@ export function SimulationView() {
 
     return limits;
   }, [messages]);
-  const isReplayMode = Boolean(replayPayload);
-  const storedScenarioMeta = useMemo(
-    () => (replayPayload?.scenarioMeta ?? (id ? loadScenarioMeta(id) : null)),
-    [id, localMetaRevision, replayPayload?.scenarioMeta],
-  );
-  const scenarioMeta = useMemo(
-    () => {
-      if (!storedScenarioMeta) return null;
-      return mergeScenarioMetaAuthority(
-        storedScenarioMeta,
-        backendGameplayState,
-        backendDirectorState,
-      );
-    },
-    [backendDirectorState, backendGameplayState, storedScenarioMeta],
-  );
+  const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
+  const {
+    captureMode,
+    setCaptureMode,
+    captureStatus,
+    lastCaptureKind,
+    theaterSceneState,
+    isModalCaptureAvailable,
+    captureDoneLabel,
+    captureModeDescription,
+    handleScreenshotCapture,
+    handleGifCapture,
+  } = useSimulationCaptureControls({
+    id,
+    viewMode,
+    hasActiveModal,
+    t,
+  });
+  const {
+    cycleReplaySpeed,
+    handleReplayBranchChange,
+    handleReplayRoundChange,
+    isReplayMode,
+    panelCollapsed,
+    playbackMode,
+    replayBranchOptions,
+    replayPayload,
+    replayRounds,
+    replaySpeed,
+    restartTheaterPlayback,
+    selectedReplayBranchId,
+    selectedReplayRound,
+    setPanelCollapsed,
+    theaterMountKey,
+  } = useSimulationReplayState({
+    replayToken,
+    replayShareId,
+    viewMode,
+    branches,
+    messages,
+    isSimulationComplete,
+    navigate,
+  });
+  const {
+    backendDirectorState,
+    setBackendDirectorState,
+    backendGameplayState,
+    setBackendGameplayState,
+    storedScenarioMeta,
+    scenarioMeta,
+    refreshLocalMeta,
+    persistDirectorMeta,
+    commitmentDraftBranchId,
+    setCommitmentDraftBranchId,
+    handleGameplayApplied,
+    handlePlacedBet,
+    handleCommitBranch,
+    handleClearCommitment,
+  } = useSimulationDirectorState({
+    id,
+    isReplayMode,
+    replayScenarioMeta: replayPayload?.scenarioMeta ?? null,
+    scenario,
+    activeBranches,
+    currentRound,
+  });
+  useEffect(() => {
+    if (!replayPayload) return;
+    setScenario(replayPayload.scenario);
+    setBackendDirectorState(replayPayload.scenario.director_state ?? null);
+    setBackendGameplayState(replayPayload.scenario.gameplay_state ?? null);
+  }, [replayPayload, setBackendDirectorState, setBackendGameplayState, setScenario]);
   const gameplayProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
     [scenario],
@@ -345,226 +317,6 @@ export function SimulationView() {
     () => countCompletedObjectives(evaluatedObjectives),
     [evaluatedObjectives],
   );
-  const canPreviewGameplayCards = !isReplayMode && viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
-  const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
-  const isWarmupPhase =
-    !isReplayMode
-    && viewMode === 'theater'
-    && !isSimulationComplete
-    && status === 'simulating'
-    && currentRound === 0;
-  const canToggleViewMode = viewMode === 'theater' || visualizationEnabled;
-  const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
-    ? t('sim.theater_unavailable_hint')
-    : undefined;
-  const prefersStableScreenCapture = useMemo(
-    () => isLikelyWebKitCaptureUserAgent(typeof navigator === 'undefined' ? undefined : navigator.userAgent),
-    [],
-  );
-  const hasActiveModal = Boolean(showPrediction || showGameplayCards || interventionTarget || detailBranch);
-  const replayBranchOptions = useMemo(
-    () => buildReplayBranchOptions(branches, messages),
-    [branches, messages],
-  );
-  const preloadTheaterLoader = useCallback(() => {
-    if (!canToggleViewMode || viewMode === 'theater') return;
-    if (!shouldWarmTheaterLoaderOnIntent()) return;
-    void loadPhaserGameLoaderModule();
-  }, [canToggleViewMode, viewMode]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const hydrateReplay = async () => {
-      if (replayShareId) {
-        const artifact = await getReplayArtifact(replayShareId).catch(() => null);
-        if (cancelled || !artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) return;
-        const { coerceSimulationReplayPayload } = await loadSimulationReplayHelpers();
-        const replay = coerceSimulationReplayPayload(artifact.payload);
-        if (!replay) {
-          console.warn('[SimulationView] Ignoring invalid replay artifact payload');
-          return;
-        }
-        setReplayPayload(replay);
-        setScenario(replay.scenario);
-        setBackendDirectorState(replay.scenario.director_state ?? null);
-        setBackendGameplayState(replay.scenario.gameplay_state ?? null);
-        setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
-        setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
-        setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
-        setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
-        setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
-        return;
-      }
-      if (!replayToken) {
-        setReplayPayload(null);
-        return;
-      }
-      const params = new URLSearchParams();
-      params.set('replay', replayToken);
-      const { readSimulationReplayPayload } = await loadSimulationReplayHelpers();
-      const replay = await readSimulationReplayPayload(params);
-      if (cancelled) return;
-      if (!replay) {
-        return;
-      }
-      setReplayPayload(replay);
-      setScenario(replay.scenario);
-      setBackendDirectorState(replay.scenario.director_state ?? null);
-      setBackendGameplayState(replay.scenario.gameplay_state ?? null);
-      setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
-      setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
-      setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
-      setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
-      setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
-    };
-
-    void hydrateReplay();
-    return () => {
-      cancelled = true;
-    };
-  }, [replayShareId, replayToken, setScenario]);
-
-  useEffect(() => {
-    setReplayUrl(isReplayMode ? window.location.href : null);
-  }, [isReplayMode]);
-
-  useEffect(() => {
-    setReplayLinkUnavailable(false);
-  }, [replayShareId, replayToken, scenario?.id]);
-
-  useEffect(() => {
-    if (viewMode !== 'theater' || !visualizationEnabled) return;
-
-    const preload = () => {
-      void loadPhaserGameLoaderModule().then((mod) => {
-        mod.preloadPhaserGame();
-      });
-    };
-    const idleWindow = window as Window & {
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-
-    if (typeof idleWindow.requestIdleCallback === 'function') {
-      const idleId = idleWindow.requestIdleCallback(preload, { timeout: 1000 });
-      return () => idleWindow.cancelIdleCallback?.(idleId);
-    }
-
-    const timeoutId = window.setTimeout(preload, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [viewMode, visualizationEnabled]);
-
-  const refreshLocalMeta = useCallback(() => {
-    setLocalMetaRevision((current) => current + 1);
-  }, []);
-
-  useEffect(() => {
-    if (!id || isReplayMode) return;
-    return subscribeScenarioMeta(id, refreshLocalMeta);
-  }, [id, isReplayMode, refreshLocalMeta]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    setBackendDirectorState(scenario?.director_state ?? null);
-  }, [isReplayMode, scenario?.director_state]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    setBackendGameplayState(scenario?.gameplay_state ?? null);
-  }, [isReplayMode, scenario?.gameplay_state]);
-
-  const persistDirectorState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    if (!id || isReplayMode) return;
-    const nextState = {
-      ...scenarioMetaToDirectorState(nextMeta),
-      revision: backendDirectorState?.revision ?? scenario?.director_state?.revision ?? 0,
-    };
-    setBackendDirectorState(nextState);
-    try {
-      const persisted = await upsertScenarioDirectorState(id, nextState);
-      setBackendDirectorState(persisted);
-    } catch (err) {
-      if (isApiError(err) && err.status === 409) {
-        const latest = await getScenarioDirectorState(id).catch(() => null);
-        if (latest) {
-          setBackendDirectorState(latest);
-        }
-      }
-      console.warn('[DirectorState] Failed to persist backend state', err);
-    }
-  }, [backendDirectorState?.revision, id, isReplayMode, scenario?.director_state?.revision]);
-
-  const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    if (!id || isReplayMode) return;
-    const nextState = {
-      ...scenarioMetaToGameplayState(nextMeta),
-      revision: backendGameplayState?.revision ?? scenario?.gameplay_state?.revision ?? 0,
-    };
-    setBackendGameplayState(nextState);
-    try {
-      const persisted = await upsertScenarioGameplayState(id, nextState);
-      setBackendGameplayState(persisted);
-    } catch (err) {
-      if (isApiError(err) && err.status === 409) {
-        const latest = await getScenarioGameplayState(id).catch(() => null);
-        if (latest) {
-          setBackendGameplayState(latest);
-        }
-      }
-      console.warn('[GameplayState] Failed to persist backend state', err);
-    }
-  }, [backendGameplayState?.revision, id, isReplayMode, scenario?.gameplay_state?.revision]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    if (!id || !storedScenarioMeta) return;
-    if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
-    if (hasScenarioDirectorAuthority(backendDirectorState)) return;
-    void persistDirectorState(storedScenarioMeta);
-  }, [backendDirectorState, id, isReplayMode, persistDirectorState, storedScenarioMeta]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    if (!id || !storedScenarioMeta) return;
-    if (hasScenarioGameplayAuthority(backendGameplayState)) return;
-    const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
-    const mergedState = scenarioMetaToGameplayState(mergedMeta);
-    if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
-    if (areScenarioGameplayStatesEquivalent(mergedState, backendGameplayState)) return;
-    void persistGameplayState(mergedMeta);
-  }, [backendGameplayState, id, isReplayMode, persistGameplayState, storedScenarioMeta]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
-    if (hasMeaningfulScenarioDirectorState(backendDirectorState ?? scenario.director_state ?? null)) return;
-    if (scenarioMeta.objectives.goals.length > 0) return;
-
-    const nextMeta = ensureScenarioObjectives(id, {
-      question: scenario.question,
-      profileId: gameplayProfile.id,
-      goals: buildDefaultDirectorObjectives({
-        profileId: gameplayProfile.id,
-        signatureCardId: signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null,
-      }),
-    });
-    refreshLocalMeta();
-    void persistDirectorState(nextMeta);
-  }, [backendDirectorState, gameplayProfile, id, isReplayMode, persistDirectorState, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
-
-  useEffect(() => {
-    if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {
-      setCommitmentDraftBranchId(scenarioMeta.commitment.branchId);
-      return;
-    }
-    setCommitmentDraftBranchId(activeBranches[0]?.id ?? '');
-  }, [activeBranches, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
-
-  const replayRounds = useMemo(
-    () => getReplayRounds(messages, branches, selectedReplayBranchId),
-    [branches, messages, selectedReplayBranchId],
-  );
   const canCopyReplayLink = Boolean(
     replayUrl || (scenario && storedScenarioMeta && !replayLinkUnavailable),
   );
@@ -607,6 +359,71 @@ export function SimulationView() {
       };
     });
   }, [branches, isSimulationComplete, isZh, replayRounds, scenario?.total_rounds, scenarioMeta?.betting.bets, scenarioMeta?.cards.usageLog, selectedReplayRound]);
+  const canPreviewGameplayCards = !isReplayMode && viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
+  const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const isWarmupPhase =
+    !isReplayMode
+    && viewMode === 'theater'
+    && !isSimulationComplete
+    && status === 'simulating'
+    && currentRound === 0;
+  const canToggleViewMode = viewMode === 'theater' || visualizationEnabled;
+  const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
+    ? t('sim.theater_unavailable_hint')
+    : undefined;
+  const preloadTheaterLoader = useCallback(() => {
+    if (!canToggleViewMode || viewMode === 'theater') return;
+    if (!shouldWarmTheaterLoaderOnIntent()) return;
+    void loadPhaserGameLoaderModule();
+  }, [canToggleViewMode, viewMode]);
+
+  useEffect(() => {
+    setReplayUrl(isReplayMode ? window.location.href : null);
+  }, [isReplayMode]);
+
+  useEffect(() => {
+    setReplayLinkUnavailable(false);
+  }, [replayShareId, replayToken, scenario?.id]);
+
+  useEffect(() => {
+    if (viewMode !== 'theater' || !visualizationEnabled) return;
+
+    const preload = () => {
+      void loadPhaserGameLoaderModule().then((mod) => {
+        mod.preloadPhaserGame();
+      });
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      const idleId = idleWindow.requestIdleCallback(preload, { timeout: 1000 });
+      return () => idleWindow.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = window.setTimeout(preload, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [viewMode, visualizationEnabled]);
+
+  useEffect(() => {
+    if (isReplayMode) return;
+    if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
+    if (scenario.director_state?.objectives?.goals?.length) return;
+    if (scenarioMeta.objectives.goals.length > 0) return;
+
+    const nextMeta = ensureScenarioObjectives(id, {
+      question: scenario.question,
+      profileId: gameplayProfile.id,
+      goals: buildDefaultDirectorObjectives({
+        profileId: gameplayProfile.id,
+        signatureCardId: signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null,
+      }),
+    });
+    refreshLocalMeta();
+    void persistDirectorMeta(nextMeta);
+  }, [gameplayProfile, id, isReplayMode, persistDirectorMeta, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
 
   // Load scenario data if navigated directly
   useEffect(() => {
@@ -828,88 +645,6 @@ export function SimulationView() {
     visualizationEnabled,
   ]);
 
-  useEffect(() => {
-    const win = window as AutomationWindow;
-    const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
-      if (mode === 'canvas') {
-        return captureElementDataUrl(
-          '.phaser-game-container',
-          prefersStableScreenCapture ? 'element' : 'canvas',
-        );
-      }
-      if (mode === 'modal') {
-        if (!hasActiveModal) return null;
-        for (const selector of MODAL_CAPTURE_SELECTORS) {
-          const shot = await captureElementDataUrl(selector, 'element');
-          if (shot) return shot;
-        }
-        return null;
-      }
-
-      return (
-        prefersStableScreenCapture
-          ? await captureElementDataUrl('.theater-panel', 'element')
-          : await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
-      ) ?? (
-        prefersStableScreenCapture
-          ? await captureCompositeElementDataUrl('.theater-panel', '.phaser-game-container')
-          : await captureElementDataUrl('.theater-panel', 'element')
-      ) ?? captureElementDataUrl(
-        '.phaser-game-container',
-        prefersStableScreenCapture ? 'element' : 'canvas',
-      );
-    };
-
-    win.capture_game_screenshot = capture;
-    return () => {
-      if (win.capture_game_screenshot === capture) {
-        delete win.capture_game_screenshot;
-      }
-    };
-  }, [hasActiveModal, prefersStableScreenCapture]);
-
-  const resolveCaptureOptions = useCallback((mode: CaptureMode = captureMode) => {
-    if (mode === 'canvas') {
-      return {
-        selector: '.phaser-game-container',
-        captureTarget: prefersStableScreenCapture ? 'element' as const : 'canvas' as const,
-      };
-    }
-    if (mode === 'modal') {
-      if (!hasActiveModal) return null;
-      return {
-        selectors: MODAL_CAPTURE_SELECTORS,
-        captureTarget: 'element' as const,
-      };
-    }
-    return {
-      selector: '.theater-panel',
-      captureTarget: 'element' as const,
-      captureBlob: () => (
-        prefersStableScreenCapture
-          ? captureElementDataUrl('.theater-panel', 'element').then(async (dataUrl) => {
-            if (!dataUrl) return null;
-            const response = await fetch(dataUrl);
-            return await response.blob();
-          })
-          : captureCompositeElementBlob('.theater-panel', '.phaser-game-container')
-      ),
-    };
-  }, [captureMode, hasActiveModal, prefersStableScreenCapture]);
-
-  const handleScreenshotCapture = useCallback(() => {
-    const options = resolveCaptureOptions();
-    if (!options) return;
-    void captureScreenshot(options);
-  }, [captureScreenshot, resolveCaptureOptions]);
-
-  const handleGifCapture = useCallback(() => {
-    const gifMode = captureMode === 'canvas' ? 'canvas' : 'panel';
-    const options = resolveCaptureOptions(gifMode);
-    if (!options) return;
-    void captureGIF(options);
-  }, [captureGIF, captureMode, resolveCaptureOptions]);
-
   const handleCopyReplayLink = useCallback(async () => {
     if (replayUrl) {
       await copyText(replayUrl);
@@ -917,35 +652,32 @@ export function SimulationView() {
     }
     const replayScenarioMeta = scenarioMeta ?? storedScenarioMeta;
     if (!scenario || !replayScenarioMeta) return;
-    const {
-      buildSimulationReplayUrl,
-    } = await loadSimulationReplayHelpers();
-    const {
-      compactScenarioMetaForReplay,
-    } = await loadScenarioReplayHelpers();
-    const snapshot = buildSimulationSnapshot(
-      scenario,
+    const { buildSimulationReplayUrl } = await loadSimulationReplayHelpers();
+    const { compactScenarioMetaForReplay } = await loadScenarioReplayHelpers();
+    const snapshot = {
+      ...scenario,
       agents,
       branches,
       messages,
-      backendDirectorState,
-      backendGameplayState,
-    );
+      director_state: backendDirectorState ?? scenario.director_state ?? null,
+      gameplay_state: backendGameplayState ?? scenario.gameplay_state ?? null,
+    };
     const compactReplayMeta = compactScenarioMetaForReplay(replayScenarioMeta, {
       stripDirectorAuthority: hasScenarioDirectorAuthority(snapshot.director_state ?? null),
       stripGameplayAuthority: hasScenarioGameplayAuthority(snapshot.gameplay_state ?? null),
     });
+    const uiState = {
+      selectedReplayBranchId,
+      selectedReplayRound,
+      playbackMode,
+      replaySpeed,
+      panelCollapsed,
+    };
     const artifact = await Promise.resolve()
       .then(() => createReplayArtifact('simulation_view_v1', {
         scenario: snapshot,
         scenarioMeta: compactReplayMeta,
-        uiState: {
-          selectedReplayBranchId,
-          selectedReplayRound,
-          playbackMode,
-          replaySpeed,
-          panelCollapsed,
-        },
+        uiState,
       }))
       .catch(() => null);
     try {
@@ -954,13 +686,7 @@ export function SimulationView() {
         : await buildSimulationReplayUrl(window.location.origin, {
           scenario: snapshot,
           scenarioMeta: compactReplayMeta,
-          uiState: {
-            selectedReplayBranchId,
-            selectedReplayRound,
-            playbackMode,
-            replaySpeed,
-            panelCollapsed,
-          },
+          uiState,
         });
       setReplayUrl(url);
       setReplayLinkUnavailable(false);
@@ -984,29 +710,8 @@ export function SimulationView() {
       setImportingReplay(false);
     }
   }, [importingReplay, navigate, replayPayload]);
-
-  useEffect(() => {
-    if (!isSimulationComplete) {
-      setSelectedReplayBranchId(null);
-      setSelectedReplayRound(null);
-      return;
-    }
-
-    const defaultBranchId = replayBranchOptions[0]?.id ?? null;
-    if (!selectedReplayBranchId || !replayBranchOptions.some((branch) => branch.id === selectedReplayBranchId)) {
-      setSelectedReplayBranchId(defaultBranchId);
-      setSelectedReplayRound(getLatestReplayRound(messages, branches, defaultBranchId));
-      return;
-    }
-
-    const latestRound = getLatestReplayRound(messages, branches, selectedReplayBranchId);
-    if (selectedReplayRound == null || (latestRound != null && selectedReplayRound > latestRound)) {
-      setSelectedReplayRound(latestRound);
-    }
-  }, [branches, isSimulationComplete, messages, replayBranchOptions, selectedReplayBranchId, selectedReplayRound]);
-
   const theaterSceneLabel = theaterSceneState?.scene
-    ? formatTheaterLabel(theaterSceneState.scene, THEATER_SCENE_LABELS, isZh)
+    ? formatTheaterLabel(theaterSceneState.scene, THEATER_SCENE_LABELS, t)
     : null;
   const theaterThemeLabel = getTheaterThemeLabel(
     typeof theaterSceneState?.theme === 'string' ? theaterSceneState.theme : scenario?.scene_theme,
@@ -1015,12 +720,12 @@ export function SimulationView() {
   const theaterWeatherLabel = formatTheaterLabel(
     typeof theaterSceneState?.weather === 'string' ? theaterSceneState.weather : null,
     THEATER_WEATHER_LABELS,
-    isZh,
+    t,
   );
   const theaterTimeLabel = formatTheaterLabel(
     typeof theaterSceneState?.time_of_day === 'string' ? theaterSceneState.time_of_day : null,
     THEATER_TIME_LABELS,
-    isZh,
+    t,
   );
   const theaterAgentCount =
     typeof theaterSceneState?.agent_count === 'number'
@@ -1049,47 +754,6 @@ export function SimulationView() {
     setGameplayAutomation(null);
     refreshLocalMeta();
   }, [refreshLocalMeta]);
-  const handleGameplayApplied = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    refreshLocalMeta();
-    await persistGameplayState(nextMeta);
-  }, [persistGameplayState, refreshLocalMeta]);
-  const handlePlacedBet = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    refreshLocalMeta();
-    await persistGameplayState(nextMeta);
-  }, [persistGameplayState, refreshLocalMeta]);
-  const handleCommitBranch = useCallback(() => {
-    if (isReplayMode) return;
-    if (!id || !commitmentDraftBranchId) return;
-    const branch = activeBranches.find((candidate) => candidate.id === commitmentDraftBranchId);
-    if (!branch) return;
-    const nextMeta = setBranchCommitment(id, {
-      branchId: branch.id,
-      branchTitle: branch.title,
-      currentRound: Math.max(1, currentRound),
-    });
-    refreshLocalMeta();
-    void persistDirectorState(nextMeta);
-  }, [activeBranches, commitmentDraftBranchId, currentRound, id, isReplayMode, persistDirectorState, refreshLocalMeta]);
-  const handleClearCommitment = useCallback(() => {
-    if (isReplayMode) return;
-    if (!id) return;
-    const nextMeta = clearBranchCommitment(id);
-    refreshLocalMeta();
-    void persistDirectorState(nextMeta);
-  }, [id, isReplayMode, persistDirectorState, refreshLocalMeta]);
-  const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
-  const captureDoneLabel = lastCaptureKind === 'gif'
-    ? t('game.gif_saved')
-    : lastCaptureKind === 'gif_fallback_png'
-      ? t('game.gif_fallback_saved')
-      : t('game.screenshot_saved');
-  const captureModeDescription = captureMode === 'panel'
-    ? t('game.capture_mode_panel_desc')
-    : captureMode === 'canvas'
-      ? t('game.capture_mode_canvas_desc')
-      : hasActiveModal
-        ? t('game.capture_mode_modal_desc')
-        : t('game.capture_mode_modal_unavailable');
   const filteredReplayMessages = useMemo(
     () => (
       canUseReplayControls
@@ -1279,52 +943,6 @@ export function SimulationView() {
     visualizationEnabled,
   ]);
 
-  useEffect(() => {
-    if (viewMode !== 'theater') {
-      lastTheaterSceneSignature.current = null;
-      setTheaterSceneState(null);
-      return;
-    }
-
-    const readSceneState = () => {
-      const next = (window as AutomationWindow).__swarmGetSceneAutomation?.() ?? null;
-      const signature = JSON.stringify(next);
-      if (signature === lastTheaterSceneSignature.current) return;
-      lastTheaterSceneSignature.current = signature;
-      setTheaterSceneState(next);
-    };
-
-    readSceneState();
-    const timer = window.setInterval(readSceneState, 250);
-    return () => window.clearInterval(timer);
-  }, [id, viewMode]);
-
-  const cycleReplaySpeed = () => {
-    setReplaySpeed((current) => {
-      if (current === 1) return 2;
-      if (current === 2) return 4;
-      return 1;
-    });
-  };
-
-  const restartTheaterPlayback = (mode: 'replay' | 'skip') => {
-    setPlaybackMode(mode);
-    setTheaterMountKey((value) => value + 1);
-  };
-
-  const handleReplayBranchChange = (branchId: string) => {
-    setSelectedReplayBranchId(branchId);
-    setSelectedReplayRound(getLatestReplayRound(messages, branches, branchId));
-    setPlaybackMode('replay');
-    setTheaterMountKey((value) => value + 1);
-  };
-
-  const handleReplayRoundChange = (round: number) => {
-    setSelectedReplayRound(round);
-    setPlaybackMode('replay');
-    setTheaterMountKey((value) => value + 1);
-  };
-
   return (
     <div className={`simulation-view ${viewMode === 'theater' ? 'simulation-view--theater' : ''} ${canUseReplayControls ? 'simulation-view--replay-ready' : ''}`}>
       {/* Header */}
@@ -1380,15 +998,13 @@ export function SimulationView() {
             </button>
           )}
           {isReplayMode && (
-            <button
-              className="btn btn-primary"
-              onClick={() => void handleImportReplay()}
-              disabled={importingReplay}
-            >
-              {importingReplay
-                ? (isZh ? '导入中...' : 'Importing...')
-                : (isZh ? '导入为本地运行' : 'Import as Local Run')}
-            </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleImportReplay()}
+            disabled={importingReplay}
+          >
+            {importingReplay ? t('sim.replay.importing') : t('sim.replay.import_local')}
+          </button>
           )}
           {/* V2: Theater mode toggle — only enabled when the scenario has visualization data */}
           <button
@@ -1423,7 +1039,7 @@ export function SimulationView() {
 
       {isReplayMode && (
         <div className="sim-error">
-          <p>🔒 {isZh ? '只读回放模式：已关闭实时写操作。' : 'Read-only replay mode: live write actions are disabled.'}</p>
+          <p>🔒 {t('sim.replay.read_only')}</p>
         </div>
       )}
 
@@ -1555,12 +1171,15 @@ export function SimulationView() {
               {scenarioMeta && systemTracks && evaluatedObjectives.length > 0 && (
                 <div className="theater-panel__director">
                   <div className="theater-panel__director-top">
-                    <strong>{isZh ? '导演目标' : 'Director Goals'}</strong>
+                    <strong>{t('sim.director.title')}</strong>
                     <span className="theater-chip">
                       {systemTracks.riskLabel} {systemTracks.riskValue}/6 · {systemTracks.resourceLabel} {systemTracks.resourceValue}/6
                     </span>
                     <span className="theater-chip">
-                      {isZh ? '完成' : 'Done'} {completedObjectiveCount}/{evaluatedObjectives.length}
+                      {t('sim.director.done', {
+                        completed: completedObjectiveCount,
+                        total: evaluatedObjectives.length,
+                      })}
                     </span>
                     {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
                       <span className="theater-chip theater-chip--primary">
@@ -1583,7 +1202,7 @@ export function SimulationView() {
                   {!isSimulationComplete && activeBranches.length > 0 && (
                     <div className="theater-panel__commitment">
                       <label className="theater-select">
-                        <span>{isZh ? '承诺世界线' : 'Committed worldline'}</span>
+                        <span>{t('sim.director.commitment_label')}</span>
                         <select
                           value={commitmentDraftBranchId}
                           onChange={(event) => setCommitmentDraftBranchId(event.target.value)}
@@ -1596,11 +1215,11 @@ export function SimulationView() {
                         </select>
                       </label>
                       <button className="btn btn-ghost btn--capture" onClick={handleCommitBranch}>
-                        {isZh ? '锁定承诺' : 'Commit'}
+                        {t('sim.director.commit')}
                       </button>
                       {scenarioMeta.commitment.active && (
                         <button className="btn btn-ghost btn--capture" onClick={handleClearCommitment}>
-                          {isZh ? '取消承诺' : 'Clear'}
+                          {t('sim.director.clear')}
                         </button>
                       )}
                     </div>
