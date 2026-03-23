@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  MAX_BUBBLE_EVENT_TEXT_CHARS,
   mapRoleToSpriteId,
   getInitialSpriteKeysForAgents,
   inferSceneTheme,
@@ -207,7 +208,9 @@ describe('VizSynthesizer — synthesizeSceneInit', () => {
       id: `a${i}`, name: `Agent ${i}`, role: 'villager', tier: 'CROWD' as const, emotion: 'neutral',
     }));
     const result = synthesizeSceneInit(manyAgents, 'scifi_base');
-    expect((result.agents as unknown[]).length).toBe(20);
+    const agents = result.agents as Array<{ x: number; y: number }>;
+    expect(agents).toHaveLength(20);
+    expect(new Set(agents.map((agent) => agent.y)).size).toBeGreaterThan(4);
   });
 });
 
@@ -228,6 +231,7 @@ describe('VizSynthesizer — synthesizeBubbles', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('returns a cleanup function', () => {
@@ -242,12 +246,40 @@ describe('VizSynthesizer — synthesizeBubbles', () => {
     cleanup();
   });
 
-  it('caps messages at 60', () => {
-    const manyMessages: AgentMessage[] = Array.from({ length: 100 }, (_, i) => ({
-      agent: 'King', agent_id: 'a1', message: `Msg ${i}`, emotion: 'neutral', branch: 'b1', round: 1,
-    }));
-    const cleanup = synthesizeBubbles(manyMessages, mockAgents, 3, 100);
-    // Should schedule ceil(60/3) = 20 batches, not 34
+  it('keeps replay bubbles readable without eager 60-char truncation', () => {
+    const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
+    const longMessage = 'a'.repeat(80);
+
+    const cleanup = synthesizeBubbles([
+      { agent: 'King', agent_id: 'a1', message: longMessage, emotion: 'neutral', branch: 'b1', round: 1 },
+    ], mockAgents, 1, 100);
+
+    vi.advanceTimersByTime(100);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'viz:bubble_show',
+      expect.objectContaining({ bubble_text: longMessage, bubble_mode: 'replay' }),
+    );
+    cleanup();
+  });
+
+  it('clips only extremely long replay bubbles', () => {
+    const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
+    const oversizedMessage = 'b'.repeat(MAX_BUBBLE_EVENT_TEXT_CHARS + 20);
+
+    const cleanup = synthesizeBubbles([
+      { agent: 'King', agent_id: 'a1', message: oversizedMessage, emotion: 'neutral', branch: 'b1', round: 1 },
+    ], mockAgents, 1, 100);
+
+    vi.advanceTimersByTime(100);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'viz:bubble_show',
+      expect.objectContaining({
+        bubble_mode: 'replay',
+        bubble_text: `${'b'.repeat(MAX_BUBBLE_EVENT_TEXT_CHARS - 1)}…`,
+      }),
+    );
     cleanup();
   });
 
@@ -261,7 +293,7 @@ describe('VizSynthesizer — synthesizeBubbles', () => {
 
     expect(dispatchSpy).toHaveBeenCalledWith(
       'viz:bubble_show',
-      expect.objectContaining({ bubble_text: 'Latest', sprite_id: 'a1' }),
+      expect.objectContaining({ bubble_text: 'Latest', bubble_mode: 'replay', sprite_id: 'a1' }),
     );
     expect(dispatchSpy).toHaveBeenCalledWith(
       'viz:emotion_change',

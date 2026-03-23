@@ -115,6 +115,19 @@ describe('WorldScene — BUBBLE_STYLES', () => {
   });
 });
 
+describe('WorldScene — bubble readability tuning', () => {
+  const BUBBLE_MAX_VISIBLE = 2;
+  const BUBBLE_MAX_TEXT_CHARS = 72;
+
+  it('keeps two recent bubbles visible for cross-agent readability', () => {
+    expect(BUBBLE_MAX_VISIBLE).toBe(2);
+  });
+
+  it('allows substantially longer bubble text before truncation', () => {
+    expect(BUBBLE_MAX_TEXT_CHARS).toBe(72);
+  });
+});
+
 describe('WorldScene — TIME_TINTS (day/night)', () => {
   it('covers 4 time-of-day phases', () => {
     expect(TIME_TINT_KEYS).toHaveLength(4);

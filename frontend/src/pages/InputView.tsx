@@ -72,8 +72,12 @@ export function InputView() {
     setLlmBaseUrl,
     llmModel,
     setLlmModel,
+    disableUserQuota,
+    setDisableUserQuota,
     testStatus,
     testError,
+    probeResult,
+    hasFreshProbe,
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
@@ -110,6 +114,10 @@ export function InputView() {
   const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
     ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
     : null;
+  const hasDirectorGrowth =
+    (campaignProfile?.total_runs ?? 0) > 0
+    || campaignBadges.length > 0
+    || topMasteries.length > 0;
   const weeklyChallengeEntries = weeklyChallenges.map((challenge) => ({
     challenge_id: challenge.id,
     profile_id: challenge.profileId,
@@ -132,6 +140,16 @@ export function InputView() {
     level: mastery.level,
     score_to_next_level: mastery.score_to_next_level ?? null,
   }));
+  const byokRecommendation = useMemo(() => {
+    if (!probeResult?.recommended) return null;
+
+    const recommendation = probeResult.recommended;
+    return {
+      ...recommendation,
+      exceedsAgents: numAgents > recommendation.agents_max,
+      exceedsRounds: rounds > recommendation.rounds_max,
+    };
+  }, [numAgents, probeResult, rounds]);
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -278,6 +296,13 @@ export function InputView() {
     const trimmed = nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
 
+    if (llmApiKey.trim() && !hasFreshProbe) {
+      const probe = await handleTestConnection();
+      if (!probe.ok) {
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       const id = await startSimulation({
@@ -291,6 +316,7 @@ export function InputView() {
         reasoningEffort: reasoningEffort || undefined,
         visualizationEnabled: nextVisualization,
         userId: directorIdentity.userId,
+        disableUserQuota,
       });
       if (challengeId) {
         markChallengeStarted(challengeId, id);
@@ -407,6 +433,16 @@ export function InputView() {
         byok_test_status: testStatus,
         error: buildAutomationErrorState(submitErrorCode, submitError),
         byok_test_error: buildAutomationErrorState(null, testStatus === 'fail' ? testError : null),
+        byok_disable_user_quota: disableUserQuota,
+        byok_probe: probeResult
+          ? {
+              estimated_parallelism: probeResult.estimated_parallelism,
+              tested_parallelism: probeResult.tested_parallelism,
+              local_provider: probeResult.local_provider,
+              allow_disable_user_quota: probeResult.allow_disable_user_quota,
+              recommended: probeResult.recommended,
+            }
+          : null,
         challenge_progress: todayChallengeProgress
           ? {
               source: todayChallengeProgress.source,
@@ -484,6 +520,7 @@ export function InputView() {
     submitError,
     submitErrorCode,
     testStatus,
+    probeResult,
     todayChallengeProgress,
     vizEnabled,
     todayChallenge?.id,
@@ -508,6 +545,7 @@ export function InputView() {
     dailyMastery?.score_to_next_level,
     topMasteryEntries,
     directorIdentity.userId,
+    disableUserQuota,
   ]);
 
   return (
@@ -668,6 +706,14 @@ export function InputView() {
 
           {campaignChallengeRotation && (
           <section className="weekly-challenge-card">
+            <div className="weekly-challenge-card__side">
+              <img
+                className="weekly-challenge-card__badge-art"
+                src={getGameplayBadgeSrc('daily_challenge')}
+                alt=""
+                aria-hidden="true"
+              />
+            </div>
             <div className="weekly-challenge-card__copy">
               <span className="daily-challenge-card__eyebrow">
                 {t('home.weekly_challenge_label')}
@@ -677,10 +723,7 @@ export function InputView() {
               </strong>
               <span className="daily-challenge-card__subtitle">
                 {campaignWeeklySummary
-                  ? t('home.weekly_challenge_summary', {
-                    runs: campaignWeeklySummary.total_runs,
-                    score: campaignWeeklySummary.campaign_score_delta,
-                  })
+                  ? t('home.weekly_challenge_intro')
                   : t('home.weekly_challenge_fallback')}
               </span>
               <div className="daily-challenge-card__hooks">
@@ -690,16 +733,20 @@ export function InputView() {
                     className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${entry.runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
                   >
                     {entry.profile_label}
-                    {entry.runs > 0 ? ` · ${t('home.weekly_challenge_runs', { count: entry.runs })}` : ''}
                   </span>
                 ))}
               </div>
               <div className="daily-challenge-card__status">
-                <span className="daily-challenge-card__pill">
-                  {campaignWeeklySummary
-                    ? t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })
-                    : t('home.weekly_challenge_fallback')}
-                </span>
+                {campaignWeeklySummary && (
+                  <span className="daily-challenge-card__pill">
+                    {t('home.weekly_challenge_completed_runs', { runs: campaignWeeklySummary.total_runs })}
+                  </span>
+                )}
+                {campaignWeeklySummary && (
+                  <span className="daily-challenge-card__pill">
+                    {t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })}
+                  </span>
+                )}
                 {weeklyTopProfileLabel && (
                   <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
                     {t('home.weekly_challenge_top_profile', { profile: weeklyTopProfileLabel })}
@@ -711,34 +758,55 @@ export function InputView() {
           )}
 
           <section className="weekly-challenge-card weekly-challenge-card--growth">
+            <div className="weekly-challenge-card__side">
+              <img
+                className="weekly-challenge-card__badge-art"
+                src={getGameplayBadgeSrc('archive_record')}
+                alt=""
+                aria-hidden="true"
+              />
+            </div>
             <div className="weekly-challenge-card__copy">
               <span className="daily-challenge-card__eyebrow">
                 {t('home.director_growth_label')}
               </span>
-              <strong className="daily-challenge-card__title">
-                {campaignProfile
-                  ? t('home.director_growth_title', {
-                    runs: campaignProfile.total_runs,
-                    badges: campaignBadges.length,
-                  })
-                  : t('home.director_growth_empty')}
+              <strong
+                className="daily-challenge-card__title"
+                aria-label={t('home.director_growth_title', {
+                  runs: campaignProfile?.total_runs ?? 0,
+                  badges: campaignBadges.length,
+                })}
+              >
+                {hasDirectorGrowth
+                  ? t('home.director_growth_active_title', { runs: campaignProfile?.total_runs ?? 0 })
+                  : t('home.director_growth_empty_title')}
               </strong>
-              <div className="weekly-growth-list">
-                {topMasteries.length > 0 ? topMasteries.map((mastery) => (
-                  <div key={mastery.profile_id} className="weekly-growth-list__item">
-                    <strong>{getGameplayProfileLabel(mastery.profile_id as never, isZh)}</strong>
-                    <span>
-                      {t('home.campaign_mastery_level', { level: mastery.level })} · {
-                        mastery.score_to_next_level != null
-                          ? t('home.campaign_next_unlock', { count: mastery.score_to_next_level })
-                          : t('home.campaign_mastered')
-                      }
+              <span className="daily-challenge-card__subtitle">
+                {hasDirectorGrowth
+                  ? t('home.director_growth_active_subtitle', { badges: campaignBadges.length })
+                  : t('home.director_growth_hint')}
+              </span>
+              {hasDirectorGrowth && (
+                <div className="daily-challenge-card__status">
+                  <span className="daily-challenge-card__pill">
+                    {t('home.director_growth_runs', { runs: campaignProfile?.total_runs ?? 0 })}
+                  </span>
+                  <span className="daily-challenge-card__pill">
+                    {t('home.director_growth_badges', { badges: campaignBadges.length })}
+                  </span>
+                </div>
+              )}
+              {topMasteries.length > 0 && (
+                <div className="daily-challenge-card__hooks">
+                  {topMasteries.map((mastery) => (
+                    <span key={mastery.profile_id} className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                      {getGameplayProfileLabel(mastery.profile_id as never, isZh)}
+                      {' · '}
+                      {t('home.campaign_mastery_level', { level: mastery.level })}
                     </span>
-                  </div>
-                )) : (
-                  <p className="daily-challenge-card__subtitle">{t('home.director_growth_hint')}</p>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </section>
 
@@ -936,6 +1004,18 @@ export function InputView() {
                     disabled={isSubmitting}
                   />
                 </div>
+                <label className="byok-switch">
+                  <input
+                    type="checkbox"
+                    checked={disableUserQuota}
+                    onChange={(e) => setDisableUserQuota(e.target.checked)}
+                    disabled={isSubmitting}
+                  />
+                  <span className="byok-switch__copy">
+                    <strong>{t('home.byok_disable_user_quota_label')}</strong>
+                    <span>{t('home.byok_disable_user_quota_hint')}</span>
+                  </span>
+                </label>
                 <div className="byok-actions">
                   <button
                     type="button"
@@ -952,7 +1032,41 @@ export function InputView() {
                     <span className="byok-test-error">{testError}</span>
                   )}
                 </div>
+                {probeResult && byokRecommendation && (
+                  <div className={`byok-probe-card ${(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) ? 'byok-probe-card--warn' : ''}`}>
+                    <div className="byok-probe-card__title-row">
+                      <strong>{t('home.byok_probe_title')}</strong>
+                      <span className="byok-probe-badge">
+                        {t('home.byok_probe_parallelism', { count: probeResult.estimated_parallelism })}
+                      </span>
+                    </div>
+                    <p className="byok-probe-copy">
+                      {t('home.byok_probe_recommendation', {
+                        agentsMin: byokRecommendation.agents_min,
+                        agentsMax: byokRecommendation.agents_max,
+                        roundsMin: byokRecommendation.rounds_min,
+                        roundsMax: byokRecommendation.rounds_max,
+                      })}
+                    </p>
+                    <p className="byok-probe-copy">
+                      {probeResult.allow_disable_user_quota
+                        ? t('home.byok_probe_local_toggle_enabled')
+                        : t('home.byok_probe_local_toggle_disabled')}
+                    </p>
+                    {(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) && (
+                      <p className="byok-probe-warning">
+                        {t('home.byok_probe_warning', {
+                          agents: numAgents,
+                          rounds,
+                        })}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <p className="byok-hint">{t('home.byok_hint')}</p>
+                {llmApiKey.trim() && !hasFreshProbe && (
+                  <p className="byok-hint">{t('home.byok_preflight_required')}</p>
+                )}
                 <p className="byok-hint">{t('home.byok_storage_notice')}</p>
               </div>
             )}

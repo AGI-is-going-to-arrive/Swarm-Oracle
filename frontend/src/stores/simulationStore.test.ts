@@ -72,6 +72,21 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().isSimulationComplete).toBe(true);
   });
 
+  it("does not let a stale simulating status overwrite done", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "done" },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating" },
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("done");
+    expect(store.getState().isSimulationComplete).toBe(true);
+  });
+
   it("ignores 'heartbeat' events", () => {
     const store = useSimulationStore;
     const before = store.getState();

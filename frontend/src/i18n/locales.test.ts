@@ -16,6 +16,12 @@ describe('i18n locale resources', () => {
     expect(zh.translation.home.viz_theater).toBe('像素剧场');
     expect(en.translation.home.viz_classic).toBe('Classic');
     expect(zh.translation.home.viz_classic).toBe('经典模式');
+    expect(en.translation.home.reasoning_low).toBe('Light');
+    expect(en.translation.home.reasoning_medium).toBe('Balanced');
+    expect(en.translation.home.reasoning_high).toBe('Deep');
+    expect(zh.translation.home.reasoning_low).toBe('轻量');
+    expect(zh.translation.home.reasoning_medium).toBe('均衡');
+    expect(zh.translation.home.reasoning_high).toBe('深入');
     expect(en.translation.sim.theater_unavailable_hint).toContain('Pixel Theater');
     expect(zh.translation.sim.theater_unavailable_hint).toContain('像素剧场');
     expect(zh.translation.game.capture_mode_panel).toBe('面板');

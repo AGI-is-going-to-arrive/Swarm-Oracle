@@ -26,7 +26,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
-from app.services.llm_client import llm_call_json
+from app.services.llm_client import get_runtime_parallelism_limit, llm_call_json
 from app.services.memory import (
     build_agent_context,
     compress_rounds,
@@ -36,6 +36,7 @@ from app.services.memory import (
     store_memory,
 )
 from app.services.narrator import narrate_branch
+from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
 
 # V2: Visualization layer (lazy-loaded only when enabled)
 try:
@@ -59,6 +60,74 @@ pending_interventions: dict[str, list[str]] = {}
 _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
+
+
+def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
+    """Persist scenario status so reconnects/resyncs can recover the current stage."""
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None or scenario.status == status:
+            return
+        scenario.status = status
+        session.add(scenario)
+        session.commit()
+
+
+def _pick_theater_ending_payload(
+    narrated_branches: list[dict[str, Any]],
+    *,
+    branch_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Choose the single ending payload Theater should present."""
+    if not narrated_branches:
+        return None
+
+    if branch_id is not None:
+        for item in narrated_branches:
+            if item.get("id") == branch_id:
+                return item
+
+    return max(
+        narrated_branches,
+        key=lambda item: (
+            float(item.get("probability") or 0),
+            str(item.get("id") or ""),
+        ),
+    )
+
+
+def reconcile_scenario_done_if_complete(engine, scenario_id: str) -> bool:
+    """Mark a stale simulating/narrating scenario as done when all branch data is final."""
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            return False
+        if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
+            return False
+        if runtime_lock_is_active(simulation_lock_key(scenario_id)):
+            return False
+
+        branches = session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).all()
+        if not branches:
+            return False
+        if any(branch.status == BranchStatus.ACTIVE for branch in branches):
+            return False
+
+        completed_branches = [
+            branch for branch in branches if branch.status == BranchStatus.COMPLETED
+        ]
+        if any(
+            not (branch.story or "").strip() or not (branch.insight or "").strip()
+            for branch in completed_branches
+        ):
+            return False
+
+        scenario.status = ScenarioStatus.DONE
+        session.add(scenario)
+        session.commit()
+        return True
 
 
 def _pending_intervention_db_path() -> str | None:
@@ -630,16 +699,16 @@ async def run_simulation(
             break
 
         for branch_info in active_branches:
-            branch_id = branch_info["id"]
+            current_branch_id = branch_info["id"]
 
             # 0) Check for pending user interventions (Butterfly Effect)
-            intervention_key = f"{scenario_id}:{branch_id}"
+            intervention_key = f"{scenario_id}:{current_branch_id}"
             intervention_text = await pop_next_pending_intervention(intervention_key)
             if intervention_text is not None:
                 await push({
                     "type": "intervention_injected",
                     "data": {
-                        "branch_id": branch_id,
+                        "branch_id": current_branch_id,
                         "round": round_num,
                         "text": intervention_text,
                     },
@@ -648,20 +717,20 @@ async def run_simulation(
                 # V2-P2: Broadcast viz:event_anim for butterfly effect
                 if viz_mapper is not None:
                     viz_interv = viz_mapper.map_intervention(
-                        intervention_text, params={"round": round_num, "branch_id": branch_id}
+                        intervention_text, params={"round": round_num, "branch_id": current_branch_id}
                     )
                     await viz_push(viz_interv)
 
             # 1) Gather agent messages — each pushed to frontend immediately
-            round_id = _create_round(engine, branch_id, round_num)
-            bb = blackboards.get(branch_id)
+            round_id = _create_round(engine, current_branch_id, round_num)
+            bb = blackboards.get(current_branch_id)
             if bb is None:
                 bb = Blackboard()  # ephemeral — discarded each round in RAW mode
 
             if hierarchical and leader_agents:
                 # P3-A: hierarchical mode — only Leaders call LLM
                 messages = await _gather_hierarchical_messages(
-                    engine, scenario_id, branch_id, round_id, round_num,
+                    engine, scenario_id, current_branch_id, round_id, round_num,
                     leader_agents, worker_agents, agent_to_group, group_leaders,
                     setting_bg, key_variable,
                     intervention_text=intervention_text,
@@ -674,7 +743,7 @@ async def run_simulation(
                 )
             else:
                 messages = await _gather_agent_messages(
-                    engine, scenario_id, branch_id, round_id, round_num, agents, setting_bg, key_variable,
+                    engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,
                     intervention_text=intervention_text,
                     push=push,
                     blackboard=bb,
@@ -691,7 +760,7 @@ async def run_simulation(
                 summary_text = f"Round {round_num} complete, {len(messages)} messages"
             await push({
                 "type": "round_summary",
-                "data": {"branch_id": branch_id, "round": round_num,
+                "data": {"branch_id": current_branch_id, "round": round_num,
                          "summary": summary_text},
             })
 
@@ -711,10 +780,10 @@ async def run_simulation(
 
             # 3) Compress memory every N rounds
             if round_num % settings.MEMORY_COMPRESS_INTERVAL == 0:
-                compress_bb = blackboards.get(branch_id)  # None in RAW mode
+                compress_bb = blackboards.get(current_branch_id)  # None in RAW mode
                 await _compress_round_memory(
                     engine,
-                    branch_id,
+                    current_branch_id,
                     round_num,
                     blackboard=compress_bb,
                     language=detected_language,
@@ -726,7 +795,7 @@ async def run_simulation(
             active_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
             if diverge_signals and active_count < settings.MAX_BRANCHES and round_num < sim_rounds:
                 fork_result = await _detect_fork(
-                    engine, branch_id, diverge_signals, sensitivity,
+                    engine, current_branch_id, diverge_signals, sensitivity,
                     llm_overrides=llm_overrides,
                     language=detected_language,
                 )
@@ -736,7 +805,7 @@ async def run_simulation(
                     for fb in fork_result.get("branches", []):
                         new_id = _create_branch(
                             engine, scenario_id,
-                            parent_branch_id=branch_id,
+                            parent_branch_id=current_branch_id,
                             fork_round=round_num,
                             fork_reason=fork_result["reason"],
                             title=fb["title"],
@@ -748,8 +817,8 @@ async def run_simulation(
                             "probability": fb["probability"]
                         })
                         # Fork blackboard for the new branch (only in blackboard mode)
-                        if branch_id in blackboards:
-                            blackboards[new_id] = blackboards[branch_id].fork()
+                        if current_branch_id in blackboards:
+                            blackboards[new_id] = blackboards[current_branch_id].fork()
                         new_branch_infos.append({
                             "id": new_id,
                             "title": fb["title"],
@@ -760,7 +829,7 @@ async def run_simulation(
                     await push({
                         "type": "branch_fork",
                         "data": {
-                            "parent": branch_id,
+                            "parent": current_branch_id,
                             "children": new_branch_infos,
                             "reason": fork_result["reason"],
                         }
@@ -770,7 +839,7 @@ async def run_simulation(
                     if viz_mapper is not None:
                         child_ids = [b["id"] for b in new_branch_infos]
                         viz_split = viz_mapper.map_branch_split(
-                            parent_branch_id=branch_id,
+                            parent_branch_id=current_branch_id,
                             child_branch_ids=child_ids,
                             reason=fork_result.get("reason"),
                         )
@@ -780,11 +849,11 @@ async def run_simulation(
                     # Parent's timeline splits into children; parent no longer
                     # participates in further rounds or fork detection.
                     branch_info["status"] = "COMPLETED"
-                    _update_branch_status(engine, branch_id, BranchStatus.COMPLETED)
+                    _update_branch_status(engine, current_branch_id, BranchStatus.COMPLETED)
                     await push({
                         "type": "branch_update",
                         "data": {
-                            "branch_id": branch_id,
+                            "branch_id": current_branch_id,
                             "status": "COMPLETED",
                         },
                     })
@@ -822,8 +891,10 @@ async def run_simulation(
 
     # ── Stage 3: Narrate ─────────────────────────────
     if branch_id is None:
+        _update_scenario_status(engine, scenario_id, ScenarioStatus.NARRATING)
         await push({"type": "status", "data": {"status": "narrating"}})
 
+    narrated_branch_payloads: list[dict[str, Any]] = []
     for b in all_branches:
         if b["status"] in ("ACTIVE", "COMPLETED"):
             narration = await _narrate_branch_data(
@@ -843,18 +914,13 @@ async def run_simulation(
                     "insight": narration.get("insight", ""),
                 },
             })
-
-            # V2-P2: Broadcast viz:ending_play for each narrated branch
-            if viz_mapper is not None:
-                prob = b.get("probability", 0)
-                ending_type = "positive" if prob > 0.5 else ("negative" if prob < 0.3 else "neutral")
-                viz_end = viz_mapper.map_ending(
-                    branch_id=b["id"],
-                    title=narration.get("title", ""),
-                    story=narration.get("story", ""),
-                    ending_type=ending_type,
-                )
-                await viz_push(viz_end)
+            narrated_branch_payloads.append({
+                "id": b["id"],
+                "probability": b.get("probability", 0),
+                "title": narration.get("title", ""),
+                "story": narration.get("story", ""),
+                "insight": narration.get("insight", ""),
+            })
 
     # ── Done ─────────────────────────────────────────
     # Cleanup pending interventions for this scenario (prevent memory leak)
@@ -863,18 +929,35 @@ async def run_simulation(
     else:
         await clear_pending_interventions_for_branch(scenario_id, branch_id)
 
-    if branch_id is None:
-        with Session(engine) as session:
-            scenario = session.get(Scenario, scenario_id)
-            if scenario:
-                scenario.status = ScenarioStatus.DONE
-                session.add(scenario)
-                session.commit()
+    scenario_finished = reconcile_scenario_done_if_complete(engine, scenario_id)
+    if scenario_finished and viz_mapper is not None:
+        chosen_ending = _pick_theater_ending_payload(
+            narrated_branch_payloads,
+            branch_id=branch_id,
+        )
+        if chosen_ending is not None:
+            prob = chosen_ending.get("probability", 0)
+            ending_type = "positive" if prob > 0.5 else ("negative" if prob < 0.3 else "neutral")
+            viz_end = viz_mapper.map_ending(
+                branch_id=chosen_ending["id"],
+                title=chosen_ending.get("title", ""),
+                story=chosen_ending.get("story", "") or chosen_ending.get("insight", ""),
+                ending_type=ending_type,
+            )
+            await viz_push(viz_end)
 
+    if scenario_finished:
         await push({"type": "simulation_done"})
+
+    if branch_id is None:
         logger.info("Simulation complete for scenario %s", scenario_id)
     else:
-        logger.info("Branch-only simulation complete for scenario %s branch %s", scenario_id, branch_id)
+        logger.info(
+            "Branch-only simulation complete for scenario %s branch %s (scenario_done=%s)",
+            scenario_id,
+            branch_id,
+            scenario_finished,
+        )
 
 
 # ── Internal helpers ─────────────────────────────────────
@@ -900,7 +983,7 @@ async def _gather_agent_messages(
     raw DB messages. Results are batch-posted to the blackboard AFTER
     asyncio.gather returns (concurrency-safe).
     """
-    semaphore = asyncio.Semaphore(settings.LLM_CONCURRENCY)
+    semaphore = asyncio.Semaphore(get_runtime_parallelism_limit())
 
     # Build shared context: prefer Blackboard briefing, fall back to DB
     if blackboard is not None:

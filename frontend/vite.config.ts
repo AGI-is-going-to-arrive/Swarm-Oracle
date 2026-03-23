@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
 const phaserCustomEntry = fileURLToPath(
-  new URL('./experiments/phaser-custom/entry.cjs', import.meta.url),
+  new URL('./experiments/phaser-custom/entry.mjs', import.meta.url),
 )
 const spectorStub = fileURLToPath(
   new URL('./experiments/phaser-custom/phaser3spectorjs-stub.cjs', import.meta.url),

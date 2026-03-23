@@ -144,21 +144,22 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - 本 session 这轮“WS event meta / BYOK session policy / WS debug observability”改动，当前还额外实跑通过：
   - `source .venv/bin/activate && cd backend && python -m pytest tests/test_ws.py -q`：`28 passed in 1.17s`
   - `source .venv/bin/activate && cd backend && python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过
+- 本 session 这轮 `api / llm_client / runtime_lock / simulator` 定向回归，当前还额外实跑通过：
+  - `python -m pytest tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py -q`：`205 passed in 26.75s`
+  - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`：通过
 
 ### Frontend
 
 ```bash
 cd frontend
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
-npm run perf:budgets:check
-npm run assets:provenance:check
+npm run test:spike:phaser-custom
 ```
 
-- 当前 targeted frontend set：`107 passed`
-- 这组扩展回归适用于本轮这类“authority 写入 / 结果页 authority / scenarioMeta-replay 收口”改动；更贴近本 session 的前端相关子集实跑为 `32 passed`。
-- 当前 CI 的 frontend targeted vitest lane 已与这组文档口径对齐，包含 `src/components/InterventionModal.test.tsx`、`src/components/ShareModal.test.tsx` 与 `src/stores/simulationStore.test.ts`。
+- 当前 targeted frontend set：`112 passed`
+- 当前推荐前端定向回归已收口到本 session 实跑过的 Input / Simulation / timeline / branch edge / GameplayCardsModal / VizSynthesizer / WorldScene / i18n 子集；类型检查、build 与 `phaser-custom` spike 单列执行。
 - 本 session 这轮“Input/Simulation hook 拆分 + `startSimulation(options)` + Simulation i18n 收口”改动，当前还额外实跑通过：
   - `src/lib/directorIdentity.test.ts + src/lib/debateCounterplay.test.ts + src/lib/scenarioMeta.test.ts + src/lib/dailyChallenge.test.ts + src/lib/llmProviderPolicy.test.ts + src/pages/InputView.test.tsx + src/pages/SimulationView.test.tsx + src/stores/simulationStore.test.ts + src/hooks/useSimulationWS.test.tsx`：`81 passed in 1.57s`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
@@ -193,6 +194,11 @@ npm run assets:provenance:check
   - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx`：`41 passed in 1.80s`
   - `cd frontend && npm test -- --run src/pages/HistoryView.test.tsx src/pages/LeaderboardView.test.tsx`：`2 passed in 496ms`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮 `InputView / SimulationView / simulationStore / TimelineBar / BranchEdge / GameplayCardsModal / VizSynthesizer / WorldScene / locales` 定向回归，当前还额外实跑通过：
+  - `npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts`：`112 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `npm run test:spike:phaser-custom`：`34 passed`
 
 ### WebSocket 调试
 
@@ -310,7 +316,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态 `passed`
 - 这份工件显式要求 `adjudication_mode = llm_hybrid`
 - `corners` 里的 share 生成 / share retry 等待当前也已跟前端更长的社交文案超时窗口对齐，减少正常 LLM 延迟下的假失败
-- 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
+- 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.mjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 当前 checkout 是否已严格签收，应以重新实跑生成的 `summary.json` 为准，而不是直接套用旧工件
 

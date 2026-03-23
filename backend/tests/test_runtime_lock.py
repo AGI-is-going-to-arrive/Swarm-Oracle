@@ -15,6 +15,7 @@ from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
     release_runtime_lock,
+    runtime_lock_is_active,
     simulation_lock_key,
 )
 
@@ -84,6 +85,37 @@ def test_runtime_lock_fallback_reclaims_expired_in_process_lease(monkeypatch):
 
     reclaimed = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=30)
     assert reclaimed is not None
+
+
+def test_runtime_lock_is_active_reports_sqlite_leases(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-active.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    key = simulation_lock_key("scenario-1")
+    lease = acquire_runtime_lock(key, lease_seconds=30)
+    assert lease is not None
+    assert runtime_lock_is_active(key) is True
+
+    assert release_runtime_lock(lease) is True
+    assert runtime_lock_is_active(key) is False
+
+
+def test_runtime_lock_is_active_reports_inprocess_leases(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        "sqlite:///:memory:",
+    )
+
+    key = debate_lock_key("debate-1")
+    lease = acquire_runtime_lock(key, lease_seconds=30)
+    assert lease is not None
+    assert runtime_lock_is_active(key) is True
+
+    assert release_runtime_lock(lease) is True
+    assert runtime_lock_is_active(key) is False
 
 
 def test_runtime_lock_fallback_sweeps_expired_unrelated_keys(monkeypatch):

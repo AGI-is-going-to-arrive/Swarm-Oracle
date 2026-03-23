@@ -140,6 +140,7 @@ const mockStore = {
   messages: [
     { agent: '奥勒留斯', agent_id: 'a1', message: '稳定秩序。', emotion: 'calm', branch: 'b1', round: 1 },
   ],
+  thinkingAgents: [] as Array<{ agent: string; agent_id: string; branch: string; round: number }>,
   status: 'done' as 'done' | 'simulating',
   error: null,
   errorCode: null as string | null,
@@ -360,6 +361,7 @@ describe('SimulationView replay automation output', () => {
     mockStore.messages = [
       { agent: '奥勒留斯', agent_id: 'a1', message: '稳定秩序。', emotion: 'calm', branch: 'b1', round: 1 },
     ];
+    mockStore.thinkingAgents = [];
     Object.assign(window, {
       __swarmGetSceneAutomation: () => ({
         scene: 'WorldScene',
@@ -592,6 +594,48 @@ describe('SimulationView replay automation output', () => {
       });
 
       expect(mockStore.loadScenario).toHaveBeenCalledTimes(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('polls the backend during the tail narrating handoff until done is observed', async () => {
+    vi.useFakeTimers();
+    try {
+      mockStore.scenario = {
+        ...baseScenario,
+        status: 'simulating',
+        total_rounds: 2,
+      };
+      mockStore.status = 'simulating';
+      mockStore.isSimulationComplete = false;
+      mockStore.currentRound = 2;
+      mockStore.messages = Array.from({ length: 16 }, (_, index) => ({
+        agent: `Agent ${index}`,
+        agent_id: `agent-${index}`,
+        message: `message-${index}`,
+        emotion: 'calm',
+        branch: 'b1',
+        round: index < 8 ? 1 : 2,
+      }));
+      mockStore.thinkingAgents = [];
+      mockStore.loadScenario = vi.fn(async () => undefined);
+
+      render(
+        <MemoryRouter initialEntries={['/sim/scenario-1']}>
+          <Routes>
+            <Route path="/sim/:id" element={<SimulationView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(mockStore.loadScenario).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1800);
+      });
+
+      expect(mockStore.loadScenario).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

@@ -4,6 +4,7 @@ These tests exercise the database-facing helper functions in simulator.py
 in isolation, using real SQLite test databases.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -21,6 +22,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.llm_client import llm_request_scope
 from app.services.simulator import (
     _agent_to_dict,
     _coerce_stance_value,
@@ -36,6 +38,7 @@ from app.services.simulator import (
     _load_latest_compressed_briefing,
     _narrate_branch_data,
     _normalized_active_branch_probabilities,
+    _pick_theater_ending_payload,
     _resolve_hierarchical_agent_sets,
     _save_message,
     _save_messages,
@@ -45,6 +48,7 @@ from app.services.simulator import (
     add_pending_intervention,
     clear_pending_interventions_for_scenario,
     pop_next_pending_intervention,
+    reconcile_scenario_done_if_complete,
     run_simulation,
 )
 from app.visualization.mapper import VisualizationMapper
@@ -117,6 +121,97 @@ class TestCoerceStanceValue:
         assert _coerce_stance_value("반대") < 0
 
 
+class TestPickTheaterEndingPayload:
+    def test_prefers_requested_branch_for_branch_only_runs(self):
+        payload = _pick_theater_ending_payload(
+            [
+                {"id": "b1", "probability": 0.8, "title": "Dominant"},
+                {"id": "b2", "probability": 0.2, "title": "Target"},
+            ],
+            branch_id="b2",
+        )
+
+        assert payload is not None
+        assert payload["id"] == "b2"
+
+    def test_falls_back_to_highest_probability_branch(self):
+        payload = _pick_theater_ending_payload(
+            [
+                {"id": "b1", "probability": 0.3, "title": "Lower"},
+                {"id": "b2", "probability": 0.7, "title": "Higher"},
+            ],
+        )
+
+        assert payload is not None
+        assert payload["id"] == "b2"
+
+
+class TestReconcileScenarioDoneIfComplete:
+    def test_marks_stale_simulating_scenario_done_when_all_branches_are_final(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+
+        branch_id = _create_branch(
+            engine,
+            scenario_id,
+            title="终局分支",
+        )
+        with Session(engine) as session:
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            branch.status = BranchStatus.COMPLETED
+            branch.story = "完整故事"
+            branch.insight = "完整启示"
+            session.add(branch)
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: False)
+
+        assert reconcile_scenario_done_if_complete(engine, scenario_id) is True
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+
+    def test_does_not_mark_done_while_runtime_lock_is_active(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+
+        branch_id = _create_branch(
+            engine,
+            scenario_id,
+            title="终局分支",
+        )
+        with Session(engine) as session:
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            branch.status = BranchStatus.COMPLETED
+            branch.story = "完整故事"
+            branch.insight = "完整启示"
+            session.add(branch)
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: True)
+
+        assert reconcile_scenario_done_if_complete(engine, scenario_id) is False
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
+
+
 class TestNormalizedActiveBranchProbabilities:
     def test_zero_sum_falls_back_to_uniform_distribution(self):
         normalized, used_uniform_fallback = _normalized_active_branch_probabilities([
@@ -139,6 +234,67 @@ class TestNormalizedActiveBranchProbabilities:
 
 
 class TestRunSimulation:
+    @pytest.mark.asyncio
+    async def test_full_run_persists_narrating_status_before_narration_broadcast(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="测试代理",
+                    role="分析师",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        pushed_statuses: list[tuple[str, ScenarioStatus | None]] = []
+
+        async def _fake_ws_callback(current_scenario_id: str, event: dict):
+            assert current_scenario_id == scenario_id
+            if event.get("type") == "status":
+                with Session(engine) as session:
+                    current = session.get(Scenario, scenario_id)
+                    pushed_statuses.append((event["data"]["status"], current.status if current else None))
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "维持生命支持优先。", "emotion": "focused", "diverge": None}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "火星先声",
+                "story": "叙事已完成。",
+                "insight": "先稳住系统，再谈扩张。",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id, ws_callback=_fake_ws_callback)
+
+        assert ("narrating", ScenarioStatus.NARRATING) in pushed_statuses
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+
     @pytest.mark.asyncio
     async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(
         self,
@@ -390,6 +546,59 @@ class TestGatherAgentMessages:
         assert "viz:bubble_show" in event_types
         assert "viz:agent_move" in event_types
         assert "viz:emotion_change" in event_types
+
+    @pytest.mark.asyncio
+    async def test_respects_request_scoped_parallelism_limit(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_ids = [
+            _make_agent(engine, sid, name=f"Agent-{idx}", tier=AgentTier.IMPORTANT)
+            for idx in range(6)
+        ]
+        with Session(engine) as session:
+            agents = [
+                _agent_to_dict(session.get(Agent, agent_id))
+                for agent_id in agent_ids
+            ]
+
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+        monkeypatch.setattr("app.services.simulator.settings.LLM_CONCURRENCY", 5)
+        monkeypatch.setattr("app.services.simulator.settings.LLM_USER_MAX_PENDING", 4)
+        monkeypatch.setattr("app.services.simulator.settings.LLM_MAX_PENDING", 24)
+
+        current_calls = 0
+        max_calls = 0
+
+        async def _fake_llm_call_json(*args, **kwargs):
+            nonlocal current_calls, max_calls
+            current_calls += 1
+            max_calls = max(max_calls, current_calls)
+            await asyncio.sleep(0.01)
+            current_calls -= 1
+            return {"content": "正常发言", "emotion": "calm", "diverge": None}
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+
+        with llm_request_scope(quota_key="user:director-test", purpose="scenario_runtime"):
+            results = await _gather_agent_messages(
+                engine,
+                sid,
+                bid,
+                rid,
+                1,
+                agents,
+                "时代: 测试\n地点: 本地\n背景: 并发控制验证",
+                "是否应当限制本轮并发",
+                language="Chinese",
+            )
+
+        assert len(results) == len(agents)
+        assert all(result["content"] == "正常发言" for result in results)
+        assert max_calls == 4
 
 
 # ── _agent_to_dict ───────────────────────────────────────────

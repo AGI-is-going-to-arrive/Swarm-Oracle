@@ -63,13 +63,15 @@ alembic/ ──► Alembic 数据库迁移框架
 - **Leader 缺失回退**: 分层模式若 group 配置的 leader 不在当前 agent 集合中，当前会回退到该组第一个可用成员作为 effective leader，并记录 warning；不会再让整组 Worker 退化成“保持沉默”
 - **Agent JSON 容错**: `_gather_agent_messages()` 现在会通过 `llm_call_json(..., fallback_mode="agent_message")` 恢复轻微损坏的 agent JSON；如果模型至少吐出了 `content/emotion/diverge` 这样的键或纯文本，不会直接让该 agent 丢一整轮发言
 - **结局类型 3 级映射**: `ending_type` 按概率分 3 档: `< 0.3` → "negative", `0.3-0.5` → "neutral", `> 0.5` → "positive"
+- **Theater 结局选择**: branch-only 补跑优先当前 `branch_id`；只有没指定分支或找不到目标分支时，才回退到概率最高的已叙事分支
 - **可视化 stance 归一化**: `_coerce_stance_value()` 将数值 stance 与中英文立场词（如 `支持/反对/neutral/support`）统一映射到 `[-1, 1]`，避免 Theater 定位阶段因文本 stance 触发类型错误
 - **占位根分支复用**: `_get_or_create_root_branch()` 会复用 `POST /api/scenario` 阶段创建的 provisional root branch，避免启动期前端世界线骨架与模拟期真实根分支重复
 - **viz_push 辅助函数**: 统一所有 viz 广播调用，含 `viz_mapper is not None` 安全守卫
 - **Fork 抑制**: 最后一轮不 fork，保证所有叶子分支都有 Agent 发言
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning，避免后续剪枝/叙事继续吃坏概率；使用单数据库会话优化 (P2-8)
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
-- **并发**: `LLM_CONCURRENCY` 限制并发LLM调用
+- **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
+- **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入；`setting` 标签与 fork-detect prompt 当前都已按语言切换，不再让英文场景吃中文主体提示
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
 - **消息落库**: 普通 agent 发言与 synthesized Worker 发言当前都改成按批次写入 `AgentMessage`，不再每条消息单独 commit；`_save_message()` 仍保留给旧调用点和测试使用
@@ -160,6 +162,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `llm_call_stream(...)` — SSE 流式异步生成器
   - `llm_call_json_stream(...)` — 流式 + JSON 解析
   - `health_check()` — 连通性检查
+- **健康探测**: `POST /api/health/test` 先跑 `health_check()`；只有 LLM status=`ok` 时才会附带 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要
 - **特性**: 支持 Chat Completions 和 Responses API 两种格式
 - **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s；当前实现直接复用模块级 `asyncio`，5xx 重试路径不会再触发本地 `UnboundLocalError`
 - **HTTP client 生命周期**: `llm_call()` / `llm_call_stream()` 当前复用共享 `httpx.AsyncClient`，但这份 client 现在是按 event loop 归属隔离的：切到新 loop 时会重建 client，旧 client 走后台 best-effort 关闭；进程退出时仍由 `main.py` 的 shutdown/lifespan 统一关闭当前共享 client
@@ -171,8 +174,9 @@ alembic/ ──► Alembic 数据库迁移框架
     - `agent_message` 专用 fallback（把带键的坏 JSON 或纯文本尽量恢复成单条 agent 发言）
   - `llm_call_json_stream()` 当前复用同一套恢复链，不再只做一次裸 `json.loads()`
 - **全局治理**:
-  - 进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`；当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
-  - 现有 `LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 会在请求入队前做 backpressure；当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
+  - `LLM_CONCURRENCY <= 0` 现在表示关闭全局并发上限；启用时，进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`，且当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
+  - `LLM_MAX_PENDING / LLM_USER_MAX_PENDING <= 0` 现在表示关闭对应 pending 上限；启用时会在请求入队前做 backpressure，当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
+  - `get_runtime_parallelism_limit()` 会按当前 request scope 把全局并发、全局 pending 和用户 pending 收口成单次本地 fan-out 的安全上限；都关闭时回退 `MAX_AGENTS`
   - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
@@ -346,12 +350,14 @@ alembic/ ──► Alembic 数据库迁移框架
 > **错误返回口径**：这批 REST 路由当前都统一走结构化 `HTTPException.detail = {code, message}`。已经覆盖 `campaign / interventions / predictions / social / scenarios / debate`，前端现在按 `status / code / message` 消费，不再把自由文本错误字符串当协议。
 >
 > **helpers 运行口径**：`api/helpers.py` 里的 fire-and-forget background task 当前会在 done callback 中主动记录未捕获异常，不再静默吞掉；simulation 失败时发给前端的 `simulation_error` 事件，也已经升级成结构化 `error = {code, message}`。
+>
+> **response 口径**：`load_scenario_response()` 读场景前会先 reconcile stale `simulating/narrating -> done`；当前顶层响应额外带 `fork_debug`，`messages[]` 会带 `diverge / branch_title`，`branches[]` 会带 `fork_round`。
 
 ### `scenarios.py` — 核心 REST 路由
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate |
-| `GET /scenario/{id}` | GET | 获取场景详情；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state` 与 `gameplay_state`，供前端直开 `/sim/:id` 时恢复 Theater 状态、导演层权威态，以及主模式 `cards.usageLog / betting.bets / archive.key_moments / archive.branch_snapshots` 权威态 |
+| `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled`, `disable_user_quota` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate；`disable_user_quota` 只在本地/self-hosted provider 下才会真正关闭用户级 quota |
+| `GET /scenario/{id}` | GET | 获取场景详情；读之前会先 reconcile 卡在 `simulating / narrating` 但其实已终局的 scenario 到 `done`；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state / gameplay_state / fork_debug`，以及 `messages[]` 里的 `diverge / branch_title`、`branches[]` 里的 `fork_round`，供前端恢复 Theater 状态和分叉上下文 |
 | `POST /scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario；当前给 `/result/replay` 与 `/sim/replay` 的“导入为本地运行”按钮使用；请求体会先做 payload bytes、`question` 长度，以及 `groups / agents / branches / messages` 数量上限校验 |
 | `GET /scenario/{id}/branches` | GET | 获取分支列表 |
 | `GET /scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） |
@@ -363,6 +369,8 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /replay-artifact` | POST | 持久化 replay payload，返回短 `share id`；当前主模式优先用它生成 `/result/replay?share=...` 与 `/sim/replay?share=...` |
 | `GET /replay-artifact/{id}` | GET | 读取 replay payload；供 replay 页面 hydrate |
 | `GET /intervention-templates` | GET | 干预模板列表 (P4-D) |
+
+> 补充：`POST /api/health/test` 会先做 `health_check()`；只有 LLM 连通时才会追加 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要。
 
 ### `interventions.py` — 干预路由
 | 端点 | 方法 | 描述 |

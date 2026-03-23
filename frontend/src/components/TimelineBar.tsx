@@ -134,6 +134,7 @@ export function TimelineBar({
 }: TimelineBarProps) {
   const { t } = useTranslation();
   const status = useSimulationStore((s) => s.status);
+  const thinkingAgents = useSimulationStore((s) => s.thinkingAgents);
   const branches = useSimulationStore((s) => s.branches);
   const scenario = useSimulationStore((s) => s.scenario);
   const currentRound = useSimulationStore((s) => s.currentRound);
@@ -143,7 +144,18 @@ export function TimelineBar({
 
   const totalRounds = scenario?.total_rounds ?? 10;
   const mode = scenario?.mode ?? 'blackboard';
-  const isSimulating = status === 'simulating';
+  const displayStatus: ScenarioStatus = useMemo(() => {
+    if (
+      status === 'simulating'
+      && currentRound >= totalRounds
+      && thinkingAgents.length === 0
+      && messages.length > 0
+    ) {
+      return 'narrating';
+    }
+    return status;
+  }, [currentRound, messages.length, status, thinkingAgents.length, totalRounds]);
+  const isSimulating = displayStatus === 'simulating';
 
   const { progressPercent, eta, avgRoundTime } = useMemo(() => {
     if (!isSimulating || currentRound === 0) {
@@ -181,7 +193,7 @@ export function TimelineBar({
     { key: 'done', label: t('sim.timeline.done'), icon: '✨' },
   ];
 
-  const currentIdx = getStageIndex(stages, status);
+  const currentIdx = getStageIndex(stages, displayStatus);
   const visibleRoundMarkers = useMemo(() => {
     if (roundMarkers.length > 0) {
       return roundMarkers;

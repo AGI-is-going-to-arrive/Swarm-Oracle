@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-23（leaderboard 全量重算 / vector-store 场景级隔离 / debate-llm-simulator hardening / scenarioMeta lock 收口 / DebateArena-ResultView-i18n 回归）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-24（BYOK probe + local quota toggle / scenario tail done 自愈 / Theater 尾声状态补拉 / Bubble & branch UI 可读性修复 / phaser-custom entry.mjs 收口）
 
 ## 阅读顺序
 

@@ -12,6 +12,7 @@ from app.api.schemas import CreateScenarioRequest
 from app.main import app
 from app.models import (
     Agent,
+    AgentMessage,
     AgentTier,
     Branch,
     BranchStatus,
@@ -85,6 +86,21 @@ def _seed_round(engine, branch_id, round_number):
         return r.id
 
 
+def _seed_message(engine, round_id, agent_id, *, content="发言", emotion="neutral", diverge=None):
+    """Create an agent message and return its ID."""
+    message = AgentMessage(
+        round_id=round_id,
+        agent_id=agent_id,
+        content=content,
+        emotion=emotion,
+        diverge=diverge,
+    )
+    with Session(engine) as session:
+        session.add(message)
+        session.commit()
+        return message.id
+
+
 def _detail_message(resp) -> str:
     detail = resp.json()["detail"]
     return detail["message"] if isinstance(detail, dict) else detail
@@ -116,6 +132,43 @@ class TestHealthEndpoint:
         assert data["server"] == "ok"
         assert "llm" in data
         assert data["llm"]["model"] == "gpt-5.4-mini"
+
+    def test_health_test_returns_probe_summary(self, client, monkeypatch):
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+
+        async def _fake_probe(**kwargs):
+            return {
+                "status": "ok",
+                "model": "test-model",
+                "local_provider": True,
+                "allow_disable_user_quota": True,
+                "estimated_parallelism": 6,
+                "tested_parallelism": 8,
+                "recommended": {
+                    "agents_min": 3,
+                    "agents_max": 24,
+                    "rounds_min": 3,
+                    "rounds_max": 8,
+                },
+                "failure": None,
+            }
+
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
+
+        resp = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
+            "llm_model": "test-model",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["server"] == "ok"
+        assert data["llm"]["status"] == "ok"
+        assert data["probe"]["estimated_parallelism"] == 6
+        assert data["probe"]["recommended"]["agents_max"] == 24
 
 
 # ── Scenario CRUD ────────────────────────────────────────
@@ -291,6 +344,34 @@ class TestReplayArtifactEndpoints:
         assert data["total_rounds"] == 7
         assert scheduled["count"] == 1
 
+    def test_create_scenario_forwards_disable_user_quota_flag(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "disable_user_quota": True,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["disable_user_quota"] is True
+
     def test_import_replay_scenario_persists_snapshot(self, client):
         resp = client.post("/api/scenario/import-replay", json={
             "scenario": {
@@ -450,6 +531,128 @@ class TestReplayArtifactEndpoints:
         assert data["scene_theme"] == "ancient_empire"
         assert data["mode"] == "blackboard"
         assert data["total_rounds"] == 6
+
+    def test_get_scenario_self_heals_stale_simulating_status(self, client, monkeypatch):
+        engine = get_engine()
+        scenario = Scenario(
+            question="状态收尾测试",
+            status=ScenarioStatus.SIMULATING,
+        )
+        with Session(engine) as session:
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="最终世界线",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="完整叙事",
+                    insight="完整启示",
+                )
+            )
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: False)
+
+        resp = client.get(f"/api/scenario/{scenario_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == ScenarioStatus.DONE.value
+
+        with Session(engine) as session:
+            refreshed = session.get(Scenario, scenario_id)
+            assert refreshed is not None
+            assert refreshed.status == ScenarioStatus.DONE
+
+    def test_get_scenario_exposes_diverge_messages_and_fork_debug(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE, question="分叉调试测试")
+        agent_id = _seed_agent(engine, sid, name="测试代理")
+        root = _seed_branch(
+            engine,
+            sid,
+            title="根世界线",
+            probability=1.0,
+            status=BranchStatus.COMPLETED,
+        )
+        child_a = _seed_branch(
+            engine,
+            sid,
+            title="方案A",
+            probability=0.4,
+            status=BranchStatus.COMPLETED,
+            parent_branch_id=root,
+            fork_reason="是否优先推进方案A",
+        )
+        child_b = _seed_branch(
+            engine,
+            sid,
+            title="方案B",
+            probability=0.6,
+            status=BranchStatus.ACTIVE,
+            parent_branch_id=root,
+            fork_reason="是否优先推进方案A",
+        )
+
+        with Session(engine) as session:
+            for branch_id, round_number in ((root, 1), (child_a, 2), (child_b, 2)):
+                branch = session.get(Branch, branch_id)
+                assert branch is not None
+                branch.fork_round = 1 if branch_id != root else 0
+                session.add(branch)
+            session.commit()
+
+        root_round = _seed_round(engine, root, 1)
+        child_round = _seed_round(engine, child_a, 2)
+        _seed_message(
+            engine,
+            root_round,
+            agent_id,
+            content="根世界线发言",
+            emotion="calm",
+            diverge="是否优先推进方案A",
+        )
+        _seed_message(
+            engine,
+            child_round,
+            agent_id,
+            content="方案A发言",
+            emotion="confident",
+            diverge=None,
+        )
+
+        resp = client.get(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert any(
+            message["diverge"] == "是否优先推进方案A"
+            and message["branch_title"] == "根世界线"
+            for message in data["messages"]
+        )
+
+        branch_a = next(branch for branch in data["branches"] if branch["title"] == "方案A")
+        assert branch_a["fork_round"] == 1
+
+        assert data["fork_debug"] == {
+            "message_count": 2,
+            "diverge_message_count": 1,
+            "diverge_rounds": [1],
+            "fork_event_count": 1,
+            "forked_branch_count": 2,
+            "fork_events": [
+                {
+                    "parent_branch_id": root,
+                    "parent_branch_title": "根世界线",
+                    "fork_round": 1,
+                    "fork_reason": "是否优先推进方案A",
+                    "child_titles": ["方案A", "方案B"],
+                    "child_branch_ids": [child_a, child_b],
+                },
+            ],
+        }
 
     def test_get_scenario_empty_id(self, client):
         """Should handle empty-looking scenario IDs."""

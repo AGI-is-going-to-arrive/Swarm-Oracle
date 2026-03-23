@@ -14,7 +14,7 @@
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
 | `DEBATE_USE_LLM` | bool | `true` | Debate Arena 回合文案是否优先走 LLM；关闭时会退回 deterministic 文案 |
 
-> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。前端这份 provider policy 现在按标签页会话保存在 `sessionStorage`，关闭该标签页后会清空；若用户浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次。
+> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。前端这份 provider policy 现在按标签页会话保存在 `sessionStorage`，关闭该标签页后会清空；若用户浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次。前端当前也可在创建 scenario 时透传 `disable_user_quota`；但 backend 只会在目标 provider 判定为本地 / self-hosted 时，对该次运行跳过 user-level fairness cap。这不会绕过 `LLM_CONCURRENCY / LLM_MAX_PENDING` 这类全局并发闸门，对非本地 provider 也不会生效。
 
 > **启动期校验**:
 > - 占位 `LLM_API_KEY = sk-12345678` 当前只允许用于本地 LLM 网关（如 `localhost / 127.0.0.1 / host.docker.internal`）
@@ -54,9 +54,9 @@
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `LLM_CONCURRENCY` | int | 5 | 进程内全局 LLM 并发上限；当前 semaphore 在进程启动后固定，修改该值需重启进程才能稳定生效 |
-| `LLM_MAX_PENDING` | int | 24 | 全局排队中的 LLM 请求上限；超过后直接返回 backpressure |
-| `LLM_USER_MAX_PENDING` | int | 4 | 单个 `user_id` 同时挂起的 LLM 请求上限 |
+| `LLM_CONCURRENCY` | int | 5 | 进程内全局 LLM 并发上限；`<= 0` 表示关闭该限制。当前 semaphore 在进程启动后固定，修改该值需重启进程才能稳定生效 |
+| `LLM_MAX_PENDING` | int | 24 | 全局排队中的 LLM 请求上限；`<= 0` 表示关闭该限制；超过后直接返回 backpressure |
+| `LLM_USER_MAX_PENDING` | int | 4 | 单个 `user_id` 同时挂起的 LLM 请求上限；`<= 0` 表示关闭该限制 |
 | `LLM_CIRCUIT_BREAKER_THRESHOLD` | int | 6 | 同一 provider 连续失败达到此阈值后，短时间打开熔断 |
 | `LLM_CIRCUIT_BREAKER_RESET_SECONDS` | int | 30 | 熔断打开后的冷却秒数 |
 
@@ -66,8 +66,10 @@
 >
 > 也就是说：
 > - `LLM_CONCURRENCY` 当前不会在运行时安全热更新；若配置变更，应该重启 backend 进程
+> - `LLM_CONCURRENCY / LLM_MAX_PENDING / LLM_USER_MAX_PENDING <= 0` 当前都表示关闭对应限制；`get_runtime_parallelism_limit()` 也会忽略这些已关闭的项，并在所有限制都关闭时回退到 `MAX_AGENTS`
 > - 同一台机器上多个 backend 进程共用同一个 SQLite 文件时，pending 配额会共享
 > - 当 SQLite reservation 可用时，它就是 pending / quota 计数的单一真相源；进程内 fallback 计数不会再额外叠加
+> - simulator 这类本地 fan-out 调用点当前不再只看全局并发；`get_runtime_parallelism_limit()` 会结合 `LLM_CONCURRENCY / LLM_MAX_PENDING` 与当前请求上下文里的 user pending cap 一起收口本次请求的并发上限
 > - provider 熔断与单进程内 `Semaphore` 仍是进程本地行为，不会跨进程同步
 > - `llm_call / llm_call_stream` 当前会复用进程内共享 `httpx.AsyncClient`，并在 app shutdown 时统一关闭
 > - `llm_call_stream` 当前只会在首个内容片段产出前做连接/起始响应重试，避免已经开始输出后重复发送流片段

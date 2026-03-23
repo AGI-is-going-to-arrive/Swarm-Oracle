@@ -18,8 +18,8 @@
 .bdm-modal-streaming {
   background: #faf8f6;
   border-radius: 18px;
-  width: min(680px, 92vw);
-  max-height: 85vh;
+  width: min(760px, 94vw);
+  max-height: min(88vh, 920px);
   display: flex;
   flex-direction: column;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
@@ -31,7 +31,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 24px 0;
+  padding: 18px 24px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .bdm-header-left {
@@ -78,15 +79,37 @@
 }
 
 .bdm-title {
-  margin: 8px 24px 16px;
+  margin: 18px 0 16px;
   font-size: 22px;
   font-weight: 700;
   color: #1a1a1a;
 }
 
+.bdm-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 24px 24px;
+}
+
+.bdm-summary-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(42vh, 380px);
+  overflow-y: auto;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
+}
+
 /* ── Sections ── */
 .bdm-section {
-  padding: 0 24px 16px;
+  padding: 0 0 16px;
+}
+
+.bdm-section:last-child {
+  padding-bottom: 0;
 }
 
 .bdm-section-title {
@@ -187,17 +210,19 @@
 
 /* ── Messages ── */
 .bdm-messages-section {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 260px;
+  min-height: 220px;
   display: flex;
   flex-direction: column;
 }
 
 .bdm-messages-scroll {
   flex: 1;
+  min-height: 180px;
   overflow-y: auto;
-  max-height: 400px;
+  max-height: none;
   padding-right: 8px;
+  scrollbar-gutter: stable;
 }
 
 .bdm-empty {

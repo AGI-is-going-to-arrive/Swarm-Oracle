@@ -21,6 +21,7 @@ class CreateScenarioRequest(BaseModel):
     llm_api_key: str | None = None    # OpenAI-compatible API key
     llm_base_url: str | None = None   # OpenAI-compatible base URL (e.g. https://api.openai.com/v1/chat/completions)
     llm_model: str | None = None      # Model name override (e.g. gpt-4o, claude-3.5-sonnet)
+    disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
 
@@ -132,6 +133,7 @@ class ScenarioResponse(BaseModel):
     scene_theme: str | None = None
     director_state: dict | None = None
     gameplay_state: dict | None = None
+    fork_debug: dict | None = None
 
 
 class StoryBranch(BaseModel):

@@ -37,7 +37,10 @@ class TestLLMCall:
     @pytest.mark.asyncio
     async def test_global_backpressure_rejects_when_queue_is_full(self, monkeypatch):
         """Global queue guard should reject immediately before making a network call."""
-        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 1)
+        llm_client._pending_requests = 1
         with pytest.raises(LLMBackpressureError):
             await llm_call("Reply with OK.", reasoning_effort="low")
 
@@ -129,6 +132,87 @@ class TestLLMCall:
         assert count_after == 0
         assert llm_client._pending_requests == 0
         assert llm_client._pending_by_quota == {}
+
+    @pytest.mark.asyncio
+    async def test_user_pending_limit_can_be_disabled(self, monkeypatch):
+        """LLM_USER_MAX_PENDING<=0 should disable per-user pending checks locally."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 4)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        reservation_a = await llm_client._reserve_runtime_slot(
+            quota_key="user:director-1",
+            provider_key="provider",
+            lease_seconds=30,
+        )
+        reservation_b = await llm_client._reserve_runtime_slot(
+            quota_key="user:director-1",
+            provider_key="provider",
+            lease_seconds=30,
+        )
+
+        assert reservation_a is None
+        assert reservation_b is None
+        assert llm_client._pending_requests == 2
+        assert llm_client._pending_by_quota == {}
+
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-1",
+            reservation_id=reservation_a,
+        )
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-1",
+            reservation_id=reservation_b,
+        )
+
+        assert llm_client._pending_requests == 0
+        assert llm_client._pending_by_quota == {}
+
+    @pytest.mark.asyncio
+    async def test_global_pending_limit_can_be_disabled(self, monkeypatch):
+        """LLM_MAX_PENDING<=0 should disable the global pending queue guard."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        llm_client._pending_requests = 999
+
+        reservation_id = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider",
+            lease_seconds=30,
+        )
+
+        assert reservation_id is None
+        assert llm_client._pending_requests == 999
+
+        await llm_client._release_runtime_slot(
+            quota_key=None,
+            reservation_id=reservation_id,
+        )
+        assert llm_client._pending_requests == 999
+
+    def test_runtime_parallelism_limit_ignores_disabled_user_cap(self, monkeypatch):
+        """Disabling the user cap should keep caller-side fan-out bounded by global limits only."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 24)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        with llm_client.llm_request_scope(quota_key="user:director-1", purpose="scenario_runtime"):
+            assert llm_client.get_runtime_parallelism_limit() == 5
+
+    def test_runtime_parallelism_limit_can_disable_global_caps(self, monkeypatch):
+        """Disabling total caps should let caller-side fan-out fall back to MAX_AGENTS."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "MAX_AGENTS", 123)
+
+        assert llm_client.get_runtime_parallelism_limit() == 123
 
     def test_sqlite_runtime_guard_uses_short_sqlite_timeout(self, monkeypatch, tmp_path):
         """SQLite runtime guard should fail fast before falling back."""

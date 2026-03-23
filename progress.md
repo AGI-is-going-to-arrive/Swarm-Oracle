@@ -118,6 +118,312 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 已截到两类证据：
     - 结局场景背景图（革命主题）
     - 延时后的结局卡片层（标题 `✊ 革命之曙光`）
+
+## 2026-03-23 Silent-Agent Root Cause + Fix
+
+- 复现对象：`/sim/daa4814e-931a-4698-8479-4549033f9805`
+- 现象确认：
+  - 前端 Agent Panel / Live Stream 中，4 个 `CORE` agent 正常发言，其余 16 个 `IMPORTANT/CROWD` agent 在每轮都显示 `(<name>沉默了)`。
+  - 接口快照 `GET /api/scenario/daa4814e-931a-4698-8479-4549033f9805` 中共有 `560` 条消息，其中 `448` 条为沉默占位；16 名非 CORE agent 为“全程沉默”。
+- 根因定位：
+  - `_gather_agent_messages()` 原先固定使用 `Semaphore(settings.LLM_CONCURRENCY)`，本地配置为 `5`。
+  - 该场景运行时实际带有 `parsed_context.user_id = director-2a39590d-d2ee-492b-9714-2807673ccd51`，因此 `parse_and_run_background()` 会通过 `llm_request_scope(quota_key="user:...")` 给整局推演套上用户级 LLM 配额。
+  - 项目默认 `LLM_USER_MAX_PENDING = 4`。结果是每轮 fan-out 时，前 4 个 agent 能拿到 runtime slot，后续 agent 会被 `LLMBackpressureError("Too many in-flight LLM requests for this user")` 立即拒绝，并落入 simulator 的 `(<name>沉默了)` 兜底分支。
+  - 额外验证：
+    - 单独调用真实 `CORE / IMPORTANT / CROWD` prompt 均可成功，说明不是 prompt 模板本身坏掉。
+    - 无 quota_key 的并发 8 次最小 `llm_call_json()` 全部成功。
+    - 带该 `quota_key` 的并发 8 次最小 `llm_call_json()` 复现为 `4 success + 4 LLMBackpressureError`。
+- 已修复：
+  - `backend/app/services/llm_client.py`
+    - 新增 `get_runtime_parallelism_limit()`，按当前请求作用域动态计算安全并发上限；有 `quota_key` 时会收口到 `min(LLM_CONCURRENCY, LLM_MAX_PENDING, LLM_USER_MAX_PENDING)`。
+  - `backend/app/services/simulator.py`
+    - `_gather_agent_messages()` 改为使用 `get_runtime_parallelism_limit()` 构建本地 semaphore，避免 simulation 自己把同一用户配额打爆。
+  - `backend/tests/test_simulator.py`
+    - 新增回归测试：带 `llm_request_scope(quota_key=...)` 时，`_gather_agent_messages()` 的最大并发不会超过 `LLM_USER_MAX_PENDING`，并且所有 agent 都拿到正常消息。
+- 本地验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_simulator.py -k 'respects_request_scoped_parallelism_limit or visualization_path_handles_text_stance_and_emotion_change' -q`
+    - `2 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/llm_client.py app/services/simulator.py tests/test_simulator.py`
+    - `All checks passed!`
+- 说明：
+  - 这次只做了根因修复和单测回归；当前已运行的本地后端进程若未重启，不会自动吃到新逻辑。要在浏览器里验证，需要重启后端并新开一局场景。
+
+## 2026-03-23 Restart + E2E Recheck
+
+- 已启动新 backend：
+  - `cd backend && ../.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - `POST http://127.0.0.1:18927/api/health` 返回 `server=ok, llm=ok, model=gpt-5.4-mini`
+- 已启动新 frontend：
+  - `cd frontend && npm run dev -- --host 127.0.0.1`
+  - 本地地址 `http://127.0.0.1:18928/`
+- 正向验证（命中本次修复的场景）：
+  - 新建场景 `36e33825-b605-4026-a2ee-818495072f0d`
+  - 该场景在创建时没有与其他同用户场景并发运行
+  - 实际接口验证：
+    - `status=simulating`
+    - 当前已落库 `60` 条消息
+    - `silent=0`
+    - `per_round={1: [20, 0], 2: [40, 0]}`
+  - 结论：单场景内部 fan-out 已不再自撞 `LLM_USER_MAX_PENDING`，本轮修复生效
+- 新发现 1（跨场景同用户并发限制，独立于本次修复）：
+  - 随后通过首页 quick start 又创建了第二个场景 `fd60a6a2-9e7a-4f5b-a7a6-edbc0f9f43f3`
+  - 此时第一局 `36e3...` 仍在运行，且前端 campaign/director 层为两局共用了同一个用户配额 `user:director-d30b7577-2566-4f9e-8fbe-b9b0f3d0073e`
+  - backend 实时日志显示：
+    - parser fallback：`Too many in-flight LLM requests for this user`
+    - simulator 大量 `Agent <name> failed: Too many in-flight LLM requests for this user`
+    - memory/narrator 也出现同类 quota 错误
+  - 结果是第二局在浏览器里出现“全员沉默”
+  - 这说明：用户级配额目前仍会跨 scenario 互相影响；本次修复只解决“单场景内部 fan-out 自撞配额”，没有解决“同一用户同时开两局”的资源竞争
+- 新发现 2（前端 SimulationView 直开回归）：
+  - 直接打开 `/sim/:id` 时，页面落入 `AppErrorBoundary`
+  - 控制台关键信息：
+    - `SyntaxError: The requested module '/experiments/phaser-custom/entry.cjs?import' does not provide an export named 'default'`
+    - 同时伴随 `director-state` 的 `409 DIRECTOR_STATE_CONFLICT`
+  - 该问题在 fresh navigate 到 `/sim/36...` 时复现；但从首页进入 simulation flow 时页面可正常渲染
+- 当前结论：
+  - 本次“agent 大面积沉默”修复在单场景链路上已验证生效
+  - 仍有两个独立问题待后续处理：
+    - 同一 director profile 下并发开多个 scenario 会重新撞上用户级配额
+    - 直接打开 `/sim/:id` 存在前端模块导入回归
+
+## 2026-03-23 BYOK Preflight + Local Unlimited Toggle
+
+- 目标：
+  - 对 BYOK 做“启动前预检”，不再让用户盲猜 API key/provider 能扛多少并发。
+  - 在首页给出清晰建议：当前探测到的并发能力下，建议的 `agents / rounds` 范围是多少。
+  - 对本地 / 自托管 provider 提供一个显式开关：允许本轮关闭“用户级并发上限”，但保留 backend 全局闸门。
+- backend 改动：
+  - `backend/app/services/llm_client.py`
+    - 新增 `is_local_provider_url()`：判断 endpoint 是否为本地 / 自托管 host。
+    - 新增 `measure_provider_parallelism()`：直接绕过 runtime-guard 的用户级公平配额，对目标 provider 做并发探测，返回：
+      - `estimated_parallelism`
+      - `local_provider`
+      - `allow_disable_user_quota`
+      - `recommended.agents_min/max`
+      - `recommended.rounds_min/max`
+    - `LLM_USER_MAX_PENDING <= 0` 现在明确表示“关闭用户级 pending 限制”，只保留 `LLM_CONCURRENCY / LLM_MAX_PENDING`。
+  - `backend/app/api/scenarios.py`
+    - `POST /api/health/test` 现在在健康检查成功后返回 `probe` 摘要。
+    - `POST /api/scenario` 透传 `disable_user_quota`。
+  - `backend/app/api/helpers.py`
+    - `parse_and_run_background()` 现在支持 `disable_user_quota`。
+    - 仅当 provider 是本地 / 自托管 endpoint 时，才真的把场景运行的 `quota_key` 置空；远端 provider 仍保留用户级公平限流。
+  - `backend/app/api/schemas.py`
+    - `CreateScenarioRequest` 新增 `disable_user_quota`。
+- frontend 改动：
+  - `frontend/src/api/client.ts`
+    - `testLlmConnection()` 响应类型扩展为带 `probe`。
+    - `createScenario()` 支持发送 `disableUserQuota`。
+  - `frontend/src/lib/llmProviderPolicy.ts`
+    - provider policy 现在会持久化 `disableUserQuota`。
+  - `frontend/src/hooks/useInputViewState.ts`
+    - 新增 `probeResult / hasFreshProbe / disableUserQuota` 状态。
+
+## 2026-03-23 Branch Tree / Detail Modal / Timeline Repair
+
+- 新确认根因：
+  - `frontend/src/components/BranchDetailModal.tsx` 旧布局把摘要区和实时发言区塞在同一列里，长 story 会把 `.bdm-messages-scroll` 挤成 `clientHeight=0`，所以打开卡片后底部实时发言基本不可见。
+  - `backend/app/services/simulator.py` 在主循环里把函数入参 `branch_id` 复用成当前分支局部变量，导致整局推演跑到 Stage 3 时 `branch_id is None` 条件失真：
+    - 不会发送 `status=narrating`
+    - 不会持久化 `ScenarioStatus.NARRATING`
+    - 整局完成链路会错走 branch-only 分支
+  - `frontend/src/components/BranchEdge.tsx` 旧实现把可见性过度依赖 GSAP reveal path；一旦动画初始化抖动，用户会先看到“透明线”，拖动节点后才恢复。
+
+- 已修复：
+  - `backend/app/services/simulator.py`
+    - 新增 `_update_scenario_status()`。
+    - 进入叙事阶段前会持久化 `ScenarioStatus.NARRATING`。
+    - 主循环内部把局部 `branch_id` 改为 `current_branch_id`，避免覆盖函数入参。
+  - `frontend/src/components/TimelineBar.tsx`
+    - 增加最终一轮发言结束后的前端兜底：当 `status=simulating` 且 `currentRound>=totalRounds`、`thinkingAgents=0` 时，阶段条会先切到 `narrating`，不再长时间卡在“群体推演”。
+  - `frontend/src/components/BranchDetailModal.tsx/.css`
+    - 拆成 `summary-scroll + messages-section` 双滚动区。
+    - 保证标题/摘要可读，同时实时发言区始终有稳定高度。
+  - `frontend/src/components/BranchEdge.tsx`
+    - 新增稳定可见的 `base` 连线层，动画层失败时仍能看见灰色连接线。
+
+- 新增/更新测试：
+  - `backend/tests/test_simulator.py`
+    - 新增 `test_full_run_persists_narrating_status_before_narration_broadcast`
+  - `frontend/src/components/TimelineBar.test.tsx`
+    - 新增最终一轮结束后切换到 `narrating` 的断言
+  - `frontend/src/components/BranchEdge.test.tsx`
+    - 新增基础可见连线层断言
+
+- 本轮验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_simulator.py -k 'persists_narrating_status_before_narration_broadcast' -q`
+    - `1 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/simulator.py tests/test_simulator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx`
+    - `4 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - 浏览器复验（`/sim/e1d26290-ca5c-485b-937c-321b9b947bf7`）：
+    - 连线层统计：`baseEdgeCount=12`，`mainEdgeCount=12`
+    - 详情弹窗：`summary clientHeight=378`，`messages clientHeight=234`，不再出现 `messages clientHeight=0`
+
+## 2026-03-23 Narrating Mid-State Browser Verification
+
+- 目标：
+  - 新开一局“更容易命中收尾阶段”的场景，在真实浏览器里确认 `narrating` 中间态确实能出现。
+
+- 过程：
+  - 先试了一局较大的慢场景：
+    - `439e450e-829a-43e3-8633-411c21503b76`
+    - 参数：`12 agents × 5 rounds`
+    - 结果：大部分时间都耗在 `simulating`，3 分钟窗口内仍停在 `R4/5`，不适合拿来抓 `narrating`。
+  - 随后改成更短但仍有叙事尾段的配置：
+    - `efe239d2-40ef-4d7e-81cb-f9ffa184953d`
+    - 参数：`8 agents × 2 rounds`
+
+- 真实浏览器取证（Playwright headless + 前端页面）：
+  - 在 `26.056s` 时抓到 `narrating` 中间态：
+    - API：`status=simulating`
+    - 页面：`activeStageText=Narrating`
+    - 页面：`headerBadge=RUNNING`
+    - 当前轮次：`2/2`
+    - 消息数：`16`
+  - 在 `30.219s` 时抓到同一页的收尾瞬间：
+    - API：`status=done`
+    - 页面仍短暂停留在：`activeStageText=Narrating`, `headerBadge=RUNNING`
+  - 刷新同一页面后复验：
+    - 页面状态恢复为：`activeStageText=Done`, `headerBadge=COMPLETED`, `nodeStatus=COMPLETED`
+
+- 产物：
+  - `frontend/output/playwright/narrating-attempt-1-efe239d2-40ef-4d7e-81cb-f9ffa184953d-narrating.jpg`
+  - `frontend/output/playwright/narrating-attempt-1-efe239d2-40ef-4d7e-81cb-f9ffa184953d-done.jpg`
+  - `frontend/output/playwright/narrating-attempt-1-efe239d2-40ef-4d7e-81cb-f9ffa184953d-after-refresh.jpg`
+
+- 结论：
+  - `narrating` 中间态已在真实浏览器里复现并截图。
+  - 当前修复后的主问题已成立：页面不再永远卡在 `simulating`；`narrating` 确实会出现。
+  - 仍观察到一个轻微时序现象：同一页面在后端刚进入 `done` 的那个瞬间，前端可能短暂滞留在 `Narrating / RUNNING`，但刷新后会立即对齐到 `Done / COMPLETED`。
+
+## 2026-03-23 Tail Done Sync Repair
+
+- 新确认根因：
+  - `SimulationView` 尾段补拉最初只轮询 20 次，真实场景里 `narrating` 前摇和尾段补叙可能超过这段窗口，导致后端进入 `done` 时页面已经停止补拉。
+  - `simulationStore.handleWSEvent('status')` 原先会直接覆盖本地状态；如果 `loadScenario()` 已把状态拉到 `done`，迟到的 `status=simulating` 仍可能把它写回去。
+
+- 已修复：
+  - `frontend/src/pages/SimulationView.tsx`
+    - 尾段状态补拉改为在 `narrating / final-round tail` 期间持续轮询，直到状态切走，不再设置固定次数上限。
+  - `frontend/src/stores/simulationStore.ts`
+    - `status` WS 事件改为复用 `mergeScenarioStatus()`，不再允许 stale `simulating` 覆盖 `done`。
+  - `frontend/src/stores/simulationStore.test.ts`
+    - 新增“done 之后收到 stale simulating 仍保持 done”的回归测试。
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts`
+    - `43 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - 真实浏览器复验：
+    - 场景 `a881ffdf-c4c5-463f-a227-97f7ed70ca42`
+    - 参数：`8 agents × 2 rounds`
+    - 后端 `apiStatus=done` 时间：`89886ms`
+    - 前端当前页切到 `Done / COMPLETED` 时间：`90091ms`
+    - 收敛延迟：`205ms`
+    - 截图：
+      - `frontend/output/playwright/tail-sync-a881ffdf-c4c5-463f-a227-97f7ed70ca42-ui-done.jpg`
+
+## 2026-03-23 Classic Single Card + Theater Bubble Cleanup
+
+- 经典模式单卡片原因确认：
+  - 场景 `28a44d3a-5ff5-4226-bd03-3a03e86361cd` 的后端真值只有 1 条 branch：
+    - `branch_count = 1`
+    - `title = 三日见光`
+    - `status = COMPLETED`
+  - 因此 Classic BranchTree 只显示 1 张世界线卡，这不是“像素模式发言没同步回来”；经典模式左侧显示的是 branch tree，右侧 `LIVE STREAM` 才是发言流。
+
+- Theater 气泡观感修复：
+  - `frontend/src/game/PhaserGame.tsx`
+    - completed replay 改成更细粒度的单条回放，不再按 3 条一批地堆到同一个时间片。
+  - `frontend/src/game/managers/VizSynthesizer.ts`
+    - 大规模 agent 完成态改成双排站位，completed replay 的演员不再全塞在单排半圆里。
+  - `frontend/src/game/scenes/WorldScene.ts`
+    - 气泡文本改为更短摘要。
+    - 同屏可见气泡数收口到 1。
+    - 气泡可见时长缩短，并在新气泡出现时主动淘汰旧气泡。
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts`
+    - `53 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - 真实浏览器复验：
+    - 页面 `http://127.0.0.1:18928/sim/28a44d3a-5ff5-4226-bd03-3a03e86361cd` 不再进入 `AppErrorBoundary`
+    - Theater 运行态 `displayedBubbleCount = 1`
+    - 最新截图：
+      - `frontend/output/playwright/theater-bubble-spacing-28a44d3a-v5.jpg`
+    - 只要 API key/baseUrl/model 变化，就会把旧探测结果标记为过期。
+  - `frontend/src/pages/InputView.tsx`
+    - BYOK 面板新增明显的“本地开发：关闭用户级并发上限”开关。
+    - `Test Connection` 现在不仅测连通性，还显示并发预检和建议区间。
+    - 如果填写了 BYOK API key，但当前没有 fresh probe，点击 `Start Simulation` 会先自动执行预检；失败则不发起场景。
+    - 当前 slider 若超过建议区间，会直接显示 warning。
+    - `render_game_to_text()` 里新增 `byok_disable_user_quota / byok_probe`。
+  - `frontend/src/pages/InputView.css`
+    - 增加本地开关和预检结果卡片样式。
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 增加本地开关、并发预检、建议区间与 warning 文案。
+- 本地配置：
+  - `backend/.env`
+    - 新增 `LLM_USER_MAX_PENDING=0`
+    - 含义：当前本地 backend 默认关闭“用户级 pending 限制”，但全局并发闸门还在。
+- 回归验证：
+  - backend:
+    - `cd backend && ../.venv/bin/python -m pytest tests/test_llm_client.py tests/test_api.py -k 'health_test_returns_probe_summary or create_scenario_forwards_disable_user_quota_flag or user_pending_limit_can_be_disabled or runtime_parallelism_limit_ignores_disabled_user_cap' -q`
+      - `4 passed`
+    - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py tests/test_api.py tests/test_llm_client.py`
+      - `All checks passed!`
+  - frontend:
+    - `cd frontend && npm test -- --run src/pages/InputView.test.tsx`
+      - `9 passed`
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+      - `passed`
+
+## 2026-03-23 Local Dev Fully Uncapped
+
+- 用户要求：本地开发时，连 backend 的总并发保护也临时去掉，不限制本地玩家。
+- 语义调整：
+  - `LLM_CONCURRENCY <= 0`：关闭全局 LLM semaphore，不再限制“同时真正发给 provider 的请求数”
+  - `LLM_MAX_PENDING <= 0`：关闭全局 pending 队列上限，不再做全局 backpressure 拒绝
+  - `LLM_USER_MAX_PENDING <= 0`：关闭用户级 pending 上限（上一轮已接入）
+- 代码实现：
+  - `backend/app/services/llm_client.py`
+    - 新增 / 使用：
+      - `_get_global_concurrency_limit()`
+      - `_get_global_pending_limit()`
+    - `get_runtime_parallelism_limit()` 现在会：
+      - 只在对应限制启用时才纳入候选值
+      - 当所有总/用户限制都关闭时，退回 `settings.MAX_AGENTS`
+    - `_reserve_sqlite_runtime_slot()` / `_reserve_runtime_slot()`：
+      - 仅当全局 pending 或用户级 pending 至少一项启用时，才做对应 guard
+      - 当总 pending 关闭时，不再因为 `_pending_requests` 超标拒绝
+    - `_get_global_semaphore()` / `_release_runtime_slot()`：
+      - 当 `LLM_CONCURRENCY <= 0` 时，不再 acquire/release semaphore
+- 本地配置更新：
+  - `backend/.env`
+    - `LLM_CONCURRENCY=0`
+    - `LLM_MAX_PENDING=0`
+    - `LLM_USER_MAX_PENDING=0`
+- 回归验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_llm_client.py tests/test_api.py -k 'global_backpressure_rejects_when_queue_is_full or global_pending_limit_can_be_disabled or runtime_parallelism_limit_can_disable_global_caps or health_test_returns_probe_summary or create_scenario_forwards_disable_user_quota_flag' -q`
+    - `5 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py tests/test_api.py tests/test_llm_client.py`
+    - `All checks passed!`
+- 运行态确认：
+  - backend 已重启
+  - 进程实际读取到：
+    - `LLM_CONCURRENCY = 0`
+    - `LLM_MAX_PENDING = 0`
+    - `LLM_USER_MAX_PENDING = 0`
+  - 同一 `quota_key` 下并发 12 次最小 `llm_call_json()`：
+    - `12 / 12` 全部成功
+    - 未再出现任何 `LLMBackpressureError`
   - 控制台日志包含 `[EndingScene] V3 showing ending: revolution`，说明 WorldScene → EndingScene 的切换链路成立。
 
 - 新增验证：
@@ -8547,3 +8853,308 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 收尾：
   - 已把本轮临时拉起的 backend / preview 停掉
   - 当前 `18927 / 18928` 无残留监听进程
+
+## 2026-03-23 Frontend UI Polish Pass
+
+- 已新增 `.impeccable.md` 设计上下文，当前这轮前端优化基于“tactical / cinematic / credible，浏览器优先、i18n 优先、可玩性优先”的约束执行。
+- 本轮保持了现有功能、页面结构和主要交互，不做大改版，只收口以下区域：
+  - `frontend/src/pages/SimulationView.tsx` + `.css`
+    - Theater director 区补了轻量 commitment 同步反馈（saving / saved / cleared）
+    - 小屏下 director goals 改成单列，commitment feedback 做成状态 pill
+  - `frontend/src/game/HudOverlay.tsx` + `frontend/src/game/game.css`
+    - Theater HUD 增加下注窗口开闭状态
+    - HUD / Theater 顶部样式从过强的 GBC neon 往全站编辑感 token 收口，保留 Theater 深色语义但减弱割裂感
+  - `frontend/src/components/PredictionModal.tsx`
+    - 下注弹窗补齐 bet setup 摘要、更清晰的状态反馈和提交态文案
+    - 相关文案改成词条，不再硬编码中英文
+  - `frontend/src/components/GameplayCardsModal.tsx` + `.css`
+    - 玩法卡 modal 补齐选中态、selection summary、可注入/冷却反馈
+    - 推荐/下一步/反制 badge 分层更清晰
+    - 用户可见文案统一进 i18n，不再散落硬编码中英文
+  - `frontend/src/pages/InputView.tsx` + `.css`
+    - 首页 `Director Growth` 从笨重的整句标题式文案，改成更接近模式切换区的 pill/chip 摘要语言
+    - 空状态也不再使用粗重整句标题，而改成更轻的 empty pill + hint
+
+- i18n：
+  - `frontend/src/i18n/locales/zh.json`
+  - `frontend/src/i18n/locales/en.json`
+  - 已补 prediction / gameplay / sim.director / game HUD 的新增词条。
+
+- 验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx src/game/HudOverlay.test.tsx src/pages/SimulationView.test.tsx src/i18n/locales.test.ts`：`36 passed`
+  - `cd frontend && npm run build`：通过
+  - `cd frontend && npm run e2e:health -- --url http://127.0.0.1:18932 --headless`：通过
+  - `cd frontend && npm run e2e:predict -- --url http://127.0.0.1:18932 --headless --question "如果预算权突然落到实习生手里，会怎样？"`：通过
+  - `cd frontend && npm run e2e:result -- --url http://127.0.0.1:18932 --headless`：通过
+
+- Playwright / skill 侧记录：
+  - `Playwright CLI` wrapper 已按 skill 流程尝试，但当前 `@playwright/mcp` 暴露的 `playwright-cli` bin 在本机不可用，报 `playwright-cli: command not found`；本轮改用 `playwright-interactive (js_repl)` 和仓库自带 e2e 脚本继续完成 QA。
+  - `develop-web-game` 自带脚本仍有已知 ESM 扩展名问题：原始 `web_game_playwright_client.js` 不能直接被 `node` 执行；本轮通过复制为 `.mjs` 到 frontend 工作区后成功运行，并生成：
+    - `frontend/output/web-game/shot-0.png`
+    - `frontend/output/web-game/state-0.json`
+
+- 本轮额外经验：
+  - `vite preview` 只服务最近一次 `build` 的静态产物。中途改完 `InputView` 后如果不重新 `npm run build`，浏览器里看到的仍是旧 UI，这次 `Director Growth` 的误判主要由此造成，而不是 backend 数据问题。
+
+## 2026-03-23 Theater ending + stale sim status fix
+
+- 诊断结论：
+  - `http://127.0.0.1:18932/sim/29584f89-9eeb-4cb6-92eb-3a5201826597` “一直卡在群体推演”并不是真的还在跑。
+  - 该 scenario 的 branch/story/insight 已经写完，但顶层 `Scenario.status` 留在 `simulating`。
+  - 根因是 branch-only / retrospective 风格的 simulation 收尾后，没有稳定把 scenario 真值回写成 `done`。
+  - Theater 中“总跳出革命之曙光且经常无描述”是另一处 bug：
+    - backend 原来会对每个 narrated branch 都广播一次 `viz:ending_play`
+    - frontend `WorldScene` 收到一次就切进 `EndingScene`
+    - `neutral` ending 在前端当前只映射到 `revolution`
+    - `story_summary` 为空时前端会回退 `(无描述)`
+
+- 已改：
+  - `backend/app/services/runtime_lock.py`
+    - 新增 `runtime_lock_is_active(lock_key)`，供只读状态修复判断运行锁是否仍有效
+  - `backend/app/services/simulator.py`
+    - 新增 `_pick_theater_ending_payload(...)`
+    - 新增 `reconcile_scenario_done_if_complete(...)`
+    - Theater ending 现在只为最终单个目标分支广播一次，不再为每个 narrated branch 各发一次
+    - ending summary 当前会优先用 `story`，为空时回退 `insight`
+    - branch-only simulation 收尾后，现在也会尝试把 scenario 状态补成 `done`，并在补成后广播 `simulation_done`
+  - `backend/app/api/helpers.py`
+    - `load_scenario_response()` 读取前会调用 `reconcile_scenario_done_if_complete(...)`
+    - 这样旧的 stale `simulating` scenario 在下次 GET 时也能自修复为 `done`
+
+- 定向验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_simulator.py tests/test_api.py -k 'runtime_lock_is_active or get_scenario_self_heals_stale_simulating_status or PickTheaterEndingPayload or ReconcileScenarioDoneIfComplete' -q`
+    - 结果：`7 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_simulator.py tests/test_api.py -k 'get_scenario_includes_visualization_fields or retrospective or passes_llm_overrides_into_narration' -q`
+    - 结果：`2 passed`
+  - 修复后再次检查：
+    - `GET /api/scenario/29584f89-9eeb-4cb6-92eb-3a5201826597` 返回 `status=done`
+    - 数据库 `scenario.status` 也已变为 `DONE`
+    - Playwright 复验该页面时，Theater 稳定停留在 `WorldScene`，不再被空描述 ending 卡反复拉走
+
+- 环境变更：
+  - 用户确认后，已停止占用 `18927` 的 Docker `swarmoracle-backend`
+  - 当前改由本仓库本地 backend `.venv` 启动在 `http://127.0.0.1:18927`
+  - 旧前端容器 `18928` 仍在，但它连的后端不再是当前会话修过的这套；当前应以 `http://127.0.0.1:18932` 为准
+
+## 2026-03-23 Frontend polish pass (`teach-impeccable` + Theater / prediction / director tools)
+
+- 设计上下文：
+  - 新增项目根 `.impeccable.md`，把本轮设计边界固定为“浏览器优先、跨平台、多语言、可玩性优先、小改动高收益、不改页面骨架”。
+
+- 已改：
+  - `frontend/src/components/PredictionModal.tsx/.css`
+    - 下注弹窗增加结构化摘要区（下注类型 / 下注目标 / 当前轮次 / 当前承诺）。
+    - 强化输入区层级、状态反馈、sticky footer、移动端高度约束和文本可读性。
+    - 错误 / 成功提示改成更明确的块级反馈，并补 `aria-live`。
+  - `frontend/src/components/GameplayCardsModal.tsx/.css`
+    - 顶部信息重组为导演状态卡 + 连锁事件 / 打法说明双层摘要。
+    - 卡片选中态、卡面密度、移动端栅格、footer 反馈做了收口。
+    - 增加 `aria-pressed` 和状态反馈区，保持现有功能与结构不变。
+  - `frontend/src/pages/SimulationView.css`
+    - Pixel Theater 周边控件做视觉层级整理：状态 chip、capture toggle、director goals、commitment 区和移动端单列目标卡更清晰。
+    - 进一步压缩小屏噪声，给主剧场和关键信息让位。
+  - `frontend/src/game/game.css`
+    - Theater 画布边框 / 阴影 / HUD bar / bet rail 改成更稳的可读性样式，降低旧霓虹感和移动端挤压。
+    - HUD 在窄屏下改为更稳的换行与滚动行为。
+  - `frontend/src/i18n/locales/{zh,en}.json`
+    - prediction / gameplay / HUD 文案改得更贴近真实动作语义，避免“打开 modal 却写成立即下注”这类误导。
+
+- 本轮验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && npm test -- --run src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/SimulationView.test.tsx src/game/HudOverlay.test.tsx src/i18n/locales.test.ts`：`29 passed`
+  - `cd frontend && npm run build`：通过
+  - `cd frontend && npm run e2e:health`：通过
+  - `cd frontend && npm run e2e:predict`：通过
+  - `cd frontend && npm run e2e:result`：通过
+
+- 使用技能做的浏览器 / 游戏化验证：
+  - 已使用 `playwright-interactive` 建立本地 Playwright 会话，完成首页与 Simulation 页面双视口读取；在 headless 下切入 Phaser Theater 时，会话对重场景切换不够稳定，因此后续改用项目内置脚本继续验证。
+  - 已使用 `develop-web-game` 的脚本（复制为 `.tmp/web_game_playwright_client.mjs` 以适配当前 Node ESM 运行方式）对 `/sim/:id` 进行截图与错误采样。
+
+- 本轮发现的现存问题 / 限制：
+  - `develop-web-game` 跑 `vite dev` 下的 Theater 切换时，捕获到现有运行时错误：
+    - `/experiments/phaser-custom/entry.cjs?import` 不提供 `default` 导出，导致 Pixel Theater 在该自动化路径下触发 `AppErrorBoundary`。
+    - 这是本轮验证抓出的现有问题，不是本次 UI polish 引入的 TS / build 回归；本轮 `tsc`、`build`、定向 vitest 都通过。
+  - `npm run release:signoff -- --headless --output-root output/e2e/ui-polish-check` 在项目自带 `corners` replay case 处失败：
+    - `Timed out waiting for replay state`
+    - 失败点在 `scripts/e2e-suite.mjs` 的 replay 角落用例，不在本轮改动覆盖的 prediction / gameplay cards / Theater 样式文件内。
+
+- 工件：
+  - `frontend/output/e2e/2026-03-23T06-09-00-887Z-health`
+  - `frontend/output/e2e/2026-03-23T06-09-00-887Z-predict`
+  - `frontend/output/e2e/2026-03-23T06-09-01-298Z-result`
+  - `frontend/output/web-game/theater-new/shot-0.png`
+  - `frontend/output/web-game/theater-new/errors-0.json`
+
+- 给下一位 agent 的建议：
+  - 如果要继续做 Theater 端到端签收，优先排查 `phaser-custom/entry.cjs` 在浏览器动态导入时的 `default export` 问题。
+  - 如果要恢复完整 `release:signoff` PASS，下一站看 `scripts/e2e-suite.mjs` 的 replay corner case，复现并收口 `waitForAutomation('replay state')` 超时。
+
+## 2026-03-23 Frontend polish pass for Pixel Theater / prediction / director tools
+
+- 已读取并落盘新的项目设计上下文到 `.impeccable.md`，本轮约束明确为：
+  - 保留现有功能、页面结构和主交互
+  - 强化策略推演感、状态可读性、跨平台浏览器体验和中英双语一致性
+  - 不做大改版，只做高收益小步优化
+- 已完成代码修改：
+  - `frontend/src/components/PredictionModal.tsx/.css`
+    - 补下注概要卡片，强化 bet type / target / round / oracle 信息层级
+    - 提交按钮在提交态显示明确文案，不再只显示 `...`
+    - 无活跃世界线时给出更具体的错误提示
+    - 优化移动端安全区和 footer 黏性
+  - `frontend/src/components/GameplayCardsModal.tsx/.css`
+    - 补选中卡牌摘要、目标/角色/来源分支与 directive mode 的摘要区
+    - 收口只读预览态提示，避免同一句提示重复堆叠
+    - 把新增微文案改为中英直出，避免缺失 locale key 时回退成 key 字符串
+    - 优化卡牌 badge/head wrapping、移动端摘要区与 footer
+  - `frontend/src/pages/SimulationView.css`
+    - 强化 Theater 顶部控件、director goals、chips 和 timeline 的可读性
+    - 收敛 header actions 的换行与信息密度
+  - `frontend/src/game/game.css`
+    - 收敛 Theater canvas / HUD 的 glow 和 active 态
+    - 改善 HUD 在窄屏下的可读性与按钮可触达性
+- 当前验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && npm test -- --run src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx`：通过
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx src/game/HudOverlay.test.tsx`：通过
+  - `cd frontend && npm run build`：通过
+- 运行态：
+  - backend 继续复用现有 `127.0.0.1:18927`
+  - 本轮前端 preview 实际监听在 `http://127.0.0.1:18931/`
+- 下一步：
+  - 用 `playwright-interactive` 做桌面 + mobile 视觉 QA
+  - 用 Playwright CLI + `develop-web-game` 动作脚本复验 prediction flow、Theater、director tools
+
+## 2026-03-23 Theater bubble readability pass
+
+- 当前目标：
+  - 修复 Pixel Theater 中 agent 气泡文案过早截断、消失过快、回放节奏过急的问题。
+  - 按用户要求补做基于本地 `/sim/:id` 的回放与玩法体验复验。
+- 已完成代码改动：
+  - `frontend/src/game/managers/VizSynthesizer.ts`
+    - 去掉历史回放 `60` 字截断，改为仅对超长文案做更宽松的事件级裁切。
+    - replay 合成事件补 `bubble_mode: 'replay'`。
+  - `frontend/src/game/PhaserGame.tsx`
+    - live 增量气泡改为 `bubble_mode: 'live'`。
+    - live 多消息同批延迟从 `600ms` 降到更接近实时的短间隔。
+    - replay 基础批次间隔调慢，并给 replay 完成态增加 settle 时间。
+  - `frontend/src/game/scenes/WorldScene.ts`
+    - 气泡最大显示字数从 `24` 提升到 `96`，并按画布宽度动态换行。
+    - 同时允许保留 `2` 个最近气泡，避免一句话一闪而过。
+    - live / replay 分开控制打字速度与停留时长；dismiss 改为“打完再延迟消失”。
+    - automation 读取气泡文字时优先用 `fullText`，避免读到 `!/?` 徽标或打字中间态。
+- 测试待执行：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - `cd frontend && npm test -- --run src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/pages/SimulationView.test.tsx`
+  - 用 `playwright-interactive` + Playwright CLI 对指定 replay 页面做回放与玩法可读性 QA
+
+- 2026-03-23 浏览器复验结果：
+  - `develop-web-game`
+    - 按 skill 要求已读取既有 `progress.md`，并复用其 ESM 回退经验。
+    - 因原脚本是 ESM 但扩展名为 `.js`，复制到 `frontend/output/web_game_playwright_client.mjs` 后执行。
+    - `output/web-game/theater-bubble-pass/` 中的 `state-*.json` 显示：
+      - replay 期间 `displayed_bubble_count` 现在可达 `2`
+      - 气泡文本不再是原来的超短截断
+      - 无新 console/page errors
+  - `playwright-interactive`
+    - 用 `js_repl` 持久浏览器会话复验了桌面 `1600x1200` 与移动端 `390x844`
+    - 桌面端：
+      - `Replay` 可重新启动回放，`phase=playing`
+      - 速度按钮可切到 `2x`
+      - `Skip to Latest` 会进入 `phase=settled`
+      - 切到 `R2` 后会重新进入 `phase=playing`
+      - 视觉截图确认气泡留存时间变长、文本量增加、左侧越界已收口
+    - 移动端：
+      - 回放仍可正常触发，`displayed_bubble_count=1`
+      - 布局未崩，但小屏下气泡仍偏拥挤，属于剩余 UX 风险
+  - `Playwright CLI skill`
+    - 已检查 `npx` 可用
+    - 技能 wrapper 当前实际失败：`playwright-cli: command not found`
+    - 因 CLI 包装器不可用，实际验证回退到 `playwright-interactive` + 浏览器截图 / 状态读取
+
+- 2026-03-23 移动端收口：
+  - 发现之前的“移动端判定”误用了 Phaser 逻辑画布宽度（`800`），导致 mobile 气泡一直走桌面布局。
+  - 已改为按 `scale.displaySize.width` 判断真实显示宽度。
+  - 窄屏 Theater 气泡现切换为：
+    - 单条字幕式底部横条
+    - 带说话者前缀（如 `李强：...`）
+    - 更紧的字数预算（`48`）和更宽的横向展开
+    - 深色高对比底板，不再沿用桌面白色大气泡
+  - `playwright-interactive` 复验 `390x844` 后，移动端截图已确认改动生效，可读性明显好于前一版。
+  - 用户确认后又补了一轮上抬：
+    - 字幕条 Y 坐标改为按 `bubbleHeight` 动态计算，不再贴着 Theater 底边
+    - `390x844` 再次复验，字幕条和底部 `LIVE ODDS` 区块之间已拉开距离
+
+## 2026-03-23 Theater layout + branching investigation
+
+- 用户反馈：
+  - `下注开放` 附近会被全局 `En/中文` 切换器挡住
+  - 短视口下 Theater 主剧场占比太小
+  - 新局经常只剩单结局，怀疑 Pixel Theater 或 recent backend 改动影响分叉
+- 已完成 UI 修正：
+  - `frontend/src/index.css`
+    - `simulation-view--theater` 下把全局语言切换器进一步上抬
+    - 对矮屏桌面 (`max-height: 820px`) 额外提高 bottom offset
+  - `frontend/src/game/game.css`
+    - 为矮屏桌面压缩 `hud-bar` / `hud-bet__status` / `hud-bet__action`
+  - `frontend/src/pages/SimulationView.css`
+    - 新增矮屏桌面紧凑模式，压缩 header、director 卡片、filters、timeline 和 capture 按钮
+  - `playwright-interactive` 复验 `1365x768`：
+    - `lang-switch` bottom 从 `692` 降到 `620`
+    - `betAction` bottom 为 `607.6`
+    - 不再遮挡
+    - `gameWrapper` height 从 `200.5` 提升到 `282.4`
+- 已确认的分支真相：
+  - `GET /api/scenario/73970602-4d44-433a-ac65-2a0389b64179`
+    - `branchCount = 1`
+    - `divergeCount = 0`
+  - 说明这局不是 Theater 少显示分支，而是 backend 真没有产生 fork
+  - `run_simulation()` 当前 fork gate 仍是：
+    - 先收集 `messages[].diverge`
+    - 只有 `diverge_signals` 非空时才调用 `_detect_fork()`
+  - 当前这局根本没进入 `_detect_fork()`，所以 `1347a13` 那轮 fork detector hardening 不是直接元凶
+- 目前最强证据指向：
+  - `3d874a8` 把默认模型从 `gpt-5.1-codex-mini` 切到 `gpt-5.4-mini`
+  - 当前 live `POST /api/health` 也确认 backend 正在用 `gpt-5.4-mini`
+  - 结合这局 `divergeCount = 0`，更像是默认模型变得更保守，不再频繁产出 `diverge`
+  - `branch_sensitivity` 默认值和 fork gate 本身没有同步收紧
+
+## 2026-03-24 Doc sync + verification
+
+- 目标：
+  - 把这轮未提交的 backend / frontend 真实改动同步进 `README.md`、`llmdoc/*`、`frontend/experiments/phaser-custom/README.md`。
+  - 只记录这次实际跑过的验证，不补写没跑过的结论。
+
+- 本轮先确认了应纳入提交的真实项目改动：
+  - `frontend/experiments/phaser-custom/entry.mjs`
+  - `frontend/src/components/BranchEdge.test.tsx`
+  - `frontend/scripts/capture-promo-assets.mjs`
+  - `frontend/scripts/capture-v2-series-assets.mjs`
+  - 现有 backend / frontend 代码改动与 `progress.md`
+
+- 本轮没有并入提交的噪声：
+  - `.agent/`、`.agents/` 删除
+  - `frontend/.tmp-web-game-client.mjs`
+  - `frontend/frontend/`
+  - 这些更像本地 agent 资产或临时工件，不属于本次业务代码 / 文档同步范围
+
+- 本轮实际验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py -q`
+    - `205 passed in 26.75s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts`
+    - `112 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && npm run test:spike:phaser-custom`
+    - `34 passed`
+
+- 本轮文档同步口径：
+  - README / llmdoc 已同步 `entry.mjs`
+  - `BYOK` 当前明确补了 `probe` 预检、推荐并发区间和本地 provider 的 `disable_user_quota` 边界
+  - scenario API / backend current-truth 已补 `fork_debug`、`diverge`、`fork_round` 与 stale `simulating -> done` 自愈
+  - frontend current-truth 已补 `PredictionModal / GameplayCardsModal` 的状态摘要化、Theater 尾声状态补拉、BranchDetailModal 双滚动区与 BranchEdge 稳定底边

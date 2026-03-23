@@ -30,8 +30,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": ""}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
-| `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`） |
+| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "disable_user_quota?": true}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
+| `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`；当前 `messages[*]` 还会带 `diverge / branch_title`，`branches[*]` 还会带 `fork_round`，顶层还会带 `fork_debug`） |
 | `POST /api/scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario | `{"scenario": ScenarioSnapshot}` | ScenarioResponse |
 | `GET /api/scenario/{id}/branches` | GET | 获取分支列表 | — | BranchInfo[] |
 | `GET /api/scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） | — | AgentInfo[] |
@@ -50,6 +50,13 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 空字符串或纯空白：返回 `422`
 > - 超过 `1000` 字符：返回 `422`
 > - `rounds` 合法范围：`1 <= rounds <= MAX_ROUNDS`；超界时返回 `422`
+> - `disable_user_quota` 只对本地 / self-hosted provider 生效；若本次运行最终走的不是本地 provider，会被忽略
+>
+> `GET /api/scenario/{id}` 当前在读取前会先尝试 reconcile stale 状态：
+> - 若场景仍是 `simulating` 或 `narrating`
+> - 且对应 runtime lock 已释放、分支都不再 `ACTIVE`
+> - 且所有 `COMPLETED` 分支都已经有 `story + insight`
+> - 后端会先把场景状态收口为 `done`，再返回响应
 >
 > `POST /api/scenario/import-replay` 当前也有导入边界保护：
 > - 整个 `scenario` payload 超过 `1_000_000 bytes`：返回 `422`
@@ -315,6 +322,18 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `POST /api/health` | POST | 健康检查（含LLM连通性） |
 | `POST /api/health/test` | POST | 使用可选 BYOK 参数测试 LLM 连通性 |
 | `GET /metrics` | GET | Prometheus 指标端点 (P3-9) — 请求计数/延迟/活跃模拟 |
+
+> `POST /api/health/test` 当前请求体为可选 BYOK 字段：
+> - `llm_api_key?`
+> - `llm_base_url?`
+> - `llm_model?`
+>
+> 当 `llm.status == "ok"` 时，响应当前还会尝试返回可选 `probe`；其字段至少包括：
+> - `estimated_parallelism`
+> - `tested_parallelism`
+> - `recommended`（`agents_min / agents_max / rounds_min / rounds_max`）
+> - `local_provider`
+> - `allow_disable_user_quota`
 
 ### Debate Arena (Track D)
 

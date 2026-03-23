@@ -53,7 +53,7 @@ describe('GameplayCardsModal preview mode', () => {
 
     expect(screen.getByText('sim.warmup.cards_preview')).toBeInTheDocument();
 
-    const applyButton = screen.getByRole('button', { name: '导演准备中' });
+    const applyButton = screen.getByRole('button', { name: 'gameplay.preview_only_cta' });
     expect(applyButton).toBeDisabled();
 
     await user.click(applyButton);

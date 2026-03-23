@@ -106,8 +106,8 @@
    - 首页题材 `label / hooks / badge` 改走轻量摘要 helper
    - `InputView` 不再直接 runtime 引完整玩法策略表
    本 session 又补了更激进的一层：
-   - 当前默认 `vite / vitest` 已 alias 到本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.cjs`
-   - `phaser` chunk 当前已从约 `1202.19 kB / 328.41 kB gzip` 收口到约 `718.11 kB / 202.34 kB gzip`
+   - 当前默认 `vite / vitest` 已 alias 到本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.mjs`
+   - `phaser` chunk 当前已从约 `1202.19 kB / 328.41 kB gzip` 收口到约 `718.94 kB / 203.76 kB gzip`
    当前前端包体的主要增量空间仍在 `capture-html`、字体与大体积 PNG 资源；`phaser` 虽然仍是最大单块资源，但已经不再是原先那种 1.2MB 级别的默认工作树阻塞项。
 
 2. 文档真值持续收口。

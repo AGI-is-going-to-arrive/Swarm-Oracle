@@ -3,7 +3,7 @@ import { defineConfig, mergeConfig } from 'vite';
 
 import baseConfig from '../../vite.config';
 
-const phaserCustomEntry = fileURLToPath(new URL('./entry.cjs', import.meta.url));
+const phaserCustomEntry = fileURLToPath(new URL('./entry.mjs', import.meta.url));
 const spectorStub = fileURLToPath(new URL('./phaser3spectorjs-stub.cjs', import.meta.url));
 
 export default mergeConfig(baseConfig, defineConfig({

@@ -71,22 +71,37 @@ function BranchEdgeComponent({
         </linearGradient>
       </defs>
 
+      {/* Stable base path keeps the link visible even if the GSAP reveal stalls. */}
+      <path
+        data-edge-layer="base"
+        d={edgePath}
+        stroke={isPruned ? '#5a5a5a' : '#8a8a8a'}
+        strokeWidth={isPruned ? 1.4 : 1.8}
+        strokeLinecap="round"
+        fill="none"
+        opacity={isPruned ? 0.45 : 0.78}
+      />
+
       {/* Background glow path */}
       <path
+        data-edge-layer="glow"
         d={edgePath}
         stroke={isPruned ? '#333' : `url(#gradient-${id})`}
         strokeWidth={isPruned ? 1 : 3}
+        strokeLinecap="round"
         fill="none"
         filter={isPruned ? undefined : `url(#glow-${id})`}
         opacity={isPruned ? 0.3 : 0.4}
       />
 
-      {/* Main animated path — starts visible as fallback */}
+      {/* Main animated overlay */}
       <path
+        data-edge-layer="main"
         ref={pathRef}
         d={edgePath}
         stroke={isPruned ? '#555' : '#666'}
         strokeWidth={isPruned ? 1 : 2}
+        strokeLinecap="round"
         fill="none"
         opacity={1}
         filter={isPruned ? undefined : `url(#glow-${id})`}
@@ -95,6 +110,7 @@ function BranchEdgeComponent({
       {/* Flowing glow particle */}
       {!isPruned && (
         <circle
+          data-edge-layer="particle"
           ref={glowRef}
           r={4}
           fill="#888"

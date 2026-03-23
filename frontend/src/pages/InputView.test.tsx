@@ -7,6 +7,7 @@ import { InputView } from './InputView';
 
 const {
   testLlmConnectionMock,
+  startSimulationMock,
   getCampaignProfileMock,
   getCampaignMasteryMock,
   getCampaignBadgesMock,
@@ -45,10 +46,32 @@ const {
     if (key === 'home.campaign_quickstart_unlocks') {
       return `${options?.count} badges unlocked · ${options?.runs} completed runs`;
     }
+    if (key === 'home.director_growth_title') {
+      return `${options?.runs} total runs · ${options?.badges} badges unlocked`;
+    }
+    if (key === 'home.director_growth_active_title') {
+      return `${options?.runs} total runs logged`;
+    }
+    if (key === 'home.director_growth_active_subtitle') {
+      return `${options?.badges} badges unlocked so far.`;
+    }
+    if (key === 'home.weekly_challenge_completed_runs') {
+      return `${options?.runs} runs completed this week`;
+    }
+    if (key === 'home.byok_probe_parallelism') {
+      return `Estimated parallelism ${options?.count}`;
+    }
+    if (key === 'home.byok_probe_title') {
+      return 'Provider Preflight';
+    }
+    if (key === 'home.byok_probe_recommendation') {
+      return `Recommended ${options?.agentsMin}-${options?.agentsMax} agents and ${options?.roundsMin}-${options?.roundsMax} rounds`;
+    }
     return translations[currentLanguage]?.[key] ?? key;
   };
   return {
     testLlmConnectionMock: vi.fn(),
+    startSimulationMock: vi.fn(async () => 'scenario-1'),
     getCampaignProfileMock: vi.fn(),
     getCampaignMasteryMock: vi.fn(),
     getCampaignBadgesMock: vi.fn(),
@@ -89,7 +112,7 @@ vi.mock('../stores/simulationStore', () => ({
     errorCode: string | null;
     reset: () => void;
   }) => unknown) => selector({
-    startSimulation: async () => 'scenario-1',
+    startSimulation: startSimulationMock,
     error: '',
     errorCode: null,
     reset: () => {},
@@ -162,6 +185,7 @@ vi.mock('../components/QuickStartCards', () => ({
 }));
 
 describe('InputView campaign progress', () => {
+  const POLICY_STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
   const campaignProfile = {
     id: 'profile-1',
     user_id: 'director-1',
@@ -212,7 +236,9 @@ describe('InputView campaign progress', () => {
   ];
 
   beforeEach(() => {
+    window.sessionStorage.clear();
     setMockLanguage('en');
+    startSimulationMock.mockClear();
     testLlmConnectionMock.mockReset();
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
@@ -304,7 +330,9 @@ describe('InputView campaign progress', () => {
 
     expect(screen.getAllByText('Lv.2').length).toBeGreaterThan(0);
     expect(screen.getAllByText((content) => content.includes('3 points to next unlock')).length).toBeGreaterThan(0);
-    expect(screen.getByText('2 badges unlocked · 4 completed runs')).toBeInTheDocument();
+    expect(screen.getByLabelText('4 total runs · 2 badges unlocked')).toBeInTheDocument();
+    expect(screen.getByText('4 total runs logged')).toBeInTheDocument();
+    expect(screen.getByText('2 badges unlocked so far.')).toBeInTheDocument();
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
   });
 
@@ -404,17 +432,125 @@ describe('InputView campaign progress', () => {
       code: 'LLM_TEMPORARILY_UNAVAILABLE',
     });
 
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      disableUserQuota: false,
+    }));
+
     render(
       <MemoryRouter>
         <InputView />
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/ }));
-    await user.type(screen.getByLabelText('home.byok_api_key_label'), 'sk-test');
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
     await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
 
     expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
+  });
+
+  it('shows BYOK probe guidance after a successful preflight', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: { status: 'ok', model: 'test-model', response: 'OK' },
+      probe: {
+        status: 'ok',
+        model: 'test-model',
+        local_provider: true,
+        allow_disable_user_quota: true,
+        estimated_parallelism: 6,
+        tested_parallelism: 8,
+        recommended: {
+          agents_min: 3,
+          agents_max: 24,
+          rounds_min: 3,
+          rounds_max: 8,
+        },
+        failure: null,
+      },
+    });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
+
+    expect(await screen.findByText('Provider Preflight')).toBeInTheDocument();
+    expect(screen.getByText('Estimated parallelism 6')).toBeInTheDocument();
+    expect(screen.getByText('Recommended 3-24 agents and 3-8 rounds')).toBeInTheDocument();
+  });
+
+  it('runs a BYOK preflight automatically before starting a simulation and forwards the local override', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: { status: 'ok', model: 'test-model', response: 'OK' },
+      probe: {
+        status: 'ok',
+        model: 'test-model',
+        local_provider: true,
+        allow_disable_user_quota: true,
+        estimated_parallelism: 6,
+        tested_parallelism: 8,
+        recommended: {
+          agents_min: 3,
+          agents_max: 24,
+          rounds_min: 3,
+          rounds_max: 8,
+        },
+        failure: null,
+      },
+    });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      disableUserQuota: true,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Launch with BYOK');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'Launch with BYOK',
+        disableUserQuota: true,
+      }));
+    });
   });
 
   it('publishes homepage challenge and growth summaries inside render_game_to_text', async () => {

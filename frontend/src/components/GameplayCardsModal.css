@@ -8,24 +8,54 @@
 }
 
 .gameplay-modal__body {
-  gap: 18px;
+  gap: 16px;
 }
 
 .gameplay-modal__art {
   width: 100%;
-  max-height: 140px;
+  max-height: 128px;
   object-fit: cover;
   object-position: center;
-  border-radius: 16px;
-  border: 1px solid var(--border-default);
-  margin-bottom: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 14px;
 }
 
 .gameplay-modal__profile {
-  margin-top: 8px;
-  font-size: var(--text-xs);
+  margin-top: 10px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.65;
+  max-width: 54ch;
+}
+
+.gameplay-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gameplay-modal__stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 12%, var(--border-default));
+  background: color-mix(in oklab, var(--color-primary-glow) 40%, var(--bg-surface) 60%);
+}
+
+.gameplay-modal__stat span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gameplay-modal__stat strong {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
 }
 
 .gameplay-modal__hooks {
@@ -38,42 +68,162 @@
 .gameplay-modal__hook {
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
+  min-height: 28px;
+  padding: 5px 9px;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent);
   background: color-mix(in oklab, var(--color-primary-glow) 52%, var(--bg-surface) 48%);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .gameplay-modal__resource {
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: 10px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
-.gameplay-modal__preview-note {
+.gameplay-modal__preview-stack {
+  display: grid;
+  gap: 10px;
   margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in oklab, var(--color-primary) 28%, transparent);
-  background: color-mix(in oklab, var(--color-primary-glow) 68%, var(--bg-surface) 32%);
+}
+
+.gameplay-modal__preview-note {
+  display: grid;
+  gap: 6px;
+  margin-top: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 24%, transparent);
+  background:
+    linear-gradient(145deg, color-mix(in oklab, var(--color-primary-glow) 68%, var(--bg-surface) 32%), var(--bg-surface)),
+    radial-gradient(circle at top right, color-mix(in oklab, var(--color-primary) 10%, transparent), transparent 42%);
   color: var(--text-secondary);
-  font-size: var(--text-xs);
-  line-height: 1.5;
+  font-size: var(--text-sm);
+  line-height: 1.6;
 }
 
 .gameplay-modal__preview-note strong {
   color: var(--text-primary);
 }
 
-.gameplay-card-grid {
+.gameplay-modal__preview-note--secondary {
+  border-color: color-mix(in oklab, var(--border-default) 88%, transparent);
+  background: linear-gradient(180deg, var(--bg-surface), color-mix(in oklab, var(--bg-surface) 82%, var(--bg-base)));
+}
+
+.gameplay-modal__availability {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--color-warning) 20%, var(--border-default));
+  background: color-mix(in oklab, var(--color-warning) 8%, var(--bg-surface));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.gameplay-modal__availability strong {
+  color: var(--text-primary);
+}
+
+.gameplay-modal__availability--ready {
+  border-color: color-mix(in oklab, var(--color-success) 24%, var(--border-default));
+  background: color-mix(in oklab, var(--color-success) 9%, var(--bg-surface));
+}
+
+.gameplay-modal__selection {
+  display: grid;
+  gap: 12px;
+  padding: 15px 16px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 18%, var(--border-default));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--color-primary-glow) 72%, var(--bg-surface) 28%), var(--bg-elevated));
+  box-shadow: 0 12px 28px oklch(0% 0 0 / 0.04);
+}
+
+.gameplay-modal__selection-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gameplay-modal__selection-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.gameplay-modal__selection-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gameplay-modal__selection-copy strong {
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.gameplay-modal__selection-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--color-warning) 28%, transparent);
+  background: color-mix(in oklab, var(--color-warning) 10%, var(--bg-surface));
+  color: color-mix(in oklab, var(--color-warning) 72%, var(--text-primary));
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.gameplay-modal__selection-state--ready {
+  border-color: color-mix(in oklab, var(--color-success) 28%, transparent);
+  background: color-mix(in oklab, var(--color-success) 10%, var(--bg-surface));
+  color: color-mix(in oklab, var(--color-success) 72%, var(--text-primary));
+}
+
+.gameplay-modal__selection-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.gameplay-modal__selection-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gameplay-modal__selection-item span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gameplay-modal__selection-item strong {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.gameplay-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 .gameplay-card {
@@ -85,12 +235,13 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  padding: 14px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
+  min-height: 196px;
+  padding: 15px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 88%, var(--bg-elevated)), var(--bg-surface));
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
@@ -128,36 +279,56 @@
 }
 
 .gameplay-card:hover {
-  transform: translateY(-1px);
-  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--color-primary) 42%, white 8%);
   box-shadow:
-    0 10px 24px oklch(0% 0 0 / 0.08),
+    0 14px 28px oklch(0% 0 0 / 0.08),
     0 0 0 1px color-mix(in oklab, var(--gameplay-card-shadow) 42%, transparent);
 }
 
 .gameplay-card--active {
-  border-color: var(--color-primary);
-  background: oklch(96% 0.02 340 / 0.7);
+  border-color: color-mix(in oklab, var(--color-primary) 58%, white 6%);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--color-primary-glow) 100%, var(--bg-elevated)), color-mix(in oklab, var(--color-primary-glow) 38%, var(--bg-surface)));
+  box-shadow:
+    0 18px 36px oklch(0% 0 0 / 0.09),
+    0 0 0 1px color-mix(in oklab, var(--color-primary) 24%, transparent);
+}
+
+.gameplay-card--active .gameplay-card__label {
+  color: color-mix(in oklab, var(--text-primary) 88%, var(--color-primary));
+}
+
+.gameplay-card--inactive {
+  opacity: 0.82;
 }
 
 .gameplay-card__icon {
-  font-size: 1.2rem;
+  font-size: 1.35rem;
 }
 
 .gameplay-card__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   width: 100%;
 }
 
 .gameplay-card__label {
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 700;
+  line-height: 1.35;
+}
+
+.gameplay-card__badge-stack {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .gameplay-card__badge {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -171,6 +342,16 @@
   text-transform: uppercase;
 }
 
+.gameplay-card__badge--recommended {
+  background: oklch(92% 0.07 320);
+  color: oklch(48% 0.18 340);
+}
+
+.gameplay-card__badge--counter {
+  background: color-mix(in oklab, var(--color-warning) 14%, var(--bg-surface));
+  color: color-mix(in oklab, var(--color-warning) 72%, var(--text-primary));
+}
+
 .gameplay-card__badge img {
   width: 18px;
   height: 18px;
@@ -178,21 +359,30 @@
 }
 
 .gameplay-card__desc {
-  font-size: var(--text-xs);
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.55;
+  min-height: 2.9em;
 }
 
 .gameplay-card__flavor {
-  font-size: 10px;
+  font-size: 11px;
   color: color-mix(in oklab, var(--text-primary) 72%, var(--text-secondary) 28%);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .gameplay-card__meta {
-  font-size: 10px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: auto;
+  font-size: 11px;
   color: var(--text-muted);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .gameplay-card--profile-trade {
@@ -231,14 +421,19 @@
   align-items: flex-start;
   flex-direction: column;
   gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--bg-surface) 88%, white 12%);
 }
 
 .gameplay-select {
   width: 100%;
+  min-height: 44px;
   padding: 12px 14px;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-surface);
+  border-radius: 14px;
+  background: var(--bg-elevated);
   color: var(--text-primary);
   font: inherit;
 }
@@ -246,10 +441,11 @@
 .gameplay-select:focus {
   outline: none;
   border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-primary) 12%, transparent);
 }
 
 .gameplay-modal__textarea {
-  min-height: 96px;
+  min-height: 112px;
   max-height: min(220px, 32vh);
 }
 
@@ -257,11 +453,17 @@
   margin-top: -4px;
 }
 
+.gameplay-modal__status {
+  display: grid;
+  gap: 10px;
+}
+
 .gameplay-modal .modal-footer {
   position: sticky;
   bottom: 0;
   margin-top: 18px;
   padding-top: 16px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 2px);
   background:
     linear-gradient(
       to top,
@@ -271,6 +473,10 @@
 }
 
 @media (max-width: 640px) {
+  .gameplay-modal__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .gameplay-card-grid {
     grid-template-columns: 1fr;
   }
@@ -278,6 +484,41 @@
   .gameplay-modal {
     max-height: calc(100vh - 20px);
     max-height: calc(100dvh - 20px);
-    padding: 22px;
+    padding: 20px;
+  }
+
+  .gameplay-modal__selection-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .gameplay-modal__selection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gameplay-modal__profile,
+  .gameplay-modal__preview-note {
+    font-size: var(--text-xs);
+  }
+
+  .gameplay-modal .modal-footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .gameplay-modal__stats {
+    grid-template-columns: 1fr;
+  }
+
+  .gameplay-card {
+    padding: 14px 12px;
+    min-height: 0;
+  }
+
+  .gameplay-card__desc {
+    min-height: 0;
   }
 }

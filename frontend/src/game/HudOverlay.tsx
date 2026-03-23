@@ -176,6 +176,12 @@ export function HudOverlay({ children, canPredict = false, onOpenPrediction }: H
             <FactionIcon color="#2196F3" side="right" />
           </span>
         </div>
+        <span
+          className={`hud-bet__status ${canPredict ? 'hud-bet__status--open' : 'hud-bet__status--locked'}`}
+          aria-live="polite"
+        >
+          {canPredict ? t('game.bet_window_open') : t('game.bet_window_locked')}
+        </span>
         <button
           className="hud-bet__action"
           onClick={() => onOpenPrediction?.()}

@@ -26,14 +26,14 @@ from app.services.campaign import (
     normalize_scenario_director_state,
     normalize_scenario_gameplay_state,
 )
-from app.services.llm_client import llm_request_scope
+from app.services.llm_client import is_local_provider_url, llm_request_scope
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     release_runtime_lock,
     simulation_lock_key,
 )
-from app.services.simulator import run_simulation
+from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,7 @@ async def parse_and_run_background(
     llm_api_key: str | None,
     llm_base_url: str | None,
     llm_model: str | None,
+    disable_user_quota: bool | None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -222,7 +223,8 @@ async def parse_and_run_background(
     except Exception:
         pass
 
-    quota_key = f"user:{user_id}" if user_id else None
+    local_provider = is_local_provider_url(llm_base_url)
+    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)
 
     try:
         with llm_request_scope(quota_key=quota_key, purpose="scenario_parse"):
@@ -260,6 +262,8 @@ async def parse_and_run_background(
     parsed["simulation_rounds"] = rounds
     if user_id:
         parsed["user_id"] = user_id
+    if disable_user_quota and local_provider:
+        parsed["disable_user_quota"] = True
 
     # Only persist non-sensitive display config.
     if llm_base_url:
@@ -368,6 +372,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
 
     C-5 fix: Uses eager loading (selectinload) to avoid N+1 queries.
     """
+    reconcile_scenario_done_if_complete(engine, scenario_id)
     with Session(engine) as session:
         s = session.get(Scenario, scenario_id)
         if not s:
@@ -387,6 +392,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
 
         agent_map = {a.id: a.name for a in agents}
         all_messages = []
+        branch_by_id = {branch.id: branch for branch in branches}
         for branch in branches:
             for r in sorted(branch.rounds, key=lambda r: r.round_number):
                 for msg in r.messages:
@@ -395,9 +401,45 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                         "agent_id": msg.agent_id,
                         "message": msg.content,
                         "emotion": msg.emotion,
+                        "diverge": msg.diverge,
                         "branch": branch.id,
+                        "branch_title": branch.title,
                         "round": r.round_number,
                     })
+
+        diverge_messages = [msg for msg in all_messages if msg.get("diverge")]
+        forked_branches = [branch for branch in branches if branch.parent_branch_id]
+        fork_groups: dict[str, list[Branch]] = {}
+        for branch in forked_branches:
+            parent_id = branch.parent_branch_id
+            if not parent_id:
+                continue
+            fork_groups.setdefault(parent_id, []).append(branch)
+
+        fork_debug = {
+            "message_count": len(all_messages),
+            "diverge_message_count": len(diverge_messages),
+            "diverge_rounds": sorted({int(msg["round"]) for msg in diverge_messages}),
+            "fork_event_count": len(fork_groups),
+            "forked_branch_count": len(forked_branches),
+            "fork_events": [
+                {
+                    "parent_branch_id": parent_id,
+                    "parent_branch_title": branch_by_id.get(parent_id).title if branch_by_id.get(parent_id) else "",
+                    "fork_round": max(child.fork_round for child in children),
+                    "fork_reason": next((child.fork_reason for child in children if child.fork_reason), ""),
+                    "child_titles": [child.title for child in sorted(children, key=lambda child: child.title)],
+                    "child_branch_ids": [child.id for child in sorted(children, key=lambda child: child.title)],
+                }
+                for parent_id, children in sorted(
+                    fork_groups.items(),
+                    key=lambda item: (
+                        max(child.fork_round for child in item[1]),
+                        branch_by_id.get(item[0]).title if branch_by_id.get(item[0]) else item[0],
+                    ),
+                )
+            ],
+        }
 
         ctx = s.parsed_context or {}
 
@@ -417,6 +459,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                 {"id": b.id, "title": b.title, "description": b.description,
                  "probability": b.probability,
                  "status": b.status.value, "parent_branch_id": b.parent_branch_id,
+                 "fork_round": b.fork_round,
                  "fork_reason": b.fork_reason,
                  "story": b.story, "insight": b.insight}
                 for b in branches
@@ -433,4 +476,5 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             scene_theme=s.scene_theme,
             director_state=normalize_scenario_director_state(s.director_state_json),
             gameplay_state=normalize_scenario_gameplay_state(s.gameplay_state_json),
+            fork_debug=fork_debug,
         )

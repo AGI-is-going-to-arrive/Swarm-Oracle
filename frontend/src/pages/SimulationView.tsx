@@ -93,6 +93,7 @@ const THEATER_TIME_LABELS: Record<string, string> = {
 
 const WARMUP_RECOVERY_INTERVAL_MS = 1500;
 const WARMUP_RECOVERY_MAX_ATTEMPTS = 10;
+const TAIL_STATUS_SYNC_INTERVAL_MS = 600;
 
 function formatTheaterLabel(
   key: string | null | undefined,
@@ -160,6 +161,7 @@ export function SimulationView() {
   const agents = useSimulationStore((s) => s.agents);
   const branches = useSimulationStore((s) => s.branches);
   const messages = useSimulationStore((s) => s.messages);
+  const thinkingAgents = useSimulationStore((s) => s.thinkingAgents);
   const status = useSimulationStore((s) => s.status);
   const error = useSimulationStore((s) => s.error);
   const errorCode = useSimulationStore((s) => s.errorCode);
@@ -185,9 +187,15 @@ export function SimulationView() {
   const [predictionAutomation, setPredictionAutomation] = useState<Record<string, unknown> | null>(null);
   const [showGameplayCards, setShowGameplayCards] = useState(false);
   const [gameplayAutomation, setGameplayAutomation] = useState<Record<string, unknown> | null>(null);
+  const [commitmentFeedback, setCommitmentFeedback] = useState<{
+    tone: 'info' | 'success';
+    message: string;
+  } | null>(null);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [replayLinkUnavailable, setReplayLinkUnavailable] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
+  const lastCommitmentAction = useRef<'commit' | 'clear' | null>(null);
+  const commitmentFeedbackTimer = useRef<number | null>(null);
   const recoveryLogEmitted = useRef(false);
   const warmupRecoveryAttempts = useRef(0);
   const activeBranches = useMemo(
@@ -371,6 +379,17 @@ export function SimulationView() {
     && !isSimulationComplete
     && status === 'simulating'
     && currentRound === 0;
+  const isTailStatusSyncPhase =
+    !isReplayMode
+    && !isSimulationComplete
+    && Boolean(id)
+    && (status === 'narrating' || (
+      status === 'simulating'
+      && currentRound >= (scenario?.total_rounds ?? 0)
+      && (scenario?.total_rounds ?? 0) > 0
+      && thinkingAgents.length === 0
+      && messages.length > 0
+    ));
   const canToggleViewMode = viewMode === 'theater' || visualizationEnabled;
   const theaterToggleHint = !canToggleViewMode && viewMode === 'classic'
     ? t('sim.theater_unavailable_hint')
@@ -495,6 +514,36 @@ export function SimulationView() {
     }
   }, [agents.length, branches.length]);
 
+  const tailSyncInFlight = useRef(false);
+  useEffect(() => {
+    if (!isTailStatusSyncPhase || !id) return;
+
+    let cancelled = false;
+
+    const syncTailStatus = async () => {
+      if (cancelled || tailSyncInFlight.current) {
+        return;
+      }
+      tailSyncInFlight.current = true;
+      try {
+        await loadScenario(id);
+      } finally {
+        tailSyncInFlight.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void syncTailStatus();
+    }, TAIL_STATUS_SYNC_INTERVAL_MS);
+
+    void syncTailStatus();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [id, isTailStatusSyncPhase, loadScenario]);
+
   const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
     if (isReplayMode) return;
     setInterventionTarget({ branchId, branchTitle });
@@ -567,6 +616,7 @@ export function SimulationView() {
             key_moment_count: archiveKeyMoments.length,
           }
           : null,
+        fork_debug: scenario?.fork_debug ?? null,
         controls: {
           can_go_back: true,
           can_toggle_view_mode: canToggleViewMode,
@@ -760,6 +810,51 @@ export function SimulationView() {
   const displayedReplayRound = canUseReplayControls
     ? (selectedReplayRound ?? currentRound)
     : currentRound;
+  const showCommitmentFeedback = useCallback((tone: 'info' | 'success', message: string) => {
+    if (commitmentFeedbackTimer.current) {
+      window.clearTimeout(commitmentFeedbackTimer.current);
+    }
+    setCommitmentFeedback({ tone, message });
+    commitmentFeedbackTimer.current = window.setTimeout(() => {
+      setCommitmentFeedback(null);
+      commitmentFeedbackTimer.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (commitmentFeedbackTimer.current) {
+        window.clearTimeout(commitmentFeedbackTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!scenarioMeta) return;
+    if (lastCommitmentAction.current === 'commit' && scenarioMeta.commitment.active) {
+      lastCommitmentAction.current = null;
+      showCommitmentFeedback('success', t('sim.director.commit_saved'));
+      return;
+    }
+    if (lastCommitmentAction.current === 'clear' && !scenarioMeta.commitment.active) {
+      lastCommitmentAction.current = null;
+      showCommitmentFeedback('success', t('sim.director.commit_cleared'));
+    }
+  }, [scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId, showCommitmentFeedback, t]);
+
+  const handleCommitBranchAction = useCallback(() => {
+    if (!commitmentDraftBranchId) return;
+    lastCommitmentAction.current = 'commit';
+    showCommitmentFeedback('info', t('sim.director.commit_saving'));
+    handleCommitBranch();
+  }, [commitmentDraftBranchId, handleCommitBranch, showCommitmentFeedback, t]);
+
+  const handleClearCommitmentAction = useCallback(() => {
+    lastCommitmentAction.current = 'clear';
+    showCommitmentFeedback('info', t('sim.director.commit_saving'));
+    handleClearCommitment();
+  }, [handleClearCommitment, showCommitmentFeedback, t]);
+
   const handlePredictionClose = useCallback(() => {
     setShowPrediction(false);
     setPredictionAutomation(null);
@@ -878,6 +973,7 @@ export function SimulationView() {
             key_moment_count: archiveKeyMoments.length,
           }
           : null,
+        fork_debug: scenario?.fork_debug ?? null,
         controls: {
           can_go_back: true,
           can_toggle_view_mode: canToggleViewMode,
@@ -1230,13 +1326,21 @@ export function SimulationView() {
                           ))}
                         </select>
                       </label>
-                      <button className="btn btn-ghost btn--capture" onClick={handleCommitBranch}>
+                      <button className="btn btn-ghost btn--capture" onClick={handleCommitBranchAction}>
                         {t('sim.director.commit')}
                       </button>
                       {scenarioMeta.commitment.active && (
-                        <button className="btn btn-ghost btn--capture" onClick={handleClearCommitment}>
+                        <button className="btn btn-ghost btn--capture" onClick={handleClearCommitmentAction}>
                           {t('sim.director.clear')}
                         </button>
+                      )}
+                      {commitmentFeedback && (
+                        <span
+                          className={`theater-commitment-feedback theater-commitment-feedback--${commitmentFeedback.tone}`}
+                          aria-live="polite"
+                        >
+                          {commitmentFeedback.message}
+                        </span>
                       )}
                     </div>
                   )}

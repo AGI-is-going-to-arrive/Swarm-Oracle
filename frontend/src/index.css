@@ -213,6 +213,16 @@ body:has(.simulation-view) .lang-switch--global {
   bottom: calc(76px + env(safe-area-inset-bottom, 0px));
 }
 
+body:has(.simulation-view--theater) .lang-switch--global {
+  bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (max-height: 820px) {
+  body:has(.simulation-view--theater) .lang-switch--global {
+    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 @media (max-width: 640px) {
   .lang-switch--global {
     top: calc(12px + env(safe-area-inset-top, 0px));

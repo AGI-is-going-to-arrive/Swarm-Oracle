@@ -7,6 +7,7 @@ import {
   getCampaignMastery,
   getCampaignProfile,
   getCampaignWeeklySummary,
+  type LlmProbeResponse,
   testLlmConnection,
 } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -67,18 +68,36 @@ export function useInputByokSettings(t: TranslateFn) {
   const [llmApiKey, setLlmApiKey] = useState('');
   const [llmBaseUrl, setLlmBaseUrl] = useState('');
   const [llmModel, setLlmModel] = useState('');
+  const [disableUserQuota, setDisableUserQuota] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
   const [testError, setTestError] = useState('');
+  const [probeResult, setProbeResult] = useState<LlmProbeResponse | null>(null);
+  const [testedConfigKey, setTestedConfigKey] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
   const providerPolicyHydrated = useRef(false);
+
+  const currentConfigKey = useMemo(
+    () => JSON.stringify({
+      apiKey: llmApiKey.trim(),
+      baseUrl: llmBaseUrl.trim(),
+      model: llmModel.trim(),
+    }),
+    [llmApiKey, llmBaseUrl, llmModel],
+  );
 
   useEffect(() => {
     const storedPolicy = loadLlmProviderPolicy();
     setLlmApiKey(storedPolicy.apiKey);
     setLlmBaseUrl(storedPolicy.baseUrl);
     setLlmModel(storedPolicy.model);
+    setDisableUserQuota(storedPolicy.disableUserQuota);
     setReasoningEffort(storedPolicy.reasoningEffort);
-    setShowByok(Boolean(storedPolicy.apiKey || storedPolicy.baseUrl || storedPolicy.model));
+    setShowByok(Boolean(
+      storedPolicy.apiKey
+      || storedPolicy.baseUrl
+      || storedPolicy.model
+      || storedPolicy.disableUserQuota
+    ));
     providerPolicyHydrated.current = true;
   }, []);
 
@@ -88,9 +107,17 @@ export function useInputByokSettings(t: TranslateFn) {
       apiKey: llmApiKey,
       baseUrl: llmBaseUrl,
       model: llmModel,
+      disableUserQuota,
       reasoningEffort,
     });
-  }, [llmApiKey, llmBaseUrl, llmModel, reasoningEffort]);
+  }, [disableUserQuota, llmApiKey, llmBaseUrl, llmModel, reasoningEffort]);
+
+  useEffect(() => {
+    setTestStatus('idle');
+    setTestError('');
+    setProbeResult(null);
+    setTestedConfigKey('');
+  }, [currentConfigKey]);
 
   const handleTestConnection = useCallback(async () => {
     setTestStatus('testing');
@@ -103,6 +130,9 @@ export function useInputByokSettings(t: TranslateFn) {
       );
       if (res.llm.status === 'ok') {
         setTestStatus('ok');
+        setProbeResult(res.probe ?? null);
+        setTestedConfigKey(currentConfigKey);
+        return { ok: true as const, probe: res.probe ?? null };
       } else {
         setTestStatus('fail');
         setTestError(res.llm.error || 'Unknown error');
@@ -122,7 +152,8 @@ export function useInputByokSettings(t: TranslateFn) {
       );
     }
     window.setTimeout(() => setTestStatus('idle'), 5000);
-  }, [llmApiKey, llmBaseUrl, llmModel, t]);
+    return { ok: false as const, probe: null };
+  }, [currentConfigKey, llmApiKey, llmBaseUrl, llmModel, t]);
 
   return {
     showByok,
@@ -133,8 +164,12 @@ export function useInputByokSettings(t: TranslateFn) {
     setLlmBaseUrl,
     llmModel,
     setLlmModel,
+    disableUserQuota,
+    setDisableUserQuota,
     testStatus,
     testError,
+    probeResult,
+    hasFreshProbe: Boolean(probeResult) && testedConfigKey === currentConfigKey && testStatus !== 'fail',
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,

@@ -7,6 +7,7 @@ import { TimelineBar } from './TimelineBar';
 
 const mockState = {
   status: 'done',
+  thinkingAgents: [] as Array<{ agent_id: string; branch: string; round: number; agent: string }>,
   branches: [] as BranchInfo[],
   scenario: {
     id: 'scenario-1',
@@ -38,6 +39,9 @@ vi.mock('../stores/simulationStore', () => ({
 
 describe('TimelineBar replay controls', () => {
   beforeEach(() => {
+    mockState.status = 'done';
+    mockState.thinkingAgents = [];
+    mockState.currentRound = 3;
     mockState.branches = [
       {
         id: 'root',
@@ -147,5 +151,18 @@ describe('TimelineBar replay controls', () => {
 
     await user.click(round3);
     expect(onRoundSelect).toHaveBeenCalledWith(3);
+  });
+
+  it('promotes the active stage to narrating once the final round speech is finished', () => {
+    mockState.status = 'simulating';
+    mockState.currentRound = 3;
+    mockState.thinkingAgents = [];
+
+    const { container } = render(<TimelineBar />);
+    const activeStage = container.querySelector('.stage--active');
+
+    expect(activeStage).not.toBeNull();
+    expect(activeStage?.textContent).toContain('sim.timeline.narrating');
+    expect(screen.queryByText('R3/3')).not.toBeInTheDocument();
   });
 });

@@ -81,6 +81,35 @@ function getLocalizedLabel(en: string, zh: string): string {
   return i18next.language === 'en' ? en : zh;
 }
 
+type BubbleMode = 'live' | 'replay';
+
+function normalizeBubbleText(text: string, maxChars = BUBBLE_MAX_TEXT_CHARS): string {
+  const compactText = text.replace(/\s+/g, ' ').trim();
+  if (compactText.length <= maxChars) {
+    return compactText;
+  }
+
+  return `${compactText.slice(0, maxChars - 1)}…`;
+}
+
+function getBubbleTiming(mode: BubbleMode, textLength: number): {
+  charDelayMs: number;
+  initialChars: number;
+  lingerMs: number;
+} {
+  const charDelayMs = mode === 'replay'
+    ? BUBBLE_TYPEWRITER_REPLAY_DELAY_MS
+    : BUBBLE_TYPEWRITER_LIVE_DELAY_MS;
+  const initialChars = Math.min(mode === 'replay' ? 4 : 8, textLength);
+  const baseLingerMs = mode === 'replay' ? BUBBLE_REPLAY_LINGER_MS : BUBBLE_LIVE_LINGER_MS;
+
+  return {
+    charDelayMs,
+    initialChars,
+    lingerMs: Math.min(BUBBLE_LINGER_MAX_MS, baseLingerMs + textLength * BUBBLE_LINGER_PER_CHAR_MS),
+  };
+}
+
 
 
 // ── Event Animation Configs (bilingual) ─────────────────
@@ -126,7 +155,30 @@ const BUBBLE_STYLES: Record<string, { bg: number; bgAlpha: number; borderColor: 
 };
 const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.neutral;
 const BUBBLE_TEXT_FONT_STACK = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-const BUBBLE_TEXT_RESOLUTION = 4;
+const BUBBLE_TEXT_RESOLUTION = 3;
+const BUBBLE_BASE_OFFSET_Y = -74;
+const BUBBLE_MAX_STACK = 4;
+const BUBBLE_MAX_VISIBLE = 2;
+const BUBBLE_MAX_TEXT_CHARS = 72;
+const BUBBLE_COMPACT_MAX_TEXT_CHARS = 48;
+const BUBBLE_TEXT_WRAP_MIN_WIDTH = 180;
+const BUBBLE_TEXT_WRAP_MAX_WIDTH = 240;
+const BUBBLE_TYPEWRITER_LIVE_DELAY_MS = 14;
+const BUBBLE_TYPEWRITER_REPLAY_DELAY_MS = 20;
+const BUBBLE_LIVE_LINGER_MS = 1800;
+const BUBBLE_REPLAY_LINGER_MS = 2800;
+const BUBBLE_LINGER_PER_CHAR_MS = 18;
+const BUBBLE_LINGER_MAX_MS = 4400;
+const BUBBLE_WORLD_PADDING_X = 28;
+const BUBBLE_WORLD_PADDING_Y = 18;
+const BUBBLE_LAYOUT_SLOTS = [
+  { x: 0, y: BUBBLE_BASE_OFFSET_Y },
+  { x: -96, y: BUBBLE_BASE_OFFSET_Y - 30 },
+  { x: 96, y: BUBBLE_BASE_OFFSET_Y - 30 },
+  { x: -156, y: BUBBLE_BASE_OFFSET_Y - 84 },
+  { x: 156, y: BUBBLE_BASE_OFFSET_Y - 84 },
+  { x: 0, y: BUBBLE_BASE_OFFSET_Y - 124 },
+] as const;
 
 // ── Day/Night Tints ─────────────────────────────────────
 const TIME_TINTS: Record<string, { color: number; alpha: number }> = {
@@ -308,6 +360,21 @@ export class WorldScene extends Phaser.Scene {
 
     // V3: Start ambient particle system
     this.startAmbientMotes(w, h, palette);
+  }
+
+  private clearProceduralBackgroundLayers(): void {
+    if (this.bgGraphics) {
+      this.bgGraphics.destroy();
+      this.bgGraphics = null;
+    }
+    if (this.groundGraphics) {
+      this.groundGraphics.destroy();
+      this.groundGraphics = null;
+    }
+    this.terrainLayers.forEach((layer) => layer.destroy());
+    this.terrainLayers = [];
+    this.cloudGraphics.forEach((cloud) => cloud.destroy());
+    this.cloudGraphics = [];
   }
 
   /** V3: Rich procedural background with terrain, clouds, and horizon glow. */
@@ -609,9 +676,8 @@ export class WorldScene extends Phaser.Scene {
 
     // Try to swap to new scene image
     if (this.textures.exists(texKey)) {
-      // Remove old procedural graphics if they exist
-      if (this.bgGraphics) { this.bgGraphics.destroy(); this.bgGraphics = null; }
-      if (this.groundGraphics) { this.groundGraphics.destroy(); this.groundGraphics = null; }
+      // Remove procedural fallback layers so the authored scene art is visible.
+      this.clearProceduralBackgroundLayers();
 
       if (this.bgImage) {
         const oldImg = this.bgImage;
@@ -655,15 +721,20 @@ export class WorldScene extends Phaser.Scene {
       EventBridge.on('viz:scene_init', (data) => {
         const nextTheme = (data.scene_theme as string) || 'medieval_village';
         const isInitialBootstrap = this.agentSprites.size === 0;
+        const palette = THEME_PALETTES[nextTheme] || DEFAULT_PALETTE;
+        const texKey = `scene_${nextTheme}`;
         if (nextTheme !== this.sceneTheme) {
           if (isInitialBootstrap) {
-            const palette = THEME_PALETTES[nextTheme] || DEFAULT_PALETTE;
-            const texKey = `scene_${nextTheme}`;
             this.applyThemeSwap(nextTheme, texKey, palette, this.scale.width, this.scale.height);
             this.sceneTheme = nextTheme;
           } else {
             this.transitionTheme(nextTheme);
           }
+        } else if (isSceneThemeId(nextTheme) && !this.textures.exists(texKey)) {
+          this.ensureSceneTexture(nextTheme, () => {
+            if (!this.sys.isActive() || this.sceneTheme !== nextTheme) return;
+            this.applyThemeSwap(nextTheme, texKey, palette, this.scale.width, this.scale.height);
+          });
         }
         const agents = data.agents as Array<{
           agent_id: string; name: string; sprite_id: string; x: number; y: number;
@@ -684,7 +755,8 @@ export class WorldScene extends Phaser.Scene {
         const text = data.bubble_text as string;
         const emotion = data.emotion as string | undefined;
         const haloColor = data.halo_color as string | undefined;
-        this.showBubble(spriteId, text, emotion, haloColor);
+        const bubbleMode = data.bubble_mode === 'replay' ? 'replay' : 'live';
+        this.showBubble(spriteId, text, emotion, haloColor, bubbleMode);
       })
     );
 
@@ -982,115 +1054,196 @@ export class WorldScene extends Phaser.Scene {
 
   // ── Dialogue Bubbles ──────────────────────────────────
 
-  private showBubble(spriteId: string, text: string, emotion?: string, _haloColor?: string): void {
+  private dismissBubble(spriteId: string, bubble: Phaser.GameObjects.Container, duration = 220): void {
+    if (!bubble.active) return;
+    if (this.bubbles.get(spriteId) === bubble) {
+      this.bubbles.delete(spriteId);
+    }
+    this.tweens.add({
+      targets: bubble,
+      alpha: 0,
+      y: bubble.y - 10,
+      duration,
+      onComplete: () => bubble.destroy(),
+    });
+  }
+
+  private showBubble(
+    spriteId: string,
+    text: string,
+    emotion?: string,
+    _haloColor?: string,
+    bubbleMode: BubbleMode = 'live',
+  ): void {
     const agent = this.agentSprites.get(spriteId);
     if (!agent?.gameObject) return;
+    const renderedViewportWidth = this.scale.displaySize?.width ?? this.scale.width;
+    const isCompactViewport = renderedViewportWidth < 560;
+    const maxChars = isCompactViewport ? BUBBLE_COMPACT_MAX_TEXT_CHARS : BUBBLE_MAX_TEXT_CHARS;
+    const maxVisibleBubbles = isCompactViewport ? 1 : BUBBLE_MAX_VISIBLE;
+    const visibleText = isCompactViewport
+      ? `${agent.name}：${normalizeBubbleText(text, maxChars)}`
+      : normalizeBubbleText(text, maxChars);
+    const { charDelayMs, initialChars, lingerMs } = getBubbleTiming(bubbleMode, visibleText.length);
+    const initialText = visibleText.slice(0, initialChars);
+    const bubbleWrapWidth = Phaser.Math.Clamp(
+      Math.round(this.scale.width * (isCompactViewport ? 0.82 : 0.32)),
+      isCompactViewport ? 220 : BUBBLE_TEXT_WRAP_MIN_WIDTH,
+      isCompactViewport ? 320 : BUBBLE_TEXT_WRAP_MAX_WIDTH,
+    );
 
     // Remove existing bubble for this agent
     const existing = this.bubbles.get(spriteId);
     if (existing) {
-      this.tweens.add({
-        targets: existing,
-        alpha: 0, y: existing.y - 10,
-        duration: 200,
-        onComplete: () => existing.destroy(),
-      });
+      this.dismissBubble(spriteId, existing, 180);
     }
 
-    // ── Anti-overlap: compute Y offset to avoid stacking ──
-    // Base bubble Y is relative to agent container (local coords)
-    let bubbleLocalY = -55;
-    const BUBBLE_SPACING = 54;
-    const MAX_STACK = 5;
-
-    // Check if any other agent's bubble is nearby in world space
-    const agentWorldY = agent.gameObject.y + bubbleLocalY;
-    let stackCount = 0;
-    this.bubbles.forEach((otherBubble, otherId) => {
-      if (otherId === spriteId || stackCount >= MAX_STACK) return;
-      const otherAgent = this.agentSprites.get(otherId);
-      if (!otherAgent?.gameObject) return;
-
-      // Check if the other bubble is within overlap distance
-      const otherWorldX = otherAgent.gameObject.x;
-      const otherWorldY = otherBubble.y + otherAgent.gameObject.y;
-      const dx = Math.abs(agent.gameObject!.x - otherWorldX);
-      const dy = Math.abs(agentWorldY + stackCount * -BUBBLE_SPACING - otherWorldY);
-
-      if (dx < 170 && dy < 40) {
-        stackCount++;
-      }
-    });
-    bubbleLocalY -= stackCount * BUBBLE_SPACING;
-
-    // Create bubble as a child of the agent container so it follows movement
-    const bubbleContainer = this.add.container(0, bubbleLocalY);
-    bubbleContainer.setDepth(50);
+    const visibleEntries = [...this.bubbles.entries()].filter(([, bubble]) => bubble.active);
+    while (visibleEntries.length >= maxVisibleBubbles) {
+      const [oldestSpriteId, oldestBubble] = visibleEntries.shift()!;
+      this.dismissBubble(oldestSpriteId, oldestBubble, 160);
+    }
 
     // Select bubble style variant based on emotion
     const style = (emotion && BUBBLE_STYLES[emotion]) ? BUBBLE_STYLES[emotion] : DEFAULT_BUBBLE_STYLE;
+    const bubbleBgColor = isCompactViewport ? 0x151224 : style.bg;
+    const bubbleBgAlpha = isCompactViewport ? 0.94 : style.bgAlpha;
+    const bubbleBorderColor = isCompactViewport ? 0xf5d7ff : style.borderColor;
 
     const bubbleTextStyle = {
-      fontSize: '15px',
-      color: '#1f2335',
+      fontSize: isCompactViewport
+        ? (bubbleMode === 'replay' ? '14px' : '15px')
+        : (bubbleMode === 'replay' ? '13px' : '14px'),
+      color: isCompactViewport ? '#fff7ff' : '#1f2335',
       fontFamily: BUBBLE_TEXT_FONT_STACK,
       fontStyle: '700',
-      align: 'center' as const,
-      lineSpacing: 6,
-      wordWrap: { width: 208, useAdvancedWrap: true },
-      stroke: '#f7f2ff',
-      strokeThickness: 2,
+      align: 'left' as const,
+      lineSpacing: 4,
+      fixedWidth: bubbleWrapWidth,
+      wordWrap: { width: bubbleWrapWidth, useAdvancedWrap: true },
+      stroke: isCompactViewport ? '#120d1b' : '#f7f2ff',
+      strokeThickness: isCompactViewport ? 0 : 1,
       shadow: {
         offsetX: 0,
-        offsetY: 1,
-        color: 'rgba(8, 10, 22, 0.35)',
+        offsetY: isCompactViewport ? 0 : 1,
+        color: isCompactViewport ? 'rgba(0, 0, 0, 0)' : 'rgba(8, 10, 22, 0.35)',
         blur: 0,
         stroke: false,
-        fill: true,
+        fill: !isCompactViewport,
       },
     };
 
-    // B4: Typewriter — start with empty text, reveal char by char
-    const textObj = this.add.text(0, 0, '', bubbleTextStyle).setOrigin(0.5).setResolution(BUBBLE_TEXT_RESOLUTION);
+    const bubbleTextResolution = isCompactViewport ? 4 : BUBBLE_TEXT_RESOLUTION;
+
+    // B4: Typewriter — keep a short prefix visible immediately so live updates do not feel delayed.
+    const textObj = this.add.text(0, 0, initialText, bubbleTextStyle).setOrigin(0.5).setResolution(bubbleTextResolution);
 
     // Pre-measure full text for proper bubble size
-    const measureText = this.add.text(0, 0, text, bubbleTextStyle).setOrigin(0.5).setAlpha(0);
-    measureText.setResolution(BUBBLE_TEXT_RESOLUTION);
+    const measureText = this.add.text(0, 0, visibleText, bubbleTextStyle).setOrigin(0.5).setAlpha(0);
+    measureText.setResolution(bubbleTextResolution);
     const bounds = measureText.getBounds();
     measureText.destroy();
 
-    const pad = 10;
+    const pad = 12;
+    const bubbleWidth = bounds.width + pad * 2;
+    const bubbleHeight = bounds.height + pad * 2;
+
+    let bubbleOffsetX = 0;
+    let bubbleOffsetY = 0;
+    let attachToAgent = true;
+
+    if (isCompactViewport) {
+      attachToAgent = false;
+      bubbleOffsetX = Math.round(this.scale.width / 2);
+      bubbleOffsetY = Math.round(
+        this.scale.height - Math.max(104, bubbleHeight / 2 + 44),
+      );
+    } else {
+      const overlapCount = new Map<number, number>();
+      const selectedSlot = BUBBLE_LAYOUT_SLOTS.find((slot, slotIndex) => {
+        const candidateWorldX = agent.gameObject!.x + slot.x;
+        const candidateWorldY = agent.gameObject!.y + slot.y;
+        let overlaps = 0;
+
+        this.bubbles.forEach((otherBubble, otherId) => {
+          if (otherId === spriteId || !otherBubble.active) return;
+          const otherAgent = this.agentSprites.get(otherId);
+          if (!otherAgent?.gameObject) return;
+
+          const otherWidth = Number(otherBubble.getData('bubbleWidth') ?? bubbleWidth);
+          const otherHeight = Number(otherBubble.getData('bubbleHeight') ?? bubbleHeight);
+          const otherWorldX = otherAgent.gameObject.x + otherBubble.x;
+          const otherWorldY = otherAgent.gameObject.y + otherBubble.y;
+
+          const overlapsHorizontally =
+            Math.abs(candidateWorldX - otherWorldX) < ((bubbleWidth + otherWidth) / 2 + BUBBLE_WORLD_PADDING_X);
+          const overlapsVertically =
+            Math.abs(candidateWorldY - otherWorldY) < ((bubbleHeight + otherHeight) / 2 + BUBBLE_WORLD_PADDING_Y);
+
+          if (overlapsHorizontally && overlapsVertically) {
+            overlaps += 1;
+          }
+        });
+
+        overlapCount.set(slotIndex, overlaps);
+        return overlaps === 0;
+      }) ?? BUBBLE_LAYOUT_SLOTS[
+        [...overlapCount.entries()].sort((a, b) => a[1] - b[1])[0]?.[0] ?? Math.min(BUBBLE_MAX_STACK, BUBBLE_LAYOUT_SLOTS.length - 1)
+      ];
+
+      bubbleOffsetX = selectedSlot.x;
+      bubbleOffsetY = selectedSlot.y;
+      const halfBubbleWidth = bubbleWidth / 2 + 12;
+      const halfBubbleHeight = bubbleHeight / 2 + 12;
+
+      const projectedLeft = agent.gameObject.x + bubbleOffsetX - halfBubbleWidth;
+      const projectedRight = agent.gameObject.x + bubbleOffsetX + halfBubbleWidth;
+      const projectedTop = agent.gameObject.y + bubbleOffsetY - halfBubbleHeight;
+
+      if (projectedLeft < 12) {
+        bubbleOffsetX += 12 - projectedLeft;
+      } else if (projectedRight > this.scale.width - 12) {
+        bubbleOffsetX -= projectedRight - (this.scale.width - 12);
+      }
+
+      if (projectedTop < 12) {
+        bubbleOffsetY += 12 - projectedTop;
+      }
+    }
+
+    const bubbleContainer = this.add.container(bubbleOffsetX, bubbleOffsetY);
+    bubbleContainer.setDepth(isCompactViewport ? 120 : 50);
 
     // Bubble background with emotion-specific fill
     const bg = this.add.graphics();
-    bg.fillStyle(style.bg, style.bgAlpha);
+    bg.fillStyle(bubbleBgColor, bubbleBgAlpha);
     bg.fillRoundedRect(
       -(bounds.width / 2 + pad), -(bounds.height / 2 + pad),
       bounds.width + pad * 2, bounds.height + pad * 2, 4,
     );
     // Emotion-specific border
-    bg.lineStyle(emotion === 'anxious' || emotion === 'fearful' ? 1 : 1.5, style.borderColor, 0.9);
+    bg.lineStyle(emotion === 'anxious' || emotion === 'fearful' ? 1 : 1.5, bubbleBorderColor, 0.9);
     bg.strokeRoundedRect(
       -(bounds.width / 2 + pad), -(bounds.height / 2 + pad),
       bounds.width + pad * 2, bounds.height + pad * 2, 4,
     );
 
     // Emotion indicator badge (! or ?)
-    if (style.indicator) {
+    if (!isCompactViewport && style.indicator) {
       const badge = this.add.text(
         bounds.width / 2 + pad + 2, -(bounds.height / 2 + pad) - 2,
         style.indicator,
         {
           fontSize: '12px',
-          color: `#${style.borderColor.toString(16).padStart(6, '0')}`,
+          color: `#${bubbleBorderColor.toString(16).padStart(6, '0')}`,
           fontFamily: 'monospace',
           fontStyle: 'bold',
         }
       ).setOrigin(0.5);
       bubbleContainer.add(badge);
-    } else if (emotion && emotion !== 'neutral') {
+    } else if (!isCompactViewport && emotion && emotion !== 'neutral') {
       const emotionDot = this.add.graphics();
-      emotionDot.fillStyle(style.borderColor, 1);
+      emotionDot.fillStyle(bubbleBorderColor, 1);
       emotionDot.fillCircle(bounds.width / 2 + pad + 4, -(bounds.height / 2 + pad) + 4, 3);
       bubbleContainer.add(emotionDot);
     }
@@ -1098,60 +1251,67 @@ export class WorldScene extends Phaser.Scene {
     bubbleContainer.add(bg);
     bubbleContainer.add(textObj);
     bubbleContainer.setAlpha(0);
-    bubbleContainer.setData('fullText', text);
+    bubbleContainer.setData('fullText', visibleText);
     bubbleContainer.setData('emotion', emotion || 'neutral');
+    bubbleContainer.setData('bubbleWidth', bubbleWidth);
+    bubbleContainer.setData('bubbleHeight', bubbleHeight);
+    bubbleContainer.setData('bubbleMode', bubbleMode);
 
-    // Add bubble to the agent's container so it moves with the agent
-    agent.gameObject.add(bubbleContainer);
+    if (attachToAgent) {
+      agent.gameObject.add(bubbleContainer);
+    }
 
     // Animate in
     this.tweens.add({
       targets: bubbleContainer,
-      alpha: 1, y: bubbleLocalY - 5,
+      alpha: 1,
+      x: bubbleOffsetX,
+      y: bubbleOffsetY - 5,
       duration: 300,
       ease: 'Back.easeOut',
     });
 
     // B4: Typewriter reveal
-    let charIdx = 0;
-    const typewriterEvent = this.time.addEvent({
-      delay: 30,
-      repeat: text.length - 1,
-      callback: () => {
-        if (!bubbleContainer.active || !textObj.active || !textObj.scene) {
-          typewriterEvent.remove(false);
-          return;
-        }
-        charIdx++;
-        try {
-          textObj.setText(text.slice(0, charIdx));
-        } catch {
-          typewriterEvent.remove(false);
-        }
-      },
-    });
+    let charIdx = initialChars;
+    const remainingChars = Math.max(visibleText.length - initialChars, 0);
+    let typewriterEvent: Phaser.Time.TimerEvent | null = null;
+
+    if (remainingChars > 0) {
+      typewriterEvent = this.time.addEvent({
+        delay: charDelayMs,
+        repeat: remainingChars - 1,
+        callback: () => {
+          if (!bubbleContainer.active || !textObj.active || !textObj.scene) {
+            typewriterEvent?.remove(false);
+            return;
+          }
+          charIdx += 1;
+          try {
+            textObj.setText(visibleText.slice(0, charIdx));
+          } catch {
+            typewriterEvent?.remove(false);
+          }
+        },
+      });
+    }
 
     this.bubbles.set(spriteId, bubbleContainer);
 
-    // Auto-fade after 4 seconds
-    this.time.delayedCall(4000, () => {
+    const typingDurationMs = Math.max(0, remainingChars * charDelayMs);
+    this.time.delayedCall(typingDurationMs + lingerMs, () => {
       if (this.bubbles.get(spriteId) === bubbleContainer) {
-        typewriterEvent.remove(false);
-        this.tweens.add({
-          targets: bubbleContainer,
-          alpha: 0,
-          duration: 500,
-          onComplete: () => {
-            typewriterEvent.remove(false);
-            bubbleContainer.destroy();
-            this.bubbles.delete(spriteId);
-          },
-        });
+        typewriterEvent?.remove(false);
+        this.dismissBubble(spriteId, bubbleContainer, 320);
       }
     });
   }
 
   private extractBubbleText(bubble: Phaser.GameObjects.Container): string {
+    const fullText = bubble.getData('fullText');
+    if (typeof fullText === 'string' && fullText.length > 0) {
+      return fullText;
+    }
+
     const textChild = bubble.list.find(
       (child): child is Phaser.GameObjects.Text => child instanceof Phaser.GameObjects.Text && !!child.text,
     );

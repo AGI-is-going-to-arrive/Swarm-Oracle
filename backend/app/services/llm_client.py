@@ -16,12 +16,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+_LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 
 # C-3 fix: pattern to detect API keys in error messages
 _PREFIXED_SECRET_PATTERN = re.compile(
@@ -155,9 +157,32 @@ def _provider_key(base_url: str | None) -> str:
     return (base_url or settings.LLM_RESPONSES_URL).strip().lower()
 
 
-def _get_global_semaphore() -> asyncio.Semaphore:
+def is_local_provider_url(base_url: str | None = None) -> bool:
+    """Return whether the effective LLM endpoint points to a local/self-hosted host."""
+    effective_url = (base_url or settings.LLM_RESPONSES_URL).strip()
+    hostname = (urlparse(effective_url).hostname or "").strip().lower()
+    return hostname in _LOCAL_LLM_HOSTS
+
+
+def _get_global_concurrency_limit() -> int | None:
+    """Return the effective global concurrency cap, or None when disabled."""
+    if settings.LLM_CONCURRENCY <= 0:
+        return None
+    return max(1, settings.LLM_CONCURRENCY)
+
+
+def _get_global_pending_limit() -> int | None:
+    """Return the effective global pending cap, or None when disabled."""
+    if settings.LLM_MAX_PENDING <= 0:
+        return None
+    return max(1, settings.LLM_MAX_PENDING)
+
+
+def _get_global_semaphore() -> asyncio.Semaphore | None:
     global _global_semaphore, _global_semaphore_limit
-    limit = max(1, settings.LLM_CONCURRENCY)
+    limit = _get_global_concurrency_limit()
+    if limit is None:
+        return None
     if _global_semaphore is None:
         _global_semaphore = asyncio.Semaphore(limit)
         _global_semaphore_limit = limit
@@ -169,6 +194,178 @@ def _get_global_semaphore() -> asyncio.Semaphore:
             limit,
         )
     return _global_semaphore
+
+
+def get_runtime_parallelism_limit() -> int:
+    """Return a safe per-request concurrency cap for local fan-out call sites.
+
+    This mirrors the runtime guard's effective ceiling closely enough that
+    callers such as the simulator can avoid self-inflicted backpressure when a
+    request-scoped quota is active.
+    """
+    candidate_limits: list[int] = []
+    global_concurrency_limit = _get_global_concurrency_limit()
+    if global_concurrency_limit is not None:
+        candidate_limits.append(global_concurrency_limit)
+
+    global_pending_limit = _get_global_pending_limit()
+    if global_pending_limit is not None:
+        candidate_limits.append(global_pending_limit)
+
+    request_context = _REQUEST_CONTEXT.get()
+    quota_key = _normalize_quota_key(request_context.quota_key)
+    user_limit = _get_user_pending_limit()
+    if quota_key and user_limit is not None:
+        candidate_limits.append(user_limit)
+
+    if candidate_limits:
+        return max(1, min(candidate_limits))
+
+    return max(1, settings.MAX_AGENTS)
+
+
+def _get_user_pending_limit() -> int | None:
+    """Return the effective per-user pending cap, or None when disabled."""
+    if settings.LLM_USER_MAX_PENDING <= 0:
+        return None
+    return max(1, settings.LLM_USER_MAX_PENDING)
+
+
+def _build_llm_payload(
+    *,
+    input_text: str,
+    model: str | None,
+    reasoning_effort: str | None,
+    target_url: str,
+) -> tuple[dict[str, Any], bool]:
+    """Build a provider request payload for either Chat Completions or Responses API."""
+    is_chat = _is_chat_completions_api(target_url)
+    payload: dict[str, Any] = {
+        "model": model or settings.LLM_MODEL_NAME,
+    }
+    effort = reasoning_effort or settings.LLM_REASONING_EFFORT
+
+    if is_chat:
+        payload["messages"] = [{"role": "user", "content": input_text}]
+        if effort:
+            payload["reasoning_effort"] = effort
+    else:
+        payload["input"] = input_text
+        if effort:
+            payload["reasoning"] = {"effort": effort}
+
+    return payload, is_chat
+
+
+def _estimate_probe_recommendations(parallelism: int) -> dict[str, int]:
+    """Turn measured provider parallelism into a conservative UI recommendation."""
+    safe_parallelism = max(1, parallelism)
+    agents_max = max(6, safe_parallelism * 4)
+    if safe_parallelism <= 2:
+        rounds_max = 4
+    elif safe_parallelism <= 4:
+        rounds_max = 6
+    elif safe_parallelism <= 8:
+        rounds_max = 8
+    else:
+        rounds_max = 10
+
+    return {
+        "agents_min": 3,
+        "agents_max": agents_max,
+        "rounds_min": 3,
+        "rounds_max": rounds_max,
+    }
+
+
+async def _probe_provider_request(
+    *,
+    client: httpx.AsyncClient,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    timeout: float,
+) -> tuple[bool, str | None]:
+    """Issue one raw provider request without runtime-guard quotas for probe purposes."""
+    target_url = base_url or settings.LLM_RESPONSES_URL
+    target_key = api_key or settings.LLM_API_KEY
+    payload, _ = _build_llm_payload(
+        input_text="Respond with exactly: OK",
+        model=model,
+        reasoning_effort="low",
+        target_url=target_url,
+    )
+
+    try:
+        response = await client.post(
+            target_url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {target_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return True, None
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:200] if exc.response is not None else ""
+        return False, f"HTTP {exc.response.status_code}: {_sanitize_error(body)}"
+    except httpx.RequestError as exc:
+        return False, _sanitize_error(str(exc))
+
+
+async def measure_provider_parallelism(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    max_parallelism: int = 8,
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    """Estimate provider-side safe parallelism for the given BYOK credentials.
+
+    This bypasses runtime-guard quotas on purpose so the result reflects the
+    provider/API-key pair rather than the backend's fairness controls.
+    """
+    effective_model = model or settings.LLM_MODEL_NAME
+    tested_parallelism = max(1, min(max_parallelism, 12))
+    local_provider = is_local_provider_url(base_url)
+    estimated_parallelism = 0
+    failure_reason: str | None = None
+
+    async with httpx.AsyncClient() as client:
+        for width in range(1, tested_parallelism + 1):
+            results = await asyncio.gather(
+                *[
+                    _probe_provider_request(
+                        client=client,
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model,
+                        timeout=timeout,
+                    )
+                    for _ in range(width)
+                ]
+            )
+            if all(ok for ok, _ in results):
+                estimated_parallelism = width
+                continue
+
+            failure_reason = next((reason for ok, reason in results if not ok and reason), None)
+            break
+
+    estimated_parallelism = max(1, estimated_parallelism)
+    return {
+        "status": "ok",
+        "model": effective_model,
+        "local_provider": local_provider,
+        "allow_disable_user_quota": local_provider,
+        "estimated_parallelism": estimated_parallelism,
+        "tested_parallelism": tested_parallelism,
+        "recommended": _estimate_probe_recommendations(estimated_parallelism),
+        "failure": failure_reason,
+    }
 
 
 def _runtime_guard_db_path() -> str | None:
@@ -292,6 +489,8 @@ def _reserve_sqlite_runtime_slot(
     reservation_id = uuid.uuid4().hex
     now = time.time()
     expires_at = now + max(lease_seconds, 30.0)
+    user_limit = _get_user_pending_limit()
+    global_pending_limit = _get_global_pending_limit()
     conn = sqlite3.connect(
         db_path,
         timeout=_SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS,
@@ -305,19 +504,20 @@ def _reserve_sqlite_runtime_slot(
             f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
             (now,),
         )
-        total_pending = conn.execute(
-            f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE}"
-        ).fetchone()[0]
-        if total_pending >= settings.LLM_MAX_PENDING:
-            conn.execute("ROLLBACK")
-            raise LLMBackpressureError("LLM queue is full; retry later")
+        if global_pending_limit is not None:
+            total_pending = conn.execute(
+                f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE}"
+            ).fetchone()[0]
+            if total_pending >= global_pending_limit:
+                conn.execute("ROLLBACK")
+                raise LLMBackpressureError("LLM queue is full; retry later")
 
-        if quota_key:
+        if quota_key and user_limit is not None:
             quota_pending = conn.execute(
                 f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE} WHERE quota_key = ?",
                 (quota_key,),
             ).fetchone()[0]
-            if quota_pending >= settings.LLM_USER_MAX_PENDING:
+            if quota_pending >= user_limit:
                 conn.execute("ROLLBACK")
                 raise LLMBackpressureError("Too many in-flight LLM requests for this user")
 
@@ -359,6 +559,8 @@ async def _reserve_runtime_slot(
     now = monotonic()
     reservation_id: str | None = None
     use_in_process_counts = False
+    user_limit = _get_user_pending_limit()
+    global_pending_limit = _get_global_pending_limit()
     async with _guard_lock:
         circuit_until = _provider_circuit_until.get(provider_key, 0.0)
         if circuit_until > now:
@@ -368,7 +570,7 @@ async def _reserve_runtime_slot(
             )
 
         db_path = _runtime_guard_db_path()
-        if db_path is not None:
+        if db_path is not None and (global_pending_limit is not None or user_limit is not None):
             try:
                 reservation_id = _reserve_sqlite_runtime_slot(
                     db_path=db_path,
@@ -386,25 +588,30 @@ async def _reserve_runtime_slot(
                 reservation_id = None
 
         if reservation_id is None:
-            if _pending_requests >= settings.LLM_MAX_PENDING:
+            if global_pending_limit is not None and _pending_requests >= global_pending_limit:
                 raise LLMBackpressureError("LLM queue is full; retry later")
 
-            if quota_key and _pending_by_quota[quota_key] >= settings.LLM_USER_MAX_PENDING:
+            if quota_key and user_limit is not None and _pending_by_quota[quota_key] >= user_limit:
                 raise LLMBackpressureError("Too many in-flight LLM requests for this user")
-            use_in_process_counts = True
+            use_in_process_counts = global_pending_limit is not None or (quota_key is not None and user_limit is not None)
 
         if use_in_process_counts:
-            _pending_requests += 1
-            if quota_key:
+            if global_pending_limit is not None:
+                _pending_requests += 1
+            if quota_key and user_limit is not None:
                 _pending_by_quota[quota_key] += 1
 
-    await _get_global_semaphore().acquire()
+    semaphore = _get_global_semaphore()
+    if semaphore is not None:
+        await semaphore.acquire()
     return reservation_id
 
 
 async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | None) -> None:
     global _pending_requests
-    _get_global_semaphore().release()
+    semaphore = _get_global_semaphore()
+    if semaphore is not None:
+        semaphore.release()
     async with _guard_lock:
         db_path = _runtime_guard_db_path()
         if db_path is not None and reservation_id is not None:
@@ -414,8 +621,9 @@ async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | 
                 logger.warning("SQLite runtime guard release failed: %s", exc)
 
         if reservation_id is None:
-            _pending_requests = max(0, _pending_requests - 1)
-            if quota_key:
+            if _get_global_pending_limit() is not None:
+                _pending_requests = max(0, _pending_requests - 1)
+            if quota_key and _get_user_pending_limit() is not None:
                 next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
                 if next_count == 0:
                     _pending_by_quota.pop(quota_key, None)

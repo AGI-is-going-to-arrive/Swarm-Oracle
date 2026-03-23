@@ -263,13 +263,19 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         break;
 
       case 'status':
-        set((state) => ({
-          status: event.data.status as SimulationState['status'],
-          isSimulationComplete: event.data.status === 'done',
-          simStartTime: event.data.status === 'simulating' && !state.simStartTime
-            ? Date.now()
-            : state.simStartTime,
-        }));
+        set((state) => {
+          const mergedStatus = mergeScenarioStatus(
+            state.status,
+            event.data.status as ActiveSimulationStatus,
+          );
+          return {
+            status: mergedStatus,
+            isSimulationComplete: mergedStatus === 'done',
+            simStartTime: event.data.status === 'simulating' && !state.simStartTime
+              ? Date.now()
+              : state.simStartTime,
+          };
+        });
         break;
 
       case 'agent_speak_start':

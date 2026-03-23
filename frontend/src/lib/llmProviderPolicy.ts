@@ -3,6 +3,7 @@ export interface LlmProviderPolicy {
   baseUrl: string;
   model: string;
   reasoningEffort: string;
+  disableUserQuota: boolean;
 }
 
 const STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
@@ -12,10 +13,15 @@ const EMPTY_POLICY: LlmProviderPolicy = {
   baseUrl: '',
   model: '',
   reasoningEffort: '',
+  disableUserQuota: false,
 };
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeBoolean(value: unknown): boolean {
+  return value === true;
 }
 
 function canUseWindow(): boolean {
@@ -57,6 +63,7 @@ function readPolicyRecord(storage: Storage | null): LlmProviderPolicy | null {
       baseUrl: normalizeText(parsed.baseUrl),
       model: normalizeText(parsed.model),
       reasoningEffort: normalizeText(parsed.reasoningEffort),
+      disableUserQuota: normalizeBoolean(parsed.disableUserQuota),
     };
   } catch {
     return null;
@@ -103,9 +110,10 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
     baseUrl: normalizeText(policy.baseUrl),
     model: normalizeText(policy.model),
     reasoningEffort: normalizeText(policy.reasoningEffort),
+    disableUserQuota: normalizeBoolean(policy.disableUserQuota),
   };
 
-  const hasContent = Object.values(normalized).some(Boolean);
+  const hasContent = Object.entries(normalized).some(([key, value]) => key === 'disableUserQuota' ? value : Boolean(value));
   if (!hasContent) {
     if (canRemoveFromStorage(storage)) {
       try {

@@ -52,7 +52,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.campaign import remove_scenario_campaign_artifacts
-from app.services.llm_client import health_check
+from app.services.llm_client import health_check, measure_provider_parallelism
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.vector_store import get_vector_store
 
@@ -145,7 +145,14 @@ async def api_health_test(req: TestLlmRequest):
         base_url=req.llm_base_url or None,
         model=req.llm_model or None,
     )
-    return {"server": "ok", "llm": llm_status}
+    probe = None
+    if llm_status.get("status") == "ok":
+        probe = await measure_provider_parallelism(
+            api_key=req.llm_api_key or None,
+            base_url=req.llm_base_url or None,
+            model=req.llm_model or None,
+        )
+    return {"server": "ok", "llm": llm_status, "probe": probe}
 
 
 # ── Scenario CRUD ────────────────────────────────────────
@@ -221,6 +228,7 @@ async def create_scenario(req: CreateScenarioRequest):
             llm_api_key=req.llm_api_key,
             llm_base_url=req.llm_base_url,
             llm_model=req.llm_model,
+            disable_user_quota=req.disable_user_quota,
         )
     )
 

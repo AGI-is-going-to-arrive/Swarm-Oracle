@@ -11,6 +11,16 @@ import type { AgentInfo, AgentMessage } from '../../types';
 import { inferSceneThemeFromQuestion } from '../../lib/themeRegistry';
 import { dispatchVizEvent } from './EventBridge';
 
+export const MAX_BUBBLE_EVENT_TEXT_CHARS = 180;
+
+export function clipBubbleEventText(text: string): string {
+  if (text.length <= MAX_BUBBLE_EVENT_TEXT_CHARS) {
+    return text;
+  }
+
+  return `${text.slice(0, MAX_BUBBLE_EVENT_TEXT_CHARS - 1)}…`;
+}
+
 // ── Role → Sprite ID Mapping ────────────────────────────
 
 const ROLE_SPRITE_MAP: Record<string, string> = {
@@ -303,22 +313,22 @@ interface AgentVizData {
   y: number;
 }
 
-/**
- * Generate agent positions using a semicircular arrangement.
- * Agents are placed on the lower 60% of the canvas (ground area).
- */
-function generatePositions(agents: AgentInfo[]): AgentVizData[] {
-  const count = agents.length;
-  const canvasW = 800;
-  const canvasH = 450;
-  const centerX = canvasW / 2;
-  const centerY = canvasH * 0.55;
-  const radiusX = canvasW * 0.38;
-  const radiusY = canvasH * 0.15;
-
-  return agents.map((agent, i) => {
-    // Distribute agents along a semicircle (π arc)
-    const angle = Math.PI * (i / Math.max(count - 1, 1));
+function projectArcPositions(
+  agents: AgentInfo[],
+  {
+    centerX,
+    centerY,
+    radiusX,
+    radiusY,
+  }: {
+    centerX: number;
+    centerY: number;
+    radiusX: number;
+    radiusY: number;
+  },
+): AgentVizData[] {
+  return agents.map((agent, index) => {
+    const angle = Math.PI * (index / Math.max(agents.length - 1, 1));
     const x = Math.round(centerX - radiusX * Math.cos(angle));
     const y = Math.round(centerY + radiusY * Math.sin(angle));
 
@@ -329,6 +339,54 @@ function generatePositions(agents: AgentInfo[]): AgentVizData[] {
       x,
       y,
     };
+  });
+}
+
+/**
+ * Generate agent positions using a semicircular arrangement.
+ * Agents are placed on the lower 60% of the canvas (ground area).
+ */
+function generatePositions(agents: AgentInfo[]): AgentVizData[] {
+  const count = agents.length;
+  const canvasW = 800;
+  const canvasH = 450;
+  const centerX = canvasW / 2;
+
+  if (count <= 12) {
+    return projectArcPositions(agents, {
+      centerX,
+      centerY: canvasH * 0.55,
+      radiusX: canvasW * 0.38,
+      radiusY: canvasH * 0.15,
+    });
+  }
+
+  const frontRowAgents = agents.filter((_, index) => index % 2 === 0);
+  const backRowAgents = agents.filter((_, index) => index % 2 === 1);
+
+  const frontRow = projectArcPositions(frontRowAgents, {
+    centerX,
+    centerY: canvasH * 0.62,
+    radiusX: canvasW * 0.4,
+    radiusY: canvasH * 0.12,
+  });
+  const backRow = projectArcPositions(backRowAgents, {
+    centerX,
+    centerY: canvasH * 0.47,
+    radiusX: canvasW * 0.3,
+    radiusY: canvasH * 0.09,
+  });
+
+  const positionsById = new Map(
+    [...frontRow, ...backRow].map((entry) => [entry.agent_id, entry]),
+  );
+
+  return agents.map((agent) => positionsById.get(agent.id) ?? {
+    agent_id: agent.id,
+    name: agent.name,
+    sprite_id: mapRoleToSpriteId(agent.role, agent.name),
+    x: Math.round(centerX),
+    y: Math.round(canvasH * 0.56),
   });
 }
 
@@ -380,7 +438,8 @@ export function synthesizeBubbles(
         // Dispatch bubble
         dispatchVizEvent('viz:bubble_show', {
           sprite_id: agentId,
-          bubble_text: msg.message.length > 60 ? msg.message.slice(0, 57) + '...' : msg.message,
+          bubble_text: clipBubbleEventText(msg.message),
+          bubble_mode: 'replay',
           emotion: msg.emotion || 'neutral',
         });
 
@@ -423,7 +482,8 @@ export function synthesizeLatestBubbles(
   for (const message of latestByAgent.values()) {
     dispatchVizEvent('viz:bubble_show', {
       sprite_id: message.agent_id,
-      bubble_text: message.message.length > 60 ? message.message.slice(0, 57) + '...' : message.message,
+      bubble_text: clipBubbleEventText(message.message),
+      bubble_mode: 'replay',
       emotion: message.emotion || 'neutral',
     });
 

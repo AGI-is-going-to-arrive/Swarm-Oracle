@@ -18,6 +18,7 @@ export interface Scenario {
   messages?: AgentMessage[];  // Historical messages from DB
   director_state?: ScenarioDirectorState | null;
   gameplay_state?: ScenarioGameplayState | null;
+  fork_debug?: ScenarioForkDebug | null;
 }
 
 export interface AgentInfo {
@@ -287,9 +288,29 @@ export interface AgentMessage {
   agent_id: string;
   message: string;
   emotion: string;
+  diverge?: string | null;
   branch: string;
+  branch_title?: string;
   round: number;
   synthesized?: boolean;  // P3-A: true for Worker-synthesized messages
+}
+
+export interface ScenarioForkDebugEvent {
+  parent_branch_id: string;
+  parent_branch_title: string;
+  fork_round: number;
+  fork_reason: string;
+  child_titles: string[];
+  child_branch_ids: string[];
+}
+
+export interface ScenarioForkDebug {
+  message_count: number;
+  diverge_message_count: number;
+  diverge_rounds: number[];
+  fork_event_count: number;
+  forked_branch_count: number;
+  fork_events: ScenarioForkDebugEvent[];
 }
 
 export interface InterventionPayload {

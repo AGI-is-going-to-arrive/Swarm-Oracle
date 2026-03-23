@@ -65,10 +65,19 @@ export default function PredictionModal({
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldAutoFocusText = (() => {
+    if (typeof window === 'undefined') return false;
+    if (window.innerWidth <= 720) return false;
+    if (typeof window.matchMedia === 'function' && !window.matchMedia('(pointer: fine)').matches) {
+      return false;
+    }
+    return true;
+  })();
 
   useEffect(() => {
+    if (!shouldAutoFocusText) return;
     inputRef.current?.focus();
-  }, []);
+  }, [shouldAutoFocusText]);
 
   // Cleanup auto-close timer on unmount
   useEffect(() => {
@@ -98,6 +107,20 @@ export default function PredictionModal({
       : confidence <= 0.7
         ? t('prediction.confidence_mid')
         : t('prediction.confidence_high');
+  const betKindLabel = getStructuredBetKindLabel(betKind, isZh);
+  const betTargetLabel =
+    betKind === 'branch_winner'
+      ? (
+        branchOptions.find((branch) => branch.id === targetBranchId)?.label
+        ?? t('prediction.waiting_worldline')
+      )
+      : betKind === 'ending_tone'
+        ? ENDING_TONE_OPTIONS[endingTone][isZh ? 'zh' : 'en']
+        : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
+  const commitmentLabel =
+    initialMeta?.commitment.branchTitle
+    ?? t('prediction.commitment_empty');
+  const oracleLabel = userName.trim() || t('prediction.name_placeholder');
   const isDisabled = status === 'submitting' || status === 'success';
   const hasBranchTargets = branchOptions.length > 0;
   const hasValidBranchTarget = branchOptions.some((branch) => branch.id === targetBranchId);
@@ -117,7 +140,7 @@ export default function PredictionModal({
     if (!trimmed || status === 'submitting' || status === 'success') return;
     if (betKind === 'branch_winner' && !hasValidBranchTarget) {
       setStatus('error');
-      setErrorMsg(t('prediction.error'));
+      setErrorMsg(t('prediction.error_branch_pending'));
       return;
     }
 
@@ -219,7 +242,7 @@ export default function PredictionModal({
   }, [branchOptions, committedBranchId]);
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
+    <div className="modal-overlay prediction-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
       <div className="modal-content prediction-modal">
         <header className="modal-header">
           <h2>{t('prediction.title')}</h2>
@@ -227,6 +250,38 @@ export default function PredictionModal({
         </header>
 
         <div className="modal-body">
+          <section className="prediction-summary" aria-label={t('prediction.bet_preview_prefix')}>
+            <div className="prediction-summary__head">
+              <span className="prediction-summary__kicker">
+                {t('prediction.summary_label')}
+              </span>
+              <strong>{betKindLabel}</strong>
+            </div>
+            <div className="prediction-summary__grid">
+              <div className="prediction-summary__item">
+                <span className="prediction-summary__label">{t('prediction.bet_target_label')}</span>
+                <strong>{betTargetLabel}</strong>
+              </div>
+              <div className="prediction-summary__item">
+                <span className="prediction-summary__label">{t('game.round_label')}</span>
+                <strong>R{currentRound}</strong>
+              </div>
+              <div className="prediction-summary__item">
+                <span className="prediction-summary__label">{t('prediction.oracle_label')}</span>
+                <strong>{oracleLabel}</strong>
+              </div>
+              <div className="prediction-summary__item">
+                <span className="prediction-summary__label">{t('sim.director.commitment_label')}</span>
+                <strong>{commitmentLabel}</strong>
+              </div>
+            </div>
+            {betKind === 'branch_winner' && !hasBranchTargets && (
+              <p className="prediction-summary__note">
+                {t('prediction.branch_unavailable_note')}
+              </p>
+            )}
+          </section>
+
           <div className="pred-field">
             <label className="pred-label" htmlFor="pred-kind">{t('prediction.bet_kind_label')}</label>
             <select
@@ -307,16 +362,14 @@ export default function PredictionModal({
               rows={4}
               maxLength={500}
             />
-            <span className="pred-char-count">{text.length}/500</span>
-            <span className="pred-char-count pred-char-count--hint">
-              {t('prediction.bet_preview_prefix')}
-              {' '}
-              {betKind === 'branch_winner'
-                ? (branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? '—')
-                : betKind === 'ending_tone'
-                  ? ENDING_TONE_OPTIONS[endingTone][isZh ? 'zh' : 'en']
-                  : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en']}
-            </span>
+            <div className="prediction-modal__helper-row">
+              <span className="pred-char-count">{text.length}/500</span>
+              <span className="pred-char-count pred-char-count--hint">
+                {t('prediction.bet_preview_prefix')}
+                {' '}
+                {betTargetLabel}
+              </span>
+            </div>
           </div>
 
           {/* Confidence Slider */}
@@ -354,8 +407,10 @@ export default function PredictionModal({
             />
           </div>
 
-          {errorMsg && <p className="modal-error">{errorMsg}</p>}
-          {status === 'success' && <p className="modal-success">{t('prediction.success')}</p>}
+          <div className="prediction-modal__status" aria-live="polite">
+            {errorMsg && <p className="modal-error">{errorMsg}</p>}
+            {status === 'success' && <p className="modal-success">{t('prediction.success')}</p>}
+          </div>
         </div>
 
         <footer className="modal-footer">
@@ -371,7 +426,9 @@ export default function PredictionModal({
             onClick={handleSubmit}
             disabled={!canSubmit}
           >
-            {status === 'submitting' ? '...' : t('prediction.submit')}
+            {status === 'submitting'
+              ? t('prediction.submitting')
+              : t('prediction.submit')}
           </button>
         </footer>
       </div>

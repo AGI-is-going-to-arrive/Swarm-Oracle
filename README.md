@@ -6,8 +6,8 @@
 
 - 当前交付形态是浏览器优先的 Web 应用。
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
-- 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.cjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
-- 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.11 kB`，gzip 从 `328.41 kB` 降到 `202.34 kB`。
+- 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.mjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
+- 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.94 kB`，gzip 从 `328.41 kB` 降到 `203.76 kB`。
 - 仓库内最近一次通过的 clean real full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff-clean/summary.json`。
 - 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
 - CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8318`）。
@@ -40,7 +40,7 @@
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
 | i18n | 中英文界面与输入语言联动输出 |
-| BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；同一 SQLite `DATABASE_URL` 下的多进程还会共享 pending / quota 计数 |
+| BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；`POST /api/health/test` 当前会返回 provider probe 摘要，本地 / 自托管 provider 还可按次关闭 user-level quota；同一 SQLite `DATABASE_URL` 下的多进程仍会共享 pending / quota 计数 |
 | Observability | `/metrics` 暴露 Prometheus 文本指标，依赖缺失时仍有最小回退文本 |
 
 ## Architecture
@@ -103,6 +103,8 @@ npm run dev
 - 占位 `LLM_API_KEY=sk-12345678` 当前只适用于本地网关，例如 `localhost`、`127.0.0.1` 或 `host.docker.internal`。
 - 如果 `LLM_RESPONSES_URL` 指向非本地 LLM 端点，后端会在配置加载阶段直接拒绝占位 key，而不是等到第一次调用时才失败。
 - `LLM_MODEL_NAME` 不能为空；留空会在配置加载阶段直接报错。
+- `POST /api/health/test` 在 LLM 可用时还会返回 provider probe 摘要，供首页 BYOK 预检显示推荐的 `agents / rounds` 区间。
+- `disable_user_quota` 只对本地 / 自托管 provider 生效；它只跳过 user-level fairness cap，不会绕过全局并发闸门。
 - backend 默认输出结构化 JSON 日志；`uvicorn` 相关日志也会统一走同一套 root formatter。
 
 ## Testing And Signoff
@@ -148,6 +150,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `backend/tests/test_api.py + backend/tests/test_llm_client.py + backend/tests/test_runtime_lock.py + backend/tests/test_simulator.py`: `205 passed in 26.75s`
+  - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`: `passed`
+  - `frontend InputView / SimulationView / simulationStore / TimelineBar / BranchEdge / GameplayCardsModal / VizSynthesizer / WorldScene / locales`: `112 passed`
+  - `frontend tsc / build / spike phaser-custom tests`: `passed`，其中 `npm run test:spike:phaser-custom` 为 `34 passed`
   - `backend/tests/test_backend_code_review_fixes.py -q`: `4 passed in 0.45s`
   - `backend/tests/test_vector_store.py backend/tests/test_parser.py backend/tests/test_models.py -q`: `64 passed in 71.56s`
   - `backend/tests/test_logging_utils.py backend/tests/test_config.py -q`: `13 passed in 0.41s`

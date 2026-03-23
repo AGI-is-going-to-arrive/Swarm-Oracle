@@ -15,6 +15,7 @@ import { WorldScene } from './scenes/WorldScene';
 import { EndingScene } from './scenes/EndingScene';
 import { EventBridge, dispatchVizEvent } from './managers/EventBridge';
 import {
+  clipBubbleEventText,
   synthesizeSceneInit,
   synthesizeBubbles,
   synthesizeLatestBubbles,
@@ -57,7 +58,15 @@ type AutomationScene = Phaser.Scene & {
   getAutomationState?: () => AutomationSceneState;
 };
 
-const REPLAY_BATCH_SIZE = 3;
+const REPLAY_BATCH_SIZE = 1;
+const REPLAY_BUBBLE_INTERVAL_BASE_MS = 880;
+const REPLAY_BUBBLE_INTERVAL_MIN_MS = 260;
+const REPLAY_BUBBLE_SETTLE_MS = 2600;
+const LIVE_BUBBLE_STAGGER_MS = 180;
+
+function getReplayBubbleIntervalMs(replaySpeed: number): number {
+  return Math.max(REPLAY_BUBBLE_INTERVAL_MIN_MS, Math.round(REPLAY_BUBBLE_INTERVAL_BASE_MS / replaySpeed));
+}
 
 function getActiveSceneAutomationState(game: Phaser.Game | null): AutomationSceneState | null {
   if (!game) return null;
@@ -225,7 +234,7 @@ export function PhaserGame({
             replayMessages,
             state.agents,
             REPLAY_BATCH_SIZE,
-            Math.max(250, Math.round(1800 / replaySpeed)),
+            getReplayBubbleIntervalMs(replaySpeed),
           );
         }
         lastBubbleIdx.current = state.messages.length;
@@ -289,7 +298,7 @@ export function PhaserGame({
         batch_count: batchCount,
       }, messageCount);
 
-      const playbackDuration = Math.max(0, batchCount - 1) * Math.max(250, Math.round(1800 / replaySpeed)) + 120;
+      const playbackDuration = Math.max(0, batchCount - 1) * getReplayBubbleIntervalMs(replaySpeed) + REPLAY_BUBBLE_SETTLE_MS;
       replayDoneTimer.current = window.setTimeout(() => {
         updateReplayAutomationState({ phase: 'complete' }, messageCount);
       }, playbackDuration);
@@ -361,9 +370,8 @@ export function PhaserGame({
           setTimeout(() => {
             dispatchVizEvent('viz:bubble_show', {
               sprite_id: msg.agent_id,
-              bubble_text: msg.message.length > 60
-                ? msg.message.slice(0, 57) + '...'
-                : msg.message,
+              bubble_text: clipBubbleEventText(msg.message),
+              bubble_mode: 'live',
               emotion: msg.emotion || 'neutral',
             });
 
@@ -373,7 +381,7 @@ export function PhaserGame({
                 halo_color: emotionToHaloColor(msg.emotion),
               });
             }
-          }, idx * 600); // 600ms stagger between messages in the same batch
+          }, idx * LIVE_BUBBLE_STAGGER_MS);
         });
 
         console.log(`[PhaserGame] Dispatched ${newMessages.length} new bubble(s) (incremental, total=${state.messages.length})`);

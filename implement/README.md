@@ -1,7 +1,7 @@
 # SwarmOracle — 实现文档索引
 
 > 汇总自多个开发对话的所有项目文档
-> 最后更新: 2026-03-20
+> 最后更新: 2026-03-24
 >
 > 读取规则：
 > - 当前产品范围、交付状态与签收口径以仓库根 `README.md` 和 `llmdoc/*` 为准。
@@ -84,10 +84,14 @@
   - backend `815 passed`
   - frontend `179 passed`
 - Current targeted verification：
-  - backend targeted set `86 passed`
+  - backend targeted set `90 passed`
   - frontend targeted set `107 passed`
   - `tsc / build / perf budgets / assets`：通过
 - Current session focused verification：
+  - `backend/tests/test_api.py + backend/tests/test_llm_client.py + backend/tests/test_runtime_lock.py + backend/tests/test_simulator.py`：`205 passed in 26.75s`
+  - `backend ruff (helpers / scenarios / schemas / llm_client / runtime_lock / simulator + 对应 tests)`：通过
+  - `frontend/src/pages/InputView.test.tsx + src/pages/SimulationView.test.tsx + src/stores/simulationStore.test.ts + src/components/TimelineBar.test.tsx + src/components/BranchEdge.test.tsx + src/components/GameplayCardsModal.test.tsx + src/game/managers/VizSynthesizer.test.ts + src/game/scenes/WorldScene.test.ts + src/i18n/locales.test.ts`：`112 passed`
+  - `frontend tsc / build / test:spike:phaser-custom`：通过，其中 `test:spike:phaser-custom` 为 `34 passed`
   - `src/lib/scenarioAuthority.test.ts + src/lib/scenarioGameplayState.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx + src/hooks/useScreenCapture.test.ts`：`37 passed`
   - `backend/tests/test_parser.py -k deterministic_parse`：`1 passed`
   - `src/lib/scenarioReplay.test.ts + src/lib/simulationReplay.test.ts + src/lib/scenarioMeta.test.ts + src/hooks/useScreenCapture.test.ts + src/pages/SimulationView.test.tsx + src/components/ShareModal.test.tsx`：`38 passed`
@@ -109,7 +113,7 @@
 - 当前交付形态仍是浏览器优先的 Web 应用；`跨平台` 指桌面/移动浏览器响应式与视口 E2E，不代表原生客户端壳已交付。
 - Safari 属于可选附加验证，不在默认 full signoff 合同内；其截图仍可能受浏览器/插件浮层污染。
 - `scenarioMeta` 仍存在，但已经不是跨设备 authority；它现在主要保留兼容、缓存和 replay 输入职责，usage-derived director/cooldown 字段、ResultView 摘要字段与 replay archive 冗余项都已进一步压缩。
-- 当前最主要的增量空间仍是 `capture-html` chunk、字体与 `frontend/public/assets` 下的大体积 PNG 资源；`phaser` 主 chunk 已通过本地精简入口从约 `1202 kB / 328 kB gzip` 收口到约 `718 kB / 202 kB gzip`，但仍是最大单块前端资源。
+- 当前最主要的增量空间仍是 `capture-html` chunk、字体与 `frontend/public/assets` 下的大体积 PNG 资源；`phaser` 主 chunk 已通过本地精简入口从约 `1202 kB / 328 kB gzip` 收口到约 `719 kB / 204 kB gzip`，但仍是最大单块前端资源。
 
 ### 推荐下钻顺序
 

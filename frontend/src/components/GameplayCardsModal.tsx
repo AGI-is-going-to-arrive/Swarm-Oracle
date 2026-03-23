@@ -195,16 +195,44 @@ export default function GameplayCardsModal({
   const profileFrameSrc = getGameplayProfileFrameSrc(gameplayProfile.id);
   const cardAvailability = canUseCard(meta, cardId, normalizedCurrentRound);
   const cardCooldownRemaining = getCardCooldownRemaining(meta, cardId, normalizedCurrentRound);
+  const selectedCardLabel = isZh ? cardDef.labelZh : cardDef.labelEn;
+  const waitingBranchLabel = t('gameplay.waiting_branches');
+  const waitingAgentLabel = t('gameplay.waiting_agents');
+  const waitingSourceLabel = t('gameplay.waiting_source_branch');
+  const directiveModeLabel = customDirectiveOverride
+    ? t('gameplay.directive_manual')
+    : t('gameplay.directive_auto');
+  const submittingLabel = t('gameplay.submitting');
+  const readOnlyLabel = t('gameplay.preview_only_cta');
   const signatureArcProgressText = signatureArcState.completed
-    ? (isZh
-      ? `已完成 ${signatureArcState.totalSteps}/${signatureArcState.totalSteps}，可转入自由推进。`
-      : `Completed ${signatureArcState.totalSteps}/${signatureArcState.totalSteps}; free-play from here.`)
-    : (isZh
-      ? `已完成 ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}，建议下一步：${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, true) : '自由推进'}`
-      : `Completed ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}. Recommended next move: ${signatureArcState.nextCardId ? getGameplayCardLabel(signatureArcState.nextCardId, false) : 'Free pivot'}`);
+    ? t('gameplay.signature_arc_completed', {
+      current: signatureArcState.totalSteps,
+      total: signatureArcState.totalSteps,
+    })
+    : t('gameplay.signature_arc_progress', {
+      current: signatureArcState.completedSteps,
+      total: signatureArcState.totalSteps,
+      next: signatureArcState.nextCardId
+        ? getGameplayCardLabel(signatureArcState.nextCardId, isZh)
+        : t('gameplay.signature_arc_free_pivot'),
+    });
   const systemTrackSummary = isZh
     ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6；${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`
     : `${systemTracks.riskLabel} ${systemTracks.riskValue}/6; ${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`;
+  const directorPointsLabel = t('gameplay.director_points');
+  const pressureLabel = t('gameplay.pressure_label');
+  const commitmentLabel = t('gameplay.committed_branch_label');
+  const tacticalLabel = t('gameplay.play_pattern_label');
+  const previewStatusLabel = t('gameplay.preview_only_note');
+  const availabilityLabel = readOnly
+    ? previewStatusLabel
+    : !cardAvailability.ok
+      ? (
+        cardAvailability.reason === 'points'
+          ? t('gameplay.error_points')
+          : t('gameplay.error_cooldown', { count: cardCooldownRemaining })
+      )
+      : t('gameplay.ready_note');
 
   useEffect(() => {
     setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
@@ -315,7 +343,7 @@ export default function GameplayCardsModal({
       return;
     }
     if (readOnly) {
-      setErrorMsg(disabledReason ?? (isZh ? '导演准备中，当前仅可预览玩法卡。' : 'Director tools are warming up. Preview only for now.'));
+      setErrorMsg(disabledReason ?? previewStatusLabel);
       return;
     }
 
@@ -334,15 +362,15 @@ export default function GameplayCardsModal({
     }
 
     if (requiresSourceBranch && (!sourceBranch || sourceBranch.id === targetBranch.id)) {
-      setErrorMsg(isZh ? '时空裂缝需要另一条来源分支。' : 'Space-Time Rift needs a different source branch.');
+      setErrorMsg(t('gameplay.error_source_branch'));
       return;
     }
 
     if (!cardAvailability.ok) {
       setErrorMsg(
         cardAvailability.reason === 'points'
-          ? (isZh ? '导演点数不足。' : 'Not enough director points.')
-          : (isZh ? `该卡仍在冷却中，还需 ${cardCooldownRemaining} 轮。` : `This card is cooling down for ${cardCooldownRemaining} more round(s).`),
+          ? t('gameplay.error_points')
+          : t('gameplay.error_cooldown', { count: cardCooldownRemaining }),
       );
       return;
     }
@@ -407,12 +435,12 @@ export default function GameplayCardsModal({
           <img
             className="gameplay-modal__art"
             src={GAMEPLAY_PANEL_ASSET}
-            alt="Gameplay tactics crest"
+            alt={isZh ? '玩法策略徽记' : 'Gameplay tactics crest'}
           />
           <h2>{t('gameplay.title')}</h2>
           <p className="modal-subtitle">{t('gameplay.subtitle')}</p>
           <p className="gameplay-modal__profile">
-            {isZh ? '当前玩法画像：' : 'Scenario profile: '}
+            {isZh ? '当前玩法画像' : 'Scenario profile'}:
             <strong>{getGameplayProfileLabel(gameplayProfile.id, isZh)}</strong>
             {' · '}
             {getGameplayProfileDescription(gameplayProfile.id, isZh)}
@@ -422,56 +450,48 @@ export default function GameplayCardsModal({
               <span key={hook} className="gameplay-modal__hook">{hook}</span>
             ))}
           </div>
-          <p className="gameplay-modal__resource">
-            {isZh ? '导演点数：' : 'Director points: '}
-            <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
-          </p>
-          <p className="gameplay-modal__preview-note">
-            <strong>{isZh ? '题材连锁事件' : 'Signature arc'}</strong>
-            <br />
-            {signatureArcState.sequenceLabels.join(' → ')}
-            <br />
-            {(isZh ? '进度' : 'Progress')}
-            {': '}
-            <strong>{signatureArcState.completedSteps}/{signatureArcState.totalSteps}</strong>
-            {signatureArcState.nextCardId && (
-              <>
-                {' · '}
-                {isZh ? '下一步' : 'Next'}
+          <div className="gameplay-modal__stats" aria-label={isZh ? '导演状态' : 'Director state'}>
+            <div className="gameplay-modal__stat">
+              <span>{directorPointsLabel}</span>
+              <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
+            </div>
+            <div className="gameplay-modal__stat">
+              <span>{systemTracks.riskLabel}</span>
+              <strong>{systemTracks.riskValue}/6</strong>
+            </div>
+            <div className="gameplay-modal__stat">
+              <span>{systemTracks.resourceLabel}</span>
+              <strong>{systemTracks.resourceValue}/6</strong>
+            </div>
+            <div className="gameplay-modal__stat">
+              <span>{pressureLabel}</span>
+              <strong>{systemTracks.pressure}</strong>
+            </div>
+          </div>
+          <div className="gameplay-modal__preview-stack">
+            <section className="gameplay-modal__preview-note">
+              <strong>{isZh ? '题材连锁事件' : 'Signature arc'}</strong>
+              <span>{signatureArcState.sequenceLabels.join(' → ')}</span>
+              <span>{signatureArcProgressText}</span>
+            </section>
+            <section className="gameplay-modal__preview-note gameplay-modal__preview-note--secondary">
+              <strong>{tacticalLabel}</strong>
+              <span>{tacticalState.label}</span>
+              <span>{tacticalState.note}</span>
+              <span>
+                {commitmentLabel}
                 {': '}
-                {getGameplayCardLabel(signatureArcState.nextCardId, isZh)}
-              </>
-            )}
-            <br />
-            {systemTracks.riskLabel}
-            {': '}
-            <strong>{systemTracks.riskValue}/6</strong>
-            {' · '}
-            {systemTracks.resourceLabel}
-            {': '}
-            <strong>{systemTracks.resourceValue}/6</strong>
-            {' · '}
-            {isZh ? '压强' : 'Pressure'}
-            {': '}
-            <strong>{systemTracks.pressure}</strong>
-            {meta.commitment.active && meta.commitment.branchTitle && (
-              <>
-                <br />
-                {isZh ? '当前承诺' : 'Committed branch'}
-                {': '}
-                <strong>{meta.commitment.branchTitle}</strong>
-              </>
-            )}
-            <br />
-            {isZh ? '当前打法' : 'Current play pattern'}
-            {': '}
-            <strong>{tacticalState.label}</strong>
-            {' · '}
-            {tacticalState.note}
-          </p>
+                <strong>{meta.commitment.branchTitle ?? '—'}</strong>
+              </span>
+            </section>
+          </div>
+          <div className={`gameplay-modal__availability ${cardAvailability.ok && !readOnly ? 'gameplay-modal__availability--ready' : ''}`}>
+            <strong>{isZh ? '当前卡牌状态' : 'Card status'}</strong>
+            <span>{availabilityLabel}</span>
+          </div>
           {readOnly && (
             <p className="gameplay-modal__preview-note">
-              {disabledReason ?? (isZh ? '导演准备中，当前仅可预览玩法卡。' : 'Director tools are warming up. Preview only for now.')}
+              {disabledReason ?? previewStatusLabel}
             </p>
           )}
         </header>
@@ -487,7 +507,9 @@ export default function GameplayCardsModal({
               return (
                 <button
                   key={currentCardId}
-                  className={`gameplay-card gameplay-card--profile-${gameplayProfile.id} ${selected ? 'gameplay-card--active' : ''}`}
+                  className={`gameplay-card gameplay-card--profile-${gameplayProfile.id} ${selected ? 'gameplay-card--active' : 'gameplay-card--inactive'}`}
+                  type="button"
+                  aria-pressed={selected}
                   onClick={() => setCardId(currentCardId)}
                   disabled={isDisabled}
                 >
@@ -501,21 +523,23 @@ export default function GameplayCardsModal({
                     <span className="gameplay-card__head">
                       <span className="gameplay-card__icon">{card.icon}</span>
                       <span className="gameplay-card__label">{isZh ? card.labelZh : card.labelEn}</span>
-                      {recommended && (
-                        <span className="gameplay-card__badge">
-                          <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
-                          <span>
-                            {currentCardId === nextCardId
-                              ? (isZh ? '下一步' : 'Next')
-                              : (isZh ? '推荐' : 'Recommended')}
+                      <span className="gameplay-card__badge-stack">
+                        {recommended && (
+                          <span className="gameplay-card__badge gameplay-card__badge--recommended">
+                            <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
+                            <span>
+                              {currentCardId === nextCardId
+                                ? (isZh ? '下一步' : 'Next')
+                                : (isZh ? '推荐' : 'Recommended')}
+                            </span>
                           </span>
-                        </span>
-                      )}
-                      {isCounterplayCard(currentCardId) && (
-                        <span className="gameplay-card__badge">
-                          <span>{isZh ? '反制' : 'Counter'}</span>
-                        </span>
-                      )}
+                        )}
+                        {isCounterplayCard(currentCardId) && (
+                          <span className="gameplay-card__badge gameplay-card__badge--counter">
+                            <span>{isZh ? '反制' : 'Counter'}</span>
+                          </span>
+                        )}
+                      </span>
                     </span>
                     <span className="gameplay-card__desc">
                       {isZh ? card.descriptionZh : card.descriptionEn}
@@ -540,6 +564,54 @@ export default function GameplayCardsModal({
             })}
           </div>
 
+          <section className="gameplay-modal__selection" aria-live="polite">
+            <div className="gameplay-modal__selection-head">
+              <div className="gameplay-modal__selection-copy">
+                <span className="gameplay-modal__selection-kicker">
+                  {isZh ? '当前卡牌' : 'Selected card'}
+                </span>
+                <strong>{selectedCardLabel}</strong>
+              </div>
+              <span
+                className={`gameplay-modal__selection-state ${cardAvailability.ok && !readOnly ? 'gameplay-modal__selection-state--ready' : ''}`}
+              >
+                {readOnly ? readOnlyLabel : availabilityLabel}
+              </span>
+            </div>
+            <div className="gameplay-modal__selection-grid">
+              <div className="gameplay-modal__selection-item">
+                <span>{t('gameplay.target_branch')}</span>
+                <strong>{targetBranch?.title ?? waitingBranchLabel}</strong>
+              </div>
+              <div className="gameplay-modal__selection-item">
+                <span>{directorPointsLabel}</span>
+                <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
+              </div>
+              {requiresPrimaryAgent && (
+                <div className="gameplay-modal__selection-item">
+                  <span>{t('gameplay.primary_agent')}</span>
+                  <strong>{primaryAgentId ? (agentsById[primaryAgentId]?.name ?? waitingAgentLabel) : waitingAgentLabel}</strong>
+                </div>
+              )}
+              {requiresSecondAgent && (
+                <div className="gameplay-modal__selection-item">
+                  <span>{t('gameplay.secondary_agent')}</span>
+                  <strong>{secondaryAgentId ? (agentsById[secondaryAgentId]?.name ?? waitingAgentLabel) : waitingAgentLabel}</strong>
+                </div>
+              )}
+              {requiresSourceBranch && (
+                <div className="gameplay-modal__selection-item">
+                <span>{t('gameplay.source_branch')}</span>
+                <strong>{sourceBranch?.title ?? waitingSourceLabel}</strong>
+              </div>
+            )}
+            <div className="gameplay-modal__selection-item">
+              <span>{isZh ? '导向提示' : 'Directive mode'}</span>
+              <strong>{directiveModeLabel}</strong>
+            </div>
+          </div>
+          </section>
+
           <div className="modal-field gameplay-modal__field">
             <label>{t('gameplay.target_branch')}</label>
             <select
@@ -555,7 +627,7 @@ export default function GameplayCardsModal({
                   </option>
                 ))
               ) : (
-                <option value="">{isZh ? '等待分支同步…' : 'Waiting for branches…'}</option>
+                <option value="">{waitingBranchLabel}</option>
               )}
             </select>
           </div>
@@ -570,16 +642,16 @@ export default function GameplayCardsModal({
                 disabled={isDisabled}
               >
                 {agents.length > 0 ? (
-                  agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">{isZh ? '等待角色同步…' : 'Waiting for agents…'}</option>
-                )}
-              </select>
-            </div>
+                agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">{waitingAgentLabel}</option>
+              )}
+            </select>
+          </div>
           )}
 
           {requiresSecondAgent && (
@@ -592,16 +664,16 @@ export default function GameplayCardsModal({
                 disabled={isDisabled}
               >
                 {agents.length > 0 ? (
-                  agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">{isZh ? '等待角色同步…' : 'Waiting for agents…'}</option>
-                )}
-              </select>
-            </div>
+                agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">{waitingAgentLabel}</option>
+              )}
+            </select>
+          </div>
           )}
 
           {requiresSourceBranch && (
@@ -622,7 +694,7 @@ export default function GameplayCardsModal({
                       </option>
                     ))
                 ) : (
-                  <option value="">{isZh ? '等待来源世界线…' : 'Waiting for source branch…'}</option>
+                  <option value="">{waitingSourceLabel}</option>
                 )}
               </select>
             </div>
@@ -631,6 +703,7 @@ export default function GameplayCardsModal({
           <textarea
             ref={inputRef}
             className="intervention-input gameplay-modal__textarea"
+            aria-label={isZh ? '玩法卡指令' : 'Gameplay card directive'}
             placeholder={placeholder}
             value={customDirective}
             onChange={(event) => setCustomDirectiveOverride(event.target.value)}
@@ -642,8 +715,14 @@ export default function GameplayCardsModal({
             {t('gameplay.hint')}
           </p>
 
-          {errorMsg && <p className="modal-error">{errorMsg}</p>}
-          {status === 'success' && <p className="modal-success">{t('intervention.success')}</p>}
+          <div className="gameplay-modal__status" aria-live="polite">
+            {errorMsg && <p className="modal-error">{errorMsg}</p>}
+            {status === 'success' && (
+              <p className="modal-success">
+                {isZh ? '玩法卡已注入，世界线正在响应这次导演动作。' : 'Card injected. The worldline is now reacting to your director move.'}
+              </p>
+            )}
+          </div>
         </div>
 
         <footer className="modal-footer">
@@ -652,9 +731,9 @@ export default function GameplayCardsModal({
           </button>
           <button className="btn btn-primary" onClick={handleSubmit} disabled={isDisabled}>
             {status === 'submitting'
-              ? '...'
+              ? submittingLabel
               : readOnly
-                ? (isZh ? '导演准备中' : 'Preparing Director Tools')
+                ? readOnlyLabel
                 : t('gameplay.apply')}
           </button>
         </footer>

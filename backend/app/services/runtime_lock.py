@@ -143,6 +143,41 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
         conn.close()
 
 
+def runtime_lock_is_active(lock_key: str) -> bool:
+    """Return whether a runtime lock is currently active for the given key."""
+    now = time.time()
+    db_path = _runtime_lock_db_path()
+
+    if db_path is None:
+        with _INPROCESS_LOCKS_GUARD:
+            _sweep_expired_inprocess_locks(now)
+            current = _INPROCESS_LOCKS.get(lock_key)
+            return current is not None and current[1] > now
+
+    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_runtime_lock_table(conn)
+        conn.execute(
+            f"DELETE FROM {_RUNTIME_LOCK_TABLE} WHERE expires_at <= ?",
+            (now,),
+        )
+        current = conn.execute(
+            f"SELECT 1 FROM {_RUNTIME_LOCK_TABLE} WHERE lock_key = ? LIMIT 1",
+            (lock_key,),
+        ).fetchone()
+        conn.execute("COMMIT")
+        return current is not None
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
 def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
     """Release a previously acquired runtime lock lease."""
     if lease is None:

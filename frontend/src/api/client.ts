@@ -87,6 +87,7 @@ export interface LlmProviderRequestOptions {
   llmModel?: string;
   reasoningEffort?: string;
   userId?: string;
+  disableUserQuota?: boolean;
 }
 
 export interface CreateScenarioOptions extends LlmProviderRequestOptions {
@@ -96,6 +97,22 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   mode?: 'raw' | 'blackboard';
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
+}
+
+export interface LlmProbeResponse {
+  status: string;
+  model: string;
+  local_provider: boolean;
+  allow_disable_user_quota: boolean;
+  estimated_parallelism: number;
+  tested_parallelism: number;
+  recommended: {
+    agents_min: number;
+    agents_max: number;
+    rounds_min: number;
+    rounds_max: number;
+  };
+  failure?: string | null;
 }
 
 async function fetchWithTimeout(
@@ -173,7 +190,7 @@ export async function testLlmConnection(
   apiKey?: string,
   baseUrl?: string,
   model?: string,
-): Promise<{ server: string; llm: { status: string; model: string; response?: string; error?: string } }> {
+): Promise<{ server: string; llm: { status: string; model: string; response?: string; error?: string }; probe?: LlmProbeResponse | null }> {
   return request('/health/test', {
     method: 'POST',
     body: JSON.stringify({
@@ -200,6 +217,7 @@ export async function createScenario(
     reasoningEffort,
     visualizationEnabled,
     userId,
+    disableUserQuota,
   } = options;
   return request('/scenario', {
     method: 'POST',
@@ -215,6 +233,7 @@ export async function createScenario(
       ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
       ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
       ...(userId && { user_id: userId }),
+      ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
     }),
   });
 }
