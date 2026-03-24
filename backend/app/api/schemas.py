@@ -17,6 +17,10 @@ class CreateScenarioRequest(BaseModel):
     mode: str | None = "blackboard"  # "raw" | "blackboard"
     hierarchical: bool | None = None  # P3-A: force hierarchical mode (auto-detected if num_agents > threshold)
     reasoning_effort: str | None = None  # "low" | "medium" | "high" | None (= use server default or disabled)
+    temperature: float | None = None  # Chat-completions sampling temperature override
+    branch_sensitivity: float | None = None  # Override branch detector sensitivity (0-1)
+    fork_prompt_variant: str | None = None  # Detector prompt variant: "a" | "b"
+    fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection
     # P4-E: BYOK — bring your own key
     llm_api_key: str | None = None    # OpenAI-compatible API key
     llm_base_url: str | None = None   # OpenAI-compatible base URL (e.g. https://api.openai.com/v1/chat/completions)
@@ -69,6 +73,39 @@ class CreateScenarioRequest(BaseModel):
     def validate_reasoning_effort(cls, v: str | None) -> str | None:
         if v is not None and v not in ("low", "medium", "high"):
             raise ValueError("reasoning_effort must be 'low', 'medium', or 'high'")
+        return v
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, v: float | None) -> float | None:
+        if v is not None and not (0.0 <= v <= 2.0):
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        return v
+
+    @field_validator("branch_sensitivity")
+    @classmethod
+    def validate_branch_sensitivity(cls, v: float | None) -> float | None:
+        if v is not None and not (0.0 <= v <= 1.0):
+            raise ValueError("branch_sensitivity must be between 0.0 and 1.0")
+        return v
+
+    @field_validator("fork_prompt_variant")
+    @classmethod
+    def validate_fork_prompt_variant(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip().lower()
+        if normalized not in ("a", "b", "c", "d", "e", "f"):
+            raise ValueError("fork_prompt_variant must be 'a', 'b', 'c', 'd', 'e', or 'f'")
+        return normalized
+
+    @field_validator("fork_detector_active_branch_limit")
+    @classmethod
+    def validate_fork_detector_active_branch_limit(cls, v: int | None) -> int | None:
+        if v is not None and not (1 <= v <= settings.MAX_BRANCHES):
+            raise ValueError(
+                f"fork_detector_active_branch_limit must be between 1 and {settings.MAX_BRANCHES}"
+            )
         return v
 
 

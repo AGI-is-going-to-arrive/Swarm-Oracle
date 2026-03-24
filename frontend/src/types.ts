@@ -304,6 +304,43 @@ export interface ScenarioForkDebugEvent {
   child_branch_ids: string[];
 }
 
+export interface ScenarioForkDebugBranchProposal {
+  title: string;
+  probability: number;
+  description_excerpt?: string;
+}
+
+export interface ScenarioForkDebugRoundResult {
+  should_fork: boolean;
+  reason: string;
+  branches: ScenarioForkDebugBranchProposal[];
+}
+
+export interface ScenarioForkDebugRoundCheck {
+  branch_id: string;
+  branch_title?: string;
+  round: number;
+  active_branch_count: number;
+  max_branches: number;
+  fork_detector_active_branch_limit?: number | null;
+  detector_branch_rank?: number | null;
+  detector_branch_budget_eligible?: boolean;
+  sim_rounds: number;
+  sensitivity: number;
+  temperature?: number | null;
+  prompt_variant?: 'a' | 'b' | 'c' | 'd' | 'e' | 'f';
+  diverge_signal_count: number;
+  diverge_signals: string[];
+  recent_summary_excerpt: string;
+  detector_invoked: boolean;
+  skip_reason?: string | null;
+  decision: 'pending' | 'skipped' | 'no_fork' | 'fork_created';
+  detector_result?: ScenarioForkDebugRoundResult | null;
+  created_branch_count?: number;
+  created_branch_ids?: string[];
+  created_branch_titles?: string[];
+}
+
 export interface ScenarioForkDebug {
   message_count: number;
   diverge_message_count: number;
@@ -311,6 +348,7 @@ export interface ScenarioForkDebug {
   fork_event_count: number;
   forked_branch_count: number;
   fork_events: ScenarioForkDebugEvent[];
+  round_checks?: ScenarioForkDebugRoundCheck[];
 }
 
 export interface InterventionPayload {

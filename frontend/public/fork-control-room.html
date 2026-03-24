@@ -1,0 +1,1465 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fork Detector Control Room</title>
+    <style>
+      :root {
+        --bg: #0d1115;
+        --bg-elevated: rgba(18, 24, 30, 0.86);
+        --bg-soft: rgba(27, 36, 44, 0.76);
+        --line: rgba(255, 255, 255, 0.08);
+        --line-strong: rgba(255, 255, 255, 0.14);
+        --text: #eef1eb;
+        --text-dim: #adb7ac;
+        --text-soft: #87928a;
+        --gold: #d7b56d;
+        --amber: #b78338;
+        --teal: #6eb7a2;
+        --red: #cf7666;
+        --olive: #76815f;
+        --violet: #7e8bbd;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+        --radius-xl: 28px;
+        --radius-lg: 20px;
+        --radius-md: 14px;
+        --radius-sm: 10px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(215, 181, 109, 0.16), transparent 34%),
+          radial-gradient(circle at top right, rgba(110, 183, 162, 0.12), transparent 32%),
+          linear-gradient(180deg, #11171d 0%, #0a0d10 100%);
+        font-family:
+          "Avenir Next",
+          "PingFang SC",
+          "Noto Sans SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        background-size: 22px 22px;
+        mask-image: radial-gradient(circle at center, black 42%, transparent 90%);
+        opacity: 0.4;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .shell {
+        width: min(1280px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 64px;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 16px;
+        z-index: 30;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 20px;
+        padding: 14px 18px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        backdrop-filter: blur(18px);
+        background: rgba(9, 12, 15, 0.66);
+        box-shadow: var(--shadow);
+      }
+
+      .topbar__brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .seal {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        border-radius: 14px;
+        background:
+          linear-gradient(145deg, rgba(215, 181, 109, 0.32), rgba(183, 131, 56, 0.08));
+        border: 1px solid rgba(215, 181, 109, 0.38);
+        color: var(--gold);
+        font-size: 22px;
+        flex: none;
+      }
+
+      .topbar__eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+      }
+
+      .topbar__title {
+        font-size: 16px;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .topbar__nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        text-decoration: none;
+        color: var(--text-dim);
+        transition: 180ms ease;
+      }
+
+      .pill:hover {
+        color: var(--text);
+        border-color: rgba(215, 181, 109, 0.4);
+        transform: translateY(-1px);
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        padding: clamp(28px, 5vw, 54px);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(125deg, rgba(28, 35, 40, 0.94), rgba(10, 15, 20, 0.92)),
+          radial-gradient(circle at 20% 10%, rgba(215, 181, 109, 0.16), transparent 35%);
+        box-shadow: var(--shadow);
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: auto -12% -34% 46%;
+        height: 260px;
+        background: radial-gradient(circle, rgba(110, 183, 162, 0.16), transparent 65%);
+        pointer-events: none;
+      }
+
+      .hero__grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
+        gap: clamp(24px, 4vw, 40px);
+        align-items: end;
+      }
+
+      .hero__kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+        padding: 10px 14px;
+        border: 1px solid rgba(215, 181, 109, 0.26);
+        border-radius: 999px;
+        background: rgba(215, 181, 109, 0.08);
+        color: var(--gold);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .hero h1 {
+        margin: 0;
+        max-width: 12ch;
+        font-family:
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          "Baskerville",
+          Georgia,
+          serif;
+        font-size: clamp(40px, 7vw, 82px);
+        line-height: 0.96;
+        letter-spacing: -0.03em;
+      }
+
+      .hero p {
+        margin: 18px 0 0;
+        max-width: 64ch;
+        color: var(--text-dim);
+        font-size: clamp(15px, 2vw, 18px);
+        line-height: 1.72;
+      }
+
+      .hero__stats {
+        display: grid;
+        gap: 12px;
+      }
+
+      .stat-card {
+        padding: 18px 18px 20px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .stat-card__label {
+        color: var(--text-soft);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .stat-card__value {
+        margin-top: 8px;
+        font-size: 30px;
+        font-weight: 700;
+      }
+
+      .stat-card__caption {
+        margin-top: 6px;
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .lens-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 14px;
+      }
+
+      .lens-card {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+      }
+
+      .lens-card h3 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+
+      .lens-card p {
+        margin: 0;
+        color: var(--text-dim);
+        line-height: 1.65;
+      }
+
+      .principle-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .principle-item {
+        display: flex;
+        gap: 12px;
+        padding: 14px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .principle-item__index {
+        width: 28px;
+        height: 28px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: rgba(215, 181, 109, 0.14);
+        color: var(--gold);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .principle-item strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+
+      .principle-item span {
+        color: var(--text-dim);
+        line-height: 1.55;
+      }
+
+      .section {
+        margin-top: 26px;
+        padding: clamp(22px, 4vw, 32px);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--line);
+        background: var(--bg-elevated);
+        backdrop-filter: blur(12px);
+        box-shadow: var(--shadow);
+      }
+
+      .section__head {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 18px;
+        margin-bottom: 22px;
+      }
+
+      .section__eyebrow {
+        color: var(--gold);
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .section__title {
+        margin: 8px 0 0;
+        font-size: clamp(28px, 4vw, 44px);
+        line-height: 1.02;
+        font-family:
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          "Baskerville",
+          Georgia,
+          serif;
+      }
+
+      .section__copy {
+        max-width: 66ch;
+        color: var(--text-dim);
+        line-height: 1.7;
+      }
+
+      .variable-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .variable-card {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+        min-height: 232px;
+      }
+
+      .variable-card__tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text-soft);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .variable-card h3 {
+        margin: 14px 0 8px;
+        font-size: 22px;
+      }
+
+      .variable-card p {
+        margin: 0;
+        color: var(--text-dim);
+        line-height: 1.6;
+      }
+
+      .impact-list {
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 10px;
+      }
+
+      .impact-list li {
+        display: flex;
+        gap: 10px;
+        align-items: start;
+        color: var(--text-dim);
+        line-height: 1.5;
+      }
+
+      .impact-bullet {
+        width: 8px;
+        height: 8px;
+        margin-top: 7px;
+        border-radius: 50%;
+        background: var(--gold);
+        flex: none;
+      }
+
+      .lab {
+        display: grid;
+        grid-template-columns: 360px minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .panel {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: var(--bg-soft);
+      }
+
+      .controls {
+        display: grid;
+        gap: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 10px;
+      }
+
+      .field__label {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        font-size: 14px;
+        color: var(--text-dim);
+      }
+
+      .field__value {
+        color: var(--gold);
+        font-weight: 600;
+      }
+
+      select,
+      input[type="range"] {
+        width: 100%;
+      }
+
+      select {
+        appearance: none;
+        padding: 13px 14px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line-strong);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+        color: var(--text);
+        font: inherit;
+      }
+
+      input[type="range"] {
+        accent-color: var(--gold);
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
+        gap: 8px;
+      }
+
+      .segmented button {
+        padding: 11px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: 180ms ease;
+      }
+
+      .segmented button.is-active {
+        color: #0c1116;
+        background: linear-gradient(135deg, var(--gold), #f4dec2);
+        border-color: transparent;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      }
+
+      .result-stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .result-hero {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .result-box {
+        padding: 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .result-box__label {
+        color: var(--text-soft);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .result-box__value {
+        margin-top: 8px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+
+      .meter {
+        margin-top: 12px;
+        height: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .meter > span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--gold), var(--amber));
+      }
+
+      .callout-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 14px;
+      }
+
+      .quote {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        border: 1px solid rgba(215, 181, 109, 0.18);
+        background: linear-gradient(180deg, rgba(215, 181, 109, 0.08), rgba(255, 255, 255, 0.02));
+      }
+
+      .quote__label {
+        color: var(--gold);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .quote__body {
+        margin-top: 12px;
+        font-size: 18px;
+        line-height: 1.65;
+      }
+
+      .evidence-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .evidence-card {
+        padding: 16px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .evidence-card h4 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .evidence-card p {
+        margin: 10px 0 0;
+        color: var(--text-dim);
+        line-height: 1.56;
+      }
+
+      .evidence-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text-dim);
+        font-size: 12px;
+      }
+
+      .chart-grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .chart-card {
+        padding: 18px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .chart-card h4 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+
+      .bar-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .bar-row {
+        display: grid;
+        grid-template-columns: 200px minmax(0, 1fr) 86px;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .bar-label {
+        color: var(--text-dim);
+        font-size: 14px;
+      }
+
+      .bar-track {
+        height: 14px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .bar-fill {
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--teal), #b7ddcf);
+      }
+
+      .bar-value {
+        text-align: right;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .matrix-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .matrix-table th,
+      .matrix-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .matrix-table th {
+        color: var(--text-soft);
+        font-weight: 600;
+      }
+
+      .status-good {
+        color: var(--teal);
+      }
+
+      .status-mid {
+        color: var(--gold);
+      }
+
+      .status-hot {
+        color: var(--red);
+      }
+
+      .footer-note {
+        margin-top: 24px;
+        color: var(--text-soft);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      @media (max-width: 1100px) {
+        .hero__grid,
+        .lab,
+        .callout-grid,
+        .result-hero,
+        .evidence-grid,
+        .variable-grid,
+        .lens-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .bar-row {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .shell {
+          width: min(100vw - 20px, 100%);
+          padding-top: 16px;
+        }
+
+        .topbar {
+          position: static;
+          border-radius: 22px;
+        }
+
+        .topbar__nav {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="topbar">
+        <div class="topbar__brand">
+          <div class="seal">⟁</div>
+          <div>
+            <div class="topbar__eyebrow">Fork Detector Lab</div>
+            <div class="topbar__title">控制变量说明页 / 实验控制室</div>
+          </div>
+        </div>
+        <nav class="topbar__nav">
+          <a class="pill" href="#map">变量地图</a>
+          <a class="pill" href="#lab">交互沙盘</a>
+          <a class="pill" href="#charts">证据图表</a>
+          <a class="pill" href="#notes">结论摘要</a>
+        </nav>
+      </div>
+
+      <section class="hero">
+        <div class="hero__grid">
+          <div>
+            <div class="hero__kicker">Speculative Control Room</div>
+            <h1>Fork Detector 变量总览</h1>
+            <p>
+              这页把本轮实验里真正影响 <code>branch</code>、<code>fork</code>、
+              <code>多结局</code> 的控制变量全部收拢成一个可交互的网页。它区分了三类东西：
+              实验旋钮、系统硬门槛、以及已经用真实 E2E 样本测到的结果。
+            </p>
+          </div>
+          <div class="hero__stats">
+            <div class="stat-card">
+              <div class="stat-card__label">本轮最强因子</div>
+              <div class="stat-card__value">Detector Prompt</div>
+              <div class="stat-card__caption">在同参条件下，prompt A 与 B 可以把 fork 命中率从 0 拉到 1。</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card__label">最有效抑爆炸结构手段</div>
+              <div class="stat-card__value">k = 1</div>
+              <div class="stat-card__caption">`fork_detector_active_branch_limit=1` 跨题都能明显压低 branch 数，同时保留多结局。</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card__label">一个重要反例</div>
+              <div class="stat-card__value">F 失败</div>
+              <div class="stat-card__caption">提示词里口头要求“压缩成 2 条主路径”并没有抑制 branch 爆炸，反而更猛。</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section__head">
+          <div>
+            <div class="section__eyebrow">Design Lens</div>
+            <h2 class="section__title">按 teach-impeccable 对齐后的页面视角</h2>
+          </div>
+          <p class="section__copy">
+            这页不是普通实验报告，而是给策略型用户快速读懂 detector 行为的浏览器控制台。设计上下文来自项目现有的
+            <code>.impeccable.md</code>：用户是浏览器里的策略型探索者，品牌气质是
+            <strong>cinematic / tactical / legible</strong>。
+          </p>
+        </div>
+        <div class="lens-grid">
+          <article class="lens-card">
+            <h3>为什么它长这样</h3>
+            <p>
+              页面保留了“可玩的指挥室”气质，但刻意避免做成发光赛博面板或装饰性 AI
+              海报。顶部是命令条，正文是实验地图、交互沙盘和证据区块，目标是让第一次打开的人在几十秒内就能回答三个问题：
+              <strong>哪个变量最强、为什么会 fork、怎样压住 branch 爆炸</strong>。
+            </p>
+          </article>
+          <div class="principle-grid">
+            <div class="principle-item">
+              <div class="principle-item__index">01</div>
+              <div>
+                <strong>战略可读性优先</strong>
+                <span>先给结论，再给交互，再给证据；避免读者被实验细节淹没。</span>
+              </div>
+            </div>
+            <div class="principle-item">
+              <div class="principle-item__index">02</div>
+              <div>
+                <strong>浏览器优先而非花哨优先</strong>
+                <span>保留沉浸感，但所有控件、标签、表格和色彩都以可扫描为先。</span>
+              </div>
+            </div>
+            <div class="principle-item">
+              <div class="principle-item__index">03</div>
+              <div>
+                <strong>变量与硬门槛分离</strong>
+                <span>实验旋钮、结构开关、系统前提必须明确分层，不让因果关系混在一起。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="map" class="section">
+        <div class="section__head">
+          <div>
+            <div class="section__eyebrow">Variable Map</div>
+            <h2 class="section__title">这一轮到底控制了什么</h2>
+          </div>
+          <p class="section__copy">
+            页面里的变量分成两类：真正被拿来做实验的旋钮，以及系统先天存在、必须同时满足的硬门槛。
+          </p>
+        </div>
+        <div class="variable-grid">
+          <article class="variable-card">
+            <div class="variable-card__tag">实验旋钮</div>
+            <h3>temperature</h3>
+            <p>影响模型在既定 detector rubric 下如何解释同一批 <code>diverge</code> 信号。它会改 fork 命中率，但不是单调线性旋钮。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span>在保守 detector 下，会改变“这是互斥未来还是同一路线细节争论”的判断。</span></li>
+              <li><span class="impact-bullet"></span><span>在激进 detector 下，更像调节 fork 强度，而不是命中率开关。</span></li>
+            </ul>
+          </article>
+          <article class="variable-card">
+            <div class="variable-card__tag">实验旋钮</div>
+            <h3>branch_sensitivity</h3>
+            <p>直接进入 detector prompt 的灵敏度值。它确实有影响，但这题上不是“越高越容易 fork”的简单开关。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span>更像是 detector 的边界提示量，而不是硬阈值。</span></li>
+              <li><span class="impact-bullet"></span><span>和 prompt、temperature 强耦合，单独读它容易误判。</span></li>
+            </ul>
+          </article>
+          <article class="variable-card">
+            <div class="variable-card__tag">实验旋钮</div>
+            <h3>fork_prompt_variant</h3>
+            <p>决定 detector 认为什么叫“足够 fork”。这是本轮最强的影响项。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span>A：基线保守。</span></li>
+              <li><span class="impact-bullet"></span><span>B：把互斥未来、制度分流、积极先验一起叠满。</span></li>
+              <li><span class="impact-bullet"></span><span>C / D：分别测“互斥未来即足够”和“制度分流即足够”。</span></li>
+            </ul>
+          </article>
+          <article class="variable-card">
+            <div class="variable-card__tag">结构开关</div>
+            <h3>k / detector budget</h3>
+            <p><code>fork_detector_active_branch_limit</code>。不是限制谁说话，而是限制每轮还有多少条 active branch 能继续跑 detector。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span><code>k=0</code>：默认行为，所有 active branch 都可继续分叉。</span></li>
+              <li><span class="impact-bullet"></span><span><code>k=1</code>：只保留最高优先级那一条继续分叉，跨题都能压住爆炸。</span></li>
+            </ul>
+          </article>
+          <article class="variable-card">
+            <div class="variable-card__tag">上下文变量</div>
+            <h3>rounds</h3>
+            <p>不是 detector 的显式评分项，但它会改变可分叉窗口数量，也会改变同一 prompt 的行为模式。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span>轮数越长，越容易进入 branch fan-out 和长尾 narration。</span></li>
+              <li><span class="impact-bullet"></span><span>对照实验必须固定 rounds，否则会把 prompt/temperature 效应掺脏。</span></li>
+            </ul>
+          </article>
+          <article class="variable-card">
+            <div class="variable-card__tag">系统硬门槛</div>
+            <h3>必须先满足的条件</h3>
+            <p>这些不是本轮旋钮，而是 fork 前置条件。</p>
+            <ul class="impact-list">
+              <li><span class="impact-bullet"></span><span><code>diverge_signals</code> 非空</span></li>
+              <li><span class="impact-bullet"></span><span>不是最后一轮</span></li>
+              <li><span class="impact-bullet"></span><span>当前 active branch 数未到系统上限</span></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section id="lab" class="section">
+        <div class="section__head">
+          <div>
+            <div class="section__eyebrow">Control Lab</div>
+            <h2 class="section__title">交互沙盘</h2>
+          </div>
+          <p class="section__copy">
+            这里不是重新跑模型，而是把已经测出来的结果压成一个可读的交互式解释器。优先展示“已实测证据”；没有精确命中的组合时，再给经验判断。
+          </p>
+        </div>
+        <div class="lab">
+          <div class="panel controls">
+            <div class="field">
+              <div class="field__label"><span>题目类型</span><span class="field__value" id="question-value">马斯克登月</span></div>
+              <select id="question-select">
+                <option value="musk">如果我是马斯克 能登上月球吗？</option>
+                <option value="jury">轮值外部评审团重裁</option>
+                <option value="internet">互联网从未被发明</option>
+              </select>
+            </div>
+            <div class="field">
+              <div class="field__label"><span>Detector Prompt</span><span class="field__value" id="prompt-value">A</span></div>
+              <div class="segmented" id="prompt-segment"></div>
+            </div>
+            <div class="field">
+              <div class="field__label"><span>temperature</span><span class="field__value" id="temperature-value">0.4</span></div>
+              <input id="temperature-range" type="range" min="0" max="3" step="1" value="1" />
+            </div>
+            <div class="field">
+              <div class="field__label"><span>branch_sensitivity</span><span class="field__value" id="sensitivity-value">0.7</span></div>
+              <input id="sensitivity-range" type="range" min="0" max="2" step="1" value="1" />
+            </div>
+            <div class="field">
+              <div class="field__label"><span>Detector Budget k</span><span class="field__value" id="budget-value">0</span></div>
+              <div class="segmented" id="budget-segment"></div>
+            </div>
+            <div class="field">
+              <div class="field__label"><span>rounds</span><span class="field__value" id="rounds-value">5</span></div>
+              <div class="segmented" id="rounds-segment"></div>
+            </div>
+          </div>
+
+          <div class="result-stack">
+            <div class="result-hero">
+              <div class="result-box">
+                <div class="result-box__label">Fork 命中率</div>
+                <div class="result-box__value" id="fork-rate">--</div>
+                <div class="meter"><span id="fork-rate-meter" style="width: 0%"></span></div>
+              </div>
+              <div class="result-box">
+                <div class="result-box__label">平均 Branch 数</div>
+                <div class="result-box__value" id="branch-count">--</div>
+                <div class="meter"><span id="branch-count-meter" style="width: 0%"></span></div>
+              </div>
+              <div class="result-box">
+                <div class="result-box__label">解释等级</div>
+                <div class="result-box__value" id="explain-grade">--</div>
+                <div class="stat-card__caption" id="evidence-mode">--</div>
+              </div>
+            </div>
+
+            <div class="callout-grid">
+              <div class="quote">
+                <div class="quote__label">这一组更可能发生什么</div>
+                <div id="scenario-summary" class="quote__body"></div>
+              </div>
+              <div class="panel">
+                <div class="quote__label">因果解释</div>
+                <ul id="why-list" class="impact-list"></ul>
+              </div>
+            </div>
+
+            <div class="evidence-grid">
+              <article class="evidence-card">
+                <h4>首轮 detector 理由</h4>
+                <p id="first-reason">--</p>
+              </article>
+              <article class="evidence-card">
+                <h4>首轮可能压出的主路径</h4>
+                <div id="first-titles" class="evidence-chip-row"></div>
+              </article>
+              <article class="evidence-card">
+                <h4>关键观察</h4>
+                <div id="observation-chips" class="evidence-chip-row"></div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="charts" class="section">
+        <div class="section__head">
+          <div>
+            <div class="section__eyebrow">Evidence</div>
+            <h2 class="section__title">实验图表</h2>
+          </div>
+          <p class="section__copy">
+            这里展示的是已经跑过的真实矩阵，不是拍脑袋的推断。
+          </p>
+        </div>
+        <div class="chart-grid">
+          <div class="chart-card">
+            <h4>Prompt A/B 在马斯克题上的命中率差异（5 rounds）</h4>
+            <div class="bar-list" id="ab-chart"></div>
+          </div>
+          <div class="chart-card">
+            <h4>Prompt 消融强度排序（马斯克题，3 rounds）</h4>
+            <div class="bar-list" id="ablation-chart"></div>
+          </div>
+          <div class="chart-card">
+            <h4>Budget 开关的跨题效果（prompt B，3 rounds）</h4>
+            <table class="matrix-table" id="budget-table"></table>
+          </div>
+        </div>
+      </section>
+
+      <section id="notes" class="section">
+        <div class="section__head">
+          <div>
+            <div class="section__eyebrow">Takeaways</div>
+            <h2 class="section__title">读完这页后该记住什么</h2>
+          </div>
+        </div>
+        <div class="evidence-grid">
+          <article class="evidence-card">
+            <h4>Prompt 是主导项</h4>
+            <p>同一题、同一温度、同一 sensitivity，仅仅更换 detector prompt，就能把 fork 命中率从 0 拉到 1。</p>
+          </article>
+          <article class="evidence-card">
+            <h4>结构预算比提示词压缩有效</h4>
+            <p><code>k=1</code> 跨题都能明显压低 branch 数；而“在 prompt 里要求少分几条”并没有成功抑爆炸。</p>
+          </article>
+          <article class="evidence-card">
+            <h4>C 与 D 是强因子</h4>
+            <p><code>C</code> 把“互斥未来”视为充分条件；<code>D</code> 把“制度/审批/责任链分流”视为充分条件。它们都不是题目特异幻觉。</p>
+          </article>
+        </div>
+        <p class="footer-note">
+          页面依据本轮真实产物整理，包括 `musk-factor-matrix`、`musk-sensitivity-temperature-matrix`、
+          `musk-prompt-ab-matrix`、`musk-prompt-ablation-matrix-r3`、
+          `budget-generalization-matrix` 与其它对照实验。结论用于解释 fork 行为，不直接等价于产品默认配置建议。
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const prompts = ["a", "b", "c", "d", "e", "f"];
+      const temperatures = [0, 0.4, 0.7, 1];
+      const sensitivities = [0.3, 0.7, 0.9];
+      const budgets = [0, 1, 2];
+      const roundsOptions = [3, 5];
+
+      const evidence = {
+        musk: {
+          title: "如果我是马斯克 能登上月球吗？",
+          promptAB5: [
+            { label: "A", forkRate: 0, branchCount: 1 },
+            { label: "B", forkRate: 1, branchCount: 13 },
+          ],
+          ablation3: {
+            a: { forkRate: 1, branchCount: 4.5, reason: "基线 detector 也会 fork，但强度偏中。", titles: ["创始人亲自上船", "企业负责人退居幕后"] },
+            b: { forkRate: 1, branchCount: 12.5, reason: "把互斥未来、制度分流、积极先验一起叠满。", titles: ["标准优先不例外", "合规放行登月", "政治背书加码"] },
+            c: { forkRate: 1, branchCount: 8.5, reason: "只要互斥未来已经出现，就足够 fork。", titles: ["地面统筹登月", "创始人亲赴月面"] },
+            d: { forkRate: 1, branchCount: 6.5, reason: "审批/责任链分流本身就是有效 fork 信号。", titles: ["特批登月乘员线", "标准审查留地面"] },
+            e: { forkRate: 1, branchCount: 4.0, reason: "把 no_fork 门槛变严，但单独作用不如 C/D。", titles: ["固定价快登月", "成本加成稳推进"] },
+            f: { forkRate: 1, branchCount: 17, reason: "提示词压缩失败，反而更容易先过度分叉。", titles: ["激进压缩失败", "先分叉再失控"] },
+          },
+          factor5: [
+            { temp: 0, sensitivity: 0.3, forkRate: 0.5, branchCount: 2 },
+            { temp: 0, sensitivity: 0.7, forkRate: 0, branchCount: 1 },
+            { temp: 0, sensitivity: 0.9, forkRate: 0.5, branchCount: 2 },
+            { temp: 0.4, sensitivity: 0.3, forkRate: 0, branchCount: 1 },
+            { temp: 0.4, sensitivity: 0.7, forkRate: 0, branchCount: 1 },
+            { temp: 0.4, sensitivity: 0.9, forkRate: 0.5, branchCount: 2 },
+            { temp: 0.7, sensitivity: 0.3, forkRate: 0.5, branchCount: 2 },
+            { temp: 0.7, sensitivity: 0.7, forkRate: 0, branchCount: 1 },
+            { temp: 0.7, sensitivity: 0.9, forkRate: 0, branchCount: 1 },
+            { temp: 1, sensitivity: 0.3, forkRate: 1, branchCount: 3.5 },
+            { temp: 1, sensitivity: 0.7, forkRate: 0.5, branchCount: 2 },
+            { temp: 1, sensitivity: 0.9, forkRate: 0.5, branchCount: 2 },
+          ],
+          promptB3: temperatures.flatMap((temp) =>
+            sensitivities.map((sensitivity) => ({
+              temp,
+              sensitivity,
+              forkRate: 1,
+              branchCount:
+                temp === 0.7 && sensitivity < 0.9 ? 10 :
+                temp === 0 && sensitivity === 0.9 ? 10 :
+                temp === 0.4 && sensitivity === 0.9 ? 12 :
+                13,
+            })),
+          ),
+          budget3: [
+            { k: 0, forkRate: 1, branchCount: 10, storyCount: 9 },
+            { k: 1, forkRate: 1, branchCount: 7, storyCount: 7 },
+            { k: 2, forkRate: 1, branchCount: 10, storyCount: 10 },
+          ],
+          notes: [
+            "这题的主冲突会在“亲自上船 vs 留在地面掌舵”之间来回摆动。",
+            "Detector 很容易把“同一安全原则下的争论”判成 no_fork。",
+            "一旦 prompt B 启用，几乎所有参数组合都会多结局。",
+          ],
+        },
+        jury: {
+          title: "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
+          ablation3: {
+            a: { forkRate: 1, branchCount: 7, reason: "基线 detector 已经能在制度题上抓住结构性分歧。", titles: ["外审强权定局", "限权复核成型", "制度反噬回撤"] },
+            b: { forkRate: 1, branchCount: 13, reason: "激进 detector 会把制度分流放大成高强度多结局。", titles: ["外审强权定局", "限权复核成型", "制度反噬回撤"] },
+            c: { forkRate: 1, branchCount: 7, reason: "互斥未来规则生效，但不如 B 激进。", titles: ["复核夺权", "例外保留"] },
+            d: { forkRate: 1, branchCount: 7, reason: "制度/审批/责任链分流在这题上非常匹配。", titles: ["评审夺权", "行政守权"] },
+            e: { forkRate: 0.7, branchCount: 5, reason: "这里只能给经验判断，本轮没专门重跑 E。", titles: ["不确定"] },
+            f: { forkRate: 0.7, branchCount: 5, reason: "未专门测 F，但从马斯克题经验看不值得期待。", titles: ["未实测"] },
+          },
+          budget3: [
+            { k: 0, forkRate: 1, branchCount: 13, storyCount: 13 },
+            { k: 1, forkRate: 1, branchCount: 7, storyCount: 7 },
+            { k: 2, forkRate: 1, branchCount: 10, storyCount: 10 },
+          ],
+          notes: [
+            "制度题比人物题更容易被 D 规则抓住。",
+            "但单独的 C/D 仍然没有 B 那么强。",
+            "budget=1 同样能压缩爆炸，而且跨题规律与马斯克题一致。",
+          ],
+        },
+        internet: {
+          title: "如果互联网从未被发明？",
+          promptB3: temperatures.flatMap((temp) =>
+            sensitivities.map((sensitivity) => ({
+              temp,
+              sensitivity,
+              forkRate: 1,
+              branchCount: temp === 0.7 && sensitivity < 0.9 ? 10 : 13,
+            })),
+          ),
+          budget3: [
+            { k: 0, forkRate: 1, branchCount: 13, storyCount: 13 },
+            { k: 1, forkRate: 1, branchCount: 9, storyCount: 9 },
+            { k: 2, forkRate: 1, branchCount: 11, storyCount: 11 },
+          ],
+          notes: [
+            "这题天然高分叉，所以 budget 压缩幅度小于前两题，但方向一致。",
+            "prompt B 在这类题上几乎是全参数稳定 fork。",
+          ],
+        },
+      };
+
+      const budgetGeneralization = [
+        { question: "马斯克登月", k0: "10 / 9", k1: "7 / 7", k2: "10 / 10" },
+        { question: "评审团重裁", k0: "13 / 13", k1: "7 / 7", k2: "10 / 10" },
+        { question: "无互联网世界", k0: "13 / 13", k1: "9 / 9", k2: "11 / 11" },
+      ];
+
+      const promptVariants = {
+        a: "A",
+        b: "B",
+        c: "C",
+        d: "D",
+        e: "E",
+        f: "F",
+      };
+
+      const state = {
+        question: "musk",
+        prompt: "a",
+        temperatureIndex: 1,
+        sensitivityIndex: 1,
+        budget: 0,
+        rounds: 5,
+      };
+
+      const promptSegment = document.getElementById("prompt-segment");
+      const budgetSegment = document.getElementById("budget-segment");
+      const roundsSegment = document.getElementById("rounds-segment");
+
+      function makeSegment(container, values, getLabel, onSelect) {
+        container.innerHTML = "";
+        values.forEach((value) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.value = value;
+          button.textContent = getLabel(value);
+          button.addEventListener("click", () => onSelect(value));
+          container.appendChild(button);
+        });
+      }
+
+      makeSegment(promptSegment, prompts, (value) => promptVariants[value], (value) => {
+        state.prompt = value;
+        render();
+      });
+      makeSegment(budgetSegment, budgets, (value) => `k=${value}`, (value) => {
+        state.budget = value;
+        render();
+      });
+      makeSegment(roundsSegment, roundsOptions, (value) => `${value} rounds`, (value) => {
+        state.rounds = value;
+        render();
+      });
+
+      document.getElementById("question-select").addEventListener("change", (event) => {
+        state.question = event.target.value;
+        render();
+      });
+      document.getElementById("temperature-range").addEventListener("input", (event) => {
+        state.temperatureIndex = Number(event.target.value);
+        render();
+      });
+      document.getElementById("sensitivity-range").addEventListener("input", (event) => {
+        state.sensitivityIndex = Number(event.target.value);
+        render();
+      });
+
+      function lookupData() {
+        const questionData = evidence[state.question];
+        const temp = temperatures[state.temperatureIndex];
+        const sensitivity = sensitivities[state.sensitivityIndex];
+        const rounds = state.rounds;
+        const prompt = state.prompt;
+        const budget = state.budget;
+
+        const exact5 = questionData.factor5?.find((item) => item.temp === temp && item.sensitivity === sensitivity);
+        const exactBudget = questionData.budget3?.find((item) => item.k === budget);
+        const ablation = questionData.ablation3?.[prompt] ?? null;
+
+        let evidenceMode = "经验判断";
+        let forkRate = 0.5;
+        let branchCount = 4;
+        let reason = "这个组合没有完全一一对应的实测点，因此这里只能给结构化经验判断。";
+        let titles = ["等待更多样本"];
+
+        if (budget > 0 && exactBudget) {
+          evidenceMode = "已实测 / Budget 泛化";
+          forkRate = exactBudget.forkRate;
+          branchCount = exactBudget.branchCount;
+          reason = "这里优先采用跨题 budget 泛化实验，因为 budget 的作用最直接。";
+          titles = [`story=${exactBudget.storyCount}`];
+        } else if (rounds === 5 && prompt === "a" && exact5) {
+          evidenceMode = "已实测 / 5 rounds";
+          forkRate = exact5.forkRate;
+          branchCount = exact5.branchCount;
+          reason = "这里命中的是 5 rounds 的温度 x sensitivity 实验。";
+          titles = ["基线 detector A"];
+        } else if (rounds === 3 && prompt === "b" && questionData.promptB3) {
+          const exact = questionData.promptB3.find((item) => item.temp === temp && item.sensitivity === sensitivity);
+          if (exact) {
+            evidenceMode = "已实测 / Prompt B 3 rounds";
+            forkRate = exact.forkRate;
+            branchCount = exact.branchCount;
+            reason = "这里命中的是激进 detector B 的 3 rounds 矩阵。";
+            titles = ["B 下几乎全参数稳定 fork"];
+          }
+        } else if (rounds === 3 && temp === 0.4 && sensitivity === 0.7 && ablation) {
+          evidenceMode = "已实测 / Prompt 消融";
+          forkRate = ablation.forkRate;
+          branchCount = ablation.branchCount;
+          reason = ablation.reason;
+          titles = ablation.titles;
+        } else if (rounds === 5 && temp === 0.4 && sensitivity === 0.7 && state.question === "musk") {
+          if (prompt === "b") {
+            evidenceMode = "已实测 / B 基线";
+            forkRate = 1;
+            branchCount = 13;
+            reason = "马斯克题在 5 rounds 下，B 是已知稳定高爆炸 detector。";
+            titles = ["标准优先不例外", "合规放行登月", "政治背书加码"];
+          } else if (prompt === "c") {
+            evidenceMode = "已实测 / C 5 rounds";
+            forkRate = 1;
+            branchCount = 14;
+            reason = "C 在 5 rounds 下已经强到和 B 同级，说明‘互斥未来即足够’是长期主因。";
+            titles = ["地面统筹登月", "创始人亲赴月面"];
+          } else if (prompt === "d") {
+            evidenceMode = "已实测 / D 5 rounds";
+            forkRate = 1;
+            branchCount = 14;
+            reason = "D 在 5 rounds 下同样达到高强度，说明制度/审批/责任链分流也是长期主因。";
+            titles = ["特批登月乘员线", "标准审查留地面"];
+          } else if (prompt === "f") {
+            evidenceMode = "已实测 / F 失败";
+            forkRate = 1;
+            branchCount = 17;
+            reason = "F 没有压住分支，反而比 B 更猛，说明口头要求压缩主路径并不可靠。";
+            titles = ["压缩失败", "过度分叉"];
+          }
+        }
+
+        return {
+          questionData,
+          temp,
+          sensitivity,
+          rounds,
+          prompt,
+          budget,
+          evidenceMode,
+          forkRate,
+          branchCount,
+          reason,
+          titles,
+        };
+      }
+
+      function renderSummary(model) {
+        const { questionData, prompt, budget, rounds, temp, sensitivity, evidenceMode, forkRate, branchCount, reason, titles } = model;
+        document.getElementById("question-value").textContent = questionData.title.replace("如果", "").replace("？", "");
+        document.getElementById("prompt-value").textContent = prompt.toUpperCase();
+        document.getElementById("temperature-value").textContent = temp.toFixed(1).replace(".0", "");
+        document.getElementById("sensitivity-value").textContent = sensitivity.toFixed(1);
+        document.getElementById("budget-value").textContent = String(budget);
+        document.getElementById("rounds-value").textContent = String(rounds);
+
+        [...promptSegment.children].forEach((button) => button.classList.toggle("is-active", button.dataset.value === prompt));
+        [...budgetSegment.children].forEach((button) => button.classList.toggle("is-active", Number(button.dataset.value) === budget));
+        [...roundsSegment.children].forEach((button) => button.classList.toggle("is-active", Number(button.dataset.value) === rounds));
+
+        const forkPercent = Math.round(model.forkRate * 100);
+        document.getElementById("fork-rate").textContent = `${forkPercent}%`;
+        document.getElementById("fork-rate-meter").style.width = `${forkPercent}%`;
+        document.getElementById("branch-count").textContent = branchCount.toFixed(1).replace(".0", "");
+        document.getElementById("branch-count-meter").style.width = `${Math.min(100, branchCount / 17 * 100)}%`;
+        document.getElementById("explain-grade").textContent = branchCount >= 12 ? "高爆炸" : branchCount >= 7 ? "中等分叉" : "克制分叉";
+        document.getElementById("evidence-mode").textContent = evidenceMode;
+
+        const summaryText = [];
+        if (budget === 1) {
+          summaryText.push("这组会优先保留最高优先级世界线继续分叉，结构上能明显压住 branch 爆炸。");
+        } else if (prompt === "b") {
+          summaryText.push("这组 detector 会把互斥未来和制度分流一起放大，天然更容易出现多结局。");
+        } else if (prompt === "c" || prompt === "d") {
+          summaryText.push("这组 detector 会把某一类分歧单独提升到足以 fork 的程度。");
+        } else if (prompt === "f") {
+          summaryText.push("这组 detector 看起来像压缩版，但实测并没有把 branch 数压下来。");
+        } else {
+          summaryText.push("这组更接近基线 detector；是否 fork 仍然高度依赖问题本身和运行时波动。");
+        }
+        summaryText.push(`当前已知平均 branch 数约为 ${branchCount.toFixed(1)}，fork 命中率约为 ${forkPercent}%。`);
+        document.getElementById("scenario-summary").textContent = summaryText.join(" ");
+
+        const whyList = document.getElementById("why-list");
+        whyList.innerHTML = "";
+        [
+          `prompt ${prompt.toUpperCase()} 决定 detector 认为什么叫“足够 fork”。`,
+          `temperature=${temp} 会影响模型如何解释同一批 diverge 信号。`,
+          `branch_sensitivity=${sensitivity} 会调整 detector 边界，但不是线性开关。`,
+          budget > 0
+            ? `k=${budget} 会限制每轮还能继续分叉的 active branch 名额。`
+            : "当前没有结构预算，所有 active branch 都能继续争取下一轮 fork。",
+        ].forEach((line) => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="impact-bullet"></span><span>${line}</span>`;
+          whyList.appendChild(li);
+        });
+
+        document.getElementById("first-reason").textContent = reason;
+        const titlesHost = document.getElementById("first-titles");
+        titlesHost.innerHTML = "";
+        titles.forEach((title) => {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = title;
+          titlesHost.appendChild(chip);
+        });
+
+        const observations = [];
+        if (prompt === "b") observations.push("Prompt 主导");
+        if (prompt === "c" || prompt === "d") observations.push("单因子偏置");
+        if (budget === 1) observations.push("结构抑爆炸");
+        if (branchCount >= 12) observations.push("高 branch fan-out");
+        if (branchCount <= 7) observations.push("可控强度");
+        if (rounds === 3) observations.push("短窗口");
+        if (rounds === 5) observations.push("长尾风险");
+
+        const obsHost = document.getElementById("observation-chips");
+        obsHost.innerHTML = "";
+        observations.forEach((item) => {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = item;
+          obsHost.appendChild(chip);
+        });
+      }
+
+      function renderBarChart(containerId, rows, formatter = (value) => value) {
+        const root = document.getElementById(containerId);
+        root.innerHTML = "";
+        rows.forEach((row) => {
+          const item = document.createElement("div");
+          item.className = "bar-row";
+          item.innerHTML = `
+            <div class="bar-label">${row.label}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${row.width}%"></div></div>
+            <div class="bar-value">${formatter(row.value)}</div>
+          `;
+          root.appendChild(item);
+        });
+      }
+
+      function renderBudgetTable() {
+        const table = document.getElementById("budget-table");
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th>题目</th>
+              <th>k = 0</th>
+              <th>k = 1</th>
+              <th>k = 2</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${budgetGeneralization
+              .map(
+                (row) => `
+                  <tr>
+                    <td>${row.question}</td>
+                    <td><span class="status-hot">${row.k0}</span></td>
+                    <td><span class="status-good">${row.k1}</span></td>
+                    <td><span class="status-mid">${row.k2}</span></td>
+                  </tr>
+                `,
+              )
+              .join("")}
+          </tbody>
+        `;
+      }
+
+      function renderCharts() {
+        renderBarChart(
+          "ab-chart",
+          evidence.musk.promptAB5.map((row) => ({
+            label: `Prompt ${row.label}`,
+            value: row.forkRate,
+            width: row.forkRate * 100,
+          })),
+          (value) => `${Math.round(value * 100)}%`,
+        );
+
+        renderBarChart(
+          "ablation-chart",
+          ["a", "b", "c", "d", "e", "f"].map((variant) => ({
+            label: `Prompt ${variant.toUpperCase()}`,
+            value: evidence.musk.ablation3[variant]?.branchCount ?? 0,
+            width: Math.min(100, ((evidence.musk.ablation3[variant]?.branchCount ?? 0) / 17) * 100),
+          })),
+          (value) => value.toFixed(1).replace(".0", ""),
+        );
+
+        renderBudgetTable();
+      }
+
+      function render() {
+        renderSummary(lookupData());
+        renderCharts();
+      }
+
+      render();
+    </script>
+  </body>
+</html>

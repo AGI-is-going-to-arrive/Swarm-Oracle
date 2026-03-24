@@ -141,6 +141,7 @@ async def compress_rounds(
     previous_briefing: dict | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
 ) -> dict:
     """Compress multiple rounds of agent messages into a structured situation briefing.
@@ -176,6 +177,7 @@ async def compress_rounds(
                 reasoning_effort="low",
                 api_key=api_key,
                 base_url=base_url,
+                temperature=temperature,
                 model=model,
             ),
             timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,

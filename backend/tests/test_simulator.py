@@ -29,6 +29,7 @@ from app.services.simulator import (
     _compress_round_memory,
     _create_branch,
     _create_round,
+    _detect_fork,
     _format_setting,
     _gather_agent_messages,
     _gather_hierarchical_messages,
@@ -294,6 +295,247 @@ class TestRunSimulation:
             scenario = session.get(Scenario, scenario_id)
             assert scenario is not None
             assert scenario.status == ScenarioStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_records_fork_debug_trace_when_detector_declines_fork(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 2,
+                "branch_sensitivity": 0.7,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="评审代理",
+                    role="分析师",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        async def _fake_llm_call_json(prompt, *_args, **_kwargs):
+            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+                return {
+                    "should_fork": False,
+                    "reason": "分歧仍可在同一制度路径内消化",
+                    "branches": [],
+                }
+            return {
+                "content": "仍有谈判空间。",
+                "emotion": "tense",
+                "diverge": "是否把重大决策全部交给外部评审团最终裁决",
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "外审开启",
+                "story": "争议被暂时留在单一路线内。",
+                "insight": "分歧存在，但还没压缩成互斥未来。",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            trace = list((scenario.parsed_context or {}).get("fork_debug_trace") or [])
+
+        declined = next(entry for entry in trace if entry["decision"] == "no_fork")
+        assert declined["detector_invoked"] is True
+        assert declined["detector_result"]["should_fork"] is False
+        assert declined["detector_result"]["reason"] == "分歧仍可在同一制度路径内消化"
+        assert declined["diverge_signal_count"] >= 1
+        assert any(entry["skip_reason"] == "last_round" for entry in trace)
+
+    @pytest.mark.asyncio
+    async def test_records_fork_debug_trace_when_detector_creates_fork(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 2,
+                "branch_sensitivity": 0.9,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="政策代理",
+                    role="战略家",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        async def _fake_llm_call_json(prompt, *_args, **_kwargs):
+            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+                return {
+                    "should_fork": True,
+                    "reason": "是否让外部评审团掌握最终裁决权会导向互斥制度未来",
+                    "branches": [
+                        {
+                            "title": "外审夺权",
+                            "description": "重大事项由外部评审团作最终拍板。",
+                            "probability": 0.55,
+                        },
+                        {
+                            "title": "内阁守权",
+                            "description": "外部评审保留复核权，内阁继续掌握最终决策。",
+                            "probability": 0.45,
+                        },
+                    ],
+                }
+            return {
+                "content": "这会彻底改写治理结构。",
+                "emotion": "urgent",
+                "diverge": "外部评审团究竟是复核机构还是最终裁决者",
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "制度分叉",
+                "story": "两条治理路线开始各自稳定。",
+                "insight": "分歧被压缩成了互斥未来路径。",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            trace = list((scenario.parsed_context or {}).get("fork_debug_trace") or [])
+            branches = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
+
+        fork_entry = next(entry for entry in trace if entry["decision"] == "fork_created")
+        assert fork_entry["detector_invoked"] is True
+        assert fork_entry["detector_result"]["should_fork"] is True
+        assert fork_entry["created_branch_count"] == 2
+        assert set(fork_entry["created_branch_titles"]) == {"外审夺权", "内阁守权"}
+        assert len(branches) == 3
+
+    @pytest.mark.asyncio
+    async def test_detector_branch_budget_skips_lower_ranked_active_branch(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 3,
+                "branch_sensitivity": 0.9,
+                "fork_prompt_variant": "a",
+                "fork_detector_active_branch_limit": 1,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="策略代理",
+                    role="分析师",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        detector_calls = 0
+
+        async def _fake_llm_call_json(prompt, *_args, **_kwargs):
+            nonlocal detector_calls
+            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+                detector_calls += 1
+                if detector_calls == 1:
+                    return {
+                        "should_fork": True,
+                        "reason": "首轮分成两条主线",
+                        "branches": [
+                            {
+                                "title": "高概率分支",
+                                "description": "继续推进主方案。",
+                                "probability": 0.6,
+                            },
+                            {
+                                "title": "低概率分支",
+                                "description": "转向次优方案。",
+                                "probability": 0.4,
+                            },
+                        ],
+                    }
+                return {
+                    "should_fork": False,
+                    "reason": "预算只允许高概率分支继续检测",
+                    "branches": [],
+                }
+            return {
+                "content": "继续推进。",
+                "emotion": "focused",
+                "diverge": "是否继续沿主方案推进",
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "结果分支",
+                "story": "叙事完成。",
+                "insight": "预算抑制了低概率继续分叉。",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            trace = list((scenario.parsed_context or {}).get("fork_debug_trace") or [])
+
+        skipped = next(
+            entry for entry in trace
+            if entry["skip_reason"] == "detector_budget_exceeded"
+        )
+        assert skipped["round"] == 2
+        assert skipped["fork_detector_active_branch_limit"] == 1
+        assert skipped["detector_branch_budget_eligible"] is False
+        assert skipped["detector_branch_rank"] == 2
 
     @pytest.mark.asyncio
     async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(
@@ -1120,9 +1362,10 @@ class TestCompressRoundMemory:
 
         captured = {}
 
-        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None, api_key=None, base_url=None, model=None):
+        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None, api_key=None, base_url=None, temperature=None, model=None):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
+            captured["temperature"] = temperature
             captured["model"] = model
             return {
                 "situation": "新局势",
@@ -1142,6 +1385,7 @@ class TestCompressRoundMemory:
             llm_overrides={
                 "api_key": "sk-test",
                 "base_url": "https://example.com/v1/chat/completions",
+                "temperature": 0.4,
                 "model": "gpt-test",
             },
         )
@@ -1149,6 +1393,7 @@ class TestCompressRoundMemory:
         assert captured == {
             "api_key": "sk-test",
             "base_url": "https://example.com/v1/chat/completions",
+            "temperature": 0.4,
             "model": "gpt-test",
         }
 
@@ -1204,9 +1449,10 @@ class TestNarrateBranchData:
 
         captured = {}
 
-        async def _fake_narrate_branch(*, branch_title, probability, agents_summary, raw_rounds, language, api_key=None, base_url=None, model=None):
+        async def _fake_narrate_branch(*, branch_title, probability, agents_summary, raw_rounds, language, api_key=None, base_url=None, temperature=None, model=None):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
+            captured["temperature"] = temperature
             captured["model"] = model
             return {"story": "story", "insight": "insight", "key_moments": []}
 
@@ -1220,6 +1466,7 @@ class TestNarrateBranchData:
             llm_overrides={
                 "api_key": "sk-test",
                 "base_url": "https://example.com/v1/chat/completions",
+                "temperature": 0.8,
                 "model": "gpt-test",
             },
         )
@@ -1228,8 +1475,82 @@ class TestNarrateBranchData:
         assert captured == {
             "api_key": "sk-test",
             "base_url": "https://example.com/v1/chat/completions",
+            "temperature": 0.8,
             "model": "gpt-test",
         }
+
+
+class TestDetectFork:
+    @pytest.mark.asyncio
+    async def test_passes_llm_overrides_into_detector(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线")
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "存在路线之争", "tense", "是否全面开战")
+
+        captured = {}
+
+        async def _fake_llm_call_json(*_args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            captured["base_url"] = kwargs.get("base_url")
+            captured["temperature"] = kwargs.get("temperature")
+            captured["model"] = kwargs.get("model")
+            return {"should_fork": False, "reason": "仍属单一路线", "branches": []}
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+
+        result = await _detect_fork(
+            engine,
+            bid,
+            ["是否全面开战"],
+            0.7,
+            llm_overrides={
+                "api_key": "sk-test",
+                "base_url": "https://example.com/v1/chat/completions",
+                "temperature": 0.6,
+                "model": "gpt-test",
+            },
+            language="Chinese",
+        )
+
+        assert result["should_fork"] is False
+        assert captured == {
+            "api_key": "sk-test",
+            "base_url": "https://example.com/v1/chat/completions",
+            "temperature": 0.6,
+            "model": "gpt-test",
+        }
+
+    @pytest.mark.asyncio
+    async def test_detector_variant_b_uses_alternate_prompt(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线")
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "存在制度分流", "tense", "是否改写审批链")
+
+        captured = {}
+
+        async def _fake_llm_call_json(prompt, *_args, **_kwargs):
+            captured["prompt"] = prompt
+            return {"should_fork": False, "reason": "still one path", "branches": []}
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+
+        await _detect_fork(
+            engine,
+            bid,
+            ["是否改写审批链"],
+            0.7,
+            prompt_variant="b",
+            language="Chinese",
+        )
+
+        assert "偏积极的世界线分叉分析师" in captured["prompt"]
+        assert "优先判定应该 fork" in captured["prompt"]
 
 
 # ── Corner Cases ─────────────────────────────────────────────

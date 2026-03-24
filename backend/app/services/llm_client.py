@@ -654,6 +654,7 @@ async def llm_call(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
     timeout: float = 120.0,
     api_key: str | None = None,
@@ -664,6 +665,7 @@ async def llm_call(
     Args:
         input_text: The prompt / instruction to send.
         reasoning_effort: Override reasoning effort (low/medium/high).
+        temperature: Override sampling temperature for chat-completions providers.
         model: Override model name.
         timeout: Request timeout in seconds.
         api_key: BYOK — override API key for this call.
@@ -690,6 +692,8 @@ async def llm_call(
         payload["messages"] = [{"role": "user", "content": input_text}]
         if effort:
             payload["reasoning_effort"] = effort
+        if temperature is not None:
+            payload["temperature"] = temperature
     else:
         # ── Responses API ──
         payload["input"] = input_text
@@ -995,6 +999,7 @@ async def llm_call_json(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
@@ -1005,7 +1010,10 @@ async def llm_call_json(
     Strips markdown code fences if present.
     """
     raw = await llm_call(
-        input_text, reasoning_effort=reasoning_effort, model=model,
+        input_text,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        model=model,
         api_key=api_key, base_url=base_url,
     )
 
@@ -1017,6 +1025,7 @@ async def llm_call_stream(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
     timeout: float = 120.0,
     api_key: str | None = None,
@@ -1045,6 +1054,8 @@ async def llm_call_stream(
         payload["messages"] = [{"role": "user", "content": input_text}]
         if effort:
             payload["reasoning_effort"] = effort
+        if temperature is not None:
+            payload["temperature"] = temperature
     else:
         payload["input"] = input_text
         if effort:
@@ -1157,6 +1168,7 @@ async def llm_call_json_stream(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
     on_delta: Any = None,
     api_key: str | None = None,
@@ -1170,7 +1182,10 @@ async def llm_call_json_stream(
     """
     full_text = ""
     async for delta in llm_call_stream(
-        input_text, reasoning_effort=reasoning_effort, model=model,
+        input_text,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        model=model,
         api_key=api_key, base_url=base_url,
     ):
         full_text += delta

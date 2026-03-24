@@ -68,11 +68,21 @@ alembic/ ──► Alembic 数据库迁移框架
 - **占位根分支复用**: `_get_or_create_root_branch()` 会复用 `POST /api/scenario` 阶段创建的 provisional root branch，避免启动期前端世界线骨架与模拟期真实根分支重复
 - **viz_push 辅助函数**: 统一所有 viz 广播调用，含 `viz_mapper is not None` 安全守卫
 - **Fork 抑制**: 最后一轮不 fork，保证所有叶子分支都有 Agent 发言
+- **Fork detector 调试**: 当前会把每轮 fork 判定记录到 `Scenario.parsed_context["fork_debug_trace"]`，并在 API 层聚合成 `fork_debug.round_checks`；内容包括 `branch_id / branch_title / round / diverge_signals / detector_invoked / skip_reason / decision / detector_result / created_branch_titles`
+- **Fork detector 运行时调参**: scenario 级运行当前可显式透传 `temperature / branch_sensitivity / fork_prompt_variant / fork_detector_active_branch_limit`
+- **Detector budget**: `fork_detector_active_branch_limit` 当前只限制“每轮还有多少个 ACTIVE branch 有资格继续跑 detector”；不会阻止这些分支发言、压缩记忆或进入 narration。当前排序规则是 `probability desc, branch_id asc`，超出预算的分支会在 `round_checks` 里带 `skip_reason = detector_budget_exceeded`
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning，避免后续剪枝/叙事继续吃坏概率；使用单数据库会话优化 (P2-8)
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
 - **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
 - **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入；`setting` 标签与 fork-detect prompt 当前都已按语言切换，不再让英文场景吃中文主体提示
+- **Prompt 变体**: fork detector 当前支持 `a / b / c / d / e / f`
+  - `a`：基线保守
+  - `b`：激进 detector，容易稳定多结局
+  - `c`：只要形成互斥未来就足够 fork
+  - `d`：只要形成制度/审批/责任链分流就足够 fork
+  - `e`：只有明确收敛才允许 `no_fork`
+  - `f`：尝试在 prompt 内强制压缩主路径；当前实测未能抑制 branch 爆炸
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
 - **消息落库**: 普通 agent 发言与 synthesized Worker 发言当前都改成按批次写入 `AgentMessage`，不再每条消息单独 commit；`_save_message()` 仍保留给旧调用点和测试使用
 - **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口；新的 round summary 已统一按 JSON 持久化，同时保留对旧 `str(dict)` 历史数据的兼容回退读取
@@ -109,6 +119,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
 - **Prompt 注入边界**: `build_agent_context()` / `_build_crowd_context()` 当前也会把 `shared_briefing / recent_messages` 统一包成 `UNTRUSTED DATA`，不再把共享简报或最近对话裸拼进 agent prompt
 - **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
+- **temperature 透传**: `compress_rounds()` 当前也接受 scenario 级 `temperature` 覆盖；如果本次运行显式传了 `temperature`，压缩链路会沿用同一设置，不再偷偷回退默认采样
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
   - `retrieve_relevant_memories(scenario_id, query, top_k)` → 格式化 Top-K 语义相关记忆
@@ -186,6 +197,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
 - **错误脱敏**: `_sanitize_error()` 当前除了 `Bearer ...`，还会掩码更通用的 key/token-like secret 片段，降低 BYOK/provider 错误回包把凭证打进日志的风险
 - **BYOK (P4-E)**: 所有函数接受 `api_key`/`base_url`/`model` 可选覆盖，用户可自带 OpenAI 兼容 API Key；API Key 仅内存传递不持久化
+- **temperature**: `llm_call / llm_call_json / llm_call_stream / llm_call_json_stream` 当前也都接受可选 `temperature`；仅当目标 provider 是 Chat Completions 路径时，才会把 `temperature` 写进 payload
 - **Provider policy 贯通**: 当前 BYOK/provider policy 已接进 `createScenario / social copy / score-predictions / createDebate`，同一份 `user_id` 也会参与用户级 pending 配额
 - **容器部署提示**: 如果后端在 Docker 容器内运行而 LLM 服务在宿主机本地，`LLM_RESPONSES_URL` 需要改为 `host.docker.internal` 或其他宿主可达地址；`POST /api/health` 会同步探测 LLM，因此容器健康检查现改用 `GET /`
 
@@ -199,6 +211,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **人数补足**: 如果 parser 在重试后仍少吐角色，当前会继续用确定性 extras 把 agent 数补到 `requested_agents`，不再只在 `requested_agents <= 12` 时才补齐
 - **fallback rounds**: fallback 轮数当前不再写死 `10`；会优先使用调用方给的默认轮数，再按 `max_rounds` 做 clamp
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
+- **temperature**: 解析阶段当前也接受 scenario 级 `temperature` 覆盖；首次 parse 与 under-filled retry 都会沿用同一 temperature，不再出现首轮和 retry 采样口径不一致
 
 ### `logging_utils.py` (≈90行) — 结构化日志配置 (**NEW**)
 - **职责**: 统一 backend 运行时日志格式，不改各模块现有 `logger.info/warning/error` 调用方式
@@ -239,6 +252,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **fallback 语言**: 当 LLM 不可用时，fallback narration 当前会跟随 `language` 输出中英文摘要，而不是固定中文兜底
 - **输入防护**: `branch_title / agents_summary / raw_rounds` 当前都会通过 `format_untrusted_text_block()` 包进 `UNTRUSTED DATA` 区块，再进入 narration prompt；可疑 prompt-injection 文本只会被当成待分析数据
 - **BYOK 透传**: narrator 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传，不把 BYOK 凭证落库
+- **temperature 透传**: narrator 当前也接受 scenario 级 `temperature` 覆盖；如果用户本次运行显式给了 temperature，结局文案不会回退到 provider 默认采样
 
 ### `campaign.py` (≈330行) — Campaign 进度服务 (**NEW**)
 - **职责**: 管理导演 campaign 进度结算、档案积分、题材 mastery 与 badge 解锁，以及单局 `director_state / gameplay_state` 权威态
@@ -351,7 +365,9 @@ alembic/ ──► Alembic 数据库迁移框架
 >
 > **helpers 运行口径**：`api/helpers.py` 里的 fire-and-forget background task 当前会在 done callback 中主动记录未捕获异常，不再静默吞掉；simulation 失败时发给前端的 `simulation_error` 事件，也已经升级成结构化 `error = {code, message}`。
 >
-> **response 口径**：`load_scenario_response()` 读场景前会先 reconcile stale `simulating/narrating -> done`；当前顶层响应额外带 `fork_debug`，`messages[]` 会带 `diverge / branch_title`，`branches[]` 会带 `fork_round`。
+> **response 口径**：`load_scenario_response()` 读场景前会先 reconcile stale `simulating/narrating -> done`；当前顶层响应额外带 `fork_debug`，`messages[]` 会带 `diverge / branch_title`，`branches[]` 会带 `fork_round`。`fork_debug` 现已包含两层：
+> - 聚合层：`message_count / diverge_message_count / diverge_rounds / fork_event_count / forked_branch_count / fork_events`
+> - 逐轮 trace：`round_checks[]`，会带 `sensitivity / temperature / prompt_variant / fork_detector_active_branch_limit / detector_branch_rank / detector_branch_budget_eligible / skip_reason / detector_result`
 
 ### `scenarios.py` — 核心 REST 路由
 | 端点 | 方法 | 描述 |

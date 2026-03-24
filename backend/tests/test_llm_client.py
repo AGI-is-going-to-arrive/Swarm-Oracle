@@ -274,6 +274,49 @@ class TestLLMCall:
         assert isinstance(result, str)
         assert len(result) > 0
 
+    @pytest.mark.asyncio
+    async def test_chat_call_includes_temperature_when_provided(self, monkeypatch):
+        captured = {}
+
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "OK",
+                            }
+                        }
+                    ]
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                captured["json"] = json
+                captured["headers"] = headers
+                captured["timeout"] = timeout
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with OK.",
+            reasoning_effort="low",
+            temperature=0.4,
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "OK"
+        assert captured["json"]["temperature"] == 0.4
+        assert captured["json"]["reasoning_effort"] == "low"
+        assert captured["json"]["model"] == "gpt-test"
+
     def test_shared_async_client_is_reused(self):
         first = llm_client._get_shared_async_client()
         second = llm_client._get_shared_async_client()

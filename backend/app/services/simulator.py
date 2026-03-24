@@ -61,6 +61,119 @@ _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
+_FORK_DEBUG_TRACE_KEY = "fork_debug_trace"
+_FORK_DEBUG_MAX_SIGNALS = 12
+_FORK_DEBUG_MAX_SIGNAL_CHARS = 240
+_FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
+_FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
+
+
+def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 1]}…"
+
+
+def _sanitize_fork_debug_signals(signals: list[str]) -> list[str]:
+    unique_signals: list[str] = []
+    seen: set[str] = set()
+    for signal in signals:
+        normalized = _truncate_debug_text(
+            signal,
+            max_chars=_FORK_DEBUG_MAX_SIGNAL_CHARS,
+        )
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_signals.append(normalized)
+        if len(unique_signals) >= _FORK_DEBUG_MAX_SIGNALS:
+            break
+    return unique_signals
+
+
+def _sanitize_fork_debug_branch(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    title = _truncate_debug_text(
+        payload.get("title"),
+        max_chars=_FORK_DEBUG_MAX_SIGNAL_CHARS,
+    )
+    description = _truncate_debug_text(
+        payload.get("description"),
+        max_chars=_FORK_DEBUG_MAX_DESCRIPTION_CHARS,
+    )
+    result: dict[str, Any] = {
+        "title": title,
+        "probability": float(payload.get("probability") or 0.0),
+    }
+    if description:
+        result["description_excerpt"] = description
+    return result
+
+
+def _sanitize_fork_debug_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"should_fork": False, "reason": "", "branches": []}
+
+    sanitized_branches = [
+        branch
+        for branch in (
+            _sanitize_fork_debug_branch(item) for item in payload.get("branches", [])
+        )
+        if branch is not None
+    ]
+    return {
+        "should_fork": payload.get("should_fork") is True,
+        "reason": _truncate_debug_text(
+            payload.get("reason"),
+            max_chars=_FORK_DEBUG_MAX_SIGNAL_CHARS,
+        ),
+        "branches": sanitized_branches,
+    }
+
+
+def _record_fork_debug_trace(engine, scenario_id: str, entry: dict[str, Any]) -> None:
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            return
+
+        ctx = dict(scenario.parsed_context or {})
+        trace = list(ctx.get(_FORK_DEBUG_TRACE_KEY) or [])
+        trace.append(entry)
+        ctx[_FORK_DEBUG_TRACE_KEY] = trace
+        scenario.parsed_context = ctx
+        session.add(scenario)
+        session.commit()
+
+
+def _get_fork_prompt_template(language: str, variant: str) -> str:
+    normalized_variant = (variant or "a").strip().lower()
+    if language == "Chinese":
+        if normalized_variant == "b":
+            return FORK_DETECT_PROMPT_ZH_B
+        if normalized_variant == "c":
+            return FORK_DETECT_PROMPT_ZH_C
+        if normalized_variant == "d":
+            return FORK_DETECT_PROMPT_ZH_D
+        if normalized_variant == "e":
+            return FORK_DETECT_PROMPT_ZH_E
+        if normalized_variant == "f":
+            return FORK_DETECT_PROMPT_ZH_F
+        return FORK_DETECT_PROMPT_ZH
+    if normalized_variant == "b":
+        return FORK_DETECT_PROMPT_EN_B
+    if normalized_variant == "c":
+        return FORK_DETECT_PROMPT_EN_C
+    if normalized_variant == "d":
+        return FORK_DETECT_PROMPT_EN_D
+    if normalized_variant == "e":
+        return FORK_DETECT_PROMPT_EN_E
+    if normalized_variant == "f":
+        return FORK_DETECT_PROMPT_EN_F
+    return FORK_DETECT_PROMPT_EN
+
 
 def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
     """Persist scenario status so reconnects/resyncs can recover the current stage."""
@@ -499,6 +612,306 @@ Description requirements:
 {language_directive}
 """
 
+FORK_DETECT_PROMPT_ZH_B = """你是一位偏积极的世界线分叉分析师。请分析以下讨论，只要已经出现互斥未来、制度分流、审批路径分裂、责任链改写或不可同时满足的目标，就优先判定应该 fork。
+
+【最近讨论摘要】
+{recent_summary}
+
+【Agent 标记的分歧信号】
+{diverge_signals}
+
+【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
+
+判定标准:
+1. 不要把 fork 理解成“必须彻底对骂”。只要分歧会导向两条或更多无法同时成立的未来，就可以 fork。
+2. 如果同一事件存在不同审批路径、不同责任归属、不同任务节奏、不同公众叙事，且这些差异会改变后续历史，请倾向于 fork。
+3. 只有当所有人实际上已经收敛到同一路线，只剩措辞、证据门槛或执行细节差异时，才返回 should_fork=false。
+4. 若 should_fork=true，请尽量压缩成 2-4 条最具代表性的未来路径。
+
+输出严格 JSON:
+{{
+  "should_fork": true或false,
+  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
+  "branches": [
+    {{
+      "title": "简短生动的走向标题（6-12字）",
+      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_EN_B = """You are an aggressive timeline-fork analyst. If the discussion already implies incompatible futures, diverging institutions, different approval paths, distinct responsibility chains, incompatible mission tempos, or mutually exclusive goals, prefer should_fork=true.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+Decision rubric:
+1. Do not require open hostility. If the disagreement leads to two or more incompatible futures, that is enough to fork.
+2. Prefer forking when the same event can proceed through meaningfully different approval paths, ownership structures, risk postures, public narratives, or downstream institutions.
+3. Return should_fork=false only when the discussion has effectively converged on one path and the remaining differences are wording, evidence thresholds, or implementation details.
+4. If should_fork=true, compress the result into the 2-4 most representative futures.
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_ZH_C = """你是一位世界线分叉分析师。请分析以下讨论。只引入一条更积极的规则：
+只要这些分歧已经隐含两条或更多无法同时成立的未来，即使讨论双方在安全原则上部分一致，也可以判定 should_fork=true。
+
+【最近讨论摘要】
+{recent_summary}
+
+【Agent 标记的分歧信号】
+{diverge_signals}
+
+【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
+
+其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。
+
+输出严格 JSON:
+{{
+  "should_fork": true或false,
+  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
+  "branches": [
+    {{
+      "title": "简短生动的走向标题（6-12字）",
+      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_EN_C = """You are a timeline-fork analyst. Apply one additional rule beyond the default baseline:
+If the disagreement already implies two or more incompatible futures, that alone is enough for should_fork=true, even if the participants still agree on some shared safety or governance principles.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_ZH_D = """你是一位制度分叉分析师。请分析以下讨论。只引入一条额外规则：
+如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。
+
+【最近讨论摘要】
+{recent_summary}
+
+【Agent 标记的分歧信号】
+{diverge_signals}
+
+【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
+
+其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。
+
+输出严格 JSON:
+{{
+  "should_fork": true或false,
+  "reason": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
+  "branches": [
+    {{
+      "title": "简短生动的走向标题（6-12字）",
+      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_EN_D = """You are an institutional fork analyst. Apply one additional rule:
+If the same event can proceed through meaningfully different approval paths, responsibility chains, mission tempos, or governance structures, and those differences would change downstream decisions and historical narrative, you may return should_fork=true.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_ZH_E = """你是一位世界线分叉分析师。请分析以下讨论。只引入一条额外规则：
+只有当讨论已经明显收敛到同一路线，剩下的差异只属于措辞、证据门槛或执行细节时，才返回 should_fork=false。若你在“表层分歧”和“互斥未来”之间拿不准，请倾向于 fork。
+
+【最近讨论摘要】
+{recent_summary}
+
+【Agent 标记的分歧信号】
+{diverge_signals}
+
+【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
+
+输出严格 JSON:
+{{
+  "should_fork": true或false,
+  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
+  "branches": [
+    {{
+      "title": "简短生动的走向标题（6-12字）",
+      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_EN_E = """You are a timeline-fork analyst. Apply one additional rule:
+Return should_fork=false only when the discussion has clearly converged on one path and the remaining differences are just wording, evidence thresholds, or implementation details. If you are uncertain between a surface disagreement and incompatible futures, lean toward forking.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_ZH_F = """你是一位世界线压缩分析师。请分析以下讨论，并遵循两条规则：
+1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。
+2. 但请强制做“主路径压缩”：默认只返回 2 条最具代表性的未来。只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。
+
+【最近讨论摘要】
+{recent_summary}
+
+【Agent 标记的分歧信号】
+{diverge_signals}
+
+【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
+
+输出严格 JSON:
+{{
+  "should_fork": true或false,
+  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
+  "branches": [
+    {{
+      "title": "简短生动的走向标题（6-12字）",
+      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+额外要求:
+- 若 should_fork=true，优先返回 2 条主路径
+- 只有当第 3 条未来明显独立且无法并入前两条时，才返回 3 条
+- 不要把纯措辞差异、证据门槛差异或执行细节差异当作独立分支
+
+{language_directive}
+"""
+
+FORK_DETECT_PROMPT_EN_F = """You are a timeline-compression analyst. Apply two rules:
+1. If the discussion already implies incompatible futures, or meaningfully different approval paths, responsibility chains, governance structures, or mission tempos, you may fork.
+2. But aggressively compress the result into the fewest representative futures: return 2 branches by default, and only return a 3rd branch when it is clearly independent and cannot be merged into the first two.
+
+[Recent Discussion Summary]
+{recent_summary}
+
+[Divergence Signals Marked By Agents]
+{diverge_signals}
+
+[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
+
+Return strict JSON:
+{{
+  "should_fork": true or false,
+  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
+  "branches": [
+    {{
+      "title": "A vivid future-path title (3-8 words)",
+      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+      "probability": 0.6
+    }}
+  ]
+}}
+
+Additional rules:
+- If should_fork=true, prefer 2 representative branches
+- Only return a 3rd branch when it is clearly independent and cannot be merged into the first two
+- Do not create separate branches for wording differences, evidence-threshold differences, or implementation details alone
+
+{language_directive}
+"""
+
 
 # ── Simulation Orchestrator ──────────────────────────────
 
@@ -533,6 +946,10 @@ async def run_simulation(
         setting_bg = _format_setting(ctx.get("setting", {}), language=detected_language)
         sim_rounds = ctx.get("simulation_rounds", 10)
         sensitivity = ctx.get("branch_sensitivity", 0.7)
+        fork_prompt_variant = str(ctx.get("fork_prompt_variant", "a") or "a").strip().lower()
+        fork_detector_active_branch_limit = ctx.get("fork_detector_active_branch_limit")
+        if fork_detector_active_branch_limit is not None:
+            fork_detector_active_branch_limit = max(1, int(fork_detector_active_branch_limit))
         key_variable = ctx.get("key_variable", scenario.question)
 
         # V2: Initialize visualization mapper if enabled
@@ -547,6 +964,8 @@ async def run_simulation(
             llm_overrides["model"] = ctx.get("llm_model")
         if not llm_overrides.get("base_url") and ctx.get("llm_base_url"):
             llm_overrides["base_url"] = ctx.get("llm_base_url")
+        if llm_overrides.get("temperature") is None and ctx.get("llm_temperature") is not None:
+            llm_overrides["temperature"] = ctx.get("llm_temperature")
 
         # Load agents
         db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
@@ -698,6 +1117,25 @@ async def run_simulation(
         if not active_branches:
             break
 
+        detector_budget_ranks: dict[str, int] = {}
+        detector_budget_eligible_ids: set[str] | None = None
+        if fork_detector_active_branch_limit is not None:
+            ranked_active_branches = sorted(
+                active_branches,
+                key=lambda item: (
+                    -float(item.get("probability", 0.0) or 0.0),
+                    str(item.get("id") or ""),
+                ),
+            )
+            detector_budget_ranks = {
+                str(branch["id"]): index + 1
+                for index, branch in enumerate(ranked_active_branches)
+            }
+            detector_budget_eligible_ids = {
+                str(branch["id"])
+                for branch in ranked_active_branches[:fork_detector_active_branch_limit]
+            }
+
         for branch_info in active_branches:
             current_branch_id = branch_info["id"]
 
@@ -793,70 +1231,139 @@ async def run_simulation(
             # 4) Detect forking (skip on last round — children would have no messages)
             diverge_signals = [m["diverge"] for m in messages if m.get("diverge")]
             active_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
-            if diverge_signals and active_count < settings.MAX_BRANCHES and round_num < sim_rounds:
-                fork_result = await _detect_fork(
-                    engine, current_branch_id, diverge_signals, sensitivity,
-                    llm_overrides=llm_overrides,
-                    language=detected_language,
+            if diverge_signals:
+                detector_temperature = (llm_overrides or {}).get("temperature")
+                recent_summary = format_messages_for_context(
+                    _get_recent_messages(engine, current_branch_id, max_rounds=3),
+                    max_recent=15,
                 )
-                # H-6 fix: strict boolean check — LLM may return truthy non-bool values
-                if fork_result.get("should_fork") is True:
-                    new_branch_infos = []
-                    for fb in fork_result.get("branches", []):
-                        new_id = _create_branch(
-                            engine, scenario_id,
-                            parent_branch_id=current_branch_id,
-                            fork_round=round_num,
-                            fork_reason=fork_result["reason"],
-                            title=fb["title"],
-                            description=fb.get("description", ""),
-                            probability=fb["probability"],
-                        )
-                        all_branches.append({
-                            "id": new_id, "status": "ACTIVE",
-                            "probability": fb["probability"]
+                fork_debug_entry: dict[str, Any] = {
+                    "branch_id": current_branch_id,
+                    "round": round_num,
+                    "active_branch_count": active_count,
+                    "max_branches": settings.MAX_BRANCHES,
+                    "fork_detector_active_branch_limit": fork_detector_active_branch_limit,
+                    "detector_branch_rank": detector_budget_ranks.get(current_branch_id),
+                    "detector_branch_budget_eligible": (
+                        True if detector_budget_eligible_ids is None else current_branch_id in detector_budget_eligible_ids
+                    ),
+                    "sim_rounds": sim_rounds,
+                    "sensitivity": sensitivity,
+                    "temperature": detector_temperature,
+                    "prompt_variant": fork_prompt_variant,
+                    "diverge_signal_count": len(diverge_signals),
+                    "diverge_signals": _sanitize_fork_debug_signals(diverge_signals),
+                    "recent_summary_excerpt": _truncate_debug_text(
+                        recent_summary,
+                        max_chars=_FORK_DEBUG_MAX_SUMMARY_CHARS,
+                    ),
+                    "detector_invoked": False,
+                    "skip_reason": None,
+                    "decision": "pending",
+                }
+
+                if active_count >= settings.MAX_BRANCHES:
+                    fork_debug_entry["skip_reason"] = "max_branches_reached"
+                    fork_debug_entry["decision"] = "skipped"
+                    _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
+                elif (
+                    detector_budget_eligible_ids is not None
+                    and current_branch_id not in detector_budget_eligible_ids
+                ):
+                    fork_debug_entry["skip_reason"] = "detector_budget_exceeded"
+                    fork_debug_entry["decision"] = "skipped"
+                    _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
+                elif round_num >= sim_rounds:
+                    fork_debug_entry["skip_reason"] = "last_round"
+                    fork_debug_entry["decision"] = "skipped"
+                    _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
+                else:
+                    fork_result = await _detect_fork(
+                        engine,
+                        current_branch_id,
+                        diverge_signals,
+                        sensitivity,
+                        llm_overrides=llm_overrides,
+                        language=detected_language,
+                        prompt_variant=fork_prompt_variant,
+                        recent_summary=recent_summary,
+                    )
+                    fork_debug_entry["detector_invoked"] = True
+                    fork_debug_entry["detector_result"] = _sanitize_fork_debug_result(
+                        fork_result,
+                    )
+
+                    # H-6 fix: strict boolean check — LLM may return truthy non-bool values
+                    if fork_result.get("should_fork") is True:
+                        new_branch_infos = []
+                        for fb in fork_result.get("branches", []):
+                            new_id = _create_branch(
+                                engine, scenario_id,
+                                parent_branch_id=current_branch_id,
+                                fork_round=round_num,
+                                fork_reason=fork_result["reason"],
+                                title=fb["title"],
+                                description=fb.get("description", ""),
+                                probability=fb["probability"],
+                            )
+                            all_branches.append({
+                                "id": new_id, "status": "ACTIVE",
+                                "probability": fb["probability"]
+                            })
+                            # Fork blackboard for the new branch (only in blackboard mode)
+                            if current_branch_id in blackboards:
+                                blackboards[new_id] = blackboards[current_branch_id].fork()
+                            new_branch_infos.append({
+                                "id": new_id,
+                                "title": fb["title"],
+                                "description": fb.get("description", ""),
+                                "probability": fb["probability"],
+                            })
+
+                        fork_debug_entry["decision"] = "fork_created"
+                        fork_debug_entry["created_branch_count"] = len(new_branch_infos)
+                        fork_debug_entry["created_branch_ids"] = [
+                            branch["id"] for branch in new_branch_infos
+                        ]
+                        fork_debug_entry["created_branch_titles"] = [
+                            branch["title"] for branch in new_branch_infos
+                        ]
+                        _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
+
+                        await push({
+                            "type": "branch_fork",
+                            "data": {
+                                "parent": current_branch_id,
+                                "children": new_branch_infos,
+                                "reason": fork_result["reason"],
+                            }
                         })
-                        # Fork blackboard for the new branch (only in blackboard mode)
-                        if current_branch_id in blackboards:
-                            blackboards[new_id] = blackboards[current_branch_id].fork()
-                        new_branch_infos.append({
-                            "id": new_id,
-                            "title": fb["title"],
-                            "description": fb.get("description", ""),
-                            "probability": fb["probability"],
+
+                        # V2: Broadcast viz:world_split
+                        if viz_mapper is not None:
+                            child_ids = [b["id"] for b in new_branch_infos]
+                            viz_split = viz_mapper.map_branch_split(
+                                parent_branch_id=current_branch_id,
+                                child_branch_ids=child_ids,
+                                reason=fork_result.get("reason"),
+                            )
+                            await viz_push(viz_split)
+
+                        # ── Mark parent as COMPLETED after fork ──
+                        # Parent's timeline splits into children; parent no longer
+                        # participates in further rounds or fork detection.
+                        branch_info["status"] = "COMPLETED"
+                        _update_branch_status(engine, current_branch_id, BranchStatus.COMPLETED)
+                        await push({
+                            "type": "branch_update",
+                            "data": {
+                                "branch_id": current_branch_id,
+                                "status": "COMPLETED",
+                            },
                         })
-
-                    await push({
-                        "type": "branch_fork",
-                        "data": {
-                            "parent": current_branch_id,
-                            "children": new_branch_infos,
-                            "reason": fork_result["reason"],
-                        }
-                    })
-
-                    # V2: Broadcast viz:world_split
-                    if viz_mapper is not None:
-                        child_ids = [b["id"] for b in new_branch_infos]
-                        viz_split = viz_mapper.map_branch_split(
-                            parent_branch_id=current_branch_id,
-                            child_branch_ids=child_ids,
-                            reason=fork_result.get("reason"),
-                        )
-                        await viz_push(viz_split)
-
-                    # ── Mark parent as COMPLETED after fork ──
-                    # Parent's timeline splits into children; parent no longer
-                    # participates in further rounds or fork detection.
-                    branch_info["status"] = "COMPLETED"
-                    _update_branch_status(engine, current_branch_id, BranchStatus.COMPLETED)
-                    await push({
-                        "type": "branch_update",
-                        "data": {
-                            "branch_id": current_branch_id,
-                            "status": "COMPLETED",
-                        },
-                    })
+                    else:
+                        fork_debug_entry["decision"] = "no_fork"
+                        _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
 
         # 5) Normalize active branch probabilities (H-1 fix)
         # P2-8: Single session for all probability updates
@@ -1060,6 +1567,7 @@ async def _gather_agent_messages(
                     model=_overrides.get("model"),
                     api_key=_overrides.get("api_key"),
                     base_url=_overrides.get("base_url"),
+                    temperature=_overrides.get("temperature"),
                     fallback_mode="agent_message",
                 )
                 content = result.get("content", "")
@@ -1318,11 +1826,23 @@ async def _gather_hierarchical_messages(
     return all_messages
 
 
-async def _detect_fork(engine, branch_id, diverge_signals, sensitivity, *, llm_overrides: dict | None = None, language: str = "Chinese") -> dict:
+async def _detect_fork(
+    engine,
+    branch_id,
+    diverge_signals,
+    sensitivity,
+    *,
+    llm_overrides: dict | None = None,
+    language: str = "Chinese",
+    prompt_variant: str = "a",
+    recent_summary: str | None = None,
+) -> dict:
     """Detect if current discussion warrants a branch fork."""
-    recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=3)
-    recent_text = format_messages_for_context(recent_msgs, max_recent=15)
-    prompt_template = FORK_DETECT_PROMPT_ZH if language == "Chinese" else FORK_DETECT_PROMPT_EN
+    recent_text = recent_summary
+    if recent_text is None:
+        recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=3)
+        recent_text = format_messages_for_context(recent_msgs, max_recent=15)
+    prompt_template = _get_fork_prompt_template(language, prompt_variant)
 
     prompt = prompt_template.format(
         recent_summary=recent_text,
@@ -1338,6 +1858,7 @@ async def _detect_fork(engine, branch_id, diverge_signals, sensitivity, *, llm_o
             model=_overrides.get("model"),
             api_key=_overrides.get("api_key"),
             base_url=_overrides.get("base_url"),
+            temperature=_overrides.get("temperature"),
         )
     except Exception as exc:
         logger.warning("Fork detection failed: %s", exc)
@@ -1375,6 +1896,7 @@ async def _compress_round_memory(
         previous_briefing=previous_briefing,
         api_key=(llm_overrides or {}).get("api_key"),
         base_url=(llm_overrides or {}).get("base_url"),
+        temperature=(llm_overrides or {}).get("temperature"),
         model=(llm_overrides or {}).get("model"),
     )
 
@@ -1451,6 +1973,7 @@ async def _narrate_branch_data(
         language=language,
         api_key=(llm_overrides or {}).get("api_key"),
         base_url=(llm_overrides or {}).get("base_url"),
+        temperature=(llm_overrides or {}).get("temperature"),
         model=(llm_overrides or {}).get("model"),
     )
     result["title"] = branch_info.get("title", "未命名")

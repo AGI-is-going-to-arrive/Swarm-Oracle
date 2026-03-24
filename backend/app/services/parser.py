@@ -407,6 +407,7 @@ async def parse_question(
     hierarchical: bool = False,
     api_key: str | None = None,
     base_url: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
 ) -> dict:
     """Parse a what-if question into structured scenario context.
@@ -420,6 +421,7 @@ async def parse_question(
         hierarchical: If True, use hierarchical prompt with groups.
         api_key: BYOK — override API key for this call.
         base_url: BYOK — override base URL for this call.
+        temperature: Optional sampling temperature for chat-completions providers.
         model: BYOK — override model name for this call.
 
     Returns:
@@ -458,7 +460,7 @@ async def parse_question(
     try:
         result = await llm_call_json(
             prompt, reasoning_effort="low",
-            api_key=api_key, base_url=base_url, model=model,
+            api_key=api_key, base_url=base_url, temperature=temperature, model=model,
         )
     except (LLMError, ValueError, TypeError) as exc:
         logger.warning(
@@ -492,7 +494,7 @@ async def parse_question(
         try:
             retry_result = await llm_call_json(
                 retry_prompt, reasoning_effort="low",
-                api_key=api_key, base_url=base_url, model=model,
+                api_key=api_key, base_url=base_url, temperature=temperature, model=model,
             )
         except (LLMError, ValueError, TypeError) as exc:
             logger.warning("Parser retry failed for '%s'; keeping best-effort result: %s", question[:80], exc)

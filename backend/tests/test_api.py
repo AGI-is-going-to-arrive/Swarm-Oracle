@@ -372,6 +372,92 @@ class TestReplayArtifactEndpoints:
         assert scheduled["count"] == 1
         assert captured["disable_user_quota"] is True
 
+    def test_create_scenario_forwards_temperature(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "temperature": 0.4,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["temperature"] == 0.4
+
+    def test_create_scenario_forwards_branch_controls(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "branch_sensitivity": 0.9,
+            "fork_prompt_variant": "b",
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["branch_sensitivity"] == 0.9
+        assert captured["fork_prompt_variant"] == "b"
+
+    def test_create_scenario_forwards_detector_branch_budget(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "fork_detector_active_branch_limit": 2,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["fork_detector_active_branch_limit"] == 2
+
     def test_import_replay_scenario_persists_snapshot(self, client):
         resp = client.post("/api/scenario/import-replay", json={
             "scenario": {
@@ -652,7 +738,62 @@ class TestReplayArtifactEndpoints:
                     "child_branch_ids": [child_a, child_b],
                 },
             ],
+            "round_checks": [],
         }
+
+    def test_get_scenario_exposes_persisted_fork_debug_round_checks(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE, question="分叉轨迹测试")
+        root = _seed_branch(
+            engine,
+            sid,
+            title="根世界线",
+            probability=1.0,
+            status=BranchStatus.COMPLETED,
+        )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "fork_debug_trace": [
+                    {
+                        "branch_id": root,
+                        "round": 1,
+                        "active_branch_count": 1,
+                        "max_branches": 8,
+                        "sim_rounds": 4,
+                        "sensitivity": 0.7,
+                        "diverge_signal_count": 2,
+                        "diverge_signals": ["是否交由外部评审团最终裁决"],
+                        "recent_summary_excerpt": "最近消息摘要",
+                        "detector_invoked": True,
+                        "skip_reason": None,
+                        "decision": "no_fork",
+                        "detector_result": {
+                            "should_fork": False,
+                            "reason": "仍属同一路线内部争论",
+                            "branches": [],
+                        },
+                    }
+                ]
+            }
+            session.add(scenario)
+            session.commit()
+
+        resp = client.get(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert len(data["fork_debug"]["round_checks"]) == 1
+        round_check = data["fork_debug"]["round_checks"][0]
+        assert round_check["branch_id"] == root
+        assert round_check["branch_title"] == "根世界线"
+        assert round_check["round"] == 1
+        assert round_check["decision"] == "no_fork"
+        assert round_check["detector_invoked"] is True
+        assert round_check["detector_result"]["should_fork"] is False
+        assert round_check["detector_result"]["reason"] == "仍属同一路线内部争论"
 
     def test_get_scenario_empty_id(self, client):
         """Should handle empty-looking scenario IDs."""

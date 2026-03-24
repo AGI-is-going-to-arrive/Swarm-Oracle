@@ -194,6 +194,10 @@ async def parse_and_run_background(
     rounds: int,
     visualization_enabled: bool,
     reasoning_effort: str | None,
+    temperature: float | None,
+    branch_sensitivity: float | None,
+    fork_prompt_variant: str | None,
+    fork_detector_active_branch_limit: int | None,
     user_id: str | None,
     llm_api_key: str | None,
     llm_base_url: str | None,
@@ -237,6 +241,7 @@ async def parse_and_run_background(
                 hierarchical=hierarchical,
                 api_key=llm_api_key,
                 base_url=llm_base_url,
+                temperature=temperature,
                 model=llm_model,
             )
     except Exception as exc:
@@ -260,6 +265,12 @@ async def parse_and_run_background(
     parsed["mode"] = mode
     parsed["hierarchical"] = hierarchical
     parsed["simulation_rounds"] = rounds
+    if branch_sensitivity is not None:
+        parsed["branch_sensitivity"] = branch_sensitivity
+    if fork_prompt_variant:
+        parsed["fork_prompt_variant"] = fork_prompt_variant
+    if fork_detector_active_branch_limit is not None:
+        parsed["fork_detector_active_branch_limit"] = fork_detector_active_branch_limit
     if user_id:
         parsed["user_id"] = user_id
     if disable_user_quota and local_provider:
@@ -270,6 +281,8 @@ async def parse_and_run_background(
         parsed["llm_base_url"] = llm_base_url
     if llm_model:
         parsed["llm_model"] = llm_model
+    if temperature is not None:
+        parsed["llm_temperature"] = temperature
     if reasoning_effort:
         parsed["reasoning_effort"] = reasoning_effort
 
@@ -353,10 +366,11 @@ async def parse_and_run_background(
         session.commit()
 
     llm_overrides: dict | None = None
-    if llm_api_key or llm_base_url or llm_model:
+    if llm_api_key or llm_base_url or llm_model or temperature is not None:
         llm_overrides = {
             "api_key": llm_api_key,
             "base_url": llm_base_url,
+            "temperature": temperature,
             "model": llm_model,
         }
 
@@ -416,6 +430,20 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                 continue
             fork_groups.setdefault(parent_id, []).append(branch)
 
+        ctx = s.parsed_context or {}
+        raw_fork_debug_trace = ctx.get("fork_debug_trace") if isinstance(ctx, dict) else None
+        fork_round_checks: list[dict] = []
+        if isinstance(raw_fork_debug_trace, list):
+            for entry in raw_fork_debug_trace:
+                if not isinstance(entry, dict):
+                    continue
+                normalized = dict(entry)
+                branch_id = str(normalized.get("branch_id", "") or "")
+                if branch_id:
+                    branch = branch_by_id.get(branch_id)
+                    normalized["branch_title"] = branch.title if branch is not None else ""
+                fork_round_checks.append(normalized)
+
         fork_debug = {
             "message_count": len(all_messages),
             "diverge_message_count": len(diverge_messages),
@@ -439,9 +467,8 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                     ),
                 )
             ],
+            "round_checks": fork_round_checks,
         }
-
-        ctx = s.parsed_context or {}
 
         return ScenarioResponse(
             id=s.id,

@@ -86,6 +86,10 @@ export interface LlmProviderRequestOptions {
   llmBaseUrl?: string;
   llmModel?: string;
   reasoningEffort?: string;
+  temperature?: number;
+  branchSensitivity?: number;
+  forkPromptVariant?: 'a' | 'b' | 'c' | 'd' | 'e' | 'f';
+  forkDetectorActiveBranchLimit?: number;
   userId?: string;
   disableUserQuota?: boolean;
 }
@@ -215,6 +219,10 @@ export async function createScenario(
     llmBaseUrl,
     llmModel,
     reasoningEffort,
+    temperature,
+    branchSensitivity,
+    forkPromptVariant,
+    forkDetectorActiveBranchLimit,
     visualizationEnabled,
     userId,
     disableUserQuota,
@@ -231,6 +239,10 @@ export async function createScenario(
       ...(llmBaseUrl && { llm_base_url: llmBaseUrl }),
       ...(llmModel && { llm_model: llmModel }),
       ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
+      ...(temperature != null && { temperature }),
+      ...(branchSensitivity != null && { branch_sensitivity: branchSensitivity }),
+      ...(forkPromptVariant && { fork_prompt_variant: forkPromptVariant }),
+      ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
       ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
       ...(userId && { user_id: userId }),
       ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),

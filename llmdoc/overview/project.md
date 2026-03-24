@@ -34,6 +34,9 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 | Scenario Management (P4-A) | 场景列表/删除/导出 Markdown |
 | Intervention Templates (P4-D) | 预设干预模板（自然灾害、技术突破等） |
 | BYOK (P4-E) | 用户自带 OpenAI 兼容 API Key/URL/Model；前端 provider policy 当前按标签页会话保存在 `sessionStorage`，关闭标签页后清空；若浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次；同一份 policy 仍会贯通 `createScenario / createDebate / social copy / scorePredictions`；首页 `Test Connection` 当前还会返回 provider probe 摘要，给出推荐的 `agents / rounds` 区间；若是本地 / 自托管 provider，本轮还可显式关闭 user-level quota，但不会绕过全局并发闸门 |
+| Scenario Runtime Tuning | 主模式当前已支持 scenario 级 runtime tuning：`temperature / branch_sensitivity / fork_prompt_variant / fork_detector_active_branch_limit`。这组参数都会进入场景 authority 与 `fork_debug.round_checks`，适合做 fork detector 行为实验或作为产品默认配置的候选 |
+| Fork Detector Control Room | 前端当前新增独立静态页 `frontend/public/fork-control-room.html`，把控制变量、交互沙盘、实验图表和推荐配置放在同一页里，方便浏览器内直接阅读与分享 |
+| Fork Budget Control | 当前 detector 还支持结构级预算开关 `fork_detector_active_branch_limit`。跨题实验结果表明：`k=1` 是目前最稳定的“压 branch 爆炸但不把多结局打没”的配置；`k=2` 也能降噪，但明显弱于 `k=1` |
 | Frontend State Split | 首页当前已按 `useInputByokSettings / useInputCampaignState / useSharedChallengePrefill` 三组 hook 收边界；模拟页当前也按 `useSimulationReplayState` 与 `useSimulationViewState` 分开 replay、截图和 director authority 状态；`simulationStore.startSimulation()` 与 `api/client.ts#createScenario()` 现统一走 options 对象，不再靠长位置参数串联 |
 | Social Media Copy (P6) | 一键生成小红书/微博/知乎/Reddit/X 平台文案；主模式结果页分享弹窗当前会明确区分生成中 / 已生成 / 可复制状态，生成完成后会给出更直白的“文案已生成 / 可直接复制或切平台”反馈；社交文案请求当前走独立更长超时窗口，避免在正常 LLM 延迟下被前端过早中断；文案 wrapper / prompt 当前会跟随场景语言，英文场景不再混入中文包裹文本；若浏览器 Clipboard API 不可用，分享弹窗现在会明确提示手动复制，而不再回退到过时的 `execCommand('copy')` 路径 |
 | Language Detection (P9) | 输入语言自动检测 + 全链路 LLM prompt 语言指令注入 |
@@ -122,6 +125,14 @@ AI "What-If" Prediction Playground — 用户提出一个历史/假设性问题�
 
 - 本 session 还额外实跑了后端回归子集：`269 passed`
 - 本次文档同步前，还额外实跑通过：
+  - `python -m pytest backend/tests/test_api.py -k 'forwards_temperature or forwards_branch_controls or detector_branch_budget' -q`：通过
+  - `python -m pytest backend/tests/test_simulator.py -k 'variant_b_uses_alternate_prompt or detector_branch_budget_skips_lower_ranked_active_branch or passes_llm_overrides_into_detector' -q`：通过
+  - `python -m pytest backend/tests/test_llm_client.py -k temperature_when_provided -q`：通过
+  - `python -m ruff check --ignore E501 backend/app/services/llm_client.py backend/app/services/parser.py backend/app/services/memory.py backend/app/services/narrator.py backend/app/services/simulator.py backend/app/api/schemas.py backend/app/api/helpers.py backend/app/api/scenarios.py backend/tests/test_llm_client.py backend/tests/test_api.py backend/tests/test_simulator.py`：通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果我是马斯克 能登上月球吗？' --temperatures 0,0.4,0.7,1.0 --runs 3 --rounds 5 --num-agents 20 --output-dir output/e2e/musk-factor-matrix`：完成并落盘 `result.json + results.csv`
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果我是马斯克 能登上月球吗？' --temperatures 0.4 --branch-sensitivities 0.7 --fork-prompt-variants a,b,c,d,e --runs 2 --rounds 3 --num-agents 20 --output-dir output/e2e/musk-prompt-ablation-matrix-r3`：完成并落盘
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果我是马斯克 能登上月球吗？' --question '如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？' --question '如果互联网从未被发明？' --temperatures 0.4 --branch-sensitivities 0.7 --fork-prompt-variants b --fork-detector-active-branch-limits 0,1,2 --runs 1 --rounds 3 --num-agents 20 --output-dir output/e2e/budget-generalization-matrix`：完成并落盘
   - `python -m pytest tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py -q`：`205 passed in 26.75s`
   - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`：通过
   - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts`：`112 passed`

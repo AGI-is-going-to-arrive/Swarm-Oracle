@@ -242,6 +242,58 @@ node scripts/capture-v2-series-assets.mjs <blackboard-walkthrough|gameplay-expla
   - 玩法卡、下注和分享都按页面 automation state 等待，不要靠固定 sleep 猜状态
   - `longform-showcase` 的 Debate 段默认复用 `promo-v1` 已有 Debate raw/gif/still
 
+### Fork Detector 实验
+
+当前若要复现实验链路，统一走：
+
+```bash
+cd frontend
+npm run e2e:fork-experiment -- \
+  --api-url http://127.0.0.1:18927 \
+  --question '如果我是马斯克 能登上月球吗？' \
+  --temperatures 0,0.4,0.7,1.0 \
+  --branch-sensitivities 0.3,0.7,0.9 \
+  --fork-prompt-variants a,b,c,d,e,f \
+  --fork-detector-active-branch-limits 0,1,2 \
+  --runs 2 \
+  --rounds 3 \
+  --num-agents 20 \
+  --concurrency 1 \
+  --timeout-ms 1800000 \
+  --output-dir output/e2e/manual-fork-lab
+```
+
+- 当前脚本会：
+  - 直接调用 `POST /api/scenario`
+  - 轮询 `/api/scenario/{id}` 到 `done / error`
+  - 读取 `/api/scenario/{id}/story`
+  - 输出 `result.json + results.csv + samples/*.json`
+- 当前主工件字段包括：
+  - `temperature`
+  - `branch_sensitivity`
+  - `fork_prompt_variant`
+  - `fork_detector_active_branch_limit`
+  - `fork_event_count / forked_branch_count / branch_count / story_branch_count`
+  - `fork_debug.round_checks[*]`
+- 本 session 已落盘的 detector 实验工件包括：
+  - `frontend/output/e2e/musk-factor-matrix/`
+  - `frontend/output/e2e/musk-sensitivity-temperature-matrix/`
+  - `frontend/output/e2e/musk-prompt-ablation-matrix-r3/`
+  - `frontend/output/e2e/budget-generalization-matrix/`
+
+### 本轮新增验证
+
+- backend：
+  - `python -m pytest backend/tests/test_llm_client.py -k temperature_when_provided -q`
+  - `python -m pytest backend/tests/test_api.py -k 'forwards_temperature or forwards_branch_controls or detector_branch_budget or persisted_fork_debug_round_checks or get_scenario_exposes_diverge_messages_and_fork_debug' -q`
+  - `python -m pytest backend/tests/test_simulator.py -k 'fork_debug_trace or passes_llm_overrides_into_compression or passes_llm_overrides_into_narration or passes_llm_overrides_into_detector or variant_b_uses_alternate_prompt or detector_branch_budget_skips_lower_ranked_active_branch' -q`
+  - `python -m ruff check --ignore E501 backend/app/services/llm_client.py backend/app/services/parser.py backend/app/services/memory.py backend/app/services/narrator.py backend/app/services/simulator.py backend/app/api/schemas.py backend/app/api/helpers.py backend/app/api/scenarios.py backend/tests/test_llm_client.py backend/tests/test_api.py backend/tests/test_simulator.py`
+- frontend：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果我是马斯克 能登上月球吗？' --temperatures 0,0.4,0.7,1.0 --runs 3 --rounds 5 --num-agents 20 --output-dir output/e2e/musk-factor-matrix`
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？' --temperatures 0.4 --branch-sensitivities 0.7 --fork-prompt-variants a,b,c,d --runs 1 --rounds 3 --num-agents 20 --output-dir output/e2e/jury-prompt-matrix`
+  - `cd frontend && node scripts/fork-experiment.mjs --api-url http://127.0.0.1:18927 --question '如果我是马斯克 能登上月球吗？' --question '如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？' --question '如果互联网从未被发明？' --temperatures 0.4 --branch-sensitivities 0.7 --fork-prompt-variants b --fork-detector-active-branch-limits 0,1,2 --runs 1 --rounds 3 --num-agents 20 --output-dir output/e2e/budget-generalization-matrix`
+
 ## Release Signoff
 
 在准备对外分享 build、做 release candidate，或重新确认文档口径时，优先跑完整签收链路。

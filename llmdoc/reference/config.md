@@ -23,6 +23,74 @@
 
 > **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8318/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
 
+## Scenario Runtime Tuning
+
+以下字段不是环境变量，而是 `POST /api/scenario` 的**单局运行时调参项**。适合做 fork 行为实验，或作为将来的产品默认配置。
+
+| 字段 | 类型 | 合法范围 / 可选值 | 作用 |
+|------|------|-------------------|------|
+| `temperature` | float | `0.0 - 2.0` | Chat Completions 采样温度。会影响 agent 发言、fork detector、memory compression、narrator 的采样风格 |
+| `branch_sensitivity` | float | `0.0 - 1.0` | 覆盖 parser 产出的 `branch_sensitivity`，直接进入 fork detector prompt |
+| `fork_prompt_variant` | str | `a / b / c / d / e / f` | 切换 `_detect_fork()` 的 detector prompt 口径 |
+| `fork_detector_active_branch_limit` | int | `1 - MAX_BRANCHES` | 每轮仅允许前 `K` 个 `ACTIVE` 分支继续跑 detector；`null / 0` 表示关闭预算，保留默认行为 |
+
+> 这组运行时调参当前都会进入 `Scenario.parsed_context`，并在 `GET /api/scenario/{id}` 的 `fork_debug.round_checks` 里回显。它们不会修改服务器级全局默认值；不传时仍走当前默认行为。
+
+### Variant 说明
+
+| Variant | detector 口径 | 当前实验结论 |
+|---------|---------------|--------------|
+| `a` | 基线保守口径；强调“根本分歧”与“真正不同未来路径” | 命中率与强度都相对克制 |
+| `b` | 激进口径；把互斥未来、制度/审批/责任链分流与更积极的 fork 先验一起叠满 | 当前最稳定、最容易出多结局，但也最容易 branch 爆炸 |
+| `c` | 只要已经形成互斥未来，就足够 fork | 是最强单因子之一 |
+| `d` | 只要形成不同审批路径、责任链或治理结构，就足够 fork | 在制度题上非常有效，也是最强单因子之一 |
+| `e` | 只有明确收敛到单一路线，才允许 `no_fork` | 在当前样本里不是主因 |
+| `f` | `c + d` 再加“默认压缩成 2 条主路径” | 实验未能抑制 branch 爆炸，不建议作为默认配置 |
+
+### 产品推荐
+
+假设用户**不能直接控制 `temperature`**，当前最推荐的产品默认配置是：
+
+```text
+fork_prompt_variant = b
+branch_sensitivity = 0.7
+fork_detector_active_branch_limit = 1
+```
+
+理由：
+
+- `fork_prompt_variant = b` 当前最稳定地让用户看到 branch / fork / 多结局
+- `fork_detector_active_branch_limit = 1` 是目前最有效的“压 branch 爆炸但不把多结局打没”的结构手段
+- `branch_sensitivity = 0.7` 先保持中位，不把 detector 调成过于漂移的状态
+
+### 档位建议
+
+| 档位 | 建议配置 | 适用场景 | 风险 |
+|------|----------|----------|------|
+| 保守版 | `d + 0.7 + k=1` | 治理、审批、法院、委员会、制度题 | branch 与多结局更克制；人物题不一定稳定出分支 |
+| 平衡版（推荐） | `b + 0.7 + k=1` | 默认产品配置 | 兼顾分支可见性和 branch 控制；仍会有一定题目波动 |
+| 激进版 | `b + 0.7 + k=0` | 内部 demo / spectacle 场景 | fork 命中率高，但 branch 爆炸和长尾 narration 风险都更高 |
+
+### 跨题预算实验摘要
+
+以下结果来自 `prompt=b, temperature=0.4, branch_sensitivity=0.7, rounds=3` 的 budget 泛化实验：
+
+| 题目 | `k=0` | `k=1` | `k=2` | 结论 |
+|------|-------|-------|-------|------|
+| 马斯克登月 | `10 / 9` | `7 / 7` | `10 / 10` | `k=1` 明显压 branch 数；`k=2` 几乎不够 |
+| 轮值外审团重裁 | `13 / 13` | `7 / 7` | `10 / 10` | `k=1` 同样有效 |
+| 无互联网世界 | `13 / 13` | `9 / 9` | `11 / 11` | 天然高分叉题也能压，但幅度较小 |
+
+表格中的 `x / y` 含义为 `branch_count / story_branch_count`。
+
+当前可以把结论收成一句话：
+
+```text
+prompt 负责“什么时候该 fork”，
+k 负责“fork 以后别炸开”，
+sensitivity 只负责微调。
+```
+
 ## 日志
 
 | 变量 | 类型 | 默认值 | 描述 |

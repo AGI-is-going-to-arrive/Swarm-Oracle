@@ -6,7 +6,11 @@ import asyncio
 import logging
 
 from app.services.lang_detect import get_language_directive
-from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block, llm_call_json
+from app.services.llm_client import (
+    UNTRUSTED_INPUT_GUARDRAIL,
+    format_untrusted_text_block,
+    llm_call_json,
+)
 
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
@@ -112,6 +116,7 @@ async def narrate_branch(
     *,
     api_key: str | None = None,
     base_url: str | None = None,
+    temperature: float | None = None,
     model: str | None = None,
 ) -> dict:
     """Generate a narrative story for a completed branch.
@@ -148,6 +153,7 @@ async def narrate_branch(
                 reasoning_effort="low",
                 api_key=api_key,
                 base_url=base_url,
+                temperature=temperature,
                 model=model,
             ),
             timeout=_NARRATION_TIMEOUT_SECONDS,
