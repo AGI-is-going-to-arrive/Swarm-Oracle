@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,6 +66,12 @@ const {
     }
     if (key === 'home.byok_probe_recommendation') {
       return `Recommended ${options?.agentsMin}-${options?.agentsMax} agents and ${options?.roundsMin}-${options?.roundsMax} rounds`;
+    }
+    if (key === 'home.simulation_eta_hint') {
+      return `${options?.agents} agents × ${options?.rounds} rounds · about ${options?.minutes} min for the main simulation`;
+    }
+    if (key === 'debate.entry_hint') {
+      return 'Debate Arena usually resolves in 3-5 minutes.';
     }
     return translations[currentLanguage]?.[key] ?? key;
   };
@@ -336,6 +342,23 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
   });
 
+  it('shows mode-specific action hints and updates the main simulation ETA when rounds change', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('20 agents × 5 rounds · about 6 min for the main simulation')).toBeInTheDocument();
+    expect(screen.getByText('Debate Arena usually resolves in 3-5 minutes.')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('slider', { name: 'home.rounds_label' }), {
+      target: { value: '10' },
+    });
+
+    expect(await screen.findByText('20 agents × 10 rounds · about 12 min for the main simulation')).toBeInTheDocument();
+  });
+
   it('prefers backend challenge rotation when the API returns remote definitions', async () => {
     getCampaignChallengeRotationMock.mockResolvedValue({
       local_date: '2026-03-17',
@@ -412,8 +435,9 @@ describe('InputView campaign progress', () => {
   });
 
   it('prefills the form from a shared challenge URL', async () => {
+    const user = userEvent.setup();
     render(
-      <MemoryRouter initialEntries={['/?sharedChallenge=1&question=Shared%20Motion&rounds=4&agents=6&mode=raw&viz=1&profile=trade']}>
+      <MemoryRouter initialEntries={['/?sharedChallenge=1&question=Shared%20Motion&rounds=4&agents=6&mode=raw&viz=1&profile=trade&preset=conservative']}>
         <InputView />
       </MemoryRouter>,
     );
@@ -423,6 +447,39 @@ describe('InputView campaign progress', () => {
       expect(screen.getByDisplayValue('Shared Motion')).toBeInTheDocument();
     });
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'Shared Motion',
+        branchSensitivity: 0.7,
+        forkPromptVariant: 'd',
+        forkDetectorActiveBranchLimit: 1,
+      }));
+    });
+  });
+
+  it('forwards the selected runtime preset into scenario creation', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getAllByRole('textbox')[0], 'Fork profile smoke test');
+    await user.click(screen.getByRole('button', { name: 'home.runtime_preset_aggressive' }));
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'Fork profile smoke test',
+        branchSensitivity: 0.7,
+        forkPromptVariant: 'b',
+        forkDetectorActiveBranchLimit: 0,
+      }));
+    });
   });
 
   it('maps structured BYOK connection errors to localized keys', async () => {

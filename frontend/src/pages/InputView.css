@@ -818,8 +818,15 @@
   gap: 12px;
 }
 
-.input-view__debate-hint {
+.input-view__submit-hints {
   margin-top: -10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.input-view__submit-hint {
   max-width: 560px;
   text-align: center;
   font-size: 12px;

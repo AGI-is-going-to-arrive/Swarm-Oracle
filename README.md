@@ -8,6 +8,9 @@
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.mjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
 - 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.94 kB`，gzip 从 `328.41 kB` 降到 `203.76 kB`。
+- 首页当前已把主模式 runtime tuning 正式收成 `神谕档位 / Oracle Profile`。三档分别是 `守望 / 校准 / 裂界`（`Watchful / Calibrated / Riftbound`），只作用于主模式 worldline branching；首页还会按当前 `Agent 数量 × 推演轮数` 给出预计耗时，`3-5 分钟` 提示现在也明确只对应 Debate Arena。
+- 主模式 `SimulationView / ResultView` 当前都只保留一个 runtime preset 标签，不再展开 prompt / sensitivity / budget 细节 chip；`分享挑战` 链接会继续把当前 `preset` 一起带回首页预填。
+- 主模式结果页 `ShareModal` 当前已收掉上方 context chips，社交文案也不再自动在正文前拼题材/神谕/permalink 前缀；`导出 Markdown` 当前改成浏览器直连后端附件下载，目标是更稳定地拿到 `.md` 文件名，而不是继续依赖前端 `blob:` 下载。
 - 仓库内最近一次通过的 clean real full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff-clean/summary.json`。
 - 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
 - CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8318`）。
@@ -36,6 +39,7 @@
 | Pixel Theater | Phaser 驱动的像素剧场，可视化角色、场景、气泡和结局 |
 | Structured Betting | 支持押世界线、押结局倾向、押题材回响 |
 | Gameplay Cards | 14 张玩法卡，包括 10 张导演卡和 4 张反制卡 |
+| Oracle Profile | 首页提供主模式 `神谕档位 / Oracle Profile` 三档，收口 `branchSensitivity / forkPromptVariant / forkDetectorActiveBranchLimit` |
 | Director Campaign | 导演目标、风险/资源轨道、worldline 承诺、成长与徽章 |
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
@@ -150,6 +154,12 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `frontend src/pages/InputView.test.tsx + src/i18n/locales.test.ts`: `14 passed`
+  - `frontend src/lib/shareEnvelope.test.ts + src/components/ShareModal.test.tsx + src/pages/ResultView.test.tsx`: `22 passed`
+  - `backend/tests/test_api.py -k export_with_branches -q`: `1 passed`
+  - `backend/tests/test_api.py + backend/tests/test_simulator.py`: `179 passed`
+  - `frontend/output/e2e/20260324-runtime-preset-corners/`：主模式 corners 回归产物已落盘
+  - `frontend/output/e2e/20260324-runtime-preset-debate/`：Debate full 回归产物已落盘
   - `backend/tests/test_api.py + backend/tests/test_llm_client.py + backend/tests/test_runtime_lock.py + backend/tests/test_simulator.py`: `205 passed in 26.75s`
   - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`: `passed`
   - `frontend InputView / SimulationView / simulationStore / TimelineBar / BranchEdge / GameplayCardsModal / VizSynthesizer / WorldScene / locales`: `112 passed`

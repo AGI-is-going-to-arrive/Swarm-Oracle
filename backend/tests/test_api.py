@@ -458,6 +458,34 @@ class TestReplayArtifactEndpoints:
         assert scheduled["count"] == 1
         assert captured["fork_detector_active_branch_limit"] == 2
 
+    def test_create_scenario_forwards_zero_detector_branch_budget(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "fork_detector_active_branch_limit": 0,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["fork_detector_active_branch_limit"] == 0
+
     def test_import_replay_scenario_persists_snapshot(self, client):
         resp = client.post("/api/scenario/import-replay", json={
             "scenario": {
@@ -1655,6 +1683,7 @@ class TestExportScenario:
         resp = client.get(f"/api/scenario/{sid}/export")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/markdown")
+        assert resp.headers["content-disposition"] == f'attachment; filename="swarmoracle-{sid[:8]}.md"'
 
         text = resp.text
         assert "如果诸葛亮多活10年？" in text

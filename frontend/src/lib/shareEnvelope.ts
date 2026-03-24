@@ -1,6 +1,7 @@
 export interface ShareFlavorContext {
   question?: string | null;
   profileLabel?: string | null;
+  runtimePresetLabel?: string | null;
   profileHooks?: string[];
   resonanceLabel?: string | null;
   directorStyleLabel?: string | null;
@@ -13,6 +14,7 @@ export interface ShareFlavorContext {
 function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[] {
   const lines: string[] = [];
   const profile = context.profileLabel?.trim();
+  const runtimePreset = context.runtimePresetLabel?.trim();
   const resonance = context.resonanceLabel?.trim();
   const hooks = (context.profileHooks ?? []).filter(Boolean).slice(0, 3);
   const director = context.directorStyleLabel?.trim();
@@ -26,6 +28,14 @@ function buildContextLines(context: ShareFlavorContext, isZh: boolean): string[]
       isZh
         ? `【${profile ?? '通用博弈'}｜${resonance ?? '未归档'}】`
         : `[${profile ?? 'General Tension'} | ${resonance ?? 'Uncatalogued'}]`,
+    );
+  }
+
+  if (runtimePreset) {
+    lines.push(
+      isZh
+        ? `神谕档位：${runtimePreset}`
+        : `Oracle profile: ${runtimePreset}`,
     );
   }
 

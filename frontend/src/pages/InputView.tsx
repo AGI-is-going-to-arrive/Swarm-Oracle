@@ -22,12 +22,23 @@ import {
   getGameplayProfileSignatureHooks,
 } from '../lib/gameplayProfileSummary';
 import {
+  buildScenarioRuntimePresetOptions,
+  getScenarioRuntimePresetConfig,
+  loadScenarioRuntimePreset,
+  saveScenarioRuntimePreset,
+  type ScenarioRuntimePresetId,
+} from '../lib/runtimePreset';
+import {
   useInputByokSettings,
   useInputCampaignState,
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import './InputView.css';
+
+function estimateSimulationMinutes(rounds: number, numAgents: number) {
+  return Math.max(1, Math.round(rounds * (0.75 + numAgents * 0.0225)));
+}
 
 /* ── Loading Step Component ───────────────────────────────── */
 function LoadingStep({ label, active, done }: { label: string; active: boolean; done: boolean }) {
@@ -53,6 +64,7 @@ export function InputView() {
   const [placeholder, setPlaceholder] = useState('');
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
+  const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
@@ -150,6 +162,26 @@ export function InputView() {
       exceedsRounds: rounds > recommendation.rounds_max,
     };
   }, [numAgents, probeResult, rounds]);
+  const runtimePresetConfig = useMemo(
+    () => getScenarioRuntimePresetConfig(runtimePreset),
+    [runtimePreset],
+  );
+  const runtimePresetDescription = useMemo(
+    () => t(`home.runtime_preset_${runtimePreset}_desc`),
+    [runtimePreset, t],
+  );
+  const estimatedSimulationMinutes = useMemo(
+    () => estimateSimulationMinutes(rounds, numAgents),
+    [numAgents, rounds],
+  );
+  const simulationEtaHint = useMemo(
+    () => t('home.simulation_eta_hint', {
+      agents: numAgents,
+      rounds,
+      minutes: estimatedSimulationMinutes,
+    }),
+    [estimatedSimulationMinutes, numAgents, rounds, t],
+  );
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -190,7 +222,14 @@ export function InputView() {
     setNumAgents(sharedChallenge.numAgents);
     setMode(sharedChallenge.mode);
     setVizEnabled(sharedChallenge.visualizationEnabled);
+    if (sharedChallenge.runtimePreset) {
+      setRuntimePreset(sharedChallenge.runtimePreset);
+    }
   }, [sharedChallenge]);
+
+  useEffect(() => {
+    saveScenarioRuntimePreset(runtimePreset);
+  }, [runtimePreset]);
 
   // Animate loading steps while submitting
   useEffect(() => {
@@ -317,6 +356,7 @@ export function InputView() {
         visualizationEnabled: nextVisualization,
         userId: directorIdentity.userId,
         disableUserQuota,
+        ...buildScenarioRuntimePresetOptions(runtimePreset),
       });
       if (challengeId) {
         markChallengeStarted(challengeId, id);
@@ -429,6 +469,13 @@ export function InputView() {
         mode,
         visualization_enabled: vizEnabled,
         reasoning_effort: reasoningEffort || null,
+        runtime_preset: {
+          id: runtimePreset,
+          branch_sensitivity: runtimePresetConfig.branchSensitivity,
+          fork_prompt_variant: runtimePresetConfig.forkPromptVariant,
+          fork_detector_active_branch_limit: runtimePresetConfig.forkDetectorActiveBranchLimit,
+          applies_to: 'main_simulation',
+        },
         byok_expanded: showByok,
         byok_test_status: testStatus,
         error: buildAutomationErrorState(submitErrorCode, submitError),
@@ -521,6 +568,10 @@ export function InputView() {
     submitErrorCode,
     testStatus,
     probeResult,
+    runtimePreset,
+    runtimePresetConfig.branchSensitivity,
+    runtimePresetConfig.forkDetectorActiveBranchLimit,
+    runtimePresetConfig.forkPromptVariant,
     todayChallengeProgress,
     vizEnabled,
     todayChallenge?.id,
@@ -843,7 +894,7 @@ export function InputView() {
             </div>
             <span className="rounds-hint">
               {rounds <= 5 ? t('home.rounds_fast') : rounds <= 15 ? t('home.rounds_standard') : rounds <= 25 ? t('home.rounds_deep') : t('home.rounds_extreme')}
-              <span className="rounds-time">≈{Math.round(rounds * 1.2)}min</span>
+              <span className="rounds-time">≈{estimatedSimulationMinutes}min</span>
             </span>
           </div>
 
@@ -953,6 +1004,28 @@ export function InputView() {
             {reasoningEffort && (
               <span className="mode-desc">{t('home.reasoning_hint')}</span>
             )}
+          </div>
+
+          <div className="mode-selector-wrap">
+            <div className="mode-selector">
+              <span className="mode-label">{t('home.runtime_preset_label')}</span>
+              <div className="mode-options">
+                {(['conservative', 'balanced', 'aggressive'] as ScenarioRuntimePresetId[]).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
+                    onClick={() => setRuntimePreset(preset)}
+                    disabled={isSubmitting}
+                    title={t(`home.runtime_preset_${preset}_desc`)}
+                  >
+                    {t(`home.runtime_preset_${preset}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <span className="mode-desc">{runtimePresetDescription}</span>
+            <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
           </div>
 
           {/* P4-E: BYOK — Bring Your Own Key */}
@@ -1089,7 +1162,10 @@ export function InputView() {
               {t('debate.entry_cta')}
             </button>
           </div>
-          <p className="input-view__debate-hint">{t('debate.entry_hint')}</p>
+          <div className="input-view__submit-hints">
+            <p className="input-view__submit-hint">{simulationEtaHint}</p>
+            <p className="input-view__submit-hint">{t('debate.entry_hint')}</p>
+          </div>
           {submitError && !isSubmitting && (
             <span className="byok-test-error" role="alert">{submitError}</span>
           )}

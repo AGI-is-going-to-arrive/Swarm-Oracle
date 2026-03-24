@@ -948,8 +948,14 @@ async def run_simulation(
         sensitivity = ctx.get("branch_sensitivity", 0.7)
         fork_prompt_variant = str(ctx.get("fork_prompt_variant", "a") or "a").strip().lower()
         fork_detector_active_branch_limit = ctx.get("fork_detector_active_branch_limit")
+        effective_detector_branch_budget_limit = None
         if fork_detector_active_branch_limit is not None:
-            fork_detector_active_branch_limit = max(1, int(fork_detector_active_branch_limit))
+            fork_detector_active_branch_limit = max(0, int(fork_detector_active_branch_limit))
+            effective_detector_branch_budget_limit = (
+                None
+                if fork_detector_active_branch_limit == 0
+                else fork_detector_active_branch_limit
+            )
         key_variable = ctx.get("key_variable", scenario.question)
 
         # V2: Initialize visualization mapper if enabled
@@ -1119,7 +1125,7 @@ async def run_simulation(
 
         detector_budget_ranks: dict[str, int] = {}
         detector_budget_eligible_ids: set[str] | None = None
-        if fork_detector_active_branch_limit is not None:
+        if effective_detector_branch_budget_limit is not None:
             ranked_active_branches = sorted(
                 active_branches,
                 key=lambda item: (
@@ -1133,7 +1139,7 @@ async def run_simulation(
             }
             detector_budget_eligible_ids = {
                 str(branch["id"])
-                for branch in ranked_active_branches[:fork_detector_active_branch_limit]
+                for branch in ranked_active_branches[:effective_detector_branch_budget_limit]
             }
 
         for branch_info in active_branches:

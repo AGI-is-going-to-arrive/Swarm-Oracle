@@ -20,7 +20,7 @@ class CreateScenarioRequest(BaseModel):
     temperature: float | None = None  # Chat-completions sampling temperature override
     branch_sensitivity: float | None = None  # Override branch detector sensitivity (0-1)
     fork_prompt_variant: str | None = None  # Detector prompt variant: "a" | "b"
-    fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection
+    fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection; 0 disables the budget
     # P4-E: BYOK — bring your own key
     llm_api_key: str | None = None    # OpenAI-compatible API key
     llm_base_url: str | None = None   # OpenAI-compatible base URL (e.g. https://api.openai.com/v1/chat/completions)
@@ -102,9 +102,9 @@ class CreateScenarioRequest(BaseModel):
     @field_validator("fork_detector_active_branch_limit")
     @classmethod
     def validate_fork_detector_active_branch_limit(cls, v: int | None) -> int | None:
-        if v is not None and not (1 <= v <= settings.MAX_BRANCHES):
+        if v is not None and not (0 <= v <= settings.MAX_BRANCHES):
             raise ValueError(
-                f"fork_detector_active_branch_limit must be between 1 and {settings.MAX_BRANCHES}"
+                f"fork_detector_active_branch_limit must be between 0 and {settings.MAX_BRANCHES}"
             )
         return v
 

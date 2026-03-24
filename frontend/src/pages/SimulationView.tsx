@@ -64,6 +64,11 @@ import {
 } from '../game/automation';
 import { HudOverlay } from '../game/HudOverlay';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
+import {
+  getScenarioRuntimePresetConfig,
+  loadScenarioRuntimePreset,
+  matchScenarioRuntimePreset,
+} from '../lib/runtimePreset';
 import type {
   BranchInfo,
 } from '../types';
@@ -172,6 +177,17 @@ export function SimulationView() {
   const currentRound = useSimulationStore((s) => s.currentRound);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
+  const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
+  const scenarioRuntimePreset = useMemo(
+    () => matchScenarioRuntimePreset(scenario?.fork_debug?.round_checks ?? null),
+    [scenario?.fork_debug?.round_checks],
+  );
+  const activeRuntimePreset = scenarioRuntimePreset ?? fallbackRuntimePreset;
+  const activeRuntimePresetConfig = useMemo(
+    () => getScenarioRuntimePresetConfig(activeRuntimePreset),
+    [activeRuntimePreset],
+  );
+  const activeRuntimePresetLabel = t(`home.runtime_preset_${activeRuntimePreset}`);
 
   // Intervention modal state
   const [interventionTarget, setInterventionTarget] = useState<{
@@ -616,6 +632,14 @@ export function SimulationView() {
             key_moment_count: archiveKeyMoments.length,
           }
           : null,
+        runtime_preset: {
+          id: activeRuntimePreset,
+          label: activeRuntimePresetLabel,
+          source: scenarioRuntimePreset ? 'scenario' : 'session',
+          branch_sensitivity: activeRuntimePresetConfig.branchSensitivity,
+          fork_prompt_variant: activeRuntimePresetConfig.forkPromptVariant,
+          fork_detector_active_branch_limit: activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
+        },
         fork_debug: scenario?.fork_debug ?? null,
         controls: {
           can_go_back: true,
@@ -695,8 +719,14 @@ export function SimulationView() {
     replayBranchOptions,
     replayRounds,
     replaySpeed,
+    activeRuntimePreset,
+    activeRuntimePresetConfig.branchSensitivity,
+    activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
+    activeRuntimePresetConfig.forkPromptVariant,
+    activeRuntimePresetLabel,
     selectedReplayBranchId,
     selectedReplayRound,
+    scenarioRuntimePreset,
     theaterSceneState,
     scenario,
     replayUrl,
@@ -973,6 +1003,14 @@ export function SimulationView() {
             key_moment_count: archiveKeyMoments.length,
           }
           : null,
+        runtime_preset: {
+          id: activeRuntimePreset,
+          label: activeRuntimePresetLabel,
+          source: scenarioRuntimePreset ? 'scenario' : 'session',
+          branch_sensitivity: activeRuntimePresetConfig.branchSensitivity,
+          fork_prompt_variant: activeRuntimePresetConfig.forkPromptVariant,
+          fork_detector_active_branch_limit: activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
+        },
         fork_debug: scenario?.fork_debug ?? null,
         controls: {
           can_go_back: true,
@@ -1042,10 +1080,16 @@ export function SimulationView() {
     gameplayAutomation,
     predictionAutomation,
     replayAutomationState,
+    activeRuntimePreset,
+    activeRuntimePresetConfig.branchSensitivity,
+    activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
+    activeRuntimePresetConfig.forkPromptVariant,
+    activeRuntimePresetLabel,
     scenarioMeta,
     scenario,
     replayUrl,
     isReplayMode,
+    scenarioRuntimePreset,
     showGameplayCards,
     showPrediction,
     status,
@@ -1072,6 +1116,21 @@ export function SimulationView() {
               : status === 'done'
                 ? t('sim.status.completed')
                 : t('sim.status.running')}
+          </span>
+          <span
+            className="badge badge-active"
+            title={[
+              t('common.runtime_preset_scope_main'),
+              `${t('common.runtime_preset_prompt_variant')}: ${activeRuntimePresetConfig.forkPromptVariant.toUpperCase()}`,
+              `${t('common.runtime_preset_branch_sensitivity')}: ${activeRuntimePresetConfig.branchSensitivity}`,
+              `${t('common.runtime_preset_branch_budget')}: ${
+                activeRuntimePresetConfig.forkDetectorActiveBranchLimit === 0
+                  ? t('common.runtime_preset_budget_disabled')
+                  : activeRuntimePresetConfig.forkDetectorActiveBranchLimit
+              }`,
+            ].join(' · ')}
+          >
+            {t('sim.runtime_preset_title')}: {activeRuntimePresetLabel}
           </span>
         </div>
         <div className="sim-header__actions">

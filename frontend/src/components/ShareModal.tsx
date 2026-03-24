@@ -8,7 +8,7 @@ import { generateSocialCopy } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
-import { buildShareCopyEnvelope, type ShareFlavorContext } from '../lib/shareEnvelope';
+import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import './ShareModal.css';
 
 interface Platform {
@@ -63,7 +63,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
         llmModel: providerPolicy.model || undefined,
         userId: directorIdentity.userId,
       });
-      setCopy(buildShareCopyEnvelope(result.copy, shareContext ?? {}, isZh));
+      setCopy(result.copy.trim());
       setPlatformName(result.platform_name);
       setStatus('success');
     } catch (err) {
@@ -162,21 +162,6 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
                 <strong>{t('share.ready', { platform: platformName || (activePlatformLabel ? t(activePlatformLabel.labelKey) : '') })}</strong>
                 <span>{copied ? t('share.copied_hint') : t('share.ready_hint')}</span>
               </div>
-              {shareContext && (shareContext.profileLabel || shareContext.resonanceLabel || shareContext.profileHooks?.length) && (
-                <div className="share-context">
-                  {shareContext.profileLabel && (
-                    <span className="share-context__chip share-context__chip--primary">
-                      {shareContext.profileLabel}
-                    </span>
-                  )}
-                  {shareContext.resonanceLabel && (
-                    <span className="share-context__chip">{shareContext.resonanceLabel}</span>
-                  )}
-                  {(shareContext.profileHooks ?? []).slice(0, 3).map((hook) => (
-                    <span key={hook} className="share-context__chip">{hook}</span>
-                  ))}
-                </div>
-              )}
               <div className="share-result-header">
                 <span className="share-result-platform">{t('share.copy_label', { platform: platformName })}</span>
                 <button

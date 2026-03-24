@@ -53,7 +53,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `temperature` 合法范围：`0.0 <= temperature <= 2.0`
 > - `branch_sensitivity` 合法范围：`0.0 <= branch_sensitivity <= 1.0`
 > - `fork_prompt_variant` 当前支持：`a / b / c / d / e / f`
-> - `fork_detector_active_branch_limit` 合法范围：`1 <= value <= MAX_BRANCHES`
+> - `fork_detector_active_branch_limit` 合法范围：`0 <= value <= MAX_BRANCHES`
 > - `disable_user_quota` 只对本地 / self-hosted provider 生效；若本次运行最终走的不是本地 provider，会被忽略
 
 > `POST /api/scenario` 当前新增的 fork runtime 调参字段：
@@ -103,7 +103,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `GET /api/scenarios` | GET | 场景列表（分页+筛选） | `?status=done&limit=20&offset=0` | `{scenarios[], total, limit, offset}` |
 | `DELETE /api/scenario/{id}` | DELETE | 删除场景（级联删除所有关联数据） | — | `{status: "deleted", scenario_id}` |
-| `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown | — | `text/markdown` |
+| `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown；当前会直接作为附件下载，文件名形如 `swarmoracle-<id8>.md` | — | `text/markdown` |
 | `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；provider overrides 当前只能走 `POST body`，不能放在 `GET query` 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
 
@@ -122,6 +122,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `reddit / x` 仍按各自模板要求输出英文文案
 > - `GET` 仍可直接生成文案，但如果把 `llm_api_key / llm_base_url / llm_model / user_id` 放进 query，后端会返回 `400`；这类 provider overrides 必须改走 `POST body`
 > - 响应结构仍是 `{platform, platform_name, copy}`；若模型先返回超大原始文本，后端会先做一次安全缓冲截断，再做平台最终限长截断
+
+> `GET /api/scenario/{id}/export` 当前除了 `content-type: text/markdown`，还会带：
+> - `Content-Disposition: attachment; filename="swarmoracle-<id8>.md"`
+>
+> 也就是说，浏览器不需要再靠前端 `blob:` 下载推断文件名；当前导出链路会直接走标准附件下载。
 
 ### Replay 分享
 

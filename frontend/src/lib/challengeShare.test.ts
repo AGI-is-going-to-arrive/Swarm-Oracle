@@ -11,6 +11,7 @@ describe('challengeShare helpers', () => {
       mode: 'blackboard',
       visualizationEnabled: true,
       profileId: 'governance',
+      runtimePreset: 'aggressive',
     });
 
     const payload = readSharedChallengePayload(new URLSearchParams(search));
@@ -21,6 +22,7 @@ describe('challengeShare helpers', () => {
       mode: 'blackboard',
       visualizationEnabled: true,
       profileId: 'governance',
+      runtimePreset: 'aggressive',
     });
   });
 });

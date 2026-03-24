@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-24（BYOK probe + local quota toggle / scenario tail done 自愈 / Theater 尾声状态补拉 / Bubble & branch UI 可读性修复 / phaser-custom entry.mjs 收口）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-25（首页神谕档位正式上架 / 主模式预计耗时提示 / Result 与 ShareModal 去冗余 / Markdown 附件下载收口）
 
 ## 阅读顺序
 

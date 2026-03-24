@@ -32,7 +32,7 @@
 | `temperature` | float | `0.0 - 2.0` | Chat Completions 采样温度。会影响 agent 发言、fork detector、memory compression、narrator 的采样风格 |
 | `branch_sensitivity` | float | `0.0 - 1.0` | 覆盖 parser 产出的 `branch_sensitivity`，直接进入 fork detector prompt |
 | `fork_prompt_variant` | str | `a / b / c / d / e / f` | 切换 `_detect_fork()` 的 detector prompt 口径 |
-| `fork_detector_active_branch_limit` | int | `1 - MAX_BRANCHES` | 每轮仅允许前 `K` 个 `ACTIVE` 分支继续跑 detector；`null / 0` 表示关闭预算，保留默认行为 |
+| `fork_detector_active_branch_limit` | int | `0 - MAX_BRANCHES` | 每轮仅允许前 `K` 个 `ACTIVE` 分支继续跑 detector；`0` 表示关闭预算，保留默认行为 |
 
 > 这组运行时调参当前都会进入 `Scenario.parsed_context`，并在 `GET /api/scenario/{id}` 的 `fork_debug.round_checks` 里回显。它们不会修改服务器级全局默认值；不传时仍走当前默认行为。
 
@@ -65,11 +65,27 @@ fork_detector_active_branch_limit = 1
 
 ### 档位建议
 
+这三档当前已经正式挂到首页 UI，入口文案为：
+
+```text
+神谕档位 / Oracle Profile
+```
+
+前端显示名是：
+
+```text
+守望 / Watchful
+校准 / Calibrated
+裂界 / Riftbound
+```
+
+它们只作用于主模式的世界线分岔，不影响 Debate Arena。
+
 | 档位 | 建议配置 | 适用场景 | 风险 |
 |------|----------|----------|------|
-| 保守版 | `d + 0.7 + k=1` | 治理、审批、法院、委员会、制度题 | branch 与多结局更克制；人物题不一定稳定出分支 |
-| 平衡版（推荐） | `b + 0.7 + k=1` | 默认产品配置 | 兼顾分支可见性和 branch 控制；仍会有一定题目波动 |
-| 激进版 | `b + 0.7 + k=0` | 内部 demo / spectacle 场景 | fork 命中率高，但 branch 爆炸和长尾 narration 风险都更高 |
+| 守望版（Watchful） | `d + 0.7 + k=1` | 治理、审批、法院、委员会、制度题 | branch 与多结局更克制；人物题不一定稳定出分支 |
+| 校准版（Calibrated，推荐） | `b + 0.7 + k=1` | 默认产品配置 | 兼顾分支可见性和 branch 控制；仍会有一定题目波动 |
+| 裂界版（Riftbound） | `b + 0.7 + k=0` | 内部 demo / spectacle 场景 | fork 命中率高，但 branch 爆炸和长尾 narration 风险都更高 |
 
 ### 跨题预算实验摘要
 

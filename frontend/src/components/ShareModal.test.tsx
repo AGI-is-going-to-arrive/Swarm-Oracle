@@ -68,6 +68,7 @@ describe('ShareModal automation callback', () => {
         scenarioId="scenario-1"
         shareContext={{
           profileLabel: '贸易绞盘',
+          runtimePresetLabel: '校准',
           profileHooks: ['关税杠杆', '港口封锁'],
           resonanceLabel: '命中题材核心',
           permalinkUrl: 'https://example.com/result/scenario-1',
@@ -87,11 +88,12 @@ describe('ShareModal automation callback', () => {
     expect(latestState.copy_length).toBeGreaterThan(0);
     expect(screen.getByText('share.ready')).toBeInTheDocument();
     expect(screen.getByText('share.ready_hint')).toBeInTheDocument();
-    expect(screen.getByText('贸易绞盘')).toBeInTheDocument();
-    expect(screen.getByText('命中题材核心')).toBeInTheDocument();
-    expect(screen.getByText('关税杠杆')).toBeInTheDocument();
-    expect(screen.getByText(/生成好的文案/)).toBeInTheDocument();
-    expect(screen.getByText(/https:\/\/example\.com\/result\/scenario-1/)).toBeInTheDocument();
+    expect(screen.getByText('生成好的文案')).toBeInTheDocument();
+    expect(screen.queryByText('贸易绞盘')).not.toBeInTheDocument();
+    expect(screen.queryByText('校准')).not.toBeInTheDocument();
+    expect(screen.queryByText('命中题材核心')).not.toBeInTheDocument();
+    expect(screen.queryByText('关税杠杆')).not.toBeInTheDocument();
+    expect(screen.queryByText(/https:\/\/example\.com\/result\/scenario-1/)).not.toBeInTheDocument();
     expect(generateSocialCopyMock).toHaveBeenCalledWith('scenario-1', 'xiaohongshu', {
       llmApiKey: 'sk-test',
       llmBaseUrl: 'https://example.com/v1/chat/completions',

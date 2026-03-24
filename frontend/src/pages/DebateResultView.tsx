@@ -363,6 +363,7 @@ export function DebateResultView() {
               <p className="debate-hero__subtitle">
                 {t('debate.result_adjudication')}: {adjudicationModeLabel}
               </p>
+              <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
               <p className="debate-hero__motion">
                 <strong>{t('debate.motion_label')}:</strong> {payload.motion}
               </p>

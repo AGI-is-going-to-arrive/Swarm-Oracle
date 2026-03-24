@@ -6,7 +6,6 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  exportScenario,
   createReplayArtifact,
   finalizeCampaign,
   getAgents,
@@ -55,8 +54,13 @@ import {
   resolveStructuredBetOutcome,
   type StructuredBetOutcome,
 } from '../lib/predictionBetting';
-import { buildExportArchivePreface, type ShareFlavorContext } from '../lib/shareEnvelope';
+import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
+import {
+  getScenarioRuntimePresetConfig,
+  loadScenarioRuntimePreset,
+  matchScenarioRuntimePreset,
+} from '../lib/runtimePreset';
 import {
   getGameplayBadgeSrc,
   getGameplayCardDefinition,
@@ -225,6 +229,17 @@ export default function ResultView() {
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const isReplayMode = Boolean(replayPayload);
   const hasUnscored = predictions.some((p) => p.score == null);
+  const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
+  const scenarioRuntimePreset = useMemo(
+    () => matchScenarioRuntimePreset(scenario?.fork_debug?.round_checks ?? null),
+    [scenario?.fork_debug?.round_checks],
+  );
+  const activeRuntimePreset = scenarioRuntimePreset ?? fallbackRuntimePreset;
+  const activeRuntimePresetConfig = useMemo(
+    () => getScenarioRuntimePresetConfig(activeRuntimePreset),
+    [activeRuntimePreset],
+  );
+  const activeRuntimePresetLabel = t(`home.runtime_preset_${activeRuntimePreset}`);
   const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
   const replayInvalidMessage = isZh
     ? '这个回放链接无效或内容不完整。'
@@ -532,21 +547,17 @@ export default function ResultView() {
     setExporting(true);
     setExportError('');
     try {
-      const markdown = await exportScenario(id);
-      const themedMarkdown = buildExportArchivePreface(markdown, shareFlavorContext, isZh);
-      const blob = new Blob([themedMarkdown], { type: 'text/markdown;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
+      const filename = `swarmoracle-${id.slice(0, 8)}.md`;
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `swarmoracle-${id.slice(0, 8)}.md`;
+      a.href = `/api/scenario/${id}/export`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Export failed');
     } finally {
-      setExporting(false);
+      window.setTimeout(() => setExporting(false), 250);
     }
   };
 
@@ -581,6 +592,7 @@ export default function ResultView() {
       mode: scenario.mode ?? 'blackboard',
       visualizationEnabled: scenario.visualization_enabled ?? false,
       profileId: inferGameplayProfile(scenario.question, scenario.scene_theme)?.id ?? null,
+      runtimePreset: activeRuntimePreset,
     });
     await copyText(url);
     setChallengeLinkCopied(true);
@@ -881,6 +893,7 @@ export default function ResultView() {
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
     profileLabel: gameplayProfileLabel,
+    runtimePresetLabel: activeRuntimePresetLabel,
     profileHooks: gameplayProfileHooks,
     resonanceLabel: profileResonanceLabel,
     directorStyleLabel,
@@ -897,6 +910,7 @@ export default function ResultView() {
   }), [
     storyData?.question,
     gameplayProfileLabel,
+    activeRuntimePresetLabel,
     gameplayProfileHooks,
     profileResonanceLabel,
     directorStyleLabel,
@@ -966,6 +980,14 @@ export default function ResultView() {
         branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
         predictions_count: predictions.length,
         has_unscored: hasUnscored,
+        runtime_preset: {
+          id: activeRuntimePreset,
+          label: activeRuntimePresetLabel,
+          source: scenarioRuntimePreset ? 'scenario' : 'session',
+          branch_sensitivity: activeRuntimePresetConfig.branchSensitivity,
+          fork_prompt_variant: activeRuntimePresetConfig.forkPromptVariant,
+          fork_detector_active_branch_limit: activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
+        },
         archive_summary: storyData && scenarioMeta && displayArchive
           ? {
               most_used_card: displayArchive.mostUsedCard ?? null,
@@ -1036,7 +1058,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue]);
+  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
     return (
@@ -1104,6 +1126,11 @@ export default function ResultView() {
           {t('result.subtitle')} — {branches.length} {t('result.ending_card').toLowerCase()}
           {branches.length !== 1 ? 's' : ''}
         </p>
+        <div className="result-archive__chips">
+          <span className="archive-chip archive-chip--primary">
+            {t('common.runtime_preset_label')} · {activeRuntimePresetLabel}
+          </span>
+        </div>
         <div className="result-actions">
           <button
             className="btn"

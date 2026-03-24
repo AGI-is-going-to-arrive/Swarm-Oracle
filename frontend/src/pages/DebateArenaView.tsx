@@ -752,6 +752,7 @@ export function DebateArenaView() {
 
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
+        <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
         {error && <p className="debate-modal__error">{error}</p>}
         <section className="debate-situation-grid" aria-label={t('debate.overview_room_title')}>
           {overviewCards.map((card) => (

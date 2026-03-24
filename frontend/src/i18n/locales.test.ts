@@ -28,4 +28,19 @@ describe('i18n locale resources', () => {
     expect(zh.translation.game.capture_mode_canvas).toBe('画布');
     expect(zh.translation.game.capture_mode_modal).toBe('弹窗');
   });
+
+  it('provides localized runtime preset labels for the homepage and gameplay pages', () => {
+    expect(en.translation.home.runtime_preset_label).toBe('Oracle Profile');
+    expect(zh.translation.home.runtime_preset_label).toBe('神谕档位');
+    expect(en.translation.home.runtime_preset_conservative).toBe('Watchful');
+    expect(en.translation.home.runtime_preset_balanced).toBe('Calibrated');
+    expect(en.translation.home.runtime_preset_aggressive).toBe('Riftbound');
+    expect(zh.translation.home.runtime_preset_conservative).toBe('守望');
+    expect(zh.translation.home.runtime_preset_balanced).toBe('校准');
+    expect(zh.translation.home.runtime_preset_aggressive).toBe('裂界');
+    expect(en.translation.sim.runtime_preset_title).toBe('Oracle Profile');
+    expect(zh.translation.sim.runtime_preset_title).toBe('本局神谕档位');
+    expect(en.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
+    expect(zh.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
+  });
 });

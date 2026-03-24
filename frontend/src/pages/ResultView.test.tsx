@@ -607,6 +607,7 @@ describe('ResultView campaign summary', () => {
     expect(writeText.mock.calls[0][0]).toContain('/result/replay?share=');
     expect(copiedUrl).toContain('sharedChallenge=1');
     expect(copiedUrl).toContain('question=');
+    expect(copiedUrl).toContain('preset=balanced');
   });
 
   it('renders from a replay token without finalizing campaign again', async () => {

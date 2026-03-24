@@ -538,6 +538,97 @@ class TestRunSimulation:
         assert skipped["detector_branch_rank"] == 2
 
     @pytest.mark.asyncio
+    async def test_zero_detector_branch_budget_disables_budget_gate(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 3,
+                "branch_sensitivity": 0.9,
+                "fork_prompt_variant": "a",
+                "fork_detector_active_branch_limit": 0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="策略代理",
+                    role="分析师",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        detector_calls = 0
+
+        async def _fake_llm_call_json(prompt, *_args, **_kwargs):
+            nonlocal detector_calls
+            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+                detector_calls += 1
+                if detector_calls == 1:
+                    return {
+                        "should_fork": True,
+                        "reason": "首轮分成两条主线",
+                        "branches": [
+                            {
+                                "title": "高概率分支",
+                                "description": "继续推进主方案。",
+                                "probability": 0.6,
+                            },
+                            {
+                                "title": "低概率分支",
+                                "description": "转向次优方案。",
+                                "probability": 0.4,
+                            },
+                        ],
+                    }
+                return {
+                    "should_fork": False,
+                    "reason": "关闭预算后，两个分支都允许继续检测。",
+                    "branches": [],
+                }
+            return {
+                "content": "继续推进。",
+                "emotion": "focused",
+                "diverge": "是否继续沿主方案推进",
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "结果分支",
+                "story": "叙事完成。",
+                "insight": "关闭预算后，所有活跃分支都完成了 detector 检测。",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            trace = list((scenario.parsed_context or {}).get("fork_debug_trace") or [])
+
+        assert detector_calls == 3
+        assert not any(entry["skip_reason"] == "detector_budget_exceeded" for entry in trace)
+        round_two_entries = [entry for entry in trace if entry["round"] == 2]
+        assert len(round_two_entries) == 2
+        assert all(entry["fork_detector_active_branch_limit"] == 0 for entry in round_two_entries)
+        assert all(entry["detector_branch_budget_eligible"] is True for entry in round_two_entries)
+
+    @pytest.mark.asyncio
     async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(
         self,
         monkeypatch,
@@ -1331,6 +1422,7 @@ class TestCompressRoundMemory:
             previous_briefing=None,
             api_key=None,
             base_url=None,
+            temperature=None,
             model=None,
         ):
             captured["messages_text"] = messages_text

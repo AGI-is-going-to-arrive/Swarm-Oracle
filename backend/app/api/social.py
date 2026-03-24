@@ -452,4 +452,12 @@ async def export_scenario(scenario_id: str):
             lines.append("")
 
     md_content = "\n".join(lines)
-    return PlainTextResponse(content=md_content, media_type="text/markdown")
+    return PlainTextResponse(
+        content=md_content,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="swarmoracle-{scenario_id[:8]}.md"'
+            )
+        },
+    )
