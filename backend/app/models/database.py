@@ -322,7 +322,16 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
             raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
     # col_type may contain "TEXT", "INTEGER DEFAULT 0" etc — validate word tokens
     for token in col_type.split():
-        if not _SAFE_IDENTIFIER.match(token) and token not in ('0', '1'):
+        if (
+            not _SAFE_IDENTIFIER.match(token)
+            and token not in ("0", "1")
+            and not (
+                len(token) >= 2
+                and token[0] == "'"
+                and token[-1] == "'"
+                and "'" not in token[1:-1]
+            )
+        ):
             raise ValueError(f"Unsafe SQL type token rejected: {token!r}")
     result = _sqlite_exec(cursor, f"PRAGMA table_info({table})")
     existing = {row[1] for row in result.fetchall()}

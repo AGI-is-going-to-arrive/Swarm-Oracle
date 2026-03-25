@@ -125,6 +125,29 @@ class TestRootEndpoint:
         assert data["name"] == "SwarmOracle"
         assert data["version"] == "0.1.0"
 
+    def test_unhandled_exception_returns_uniform_internal_error(self):
+        from fastapi import APIRouter
+
+        router = APIRouter()
+
+        @router.get("/_test/unhandled-error")
+        async def _boom():
+            raise RuntimeError("secret internal detail")
+
+        app.include_router(router)
+        try:
+            with TestClient(app, raise_server_exceptions=False) as client:
+                resp = client.get("/_test/unhandled-error")
+            assert resp.status_code == 500
+            assert resp.json() == {
+                "detail": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Internal server error",
+                }
+            }
+        finally:
+            app.router.routes.pop()
+
 class TestHealthEndpoint:
     def test_health(self, client):
         """POST /api/health should check server + LLM."""
@@ -1075,6 +1098,28 @@ class TestPredictionLeaderboardEndpoints:
         payload = resp.json()
         assert len(payload) == 1
         assert payload[0]["prediction_text"] == "预测 2"
+
+    def test_list_predictions_applies_default_page_size(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Prediction(
+                        scenario_id=sid,
+                        prediction_text=f"预测 {idx}",
+                        user_id=f"user-{idx}",
+                        user_name=f"User {idx}",
+                    )
+                    for idx in range(55)
+                ]
+            )
+            session.commit()
+
+        resp = client.get(f"/api/scenario/{sid}/predictions")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload) == 50
 
     def test_submit_prediction_rejects_closed_statuses(self, client):
         engine = get_engine()

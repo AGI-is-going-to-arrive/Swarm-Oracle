@@ -440,14 +440,14 @@ async def get_pending_intervention_count(key: str) -> int:
         scenario_id, branch_id = _split_intervention_key(key)
         engine = get_engine()
         with Session(engine) as session:
-            return len(
+            return int(
                 session.exec(
-                    select(PendingIntervention)
-                    .where(
+                    select(func.count(PendingIntervention.id)).where(
                         PendingIntervention.scenario_id == scenario_id,
                         PendingIntervention.branch_id == branch_id,
                     )
-                ).all()
+                ).one()
+                or 0
             )
 
     async with _intervention_lock:
@@ -1510,8 +1510,10 @@ async def _gather_agent_messages(
     else:
         shared_text = ""
 
-    # Fall back to DB messages when no blackboard or first round (empty board)
-    recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
+    # Only hit the DB when the blackboard cannot provide usable context.
+    recent_msgs = None
+    if not shared_text or shared_text == "(尚无共享信息)":
+        recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
     emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
 
     async def push_event(event: dict):
@@ -1545,6 +1547,7 @@ async def _gather_agent_messages(
                 )
             else:
                 # Fallback: format DB messages per-tier (first round or no blackboard)
+                assert recent_msgs is not None
                 recent_text = format_messages_for_context(recent_msgs, tier=agent_tier)
                 ctx = build_agent_context(
                     agent=agent,

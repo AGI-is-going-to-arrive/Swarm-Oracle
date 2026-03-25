@@ -151,6 +151,21 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
         "visualization_enabled": True,
     },
 )
+_DAILY_ROTATION_ORDER: tuple[str, ...] = (
+    "daily-ai-governance",
+    "daily-roman-empire",
+    "daily-war-front",
+    "daily-industry",
+    "daily-frontier",
+    "daily-trade-chokepoint",
+    "daily-legal-veto",
+    "daily-faith-order",
+    "daily-ecology-threshold",
+    "daily-mythic-pact",
+    "daily-survival-grid",
+    "daily-generic-shuffle",
+)
+_DAILY_CHALLENGE_BY_ID = {challenge["id"]: challenge for challenge in DAILY_CHALLENGES}
 
 
 def _parse_local_date(local_date: str) -> date:
@@ -159,6 +174,18 @@ def _parse_local_date(local_date: str) -> date:
 
 def _date_key(value: date) -> str:
     return value.isoformat()
+
+
+def _rotation_catalog() -> tuple[dict[str, Any], ...]:
+    catalog: list[dict[str, Any]] = []
+    for challenge_id in _DAILY_ROTATION_ORDER:
+        challenge = _DAILY_CHALLENGE_BY_ID.get(challenge_id)
+        if challenge is None:
+            raise RuntimeError(
+                f"Daily challenge rotation references unknown challenge id: {challenge_id}"
+            )
+        catalog.append(challenge)
+    return tuple(catalog)
 
 
 def _day_index(local_date: date) -> int:
@@ -175,21 +202,23 @@ def challenge_week_key(local_date: str) -> str:
 
 def get_today_challenge_definition(local_date: str) -> dict[str, Any]:
     target_date = _parse_local_date(local_date)
-    return DAILY_CHALLENGES[_day_index(target_date) % len(DAILY_CHALLENGES)].copy()
+    catalog = _rotation_catalog()
+    return catalog[_day_index(target_date) % len(catalog)].copy()
 
 
 def get_weekly_challenge_definitions(local_date: str, count: int = 3) -> list[dict[str, Any]]:
     target_date = _parse_local_date(local_date)
+    catalog = _rotation_catalog()
     week_index = _day_index(target_date) // 7
-    start = (week_index * count) % len(DAILY_CHALLENGES)
+    start = (week_index * count) % len(catalog)
     return [
-        DAILY_CHALLENGES[(start + offset) % len(DAILY_CHALLENGES)].copy()
+        catalog[(start + offset) % len(catalog)].copy()
         for offset in range(count)
     ]
 
 
 def get_challenge_rotation(local_date: str, weekly_count: int = 3) -> dict[str, Any]:
-    normalized_count = max(1, min(weekly_count, len(DAILY_CHALLENGES)))
+    normalized_count = max(1, min(weekly_count, len(_rotation_catalog())))
     return {
         "local_date": local_date,
         "week_key": challenge_week_key(local_date),

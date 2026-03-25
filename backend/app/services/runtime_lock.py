@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 
 from app.config import settings
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 _RUNTIME_LOCK_TABLE = "runtime_lock"
 _INPROCESS_LOCKS: dict[str, tuple[str, float]] = {}
 _INPROCESS_LOCKS_GUARD = threading.Lock()
+_SQLITE_TIMEOUT_SECONDS = 30.0
+_SQLITE_CONNECTIONS = threading.local()
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,41 @@ def _ensure_runtime_lock_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _get_threadlocal_connection_cache() -> dict[str, sqlite3.Connection]:
+    cache = getattr(_SQLITE_CONNECTIONS, "cache", None)
+    if cache is None:
+        cache = {}
+        _SQLITE_CONNECTIONS.cache = cache
+    return cache
+
+
+def _get_sqlite_connection(db_path: str) -> sqlite3.Connection:
+    cache = _get_threadlocal_connection_cache()
+    conn = cache.get(db_path)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except sqlite3.Error:
+            with suppress(sqlite3.Error):
+                conn.close()
+            cache.pop(db_path, None)
+
+    conn = sqlite3.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS, isolation_level=None)
+    cache[db_path] = conn
+    return conn
+
+
+def _close_threadlocal_sqlite_connections() -> None:
+    cache = getattr(_SQLITE_CONNECTIONS, "cache", None)
+    if not cache:
+        return
+    for conn in list(cache.values()):
+        with suppress(sqlite3.Error):
+            conn.close()
+    cache.clear()
+
+
 def _sweep_expired_inprocess_locks(now: float) -> None:
     expired_keys = [
         key for key, (_owner_id, expires_at) in _INPROCESS_LOCKS.items() if expires_at <= now
@@ -102,7 +140,7 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
             expires_at=expires_at,
         )
 
-    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    conn = _get_sqlite_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn)
@@ -139,8 +177,6 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
         except sqlite3.DatabaseError:
             pass
         raise
-    finally:
-        conn.close()
 
 
 def runtime_lock_is_active(lock_key: str) -> bool:
@@ -154,7 +190,7 @@ def runtime_lock_is_active(lock_key: str) -> bool:
             current = _INPROCESS_LOCKS.get(lock_key)
             return current is not None and current[1] > now
 
-    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    conn = _get_sqlite_connection(db_path)
     try:
         _ensure_runtime_lock_table(conn)
         current = conn.execute(
@@ -169,8 +205,6 @@ def runtime_lock_is_active(lock_key: str) -> bool:
         return current is not None
     except Exception:
         raise
-    finally:
-        conn.close()
 
 
 def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
@@ -185,7 +219,7 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
             _INPROCESS_LOCKS.pop(lease.lock_key, None)
             return True
 
-    conn = sqlite3.connect(lease.db_path, timeout=30, isolation_level=None)
+    conn = _get_sqlite_connection(lease.db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn)
@@ -201,5 +235,3 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
         except sqlite3.DatabaseError:
             pass
         raise
-    finally:
-        conn.close()

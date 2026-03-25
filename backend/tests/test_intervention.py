@@ -271,6 +271,39 @@ class TestRetrospectiveIntervention:
             assert "round-one context" in [message.content for message in cloned_messages]
             assert "round-two context" in [message.content for message in cloned_messages]
 
+    def test_clone_branch_history_batches_round_queries(self, monkeypatch):
+        from app.api import interventions as interventions_module
+
+        executed_limits: list[int] = []
+
+        class _FakeResult:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def all(self):
+                return self._rows
+
+        class _FakeSession:
+            def exec(self, statement):
+                limit_clause = getattr(statement, "_limit_clause", None)
+                executed_limits.append(int(limit_clause.value) if limit_clause is not None else -1)
+                return _FakeResult([])
+
+            def add(self, _value):
+                return None
+
+            def flush(self):
+                return None
+
+        interventions_module._clone_branch_history(
+            _FakeSession(),
+            source_branch_id="branch-1",
+            target_branch_id="branch-2",
+            through_round=250,
+        )
+
+        assert executed_limits == [100]
+
 
 # ── Batch Intervention Tests ─────────────────────────────
 

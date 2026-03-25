@@ -33,6 +33,7 @@ class TestLLMCall:
         llm_client._provider_circuit_until.clear()
         llm_client._global_semaphore = None
         llm_client._global_semaphore_limit = 0
+        llm_client._runtime_guard_table_ensured_keys.clear()
 
     @pytest.mark.asyncio
     async def test_global_backpressure_rejects_when_queue_is_full(self, monkeypatch):
@@ -284,6 +285,67 @@ class TestLLMCall:
             command.startswith("INSERT INTO llm_runtime_guard")
             for command, _ in fake_connection.commands
         )
+
+    def test_runtime_guard_table_is_ensured_once_per_db_path(self, monkeypatch, tmp_path):
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard_cached.db"
+
+        class _FakeResult:
+            def scalar_one(self):
+                return 0
+
+        class _FakeConnection:
+            def __init__(self):
+                self.commands: list[tuple[str, object]] = []
+
+            def exec_driver_sql(self, statement: str, params=None):
+                normalized = " ".join(statement.split())
+                self.commands.append((normalized, params))
+                return _FakeResult()
+
+            def commit(self):
+                return None
+
+            def rollback(self):
+                return None
+
+        class _FakeConnectContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def connect(self):
+                return _FakeConnectContext(self.connection)
+
+        fake_connection = _FakeConnection()
+        fake_engine = _FakeEngine(fake_connection)
+
+        monkeypatch.setattr(llm_client, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        first = llm_client._reserve_sqlite_runtime_slot(quota_key=None, lease_seconds=30)
+        llm_client._release_sqlite_runtime_slot(reservation_id=first)
+        second = llm_client._reserve_sqlite_runtime_slot(quota_key=None, lease_seconds=30)
+
+        assert first
+        assert second
+        ddl_commands = [
+            command
+            for command, _ in fake_connection.commands
+            if command.startswith("CREATE TABLE") or command.startswith("CREATE INDEX")
+        ]
+        assert len(ddl_commands) == 3
 
     @pytest.mark.asyncio
     async def test_global_semaphore_is_not_replaced_after_runtime_change(self, monkeypatch):

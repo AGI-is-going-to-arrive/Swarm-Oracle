@@ -180,6 +180,27 @@ async def test_run_debate_background_skips_when_sqlite_runtime_lock_is_held():
 
 
 @pytest.mark.asyncio
+async def test_run_debate_background_uses_shorter_runtime_lock_lease(monkeypatch):
+    debate = create_debate_record("如果所有仲裁都必须公开其失败的备援链路，会更稳吗？")
+    captured: dict[str, float] = {}
+
+    def _fake_acquire_runtime_lock(lock_key: str, *, lease_seconds: float):
+        captured["lock_key"] = lock_key
+        captured["lease_seconds"] = lease_seconds
+        return None
+
+    monkeypatch.setattr(debate_module, "acquire_runtime_lock", _fake_acquire_runtime_lock)
+
+    async def _push(_debate_id: str, _event: dict) -> None:
+        return None
+
+    await run_debate_background(debate.id, ws_callback=_push)
+
+    assert captured["lock_key"] == debate_lock_key(debate.id)
+    assert captured["lease_seconds"] == 15 * 60
+
+
+@pytest.mark.asyncio
 async def test_run_debate_background_sends_generic_error_to_clients(monkeypatch):
     debate = create_debate_record("Should a tribunal leak upstream details on failure?")
     pushed_events: list[dict] = []

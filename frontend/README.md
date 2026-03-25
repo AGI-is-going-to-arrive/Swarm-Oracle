@@ -88,7 +88,7 @@ npm run build:spike:phaser-custom
 ```
 
 - Historical full baseline: `179 passed`.
-- Current targeted frontend set: `107 passed`.
+- Current targeted frontend set: `112 passed`.
 - Current custom Phaser runtime subset:
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `npm run test:spike:phaser-custom`: `30 passed`

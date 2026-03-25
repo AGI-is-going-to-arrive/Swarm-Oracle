@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import type { ScenarioGameplayState } from '../types';
 import {
   areScenarioGameplayStatesEquivalent,
   mergeScenarioMetaWithGameplayState,
@@ -216,6 +217,94 @@ describe('scenarioGameplayState helpers', () => {
       'event:bet:2:Open%20Hearing',
       'event:card:2:public_hearing',
     ]));
+  });
+
+  it('treats reordered normalized gameplay payloads as equivalent without JSON stringification', () => {
+    const left: ScenarioGameplayState = {
+      cards: {
+        usage_log: [
+          {
+            card_id: 'public_hearing',
+            profile_id: 'law',
+            branch_id: 'branch-b',
+            branch_title: 'Branch B',
+            round: 3,
+            cost: 1,
+            directive: 'Open the hearing.',
+            used_at: '2026-03-20T00:03:00Z',
+          },
+        ],
+      },
+      betting: {
+        bets: [
+          {
+            bet_id: 'bet-2',
+            kind: 'ending_tone',
+            target_id: null,
+            target_label: 'Order',
+            confidence: 0.6,
+            user_name: 'Director',
+            placed_at_round: 2,
+            placed_at: '2026-03-20T00:02:00Z',
+            resolved: false,
+          },
+        ],
+      },
+      archive: {
+        key_moments: ['event:bet:2:Order', 'event:card:3:public_hearing'],
+        branch_snapshots: [
+          {
+            branch_id: 'branch-b',
+            title: 'Branch B',
+            probability: 0.7,
+          },
+        ],
+      },
+    };
+
+    const right: ScenarioGameplayState = {
+      archive: {
+        branch_snapshots: [
+          {
+            probability: 0.7,
+            title: 'Branch B',
+            branch_id: 'branch-b',
+          },
+        ],
+        key_moments: ['event:bet:2:Order', 'event:card:3:public_hearing'],
+      },
+      betting: {
+        bets: [
+          {
+            resolved: false,
+            placed_at: '2026-03-20T00:02:00Z',
+            placed_at_round: 2,
+            user_name: 'Director',
+            confidence: 0.6,
+            target_label: 'Order',
+            target_id: null,
+            kind: 'ending_tone',
+            bet_id: 'bet-2',
+          },
+        ],
+      },
+      cards: {
+        usage_log: [
+          {
+            used_at: '2026-03-20T00:03:00Z',
+            directive: 'Open the hearing.',
+            cost: 1,
+            round: 3,
+            branch_title: 'Branch B',
+            branch_id: 'branch-b',
+            profile_id: 'law',
+            card_id: 'public_hearing',
+          },
+        ],
+      },
+    };
+
+    expect(areScenarioGameplayStatesEquivalent(left, right)).toBe(true);
   });
 
   it('treats explicit remote gameplay partitions as authoritative once remote gameplay is present', () => {

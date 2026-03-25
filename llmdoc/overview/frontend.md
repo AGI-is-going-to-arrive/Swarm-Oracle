@@ -134,6 +134,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 主模式 `cards.usageLog / betting.bets / archive.keyMoments / archive.branchSnapshots` 已以后端 `gameplay_state` 为准
   - 页面层当前不会再把远端 `gameplay_state` 反向 apply 成 localStorage 镜像；结果页当前也以远端 authority 为展示基线，只在缺字段时回退本地兼容内容
   - `scenarioMetaToGameplayState()` 当前会通过 helper 现算完整 `key_moments`，而不是假定本地 `archive.keyMoments` 已经带齐 card/bet 冗余项
+  - `areScenarioGameplayStatesEquivalent()` 当前已改成显式结构化比较，只对 authority 真正在乎的 `usage_log / bets / key_moments / branch_snapshots` 做判等，不再靠 `JSON.stringify(...)`
   - `SimulationView` 当前只会在 backend `gameplay_state` 仍为空时，才把本地 compat gameplay 回写后端；一旦远端 `gameplay_state` 已有有效内容，不再把 stale local `usageLog / bets` 混回 authority 链路
 
 ### `themeRegistry.ts`
@@ -520,8 +521,8 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 |------|------|
 | `PhaserGame.tsx` | Phaser 游戏 React 包装组件，管理 Phaser.Game 生命周期 + 增量气泡分发（store 订阅实时消息）+ fallback synth init（竞态条件防御）；对自动化暴露 `advanceTime(ms)`，并通过 replay sync 在已完成回放与 live Theater 启动期跳过 `TitleScene`；completed replay 当前也已改成更细粒度的单条回放节奏，不再把多条消息硬塞在同一个时间片；`worldSceneBootstrap.ts` 现额外负责 completed replay / mobile Theater 的 `WorldScene` bootstrap guard，避免 `scene=null` 或 Agent 尚未 hydrate 时误判完成；Phaser `preBoot` 会注入初始 `scene_theme` |
 | `PhaserGameLoader.tsx` | 懒加载器，显示加载状态，动态导入 Phaser；透传 `playbackMode/replaySpeed/playbackBranchId/playbackRound` 到 `PhaserGame`；当前默认 build / vitest 通过 alias 把 `phaser` 指向本地精简入口 `experiments/phaser-custom/entry.mjs`，`preloadPhaserGame()` 也会跳过 hidden / reduced-data / saveData / `2g/slow-2g`，以及低内存 / 低并发设备的预热 |
-| `EventBridge.ts` | WebSocket 事件 → Phaser CustomEvent 桥接层，解耦 React 与 Phaser；开发态 HMR dispose 当前也会显式 `stop()`，避免模块级 singleton 在热更新后残留旧订阅 |
-| `EventBridge.test.ts` | EventBridge 单元测试（13 tests）— 生命周期/订阅/错误隔离/边界情况 |
+| `EventBridge.ts` | WebSocket 事件 → Phaser CustomEvent 桥接层，解耦 React 与 Phaser；开发态 HMR dispose 当前也会显式 `stop()`，避免模块级 singleton 在热更新后残留旧订阅；listener 入口现在还会先检查 `active`，`stop()` 也会先把 `active=false` 再做 teardown，收住 stale listener 在卸载后的误触发 |
+| `EventBridge.test.ts` | EventBridge 单元测试（14 tests）— 生命周期/订阅/错误隔离/边界情况；当前额外覆盖 `stop()` 后 stale listener 引用不会再触发 handler |
 | `scenes/BootScene.ts` | Phaser 启动场景，当前只加载首屏初始 theme + 角色 sprite，并为缺失 sprite 生成 procedural fallback；后续 `scene_change` 背景与 `EndingScene` 大图改为按需补载，最后路由到 TitleScene |
 | `scenes/TitleScene.ts` | 像素风标题画面，打字机字幕效果 + 点击跳过交互 + 微光扫描线动画，i18n 支持 (Phase 3 + 3.0-B3)；自动化可读取标题场景状态 |
 | `scenes/WorldScene.ts` | 主游戏场景 — agent 精灵、打字机对话气泡变体、移动、世界分裂、情绪光环、天气/昼夜系统、阵营标记、MiniMap HUD、鼠标视差滚动、垂直擦除场景过渡；首次 `scene_init` 在 bootstrap 阶段会直接应用主题，避免先闪默认村庄；Phaser SHUTDOWN 生命周期自动清理所有 GameObjects/tweens/timers；气泡框仍保留像素风，但气泡文字已切到更高分辨率的常规 UI 字体栈，减少“字糊成像素块”的观感；当前 bubble 截断、打字速度、停留时长已按 live / replay 分开收口，窄屏只保留 1 条底部字幕式气泡，桌面最多保留 2 条；12 人以上当前也会切到前后双排弧形站位；同 theme 但贴图缺失时会补拉 scene texture，切到 authored scene art 时还会主动清理 procedural fallback 背景层；ambient mote 当前也已补独立对象池 `ambientMotePool`，不再每轮 spawn 后直接 destroy；自动化可读取主题/天气/agent/bubble 摘要 |
@@ -623,7 +624,7 @@ WebSocket (viz:* events) → EventBridge → CustomEvent → Phaser WorldScene
 - **开发**: `npm run dev` → Vite dev server (localhost:18928)
 - **测试**:
   - Historical full baseline: **179 passed**
-  - Current targeted frontend set: **107 passed**
+  - Current targeted frontend set: **112 passed**
   - 当前 targeted set 已纳入 `src/components/ShareModal.test.tsx`
   - `npx tsc --noEmit -p tsconfig.app.json`、`npm run build`、`npm run perf:budgets:check`、`npm run assets:provenance:check` 当前通过
 - 本 session 这轮“Input/Simulation hook 拆分 + `startSimulation(options)` + Simulation i18n 收口”改动，当前还额外实跑通过：

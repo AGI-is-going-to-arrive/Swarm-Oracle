@@ -25,6 +25,19 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `replay-artifact`
 >
 > FastAPI / Pydantic 自带的 schema 校验 `422` 仍保持框架默认错误体；这里说的是项目自定义业务错误。
+>
+> 当前未被路由层显式接住的异常，也会统一收口为：
+>
+> ```json
+> {
+>   "detail": {
+>     "code": "INTERNAL_ERROR",
+>     "message": "Internal server error"
+>   }
+> }
+> ```
+>
+> 也就是说，客户端现在不会再看到原始 Python 异常字符串；详细堆栈只保留在服务端日志里。
 
 ### Scenarios
 
@@ -167,7 +180,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
-| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | `?limit=20&offset=0`（均可选） | PredictionResponse[] |
+| `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | `?limit=50&offset=0`（均可选；默认 `limit=50`） | PredictionResponse[] |
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{attempted, scored, failed, all_failed, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20&offset=0` | LeaderboardEntry[] |
 
@@ -194,7 +207,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `GET /api/scenario/{id}/predictions` 当前会先校验 scenario 是否存在：
 > - 存在：返回该场景预测列表
 > - 不存在：返回 `404 Not Found`
-> - 也支持可选 `limit` 与 `offset`；未传时保持旧行为，返回该场景的全量预测列表
+> - 也支持可选 `limit` 与 `offset`
+> - 未传 `limit` 时，当前默认分页上限是 `50`
 >
 > `GET /api/leaderboard` 当前支持：
 > - `limit`：`1-100`

@@ -164,3 +164,21 @@ def test_settings_reject_invalid_memory_tier_order(monkeypatch):
 
     with pytest.raises(ValueError, match="CROWD <= IMPORTANT <= CORE"):
         Settings()
+
+
+def test_settings_reject_invalid_branch_prune_threshold(monkeypatch):
+    monkeypatch.setenv("BRANCH_PRUNE_THRESHOLD", "1.2")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="BRANCH_PRUNE_THRESHOLD"):
+        Settings()
+
+
+def test_settings_reject_invalid_fork_sensitivity(monkeypatch):
+    monkeypatch.setenv("FORK_SENSITIVITY", "-0.1")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="FORK_SENSITIVITY"):
+        Settings()

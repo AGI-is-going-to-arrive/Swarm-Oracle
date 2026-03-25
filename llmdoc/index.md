@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-25（review fix 批次：parser fallback group 回写 / memory 两段式高信号压缩 + developer-only budget / 409 可见反馈 / 安全读重试 / WS 去重与重连日志 / 移动端结果页操作区修复）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-25（review fix 批次：runtime lock / runtime guard / gameplay contract / challenge rotation / EventBridge / gameplay-state compare 收口；并已补记本 session `release:signoff` 实跑结果）
 
 ## 阅读顺序
 

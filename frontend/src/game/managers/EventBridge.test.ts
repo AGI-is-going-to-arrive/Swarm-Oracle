@@ -180,4 +180,33 @@ describe('EventBridge — edge cases', () => {
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('stale listener references ignore events after stop()', () => {
+    const handler = vi.fn();
+    let capturedListener: ((event: Event) => void) | undefined;
+    const realAddEventListener = window.addEventListener.bind(window);
+    const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation((type, listener, options) => {
+      if (type === 'viz-event') {
+        capturedListener = listener as (event: Event) => void;
+      }
+      return realAddEventListener(type, listener, options);
+    });
+
+    EventBridge.stop();
+    EventBridge.start();
+    EventBridge.on('viz:ending_play', handler);
+    EventBridge.stop();
+
+    const staleListener = capturedListener;
+    expect(staleListener).toBeDefined();
+    if (!staleListener) {
+      throw new Error('Expected stale listener to be captured');
+    }
+    staleListener(
+      new CustomEvent('viz-event', { detail: { type: 'viz:ending_play', data: { title: 'Victory' } } })
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+    addSpy.mockRestore();
+  });
 });

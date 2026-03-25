@@ -145,10 +145,14 @@ class WSManager:
 ws_manager = WSManager()
 
 
-async def _scenario_exists(scenario_id: str) -> bool:
+def _scenario_exists_sync(scenario_id: str) -> bool:
     engine = get_engine()
     with Session(engine) as session:
         return session.get(Scenario, scenario_id) is not None
+
+
+async def _scenario_exists(scenario_id: str) -> bool:
+    return await asyncio.to_thread(_scenario_exists_sync, scenario_id)
 
 
 async def _close_missing_resource(

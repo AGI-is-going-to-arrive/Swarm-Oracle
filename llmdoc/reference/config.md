@@ -134,6 +134,10 @@ sensitivity 只负责微调。
 | `DEFAULT_NUM_AGENTS` | int | 20 | 用户不传参时默认agent数 (3-100) |
 | `DEFAULT_ROUNDS` | int | 10 | 用户不传参时默认模拟轮数 |
 
+> 当前这组旧参数也已补启动期范围校验：
+> - `BRANCH_PRUNE_THRESHOLD`：`>= 0` 且 `< 1`
+> - `FORK_SENSITIVITY`：`0 - 1`
+
 ## 并发控制
 
 | 变量 | 类型 | 默认值 | 描述 |
@@ -157,11 +161,14 @@ sensitivity 只负责微调。
 > - provider 熔断与单进程内 `Semaphore` 仍是进程本地行为，不会跨进程同步
 > - `llm_call / llm_call_stream` 当前会复用进程内共享 `httpx.AsyncClient`，并在 app shutdown 时统一关闭
 > - `llm_call_stream` 当前只会在首个内容片段产出前做连接/起始响应重试，避免已经开始输出后重复发送流片段
+> - `llm_runtime_guard` 的 `CREATE TABLE / CREATE INDEX` 当前也已按 SQLite db path 做首次缓存；同一个 db path 的后续 reserve/release 不会再重复 ensure 整组 DDL
 >
 > 除了 LLM runtime guard，这一轮后台任务也补上了 SQLite shared lease：
 > - 主模式 simulation 与 Debate background task 当前都会通过 `runtime_lock` 表做跨 worker 防重入
 > - 只有当 `DATABASE_URL` 指向同一个 SQLite 文件时，这层 lease 才能跨进程共享
 > - 若 `DATABASE_URL = sqlite:///:memory:`、`file:` URI，或根本不是 SQLite，这层锁会退回进程内互斥 fast path；仍能防止同一进程内的重复启动，但不会跨 worker 共享
+> - `runtime_lock` 当前也已改成 per-thread SQLite connection reuse，不再每次 `acquire / is_active / release` 都重新 `connect()/close()`
+> - Debate background task 当前默认 lease 为 `15 分钟`；simulation 仍按 `MAX_ROUNDS * 180 + 60` 的动态上限计算
 
 ## 数据库
 

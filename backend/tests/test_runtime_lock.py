@@ -23,8 +23,10 @@ from app.services.runtime_lock import (
 @pytest.fixture(autouse=True)
 def reset_inprocess_runtime_locks():
     runtime_lock_module._INPROCESS_LOCKS.clear()
+    runtime_lock_module._close_threadlocal_sqlite_connections()
     yield
     runtime_lock_module._INPROCESS_LOCKS.clear()
+    runtime_lock_module._close_threadlocal_sqlite_connections()
 
 
 def test_runtime_lock_acquire_release_round_trip(monkeypatch, tmp_path):
@@ -101,6 +103,31 @@ def test_runtime_lock_is_active_reports_sqlite_leases(monkeypatch, tmp_path):
 
     assert release_runtime_lock(lease) is True
     assert runtime_lock_is_active(key) is False
+
+
+def test_runtime_lock_reuses_threadlocal_sqlite_connection(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-reuse.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    real_connect = runtime_lock_module.sqlite3.connect
+    connect_calls: list[str] = []
+
+    def _tracked_connect(path, *args, **kwargs):
+        connect_calls.append(str(path))
+        return real_connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_lock_module.sqlite3, "connect", _tracked_connect)
+
+    key = simulation_lock_key("scenario-reuse")
+    lease = acquire_runtime_lock(key, lease_seconds=30)
+    assert lease is not None
+    assert runtime_lock_is_active(key) is True
+    assert release_runtime_lock(lease) is True
+
+    assert connect_calls == [str(db_path)]
 
 
 def test_runtime_lock_is_active_does_not_issue_immediate_transaction(monkeypatch, tmp_path):

@@ -160,25 +160,36 @@ def _calculate_win_streak(session: Session, user_id: str) -> int:
     """Count consecutive wins from the newest scored predictions backward."""
     if user_id == ANONYMOUS_USER_ID:
         return 0
-
-    recent_scores = session.exec(
-        select(Prediction.score)
-        .where(
-            Prediction.user_id == user_id,
-            Prediction.score != None,  # noqa: E711
-        )
-        .order_by(
-            Prediction.created_at.desc(),
-            Prediction.scored_at.desc(),
-            Prediction.id.desc(),
-        )
-    ).all()
-
     streak = 0
-    for score in recent_scores:
-        if (score or 0.0) < 60:
+    batch_size = 128
+    offset = 0
+
+    while True:
+        recent_scores = session.exec(
+            select(Prediction.score)
+            .where(
+                Prediction.user_id == user_id,
+                Prediction.score != None,  # noqa: E711
+            )
+            .order_by(
+                Prediction.created_at.desc(),
+                Prediction.scored_at.desc(),
+                Prediction.id.desc(),
+            )
+            .offset(offset)
+            .limit(batch_size)
+        ).all()
+        if not recent_scores:
             break
-        streak += 1
+
+        for score in recent_scores:
+            if (score or 0.0) < 60:
+                return streak
+            streak += 1
+
+        if len(recent_scores) < batch_size:
+            break
+        offset += batch_size
     return streak
 
 

@@ -324,6 +324,26 @@ class TestSQLitePathParsing:
         assert "new_col" in cols
         conn.close()
 
+    def test_migrate_add_column_allows_quoted_string_defaults(self, tmp_path):
+        """_migrate_add_column should allow common quoted SQLite default literals."""
+        from app.models.database import _migrate_add_column
+
+        db_file = tmp_path / "migrate_default_string.db"
+        conn = sqlite3.connect(str(db_file))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE test_tbl (id TEXT)")
+        conn.commit()
+
+        _migrate_add_column(cursor, "test_tbl", "meta_json", "TEXT DEFAULT '{}'")
+        conn.commit()
+
+        cursor.execute("PRAGMA table_info(test_tbl)")
+        rows = cursor.fetchall()
+        default_map = {row[1]: row[4] for row in rows}
+        assert "meta_json" in default_map
+        assert default_map["meta_json"] == "'{}'"
+        conn.close()
+
     def test_init_db_reuses_engine_managed_connection_for_sqlite_migrations(self, monkeypatch):
         """init_db should route migrations through engine.begin(), not sqlite3.connect()."""
         from types import SimpleNamespace

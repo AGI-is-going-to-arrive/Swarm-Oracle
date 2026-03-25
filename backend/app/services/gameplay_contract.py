@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -15,18 +16,19 @@ _CONTRACT_CACHE_LOCK = Lock()
 def load_gameplay_contract() -> dict[str, Any]:
     global _CONTRACT_CACHE
 
-    try:
-        mtime_ns = CONTRACT_PATH.stat().st_mtime_ns
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Gameplay contract file is missing: {CONTRACT_PATH}. "
-            "Restore shared/gameplay_contract.v1.json before starting the backend."
-        ) from exc
     with _CONTRACT_CACHE_LOCK:
-        if _CONTRACT_CACHE is not None and _CONTRACT_CACHE[0] == mtime_ns:
-            return _CONTRACT_CACHE[1]
+        try:
+            with CONTRACT_PATH.open("r", encoding="utf-8") as handle:
+                mtime_ns = os.fstat(handle.fileno()).st_mtime_ns
+                if _CONTRACT_CACHE is not None and _CONTRACT_CACHE[0] == mtime_ns:
+                    return _CONTRACT_CACHE[1]
 
-        with CONTRACT_PATH.open("r", encoding="utf-8") as handle:
-            contract = json.load(handle)
+                contract = json.load(handle)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Gameplay contract file is missing: {CONTRACT_PATH}. "
+                "Restore shared/gameplay_contract.v1.json before starting the backend."
+            ) from exc
+
         _CONTRACT_CACHE = (mtime_ns, contract)
         return contract

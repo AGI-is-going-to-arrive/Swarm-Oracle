@@ -32,17 +32,17 @@ api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
-api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；除 `heartbeat` 外，当前还会给所有出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`；空闲期仍会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key；`LOG_LEVEL = DEBUG` 时，broadcast 还会记录 `stream/type/seq/event_id/client count` 便于排查)
+api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；存在性检查当前已通过 `asyncio.to_thread(...)` 包装同步 DB read，不再在 async WS 握手里直接阻塞事件循环；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；除 `heartbeat` 外，当前还会给所有出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`；空闲期仍会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key；`LOG_LEVEL = DEBUG` 时，broadcast 还会记录 `stream/type/seq/event_id/client count` 便于排查)
     │
-main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter
+main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter；未处理异常当前也会统一收口成 `500 + INTERNAL_ERROR`，不再直接把默认 FastAPI 500 形状暴露给客户端
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理；`_migrate_add_column()` 当前也已接受常见单引号字符串默认值，如 `TEXT DEFAULT '{}'`，不再只允许 `0/1`)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A；`scenario_id` 已加索引)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
-config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空；当前额外提供 `LOG_LEVEL / LOG_FORMAT`，默认 `INFO + json`)
+config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空；当前额外提供 `LOG_LEVEL / LOG_FORMAT`，默认 `INFO + json`；`BRANCH_PRUNE_THRESHOLD / FORK_SENSITIVITY` 当前也已补范围校验)
 alembic/ ──► Alembic 数据库迁移框架
 ```
 
@@ -75,6 +75,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
 - **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
 - **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
+- **Blackboard 热路径**: `_gather_agent_messages()` 当前只有在 blackboard 没有可用共享简报时才会回退 `_get_recent_messages()`；默认 blackboard 主路径不再白做 recent DB query
 - **语言感知**: 全链路透传 `detected_language` 参数给 memory、narrator、fork 检测、round 压缩，确保输出语言匹配用户输入；`setting` 标签与 fork-detect prompt 当前都已按语言切换，不再让英文场景吃中文主体提示
 - **Prompt 变体**: fork detector 当前支持 `a / b / c / d / e / f`
   - `a`：基线保守
@@ -87,6 +88,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **消息落库**: 普通 agent 发言与 synthesized Worker 发言当前都改成按批次写入 `AgentMessage`，不再每条消息单独 commit；`_save_message()` 仍保留给旧调用点和测试使用
 - **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口；新的 round summary 已统一按 JSON 持久化，同时保留对旧 `str(dict)` 历史数据的兼容回退读取
 - **干预队列**: API 层与模拟主循环当前都统一走 helper；当多个 worker 共用同一个 SQLite 文件时，待注入干预会先落到 `PendingIntervention` 共享队列表，再由模拟主循环按分支 FIFO 原子取出；当前 pop 路径也已改成复用 engine-managed SQLAlchemy connection，不再和主业务链路分成两套 SQLite 连接管理；scenario 结束或删除时也会一并清理残留队列
+- **队列深度统计**: `get_pending_intervention_count()` 当前已改成 SQL `COUNT(*)`，不再 `.all()` 后再在 Python 里 `len()`
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
 - **职责**: 中央共享黑板，所有 Agent 共读同一份信息
@@ -156,6 +158,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
   - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
   - `runtime_lock_is_active()` 当前已改成纯 `SELECT` 读路径，只检查“该 key 是否存在且尚未过期”；不再为了只读判断去拿 `BEGIN IMMEDIATE`
+  - SQLite 路径当前也已改成 per-thread connection reuse；`acquire / release / is_active` 不再每次重新 `sqlite3.connect()` / `close()`
   - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内互斥 lease，而不是“永远成功”的空锁；这条 fast path 仍只保证单进程内防重入
   - 进程内 fallback 当前会在每次 `acquire` 前顺手清理过期 key，不再把已失效 lease 永远留在内存字典里
 - **集成点**:
@@ -167,6 +170,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **关键API**:
   - `load_gameplay_contract()` → `dict[str, Any]` — 基于文件 `mtime_ns` 的轻量缓存；文件未变更时复用缓存，变更后自动重读
 - **缓存保护**: contract cache 当前已补上进程内锁，避免多线程 / 多请求同时 miss cache 时重复读同一个文件
+- **原子读取**: `load_gameplay_contract()` 当前会先 `open()` 再对已打开句柄 `fstat()` 取 `mtime_ns`；不再先 `Path.stat()` 再 `open()`，收掉 TOCTOU 窗口
 - **缺文件报错**: 若 `shared/gameplay_contract.v1.json` 缺失，当前会直接抛出清晰 `RuntimeError`，提示先恢复 shared contract，而不是让后端在 `Path.stat()` 上抛裸异常
 - **集成点**: `visualization/card_events.py` 启动时据此构建 `CARD_TYPES`，后端测试 `test_gameplay_contract_sync.py` 会校验卡牌 ID 与触发模式和 shared contract 保持一致
 
@@ -193,7 +197,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `LLM_CONCURRENCY <= 0` 现在表示关闭全局并发上限；启用时，进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`，且当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
   - `LLM_MAX_PENDING / LLM_USER_MAX_PENDING <= 0` 现在表示关闭对应 pending 上限；启用时会在请求入队前做 backpressure，当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
   - `get_runtime_parallelism_limit()` 会按当前 request scope 把全局并发、全局 pending 和用户 pending 收口成单次本地 fan-out 的安全上限；都关闭时回退 `MAX_AGENTS`
-  - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；reservation/release 路径现已改为复用 engine-managed SQLAlchemy connection，不再直接走 raw `sqlite3.connect()`；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
+  - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；reservation/release 路径现已改为复用 engine-managed SQLAlchemy connection，不再直接走 raw `sqlite3.connect()`；同一个 SQLite db path 也会缓存 `llm_runtime_guard` 的 ensure 状态，后续 reserve/release 不再重复跑整组 DDL；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
   - `llm_call_stream()` 当前也支持连接阶段重试；只有在首个 content 产出前才会重试，避免重复发出部分流片段
@@ -309,6 +313,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `get_challenge_rotation(local_date, weekly_count)` — 汇总 today + weekly challenge rotation payload
 - **当前口径**:
   - challenge 定义源头现在在 backend；首页只负责消费 rotation API，不再自己轮换 12 条静态 challenge 题库
+  - today / weekly challenge 当前已走固定显式 rotation order；后端后续追加 challenge catalog 条目时，不会把既有日期映射整体挪位
   - `daily-status / weekly-summary` 继续负责 campaign 真值，`challenge rotation` 则负责题目定义和 weekly featured profiles
   - challenge catalog 目前仍是后端内置数据，不依赖数据库；改 challenge 文案、轮换口径时只需要改 backend 这一处
 
@@ -343,7 +348,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
   - Debate 结果会自动给已提交的 prediction 打分，不要求另开批量评分接口
   - `POST /api/debate/{id}/predict` 当前会先持久化 `DebatePrediction / DebateCounterplay`，再 best-effort 广播 `debate_counterplay`；若 WebSocket 广播失败，只会记 warning，不会把已落库请求翻成假 `500`
-  - `run_debate_background()` 当前会在广播 `LIVE` 前先拿 SQLite shared runtime lock；同一 `debate_id` 若已被另一 worker 持锁，会直接返回，不会重复推进回合
+  - `run_debate_background()` 当前会在广播 `LIVE` 前先拿 SQLite shared runtime lock；同一 `debate_id` 若已被另一 worker 持锁，会直接返回，不会重复推进回合；这条 lease 当前已收口到 `15 分钟`，不再把 crash 后的自动释放窗口拖到 `1 小时`
   - 除了 shared runtime lock，进程内 `_running_debates` 当前也有 thread lock 原子保护；同一进程里若未来出现线程/回调并发进入，也不会在 check-add 之间重复起同一场 debate
 
 ### `scoring.py` (≈200行) — 预测评分 (P3-B **NEW**)
@@ -355,6 +360,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `recompute_leaderboard_entry(session, user_id, user_name)` — 在删 scenario / 删 prediction 后按剩余已评分预测重建单个排行榜行
 - **排行榜物化**:
   - `total_predictions / total_score / avg_score / best_score / win_streak` 当前都按已评分 `Prediction` 真值重算；即使 `Leaderboard` 行先前是 stale 值，也会在下一次更新时被纠正
+  - `GET /api/scenario/{id}/predictions` 当前默认分页上限为 `50`；`win_streak` 计算也已改成分批扫描最新已评分预测，不再一次性 `.all()` 整个用户历史
   - `entry.user_name` 当前始终使用本次请求传入的显示名，不再回跳到历史 prediction 上的旧名字
   - 匿名预测当前不会再刷新 leaderboard row；`win_streak` 对匿名用户也固定返回 `0`
 - **原子持久化**:
@@ -541,7 +547,7 @@ alembic/ ──► Alembic 数据库迁移框架
 
 当前发布判断以后端 targeted `pytest` 与 `release:signoff` 为准：
 
-- backend signoff set：**90 passed**
+- backend signoff set：**156 passed**
 - `/metrics` live check：`200 text/plain`
 - 详细命令与最新工件路径见 `llmdoc/guides/development.md`
 - 本 session 还额外实跑了一组更宽的 backend 回归：**269 passed**

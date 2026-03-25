@@ -23,6 +23,7 @@ from app.services.lang_detect import detect_language, get_anonymous_predictor_na
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["predictions"])
+DEFAULT_PREDICTION_PAGE_SIZE = 50
 OPEN_PREDICTION_STATUSES = {
     ScenarioStatus.PARSING,
     ScenarioStatus.SIMULATING,
@@ -161,7 +162,7 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
 @router.get("/scenario/{scenario_id}/predictions")
 async def list_predictions(
     scenario_id: str,
-    limit: int | None = Query(default=None, ge=1, le=100),
+    limit: int = Query(default=DEFAULT_PREDICTION_PAGE_SIZE, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> list[PredictionResponse]:
     """List all predictions for a scenario."""
@@ -176,9 +177,8 @@ async def list_predictions(
             .where(Prediction.scenario_id == scenario_id)
             .order_by(Prediction.created_at.desc())
             .offset(offset)
+            .limit(limit)
         )
-        if limit is not None:
-            query = query.limit(limit)
         preds = list(session.exec(query).all())
 
         return [

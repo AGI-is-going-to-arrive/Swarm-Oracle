@@ -188,44 +188,67 @@ def _clone_branch_history(
     through_round: int,
 ) -> None:
     """Clone rounds/messages so retrospective replay can continue from the fork point."""
-    source_rounds = list(
-        session.exec(
-            select(Round)
-            .where(
-                Round.branch_id == source_branch_id,
-                Round.round_number <= through_round,
-            )
-            .order_by(Round.round_number)
-        ).all()
-    )
+    round_offset = 0
+    round_batch_size = 100
 
-    for source_round in source_rounds:
-        cloned_round = Round(
-            branch_id=target_branch_id,
-            round_number=source_round.round_number,
-            compressed_summary=source_round.compressed_summary,
-        )
-        session.add(cloned_round)
-        session.flush()
-
-        source_messages = list(
+    while True:
+        source_rounds = list(
             session.exec(
-                select(AgentMessage)
-                .where(AgentMessage.round_id == source_round.id)
-                .order_by(AgentMessage.id)
+                select(Round)
+                .where(
+                    Round.branch_id == source_branch_id,
+                    Round.round_number <= through_round,
+                )
+                .order_by(Round.round_number)
+                .offset(round_offset)
+                .limit(round_batch_size)
             ).all()
         )
-        for source_message in source_messages:
-            session.add(
-                AgentMessage(
-                    round_id=cloned_round.id,
-                    agent_id=source_message.agent_id,
-                    content=source_message.content,
-                    emotion=source_message.emotion,
-                    diverge=source_message.diverge,
-                    tokens_used=source_message.tokens_used,
-                )
+        if not source_rounds:
+            break
+
+        for source_round in source_rounds:
+            cloned_round = Round(
+                branch_id=target_branch_id,
+                round_number=source_round.round_number,
+                compressed_summary=source_round.compressed_summary,
             )
+            session.add(cloned_round)
+            session.flush()
+
+            message_offset = 0
+            message_batch_size = 500
+            while True:
+                source_messages = list(
+                    session.exec(
+                        select(AgentMessage)
+                        .where(AgentMessage.round_id == source_round.id)
+                        .order_by(AgentMessage.id)
+                        .offset(message_offset)
+                        .limit(message_batch_size)
+                    ).all()
+                )
+                if not source_messages:
+                    break
+
+                for source_message in source_messages:
+                    session.add(
+                        AgentMessage(
+                            round_id=cloned_round.id,
+                            agent_id=source_message.agent_id,
+                            content=source_message.content,
+                            emotion=source_message.emotion,
+                            diverge=source_message.diverge,
+                            tokens_used=source_message.tokens_used,
+                        )
+                    )
+                if len(source_messages) < message_batch_size:
+                    break
+                message_offset += message_batch_size
+
+        if len(source_rounds) < round_batch_size:
+            break
+        round_offset += round_batch_size
 
 
 # ── Intervention Templates (P4-D) ────────────────────────

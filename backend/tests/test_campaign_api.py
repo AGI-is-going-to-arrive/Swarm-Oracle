@@ -11,6 +11,7 @@ from sqlmodel import Session
 from app.main import app
 from app.models import Scenario, ScenarioStatus
 from app.models.database import get_engine
+from app.services import daily_challenges as daily_challenges_module
 
 
 @pytest.fixture
@@ -226,6 +227,39 @@ def test_challenge_rotation_endpoint_returns_today_and_weekly_challenges(client:
     assert data["today_challenge"]["id"] == "daily-mythic-pact"
     assert data["today_challenge"]["profile_id"] == "mythic"
     assert len(data["weekly_challenges"]) == 3
+
+
+def test_challenge_rotation_is_stable_when_catalog_grows_without_rotation_change():
+    local_date = "2026-03-17"
+    original_daily = daily_challenges_module.DAILY_CHALLENGES
+    original_catalog = daily_challenges_module._DAILY_CHALLENGE_BY_ID
+
+    baseline = daily_challenges_module.get_today_challenge_definition(local_date)
+
+    extra = {
+        "id": "daily-newcomer",
+        "question": "如果一座新城市突然出现在地图上？",
+        "question_en": "What if a new city suddenly appeared on the map?",
+        "subtitle_zh": "新条目",
+        "subtitle_en": "New entry",
+        "profile_id": "generic",
+        "rounds": 3,
+        "num_agents": 3,
+        "mode": "blackboard",
+        "visualization_enabled": True,
+    }
+
+    daily_challenges_module.DAILY_CHALLENGES = original_daily + (extra,)
+    daily_challenges_module._DAILY_CHALLENGE_BY_ID = {
+        challenge["id"]: challenge for challenge in daily_challenges_module.DAILY_CHALLENGES
+    }
+    try:
+        grown = daily_challenges_module.get_today_challenge_definition(local_date)
+    finally:
+        daily_challenges_module.DAILY_CHALLENGES = original_daily
+        daily_challenges_module._DAILY_CHALLENGE_BY_ID = original_catalog
+
+    assert grown["id"] == baseline["id"]
 
 
 def test_challenge_rotation_endpoint_rejects_invalid_local_date(client: TestClient):

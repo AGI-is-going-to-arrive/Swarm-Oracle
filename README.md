@@ -151,8 +151,8 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - Historical full baseline: backend `815 passed`, frontend `179 passed`.
 - Current targeted verification:
-  - backend targeted set `90 passed`
-  - frontend targeted set `107 passed`
+  - backend targeted set `156 passed`
+  - frontend targeted set `112 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
   - `backend/tests/test_agent_group.py + backend/tests/test_memory.py + backend/tests/test_simulator.py + backend/tests/test_config.py`: `142 passed in 4.18s`

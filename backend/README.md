@@ -72,7 +72,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - Historical full baseline: `815 passed`.
-- Current signoff backend set: `90 passed`.
+- Current signoff backend set: `156 passed`.
 - Current session backend regression pack: `269 passed`.
 - Current session backend review-fix pack:
   - `python -m pytest tests/test_backend_code_review_fixes.py -q`: `4 passed in 0.45s`

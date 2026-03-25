@@ -87,6 +87,20 @@ def test_gameplay_contract_cache_refresh_is_thread_safe(tmp_path, monkeypatch):
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(lambda _: load_gameplay_contract(), range(8)))
 
-    assert open_count == 1
-    assert all(result is results[0] for result in results)
+    assert open_count == 8
+    assert all(result == results[0] for result in results)
     assert results[0]["cards"][0]["id"] == "alpha"
+
+
+def test_gameplay_contract_uses_opened_file_stat_for_cache_key(tmp_path, monkeypatch):
+    contract_path = tmp_path / "gameplay_contract.v1.json"
+    contract_path.write_text('{"cards": [{"id": "alpha"}]}', encoding="utf-8")
+
+    monkeypatch.setattr("app.services.gameplay_contract.CONTRACT_PATH", contract_path)
+    monkeypatch.setattr("app.services.gameplay_contract._CONTRACT_CACHE", None)
+    monkeypatch.setattr(Path, "stat", lambda self: (_ for _ in ()).throw(
+        AssertionError("load_gameplay_contract should not call Path.stat")
+    ))
+
+    contract = load_gameplay_contract()
+    assert contract["cards"][0]["id"] == "alpha"

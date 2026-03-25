@@ -9890,3 +9890,232 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 当前边界结论（先记事实，最终判断以本轮总总结为准）：
   - 自动化钩子 `render_game_to_text / advanceTime / capture_game_screenshot` 当前在主模式与 Debate 路径都可真实消费
   - 当前“跨平台”应继续解释为现代桌面/移动浏览器覆盖，不应误写成已有原生 Windows/macOS/Linux/iOS/Android 客户端壳
+
+## 2026-03-25 Review Truth Audit + E2E Recheck
+
+- 本轮运行态：
+  - backend 启动于 `http://127.0.0.1:18927`
+  - frontend 启动于 `http://127.0.0.1:18931`
+  - `GET /metrics` 返回 Prometheus 指标，说明当前 metrics 路径正常
+
+- 本轮实际执行的自动化矩阵：
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-audit-corners --headless`
+    - 通过；覆盖主模式 authority roundtrip、结构化下注、结果页 loading gate、share retry、history / leaderboard、Theater capture modes
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-audit-mobile --headless`
+    - 通过；移动端首页 daily / weekly / director growth 卡片可见，Theater 与结果页操作区无溢出
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-audit-debate --headless`
+    - 通过；desktop + mobile live / result / share 路径完整闭环
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-audit-cross-browser --headless`
+    - 通过；Firefox / WebKit authority readback 正常
+
+- 本轮额外定向回归：
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/pages/SimulationView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx`
+    - `34 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_predictions.py tests/test_runtime_lock.py tests/test_ws.py tests/test_config.py -q`
+    - `85 passed`
+
+- `playwright-interactive` 人工视觉复核：
+  - 首页 ZH / EN 切换会同步更新 `document.documentElement.lang`
+  - 已人工查看 desktop 首页、mobile 首页、desktop Theater、mobile 结果页、desktop Debate result + share modal
+  - 可见性结论：
+    - mobile 首页卡片与语言切换器可见
+    - mobile 结果页操作区按钮已完整进入视口
+    - desktop Theater 首屏 HUD / 目标区 / 时间线 / 主画布当前可见
+    - Debate share modal 可正常打开，且正文内容非空
+
+- `Playwright CLI Skill` 包装器现状：
+  - `~/.codex/skills/playwright/scripts/playwright_cli.sh` 当前调用后报 `playwright-cli: command not found`
+  - 这属于技能包装链路问题，不是项目问题；本轮已回退使用仓库自带 E2E 脚本 + `playwright-interactive`
+
+- 对 `code_review_report.md` 里仍标“待完成”的条目，本轮保守判断：
+  - 真实存在且值得优先改：
+    - `#11` prediction 列表默认不分页 + leaderboard win streak 全量读
+    - `#24` blackboard 模式下 `_gather_agent_messages()` 仍会先做无用 DB recent query
+    - `#28` config 对旧参数仍缺少完整范围校验
+    - `#30` WS `_scenario_exists / _debate_exists` 在 async handler 里仍直接走同步 `Session.get()`
+  - 真实存在，但更像工程优化 / 低优先级：
+    - `#13`, `#14`, `#16`, `#18`, `#20`, `#21/#36`, `#22`, `#25`, `#26`, `#31`, `#37`
+  - 不建议继续按“当前缺陷”追踪：
+    - `#38` EventBridge teardown race 更像理论性防御硬化，不是当前可复现实 bug
+
+- 边界结论：
+  - 当前产品定位仍是“浏览器优先的 Web 应用”
+  - 当前“跨平台”应继续解释为现代桌面/移动浏览器 + Chromium / Firefox / WebKit / Safari 覆盖
+  - 不应把当前能力外扩成原生 Windows/macOS/Linux/iOS/Android 客户端壳
+
+## 2026-03-25 Review Fix Batch — #24 #30 #11 #28
+
+- 本轮已实际修复 4 项高收益 review 条目，未扩散到无关重构：
+  - `#24` `backend/app/services/simulator.py`
+    - `_gather_agent_messages()` 现在只在 blackboard 没有可用共享上下文时才查询 `_get_recent_messages()`
+    - 避免默认 blackboard 主路径每轮每分支白做一次 DB recent query
+  - `#30` `backend/app/api/ws.py` + `backend/app/api/debate.py`
+    - `_scenario_exists()` / `_debate_exists()` 现在通过 `asyncio.to_thread(...)` 包装同步 DB existence check
+    - 避免在 async WS 握手路径里直接阻塞事件循环
+  - `#11` `backend/app/api/predictions.py` + `backend/app/services/scoring.py`
+    - scenario predictions 列表新增默认分页上限：`50`
+    - `_calculate_win_streak()` 改为分批读取最新已评分 prediction，不再一次性 `.all()` 整个用户历史
+  - `#28` `backend/app/config.py`
+    - 新增 `BRANCH_PRUNE_THRESHOLD >= 0 and < 1`
+    - 新增 `FORK_SENSITIVITY between 0 and 1`
+
+- 本轮新增测试：
+  - `backend/tests/test_simulator.py`
+    - 覆盖 blackboard 有共享上下文时不会再触发 `_get_recent_messages()`
+  - `backend/tests/test_api.py`
+    - 覆盖 predictions 列表默认分页上限 `50`
+  - `backend/tests/test_config.py`
+    - 覆盖 `BRANCH_PRUNE_THRESHOLD` / `FORK_SENSITIVITY` 非法值拒绝
+
+- 本轮验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_simulator.py -k 'skips_db_recent_message_query_when_blackboard_has_context or visualization_path_handles_text_stance_and_emotion_change' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'list_predictions_supports_limit_and_offset or list_predictions_applies_default_page_size' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_config.py -k 'invalid_branch_prune_threshold or invalid_fork_sensitivity or settings_defaults' -q`
+    - `3 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_predictions.py tests/test_ws.py tests/test_debate_api.py tests/test_simulator.py tests/test_config.py -q`
+    - `178 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/predictions.py app/api/ws.py app/api/debate.py app/services/scoring.py app/services/simulator.py app/config.py tests/test_api.py tests/test_config.py tests/test_simulator.py`
+    - 通过
+
+## 2026-03-25 Review Fix Batch — #14 #22 #25 #31
+
+- 本轮已实际修复：
+  - `#14` `backend/app/services/debate.py`
+    - Debate runtime lock lease 从 `60 * 60` 收口到 `15 * 60`
+    - 当前仍保持 crash-safe lease 模式，但不再把崩溃后的自动释放窗口拖到 1 小时
+  - `#22` `backend/app/services/llm_client.py`
+    - `llm_runtime_guard` 的建表/建索引现在按 SQLite db path 做首次缓存
+    - 同一个 db path 的后续 reserve/release 不再重复执行整组 DDL
+  - `#25` `backend/app/services/simulator.py`
+    - `get_pending_intervention_count()` 已改为 SQL `COUNT(*)`
+    - 不再 `.all()` 后在 Python 里 `len()`
+  - `#31` `backend/app/services/runtime_lock.py`
+    - SQLite runtime lock 现在改为 per-thread connection reuse
+    - `acquire / is_active / release` 不再每次重新 `sqlite3.connect()` / `close()`
+    - 测试夹具已补线程本地连接清理，避免跨测例污染
+
+- 本轮新增测试：
+  - `backend/tests/test_debate_service.py`
+    - 覆盖 debate runtime lock 租约已降到 `15 * 60`
+  - `backend/tests/test_llm_client.py`
+    - 覆盖 runtime guard table 同一 db path 只 ensure 一次
+  - `backend/tests/test_runtime_lock.py`
+    - 覆盖 runtime lock 线程内 SQLite connection reuse
+
+- 本轮验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_service.py -k 'shorter_runtime_lock_lease or skips_when_sqlite_runtime_lock_is_held' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_llm_client.py -k 'runtime_guard_table_is_ensured_once_per_db_path or sqlite_runtime_guard_reuses_engine_managed_connection' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_runtime_lock.py -k 'reuses_threadlocal_sqlite_connection or runtime_lock_is_active_reports_sqlite_leases' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'intervene_reports_pending_queue_depth or intervene_success' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_service.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_api.py tests/test_intervention.py -q`
+    - `189 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/debate.py app/services/llm_client.py app/services/simulator.py app/services/runtime_lock.py tests/test_debate_service.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_api.py`
+    - 通过
+
+## 2026-03-25 Review Fix Batch — #13 #16 #18 #37
+
+- 本轮已实际修复：
+  - `#13` `frontend/src/lib/scenarioGameplayState.ts`
+    - `areScenarioGameplayStatesEquivalent()` 已从 `JSON.stringify(...)` 改为显式结构化比较
+    - 当前只比较 authority 真正在乎的四块：`cards.usage_log / betting.bets / archive.key_moments / archive.branch_snapshots`
+  - `#16` `backend/app/api/interventions.py`
+    - `_clone_branch_history()` 已从“一次性 `.all()` 拉完整 rounds/history”改为按 batch 分段复制
+    - rounds 用 `100` 一批，messages 用 `500` 一批，避免长历史回溯时把整条历史一次性物化到内存
+  - `#18` `backend/app/services/gameplay_contract.py`
+    - `load_gameplay_contract()` 改为 `open()` 后对已打开句柄 `fstat()` 取 `mtime_ns`
+    - 不再先 `Path.stat()` 再 `open()`，收掉 TOCTOU 窗口
+  - `#37` `backend/app/main.py`
+    - 新增全局 `Exception` handler
+    - 未处理异常现在统一返回 `500 + {"detail":{"code":"INTERNAL_ERROR","message":"Internal server error"}}`
+    - 服务端仍保留 `logger.exception(...)` 记录栈
+
+- 本轮新增测试：
+  - `frontend/src/lib/scenarioGameplayState.test.ts`
+    - 覆盖语义等价的 gameplay payload 仍判等
+  - `backend/tests/test_intervention.py`
+    - 覆盖 `_clone_branch_history()` 已按 batch 查询，而不是一口气 `.all()`
+  - `backend/tests/test_gameplay_contract_sync.py`
+    - 覆盖 `load_gameplay_contract()` 不再调用 `Path.stat()`，而是走 `open + fstat`
+  - `backend/tests/test_api.py`
+    - 覆盖未处理异常统一收口到 `INTERNAL_ERROR`
+
+- 本轮验证通过：
+  - `cd frontend && npm test -- --run src/lib/scenarioGameplayState.test.ts`
+    - `6 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py tests/test_gameplay_contract_sync.py tests/test_api.py -k 'clone_branch_history_batches_round_queries or gameplay_contract or unhandled_exception_returns_uniform_internal_error or retro_branch_clones_history_through_selected_round' -q`
+    - `10 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py tests/test_gameplay_contract_sync.py tests/test_api.py -q`
+    - `143 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/interventions.py app/services/gameplay_contract.py app/main.py tests/test_intervention.py tests/test_gameplay_contract_sync.py tests/test_api.py`
+    - 通过
+
+## 2026-03-25 Review Fix Batch — #20 #21/#36 #26
+
+- 本轮已实际修复：
+  - `#20` `backend/app/services/daily_challenges.py`
+    - daily/weekly challenge rotation 改为显式固定 `rotation order`
+    - 现在 challenge catalog 新增/追加条目时，不会因为 `len(challenges)` 变化导致全日期映射整体漂移
+  - `#21/#36` `backend/app/api/social.py`
+    - `_bound_social_generation_buffer()` 的冗余表达式已收口为直接 `limit * 2`
+  - `#26` `backend/app/models/database.py`
+    - `_migrate_add_column()` 现在允许常见单引号字符串 default literal
+    - 如 `TEXT DEFAULT ''` / `TEXT DEFAULT '{}'` 这类 SQLite 常见默认值已可通过校验
+  - `#31`
+    - 已在上一轮 `runtime_lock.py` connection reuse 中收口，本轮未重复改动
+
+- 本轮新增测试：
+  - `backend/tests/test_campaign_api.py`
+    - 覆盖 challenge rotation 在 catalog 增长时仍保持稳定
+  - `backend/tests/test_corner_cases.py`
+    - 覆盖 `_migrate_add_column()` 支持 quoted string defaults
+
+- 本轮验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_corner_cases.py -k 'challenge_rotation_is_stable_when_catalog_grows_without_rotation_change or migrate_add_column_allows_quoted_string_defaults or challenge_rotation_endpoint_returns_today_and_weekly_challenges' -q`
+    - `3 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_corner_cases.py tests/test_api.py -k 'challenge_rotation or social_copy or migrate_add_column or test_root or test_health' -q`
+    - `13 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_corner_cases.py -q`
+    - `54 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/daily_challenges.py app/api/social.py app/models/database.py tests/test_campaign_api.py tests/test_corner_cases.py`
+    - 通过
+
+## 2026-03-25 Review Fix Batch — #38 + Postfix Smoke
+
+- 本轮已完成：
+  - `#38` `frontend/src/game/managers/EventBridge.ts`
+    - listener 入口当前会先检查 `this.active`
+    - `stop()` 当前会先 `this.active = false`，再移除 DOM listener 和清空 handlers
+    - 这让陈旧 listener 引用即使被调用，也不会再触发 handler
+  - `frontend/src/game/managers/EventBridge.test.ts`
+    - 新增 `stale listener references ignore events after stop()` 覆盖 stale callback 场景
+
+- 本轮前端验证通过：
+  - `cd frontend && npm test -- --run src/game/managers/EventBridge.test.ts`
+    - `14 passed`
+  - `cd frontend && npm test -- --run src/game/managers/EventBridge.test.ts src/game/PhaserGame.test.ts src/game/scenes/WorldScene.test.ts src/pages/SimulationView.test.tsx src/lib/scenarioGameplayState.test.ts`
+    - `66 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 本轮浏览器 smoke 通过：
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-postfix2-mobile --headless`
+    - 通过；移动端首页 daily challenge / weekly challenge / director growth 卡片仍正常，Theater 和结果页操作区正常
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-postfix2-corners --headless`
+    - 通过；share / authority roundtrip / replay / history / leaderboard 深水区仍正常
+
+## 2026-03-25 Release Signoff + Docs Sync
+
+- 本 session 已额外实跑一次完整 `release:signoff`：
+  - `cd frontend && node scripts/release-signoff.mjs --url http://127.0.0.1:18931 --backend-url http://127.0.0.1:18927 --output-root output/e2e/20260325-session-release-signoff --headless`
+  - 工件：`frontend/output/e2e/20260325-session-release-signoff/summary.json`
+  - 结果：`passed`
+  - 绑定 git：`branch=master`，`commit=8c94b2bac5482c2ddaed44d8c8dbfc2fa0639787`，`dirty=true`
+- 已按这次真实代码与测试结果同步 `llmdoc/*` 与 `code_review_report.md`，不再保留旧的“待修复”口径。

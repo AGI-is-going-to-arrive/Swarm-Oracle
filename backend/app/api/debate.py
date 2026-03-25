@@ -55,10 +55,14 @@ _IMPORT_REPLAY_DEFAULT_WINNER = "proposition"
 _IMPORT_REPLAY_DEFAULT_VERDICT_TONE = "balance"
 
 
-async def _debate_exists(debate_id: str) -> bool:
+def _debate_exists_sync(debate_id: str) -> bool:
     engine = get_engine()
     with Session(engine) as session:
         return session.get(Debate, debate_id) is not None
+
+
+async def _debate_exists(debate_id: str) -> bool:
+    return await asyncio.to_thread(_debate_exists_sync, debate_id)
 
 
 class CreateDebateRequest(BaseModel):

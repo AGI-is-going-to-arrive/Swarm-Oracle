@@ -135,6 +135,8 @@ _global_semaphore_limit = 0
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
 _SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS = 1.0
+_runtime_guard_table_ensured_keys: set[str] = set()
+_runtime_guard_table_ensured_keys_lock = threading.Lock()
 _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
@@ -488,7 +490,11 @@ def _exec_runtime_guard_sql(conn: Any, statement: str, params: tuple[Any, ...] |
     return conn.execute(statement, params)
 
 
-def _ensure_runtime_guard_table(conn: Any) -> None:
+def _ensure_runtime_guard_table(conn: Any, *, cache_key: str | None = None) -> None:
+    if cache_key is not None:
+        with _runtime_guard_table_ensured_keys_lock:
+            if cache_key in _runtime_guard_table_ensured_keys:
+                return
     _exec_runtime_guard_sql(
         conn,
         f"""
@@ -514,6 +520,9 @@ def _ensure_runtime_guard_table(conn: Any) -> None:
         ON {_RUNTIME_GUARD_TABLE} (expires_at)
         """
     )
+    if cache_key is not None:
+        with _runtime_guard_table_ensured_keys_lock:
+            _runtime_guard_table_ensured_keys.add(cache_key)
 
 
 def _reserve_sqlite_runtime_slot(
@@ -523,18 +532,19 @@ def _reserve_sqlite_runtime_slot(
     lease_seconds: float,
 ) -> str:
     """Reserve one global runtime slot in SQLite for cross-process accounting."""
+    resolved_db_path = db_path or _runtime_guard_db_path()
     reservation_id = uuid.uuid4().hex
     now = time.time()
     expires_at = now + max(lease_seconds, 30.0)
     user_limit = _get_user_pending_limit()
     global_pending_limit = _get_global_pending_limit()
-    engine, should_dispose = _get_runtime_guard_engine(db_path)
+    engine, should_dispose = _get_runtime_guard_engine(resolved_db_path)
 
     try:
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
-                _ensure_runtime_guard_table(conn)
+                _ensure_runtime_guard_table(conn, cache_key=resolved_db_path)
                 _exec_runtime_guard_sql(
                     conn,
                     f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
@@ -584,11 +594,13 @@ def _reserve_sqlite_runtime_slot(
 
 
 def _release_sqlite_runtime_slot(*, db_path: str | None = None, reservation_id: str) -> None:
-    engine, should_dispose = _get_runtime_guard_engine(db_path)
+    resolved_db_path = db_path or _runtime_guard_db_path()
+    engine, should_dispose = _get_runtime_guard_engine(resolved_db_path)
     try:
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _ensure_runtime_guard_table(conn, cache_key=resolved_db_path)
                 _exec_runtime_guard_sql(
                     conn,
                     f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE reservation_id = ?",

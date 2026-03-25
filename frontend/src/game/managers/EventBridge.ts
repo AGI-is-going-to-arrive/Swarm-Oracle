@@ -39,6 +39,7 @@ class EventBridgeClass {
     this.active = true;
 
     this.domListener = (e: Event) => {
+      if (!this.active) return;
       const ce = e as CustomEvent;
       const { type: vizType, data } = ce.detail ?? {};
       if (!vizType) return;
@@ -63,11 +64,11 @@ class EventBridgeClass {
    * Stop listening.  Call when Phaser game unmounts.
    */
   stop(): void {
+    this.active = false;
     if (this.domListener) {
       window.removeEventListener('viz-event', this.domListener);
       this.domListener = null;
     }
-    this.active = false;
     this.handlers.clear();
     console.log('[EventBridge] Stopped');
   }

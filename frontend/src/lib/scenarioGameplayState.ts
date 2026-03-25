@@ -189,6 +189,62 @@ function normalizeGameplayState(
   };
 }
 
+function areUsageLogsEqual(
+  left: ScenarioGameplayState['cards']['usage_log'],
+  right: ScenarioGameplayState['cards']['usage_log'],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      entry.card_id === other.card_id
+      && entry.profile_id === other.profile_id
+      && entry.branch_id === other.branch_id
+      && entry.branch_title === other.branch_title
+      && entry.round === other.round
+      && entry.cost === other.cost
+      && entry.directive === other.directive
+      && entry.used_at === other.used_at
+    );
+  });
+}
+
+function areBetRecordsEqual(
+  left: ScenarioGameplayState['betting']['bets'],
+  right: ScenarioGameplayState['betting']['bets'],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      entry.bet_id === other.bet_id
+      && entry.kind === other.kind
+      && entry.target_id === other.target_id
+      && entry.target_label === other.target_label
+      && entry.confidence === other.confidence
+      && entry.user_name === other.user_name
+      && entry.placed_at_round === other.placed_at_round
+      && entry.placed_at === other.placed_at
+      && entry.resolved === other.resolved
+    );
+  });
+}
+
+function areBranchSnapshotsEqual(
+  left: ScenarioGameplayState['archive']['branch_snapshots'],
+  right: ScenarioGameplayState['archive']['branch_snapshots'],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      entry.branch_id === other.branch_id
+      && entry.title === other.title
+      && entry.probability === other.probability
+    );
+  });
+}
+
 export function hasMeaningfulScenarioGameplayState(
   state: ScenarioGameplayState | null | undefined,
 ): boolean {
@@ -325,7 +381,22 @@ export function areScenarioGameplayStatesEquivalent(
   left: ScenarioGameplayState | null | undefined,
   right: ScenarioGameplayState | null | undefined,
 ): boolean {
-  return JSON.stringify(normalizeGameplayState(left)) === JSON.stringify(normalizeGameplayState(right));
+  const normalizedLeft = normalizeGameplayState(left);
+  const normalizedRight = normalizeGameplayState(right);
+  if (!areUsageLogsEqual(normalizedLeft.cards.usage_log, normalizedRight.cards.usage_log)) return false;
+  if (!areBetRecordsEqual(normalizedLeft.betting.bets, normalizedRight.betting.bets)) return false;
+  if (normalizedLeft.archive.key_moments.length !== normalizedRight.archive.key_moments.length) return false;
+  if (
+    normalizedLeft.archive.key_moments.some(
+      (moment, index) => moment !== normalizedRight.archive.key_moments[index],
+    )
+  ) {
+    return false;
+  }
+  return areBranchSnapshotsEqual(
+    normalizedLeft.archive.branch_snapshots,
+    normalizedRight.archive.branch_snapshots,
+  );
 }
 
 export function applyScenarioGameplayState(

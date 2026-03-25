@@ -77,6 +77,7 @@ _DEBATE_PREDICTION_OPTIONS = {
     "winner": ("proposition", "opposition"),
     "verdict_tone": ("order", "balance", "rupture"),
 }
+_DEBATE_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -1444,7 +1445,7 @@ async def run_debate_background(
     try:
         lock_lease = acquire_runtime_lock(
             debate_lock_key(debate_id),
-            lease_seconds=60 * 60,
+            lease_seconds=_DEBATE_RUNTIME_LOCK_LEASE_SECONDS,
         )
         if lock_lease is None:
             logger.warning(

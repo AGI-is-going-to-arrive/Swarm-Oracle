@@ -79,7 +79,7 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-- 当前 targeted backend set：`90 passed`
+- 当前 targeted backend set：`156 passed`
 - 本 session 这轮“parser fallback group 回写 / memory 两段式高信号压缩 + developer-only budget”改动，当前还额外实跑通过：
   - `tests/test_agent_group.py + tests/test_memory.py + tests/test_simulator.py + tests/test_config.py`：`142 passed in 4.18s`
 - 本轮这类“runtime guard / rolling briefing / language-aware fallback / mtime-aware contract”改动，当前还额外实跑通过：
@@ -153,6 +153,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - 本 session 这轮 `api / llm_client / runtime_lock / simulator` 定向回归，当前还额外实跑通过：
   - `python -m pytest tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py -q`：`205 passed in 26.75s`
   - `python -m ruff check --ignore E501 app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/llm_client.py app/services/runtime_lock.py app/services/simulator.py tests/test_api.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_simulator.py`：通过
+- 本 session 这轮“runtime lock lease / runtime guard ensure cache / pending count SQL COUNT / global INTERNAL_ERROR / contract fstat / challenge rotation 固定 order”改动，当前还额外实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_service.py tests/test_llm_client.py tests/test_runtime_lock.py tests/test_api.py tests/test_intervention.py -q`：`189 passed in 25.36s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py tests/test_gameplay_contract_sync.py tests/test_api.py -q`：`143 passed in 8.77s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_campaign_api.py tests/test_corner_cases.py -q`：`54 passed in 1.69s`
 
 ### Frontend
 
@@ -222,6 +226,9 @@ npm run test:spike:phaser-custom
     - `output/e2e/debate-live-modal-playwright.png`
     - `output/e2e/debate-live-mobile-post-fix.png`
     - `output/e2e/debate-result-zh-playwright.png`
+- 本 session 这轮“EventBridge stale-listener hardening / scenarioGameplayState structural compare”改动，当前还额外实跑通过：
+  - `cd frontend && npm test -- --run src/game/managers/EventBridge.test.ts src/game/PhaserGame.test.ts src/game/scenes/WorldScene.test.ts src/pages/SimulationView.test.tsx src/lib/scenarioGameplayState.test.ts`：`66 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
 - 本 session 这轮 `InputView / SimulationView / simulationStore / TimelineBar / BranchEdge / GameplayCardsModal / VizSynthesizer / WorldScene / locales` 定向回归，当前还额外实跑通过：
   - `npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts`：`112 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
@@ -399,6 +406,17 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - 当前默认 `vite.config.ts` / `vitest.config.ts` 已通过 alias 指向本地精简 Phaser 入口 `frontend/experiments/phaser-custom/entry.mjs`
 - `e2e-suite.mjs` 里的 `director_state_roundtrip / gameplay_state_roundtrip` 当前也会先回读 authority 的最新 `revision` 再 PUT，避免 signoff 被固定历史样本的 stale revision 卡住
 - 当前 checkout 是否已严格签收，应以重新实跑生成的 `summary.json` 为准，而不是直接套用旧工件
+
+本 session 还额外实跑通过了一次带脏工作树的 release signoff：
+
+- `cd frontend && node scripts/release-signoff.mjs --url http://127.0.0.1:18931 --backend-url http://127.0.0.1:18927 --output-root output/e2e/20260325-session-release-signoff --headless`
+- 工件：`frontend/output/e2e/20260325-session-release-signoff/summary.json`
+- 状态：`passed`
+- 绑定 git：
+  - `branch = master`
+  - `commit = 8c94b2bac5482c2ddaed44d8c8dbfc2fa0639787`
+  - `dirty = true`
+- 这份工件同样覆盖 backend targeted checks、`/metrics`、`tsc`、`build`、perf budgets、assets、`corners`、`mobile`、`cross-browser`、`debate-full`
 
 ## CI
 

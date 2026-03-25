@@ -206,7 +206,7 @@ def _bound_social_generation_buffer(platform: str, copy: str) -> str:
     if limit is None:
         return trimmed
 
-    safety_limit = max(limit * 2, limit)
+    safety_limit = limit * 2
     if len(trimmed) <= safety_limit:
         return trimmed
     return trimmed[: safety_limit - 1].rstrip() + "…"

@@ -154,6 +154,11 @@ class Settings(BaseSettings):
             if value <= 0:
                 raise ValueError(f"{field_name} must be > 0")
 
+        if not (0.0 <= self.BRANCH_PRUNE_THRESHOLD < 1.0):
+            raise ValueError("BRANCH_PRUNE_THRESHOLD must be >= 0 and < 1")
+        if not (0.0 <= self.FORK_SENSITIVITY <= 1.0):
+            raise ValueError("FORK_SENSITIVITY must be between 0 and 1")
+
         if self.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS > self.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS:
             raise ValueError(
                 "MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS must be <= MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS"

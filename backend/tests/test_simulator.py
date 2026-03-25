@@ -22,6 +22,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.blackboard import Blackboard
 from app.services.llm_client import llm_request_scope
 from app.services.simulator import (
     _agent_to_dict,
@@ -31,8 +32,8 @@ from app.services.simulator import (
     _create_branch,
     _create_round,
     _detect_fork,
-    _format_setting,
     _format_message_for_compression,
+    _format_setting,
     _gather_agent_messages,
     _gather_hierarchical_messages,
     _get_branch,
@@ -860,6 +861,56 @@ class TestGatherHierarchicalMessages:
 
 
 class TestGatherAgentMessages:
+    @pytest.mark.asyncio
+    async def test_skips_db_recent_message_query_when_blackboard_has_context(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent = Agent(
+            scenario_id=sid,
+            name="姜维",
+            role="将领",
+            persona="谨慎推进",
+            tier=AgentTier.IMPORTANT,
+        )
+        with Session(engine) as session:
+            session.add(agent)
+            session.commit()
+            session.refresh(agent)
+            agent_dict = _agent_to_dict(agent)
+
+        board = Blackboard()
+        board.post("诸葛亮", "共享态势已经更新", "focused")
+
+        async def _fake_llm_call_json(*args, **kwargs):
+            return {"content": "保持阵线。", "emotion": "calm", "diverge": None}
+
+        def _raise_on_recent_messages(*args, **kwargs):
+            raise AssertionError("blackboard path should not query recent DB messages")
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator._get_recent_messages", _raise_on_recent_messages)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 测试\n地点: 本地\n背景: 黑板优先",
+            "是否继续推进",
+            blackboard=board,
+            language="Chinese",
+        )
+
+        assert len(results) == 1
+        assert results[0]["content"] == "保持阵线。"
+
     @pytest.mark.asyncio
     async def test_visualization_path_handles_text_stance_and_emotion_change(self, monkeypatch):
         engine = get_engine()
