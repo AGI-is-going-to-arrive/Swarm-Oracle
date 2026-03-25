@@ -70,6 +70,38 @@ const PROFILE_RESONANCE_KEYWORDS: Record<GameplayProfileId, string[]> = {
   generic: ['冲突', '分歧', '转向', '证据', 'conflict', 'tension', 'pivot', 'evidence'],
 };
 
+function normalizeArchiveBetValue(value: string | null | undefined): string {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function matchesArchiveBetOption(
+  targetId: string | undefined,
+  targetLabel: string,
+  optionId: string,
+  option: { zh: string; en: string },
+): boolean {
+  const normalizedTargetId = normalizeArchiveBetValue(targetId);
+  if (normalizedTargetId === optionId) {
+    return true;
+  }
+
+  const normalizedTargetLabel = normalizeArchiveBetValue(targetLabel);
+  if (!normalizedTargetLabel) {
+    return false;
+  }
+
+  return (
+    normalizedTargetLabel === optionId
+    || normalizedTargetLabel === normalizeArchiveBetValue(option.zh)
+    || normalizedTargetLabel === normalizeArchiveBetValue(option.en)
+  );
+}
+
 function pickDominantBranch(branches: ArchiveBranchLike[]): ArchiveBranchLike | null {
   return [...branches]
     .sort((a, b) => {
@@ -119,13 +151,8 @@ function getCounterplaySummary(usages: CardUsageRecord[]): {
 }
 
 function matchesEndingTone(targetLabel: string, tone: EndingToneId): boolean {
-  const lower = targetLabel.toLowerCase();
   const option = ENDING_TONE_OPTIONS[tone];
-  return (
-    lower.includes(tone) ||
-    lower.includes(option.zh.toLowerCase()) ||
-    lower.includes(option.en.toLowerCase())
-  );
+  return matchesArchiveBetOption(undefined, targetLabel, tone, option);
 }
 
 function resolveBettingHit(
@@ -143,12 +170,11 @@ function resolveBettingHit(
     }
     if (bet.kind === 'profile_resonance') {
       const option = PROFILE_RESONANCE_OPTIONS[profileResonance];
-      const lower = bet.targetLabel.toLowerCase();
-      return (
-        bet.targetId === profileResonance
-        || lower.includes(profileResonance)
-        || lower.includes(option.zh.toLowerCase())
-        || lower.includes(option.en.toLowerCase())
+      return matchesArchiveBetOption(
+        bet.targetId,
+        bet.targetLabel,
+        profileResonance,
+        option,
       );
     }
     if (!dominantTone) return false;

@@ -335,8 +335,15 @@ export function useSimulationDirectorState({
     setCommitmentDraftBranchId(activeBranches[0]?.id ?? '');
   }, [activeBranches, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
 
-  const handleGameplayApplied = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+  const handleGameplayApplied = useCallback(async (
+    nextMeta: NonNullable<typeof scenarioMeta>,
+    persistedState?: ScenarioGameplayState | null,
+  ) => {
     refreshLocalMeta();
+    if (persistedState) {
+      setBackendGameplayState(persistedState);
+      return;
+    }
     await persistGameplayState(nextMeta);
   }, [persistGameplayState, refreshLocalMeta]);
 

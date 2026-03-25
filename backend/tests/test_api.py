@@ -912,6 +912,95 @@ class TestPredictionLeaderboardEndpoints:
         assert len(payload) == 1
         assert payload[0]["user_id"] == "leader-b"
 
+    def test_get_leaderboard_hides_anonymous_rows(self, client):
+        engine = get_engine()
+        with Session(engine) as session:
+            session.add(
+                Leaderboard(
+                    user_id="anonymous",
+                    user_name="匿名预言家",
+                    total_predictions=3,
+                    total_score=120.0,
+                    avg_score=40.0,
+                    best_score=80.0,
+                    win_streak=2,
+                )
+            )
+            session.add(
+                Leaderboard(
+                    user_id="leader-visible",
+                    user_name="Visible",
+                    total_predictions=1,
+                    total_score=80.0,
+                    avg_score=80.0,
+                    best_score=80.0,
+                    win_streak=1,
+                )
+            )
+            session.commit()
+
+        resp = client.get("/api/leaderboard?limit=10")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert all(item["user_id"] != "anonymous" for item in payload)
+        assert any(item["user_id"] == "leader-visible" for item in payload)
+
+    def test_submit_prediction_rejects_duplicate_bettor_for_same_scenario(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        first = client.post(
+            f"/api/scenario/{sid}/predict",
+            json={
+                "prediction_text": "世界线会收束",
+                "confidence": 0.7,
+                "user_id": "bettor-1",
+                "user_name": "Alice",
+            },
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            f"/api/scenario/{sid}/predict",
+            json={
+                "prediction_text": "世界线会继续分叉",
+                "confidence": 0.6,
+                "user_id": "bettor-1",
+                "user_name": "Alice",
+            },
+        )
+
+        assert second.status_code == 409
+        assert _detail_code(second) == "PREDICTION_ALREADY_SUBMITTED"
+
+    def test_submit_prediction_rejects_duplicate_anonymous_prediction_for_same_scenario(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        first = client.post(
+            f"/api/scenario/{sid}/predict",
+            json={
+                "prediction_text": "匿名预测一",
+                "confidence": 0.6,
+                "user_id": "",
+                "user_name": "",
+            },
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            f"/api/scenario/{sid}/predict",
+            json={
+                "prediction_text": "匿名预测二",
+                "confidence": 0.4,
+                "user_id": "",
+                "user_name": "",
+            },
+        )
+
+        assert second.status_code == 409
+        assert _detail_code(second) == "PREDICTION_ALREADY_SUBMITTED"
+
     def test_submit_prediction_rejects_invalid_confidence_via_active_router(self, client):
         """Prediction API should use predictions.py validation rather than legacy dict parsing."""
         engine = get_engine()
@@ -1001,6 +1090,8 @@ class TestInterveneEndpoint:
         assert data["status"] == "applied"
         assert data["branch_id"] == bid
         assert data["round"] == 2  # max round number
+        assert data["pending_count"] == 1
+        assert data["queued_ahead"] == 0
         assert "intervention_id" in data
 
         # Verify the log was persisted
@@ -1021,6 +1112,109 @@ class TestInterveneEndpoint:
             )
             assert [item.user_input for item in queued] == ["突然下大雨"]
             assert queued[0].branch_id == bid
+
+    def test_intervene_reports_pending_queue_depth(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        with Session(engine) as session:
+            session.add(
+                PendingIntervention(
+                    scenario_id=sid,
+                    branch_id=bid,
+                    user_input="已在队列中的干预",
+                )
+            )
+            session.commit()
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid,
+            "text": "后续干预",
+        })
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["pending_count"] == 2
+        assert payload["queued_ahead"] == 1
+
+    def test_intervene_with_gameplay_card_persists_backend_gameplay_state(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene",
+            json={
+                "branch_id": bid,
+                "text": "用户接管该角色的下一句发言",
+                "card_id": "human_takeover",
+                "profile_id": "governance",
+                "directive": "请强推公开解释义务",
+            },
+        )
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        usage_log = payload["gameplay_state"]["cards"]["usage_log"]
+        assert len(usage_log) == 1
+        assert usage_log[0]["card_id"] == "human_takeover"
+        assert usage_log[0]["profile_id"] == "governance"
+        assert usage_log[0]["branch_id"] == bid
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.gameplay_state_json is not None
+            persisted_usage = scenario.gameplay_state_json["cards"]["usage_log"]
+            assert len(persisted_usage) == 1
+            assert persisted_usage[0]["card_id"] == "human_takeover"
+
+    def test_intervene_rejects_gameplay_card_on_cooldown(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.gameplay_state_json = {
+                "revision": 1,
+                "cards": {
+                    "usage_log": [
+                        {
+                            "card_id": "human_takeover",
+                            "profile_id": "governance",
+                            "branch_id": bid,
+                            "branch_title": "主线",
+                            "round": 1,
+                            "cost": 1,
+                            "directive": "上一轮接管",
+                            "used_at": "2026-03-25T00:00:00+00:00",
+                        }
+                    ]
+                },
+                "betting": {"bets": []},
+                "archive": {"key_moments": [], "branch_snapshots": []},
+            }
+            session.add(scenario)
+            session.commit()
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene",
+            json={
+                "branch_id": bid,
+                "text": "再次接管",
+                "card_id": "human_takeover",
+                "profile_id": "governance",
+                "directive": "再次强推公开解释义务",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
 
     def test_intervene_nonexistent_scenario(self, client):
         """Should return 404 for unknown scenario."""

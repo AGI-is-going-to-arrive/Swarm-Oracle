@@ -219,6 +219,25 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `frontend/src/hooks/useInputViewState.ts`
     - 新增 `probeResult / hasFreshProbe / disableUserQuota` 状态。
 
+## 2026-03-25 Review Report Validation
+
+- 已读取 `code-review-report.md`，按条目映射到 backend/frontend 当前实现，而不是仅按报告文本判断。
+- 已完成最小回归：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ws.py -q` -> `28 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_parser.py -q` -> `10 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py -k 'import_replay_debate or debate_websocket_disconnects_on_normal_close' -q` -> `12 passed, 11 deselected`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_simulator.py -k 'normalized_active_branch_probabilities or pop_next_pending_intervention_preserves_order or branch_only_resume_starts_after_fork_round' -q` -> `2 passed, 71 deselected`
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/lib/predictionBetting.test.ts src/lib/dailyChallenge.test.ts src/pages/DebateArenaView.test.tsx` -> `20 passed`
+  - `cd frontend && npm run e2e:health` -> 成功，产物目录 `frontend/output/e2e/2026-03-25T01-03-31-161Z-health`
+- 关键核验事实：
+  - `WSManager.broadcast()` 当前已使用 `asyncio.gather(..., return_exceptions=True)` 并在失败后清理 dead socket；“广播遇到断连会崩”这类结论已过时。
+  - `simulator.py` 当前确实是“先归一化、后 prune”；如果某轮 prune 掉低概率分支，剩余 ACTIVE 分支总和可能暂时小于 `1.0`，直到下一轮再归一化。
+  - `debate import-replay` 当前重复导入同一 payload 会生成两条不同 debate 记录；已用 `TestClient` 复现两次导入得到两个不同 id。
+  - `debate _build_hybrid_plan()` 当前在完全平局且 `adjudicated_winner is None` 时，实际偏向 `opposition`，不是旧报告里写的“偏向 proposition”。
+  - `parser.parse_question()` 的 retry 调用确实复用同一组 `reasoning_effort/temperature/model`；`_generate_fallback_groups()` 会原地给 `agents` 写入 `group`；重复 name 的 agent 也确实能原样保留。
+- 额外发现（不在本轮 review report 条目中）：
+  - 组合跑 `tests/test_ws.py + tests/test_parser.py + tests/test_debate_api.py` 时，`tests/test_parser.py::TestParseQuestion::test_parse_modern` 在真实 LLM 返回 list payload 的情况下抛 `AttributeError: 'list' object has no attribute 'get'`；说明 parser 对“JSON 恢复成 list”这一分支仍有健壮性缺口。
+
 ## 2026-03-23 Branch Tree / Detail Modal / Timeline Repair
 
 - 新确认根因：
@@ -9158,3 +9177,303 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `BYOK` 当前明确补了 `probe` 预检、推荐并发区间和本地 provider 的 `disable_user_quota` 边界
   - scenario API / backend current-truth 已补 `fork_debug`、`diverge`、`fork_round` 与 stale `simulating -> done` 自愈
   - frontend current-truth 已补 `PredictionModal / GameplayCardsModal` 的状态摘要化、Theater 尾声状态补拉、BranchDetailModal 双滚动区与 BranchEdge 稳定底边
+
+## 2026-03-25 Review report validation + E2E spot-check
+
+- 目标：
+  - 核验 `code-review-report.md` 中的问题是否仍然成立，而不是直接采纳旧报告。
+  - 补一轮真实浏览器验证，确认当前 E2E / i18n / 自动化钩子的事实边界。
+
+- 已读上下文：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `code-review-report.md`
+
+- 本轮已确认的代码事实：
+  - Intervention API 仍然只有 `branch_id + text`，没有 `card_id` 或后端卡牌费用/冷却校验。
+    - 前端 `GameplayCardsModal` 只是先本地校验 `canUseCard()`，然后调用 `intervene()` 发纯文本 prompt。
+    - 复现实验：构造文本 `"[CARD] audit_reckoning at zero cost"` 直接 `POST /api/scenario/{id}/intervene` 返回 `200`。
+  - 匿名预测问题仍然存在：
+    - 同一场景可重复提交空 `user_id`，后端都会写成 `anonymous`。
+    - 复现实验写入 2 条匿名 prediction 后，leaderboard 聚合为单条 `Anonymous Predictor`，`total_predictions=2`。
+  - Debate `judge` 预测选项不一致仍然存在：
+    - 后端 `available_prediction_options.winner == ["proposition", "opposition"]`。
+    - 后端也明确拒绝 `target_value="judge"`（422）。
+    - 前端显示层和摘要 helper 仍把 `judge` 当成可展示 side。
+  - Structured bet 的模糊 `includes()` 匹配仍在：
+    - `frontend/src/lib/predictionBetting.ts`
+    - `frontend/src/lib/archiveSummary.ts`
+    - 但当前 UI 正常路径下 target label 来自固定选项，实际可触发面比报告写得更窄。
+  - 批量干预上限不是“缺失”，当前实际已有限制：
+    - `BatchInterveneRequest` 限制最多 `50` 条。
+    - 对应 backend tests 已通过。
+  - 回溯分支概率“无下限”这条需要谨慎：
+    - API 创建时确实先写 `branch.probability * 0.8`。
+    - 但现有测试显示 retrospective 单分支重跑后会归一化成 `1.0`，所以报告里的长期衰减结论并不成立。
+
+- 本轮自动化 / E2E 验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py -k 'new_branch_probability or batch_rejects_oversized_intervention_list' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'intervene_batch_rejects_excessive_items or intervene_batch_enqueues_fifo_per_branch' -q`
+    - `2 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py -k 'predict_rejects_invalid_target_value or create_debate_returns_immediately_and_schedules_background' -q`
+    - `2 passed`
+  - `cd frontend && npm test -- --run src/lib/predictionBetting.test.ts src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx`
+    - `12 passed`
+  - `cd frontend && npm test -- --run src/lib/dailyChallenge.test.ts src/lib/debateCounterplay.test.ts src/lib/predictionBetting.test.ts`
+    - `14 passed`
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/pages/InputView.test.tsx`
+    - `14 passed`
+  - `cd frontend && node scripts/e2e-automation.mjs health --url http://127.0.0.1:18928 --headless`
+    - history / leaderboard automation 正常；同时抓到匿名预测 leaderboard 聚合证据
+  - `cd frontend && node scripts/e2e-automation.mjs predict --url http://127.0.0.1:18928 --headless`
+    - 主模式预测弹窗可打开、可提交、automation state 正常
+  - `cd frontend && node scripts/e2e-debate-suite.mjs desktop --url http://127.0.0.1:18928 --headless`
+    - Debate 桌面 live/result/share 全链路通过；`render_game_to_text / advanceTime / capture_game_screenshot` 全部可用
+  - `cd frontend && node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --headless`
+    - Debate 移动端中文链路通过；小红书分享文案、结果页和 modal 截图都正常
+  - `develop-web-game` 通用脚本也已复用当前项目自动化钩子跑通：
+    - `node --experimental-default-type=module ~/.codex/skills/develop-web-game/scripts/web_game_playwright_client.js ...`
+
+- 本轮人工截图结论：
+  - 首页桌面中英切换正常，`document.documentElement.lang` 会同步成 `zh-CN/en`。
+  - 首页 `390x844` 小屏下中文首屏可读，未见明显文本裁切。
+  - Debate 桌面 / 移动端截图中，主 CTA、分享弹窗、结果信息卡均可见。
+  - 当前“跨平台”仍是浏览器层跨平台（桌面/移动 viewport + 多浏览器脚本），不是原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+
+- 给下一位代理的建议：
+  - 如果要继续处理 `code-review-report.md`，优先看：
+    - 卡牌后端校验
+    - 匿名预测限流 / 去匿名聚合污染
+    - Debate `judge` 预测前后端对齐
+    - 分支裁剪后二次归一化
+  - 不要把“批量干预缺少限流”或“回溯概率持续指数衰减”继续当成已确认问题；当前代码与测试已经部分反证。
+
+## 2026-03-25 Review report validation + E2E follow-up
+
+- 本轮新增验证目标：
+  - 用当前仓库代码和现跑服务重新核验 `code-review-report.md`，区分“真实缺陷 / 设计取舍 / 已过时结论”。
+  - 复查当前自动化钩子、i18n、桌面/移动浏览器可玩性，而不是沿用旧日志结论。
+
+- 本轮额外实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py tests/test_predictions.py tests/test_card_events.py tests/test_debate_api.py -q`
+    - `94 passed`
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/lib/predictionBetting.test.ts src/lib/dailyChallenge.test.ts src/lib/debateCounterplay.test.ts src/game/automation.test.ts src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/pages/DebateResultView.test.tsx`
+    - `75 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run e2e:predict -- --headless --output-dir output/e2e/codex-predict`
+    - 主模式创建场景 + 预测弹窗 + 提交预测通过
+  - `cd frontend && npm run e2e:result -- --headless --output-dir output/e2e/codex-result`
+    - 主模式结果页 + Markdown 导出 + 分享弹窗/文案生成通过
+  - `cd frontend && npm run e2e:debate:desktop -- --headless --output-dir output/e2e/codex-debate-desktop`
+    - Debate 桌面 live/result/share 全链路通过
+  - `cd frontend && npm run e2e:debate:mobile -- --headless --output-dir output/e2e/codex-debate-mobile`
+    - Debate 移动端中文链路通过
+  - `cd frontend && npm run e2e:health -- --headless --output-dir output/e2e/codex-health`
+    - history / leaderboard 自动化通过
+
+- 本轮新确认的事实：
+  - `render_game_to_text` / `advanceTime` / `capture_game_screenshot` 现在不是缺失项，已经接在：
+    - `frontend/src/game/PhaserGame.tsx`
+    - `frontend/src/pages/SimulationView.tsx`
+    - `frontend/src/pages/DebateArenaView.tsx`
+    - `frontend/src/pages/DebateResultView.tsx`
+  - `i18n` 当前是系统化实现，不是临时补丁：
+    - `frontend/src/i18n/config.ts` 统一初始化
+    - `frontend/src/i18n/locales.test.ts` 通过
+    - 本轮额外比对 `zh/en` locale key 数量一致
+  - 当前“跨平台”应继续准确表述为 Web 浏览器跨平台：
+    - 桌面 / 移动浏览器视口已验证
+    - 仓库里没有 Electron / Tauri / Capacitor / React Native 之类原生壳证据
+  - 匿名预测问题当前仍然真实存在：
+    - 对 `76fe3964-2c6a-49b1-82ab-c84fd385bcd6` 连续两次空 `user_id` 提交 prediction，后端均返回 `200`
+    - `e2e:health` 结果里的 leaderboard 也出现了聚合后的“匿名预言家”条目
+  - Debate `judge` 预测选项不一致仍然真实：
+    - 新建 debate 后，`POST /api/debate/{id}/predict` with `target_value="judge"` 返回 `422`
+    - 前端展示层仍保留 `judge` side label helper
+  - `predictionBetting.ts` 与 `archiveSummary.ts` 中的 `includes()` 模糊匹配仍在，属于真实但偏边界的误判风险
+  - `BatchInterveneRequest` 当前已经有 `<= 50` 的后端限制，因此“批量干预完全不限流”是过时结论
+  - `narrator` fallback 当前会吃到 `[R? agent_name]: content` 形式的 `raw_rounds`，所以“fallback 完全不带 agent 名”已不成立
+
+- 本轮人工截图复核：
+  - `frontend/output/e2e/codex-predict/predict-submitted.png`
+    - 预测弹窗布局正常，无明显遮挡
+  - `frontend/output/e2e/codex-result/share-generated.png`
+    - 结果页分享弹窗正常生成，小红书文案区可读
+  - `frontend/output/e2e/codex-debate-desktop/live.png`
+    - Debate 桌面首屏主信息、下注入口和状态卡均可见
+  - `frontend/output/e2e/codex-debate-mobile/result-ready.png`
+    - Debate 移动端 `390x844` 首屏 CTA 可达，未见明显裁切
+
+- 当前建议的真实优先级：
+  - 高：
+    - 卡牌后端校验缺失
+    - 匿名预测 / leaderboard 聚合污染
+    - 分支裁剪后缺二次归一化
+  - 中：
+    - Debate `judge` 预测前后端对齐
+    - Debate import replay 幂等性
+    - 干预队列排队无可见反馈
+    - Debate tie-break 默认偏置（报告方向写反，当前更像默认偏 `opposition/proposition` 混合偏置，需要按代码再确认）
+  - 低或设计取舍：
+    - localStorage TTL
+    - parser retry 多样性
+    - detached session 风格问题
+
+## 2026-03-25 Priority fixes applied
+
+- 本轮按用户确认，实际落了这些修复：
+  - `#1` 后端玩法卡校验：
+    - `backend/app/api/interventions.py`
+    - `backend/app/api/schemas.py`
+    - `frontend/src/components/GameplayCardsModal.tsx`
+    - `frontend/src/hooks/useSimulationViewState.ts`
+    - `frontend/src/types.ts`
+  - `#2 #6` 匿名预测限制与 leaderboard 去污染：
+    - `backend/app/api/predictions.py`
+    - `backend/app/services/scoring.py`
+    - `frontend/src/lib/apiErrorMessage.ts`
+    - `frontend/src/i18n/locales/{zh,en}.json`
+  - `#7` structured bet 精确匹配：
+    - `frontend/src/lib/predictionBetting.ts`
+    - `frontend/src/lib/predictionBetting.test.ts`
+    - 另外顺手把 `archiveSummary.ts` 的同类模糊命中一并收掉，避免结果页结算口径继续漂
+  - `#10` retrospective fork depth limit：
+    - `backend/app/api/interventions.py`
+    - `backend/tests/test_intervention.py`
+  - `#12 #20` Debate import replay 幂等与 tie-break 去偏：
+    - `backend/app/api/debate.py`
+    - `backend/app/services/debate.py`
+    - `backend/tests/test_debate_api.py`
+  - `#13` 分支剪枝后二次归一化：
+    - `backend/app/services/simulator.py`
+    - `backend/tests/test_simulator.py`
+  - `#15` 干预队列反馈：
+    - `backend/app/services/simulator.py`
+    - `backend/app/api/interventions.py`
+    - `frontend/src/components/InterventionModal.tsx`
+    - `frontend/src/components/GameplayCardsModal.tsx`
+    - `frontend/src/i18n/locales/{zh,en}.json`
+
+- 修复后的行为口径：
+  - Gameplay card 现在走 intervention API 时会带 `card_id/profile_id/directive`，后端会按 shared gameplay contract 校验：
+    - `manual_enabled`
+    - `min_round`
+    - `cooldown_rounds`
+    - director points
+  - 校验通过后，后端会把该次出牌直接落进 authority `gameplay_state_json.cards.usage_log`，不再只靠前端 local meta 假装扣点数
+  - 同一 `scenario_id + user_id`（包括匿名 `anonymous`）现在只允许一条 prediction
+  - leaderboard API 不再返回 `anonymous` 行，匿名预测也不再更新 leaderboard / win streak
+  - 标准 intervention 成功响应现在会返回 `pending_count / queued_ahead`
+  - UI 会把 queued feedback 显示在 Intervention / GameplayCardsModal 的成功提示里
+  - Debate replay import 对同一规范化 payload 现在是幂等的
+  - Debate hybrid tie-break 在 adjudicated winner 缺失时回退到 `base_plan.winner`
+  - simulator 在 prune 后会再做一次 active branch 概率归一化
+
+- 本轮验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'intervene or leaderboard or duplicate' -q`
+    - `31 passed, 81 deselected`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_intervention.py tests/test_predictions.py tests/test_simulator.py -k 'fork_depth or anonymous or leaderboard or renormalizes or cooldown or gameplay_card' -q`
+    - `15 passed, 111 deselected`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_api.py -q`
+    - 通过（本轮子任务已跑）
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_debate_service.py -q`
+    - 通过（本轮子任务已跑）
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/interventions.py app/api/predictions.py app/api/debate.py app/services/scoring.py app/services/simulator.py app/services/debate.py tests/test_api.py tests/test_intervention.py tests/test_predictions.py tests/test_simulator.py tests/test_debate_api.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/lib/predictionBetting.test.ts src/lib/archiveSummary.test.ts src/components/InterventionModal.test.tsx src/components/GameplayCardsModal.test.tsx`
+    - `19 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run e2e:debate:desktop -- --headless --output-dir output/e2e/codex-fix-debate-desktop`
+    - 通过
+  - `cd frontend && npm run e2e:debate:mobile -- --headless --output-dir output/e2e/codex-fix-debate-mobile`
+    - 通过
+
+- E2E 备注：
+  - `e2e:predict` 在这轮真实 LLM 负载下两次都不稳定：
+    - 第一次与 Debate 并发跑时，脚本在等待 `/sim/:id` 跳转 20s 超时
+    - 第二次单独跑时，后端日志确认 `POST /api/scenario` 已返回 `200`，但脚本后续仍长时间等待“进入可下注状态”
+  - 目前更像已有主模式脚本/时序脆弱点，而不是本轮修复直接引入的新 API/编译回归；这条如果继续查，建议单独开一轮只盯 `e2e-automation.mjs predict`
+
+## 2026-03-25 Predict E2E timeout investigation
+
+- 本轮单独排查 `frontend/scripts/e2e-automation.mjs predict` 的超时，不再混跑其他 E2E。
+- 用 `playwright-interactive` 手工复现实测结果：
+  - 点击首页“开始推演”后，`500ms` 内就已进入 `/sim/:id`
+  - 页面 `render_game_to_text()` 同步显示 `page.kind = simulation`
+  - backend 同时记录到 `POST /api/scenario 200`
+  - 说明根因不是“create scenario 失败”或“前端根本没跳转”
+- 额外看到的时序事实：
+  - `/sim/:id` 首屏刚进来时，`agents/branches/messages` 可能暂时为空
+  - 随后页面会触发 `[Recovery] Warmup missing agents/branches — hydrating from API...`
+  - 所以主模式流本身就有“先跳转、后补全运行态”的正常窗口
+- 结论：
+  - 原脚本的 `createScenario()` 只做：
+    - click
+    - `page.waitForURL(/\\/sim\\//, { timeout: 20000 })`
+  - 这个等待条件在 dev / LLM 忙时过于脆弱，容易把 SPA 路由跳转和 hydration 抖动误判为失败
+- 已修复：
+  - `frontend/scripts/e2e-automation.mjs`
+  - `createScenario()` 现在改成：
+    - 点击后等待 `window.location.href` 命中 `/sim/`
+    - 或 `render_game_to_text().page.kind === "simulation"`
+    - timeout 提高到 `45000ms`
+    - 若 automation 已进入 simulation 但 URL 尚未命中，再补一个短 `waitForURL`
+- 修复后验证：
+  - `cd frontend && npm run e2e:predict -- --headless --output-dir output/e2e/codex-fix-predict-stable`
+    - 通过
+  - 产物：
+    - `frontend/output/e2e/codex-fix-predict-stable`
+- 备注：
+  - 这次修的是脚本时序，不是业务页面逻辑
+  - 如果后续还要继续提升 predict 流稳定性，下一步建议盯：
+    - `runPredictFlow()` 对 “simulation page with prediction button” 的 `10000ms` 等待是否仍偏紧
+
+- 后续补强：
+  - 继续把 `runPredictFlow()` 拆成两段等待：
+    - 先等 `page.kind === simulation`
+    - 再等预测按钮真实可见且未禁用
+  - `can_open_prediction` 的 automation wait timeout 也已从 `10000ms` 放宽到 `30000ms`
+- 二次验证：
+  - `cd frontend && npm run e2e:predict -- --headless --output-dir output/e2e/codex-fix-predict-stable-2`
+    - 通过
+
+## 2026-03-25 Report validation rerun (current session)
+
+- 新增实跑：
+  - `cd frontend && npm run e2e:health -- --url http://127.0.0.1:18928 --output-dir output/e2e/health-20260325`
+    - 通过；history / leaderboard 自动化正常。
+  - `cd frontend && npm run e2e:debate:desktop -- --url http://127.0.0.1:18928 --output-dir output/e2e/debate-desktop-20260325`
+    - 通过；桌面 Debate live/result/share 全链路正常。
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/mobile-20260325 --headless`
+    - 通过；移动端首页 / Theater / 结果页自动化正常。
+  - `cd frontend && npm run e2e:debate:mobile -- --url http://127.0.0.1:18928 --output-dir output/e2e/debate-mobile-20260325`
+    - 通过；移动端中文 Debate 全链路正常。
+
+- 新增确认的事实：
+  - `e2e:health` 直接显示 leaderboard 中存在聚合后的“匿名预言家”条目，且 `avg_score / total_predictions / win_streak` 已混入多条匿名记录；匿名预测污染不是理论风险，而是当前运行态事实。
+  - `BatchInterveneRequest` 现在已有后端上限 `50`；“批量干预完全无上限”已不成立。
+  - 回溯分支创建时路由层仍先写 `branch.probability * 0.8`，但后台 simulation 会在后续做 active branch 归一化；“持续指数衰减到深层分支必死”更接近部分成立，而不是稳定复现的当前 bug。
+  - `frontend/src/components/GameplayCardsModal.tsx` 仍然只在前端做 `cost/cooldown` 校验，然后把 directive 通过 `/api/scenario/{id}/intervene` 提交，再把 usage log 通过 `/api/campaign/scenario/{id}/gameplay-state` 回写后端；后端没有按 card contract 二次校验，问题仍然真实。
+
+- `develop-web-game` skill 现状：
+  - 原始客户端 `~/.codex/skills/develop-web-game/scripts/web_game_playwright_client.js` 直接执行仍会因 ESM `.js` 扩展名失败；本轮继续用仓库内临时 `.mjs` 副本绕过。
+  - 在 `headless + swiftshader` 下抓 `frontend/output/web-game/sim-e7e10414/shot-0.png`，Theater 主画布是黑的；但同一路径在 headed 复跑 `frontend/output/web-game/sim-e7e10414-headed/shot-0.png` 渲染正常。
+  - 结论：这更像 headless/WebGL 取证差异，不应直接记成产品渲染故障；后续若要用该 skill 做 Phaser 取证，优先 headed 复核。
+
+- 给下一位代理的建议：
+  - 若继续处理 `code-review-report.md`，优先收口：
+    - 匿名预测限制 + leaderboard 去污染
+    - 卡牌后端校验
+    - 分支裁剪后二次归一化
+    - Debate `judge` 预测前后端对齐
+  - 若继续做浏览器取证，优先复用：
+    - `frontend/output/e2e/health-20260325`
+    - `frontend/output/e2e/mobile-20260325`
+    - `frontend/output/e2e/debate-desktop-20260325`
+    - `frontend/output/e2e/debate-mobile-20260325`

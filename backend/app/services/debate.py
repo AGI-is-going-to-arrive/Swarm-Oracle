@@ -376,6 +376,11 @@ def _build_hybrid_plan(
     totals = {"proposition": 0, "opposition": 0}
     adjudicated_winner = adjudication.get("winner")
     adjudicated_tone = adjudication.get("verdict_tone")
+    tie_break_winner = (
+        adjudicated_winner
+        if adjudicated_winner in _VALID_DEBATE_WINNERS
+        else base_plan.winner
+    )
 
     for dimension in DEBATE_DIMENSIONS:
         base_scores = base_plan.breakdown[dimension]
@@ -409,7 +414,7 @@ def _build_hybrid_plan(
                     blended_proposition = min(5, blended_proposition + 1)
                 else:
                     blended_opposition = min(5, blended_opposition + 1)
-            elif adjudicated_winner == "proposition":
+            elif tie_break_winner == "proposition":
                 blended_proposition = min(5, blended_proposition + 1)
             else:
                 blended_opposition = min(5, blended_opposition + 1)
@@ -426,7 +431,7 @@ def _build_hybrid_plan(
         "opposition": totals["opposition"] * 5,
     }
     if score["proposition"] == score["opposition"]:
-        if adjudicated_winner == "opposition":
+        if tie_break_winner == "opposition":
             score["opposition"] += 5
         else:
             score["proposition"] += 5

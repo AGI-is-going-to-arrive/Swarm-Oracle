@@ -206,6 +206,29 @@ class TestRetrospectiveIntervention:
         })
         assert resp.status_code == 422
 
+    def test_rejects_when_retrospective_fork_depth_limit_is_reached(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        parent_id = _seed_branch(engine, sid, title="root")
+        for depth in range(1, 6):
+            _seed_round(engine, parent_id, 1)
+            parent_id = _seed_branch(
+                engine,
+                sid,
+                title=f"depth-{depth}",
+                parent_branch_id=parent_id,
+            )
+        _seed_round(engine, parent_id, 1)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": parent_id,
+            "round_number": 1,
+            "text": "超过最大回溯深度",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "RETROSPECTIVE_FORK_DEPTH_EXCEEDED"
+
     def test_retro_branch_clones_history_through_selected_round(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)

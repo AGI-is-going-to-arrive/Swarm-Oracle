@@ -37,7 +37,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenario/{id}/agents` | GET | 获取agent列表（含 group_id, group_name） | — | AgentInfo[] |
 | `GET /api/scenario/{id}/story` | GET | 获取叙事结果 | — | StoryData |
 | `GET /api/scenario/{id}/groups` | GET | 获取分层分组信息 (P3-A) | — | AgentGroupDetail[] |
-| `POST /api/scenario/{id}/intervene` | POST | 注入干预 | `{"branch_id": "...", "text": "..."}` | InterventionResponse |
+| `POST /api/scenario/{id}/intervene` | POST | 注入干预；当前也支持正式玩法卡注入 | `{"branch_id": "...", "text": "...", "card_id?": "human_takeover", "profile_id?": "governance", "directive?": "..."}` | InterventionResponse（标准响应当前会额外带 `pending_count / queued_ahead`；若这次请求走了正式玩法卡分支，还会一并回传更新后的 `gameplay_state`） |
 | `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预 | `{"branch_id": "...", "round_number": 2, "text": "..."}` | `{status, new_branch_id, from_round}` |
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预 | `{"interventions": [{"branch_id": "...", "text": "..."}]}` | `{status, count, interventions[]}` |
 
@@ -45,6 +45,22 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `interventions` 不能为空
 > - `interventions` 最多 `50` 条；超过时返回 `422`
 > - 当 SQLite-backed pending queue 启用时，`InterventionLog` 与 `PendingIntervention` 会在同一个事务里落库；不会再出现“日志已写但 pending queue 未写”的半提交
+>
+> `POST /api/scenario/{id}/intervene` 当前新增的正式玩法卡写法：
+> - `card_id / profile_id / directive` 都是可选字段；只有带 `card_id` 时，后端才会把这次请求当成正式玩法卡注入处理
+> - 一旦走玩法卡分支，后端会按 shared gameplay contract 校验：
+>   - `manual_enabled`
+>   - `min_round`
+>   - `cooldown_rounds`
+>   - 当前 `director points`
+> - 校验通过后，后端会把这次 usage 直接写进 `Scenario.gameplay_state_json.cards.usage_log`
+> - 标准干预响应与 `intervention_applied` 广播当前都会带：
+>   - `pending_count`
+>   - `queued_ahead`
+>
+> `POST /api/scenario/{id}/intervene/retrospective` 当前还新增了 fork depth 限制：
+> - 当来源分支的 parent 链深度已经达到 `5`
+> - 后端会返回 `400 RETROSPECTIVE_FORK_DEPTH_EXCEEDED`
 >
 > `POST /api/scenario` 当前也由 `CreateScenarioRequest` 在 schema 层校验 `question`：
 > - 空字符串或纯空白：返回 `422`
@@ -88,10 +104,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `groups` 最多 `128` 条、`agents` 最多 `256` 条、`branches` 最多 `256` 条、`messages` 最多 `5_000` 条；超出时返回 `413`
 > - 导入消息时若缺少 `agent_id`，后端会先按本次导入快照里的 agent name map 回退匹配，而不是反复全表扫描当前 scenario agents
 >
-> 当前主模式玩法卡的真实写路径是：
-> - 前端先把 card directive 生成普通干预 prompt，再调用 `POST /api/scenario/{id}/intervene`
-> - 随后再把 `card_id / directive / used_at` 等 usage 记录写进 `gameplay-state`
-> - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，`gameplay-state` 负责 authority / 冷却 / 结算与回放
+> 当前主模式玩法卡的真实写路径已收口为：
+> - 前端先把 card directive 生成正式干预请求，再调用 `POST /api/scenario/{id}/intervene`
+> - 若请求里带了有效 `card_id / profile_id / directive`，后端会直接做玩法卡校验并写入 `gameplay-state`
+> - 因此“玩法卡影响世界线”的直接注入入口仍是 `intervene`，但 authority / 冷却 / director points 现在不再只靠前端本地状态兜底
 >
 > `intervene / retrospective / batch` 当前不改 REST 形状，但待注入文本已经进入后端共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求和模拟不需要落在同一个 worker，干预也能被消费。`batch` 在 SQLite queue 路径下还会把 queue row 和 intervention log 一起原子写入。
 
@@ -158,6 +174,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >
 > `POST /api/scenario/{id}/predict` 当前请求体仍接受可选 `user_id`；若 `user_name` 留空，后端会按 scenario / question 语言补匿名昵称（中文场景用 `匿名预言家`，英文场景用 `Anonymous Predictor`），再把 `user_id` 缺省回退到 `"anonymous"`。当前 `PredictionResponse` 不回显 `user_id`。
 >
+> `POST /api/scenario/{id}/predict` 当前还新增了“单局单用户一条 prediction”约束：
+> - 同一 `scenario_id + user_id` 只能提交一次
+> - 匿名 `anonymous` 也走同一条规则
+> - 重复提交时返回 `409 PREDICTION_ALREADY_SUBMITTED`
+>
 > `POST /api/scenario/{id}/predict` 当前只在这两种状态开放：
 > - `parsing`
 > - `simulating`
@@ -177,6 +198,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `limit`：`1-100`
 > - `offset`：`>= 0`
 > - 默认仍按 `avg_score desc` 排序
+> - 匿名 `anonymous` 行当前不会再出现在排行榜响应里
 >
 > `POST /api/scenario/{id}/score-predictions` 当前的内部行为：
 > - 单条 prediction 会先原子认领未评分行，再写入分数
@@ -391,6 +413,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `result.verdict_tone` 必须是 `order / balance / rupture`
 > - `turns[*].sequence` 必须是从 `1` 开始、连续且无重复的正整数；合法输入会先按 `sequence` 排序再导入
 > - `phase_insights` 的关键枚举/结构字段若非法（例如坏 `phase`、坏 direction、坏 `confidence_drift` 结构），会返回 `422`
+> - 对同一份规范化 replay payload，导入当前是幂等的：若后端已存在同指纹 debate，会直接返回已有 snapshot，而不是重复创建新记录
 >
 > prediction 只支持两类：
 > - `winner`

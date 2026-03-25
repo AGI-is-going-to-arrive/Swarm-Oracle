@@ -237,6 +237,8 @@
       "success_standard": "干预已施加！",
       "success_retrospective": "回溯重演已加入队列！",
       "success_batch": "批量干预已加入队列！",
+      "queue_note_next": "已加入队列，预计下一轮生效。",
+      "queue_note_delayed": "已加入队列，前方还有 {{count}} 条待处理干预。",
       "error": "干预失败",
       "error_unavailable": "当前分支暂时无法接受干预。",
       "error_branch_missing": "你选择的分支已经不存在了。",
@@ -415,6 +417,7 @@
       "success": "预测已提交！",
       "error": "提交失败",
       "error_closed": "当前场景的预测窗口已经关闭。",
+      "error_duplicate": "同一名下注者在这个场景里只能提交一次预测。",
       "error_branch_pending": "当前还没有可下注的活跃世界线，请稍候再试。",
       "branch_unavailable_note": "当前只开放了主世界线，先押结局倾向或题材回响会更稳。",
       "confidence_low": "猜测",
@@ -540,6 +543,7 @@
       "error_source_branch": "时空裂缝需要另一条来源分支。",
       "error_points": "导演点数不足，本轮暂时无法出牌。",
       "error_cooldown": "冷却中，还需 {{count}} 轮。",
+      "error_min_round": "这张卡要到第 {{round}} 轮后才可使用。",
       "success": "玩法卡已注入，世界线正在响应这次导演动作。"
     },
     "debate": {

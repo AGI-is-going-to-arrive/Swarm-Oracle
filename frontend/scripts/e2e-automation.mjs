@@ -120,7 +120,22 @@ async function createScenario(page, { baseUrl, question, theater = false }) {
   }
 
   await page.getByRole("button", { name: /开始推演|submit/i }).click();
-  await page.waitForURL(/\/sim\//, { timeout: 20000 });
+  await page.waitForFunction(() => {
+    const href = window.location.href;
+    if (/\/sim\//.test(href)) return true;
+
+    if (typeof window.render_game_to_text !== "function") return false;
+    try {
+      const payload = JSON.parse(window.render_game_to_text());
+      return payload?.page?.kind === "simulation";
+    } catch {
+      return false;
+    }
+  }, { timeout: 45000 });
+
+  if (!/\/sim\//.test(page.url())) {
+    await page.waitForURL(/\/sim\//, { timeout: 10000 });
+  }
   return page.url().split("/").pop();
 }
 
@@ -140,14 +155,31 @@ async function runPredictFlow(page, args) {
     theater: false,
   });
 
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.kind === "simulation",
+    15000,
+    "simulation page",
+  );
+
+  const predictButton = page.getByRole("button", { name: /预测|predict/i });
+  await predictButton.waitFor({ state: "visible", timeout: 30000 });
+  await page.waitForFunction(() => {
+    const buttons = Array.from(document.querySelectorAll("button"));
+    return buttons.some((button) => {
+      const text = button.textContent?.trim() ?? "";
+      return /预测|predict/i.test(text) && !button.hasAttribute("disabled");
+    });
+  }, { timeout: 30000 });
+
   const simPayload = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "simulation" && payload.page?.controls?.can_open_prediction,
-    10000,
+    30000,
     "simulation page with prediction button",
   );
 
-  await page.getByRole("button", { name: /预测|predict/i }).click();
+  await predictButton.click();
 
   await waitForAutomation(
     page,

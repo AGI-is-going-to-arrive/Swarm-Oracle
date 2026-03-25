@@ -30,6 +30,30 @@ describe('resolveStructuredBetOutcome', () => {
     )).toBe('hit');
   });
 
+  it('matches ending tone bets by normalized localized label', () => {
+    expect(resolveStructuredBetOutcome(
+      {
+        kind: 'ending_tone',
+        targetLabel: 'Balanced Co Governance',
+      },
+      {
+        dominantTone: 'balance',
+      },
+    )).toBe('hit');
+  });
+
+  it('does not match ending tone bets by substring-only overlap', () => {
+    expect(resolveStructuredBetOutcome(
+      {
+        kind: 'ending_tone',
+        targetLabel: 'balanced order',
+      },
+      {
+        dominantTone: 'order',
+      },
+    )).toBe('miss');
+  });
+
   it('matches theme resonance bets by target id', () => {
     expect(resolveStructuredBetOutcome(
       {
@@ -41,5 +65,29 @@ describe('resolveStructuredBetOutcome', () => {
         profileResonance: 'signature',
       },
     )).toBe('hit');
+  });
+
+  it('matches theme resonance bets by normalized English label', () => {
+    expect(resolveStructuredBetOutcome(
+      {
+        kind: 'profile_resonance',
+        targetLabel: 'Direction Aligned',
+      },
+      {
+        profileResonance: 'aligned',
+      },
+    )).toBe('hit');
+  });
+
+  it('does not match theme resonance bets by substring-only overlap', () => {
+    expect(resolveStructuredBetOutcome(
+      {
+        kind: 'profile_resonance',
+        targetLabel: 'signature adjacent move',
+      },
+      {
+        profileResonance: 'signature',
+      },
+    )).toBe('miss');
   });
 });

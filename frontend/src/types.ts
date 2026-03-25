@@ -354,6 +354,9 @@ export interface ScenarioForkDebug {
 export interface InterventionPayload {
   branch_id: string;
   text: string;
+  card_id?: string;
+  profile_id?: string;
+  directive?: string;
 }
 
 export interface RetrospectiveInterventionPayload extends InterventionPayload {
@@ -369,6 +372,9 @@ export interface InterventionResponse {
   intervention_id: string;
   branch_id: string;
   round: number;
+  pending_count?: number;
+  queued_ahead?: number;
+  gameplay_state?: ScenarioGameplayState | null;
 }
 
 export interface RetrospectiveInterventionResponse {

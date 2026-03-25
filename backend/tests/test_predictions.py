@@ -476,6 +476,56 @@ class TestScoringService(unittest.TestCase):
             self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
             self.assertEqual(kwargs["model"], "gpt-test")
 
+    def test_score_prediction_does_not_create_leaderboard_row_for_anonymous_user(self):
+        from app.models import Branch, Scenario, ScenarioStatus
+        from app.services.scoring import score_prediction
+
+        with patch("app.services.scoring.get_engine") as mock_engine:
+            engine = create_engine("sqlite:///:memory:")
+            SQLModel.metadata.create_all(engine)
+            mock_engine.return_value = engine
+
+            with Session(engine) as session:
+                scenario = Scenario(
+                    question="匿名预测测试",
+                    status=ScenarioStatus.DONE,
+                    parsed_context={"_language": "Chinese"},
+                )
+                session.add(scenario)
+                session.commit()
+                session.refresh(scenario)
+
+                session.add(
+                    Branch(
+                        scenario_id=scenario.id,
+                        title="主线",
+                        probability=1.0,
+                        story="故事结果",
+                        insight="关键洞察",
+                    )
+                )
+                pred = Prediction(
+                    scenario_id=scenario.id,
+                    prediction_text="匿名预测",
+                    user_id="anonymous",
+                    user_name="匿名预言家",
+                )
+                session.add(pred)
+                session.commit()
+                pred_id = pred.id
+
+            with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                mock_llm.return_value = {"score": 88, "reason": "命中主线"}
+                result = asyncio.run(score_prediction(pred_id))
+
+            self.assertEqual(result, {"score": 88, "reason": "命中主线"})
+
+            with Session(engine) as session:
+                entries = session.exec(
+                    select(Leaderboard).where(Leaderboard.user_id == "anonymous")
+                ).all()
+                self.assertEqual(entries, [])
+
     def test_score_prediction_uses_english_prompt_for_english_scenario(self):
         """English scenarios should not receive a Chinese scoring prompt body."""
         from app.models import Branch, Scenario, ScenarioStatus

@@ -7,14 +7,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import app.api.debate as debate_api
+import app.services.debate as debate_service
 from app.main import app
 from app.models import Debate, DebatePhase, DebateStatus
 from app.models.database import get_engine
 from app.services.debate import create_debate_record, run_debate_background
-from app.services.debate_scoring import build_debate_plan
+from app.services.debate_scoring import DebatePlan, build_debate_plan
 
 
 @pytest.fixture
@@ -414,6 +415,73 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
     assert result_payload["phase_insights"][-1]["judge_focus"] == "Imported verdict focus"
 
 
+def test_import_replay_debate_is_idempotent_for_identical_payload(client: TestClient):
+    payload = {
+        "debate": {
+            "id": "debate-replay-idempotent",
+            "question": "Should an emergency audit board publish every sealed tariff exception?",
+            "motion": "Motion",
+            "language": "en",
+            "profile_id": "trade",
+            "scene_theme": "debate_arena_forum",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Audit Lead"},
+                {"side": "opposition", "name": "Opposition", "role": "Trade Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn 1",
+                },
+                {
+                    "sequence": 2,
+                    "phase": "crossfire",
+                    "speaker_side": "opposition",
+                    "speaker_name": "Opposition",
+                    "content": "Imported turn 2",
+                },
+            ],
+            "result": {
+                "winner": "proposition",
+                "verdict_tone": "balance",
+                "judge_summary": "Imported verdict",
+                "adjudication_mode": "llm_hybrid",
+            },
+            "predictions": [
+                {
+                    "kind": "winner",
+                    "target_value": "proposition",
+                    "confidence": 0.8,
+                    "user_id": "director-1",
+                    "user_name": "Director",
+                },
+            ],
+        },
+    }
+
+    first = client.post("/api/debate/import-replay", json=payload)
+    second = client.post("/api/debate/import-replay", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_id = first.json()["id"]
+    second_id = second.json()["id"]
+    assert second_id == first_id
+
+    with Session(get_engine()) as session:
+        debates = session.exec(
+            select(Debate).where(
+                Debate.question == payload["debate"]["question"],
+                Debate.motion == payload["debate"]["motion"],
+            )
+        ).all()
+        assert len(debates) == 1
+
+
 def test_import_replay_debate_rejects_oversized_payload(client: TestClient):
     oversized_content = "x" * (debate_api.MAX_IMPORT_REPLAY_DEBATE_BYTES + 1)
 
@@ -754,3 +822,33 @@ def test_empty_turn_fallbacks_are_readable():
     assert "was: ." not in summary
     assert best_argument in summary
     assert best_rebuttal in summary
+
+
+def test_build_hybrid_plan_uses_base_plan_winner_when_adjudication_winner_is_missing():
+    template_plan = build_debate_plan(
+        "Should a permanent audit chamber review every emergency budget?"
+    )
+    tied_breakdown = {
+        dimension: {"proposition": 3, "opposition": 3}
+        for dimension in template_plan.breakdown
+    }
+    base_plan = DebatePlan(
+        winner="proposition",
+        verdict_tone=template_plan.verdict_tone,
+        score={"proposition": 60, "opposition": 55},
+        breakdown=tied_breakdown,
+        phase_deltas=template_plan.phase_deltas,
+        audience_meter=template_plan.audience_meter,
+    )
+
+    hybrid_plan, mode = debate_service._build_hybrid_plan(
+        base_plan,
+        {
+            "verdict_tone": "balance",
+            "dimensions": tied_breakdown,
+        },
+    )
+
+    assert mode == "llm_hybrid"
+    assert hybrid_plan.winner == "proposition"
+    assert hybrid_plan.score["proposition"] > hybrid_plan.score["opposition"]

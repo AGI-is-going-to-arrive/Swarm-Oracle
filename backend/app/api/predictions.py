@@ -26,6 +26,7 @@ OPEN_PREDICTION_STATUSES = {
     ScenarioStatus.PARSING,
     ScenarioStatus.SIMULATING,
 }
+ANONYMOUS_USER_ID = "anonymous"
 
 
 # ── Request / Response Schemas ─────────────────────────
@@ -104,6 +105,20 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
                 f"Scenario is '{scenario.status.value}' — predictions are closed",
             )
 
+        normalized_user_id = req.user_id or ANONYMOUS_USER_ID
+        existing = session.exec(
+            select(Prediction).where(
+                Prediction.scenario_id == scenario_id,
+                Prediction.user_id == normalized_user_id,
+            )
+        ).first()
+        if existing is not None:
+            raise api_error(
+                409,
+                "PREDICTION_ALREADY_SUBMITTED",
+                "This user already submitted a prediction for the scenario",
+            )
+
         scenario_language = (
             scenario.parsed_context.get("_language")
             if isinstance(scenario.parsed_context, dict)
@@ -113,7 +128,7 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
 
         pred = Prediction(
             scenario_id=scenario_id,
-            user_id=req.user_id or "anonymous",
+            user_id=normalized_user_id,
             user_name=user_name,
             prediction_text=req.prediction_text,
             confidence=req.confidence,
@@ -224,6 +239,7 @@ async def get_leaderboard(
         entries = list(session.exec(
             select(Leaderboard)
             .where(Leaderboard.total_predictions >= 1)
+            .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
             .order_by(Leaderboard.avg_score.desc())
             .offset(offset)
             .limit(min(limit, 100))

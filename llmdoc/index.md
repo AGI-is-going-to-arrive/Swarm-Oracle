@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-25（首页神谕档位正式上架 / 主模式预计耗时提示 / Result 与 ShareModal 去冗余 / Markdown 附件下载收口）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-25（玩法卡后端校验与 queue feedback / 匿名 prediction 去污染 / Debate replay import 幂等 / `e2e:predict` 时序加固）
 
 ## 阅读顺序
 

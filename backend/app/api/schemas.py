@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from app.config import settings
 
@@ -119,6 +119,23 @@ class TestLlmRequest(BaseModel):
 class InterveneRequest(BaseModel):
     branch_id: str
     text: str
+    card_id: str | None = None
+    profile_id: str | None = None
+    directive: str | None = None
+
+    @field_validator("card_id", "profile_id", "directive")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_card_bundle(self) -> "InterveneRequest":
+        if self.card_id and not self.profile_id:
+            raise ValueError("profile_id is required when card_id is provided")
+        return self
 
 
 class RetrospectiveInterveneRequest(BaseModel):

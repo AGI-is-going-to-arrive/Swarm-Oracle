@@ -71,7 +71,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **Fork detector 调试**: 当前会把每轮 fork 判定记录到 `Scenario.parsed_context["fork_debug_trace"]`，并在 API 层聚合成 `fork_debug.round_checks`；内容包括 `branch_id / branch_title / round / diverge_signals / detector_invoked / skip_reason / decision / detector_result / created_branch_titles`
 - **Fork detector 运行时调参**: scenario 级运行当前可显式透传 `temperature / branch_sensitivity / fork_prompt_variant / fork_detector_active_branch_limit`
 - **Detector budget**: `fork_detector_active_branch_limit` 当前只限制“每轮还有多少个 ACTIVE branch 有资格继续跑 detector”；不会阻止这些分支发言、压缩记忆或进入 narration。当前排序规则是 `probability desc, branch_id asc`，超出预算的分支会在 `round_checks` 里带 `skip_reason = detector_budget_exceeded`
-- **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning，避免后续剪枝/叙事继续吃坏概率；使用单数据库会话优化 (P2-8)
+- **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning；这一轮又补了 prune 后的二次归一化，避免低概率分支被剪掉后剩余 `ACTIVE` 分支概率和继续小于 `1.0`
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
 - **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
 - **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
@@ -113,7 +113,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - **输出格式**: `{situation, active_debates, key_quotes, tension_points, consensus}`
 - **干预 / 玩法卡注入**:
   - `intervention_text` 当前会在 agent prompt 里被明确描述成“高优先级、持续生效的世界线事件”，要求先回应、再在后续轮次持续体现影响
-  - 玩法卡当前不是从 `gameplay_state` 直接反向注入 prompt；前端 `GameplayCardsModal` 会先把 card prompt 作为 `/intervene` 文本发给后端，再把 `usage_log` 同步进 `gameplay_state`
+  - 玩法卡当前仍通过 `/intervene` 注入 card prompt，但正式 card 调用现在会一并带 `card_id / profile_id / directive`
+  - 后端会按 shared gameplay contract 校验 `manual_enabled / min_round / cooldown_rounds / director points`，通过后再把 usage 直接写进 `Scenario.gameplay_state_json`
 - **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
 - **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
@@ -325,7 +326,9 @@ alembic/ ──► Alembic 数据库迁移框架
   - live snapshot / result payload 顶层当前还会返回 `phase_insights[]`，每个阶段都有 `stakes / judge_focus / commentary / pressure_margin / confidence_drift`
   - `counterplay` 当前不只影响顶层摘要；若某阶段命中了对冲，后端会把这条信息直接织进对应阶段的 `phase_insights.commentary`
   - replay import 当前会把输入 payload 里的 `phase_insights` 一并持久化；后续 live/result 读路径会优先回放这份已导入的阶段洞察，而不是只靠重算
+  - replay import 这一轮又补了 payload 指纹；相同 replay 再导入时会直接命中已有 Debate snapshot，不再重复创建记录
   - replay import 当前还会校验 `winner / verdict_tone / turns[*].sequence / phase_insights` 的关键字段；坏快照会直接返回 `422`，同时 turn 会按 `sequence` 排序后再落库
+  - `LLM hybrid` tie-break 当前若拿不到合法 `adjudicated_winner`，会回退到 deterministic `base_plan.winner`，不再默认偏向某一侧
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - 如果 debate background runner 失败，当前发给前端的 `status=error` 事件也已统一成结构化 `error = {code, message}`；详细异常仍只留在后端日志，不再把原始 `str(exc)` 直接透给前端
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
@@ -344,6 +347,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **排行榜物化**:
   - `total_predictions / total_score / avg_score / best_score / win_streak` 当前都按已评分 `Prediction` 真值重算；即使 `Leaderboard` 行先前是 stale 值，也会在下一次更新时被纠正
   - `entry.user_name` 当前始终使用本次请求传入的显示名，不再回跳到历史 prediction 上的旧名字
+  - 匿名预测当前不会再刷新 leaderboard row；`win_streak` 对匿名用户也固定返回 `0`
 - **原子持久化**:
   - `score_prediction()` 当前会先用单条 `UPDATE ... WHERE score IS NULL` 原子 claim 未评分 prediction，再落 leaderboard 事务
   - 若并发 scorer 已经先写入，该请求会回读已有分数返回，不再重复覆盖
@@ -391,13 +395,23 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `interventions.py` — 干预路由
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /api/scenario/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符） |
-| `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演） |
+| `POST /api/scenario/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符；正式玩法卡调用当前也走这条路由） |
+| `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演；当前最大 fork depth = 5） |
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支；当前单次请求最多 50 条） |
 
-> intervene / retrospective / batch 这三条路由当前仍不改变 REST 形状，但待注入文本已经改成共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求落在哪个 worker、模拟跑在哪个 worker，不再影响干预是否能被真正消费。
+> intervene / retrospective / batch 这三条路由当前都走共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求落在哪个 worker、模拟跑在哪个 worker，不再影响干预是否能被真正消费。
 >
 > `batch` 当前在 SQLite pending queue 路径下会把 `InterventionLog` 和 `PendingIntervention` 放进同一个事务提交；若前置校验失败，不会留下半写入的 queue/log 残留。
+>
+> `POST /api/scenario/{id}/intervene` 当前新增两层口径：
+> - 标准文本干预仍保持原入口
+> - 正式玩法卡调用可额外带 `card_id / profile_id / directive`；后端会按 shared gameplay contract 校验 `manual_enabled / min_round / cooldown_rounds / director points`
+>
+> 标准 intervene 成功响应 / WS payload 当前还会附带：
+> - `pending_count`
+> - `queued_ahead`
+>
+> 也就是说，前端现在可以明确显示“这条干预会在下一轮生效”还是“前面还有几条待处理干预”。
 
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
@@ -439,10 +453,12 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；响应当前会显式带 `attempted / scored / failed / all_failed / results` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜；支持 `limit / offset` |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
+- **提交通道**: 当前同一 `scenario_id + user_id`（含匿名 `anonymous`）只允许一条 prediction；重复提交会返回结构化冲突错误
 - **提交窗口**: `POST /api/scenario/{id}/predict` 当前只在 `ScenarioStatus.PARSING / SIMULATING` 开放；进入 `NARRATING / DONE / ERROR` 后都会直接拒绝新预测
 - **分页**:
   - `GET /api/scenario/{id}/predictions` 当前支持可选 `limit / offset`
   - `GET /api/leaderboard` 当前支持 `limit / offset`
+  - leaderboard 当前会显式排除匿名行；匿名 prediction 仍可被评分，但不会出现在全局排行榜里
 
 ### `debate.py` — Debate Arena 路由 (Track D **NEW**)
 | 端点 | 方法 | 描述 |
@@ -450,7 +466,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/debate` | POST | 创建独立 Debate Arena；立即返回 live snapshot，并把后台阶段推进交给独立 debate worker；当前可选透传 `user_id / llm_* / reasoning_effort`，并会保留约 `5s` pre-roll 供前端进入 live 页并完成下注 |
 | `GET /api/debate/{id}` | GET | 获取 debate live snapshot（participants / score / turns / prediction options）；当前顶层会显式带可选 `counterplay` 与 `phase_insights[]` |
 | `GET /api/debate/{id}/result` | GET | 获取 verdict 完整结果（winner / breakdown / `judge_rationale` / replay digest / predictions）；当前顶层也会显式带 `counterplay`、`phase_insights[]` 与 `adjudication_mode`，结果页 automation 还会显式暴露 `supporting_turns`；未就绪时返回 `409`，`ERROR` 终态返回 `500` |
-| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用，并会保留输入里的 `phase_insights` / `adjudication_mode` |
+| `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前给 `/debate/replay/result` 的“导入为本地运行”按钮使用，并会保留输入里的 `phase_insights` / `adjudication_mode`；相同 replay payload 当前会幂等命中已有记录 |
 | `POST /api/debate/{id}/predict` | POST | 提交结构化押注（`winner` 或 `verdict_tone`）；当前只在 `DebateStatus.LIVE` 且阶段仍处于 `opening / crossfire / rebuttal` 时接受新押注；`QUEUED / ERROR / DONE / closing / verdict` 都会拒绝；当 `is_counterplay = true` 时，会同时写入 `DebatePrediction` 与独立 `DebateCounterplay` 记录 |
 
 ### `ws.py` — WebSocket路由

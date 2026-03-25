@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from sqlalchemy import update
 from sqlmodel import Session, func, select
 
 from app.api.errors import api_error
@@ -20,10 +22,161 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.services.simulator import _pending_intervention_db_path, add_pending_intervention
+from app.services.campaign import normalize_scenario_gameplay_state
+from app.services.gameplay_contract import load_gameplay_contract
+from app.services.simulator import (
+    _pending_intervention_db_path,
+    add_pending_intervention,
+    get_pending_intervention_count,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+MAX_RETROSPECTIVE_FORK_DEPTH = 5
+
+
+def _build_gameplay_card_defs() -> dict[str, dict]:
+    contract = load_gameplay_contract()
+    return {
+        str(card["id"]): card
+        for card in contract.get("cards", [])
+        if isinstance(card, dict) and card.get("id")
+    }
+
+
+GAMEPLAY_CARD_DEFS = _build_gameplay_card_defs()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _get_branch_depth(session: Session, branch_id: str) -> int:
+    depth = 0
+    current_id = branch_id
+    seen: set[str] = set()
+
+    while current_id and current_id not in seen:
+        seen.add(current_id)
+        branch = session.get(Branch, current_id)
+        if branch is None or not branch.parent_branch_id:
+            break
+        depth += 1
+        current_id = branch.parent_branch_id
+
+    return depth
+
+
+def _remaining_director_points(gameplay_state: dict) -> int:
+    spent_points = 0
+    for entry in gameplay_state.get("cards", {}).get("usage_log", []):
+        try:
+            spent_points += max(0, int(entry.get("cost", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    return max(0, 3 - spent_points)
+
+
+def _last_card_round(gameplay_state: dict, card_id: str) -> int | None:
+    rounds = [
+        int(entry.get("round", 0) or 0)
+        for entry in gameplay_state.get("cards", {}).get("usage_log", [])
+        if entry.get("card_id") == card_id
+    ]
+    rounds = [round_number for round_number in rounds if round_number > 0]
+    return max(rounds) if rounds else None
+
+
+def _persist_gameplay_card_usage(
+    session: Session,
+    *,
+    scenario_id: str,
+    scenario: Scenario,
+    branch: Branch,
+    current_round: int,
+    req: InterveneRequest,
+) -> dict | None:
+    if not req.card_id:
+        return None
+
+    card_def = GAMEPLAY_CARD_DEFS.get(req.card_id)
+    if card_def is None or not card_def.get("manual_enabled", False):
+        raise api_error(400, "GAMEPLAY_CARD_INVALID", "Unknown or unavailable gameplay card")
+
+    if not req.profile_id:
+        raise api_error(400, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
+
+    effective_round = max(current_round, 1)
+    min_round = max(1, int(card_def.get("min_round", 1) or 1))
+    if effective_round < min_round:
+        raise api_error(
+            400,
+            "GAMEPLAY_CARD_MIN_ROUND",
+            f"Gameplay card is available from round {min_round}",
+        )
+
+    current_state = normalize_scenario_gameplay_state(scenario.gameplay_state_json)
+    remaining_points = _remaining_director_points(current_state)
+    card_cost = max(0, int(card_def.get("cost", 0) or 0))
+    if remaining_points < card_cost:
+        raise api_error(
+            400,
+            "GAMEPLAY_CARD_POINTS_EXHAUSTED",
+            "Not enough director points for this gameplay card",
+        )
+
+    cooldown_rounds = max(0, int(card_def.get("cooldown_rounds", 0) or 0))
+    last_used_round = _last_card_round(current_state, req.card_id)
+    if last_used_round is not None and effective_round - last_used_round < cooldown_rounds:
+        remaining = cooldown_rounds - (effective_round - last_used_round)
+        raise api_error(
+            400,
+            "GAMEPLAY_CARD_ON_COOLDOWN",
+            f"Gameplay card is cooling down for {remaining} more round(s)",
+        )
+
+    next_state = {
+        "revision": current_state["revision"] + 1,
+        "cards": {
+            "usage_log": [
+                *current_state.get("cards", {}).get("usage_log", []),
+                {
+                    "card_id": req.card_id,
+                    "profile_id": req.profile_id,
+                    "branch_id": branch.id,
+                    "branch_title": branch.title,
+                    "round": effective_round,
+                    "cost": card_cost,
+                    "directive": req.directive or req.text.strip(),
+                    "used_at": _now_iso(),
+                },
+            ],
+        },
+        "betting": current_state.get("betting", {}),
+        "archive": current_state.get("archive", {}),
+    }
+    next_state = normalize_scenario_gameplay_state(next_state)
+
+    result = session.exec(
+        update(Scenario)
+        .where(Scenario.id == scenario_id)
+        .where(
+            func.coalesce(
+                func.json_extract(Scenario.gameplay_state_json, "$.revision"),
+                0,
+            )
+            == current_state["revision"]
+        )
+        .values(gameplay_state_json=next_state)
+    )
+    if result.rowcount != 1:
+        session.rollback()
+        raise api_error(
+            409,
+            "GAMEPLAY_STATE_REVISION_MISMATCH",
+            "Gameplay state revision mismatch",
+        )
+    return next_state
 
 
 def _clone_branch_history(
@@ -110,6 +263,7 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     engine = get_engine()
 
     # Validate scenario exists and is in a running state
+    gameplay_state = None
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
@@ -138,6 +292,15 @@ async def intervene(scenario_id: str, req: InterveneRequest):
         ).one_or_none()
         current_round = max_round if max_round is not None else 0
 
+        gameplay_state = _persist_gameplay_card_usage(
+            session,
+            scenario_id=scenario_id,
+            scenario=scenario,
+            branch=branch,
+            current_round=current_round,
+            req=req,
+        )
+
         # Save intervention log
         log = InterventionLog(
             scenario_id=scenario_id,
@@ -153,6 +316,8 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     # Queue intervention for the simulator (C-4 fix: thread-safe access)
     key = f"{scenario_id}:{req.branch_id}"
     await add_pending_intervention(key, req.text.strip())
+    pending_count = await get_pending_intervention_count(key)
+    queued_ahead = max(0, pending_count - 1)
 
     # Broadcast via WebSocket
     from app.api.ws import ws_manager
@@ -163,6 +328,8 @@ async def intervene(scenario_id: str, req: InterveneRequest):
             "text": req.text.strip(),
             "round": current_round,
             "intervention_id": log_id,
+            "pending_count": pending_count,
+            "queued_ahead": queued_ahead,
         }
     })
 
@@ -171,6 +338,9 @@ async def intervene(scenario_id: str, req: InterveneRequest):
         "intervention_id": log_id,
         "branch_id": req.branch_id,
         "round": current_round,
+        "pending_count": pending_count,
+        "queued_ahead": queued_ahead,
+        "gameplay_state": gameplay_state,
     }
 
 
@@ -194,6 +364,14 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
         branch = session.get(Branch, req.branch_id)
         if not branch or branch.scenario_id != scenario_id:
             raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")
+
+        branch_depth = _get_branch_depth(session, req.branch_id)
+        if branch_depth >= MAX_RETROSPECTIVE_FORK_DEPTH:
+            raise api_error(
+                400,
+                "RETROSPECTIVE_FORK_DEPTH_EXCEEDED",
+                f"Retrospective fork depth limit is {MAX_RETROSPECTIVE_FORK_DEPTH}",
+            )
 
         # Validate round_number exists in this branch
         max_round = session.exec(

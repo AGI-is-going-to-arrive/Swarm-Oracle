@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { intervene } from '../api/client';
 import { dispatchVizEvent } from '../game';
-import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   applyCardUsage,
   canUseCard,
@@ -11,7 +11,8 @@ import {
   loadScenarioMeta,
   type ScenarioMeta,
 } from '../lib/scenarioMeta';
-import type { AgentInfo, BranchInfo } from '../types';
+import { applyScenarioGameplayState } from '../lib/scenarioGameplayState';
+import type { AgentInfo, BranchInfo, ScenarioGameplayState } from '../types';
 import { GAMEPLAY_PANEL_ASSET } from '../lib/themeRegistry';
 import {
   buildAgentsById,
@@ -50,7 +51,10 @@ interface Props {
   currentRound?: number;
   readOnly?: boolean;
   disabledReason?: string | null;
-  onApplied?: (nextMeta: ScenarioMeta) => void | Promise<void>;
+  onApplied?: (
+    nextMeta: ScenarioMeta,
+    persistedGameplayState?: ScenarioGameplayState | null,
+  ) => void | Promise<void>;
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
@@ -129,6 +133,7 @@ export default function GameplayCardsModal({
   const [customDirectiveOverride, setCustomDirectiveOverride] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [queueNotice, setQueueNotice] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const normalizedCurrentRound = Math.max(1, currentRound);
@@ -377,6 +382,7 @@ export default function GameplayCardsModal({
 
     setStatus('submitting');
     setErrorMsg('');
+    setQueueNotice('');
 
     const prompt = buildGameplayCardPrompt({
       cardId,
@@ -397,9 +403,12 @@ export default function GameplayCardsModal({
     });
 
     try {
-      await intervene(scenarioId, {
+      const response = await intervene(scenarioId, {
         branch_id: targetBranch.id,
         text: prompt,
+        card_id: cardId,
+        profile_id: gameplayProfile.id,
+        directive: customDirective,
       });
 
       dispatchVizEvent('viz:event_anim', {
@@ -408,23 +417,41 @@ export default function GameplayCardsModal({
         card_name_zh: cardDef.labelZh,
       });
 
-      const nextMeta = applyCardUsage(scenarioId, {
-        cardId,
-        profileId: gameplayProfile.id,
-        branchId: targetBranch.id,
-        branchTitle: targetBranch.title,
-        round: normalizedCurrentRound,
-        directive: customDirective,
-        usedAt: new Date().toISOString(),
-      });
+      const nextMeta = response.gameplay_state
+        ? applyScenarioGameplayState(scenarioId, response.gameplay_state)
+        : applyCardUsage(scenarioId, {
+            cardId,
+            profileId: gameplayProfile.id,
+            branchId: targetBranch.id,
+            branchTitle: targetBranch.title,
+            round: normalizedCurrentRound,
+            directive: customDirective,
+            usedAt: new Date().toISOString(),
+          });
       setMeta(nextMeta);
-      await onApplied?.(nextMeta);
+      if ((response.queued_ahead ?? 0) > 0) {
+        setQueueNotice(
+          t('intervention.queue_note_delayed', { count: response.queued_ahead }),
+        );
+      } else {
+        setQueueNotice(t('intervention.queue_note_next'));
+      }
+      await onApplied?.(nextMeta, response.gameplay_state ?? null);
 
       setStatus('success');
-      closeTimerRef.current = setTimeout(() => onClose(), 1200);
+      closeTimerRef.current = setTimeout(() => onClose(), 1800);
     } catch (error) {
       setStatus('error');
-      setErrorMsg(getLocalizedApiErrorMessage(error, t, t('intervention.error')));
+      const errorCode = getApiErrorCode(error);
+      if (errorCode === 'GAMEPLAY_CARD_POINTS_EXHAUSTED') {
+        setErrorMsg(t('gameplay.error_points'));
+      } else if (errorCode === 'GAMEPLAY_CARD_ON_COOLDOWN') {
+        setErrorMsg(t('gameplay.error_cooldown', { count: Math.max(cardCooldownRemaining, 1) }));
+      } else if (errorCode === 'GAMEPLAY_CARD_MIN_ROUND') {
+        setErrorMsg(t('gameplay.error_min_round', { round: cardDef.minRound }));
+      } else {
+        setErrorMsg(getLocalizedApiErrorMessage(error, t, t('intervention.error')));
+      }
     }
   };
 
@@ -718,9 +745,14 @@ export default function GameplayCardsModal({
           <div className="gameplay-modal__status" aria-live="polite">
             {errorMsg && <p className="modal-error">{errorMsg}</p>}
             {status === 'success' && (
-              <p className="modal-success">
-                {isZh ? '玩法卡已注入，世界线正在响应这次导演动作。' : 'Card injected. The worldline is now reacting to your director move.'}
-              </p>
+              <>
+                <p className="modal-success">
+                  {t('gameplay.success')}
+                </p>
+                {queueNotice && (
+                  <p className="template-hint gameplay-modal__hint">{queueNotice}</p>
+                )}
+              </>
             )}
           </div>
         </div>

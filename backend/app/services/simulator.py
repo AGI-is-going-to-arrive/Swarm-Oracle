@@ -434,6 +434,27 @@ async def add_pending_intervention(key: str, text: str) -> None:
         pending_interventions[key].append(text)
 
 
+async def get_pending_intervention_count(key: str) -> int:
+    """Return the number of queued interventions for one branch."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        scenario_id, branch_id = _split_intervention_key(key)
+        engine = get_engine()
+        with Session(engine) as session:
+            return len(
+                session.exec(
+                    select(PendingIntervention)
+                    .where(
+                        PendingIntervention.scenario_id == scenario_id,
+                        PendingIntervention.branch_id == branch_id,
+                    )
+                ).all()
+            )
+
+    async with _intervention_lock:
+        return len(pending_interventions.get(key, []))
+
+
 async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
     """Remove any leftover queued interventions for a finished scenario."""
     db_path = _pending_intervention_db_path()
@@ -1371,26 +1392,8 @@ async def run_simulation(
                         fork_debug_entry["decision"] = "no_fork"
                         _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
 
-        # 5) Normalize active branch probabilities (H-1 fix)
-        # P2-8: Single session for all probability updates
-        active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
-        normalized_probabilities, used_uniform_fallback = _normalized_active_branch_probabilities(
-            active_branches,
-        )
-        if normalized_probabilities is not None:
-            if used_uniform_fallback:
-                logger.warning(
-                    "Active branches for scenario %s summed to <= 0; falling back to uniform probabilities",
-                    scenario_id,
-                )
-            with Session(engine) as session:
-                for b, normalized_probability in zip(active_branches, normalized_probabilities):
-                    b["probability"] = normalized_probability
-                    db_branch = session.get(Branch, b["id"])
-                    if db_branch:
-                        db_branch.probability = b["probability"]
-                        session.add(db_branch)
-                session.commit()
+        # 5) Normalize active branch probabilities before pruning.
+        _apply_normalized_active_branch_probabilities(engine, scenario_id, all_branches)
 
         # 6) Prune low-probability branches
         for b in all_branches:
@@ -1401,6 +1404,9 @@ async def run_simulation(
                     "type": "branch_prune",
                     "data": {"branch_id": b["id"], "reason": "概率过低"},
                 })
+
+        # 7) Re-normalize survivors after pruning so active branches still sum to 1.0.
+        _apply_normalized_active_branch_probabilities(engine, scenario_id, all_branches)
 
     # ── Stage 3: Narrate ─────────────────────────────
     if branch_id is None:
@@ -2084,6 +2090,34 @@ def _normalized_active_branch_probabilities(
     ]
     normalized[-1] = round(1.0 - sum(normalized[:-1]), 4)
     return normalized, False
+
+
+def _apply_normalized_active_branch_probabilities(
+    engine,
+    scenario_id: str,
+    all_branches: list[dict[str, Any]],
+) -> None:
+    active_branches = [branch for branch in all_branches if branch["status"] == "ACTIVE"]
+    normalized_probabilities, used_uniform_fallback = _normalized_active_branch_probabilities(
+        active_branches,
+    )
+    if normalized_probabilities is None:
+        return
+
+    if used_uniform_fallback:
+        logger.warning(
+            "Active branches for scenario %s summed to <= 0; falling back to uniform probabilities",
+            scenario_id,
+        )
+
+    with Session(engine) as session:
+        for branch, normalized_probability in zip(active_branches, normalized_probabilities):
+            branch["probability"] = normalized_probability
+            db_branch = session.get(Branch, branch["id"])
+            if db_branch:
+                db_branch.probability = normalized_probability
+                session.add(db_branch)
+        session.commit()
 
 
 def _save_message(engine, round_id, agent_id, content, emotion, diverge):

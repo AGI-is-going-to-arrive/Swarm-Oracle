@@ -116,6 +116,38 @@ export function getPredictionRationale(text: string): string {
   return lines.slice(1).join('\n').trim() || lines[0] || '';
 }
 
+function normalizeStructuredBetValue(value: string | null | undefined): string {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function matchesStructuredBetOption(
+  targetId: string | undefined,
+  targetLabel: string,
+  optionId: string,
+  option: { zh: string; en: string },
+): boolean {
+  const normalizedTargetId = normalizeStructuredBetValue(targetId);
+  if (normalizedTargetId === optionId) {
+    return true;
+  }
+
+  const normalizedTargetLabel = normalizeStructuredBetValue(targetLabel);
+  if (!normalizedTargetLabel) {
+    return false;
+  }
+
+  return (
+    normalizedTargetLabel === optionId
+    || normalizedTargetLabel === normalizeStructuredBetValue(option.zh)
+    || normalizedTargetLabel === normalizeStructuredBetValue(option.en)
+  );
+}
+
 export function resolveStructuredBetOutcome(
   bet: Pick<ParsedStructuredBet['meta'], 'kind' | 'targetId' | 'targetLabel'>,
   context: StructuredBetOutcomeContext,
@@ -130,22 +162,24 @@ export function resolveStructuredBetOutcome(
   if (bet.kind === 'ending_tone') {
     if (!context.dominantTone) return 'pending';
     const option = ENDING_TONE_OPTIONS[context.dominantTone];
-    const lower = bet.targetLabel.toLowerCase();
-    return bet.targetId === context.dominantTone
-      || lower.includes(context.dominantTone)
-      || lower.includes(option.zh.toLowerCase())
-      || lower.includes(option.en.toLowerCase())
+    return matchesStructuredBetOption(
+      bet.targetId,
+      bet.targetLabel,
+      context.dominantTone,
+      option,
+    )
       ? 'hit'
       : 'miss';
   }
 
   if (!context.profileResonance) return 'pending';
   const option = PROFILE_RESONANCE_OPTIONS[context.profileResonance];
-  const lower = bet.targetLabel.toLowerCase();
-  return bet.targetId === context.profileResonance
-    || lower.includes(context.profileResonance)
-    || lower.includes(option.zh.toLowerCase())
-    || lower.includes(option.en.toLowerCase())
+  return matchesStructuredBetOption(
+    bet.targetId,
+    bet.targetLabel,
+    context.profileResonance,
+    option,
+  )
     ? 'hit'
     : 'miss';
 }

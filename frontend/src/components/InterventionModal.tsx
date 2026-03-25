@@ -68,6 +68,7 @@ export default function InterventionModal({
   const [text, setText] = useState('');
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [queueNotice, setQueueNotice] = useState('');
   const [templates, setTemplates] = useState<InterventionTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [selectedBatchBranchIds, setSelectedBatchBranchIds] = useState<string[]>([branchId]);
@@ -170,10 +171,16 @@ export default function InterventionModal({
 
     setStatus('submitting');
     setErrorMsg('');
+    setQueueNotice('');
 
     try {
       if (mode === 'standard') {
-        await intervene(scenarioId, { branch_id: branchId, text: trimmed });
+        const response = await intervene(scenarioId, { branch_id: branchId, text: trimmed });
+        setQueueNotice(
+          (response.queued_ahead ?? 0) > 0
+            ? t('intervention.queue_note_delayed', { count: response.queued_ahead })
+            : t('intervention.queue_note_next'),
+        );
       } else if (mode === 'retrospective') {
         await interveneRetrospective(scenarioId, {
           branch_id: branchId,
@@ -189,7 +196,7 @@ export default function InterventionModal({
         });
       }
       setStatus('success');
-      closeTimerRef.current = setTimeout(() => onClose(), 1200);
+      closeTimerRef.current = setTimeout(() => onClose(), 1800);
     } catch (error) {
       setStatus('error');
       setErrorMsg(getLocalizedApiErrorMessage(error, t, t('intervention.error')));
@@ -332,7 +339,12 @@ export default function InterventionModal({
           />
 
           {errorMsg && <p className="modal-error">{errorMsg}</p>}
-          {status === 'success' && <p className="modal-success">{t(`intervention.success_${mode}`)}</p>}
+          {status === 'success' && (
+            <>
+              <p className="modal-success">{t(`intervention.success_${mode}`)}</p>
+              {queueNotice && <p className="intervention-help">{queueNotice}</p>}
+            </>
+          )}
         </div>
 
         <footer className="modal-footer">

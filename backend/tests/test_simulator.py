@@ -25,6 +25,7 @@ from app.models.database import get_engine
 from app.services.llm_client import llm_request_scope
 from app.services.simulator import (
     _agent_to_dict,
+    _apply_normalized_active_branch_probabilities,
     _coerce_stance_value,
     _compress_round_memory,
     _create_branch,
@@ -232,6 +233,40 @@ class TestNormalizedActiveBranchProbabilities:
 
         assert normalized is None
         assert used_uniform_fallback is False
+
+    def test_re_normalizes_survivors_after_pruning(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_a = _create_branch(engine, scenario_id, title="A", probability=0.5)
+        branch_b = _create_branch(engine, scenario_id, title="B", probability=0.3)
+        branch_c = _create_branch(engine, scenario_id, title="C", probability=0.2)
+
+        with Session(engine) as session:
+            pruned = session.get(Branch, branch_c)
+            assert pruned is not None
+            pruned.status = BranchStatus.PRUNED
+            session.add(pruned)
+            session.commit()
+
+        all_branches = [
+            {"id": branch_a, "probability": 0.5, "status": "ACTIVE"},
+            {"id": branch_b, "probability": 0.3, "status": "ACTIVE"},
+            {"id": branch_c, "probability": 0.2, "status": "PRUNED"},
+        ]
+
+        _apply_normalized_active_branch_probabilities(engine, scenario_id, all_branches)
+
+        assert all_branches[0]["probability"] == 0.625
+        assert all_branches[1]["probability"] == 0.375
+        assert all_branches[2]["probability"] == 0.2
+
+        with Session(engine) as session:
+            persisted_a = session.get(Branch, branch_a)
+            persisted_b = session.get(Branch, branch_b)
+            assert persisted_a is not None
+            assert persisted_b is not None
+            assert persisted_a.probability == 0.625
+            assert persisted_b.probability == 0.375
 
 
 class TestRunSimulation:

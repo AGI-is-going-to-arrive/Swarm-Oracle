@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, WebSocket
 from pydantic import BaseModel, field_validator, model_validator
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api.errors import api_error
 from app.api.helpers import schedule_background_task
@@ -41,6 +42,7 @@ MAX_IMPORT_REPLAY_TURNS = 512
 MAX_IMPORT_REPLAY_PREDICTIONS = 512
 MAX_IMPORT_REPLAY_PHASE_INSIGHTS = 32
 logger = logging.getLogger(__name__)
+_REPLAY_IMPORT_FINGERPRINT_KEY = "replay_import_fingerprint"
 
 _PREDICTION_OPTIONS = {
     DebatePredictionKind.WINNER: {"proposition", "opposition"},
@@ -290,6 +292,180 @@ def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[d
     return normalized
 
 
+def _normalize_import_replay_predictions(predictions: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for raw_prediction in predictions:
+        if not isinstance(raw_prediction, dict):
+            continue
+        try:
+            kind = DebatePredictionKind(
+                str(raw_prediction.get("kind", DebatePredictionKind.WINNER.value))
+            )
+        except ValueError:
+            continue
+
+        counterplay_phase = raw_prediction.get("counterplay_phase")
+        normalized_phase: str | None = None
+        if counterplay_phase:
+            normalized_phase = DebatePhase(str(counterplay_phase)).value
+
+        normalized.append(
+            {
+                "kind": kind.value,
+                "target_value": str(raw_prediction.get("target_value", "")).strip(),
+                "confidence": float(raw_prediction.get("confidence", 0.5) or 0.5),
+                "user_id": str(raw_prediction.get("user_id", "anonymous")).strip() or "anonymous",
+                "user_name": (
+                    str(raw_prediction.get("user_name", "Anonymous Director")).strip()
+                    or "Anonymous Director"
+                ),
+                "is_counterplay": bool(raw_prediction.get("is_counterplay")),
+                "counterplay_phase": normalized_phase,
+                "counterplay_variant": (
+                    str(raw_prediction.get("counterplay_variant", "")).strip() or None
+                ),
+                "score": raw_prediction.get("score"),
+                "score_reason": str(raw_prediction.get("score_reason", "")).strip() or None,
+            }
+        )
+
+    normalized.sort(
+        key=lambda item: (
+            item["kind"],
+            item["target_value"],
+            item["user_id"],
+            item["user_name"],
+            item["counterplay_phase"] or "",
+            item["counterplay_variant"] or "",
+            str(item["score"]),
+            item["score_reason"] or "",
+        )
+    )
+    return normalized
+
+
+def _normalize_import_replay_counterplay(counterplay: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(counterplay, dict):
+        return None
+
+    try:
+        kind = DebatePredictionKind(
+            str(counterplay.get("kind", DebatePredictionKind.WINNER.value))
+        )
+        phase = DebatePhase(str(counterplay.get("phase", DebatePhase.CROSSFIRE.value)))
+    except ValueError:
+        return None
+
+    return {
+        "kind": kind.value,
+        "target_value": str(counterplay.get("target_value", "")).strip(),
+        "confidence": float(counterplay.get("confidence", 0.5) or 0.5),
+        "phase": phase.value,
+        "variant": str(counterplay.get("variant", "balanced")).strip() or "balanced",
+        "outcome": str(counterplay.get("outcome", "")).strip() or None,
+        "user_name": str(counterplay.get("user_name", "Imported Replay")).strip()
+        or "Imported Replay",
+        "explanation": str(counterplay.get("explanation", "")).strip() or "",
+    }
+
+
+def _build_import_replay_fingerprint(
+    *,
+    payload: dict[str, Any],
+    question: str,
+    motion: str,
+    winner: str,
+    verdict_tone: str,
+    normalized_turns: list[dict[str, Any]],
+    normalized_phase_insights: list[dict[str, Any]] | None,
+    normalized_predictions: list[dict[str, Any]],
+    normalized_counterplay: dict[str, Any] | None,
+) -> str:
+    participants = payload.get("participants") if isinstance(payload.get("participants"), list) else []
+
+    def _participant(side: str) -> dict[str, str]:
+        for item in participants:
+            if isinstance(item, dict) and item.get("side") == side:
+                return {
+                    "side": side,
+                    "name": str(item.get("name", "")).strip(),
+                    "role": str(item.get("role", "")).strip(),
+                }
+        return {"side": side, "name": "", "role": ""}
+
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    score = (
+        result.get("score")
+        if isinstance(result.get("score"), dict)
+        else payload.get("score")
+        if isinstance(payload.get("score"), dict)
+        else {}
+    )
+    rationale = result.get("judge_rationale") if isinstance(result.get("judge_rationale"), dict) else {}
+
+    canonical_payload = {
+        "question": question,
+        "motion": motion,
+        "language": str(payload.get("language", "en")).strip() or "en",
+        "profile_id": str(payload.get("profile_id", "generic")).strip() or "generic",
+        "scene_theme": str(payload.get("scene_theme", "debate_arena_forum")).strip()
+        or "debate_arena_forum",
+        "participants": [
+            _participant("proposition"),
+            _participant("opposition"),
+            _participant("judge"),
+        ],
+        "winner": winner,
+        "verdict_tone": verdict_tone,
+        "score": {
+            "proposition": int(score.get("proposition", 0) or 0),
+            "opposition": int(score.get("opposition", 0) or 0),
+            "audience_meter": int(score.get("audience_meter", 0) or 0),
+        },
+        "result": {
+            "best_argument": str(result.get("best_argument", "")).strip(),
+            "best_rebuttal": str(result.get("best_rebuttal", "")).strip(),
+            "judge_summary": str(result.get("judge_summary", "")).strip(),
+            "judge_rationale": {
+                "winner_reason": rationale.get("winner_reason"),
+                "loser_gap": rationale.get("loser_gap"),
+                "swing_factor": rationale.get("swing_factor"),
+                "closing_note": rationale.get("closing_note"),
+                "dimension_rationales": (
+                    rationale.get("dimension_rationales")
+                    if isinstance(rationale.get("dimension_rationales"), dict)
+                    else {}
+                ),
+            },
+            "adjudication_mode": str(result.get("adjudication_mode", "deterministic")).strip()
+            or "deterministic",
+            "breakdown": result.get("breakdown") if isinstance(result.get("breakdown"), dict) else {},
+        },
+        "turns": normalized_turns,
+        "phase_insights": normalized_phase_insights or [],
+        "predictions": normalized_predictions,
+        "counterplay": normalized_counterplay,
+    }
+
+    encoded = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _extract_replay_import_fingerprint(debate: Debate) -> str | None:
+    breakdown = debate.breakdown_json if isinstance(debate.breakdown_json, dict) else {}
+    metadata = breakdown.get("metadata") if isinstance(breakdown.get("metadata"), dict) else {}
+    value = metadata.get(_REPLAY_IMPORT_FINGERPRINT_KEY)
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
@@ -367,15 +543,54 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
     )
     normalized_turns = _normalize_import_replay_turns(turns)
     normalized_phase_insights = _normalize_import_phase_insights(phase_insights)
+    normalized_predictions = _normalize_import_replay_predictions(predictions)
+    normalized_counterplay = _normalize_import_replay_counterplay(counterplay)
+    normalized_language = str(payload.get("language", "en")).strip() or "en"
+    normalized_profile_id = str(payload.get("profile_id", "generic")).strip() or "generic"
+    normalized_scene_theme = (
+        str(payload.get("scene_theme", "debate_arena_forum")).strip() or "debate_arena_forum"
+    )
+    replay_import_fingerprint = _build_import_replay_fingerprint(
+        payload=payload,
+        question=question,
+        motion=motion,
+        winner=winner,
+        verdict_tone=verdict_tone,
+        normalized_turns=normalized_turns,
+        normalized_phase_insights=normalized_phase_insights,
+        normalized_predictions=normalized_predictions,
+        normalized_counterplay=normalized_counterplay,
+    )
 
     engine = get_engine()
     with Session(engine) as session:
+        existing_replays = session.exec(
+            select(Debate).where(
+                Debate.question == question,
+                Debate.motion == motion,
+                Debate.language == normalized_language,
+                Debate.profile_id == normalized_profile_id,
+                Debate.scene_theme == normalized_scene_theme,
+                Debate.status == DebateStatus.DONE,
+            )
+        ).all()
+        for candidate in existing_replays:
+            if _extract_replay_import_fingerprint(candidate) == replay_import_fingerprint:
+                result_payload = load_debate_snapshot(candidate.id)
+                if result_payload is None:
+                    raise api_error(
+                        500,
+                        "REPLAY_DEBATE_RESPONSE_MISSING",
+                        "Failed to load imported replay debate",
+                    )
+                return result_payload
+
         debate = Debate(
             question=question,
             motion=motion,
-            language=str(payload.get("language", "en")).strip() or "en",
-            profile_id=str(payload.get("profile_id", "generic")).strip() or "generic",
-            scene_theme=str(payload.get("scene_theme", "debate_arena_forum")).strip() or "debate_arena_forum",
+            language=normalized_language,
+            profile_id=normalized_profile_id,
+            scene_theme=normalized_scene_theme,
             status=DebateStatus.DONE,
             current_phase=DebatePhase.VERDICT,
             proposition_name=str(proposition.get("name", "Proposition")).strip() or "Proposition",
@@ -405,6 +620,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
                 "metadata": {
                     "adjudication_mode": str(result.get("adjudication_mode", "deterministic")).strip() or "deterministic",
                     "phase_insights": normalized_phase_insights if normalized_phase_insights is not None else [],
+                    _REPLAY_IMPORT_FINGERPRINT_KEY: replay_import_fingerprint,
                 },
             },
         )
@@ -432,51 +648,41 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
                 )
             )
 
-        for raw_prediction in predictions:
-            if not isinstance(raw_prediction, dict):
-                continue
-            try:
-                kind = DebatePredictionKind(str(raw_prediction.get("kind", DebatePredictionKind.WINNER.value)))
-            except ValueError:
-                continue
-            counterplay_phase = raw_prediction.get("counterplay_phase")
+        for normalized_prediction in normalized_predictions:
             session.add(
                 DebatePrediction(
                     debate_id=debate.id,
-                    kind=kind,
-                    target_value=str(raw_prediction.get("target_value", "")).strip(),
-                    confidence=float(raw_prediction.get("confidence", 0.5) or 0.5),
-                    user_id=str(raw_prediction.get("user_id", "anonymous")).strip() or "anonymous",
-                    user_name=str(raw_prediction.get("user_name", "Anonymous Director")).strip() or "Anonymous Director",
-                    is_counterplay=bool(raw_prediction.get("is_counterplay")),
-                    counterplay_phase=DebatePhase(str(counterplay_phase)) if counterplay_phase else None,
-                    counterplay_variant=str(raw_prediction.get("counterplay_variant", "")).strip() or None,
-                    score=raw_prediction.get("score"),
-                    score_reason=str(raw_prediction.get("score_reason", "")).strip() or None,
+                    kind=DebatePredictionKind(normalized_prediction["kind"]),
+                    target_value=normalized_prediction["target_value"],
+                    confidence=normalized_prediction["confidence"],
+                    user_id=normalized_prediction["user_id"],
+                    user_name=normalized_prediction["user_name"],
+                    is_counterplay=normalized_prediction["is_counterplay"],
+                    counterplay_phase=(
+                        DebatePhase(normalized_prediction["counterplay_phase"])
+                        if normalized_prediction["counterplay_phase"]
+                        else None
+                    ),
+                    counterplay_variant=normalized_prediction["counterplay_variant"],
+                    score=normalized_prediction["score"],
+                    score_reason=normalized_prediction["score_reason"],
                 )
             )
 
-        if counterplay:
-            try:
-                kind = DebatePredictionKind(str(counterplay.get("kind", DebatePredictionKind.WINNER.value)))
-                phase = DebatePhase(str(counterplay.get("phase", DebatePhase.CROSSFIRE.value)))
-            except ValueError:
-                kind = None
-                phase = None
-            if kind and phase:
-                session.add(
-                    DebateCounterplay(
-                        debate_id=debate.id,
-                        kind=kind,
-                        target_value=str(counterplay.get("target_value", "")).strip(),
-                        confidence=float(counterplay.get("confidence", 0.5) or 0.5),
-                        phase=phase,
-                        variant=str(counterplay.get("variant", "balanced")).strip() or "balanced",
-                        outcome=str(counterplay.get("outcome", "")).strip() or None,
-                        user_id="imported-replay",
-                        user_name=str(counterplay.get("user_name", "Imported Replay")).strip() or "Imported Replay",
-                    )
+        if normalized_counterplay:
+            session.add(
+                DebateCounterplay(
+                    debate_id=debate.id,
+                    kind=DebatePredictionKind(normalized_counterplay["kind"]),
+                    target_value=normalized_counterplay["target_value"],
+                    confidence=normalized_counterplay["confidence"],
+                    phase=DebatePhase(normalized_counterplay["phase"]),
+                    variant=normalized_counterplay["variant"],
+                    outcome=normalized_counterplay["outcome"],
+                    user_id="imported-replay",
+                    user_name=normalized_counterplay["user_name"],
                 )
+            )
 
         session.commit()
 

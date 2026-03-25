@@ -67,6 +67,8 @@ export function getLocalizedApiErrorMessage(
       return t('debate.bet_error_locked');
     case 'PREDICTIONS_CLOSED':
       return t('prediction.error_closed');
+    case 'PREDICTION_ALREADY_SUBMITTED':
+      return t('prediction.error_duplicate');
     case 'INTERVENTION_SCENARIO_STATUS_INVALID':
     case 'INTERVENTION_BRANCH_STATUS_INVALID':
     case 'BATCH_INTERVENTION_BRANCH_STATUS_INVALID':

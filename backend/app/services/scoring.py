@@ -25,6 +25,7 @@ from app.services.llm_client import (
 )
 
 logger = logging.getLogger(__name__)
+ANONYMOUS_USER_ID = "anonymous"
 
 SCORING_PROMPTS = {
     "Chinese": """你是一个精确的预测评估器。请比较用户的预测与实际推演结果，给出准确率评分。
@@ -157,6 +158,9 @@ def _claim_prediction_score(
 
 def _calculate_win_streak(session: Session, user_id: str) -> int:
     """Count consecutive wins from the newest scored predictions backward."""
+    if user_id == ANONYMOUS_USER_ID:
+        return 0
+
     recent_scores = session.exec(
         select(Prediction.score)
         .where(
@@ -334,7 +338,8 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                     )
                     session.rollback()
                     return None
-                _update_leaderboard(session, pred.user_id, pred.user_name, score)
+                if pred.user_id != ANONYMOUS_USER_ID:
+                    _update_leaderboard(session, pred.user_id, pred.user_name, score)
                 session.commit()
             else:
                 session.rollback()

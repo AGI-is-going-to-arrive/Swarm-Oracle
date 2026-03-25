@@ -237,6 +237,8 @@
       "success_standard": "Intervention applied!",
       "success_retrospective": "Retrospective replay queued!",
       "success_batch": "Batch intervention queued!",
+      "queue_note_next": "Queued successfully. It should apply on the next round.",
+      "queue_note_delayed": "Queued successfully. {{count}} intervention(s) are still ahead of this one.",
       "error": "Failed to apply intervention",
       "error_unavailable": "This branch cannot accept interventions right now.",
       "error_branch_missing": "The selected branch is no longer available.",
@@ -415,6 +417,7 @@
       "success": "Prediction submitted!",
       "error": "Failed to submit",
       "error_closed": "Predictions are closed for this scenario.",
+      "error_duplicate": "This bettor already submitted a prediction for the scenario.",
       "error_branch_pending": "No active worldline is ready for branch betting yet. Try again in a moment.",
       "branch_unavailable_note": "Only the root worldline is available for now. Ending-tone or resonance bets are the safer fallback.",
       "confidence_low": "Guess",
@@ -540,6 +543,7 @@
       "error_source_branch": "Space-Time Rift needs a different source branch.",
       "error_points": "Not enough director points for this move right now.",
       "error_cooldown": "Cooling down for {{count}} more round(s).",
+      "error_min_round": "This card unlocks starting from round {{round}}.",
       "success": "Card injected. The worldline is now reacting to your director move."
     },
     "debate": {

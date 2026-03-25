@@ -140,6 +140,31 @@ describe('archiveSummary helpers', () => {
     expect(summary.bettingHit).toBe(true);
   });
 
+  it('does not treat substring-only ending tone labels as a hit', () => {
+    const summary = buildArchiveSummary({
+      branches,
+      usages,
+      bets: [
+        {
+          betId: 'bet-tone-substring',
+          kind: 'ending_tone',
+          targetId: undefined,
+          targetLabel: 'balanced order',
+          confidence: 0.65,
+          placedAtRound: 2,
+          placedAt: '2026-03-15T00:02:00Z',
+          resolved: false,
+        },
+      ],
+      keyMomentCount: 2,
+      isDailyChallenge: false,
+      profileId: 'governance',
+    });
+
+    expect(summary.dominantTone).toBe('balance');
+    expect(summary.bettingHit).toBe(false);
+  });
+
   it('rewards completed objectives and a successful branch commitment in archive grading', () => {
     const summary = buildArchiveSummary({
       branches,
