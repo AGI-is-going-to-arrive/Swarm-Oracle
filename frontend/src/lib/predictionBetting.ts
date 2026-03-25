@@ -60,8 +60,11 @@ export function getStructuredBetKindLabel(kind: StructuredBetKind, isZh: boolean
   return isZh ? '押注结局倾向' : 'Ending Tone';
 }
 
-export function getEndingToneLabel(tone: EndingToneId, isZh: boolean): string {
-  const match = ENDING_TONE_OPTIONS[tone];
+export function getEndingToneLabel(tone: EndingToneId | string, isZh: boolean): string {
+  const match = ENDING_TONE_OPTIONS[tone as EndingToneId];
+  if (!match) {
+    return tone;
+  }
   return isZh ? match.zh : match.en;
 }
 

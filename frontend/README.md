@@ -45,8 +45,11 @@ React + TypeScript frontend for SwarmOracle.
   shared gzip/base64/url replay token codec used by both `scenarioReplay.ts` and `simulationReplay.ts`
 - `useDebateWS` / `useSimulationWS`
   live event hydration
+  store-side phase / branch status now stay monotonic under out-of-order WS events
 - `PhaserGameLoader` / `useScreenCapture`
   Theater-only loading and split capture runtime
+- `predictionBetting.ts`
+  structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 

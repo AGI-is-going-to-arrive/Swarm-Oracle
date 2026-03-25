@@ -43,6 +43,7 @@ describe('llmProviderPolicy', () => {
       baseUrl: 'https://example.com/v1/chat/completions',
       model: 'gpt-test',
       reasoningEffort: 'medium',
+      disableUserQuota: false,
     });
   });
 
@@ -65,6 +66,7 @@ describe('llmProviderPolicy', () => {
       baseUrl: '',
       model: '',
       reasoningEffort: '',
+      disableUserQuota: false,
     });
   });
 
@@ -121,6 +123,7 @@ describe('llmProviderPolicy', () => {
       baseUrl: 'https://example.com/v1',
       model: 'gpt-legacy',
       reasoningEffort: 'high',
+      disableUserQuota: false,
     });
     expect(window.sessionStorage.getItem('swarmoracle.llm-provider-policy.v1')).toContain('sk-legacy');
     expect(window.localStorage.getItem('swarmoracle.llm-provider-policy.v1')).toBeNull();

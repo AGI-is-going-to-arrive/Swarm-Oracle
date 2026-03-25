@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from app.models.database import _now, _uuid
@@ -26,6 +27,9 @@ class Prediction(SQLModel, table=True):
     """
 
     __tablename__ = "prediction"
+    __table_args__ = (
+        UniqueConstraint("scenario_id", "user_id", name="uq_prediction_scenario_user"),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     scenario_id: str = Field(foreign_key="scenario.id", index=True)

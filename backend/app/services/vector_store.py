@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
@@ -23,8 +22,6 @@ _CHROMA_AVAILABLE = True
 _CHROMA_WRITE_LOCK = threading.Lock()
 _CHROMA_WRITE_LOCK_KEY_PREFIX = "vector-store:chroma-write"
 _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
-_CHROMA_WRITE_LOCK_TIMEOUT_SECONDS = 10.0
-_CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS = 0.05
 _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 
 
@@ -217,34 +214,35 @@ class VectorStore:
         )
 
     def _acquire_write_lease(self, scenario_id: str, operation: str):
-        """Wait briefly for the shared runtime lease that serializes Chroma writes."""
-        deadline = time.monotonic() + _CHROMA_WRITE_LOCK_TIMEOUT_SECONDS
-        lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:{scenario_id}"
-        while True:
-            try:
-                lease = acquire_runtime_lock(
-                    lock_key,
-                    lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Vector store %s lock acquisition failed for %s: %s",
-                    operation,
-                    scenario_id,
-                    exc,
-                )
-                return None
+        """Acquire the shared runtime lease that serializes Chroma writes.
 
-            if lease is not None:
-                return lease
-            if time.monotonic() >= deadline:
-                logger.warning(
-                    "Vector store %s skipped for %s because shared Chroma write lock stayed busy",
-                    operation,
-                    scenario_id,
-                )
-                return None
-            time.sleep(_CHROMA_WRITE_LOCK_POLL_INTERVAL_SECONDS)
+        Vector memory is best-effort, so skip immediately when another worker
+        already owns the lease instead of blocking the caller.
+        """
+        lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:{scenario_id}"
+        try:
+            lease = acquire_runtime_lock(
+                lock_key,
+                lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Vector store %s lock acquisition failed for %s: %s",
+                operation,
+                scenario_id,
+                exc,
+            )
+            return None
+
+        if lease is not None:
+            return lease
+
+        logger.warning(
+            "Vector store %s skipped for %s because shared Chroma write lock stayed busy",
+            operation,
+            scenario_id,
+        )
+        return None
 
     def _run_serialized_write(
         self,

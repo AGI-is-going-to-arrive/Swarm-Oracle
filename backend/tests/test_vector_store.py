@@ -467,6 +467,42 @@ class TestVectorStoreEdgeCases:
         )]
         assert released == [lease]
 
+    def test_store_skips_immediately_when_shared_write_lock_is_busy(self, monkeypatch):
+        acquired: list[tuple[str, float]] = []
+        released: list[object] = []
+        add_calls: list[str] = []
+
+        class _FakeCollection:
+            def add(self, *, documents, metadatas, ids):
+                add_calls.append(documents[0])
+
+        def _fake_acquire(lock_key: str, *, lease_seconds: float):
+            acquired.append((lock_key, lease_seconds))
+            return None
+
+        monkeypatch.setattr(vector_store_module, "acquire_runtime_lock", _fake_acquire)
+        monkeypatch.setattr(
+            vector_store_module,
+            "release_runtime_lock",
+            lambda lease: released.append(lease) or True,
+        )
+
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = object()
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 128
+        vs._collections = OrderedDict()
+        vs._get_collection = lambda scenario_id: _FakeCollection()
+
+        vs.store("scenario-busy", "Agent", "Content", round_num=1)
+
+        assert acquired == [(
+            f"{vector_store_module._CHROMA_WRITE_LOCK_KEY_PREFIX}:scenario-busy",
+            vector_store_module._CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )]
+        assert add_calls == []
+        assert released == []
+
     def test_get_collection_prefers_cache_before_client_lookup(self):
         """Repeated cache hits should not recreate the same Chroma collection."""
         created_names: list[str] = []

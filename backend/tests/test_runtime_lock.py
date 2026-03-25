@@ -103,6 +103,43 @@ def test_runtime_lock_is_active_reports_sqlite_leases(monkeypatch, tmp_path):
     assert runtime_lock_is_active(key) is False
 
 
+def test_runtime_lock_is_active_does_not_issue_immediate_transaction(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-read-path.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    statements: list[str] = []
+
+    class _FakeResult:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class _FakeConnection:
+        def execute(self, statement, params=()):
+            statements.append(" ".join(str(statement).split()))
+            if "SELECT 1" in str(statement):
+                return _FakeResult((1,))
+            return _FakeResult(None)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        runtime_lock_module.sqlite3,
+        "connect",
+        lambda *args, **kwargs: _FakeConnection(),
+    )
+
+    assert runtime_lock_is_active(simulation_lock_key("scenario-1")) is True
+    assert not any("BEGIN IMMEDIATE" in statement for statement in statements)
+    assert not any("DELETE FROM runtime_lock" in statement for statement in statements)
+
+
 def test_runtime_lock_is_active_reports_inprocess_leases(monkeypatch):
     monkeypatch.setattr(
         "app.services.runtime_lock.settings.DATABASE_URL",

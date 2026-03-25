@@ -179,6 +179,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 同一 `scenario_id + user_id` 只能提交一次
 > - 匿名 `anonymous` 也走同一条规则
 > - 重复提交时返回 `409 PREDICTION_ALREADY_SUBMITTED`
+> - 这条规则当前不只靠应用层 pre-check；SQLite 也已补上唯一索引，所以高并发竞态下仍会收口到同一个 `409`
 >
 > `POST /api/scenario/{id}/predict` 当前只在这两种状态开放：
 > - `parsing`

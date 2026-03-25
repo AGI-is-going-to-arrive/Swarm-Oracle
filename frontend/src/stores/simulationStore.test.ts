@@ -350,6 +350,42 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().branches[0].title).toBe("永世帝国");
   });
 
+  it("does not let branch_update regress a completed branch back to active", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "done",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [{
+        id: "b1",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "历史拐点",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "COMPLETED",
+      }],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    store.getState().handleWSEvent({
+      type: "branch_update",
+      data: { branch_id: "b1", status: "ACTIVE" },
+    } as WSEvent);
+
+    expect(store.getState().branches[0].status).toBe("COMPLETED");
+  });
+
   it("handles 'intervention_applied' → adds to interventionLog", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({

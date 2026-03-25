@@ -1,9 +1,11 @@
 """Tests for app.api — REST API endpoints via FastAPI TestClient."""
 
 import json
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 import app.api.scenarios as scenarios_api
@@ -1001,6 +1003,39 @@ class TestPredictionLeaderboardEndpoints:
         assert second.status_code == 409
         assert _detail_code(second) == "PREDICTION_ALREADY_SUBMITTED"
 
+    def test_submit_prediction_returns_409_when_unique_constraint_races(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        original_commit = Session.commit
+
+        def _commit_with_race(session):
+            staged_prediction = next(
+                (
+                    obj for obj in session.new
+                    if isinstance(obj, Prediction)
+                    and obj.scenario_id == sid
+                    and obj.user_id == "bettor-race"
+                ),
+                None,
+            )
+            if staged_prediction is not None:
+                raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+            return original_commit(session)
+
+        with patch("app.api.predictions.Session.commit", autospec=True, side_effect=_commit_with_race):
+            response = client.post(
+                f"/api/scenario/{sid}/predict",
+                json={
+                    "prediction_text": "世界线会继续分叉",
+                    "confidence": 0.6,
+                    "user_id": "bettor-race",
+                    "user_name": "Alice",
+                },
+            )
+
+        assert response.status_code == 409
+        assert _detail_code(response) == "PREDICTION_ALREADY_SUBMITTED"
+
     def test_submit_prediction_rejects_invalid_confidence_via_active_router(self, client):
         """Prediction API should use predictions.py validation rather than legacy dict parsing."""
         engine = get_engine()
@@ -1028,9 +1063,9 @@ class TestPredictionLeaderboardEndpoints:
         with Session(engine) as session:
             session.add_all(
                 [
-                    Prediction(scenario_id=sid, prediction_text="预测 1", user_name="A"),
-                    Prediction(scenario_id=sid, prediction_text="预测 2", user_name="B"),
-                    Prediction(scenario_id=sid, prediction_text="预测 3", user_name="C"),
+                    Prediction(scenario_id=sid, prediction_text="预测 1", user_id="user-a", user_name="A"),
+                    Prediction(scenario_id=sid, prediction_text="预测 2", user_id="user-b", user_name="B"),
+                    Prediction(scenario_id=sid, prediction_text="预测 3", user_id="user-c", user_name="C"),
                 ]
             )
             session.commit()

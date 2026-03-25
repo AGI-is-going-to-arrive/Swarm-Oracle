@@ -156,23 +156,18 @@ def runtime_lock_is_active(lock_key: str) -> bool:
 
     conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     try:
-        conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn)
-        conn.execute(
-            f"DELETE FROM {_RUNTIME_LOCK_TABLE} WHERE expires_at <= ?",
-            (now,),
-        )
         current = conn.execute(
-            f"SELECT 1 FROM {_RUNTIME_LOCK_TABLE} WHERE lock_key = ? LIMIT 1",
-            (lock_key,),
+            f"""
+            SELECT 1
+            FROM {_RUNTIME_LOCK_TABLE}
+            WHERE lock_key = ? AND expires_at > ?
+            LIMIT 1
+            """,
+            (lock_key, now),
         ).fetchone()
-        conn.execute("COMMIT")
         return current is not None
     except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.DatabaseError:
-            pass
         raise
     finally:
         conn.close()

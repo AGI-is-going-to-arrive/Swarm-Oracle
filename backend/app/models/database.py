@@ -273,6 +273,12 @@ def init_db():
                 _migrate_create_index(
                     conn, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
                 )
+                _migrate_create_unique_index(
+                    conn,
+                    "prediction",
+                    "uq_prediction_scenario_user",
+                    ["scenario_id", "user_id"],
+                )
                 _migrate_create_index(
                     conn,
                     "pending_intervention",
@@ -332,6 +338,18 @@ def _migrate_create_index(cursor, table: str, index_name: str, columns: list[str
             raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
     column_sql = ", ".join(columns)
     _sqlite_exec(cursor, f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column_sql})")
+
+
+def _migrate_create_unique_index(cursor, table: str, index_name: str, columns: list[str]) -> None:
+    """Create a unique index if it doesn't already exist (SQLite only)."""
+    for identifier in (table, index_name, *columns):
+        if not _SAFE_IDENTIFIER.match(identifier):
+            raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
+    column_sql = ", ".join(columns)
+    _sqlite_exec(
+        cursor,
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({column_sql})",
+    )
 
 
 def get_session():

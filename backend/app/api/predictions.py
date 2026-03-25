@@ -13,6 +13,7 @@ import logging
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -133,8 +134,16 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
             prediction_text=req.prediction_text,
             confidence=req.confidence,
         )
-        session.add(pred)
-        session.commit()
+        try:
+            session.add(pred)
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise api_error(
+                409,
+                "PREDICTION_ALREADY_SUBMITTED",
+                "This user already submitted a prediction for the scenario",
+            ) from None
         session.refresh(pred)
 
         return PredictionResponse(

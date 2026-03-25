@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.main import app
@@ -56,6 +57,30 @@ class TestPredictionModel(unittest.TestCase):
         self.assertEqual(p.score, 85.0)
         self.assertEqual(p.score_reason, "核心趋势命中")
         self.assertIsNotNone(p.scored_at)
+
+    def test_unique_constraint_rejects_duplicate_scenario_user_pairs(self):
+        engine = create_engine("sqlite:///:memory:")
+        SQLModel.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            session.add(
+                Prediction(
+                    scenario_id="scenario-1",
+                    user_id="user-1",
+                    prediction_text="first",
+                )
+            )
+            session.commit()
+
+            session.add(
+                Prediction(
+                    scenario_id="scenario-1",
+                    user_id="user-1",
+                    prediction_text="second",
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                session.commit()
 
 
 class TestLeaderboardModel(unittest.TestCase):
@@ -112,7 +137,7 @@ class TestLeaderboardUpdate(unittest.TestCase):
         created_at = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=minutes)
         with Session(self.engine) as session:
             pred = Prediction(
-                scenario_id="scenario-1",
+                scenario_id=f"scenario-{minutes}",
                 user_id=user_id,
                 user_name=user_name,
                 prediction_text=f"prediction-{minutes}",
@@ -614,8 +639,16 @@ class TestScoringService(unittest.TestCase):
                 scenario_id = scenario.id
                 session.add_all(
                     [
-                        Prediction(scenario_id=scenario_id, prediction_text="预测一"),
-                        Prediction(scenario_id=scenario_id, prediction_text="预测二"),
+                        Prediction(
+                            scenario_id=scenario_id,
+                            prediction_text="预测一",
+                            user_id="user-1",
+                        ),
+                        Prediction(
+                            scenario_id=scenario_id,
+                            prediction_text="预测二",
+                            user_id="user-2",
+                        ),
                     ]
                 )
                 session.commit()
@@ -849,17 +882,28 @@ class TestScoringService(unittest.TestCase):
 
             with patch("app.services.scoring.get_engine", return_value=engine):
                 with Session(engine) as session:
-                    scenario = Scenario(
+                    historical_scenario = Scenario(
                         question="测试问题",
                         status=ScenarioStatus.DONE,
                         outcome_text="实际结果",
                     )
-                    session.add(scenario)
+                    first_scenario = Scenario(
+                        question="测试问题一",
+                        status=ScenarioStatus.DONE,
+                        outcome_text="实际结果一",
+                    )
+                    second_scenario = Scenario(
+                        question="测试问题二",
+                        status=ScenarioStatus.DONE,
+                        outcome_text="实际结果二",
+                    )
+                    session.add(historical_scenario)
+                    session.add(first_scenario)
+                    session.add(second_scenario)
                     session.flush()
-                    scenario_id = scenario.id
 
                     historical = Prediction(
-                        scenario_id=scenario_id,
+                        scenario_id=historical_scenario.id,
                         prediction_text="已评分",
                         user_id="director-1",
                         user_name="Alice",
@@ -868,19 +912,26 @@ class TestScoringService(unittest.TestCase):
                         scored_at=datetime.now(timezone.utc),
                     )
                     first_pending = Prediction(
-                        scenario_id=scenario_id,
+                        scenario_id=first_scenario.id,
                         prediction_text="预测一",
                         user_id="director-1",
                         user_name="Alice",
                     )
                     second_pending = Prediction(
-                        scenario_id=scenario_id,
+                        scenario_id=second_scenario.id,
                         prediction_text="预测二",
                         user_id="director-1",
                         user_name="Alice",
                     )
-                    branch = Branch(
-                        scenario_id=scenario_id,
+                    first_branch = Branch(
+                        scenario_id=first_scenario.id,
+                        title="主线",
+                        story="系统最终收敛到稳定结局",
+                        probability=1.0,
+                        status="COMPLETED",
+                    )
+                    second_branch = Branch(
+                        scenario_id=second_scenario.id,
                         title="主线",
                         story="系统最终收敛到稳定结局",
                         probability=1.0,
@@ -889,7 +940,8 @@ class TestScoringService(unittest.TestCase):
                     session.add(historical)
                     session.add(first_pending)
                     session.add(second_pending)
-                    session.add(branch)
+                    session.add(first_branch)
+                    session.add(second_branch)
                     session.commit()
 
                     scoring_module.recompute_leaderboard_entry(session, "director-1", "Alice")

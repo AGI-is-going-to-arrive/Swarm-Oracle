@@ -102,6 +102,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
 - `shared/gameplay_contract.v1.json` missing at boot now raises a clear runtime error instead of failing later with a raw file-stat exception.
 - `scoring.py` now persists prediction scores and leaderboard materialization in one transaction, so a leaderboard failure does not leave scored predictions half-written.
+- `predictions.py` now enforces one prediction per `scenario_id + user_id` at both layers: API pre-check plus SQLite unique index, and duplicate races still collapse to `409 PREDICTION_ALREADY_SUBMITTED`.
+- `runtime_lock_is_active()` now uses a read-only existence check for active leases instead of taking `BEGIN IMMEDIATE` on the shared lock table.
+- `vector_store.py` now treats the shared Chroma write lease as best-effort; if another worker already owns the same scenario lock, the write is skipped instead of busy-waiting in the caller.
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.
 - `POST /api/scenario` now rejects out-of-range `rounds` at schema level, `import-replay` no longer repeatedly scans agents when it falls back by name, and `GET /api/scenario/{id}/groups` now batch-loads leader/member data.
 - `AgentGroup.scenario_id` now has an index, with both `init_db()` lightweight migration coverage and Alembic revision `011_add_agent_group_scenario_index`.

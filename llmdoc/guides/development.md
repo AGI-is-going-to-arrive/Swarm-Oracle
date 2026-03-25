@@ -121,6 +121,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
   - `python -m pytest tests/test_vector_store.py -q`：`27 passed in 3.63s`
   - `python -m pytest tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py -q`：`82 passed in 25.37s`
   - `python -m ruff check --ignore E501 app/models/database.py app/services/llm_client.py app/services/vector_store.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_vector_store.py`：通过
+- 本 session 这轮“prediction 唯一约束 / runtime_lock 只读路径 / vector store busy-skip / 前端状态单调守卫”改动，当前还额外实跑通过：
+  - `python -m pytest tests/test_predictions.py tests/test_api.py tests/test_runtime_lock.py tests/test_vector_store.py -q`：`190 passed in 9.60s`
+  - `python -m ruff check --ignore E501 app/models/predictions.py app/api/predictions.py app/models/database.py app/services/runtime_lock.py app/services/vector_store.py tests/test_predictions.py tests/test_api.py tests/test_runtime_lock.py tests/test_vector_store.py alembic/versions/012_add_prediction_scenario_user_unique_index.py`：通过
 - 本 session 这轮“WS 并行广播 / challenge rotation API”改动，当前还额外实跑通过：
   - `python -m pytest tests/test_ws.py -q`：`21 passed in 0.96s`
   - `python -m pytest tests/test_campaign_api.py -q`：`14 passed in 0.88s`
@@ -189,6 +192,10 @@ npm run test:spike:phaser-custom
   - `cd backend && python -m ruff check --ignore E501 app/api/ws.py tests/test_ws.py`：通过
   - `cd frontend && npm test -- --run src/lib/llmProviderPolicy.test.ts src/components/ShareModal.test.tsx src/hooks/useSimulationWS.test.tsx src/hooks/useDebateWS.test.tsx src/pages/InputView.test.tsx`：`30 passed`
   - `cd frontend && npm test -- --run src/lib/wsDebug.test.ts src/pages/ResultView.test.tsx src/hooks/useSimulationWS.test.tsx src/hooks/useDebateWS.test.tsx`：`33 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“前端 provider-policy 测试同步 / phase&branch 单调守卫 / tone fallback”改动，当前还额外实跑通过：
+  - `cd frontend && npm test -- --run src/lib/llmProviderPolicy.test.ts src/lib/predictionBetting.test.ts src/stores/debateStore.test.ts src/stores/simulationStore.test.ts`：`47 passed`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/hooks/useSimulationWS.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts`：`30 passed`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
 - 本 session 这轮“scenarioMeta 锁竞争收口 / DebateArena stale counterplay + bet error / Result replay import error / History+Leaderboard i18n 回归”改动，当前还额外实跑通过：
   - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx`：`41 passed in 1.80s`

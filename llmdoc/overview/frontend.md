@@ -61,6 +61,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 - **场景 hydration**: `setScenario()` / `loadScenario()` 会读取 `Scenario.visualization_enabled`，并在直开 `/sim/:id` 时自动恢复 `viewMode='theater'`，避免已启用像素剧场的场景回落到 Classic
 - **高级干预事件**: `retrospective_start` 会补一条占位分支并写入 intervention log，`batch_intervention_applied` 会把整批分支干预一起写入 intervention log
 - **防护**: `MAX_MESSAGES=5000` 消息上限 + composite-key dedup 防止内存无限增长；同一 scenario 的后续 hydration snapshot 当前也会和 store 里的已有消息/状态合并，避免较旧 API 快照把更晚的 WS 状态覆盖掉
+- **状态单调性**: `branch_update` 当前也已复用分支状态守卫；`COMPLETED / PRUNED` 不会再被晚到 WS 事件回退成 `ACTIVE`
 - **错误口径**: `startSimulation()` / `loadScenario()` 与 `simulation_error` 当前都会同时落 `errorCode + error`；页面 UI 走本地化文案，automation 则可继续读取同一份 code
 - **WS keepalive**: `heartbeat` 当前会被显式当作 no-op 事件忽略，不再落进默认 `unhandled event` warning，也不会污染 simulation 状态
 
@@ -74,6 +75,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 与 `simulationStore` 完全分离，不把 Debate 状态继续塞回 scenario 主 store
   - `agent_speak / debate_phase_change / debate_score_update / debate_counterplay / debate_verdict` 只更新 Debate 闭环需要的最小状态
   - `startDebate()` / `loadDebate()` / `setError()` 当前也会统一维护 `errorCode + error`，不再把 runtime/API 原始字符串直接灌给页面
+  - `setPhase()` 当前也已补单调守卫；live 页若收到乱序 phase 事件，不会再把 `closing / verdict` 回退成更早阶段
   - `setVerdict()` 当前还会把 `debate_verdict` 事件里一并带回来的 `phase_insights` 落进 store，保证 live 页在 verdict 到来时就能拿到完整阶段洞察
 
 ## 本地玩法元数据 (`src/lib/`)
@@ -229,7 +231,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 
 ### `useInputViewState.ts`
 - 首页状态拆分 helper，当前导出三组 hook：
-  - `useInputByokSettings()`：负责 provider policy 读写、BYOK 表单状态和连通性测试；当前会优先读写 `sessionStorage`，并在首次 hydrate 时把 legacy `localStorage` provider policy 迁移一次；同时也维护 `probeResult / hasFreshProbe / disableUserQuota`，让首页在 fresh probe 失效时先重跑 BYOK 预检，再决定是否发起 `createScenario`
+  - `useInputByokSettings()`：负责 provider policy 读写、BYOK 表单状态和连通性测试；当前会优先读写 `sessionStorage`，并在首次 hydrate 时把 legacy `localStorage` provider policy 迁移一次；provider policy 当前也已经正式带上 `disableUserQuota` 布尔位，默认 `false`；同时也维护 `probeResult / hasFreshProbe / disableUserQuota`，让首页在 fresh probe 失效时先重跑 BYOK 预检，再决定是否发起 `createScenario`
   - `useInputCampaignState()`：负责 challenge rotation、campaign profile/mastery/badges/daily-status/weekly-summary 拉取与派生
   - `useSharedChallengePrefill()`：负责从分享 challenge URL 解析预填参数与 banner
 - 当前口径：

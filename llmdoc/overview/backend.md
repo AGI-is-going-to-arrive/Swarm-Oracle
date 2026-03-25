@@ -140,6 +140,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 模块级单例当前不会把“初始化失败/超时后仍不可用”的实例永久缓存住；若初始化最终失败，后续 `get_vector_store()` 仍会重试
   - 如果 Chroma 在运行期才出错，当前会优先按场景隔离：`collection lookup / store / query` 这类单场景故障只会清掉对应 scenario 的 cache，不会顺手把整个共享 client 置空；`health_check` / 初始化这类更广义故障仍会失效本地 `client + collection cache`
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock；shared lock key 现已按 `scenario_id` 分片，不同 scenario 的 Chroma 写入不再被全局单 key 串成一条队列
+  - shared runtime lock 当前是 best-effort：若别的 worker 正在写同一 scenario，当前这次写入会直接跳过，不再在调用方里 busy-wait 轮询
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
   - ChromaDB 不可用时静默降级
 
@@ -152,6 +153,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **设计**:
   - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
   - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
+  - `runtime_lock_is_active()` 当前已改成纯 `SELECT` 读路径，只检查“该 key 是否存在且尚未过期”；不再为了只读判断去拿 `BEGIN IMMEDIATE`
   - `DATABASE_URL` 不是文件型 SQLite 时，当前会安全回退成进程内互斥 lease，而不是“永远成功”的空锁；这条 fast path 仍只保证单进程内防重入
   - 进程内 fallback 当前会在每次 `acquire` 前顺手清理过期 key，不再把已失效 lease 永远留在内存字典里
 - **集成点**:
@@ -359,6 +361,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - 若 LLM 返回后发现原场景已被删除，该次写入会直接回滚，不再把孤儿 prediction 落分
   - 若 leaderboard 更新失败，会整笔回滚，不再留下“prediction 已评分但 leaderboard 未更新”的半提交状态
   - `score_all_for_scenario()` 当前返回值已细化为 `attempted / scored / failed / all_failed / results`，可以区分“没有待评分 prediction”和“全部评分失败”
+  - `Prediction` 表当前也已补 `(scenario_id, user_id)` 复合唯一约束；也就是说，重复 prediction 现在既有应用层预检查，也有 DB 层最终兜底
 - **语言感知 prompt**: 评分 prompt 当前已拆成中英模板；英文场景会使用英文标题、标签与 rubric，不再只靠中文主体 + language directive 混合驱动
 
 ## API层 (`app/api/`) — P0-1 拆分
@@ -466,6 +469,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /api/leaderboard` | GET | 全局预测排行榜；支持 `limit / offset` |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
 - **提交通道**: 当前同一 `scenario_id + user_id`（含匿名 `anonymous`）只允许一条 prediction；重复提交会返回结构化冲突错误
+- **DB 兜底**: 这条“单局单用户一条 prediction”约束当前也已经落到 SQLite 唯一索引；即使高并发下绕过了应用层 pre-check，API 仍会把底层 `IntegrityError` 收口成同一份 `409 PREDICTION_ALREADY_SUBMITTED`
 - **提交窗口**: `POST /api/scenario/{id}/predict` 当前只在 `ScenarioStatus.PARSING / SIMULATING` 开放；进入 `NARRATING / DONE / ERROR` 后都会直接拒绝新预测
 - **分页**:
   - `GET /api/scenario/{id}/predictions` 当前支持可选 `limit / offset`

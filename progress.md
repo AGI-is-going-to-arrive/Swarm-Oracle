@@ -9547,3 +9547,147 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 本轮验证：
   - `cd backend && ../.venv/bin/python -m pytest tests/test_parser.py -q`
     - `14 passed in 100.08s`
+
+## 2026-03-25 Review Validation Pass (Current Turn)
+
+- 当前目标：
+  - 读取 `code_review_report.md`，确认报告中的问题哪些仍真实存在，哪些已经过时，哪些值得在不偏离“交互式推演剧场”定位的前提下继续改。
+  - 使用仓库自带 Playwright 套件、`playwright-interactive`、`develop-web-game` 风格客户端做真实 E2E 与截图复核。
+
+- 当前关键结论：
+  - 这是**浏览器优先的 Web 应用**，当前“跨平台”应解释为桌面/移动浏览器可用，不是原生 Windows/macOS/Linux/iOS/Android 客户端。
+  - 产品定位更接近“交互式推演剧场 / 策略观演工具”，不是传统连续动作型 web game；可玩性验证应侧重参数设置、视图切换、预测、干预、回放、分享，而不是移动/跳跃/战斗手感。
+
+- 本轮已确认仍存在的问题：
+  - `backend/tests/test_agent_group.py` 当前仍失败：`TestParserFallbackGroups::test_fallback_groups_updates_agents`
+    - 现状：`_generate_fallback_groups()` 本身不会写回 `agent["group"]`，测试与函数契约不一致
+    - 结论：问题真实存在，但更像“helper 契约/测试未对齐”；如果坚持 helper 纯函数设计，应改测试而不是回退实现
+  - `frontend/src/lib/llmProviderPolicy.test.ts`
+    - 当前 3 例失败，原因是测试断言没有同步 `disableUserQuota`
+    - 结论：问题真实存在，且是当前最值得优先清理的回归基线污染
+  - `frontend/src/stores/debateStore.ts`
+    - `setPhase()` 仍直接写入 phase，未使用单调守卫
+  - `frontend/src/stores/simulationStore.ts`
+    - `branch_update` 路径仍可把高终态状态回退为低状态
+  - `frontend/src/lib/predictionBetting.ts`
+    - `getEndingToneLabel()` 对未知 tone 仍无 fallback
+  - `frontend/src/hooks/useSimulationWS.ts` / `frontend/src/hooks/useDebateWS.ts`
+    - `seenEventIdsRef.current.includes(...)` 仍是 O(n)
+    - reconnect debug log 仍会先把 `reconnectCount` 清零再写日志
+  - `backend/app/services/runtime_lock.py`
+    - `runtime_lock_is_active()` 仍使用 `BEGIN IMMEDIATE`
+  - `backend/app/services/vector_store.py`
+    - `_acquire_write_lease()` 仍使用 `time.sleep()` 轮询
+  - `backend/app/models/predictions.py`
+    - `Prediction` 仍无 `(scenario_id, user_id)` 复合唯一约束
+  - `backend/app/services/memory.py`
+    - `compress_rounds()` 仍有 `max_chars=max(4000, len(messages_text))`
+  - `backend/app/services/debate.py`
+    - debate runtime lock 仍是 `lease_seconds=60 * 60`
+  - `backend/app/api/social.py`
+    - `_bound_social_generation_buffer()` 仍保留 `max(limit * 2, limit)` 冗余表达式
+  - `backend/app/main.py`
+    - 仍无统一全局 `Exception` handler
+
+- 本轮确认“已修 / 不值得优先改 / 需要按产品边界解释”的项：
+  - `frontend/src/lib/scenarioGameplayDerivations.ts` 的 `maxPoints = 3`
+    - 当前前后端口径仍一致，更像未来可配置化点，不是现阶段错配
+  - `EventBridge` 的 start 前注册保护
+    - 当前更像设计取舍，不是高优先级正确性 bug
+  - `frontend` i18n
+    - 当前中英双语切换工作正常；若要覆盖更多语言，属于产品扩展，不是 bug
+
+- 本轮自动化与浏览器验证：
+  - 主模式 corners：
+    - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-corners-review --headless`
+    - 通过，产物落盘 `frontend/output/e2e/20260325-corners-review/`
+  - 主模式 mobile：
+    - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-mobile-review --headless`
+    - 通过，产物落盘 `frontend/output/e2e/20260325-mobile-review/`
+  - Debate full（默认超时）：
+    - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-debate-review --headless`
+    - 首次失败，原因是 debate 在当前 provider/模型速度下超过默认结果超时；不是立即可判定为流程卡死
+  - Debate mobile（延长超时）：
+    - `cd frontend && SWARM_DEBATE_RESULT_TIMEOUT_MS=480000 SWARM_DEBATE_STALL_TIMEOUT_MS=240000 SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS=240000 node scripts/e2e-debate-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-debate-mobile-review --headless`
+    - 通过，说明 Debate 流程在当前环境下**更像慢，不是必然卡死**
+  - `playwright-interactive` 人工复核：
+    - 桌面/移动首页中英切换可用，首屏未见明显裁切
+    - 桌面主模式 daily challenge 能进入 Theater，并可见目标卡、承诺区、截图模式与下注入口
+  - `develop-web-game` 风格客户端：
+    - 首次尝试 `modal` 捕获时，真实页面状态与 `Open Bet` 选择器假设不一致，说明自动化对 live Debate 的阶段敏感
+    - 退回 `panel` 捕获后成功，产物落盘：
+      - `output/web-game-debate-review-panel/shot-0.png`
+      - `output/web-game-debate-review-panel/state-0.json`
+
+- 本轮视觉复核重点：
+  - `frontend/output/e2e/20260325-corners-review/director-state-roundtrip/simulation.png`
+    - 桌面 Theater 首屏完整，HUD、目标、承诺、剧场和底部时间线都可见
+  - `frontend/output/e2e/20260325-debate-review/desktop/live.png`
+    - Debate 桌面 live 首屏完整，布局清晰
+  - `frontend/output/e2e/20260325-debate-mobile-review/live.png`
+    - 移动端首屏可用，未见关键 CTA 被裁切
+  - `frontend/output/e2e/20260325-debate-mobile-review/share-open.png`
+    - 移动端分享弹窗可见且内容非空
+
+- 本轮保守结论：
+  - 当前项目在“桌面/移动浏览器可用、核心玩法可走通、中英双语可切换”这一层面上成立。
+  - 当前最值得继续改的是：
+    - 前端测试漂移
+    - debate/simulation store 的状态单调守卫
+    - prediction tone fallback
+    - runtime lock / prediction uniqueness 这类真实并发正确性问题
+  - 当前不建议把“跨平台”错误理解成要立即补原生客户端壳；这会偏离现有架构和产品定位。
+
+## 2026-03-25 Priority Fix Batch (Current Turn)
+
+- 已按当前优先级落地修复：
+  - `frontend/src/lib/llmProviderPolicy.test.ts`
+    - 同步 `disableUserQuota: false` 断言，清掉 3 个漂移失败用例
+  - `frontend/src/stores/debateStore.ts`
+    - `setPhase()` 现在复用现有 `laterPhase()`，不再允许 phase 倒退
+  - `frontend/src/stores/simulationStore.ts`
+    - 为 branch status 引入显式 rank，`branch_update` 现在复用 `mergeBranch()`，终态不会再被晚到事件回退成 `ACTIVE`
+  - `frontend/src/lib/predictionBetting.ts`
+    - `getEndingToneLabel()` 现在对未知 tone 返回原始字符串，不再直接抛错
+  - `backend/app/models/predictions.py`
+    - 为 `prediction(scenario_id, user_id)` 增加复合唯一约束
+  - `backend/alembic/versions/012_add_prediction_scenario_user_unique_index.py`
+    - 新增 Alembic migration，为已有数据库补唯一索引
+  - `backend/app/models/database.py`
+    - `init_db()` 的 SQLite best-effort migration 现在也会补 `uq_prediction_scenario_user`
+  - `backend/app/api/predictions.py`
+    - `submit_prediction()` 现在会把 DB 层 `IntegrityError` 收敛成稳定的 `409 PREDICTION_ALREADY_SUBMITTED`
+  - `backend/app/services/runtime_lock.py`
+    - `runtime_lock_is_active()` 改为纯 SELECT 检查活跃且未过期的 lease，不再走 `BEGIN IMMEDIATE + DELETE`
+  - `backend/app/services/vector_store.py`
+    - `_acquire_write_lease()` 改为“单次尝试，忙则跳过”，不再用 `time.sleep()` 在写锁竞争时阻塞调用方
+
+- 新增/更新回归测试：
+  - `frontend/src/lib/predictionBetting.test.ts`
+    - 保留原有 structured bet outcome 测试，并新增未知 tone fallback 覆盖
+  - `frontend/src/stores/debateStore.test.ts`
+    - 新增 `setPhase` 不回退测试
+  - `frontend/src/stores/simulationStore.test.ts`
+    - 新增 `branch_update` 不回退终态测试
+  - `backend/tests/test_predictions.py`
+    - 新增 Prediction 唯一约束测试
+    - 同步旧 leaderboard/scoring 测试数据，使之符合“一场景一用户一条 prediction”新契约
+  - `backend/tests/test_api.py`
+    - 新增 API 层唯一约束竞态时仍返回 409 的测试
+    - 调整 list_predictions 测试数据，避免旧测试继续构造非法重复 prediction
+  - `backend/tests/test_runtime_lock.py`
+    - 新增 `runtime_lock_is_active()` 不再发出 `BEGIN IMMEDIATE / DELETE` 的读路径测试
+  - `backend/tests/test_vector_store.py`
+    - 新增“共享写锁忙时立即跳过、不写入”的测试
+
+- 本轮验证通过：
+  - `cd frontend && npm test -- --run src/lib/llmProviderPolicy.test.ts src/lib/predictionBetting.test.ts src/stores/debateStore.test.ts src/stores/simulationStore.test.ts`
+    - `47 passed`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/hooks/useSimulationWS.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts`
+    - `30 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd backend && .venv/bin/python -m pytest tests/test_predictions.py tests/test_api.py tests/test_runtime_lock.py tests/test_vector_store.py -q`
+    - `190 passed`
+  - `cd backend && .venv/bin/python -m ruff check --ignore E501 app/models/predictions.py app/api/predictions.py app/models/database.py app/services/runtime_lock.py app/services/vector_store.py tests/test_predictions.py tests/test_api.py tests/test_runtime_lock.py tests/test_vector_store.py alembic/versions/012_add_prediction_scenario_user_unique_index.py`
+    - 通过

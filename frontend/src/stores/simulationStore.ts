@@ -29,6 +29,12 @@ const STATUS_RANK: Record<SimulationState['status'], number> = {
   error: 4,
 };
 
+const BRANCH_STATUS_RANK: Record<BranchInfo['status'], number> = {
+  ACTIVE: 0,
+  COMPLETED: 1,
+  PRUNED: 1,
+};
+
 /** Agent currently thinking (waiting for LLM response). */
 export interface ThinkingAgent {
   agent: string;
@@ -130,12 +136,13 @@ function mergeMessages(current: AgentMessage[], incoming: AgentMessage[]): Agent
 }
 
 function mergeBranch(current: BranchInfo, incoming: BranchInfo): BranchInfo {
+  const nextStatus = BRANCH_STATUS_RANK[current.status] >= BRANCH_STATUS_RANK[incoming.status]
+    ? current.status
+    : incoming.status;
   return {
     ...current,
     ...incoming,
-    status: current.status !== 'ACTIVE' && incoming.status === 'ACTIVE'
-      ? current.status
-      : incoming.status,
+    status: nextStatus,
   };
 }
 
@@ -425,7 +432,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         set((state) => ({
           branches: state.branches.map((b) =>
             b.id === event.data.branch_id
-              ? { ...b, status: event.data.status as 'ACTIVE' | 'COMPLETED' | 'PRUNED' }
+              ? mergeBranch(b, {
+                  ...b,
+                  status: event.data.status as 'ACTIVE' | 'COMPLETED' | 'PRUNED',
+                })
               : b,
           ),
         }));

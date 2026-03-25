@@ -187,7 +187,7 @@ export const useDebateStore = create<DebateState>((set) => ({
     return {
       debate: {
         ...state.debate,
-        current_phase: phase,
+        current_phase: laterPhase(state.debate.current_phase, phase),
       },
     };
   }),

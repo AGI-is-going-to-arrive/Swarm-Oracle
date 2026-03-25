@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-25（review fix 批次：回溯分支概率下限 / Debate 下注契约对齐 / daily challenge & counterplay TTL / engine-managed SQLite guard / parser 重试与重名收口）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-25（review fix 批次：预测唯一约束 / WS 状态单调守卫 / tone fallback / runtime lock 只读路径 / vector store busy-skip）
 
 ## 阅读顺序
 

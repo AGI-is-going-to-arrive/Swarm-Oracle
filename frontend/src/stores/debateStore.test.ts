@@ -303,4 +303,28 @@ describe('debateStore', () => {
     expect(useDebateStore.getState().error).toBe('debate.bet_error_locked');
     expect(useDebateStore.getState().status).toBe('error');
   });
+
+  it('does not let setPhase regress the current phase', () => {
+    useDebateStore.getState().setDebate({
+      id: 'debate-6',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'live',
+      current_phase: 'closing',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: false,
+    });
+
+    useDebateStore.getState().setPhase('crossfire');
+
+    expect(useDebateStore.getState().debate?.current_phase).toBe('closing');
+  });
 });

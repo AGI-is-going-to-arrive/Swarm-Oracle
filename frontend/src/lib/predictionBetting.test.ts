@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveStructuredBetOutcome } from './predictionBetting';
+import { getEndingToneLabel, resolveStructuredBetOutcome } from './predictionBetting';
 
 describe('resolveStructuredBetOutcome', () => {
   it('matches branch winner bets by id or title', () => {
@@ -89,5 +89,17 @@ describe('resolveStructuredBetOutcome', () => {
         profileResonance: 'signature',
       },
     )).toBe('miss');
+  });
+});
+
+describe('getEndingToneLabel', () => {
+  it('returns localized labels for known ending tones', () => {
+    expect(getEndingToneLabel('order', true)).toBe('秩序收束');
+    expect(getEndingToneLabel('balance', false)).toBe('Balanced Co-Governance');
+  });
+
+  it('falls back to the raw tone id for unknown values', () => {
+    expect(getEndingToneLabel('unknown-tone', true)).toBe('unknown-tone');
+    expect(getEndingToneLabel('unknown-tone', false)).toBe('unknown-tone');
   });
 });
