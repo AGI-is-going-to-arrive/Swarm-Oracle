@@ -108,7 +108,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `compress_rounds(messages_text, previous_briefing?)` → `dict` (态势简报)
   - `_validate_compress_result(raw)` — 防御性LLM输出校验
   - `format_messages_for_context(messages, max_recent, tier)` — 按tier差异化消息数量
-  - `format_briefing_for_context(briefing)` — 黑板 dict → 中文结构化文本
+  - `format_briefing_for_context(briefing, language)` — 黑板 dict → language-aware 结构化文本
   - `build_agent_context(..., tier, shared_briefing)` — Blackboard模式替换 messages+memories
   - `_build_crowd_context(...)` — CROWD精简prompt (~800 tokens)
 - **Tier映射**: `_TIER_MAX_RECENT` = CORE→12, IMPORTANT→5, CROWD→3
@@ -121,6 +121,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **高信号优先保留**: 较早窗口进入 overflow summary 前，当前会先抽取 priority lines；规则优先照顾最近消息、`CORE/LEADER` 标记、`emotion/diverge` 变化，以及 `干预 / 玩法卡 / 下注 / fork / result` 相关中英文关键词。`simulator.py` 当前也会把压缩输入格式化成带 `round / tier / emotion / diverge` 标签的结构化行，供这层筛选使用
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
 - **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
+- **语言化 scaffold**: 压缩 prompt、rolling briefing formatter、shared briefing formatter、crowd/full agent context 当前都已按 `language` 分流；英文链路不再只是“中文模板 + language directive”
 - **Prompt 注入边界**: `build_agent_context()` / `_build_crowd_context()` 当前也会把 `shared_briefing / recent_messages` 统一包成 `UNTRUSTED DATA`，不再把共享简报或最近对话裸拼进 agent prompt
 - **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
 - **temperature 透传**: `compress_rounds()` 当前也接受 scenario 级 `temperature` 覆盖；如果本次运行显式传了 `temperature`，压缩链路会沿用同一设置，不再偷偷回退默认采样
@@ -223,7 +224,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **temperature**: 解析阶段当前也接受 scenario 级 `temperature` 覆盖；首次 parse 与 under-filled retry 都会沿用同一 temperature，不再出现首轮和 retry 采样口径不一致
 - **retry 多样化**: under-filled retry 当前会把 `reasoning_effort` 提到 `medium`，若调用方显式给了 `temperature`，也会做一次小幅上调（`+0.1`，上限 `2.0`），不再是完全相同参数重试
 - **重名收口**: parser 当前会在 parse 结果层统一规范 agent 名称；若 LLM 返回同名角色，会自动去重并同步修正 hierarchical `groups[].members / leader`
-- **fallback helper 副作用收口**: `_generate_fallback_groups()` 当前会直接给 agent 回写 `group` 字段，和 helper / 测试契约保持一致；group 结构仍按显式步骤返回
+- **fallback helper 契约**: `_generate_fallback_groups()` 当前保持纯函数，只返回 group 结构；实际 `group` 写回仍统一走 `_apply_group_memberships()`
 
 ### `logging_utils.py` (≈90行) — 结构化日志配置 (**NEW**)
 - **职责**: 统一 backend 运行时日志格式，不改各模块现有 `logger.info/warning/error` 调用方式
@@ -235,14 +236,15 @@ alembic/ ──► Alembic 数据库迁移框架
   - 默认 `LOG_LEVEL = INFO`
   - 如果切回 `LOG_FORMAT = plain`，仍使用原来的人类可读格式
 
-### `lang_detect.py` (≈70行) — 语言检测 (P9 **NEW**)
+### `lang_detect.py` (≈90行) — 语言检测 (P9 **NEW**)
 - **职责**: 基于字符比例启发式检测用户输入语言，生成 LLM prompt 语言指令
 - **关键函数**:
-  - `detect_language(text)` → `str` — 返回 "Chinese"/"English"/"Japanese"/"Korean"，字符比例启发式，无外部依赖
+  - `detect_language(text)` → `str` — 返回 `Chinese / English / Japanese / Korean / French / German / Spanish / Portuguese / Italian`，字符比例 + 常见停用词/变音符号启发式，无外部依赖
   - `get_language_directive(language)` → `str` — 生成 prompt 注入的多语言指令文本
   - `get_anonymous_director_name(language)` / `get_anonymous_predictor_name(language)` — 生成 language-aware 的匿名显示名
-- **覆盖范围**: CJK 统一表意文字、日文假名（平假名+片假名）、韩文谚文
+- **覆盖范围**: CJK 统一表意文字、日文假名（平假名+片假名）、韩文谚文，以及常见拉丁语系 (`French / German / Spanish / Portuguese / Italian`)
 - **日语提示**: 当前还会额外检查常见日语助词/敬体词（如 `の / は / が / を / です / ます`），降低纯汉字占比较高的短日文被误判成 Chinese 的概率
+- **拉丁语系提示**: 当前会结合停用词和变音符号做轻量判断；未命中的其它语言仍安全回退到 English
 - **防护**: 空输入默认 English；不计入全角Latin/数字避免误判
 - **集成点**: `parser.py` (检测)、`simulator.py`/`memory.py`/`narrator.py`/`scoring.py` (指令注入)
 
@@ -261,6 +263,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: 为已完成的分支生成故事总结和洞察
 - **输出**: `{title, story, insight, key_moments[]}`
 - **返回值归一化**: narrator 现在会容忍 `llm_call_json()` 返回 `list[dict]` 或字符串列表，优先提取第一条可用叙事，避免再因 `list` 没有 `.get()` 把整局场景打进 `error`
+- **语言化 scaffold**: narration prompt 当前已按 `Chinese / English` 分流；英文场景不再复用中文写作要求与字段标题
 - **fallback 语言**: 当 LLM 不可用时，fallback narration 当前会跟随 `language` 输出中英文摘要，而不是固定中文兜底
 - **输入防护**: `branch_title / agents_summary / raw_rounds` 当前都会通过 `format_untrusted_text_block()` 包进 `UNTRUSTED DATA` 区块，再进入 narration prompt；可疑 prompt-injection 文本只会被当成待分析数据
 - **BYOK 透传**: narrator 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传，不把 BYOK 凭证落库
@@ -432,7 +435,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；当前 wrapper / instruction 会跟随场景语言，英文场景不再收到中文包装文案 |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；当前 wrapper / instruction 会跟随场景语言，所有平台都按场景语言输出，`reddit / x` 不再单独强制英文；非中英文场景会复用英文 scaffold 并显式注入目标语言 directive |
 
 > social 路由当前也已纳入结构化错误口径；像 `LLM temporarily unavailable / generation failed` 这类失败，仍保留原 message 含义，但现在会通过 `{code, message}` 对外返回，而不是混用自由文本 detail。
 

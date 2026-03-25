@@ -12,12 +12,15 @@ import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent 
 
 let seenMessageKeys = new Set<string>();
 
-function messageDedupKey(message: Pick<AgentMessage, 'agent_id' | 'branch' | 'round' | 'message'>): string {
-  return `${message.agent_id}::${message.branch}::${message.round}::${message.message}`;
+function messageDedupKey(
+  message: Pick<AgentMessage, 'agent_id' | 'branch' | 'round' | 'message'>,
+  scenarioId: string | null | undefined,
+): string {
+  return `${scenarioId ?? ''}::${message.agent_id}::${message.branch}::${message.round}::${message.message}`;
 }
 
-function rebuildSeenMessageKeys(messages: AgentMessage[]) {
-  seenMessageKeys = new Set(messages.map((message) => messageDedupKey(message)));
+function rebuildSeenMessageKeys(messages: AgentMessage[], scenarioId?: string | null) {
+  seenMessageKeys = new Set(messages.map((message) => messageDedupKey(message, scenarioId)));
 }
 
 const STATUS_RANK: Record<SimulationState['status'], number> = {
@@ -120,14 +123,18 @@ function translate(key: string, options?: Record<string, unknown>): string {
   return i18n.t(key, options as never) as unknown as string;
 }
 
-function mergeMessages(current: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
+function mergeMessages(
+  current: AgentMessage[],
+  incoming: AgentMessage[],
+  scenarioId: string | null | undefined,
+): AgentMessage[] {
   if (current.length === 0) return incoming.slice(-MAX_MESSAGES);
   if (incoming.length === 0) return current.slice(-MAX_MESSAGES);
 
   const merged = [...incoming];
-  const seen = new Set(incoming.map((message) => messageDedupKey(message)));
+  const seen = new Set(incoming.map((message) => messageDedupKey(message, scenarioId)));
   for (const message of current) {
-    const key = messageDedupKey(message);
+    const key = messageDedupKey(message, scenarioId);
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(message);
@@ -173,7 +180,7 @@ function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Part
   const incomingStatus = scenario.status as ActiveSimulationStatus;
   const sameScenario = state.scenario?.id === scenario.id;
   const mergedMessages = sameScenario
-    ? mergeMessages(state.messages, (scenario.messages || []) as AgentMessage[])
+    ? mergeMessages(state.messages, (scenario.messages || []) as AgentMessage[], scenario.id)
     : ((scenario.messages || []) as AgentMessage[]);
   const mergedBranches = sameScenario
     ? mergeBranches(state.branches, scenario.branches as BranchInfo[])
@@ -183,7 +190,7 @@ function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Part
     : incomingStatus;
   const highestRound = Math.max(0, ...mergedMessages.map((message) => message.round ?? 0));
 
-  rebuildSeenMessageKeys(mergedMessages);
+  rebuildSeenMessageKeys(mergedMessages, scenario.id);
 
   const nextScenarioStatus = mergedStatus as Scenario['status'];
   return {
@@ -228,7 +235,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         error: null,
         errorCode: null,
       });
-      rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[]);
+      rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[], scenario.id);
       return scenario.id;
     } catch (err) {
       set({
@@ -310,7 +317,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         // Final message — add to messages (with dedup + cap), remove from thinking
         set((state) => {
           const d = event.data;
-          const dedupKey = messageDedupKey(d);
+          const dedupKey = messageDedupKey(d, state.scenario?.id);
           const isDuplicate = seenMessageKeys.has(dedupKey);
           if (isDuplicate) {
             return {
@@ -324,7 +331,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           seenMessageKeys.add(dedupKey);
           if (newMessages.length > MAX_MESSAGES) {
             newMessages = newMessages.slice(newMessages.length - MAX_MESSAGES);
-            rebuildSeenMessageKeys(newMessages);
+            rebuildSeenMessageKeys(newMessages, state.scenario?.id);
           }
           return {
             messages: newMessages,

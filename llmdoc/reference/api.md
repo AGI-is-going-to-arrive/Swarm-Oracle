@@ -149,7 +149,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > `GET/POST /api/scenario/{id}/social/{platform}` 当前会按 scenario 语言选择 prompt wrapper / context 包装：
 > - 英文 scenario 不再收到中文包装文本
-> - `reddit / x` 仍按各自模板要求输出英文文案
+> - 当前所有平台都跟随 scenario 语言输出，`reddit / x` 不再单独强制英文
+> - 非中英文 scenario 当前会复用英文 scaffold，并额外显式注入目标语言 directive
 > - `GET` 仍可直接生成文案，但如果把 `llm_api_key / llm_base_url / llm_model / user_id` 放进 query，后端会返回 `400`；这类 provider overrides 必须改走 `POST body`
 > - 响应结构仍是 `{platform, platform_name, copy}`；若模型先返回超大原始文本，后端会先做一次安全缓冲截断，再做平台最终限长截断
 

@@ -53,6 +53,23 @@ class TestDetectLanguage:
     def test_korean_mixed(self):
         assert detect_language("서울에서 AI 기술 발전에 대해 논의하다") == "Korean"
 
+    # -- Common Latin-script languages ----------------------------
+
+    def test_french(self):
+        assert detect_language("Le monde est en crise et la justice doit répondre vite.") == "French"
+
+    def test_spanish(self):
+        assert detect_language("La ciudad está en crisis y el tribunal debe responder rápido.") == "Spanish"
+
+    def test_portuguese(self):
+        assert detect_language("A cidade está em crise e o tribunal deve responder rápido.") == "Portuguese"
+
+    def test_german(self):
+        assert detect_language("Die Stadt ist in Krise und das Gericht muss schnell handeln.") == "German"
+
+    def test_italian(self):
+        assert detect_language("La città è in crisi e il tribunale deve rispondere subito.") == "Italian"
+
     # -- Edge cases ------------------------------------------------
 
     def test_empty_string(self):
@@ -114,13 +131,17 @@ class TestGetLanguageDirective:
         d = get_language_directive("Korean")
         assert "한국어" in d
 
-    def test_unknown_language_fallback(self):
-        """Unknown language should generate a sensible English directive."""
+    def test_supported_french_directive(self):
+        """French now has an explicit directive."""
         d = get_language_directive("French")
-        assert "French" in d
-        assert "MUST" in d
+        assert "français" in d
 
     def test_returns_string(self):
         """All directives must be strings."""
-        for lang in ("Chinese", "English", "Japanese", "Korean", "French"):
+        for lang in ("Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Italian"):
             assert isinstance(get_language_directive(lang), str)
+
+    def test_unknown_language_fallback(self):
+        d = get_language_directive("Dutch")
+        assert "Dutch" in d
+        assert "MUST" in d

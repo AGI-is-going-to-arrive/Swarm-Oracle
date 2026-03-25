@@ -69,6 +69,29 @@ cp .env.example backend/.env
 - Current release signoff
   - 当前发布判断的唯一合同。
 
+## 本 session 新增定向验证
+
+- `cd backend && source .venv/bin/activate && python -m pytest tests/test_memory.py tests/test_narrator.py tests/test_blackboard.py tests/test_simulator.py -q`
+  - `182 passed`
+- `cd backend && source .venv/bin/activate && python -m pytest tests/test_lang_detect.py -q`
+  - `32 passed`
+- `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'social_copy_uses_english_wrappers_for_english_scenarios or social_copy_reddit_follows_chinese_scenario_language or social_copy_non_english_scenario_adds_explicit_output_language' -q`
+  - `3 passed`
+- `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/social.py app/services/lang_detect.py app/services/blackboard.py app/services/memory.py app/services/narrator.py app/services/simulator.py tests/test_api.py tests/test_lang_detect.py tests/test_blackboard.py tests/test_memory.py tests/test_narrator.py`
+  - `All checks passed!`
+- `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+  - `17 passed`
+- `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/lib/scenarioMeta.test.ts src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+  - `37 passed`
+- `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 通过
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-replayspeed-corners-rerun --headless`
+  - 通过；当前 `corners` 已新增 `replay_speed_switch` case
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-finalize-i18n-corners --headless`
+  - 通过；覆盖 `ResultView finalize cache` 与 backend prompt i18n 改动
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-social-lang-corners --headless`
+  - 通过；覆盖 `social language policy` 与 `lang_detect` 扩展后的主模式真实链路
+
 ## 当前推荐定向回归
 
 ### Backend

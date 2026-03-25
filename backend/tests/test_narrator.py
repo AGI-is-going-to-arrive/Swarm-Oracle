@@ -193,6 +193,25 @@ class TestNarrateBranch:
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    async def test_english_prompt_uses_english_scaffold(self, mock_llm):
+        mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
+
+        await narrate_branch(
+            branch_title="Opening Branch",
+            probability=0.4,
+            agents_summary="A (Strategist)",
+            raw_rounds="[R1 A]: First record",
+            language="English",
+        )
+
+        prompt = mock_llm.call_args[0][0]
+        assert "[Branch Title]" in prompt
+        assert "Raw Interaction Transcript" in prompt
+        assert "写作要求" not in prompt
+        assert "原始交互记录" not in prompt
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
     async def test_provider_overrides_are_forwarded(self, mock_llm):
         """BYOK overrides should propagate to the narration LLM call."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}

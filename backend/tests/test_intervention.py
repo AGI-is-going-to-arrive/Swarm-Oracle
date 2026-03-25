@@ -427,6 +427,45 @@ class TestBatchIntervention:
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
 
+    def test_batch_rejects_gameplay_card_cooldown_bypass(self, client):
+        """Batch intervene should honor the same gameplay card cooldown checks as single intervene."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {
+                        "branch_id": bid,
+                        "text": "第一次强推",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "立即执行接管",
+                    },
+                    {
+                        "branch_id": bid,
+                        "text": "第二次强推",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "再次强推接管",
+                    },
+                ],
+            },
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "GAMEPLAY_CARD_ON_COOLDOWN"
+        with Session(engine) as session:
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
+
     def test_batch_rejects_oversized_intervention_list(self, client):
         """Batch request should reject excessive branch fan-out."""
         engine = get_engine()

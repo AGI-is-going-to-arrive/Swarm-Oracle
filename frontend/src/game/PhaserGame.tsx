@@ -112,6 +112,13 @@ export function PhaserGame({
   const replaySyncTimer = useRef<number | null>(null);
   const replayDoneTimer = useRef<number | null>(null);
   const replayAutomationState = useRef<AutomationReplayState | null>(null);
+  const replaySpeedRef = useRef(replaySpeed);
+  const replayPlaybackSyncRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    replaySpeedRef.current = replaySpeed;
+    replayPlaybackSyncRef.current?.();
+  }, [replaySpeed]);
 
   useEffect(() => {
     if (!containerRef.current || gameRef.current) return;
@@ -225,20 +232,20 @@ export function PhaserGame({
       for (const agent of state.agents) agentIds.add(agent.id);
       lastBubbleIdx.current = 0;
 
-      if (replayMessages.length > 0) {
-        dispatchVizEvent('viz:clear_bubbles', {});
-        if (playbackMode === 'skip') {
-          synthesizeLatestBubbles(replayMessages, state.agents);
-        } else {
-          bubbleCleanup.current = synthesizeBubbles(
-            replayMessages,
-            state.agents,
-            REPLAY_BATCH_SIZE,
-            getReplayBubbleIntervalMs(replaySpeed),
-          );
+        if (replayMessages.length > 0) {
+          dispatchVizEvent('viz:clear_bubbles', {});
+          if (playbackMode === 'skip') {
+            synthesizeLatestBubbles(replayMessages, state.agents);
+          } else {
+            bubbleCleanup.current = synthesizeBubbles(
+              replayMessages,
+              state.agents,
+              REPLAY_BATCH_SIZE,
+              getReplayBubbleIntervalMs(replaySpeedRef.current),
+            );
+          }
+          lastBubbleIdx.current = state.messages.length;
         }
-        lastBubbleIdx.current = state.messages.length;
-      }
 
       console.log(`[PhaserGame] Bootstrap scene init from ${source} — theme=${theme}, agents=${state.agents.length}`);
       return true;
@@ -253,7 +260,7 @@ export function PhaserGame({
         available: next.available ?? replayAutomationState.current?.available ?? false,
         phase: next.phase ?? replayAutomationState.current?.phase ?? 'idle',
         playback_mode: next.playback_mode ?? replayAutomationState.current?.playback_mode ?? playbackMode,
-        replay_speed: next.replay_speed ?? replayAutomationState.current?.replay_speed ?? replaySpeed,
+        replay_speed: next.replay_speed ?? replayAutomationState.current?.replay_speed ?? replaySpeedRef.current,
         selected_branch_id:
           next.selected_branch_id ?? replayAutomationState.current?.selected_branch_id ?? playbackBranchId ?? null,
         selected_round:
@@ -280,7 +287,7 @@ export function PhaserGame({
           available: true,
           phase: 'settled',
           playback_mode: playbackMode,
-          replay_speed: replaySpeed,
+          replay_speed: replaySpeedRef.current,
           selected_branch_id: playbackBranchId ?? null,
           selected_round: playbackRound ?? null,
           batch_count: batchCount,
@@ -292,16 +299,55 @@ export function PhaserGame({
         available: true,
         phase: 'playing',
         playback_mode: playbackMode,
-        replay_speed: replaySpeed,
+        replay_speed: replaySpeedRef.current,
         selected_branch_id: playbackBranchId ?? null,
         selected_round: playbackRound ?? null,
         batch_count: batchCount,
       }, messageCount);
 
-      const playbackDuration = Math.max(0, batchCount - 1) * getReplayBubbleIntervalMs(replaySpeed) + REPLAY_BUBBLE_SETTLE_MS;
+      const playbackDuration =
+        Math.max(0, batchCount - 1) * getReplayBubbleIntervalMs(replaySpeedRef.current)
+        + REPLAY_BUBBLE_SETTLE_MS;
       replayDoneTimer.current = window.setTimeout(() => {
         updateReplayAutomationState({ phase: 'complete' }, messageCount);
       }, playbackDuration);
+    };
+
+    replayPlaybackSyncRef.current = () => {
+      if (!gameRef.current || !synthDone.current) return;
+
+      const state = useSimulationStore.getState();
+      if (!state.isSimulationComplete) return;
+
+      const replayMessages = filterReplayMessages(
+        state.messages,
+        state.branches,
+        playbackBranchId,
+        playbackRound,
+      );
+
+      if (bubbleCleanup.current) {
+        bubbleCleanup.current();
+        bubbleCleanup.current = null;
+      }
+
+      dispatchVizEvent('viz:clear_bubbles', {});
+      syncReplayAutomationState(replayMessages.length);
+
+      if (replayMessages.length > 0) {
+        if (playbackMode === 'skip') {
+          synthesizeLatestBubbles(replayMessages, state.agents);
+        } else {
+          bubbleCleanup.current = synthesizeBubbles(
+            replayMessages,
+            state.agents,
+            REPLAY_BATCH_SIZE,
+            getReplayBubbleIntervalMs(replaySpeedRef.current),
+          );
+        }
+      }
+
+      lastBubbleIdx.current = state.messages.length;
     };
 
     // ── V2.1: Viz Event Synthesis for completed simulations ──
@@ -397,6 +443,7 @@ export function PhaserGame({
         window.clearInterval(replaySyncTimer.current);
         replaySyncTimer.current = null;
       }
+      replayPlaybackSyncRef.current = null;
       EventBridge.stop();
       if (gameRef.current) {
         gameRef.current.destroy(true);
@@ -408,7 +455,7 @@ export function PhaserGame({
       delete automationWindow.advanceTime;
       replayAutomationState.current = null;
     };
-  }, [height, playbackBranchId, playbackMode, playbackRound, replaySpeed, width]);
+  }, [height, playbackBranchId, playbackMode, playbackRound, width]);
 
   return (
     <div

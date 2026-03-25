@@ -254,22 +254,23 @@ class VectorStore:
         if not self.available:
             return
 
-        with _CHROMA_WRITE_LOCK:
-            lease = self._acquire_write_lease(scenario_id, operation)
-            if lease is None:
-                return
-            try:
+        lease = self._acquire_write_lease(scenario_id, operation)
+        if lease is None:
+            return
+
+        try:
+            with _CHROMA_WRITE_LOCK:
                 write_call()
-            finally:
-                try:
-                    release_runtime_lock(lease)
-                except Exception as exc:
-                    logger.warning(
-                        "Vector store %s lock release failed for %s: %s",
-                        operation,
-                        scenario_id,
-                        exc,
-                    )
+        finally:
+            try:
+                release_runtime_lock(lease)
+            except Exception as exc:
+                logger.warning(
+                    "Vector store %s lock release failed for %s: %s",
+                    operation,
+                    scenario_id,
+                    exc,
+                )
 
     def store(
         self,

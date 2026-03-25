@@ -1,9 +1,7 @@
 """Tests for P3-A: Hierarchical agent grouping and group-aware blackboard."""
 
-import pytest
-from app.services.blackboard import Blackboard
 from app.models.agent_group import AgentGroup, AgentGroupMember
-
+from app.services.blackboard import Blackboard
 
 # ── Blackboard group briefing tests ───────────────────
 
@@ -188,18 +186,21 @@ class TestParserFallbackGroups:
         assert len(support_group["members"]) == 2
         assert support_group["leader"] == "Agent1"  # First member is leader
 
-    def test_fallback_groups_updates_agents(self):
-        """_generate_fallback_groups should set group field on agents."""
-        from app.services.parser import _generate_fallback_groups
+    def test_apply_group_memberships_returns_grouped_agent_copies(self):
+        """Fallback groups should be applied without mutating the original list."""
+        from app.services.parser import _apply_group_memberships, _generate_fallback_groups
 
         agents = [
             {"name": "A", "stance": "支持"},
             {"name": "B", "stance": "反对"},
         ]
-        _generate_fallback_groups(agents)
+        groups = _generate_fallback_groups(agents)
+        grouped_agents = _apply_group_memberships(agents, groups)
 
-        assert agents[0]["group"] == "支持派"
-        assert agents[1]["group"] == "反对派"
+        assert "group" not in agents[0]
+        assert "group" not in agents[1]
+        assert grouped_agents[0]["group"] == "支持派"
+        assert grouped_agents[1]["group"] == "反对派"
 
 
 # ── Hierarchical simulation — unit tests ──────────────
@@ -221,8 +222,8 @@ class TestHierarchicalSimulation:
 
     def test_agent_to_dict_includes_group_id(self):
         """_agent_to_dict should include group_id field."""
-        from app.services.simulator import _agent_to_dict
         from app.models import Agent, AgentTier
+        from app.services.simulator import _agent_to_dict
 
         agent = Agent(
             id="test-id",

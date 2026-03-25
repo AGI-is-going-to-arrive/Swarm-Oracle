@@ -139,6 +139,61 @@ describe('useDebateWS', () => {
     expect(MockWebSocket.instances).toHaveLength(2);
   });
 
+  it('ignores stale socket messages after switching debates', () => {
+    const view = render(<Harness debateId="debate-old" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    const staleSocket = MockWebSocket.instances[0];
+
+    view.rerender(<Harness debateId="debate-new" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    act(() => {
+      staleSocket?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_phase_change',
+          data: { phase: 'verdict' },
+          meta: { stream_id: 'debate-old', sequence: 1, event_id: 'debate-old:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setPhase).not.toHaveBeenCalled();
+  });
+
+  it('ignores stale socket close events after a reconnect replaced the active socket', () => {
+    render(<Harness debateId="debate-stale-close" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    const staleSocket = MockWebSocket.instances[0];
+    expect(staleSocket).toBeDefined();
+
+    act(() => {
+      staleSocket?.emitClose(1006);
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    act(() => {
+      staleSocket?.onclose?.({ code: 1006 } as CloseEvent);
+      vi.advanceTimersByTime(12_000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
   it('forwards debate_counterplay events into the store', () => {
     render(<Harness debateId="debate-4" />);
 
@@ -390,4 +445,5 @@ describe('useDebateWS', () => {
     );
     debugSpy.mockRestore();
   });
+
 });

@@ -292,11 +292,13 @@ describe('DebateResultView', () => {
     const user = userEvent.setup();
     const replayToken = encodeDebateReplayToken(buildPayload());
     importReplayDebateMock.mockResolvedValue({ id: 'imported-debate-1' });
+    getDebateResultMock.mockResolvedValue(buildPayload());
 
     render(
       <MemoryRouter initialEntries={[`/debate/replay/result?replay=${replayToken}`]}>
         <Routes>
           <Route path="/debate/replay/result" element={<DebateResultView />} />
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
         </Routes>
       </MemoryRouter>,
     );
@@ -345,4 +347,45 @@ describe('DebateResultView', () => {
     expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
     expect(getDebateResultMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('stops polling after repeated API 409 responses and shows a pending error', async () => {
+    vi.useFakeTimers();
+    getDebateResultMock.mockRejectedValue(
+      new ApiError(409, 'DEBATE_RESULT_NOT_READY', 'Debate result is not ready yet'),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200 * 12);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const settledCallCount = getDebateResultMock.mock.calls.length;
+    expect(settledCallCount).toBeGreaterThanOrEqual(11);
+    expect(settledCallCount).toBeLessThanOrEqual(12);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getDebateResultMock.mock.calls.length).toBe(settledCallCount);
+
+    vi.useRealTimers();
+    expect(await screen.findByText('debate.result_pending')).toBeInTheDocument();
+  });
+
 });

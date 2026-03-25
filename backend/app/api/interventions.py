@@ -485,7 +485,10 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
 
     engine = get_engine()
 
-    # Validate scenario
+    # Validate ALL branches first (atomic: all-or-nothing)
+    results = []
+    use_persisted_queue = _pending_intervention_db_path() is not None
+    memory_queue_entries: list[tuple[str, str]] = []
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
@@ -497,11 +500,7 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
                 f"Cannot intervene: scenario status is '{scenario.status.value}'",
             )
 
-    # Validate ALL branches first (atomic: all-or-nothing)
-    results = []
-    use_persisted_queue = _pending_intervention_db_path() is not None
-    memory_queue_entries: list[tuple[str, str]] = []
-    with Session(engine) as session:
+        branch_map: dict[str, Branch] = {}
         for item in req.interventions:
             if not item.text.strip():
                 raise api_error(
@@ -523,13 +522,26 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
                     "INTERVENTION_BRANCH_STATUS_INVALID",
                     f"Cannot intervene: branch {item.branch_id} status is '{branch.status.value}'",
                 )
+            branch_map[item.branch_id] = branch
 
         # All valid — apply all interventions
         for item in req.interventions:
+            branch = branch_map[item.branch_id]
             max_round = session.exec(
                 select(func.max(Round.round_number)).where(Round.branch_id == item.branch_id)
             ).one_or_none()
             current_round = max_round if max_round is not None else 0
+
+            next_gameplay_state = _persist_gameplay_card_usage(
+                session,
+                scenario_id=scenario_id,
+                scenario=scenario,
+                branch=branch,
+                current_round=current_round,
+                req=item,
+            )
+            if next_gameplay_state is not None:
+                scenario.gameplay_state_json = next_gameplay_state
 
             log = InterventionLog(
                 scenario_id=scenario_id,

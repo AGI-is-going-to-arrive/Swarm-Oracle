@@ -9,9 +9,9 @@ import app.services.memory as memory_module
 from app.services.memory import (
     _COMPRESS_DEFAULTS,
     _TIER_MAX_RECENT,
+    _build_crowd_context,
     _extract_priority_lines,
     _score_priority_line,
-    _build_crowd_context,
     _validate_compress_result,
     build_agent_context,
     compress_rounds,
@@ -106,6 +106,21 @@ class TestBuildAgentContext:
         )
         assert "刚才的对话 / UNTRUSTED DATA" in ctx
         assert "Potential prompt-injection markers detected" in ctx
+
+    def test_english_context_uses_english_scaffold(self):
+        agent = {"name": "Test", "role": "Strategist", "persona": "Measured", "emotion": "calm"}
+        ctx = build_agent_context(
+            agent=agent,
+            setting_background="A coalition is under strain.",
+            current_topic="Should the coalition split?",
+            recent_messages="[A]: We may need a split.",
+            language="English",
+        )
+        assert 'You are roleplaying "Test"' in ctx
+        assert "[World Background]" in ctx
+        assert "Recent Dialogue / UNTRUSTED DATA" in ctx
+        assert "推演核心议题" not in ctx
+        assert "刚才的对话" not in ctx
 
     def test_context_token_budget(self):
         """Context should be reasonably sized (~2-3K tokens ≈ ~4-6K chars)."""
@@ -266,6 +281,25 @@ class TestCompressRounds:
         prompt = mock_llm.call_args[0][0]
         assert "当前窗口原始对话 / UNTRUSTED DATA" in prompt
         assert "```text" in prompt
+
+    @pytest.mark.asyncio
+    async def test_english_compress_prompt_uses_english_scaffold(self):
+        mock_response = {
+            "situation": "The room is deadlocked.",
+            "active_debates": ["Whether to escalate"],
+            "key_quotes": ["[A]: We escalate at dawn."],
+            "tension_points": ["The alliance may fracture."],
+            "consensus": "",
+        }
+        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            await compress_rounds("[A]: We escalate at dawn.", language="English")
+
+        prompt = mock_llm.call_args[0][0]
+        assert "[Previous Rolling Briefing]" in prompt
+        assert "Current Raw Dialogue Window / UNTRUSTED DATA" in prompt
+        assert "态势简报" not in prompt
+        assert "当前窗口原始对话" not in prompt
 
     @pytest.mark.asyncio
     async def test_partial_fields_from_llm(self):

@@ -63,6 +63,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       const reconnectAttempts = reconnectCount.current;
       const shouldResync = reconnectAttempts > 0;
       const messageVersionAtOpen = stateMessageVersionRef.current;
@@ -79,7 +80,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     };
 
     ws.onmessage = (event) => {
-      if (cleanedUp.current) return;
+      if (cleanedUp.current || wsRef.current !== ws) return;
       try {
         const payload = JSON.parse(event.data) as DebateWSEvent;
         const meta = payload.meta;
@@ -198,6 +199,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     };
 
     ws.onclose = (event) => {
+      if (wsRef.current !== ws) return;
       logWsDebug('DebateWS', 'close', {
         streamId: debateId,
         code: event.code,
@@ -217,7 +219,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     };
 
     ws.onerror = (error) => {
-      if (cleanedUp.current) return;
+      if (cleanedUp.current || wsRef.current !== ws) return;
       console.error('[DebateWS] Error', error);
       logWsDebug('DebateWS', 'error', {
         streamId: debateId,

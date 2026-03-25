@@ -19,6 +19,8 @@ _INPROCESS_LOCKS: dict[str, tuple[str, float]] = {}
 _INPROCESS_LOCKS_GUARD = threading.Lock()
 _SQLITE_TIMEOUT_SECONDS = 30.0
 _SQLITE_CONNECTIONS = threading.local()
+_ENSURED_SQLITE_SCHEMA_PATHS: set[str] = set()
+_ENSURE_SQLITE_SCHEMA_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,12 @@ def _runtime_lock_db_path() -> str | None:
     return db_path
 
 
-def _ensure_runtime_lock_table(conn: sqlite3.Connection) -> None:
+def _ensure_runtime_lock_table(conn: sqlite3.Connection, db_path: str | None = None) -> None:
+    if db_path is not None:
+        with _ENSURE_SQLITE_SCHEMA_GUARD:
+            if db_path in _ENSURED_SQLITE_SCHEMA_PATHS:
+                return
+
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {_RUNTIME_LOCK_TABLE} (
@@ -68,6 +75,9 @@ def _ensure_runtime_lock_table(conn: sqlite3.Connection) -> None:
         ON {_RUNTIME_LOCK_TABLE} (expires_at)
         """
     )
+    if db_path is not None:
+        with _ENSURE_SQLITE_SCHEMA_GUARD:
+            _ENSURED_SQLITE_SCHEMA_PATHS.add(db_path)
 
 
 def _get_threadlocal_connection_cache() -> dict[str, sqlite3.Connection]:
@@ -143,7 +153,7 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
     conn = _get_sqlite_connection(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        _ensure_runtime_lock_table(conn)
+        _ensure_runtime_lock_table(conn, db_path)
         conn.execute(
             f"DELETE FROM {_RUNTIME_LOCK_TABLE} WHERE expires_at <= ?",
             (now,),
@@ -192,7 +202,7 @@ def runtime_lock_is_active(lock_key: str) -> bool:
 
     conn = _get_sqlite_connection(db_path)
     try:
-        _ensure_runtime_lock_table(conn)
+        _ensure_runtime_lock_table(conn, db_path)
         current = conn.execute(
             f"""
             SELECT 1
@@ -222,7 +232,7 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
     conn = _get_sqlite_connection(lease.db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        _ensure_runtime_lock_table(conn)
+        _ensure_runtime_lock_table(conn, lease.db_path)
         cursor = conn.execute(
             f"DELETE FROM {_RUNTIME_LOCK_TABLE} WHERE lock_key = ? AND owner_id = ?",
             (lease.lock_key, lease.owner_id),

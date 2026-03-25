@@ -23,9 +23,11 @@ from app.services.runtime_lock import (
 @pytest.fixture(autouse=True)
 def reset_inprocess_runtime_locks():
     runtime_lock_module._INPROCESS_LOCKS.clear()
+    runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
     runtime_lock_module._close_threadlocal_sqlite_connections()
     yield
     runtime_lock_module._INPROCESS_LOCKS.clear()
+    runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
     runtime_lock_module._close_threadlocal_sqlite_connections()
 
 
@@ -165,6 +167,42 @@ def test_runtime_lock_is_active_does_not_issue_immediate_transaction(monkeypatch
     assert runtime_lock_is_active(simulation_lock_key("scenario-1")) is True
     assert not any("BEGIN IMMEDIATE" in statement for statement in statements)
     assert not any("DELETE FROM runtime_lock" in statement for statement in statements)
+
+
+def test_runtime_lock_caches_schema_ensure_per_sqlite_path(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-schema-cache.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    statements: list[str] = []
+
+    class _FakeResult:
+        def fetchone(self):
+            return None
+
+    class _FakeConnection:
+        def execute(self, statement, params=()):
+            statements.append(" ".join(str(statement).split()))
+            return _FakeResult()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        runtime_lock_module.sqlite3,
+        "connect",
+        lambda *args, **kwargs: _FakeConnection(),
+    )
+
+    assert runtime_lock_is_active(simulation_lock_key("scenario-1")) is False
+    assert runtime_lock_is_active(simulation_lock_key("scenario-1")) is False
+
+    create_table_calls = [
+        statement for statement in statements if "CREATE TABLE IF NOT EXISTS runtime_lock" in statement
+    ]
+    assert len(create_table_calls) == 1
 
 
 def test_runtime_lock_is_active_reports_inprocess_leases(monkeypatch):

@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-25（review fix 批次：runtime lock / runtime guard / gameplay contract / challenge rotation / EventBridge / gameplay-state compare 收口；并已补记本 session `release:signoff` 实跑结果）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-26（review fix 批次：runtime lock / runtime guard / gameplay contract / challenge rotation / EventBridge / gameplay-state compare 收口；并已补记本 session 的 `replay speed e2e`、`ResultView finalize cache`、`social language policy` 与 `lang_detect` 扩展实跑结果）
 
 ## 阅读顺序
 

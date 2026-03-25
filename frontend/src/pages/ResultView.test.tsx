@@ -448,6 +448,75 @@ describe('ResultView campaign summary', () => {
     expect(getCampaignScenarioSummaryMock).toHaveBeenCalledTimes(1);
   });
 
+  it('reuses a cached finalize result when the scenario summary is already finalized', async () => {
+    const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
+    getCampaignScenarioSummaryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      profile_id: 'law',
+      archive_grade: 'A',
+      profile_resonance: 'aligned',
+      betting_hit: null,
+      most_used_card: null,
+      completed_daily_challenge: false,
+      objective_completed_count: 0,
+      objective_total_count: 0,
+      commitment_outcome: null,
+      campaign_score_delta: 5,
+      finalized_at: '2026-03-17T00:00:00Z',
+    });
+
+    window.sessionStorage.setItem(
+      'swarmoracle:result-campaign-finalize:v1',
+      JSON.stringify({
+        'scenario-1::director-1::law': {
+          scenario_id: 'scenario-1',
+          already_finalized: true,
+          campaign_score_delta: 5,
+          profile: {
+            user_id: 'director-1',
+            user_name: 'Local Director',
+            total_runs: 1,
+            completed_challenges: 0,
+            total_bets: 0,
+            hit_bets: 0,
+            highest_archive_grade: 'A',
+            created_at: '2026-03-17T00:00:00Z',
+            updated_at: '2026-03-17T00:00:00Z',
+          },
+          mastery: {
+            profile_id: 'law',
+            runs: 1,
+            challenge_completions: 0,
+            signature_hits: 0,
+            aligned_hits: 1,
+            campaign_score: 5,
+            level: 2,
+            best_archive_grade: 'A',
+            favorite_card_id: null,
+            next_level_score: 10,
+            score_to_next_level: 5,
+          },
+          badges: [],
+          newly_unlocked_badges: [],
+        },
+      }),
+    );
+    finalizeCampaignMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.campaign_title')).toBeInTheDocument();
+    expect(screen.getByText('+5')).toBeInTheDocument();
+    expect(finalizeCampaignMock).not.toHaveBeenCalled();
+    expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-1');
+  });
+
   it('scores predictions with BYOK overrides loaded from sessionStorage', async () => {
     const user = userEvent.setup();
     const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);

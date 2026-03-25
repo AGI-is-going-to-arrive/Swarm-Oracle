@@ -1349,6 +1349,132 @@ class TestInterveneEndpoint:
             )
         assert [item.user_input for item in queued] == ["第一条批量干预", "第二条批量干预"]
 
+    def test_intervene_batch_persists_gameplay_card_usage(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {
+                        "branch_id": bid,
+                        "text": "批量接管",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "批量强推公开解释义务",
+                    }
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            usage_log = scenario.gameplay_state_json["cards"]["usage_log"]
+            assert len(usage_log) == 1
+            assert usage_log[0]["card_id"] == "human_takeover"
+            assert usage_log[0]["profile_id"] == "governance"
+
+    def test_intervene_batch_rejects_gameplay_card_on_cooldown(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.gameplay_state_json = {
+                "revision": 1,
+                "cards": {
+                    "usage_log": [
+                        {
+                            "card_id": "human_takeover",
+                            "profile_id": "governance",
+                            "branch_id": bid,
+                            "branch_title": "主线",
+                            "round": 1,
+                            "cost": 1,
+                            "directive": "上一轮接管",
+                            "used_at": "2026-03-25T00:00:00+00:00",
+                        }
+                    ]
+                },
+                "betting": {"bets": []},
+                "archive": {"key_moments": [], "branch_snapshots": []},
+            }
+            session.add(scenario)
+            session.commit()
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {
+                        "branch_id": bid,
+                        "text": "再次接管",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "再次强推公开解释义务",
+                    }
+                ]
+            },
+        )
+
+        assert resp.status_code == 400
+        assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
+
+    def test_intervene_batch_keeps_gameplay_card_validation_atomic(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {
+                        "branch_id": bid,
+                        "text": "第一次接管",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "强推公开解释义务",
+                    },
+                    {
+                        "branch_id": bid,
+                        "text": "第二次接管",
+                        "card_id": "human_takeover",
+                        "profile_id": "governance",
+                        "directive": "再次强推公开解释义务",
+                    },
+                ]
+            },
+        )
+
+        assert resp.status_code == 400
+        assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.gameplay_state_json is None
+            queued = session.exec(
+                select(PendingIntervention)
+                .where(PendingIntervention.scenario_id == sid)
+            ).all()
+            logs = session.exec(
+                select(InterventionLog)
+                .where(InterventionLog.scenario_id == sid)
+            ).all()
+
+        assert queued == []
+        assert logs == []
+
     def test_intervene_finished_scenario(self, client):
         """Should reject intervention on DONE scenario."""
         engine = get_engine()
@@ -2110,6 +2236,78 @@ class TestSocialCopy:
 
         assert resp.status_code == 200
         assert resp.json()["copy"] == "English social copy"
+
+    def test_social_copy_reddit_follows_chinese_scenario_language(self, client, monkeypatch):
+        engine = get_engine()
+        scenario = Scenario(
+            question="如果罗马帝国从未衰落？",
+            status=ScenarioStatus.DONE,
+            parsed_context={"_language": "Chinese"},
+        )
+        with Session(engine) as session:
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            sid = scenario.id
+        _seed_agent(engine, sid, name="奥古斯都", role="皇帝", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="帝国续命",
+            probability=0.7,
+            status=BranchStatus.COMPLETED,
+            story="帝国秩序被延长了三个世纪。",
+            insight="制度惯性比个人寿命更重要。",
+        )
+
+        async def _fake_llm_call(prompt, **kwargs):
+            assert "写一篇 Reddit 帖子" in prompt
+            assert "使用英文" not in prompt
+            assert "所有文本使用中文" in prompt
+            return "中文 Reddit 文案"
+
+        monkeypatch.setattr("app.services.llm_client.llm_call", _fake_llm_call)
+
+        resp = client.post(f"/api/scenario/{sid}/social/reddit", json={})
+
+        assert resp.status_code == 200
+        assert resp.json()["copy"] == "中文 Reddit 文案"
+
+    def test_social_copy_non_english_scenario_adds_explicit_output_language(self, client, monkeypatch):
+        engine = get_engine()
+        scenario = Scenario(
+            question="Et si Rome ne s'était jamais effondrée ?",
+            status=ScenarioStatus.DONE,
+            parsed_context={"_language": "French"},
+        )
+        with Session(engine) as session:
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            sid = scenario.id
+
+        _seed_agent(engine, sid, name="Auguste", role="Empereur", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="Continuité impériale",
+            probability=0.7,
+            status=BranchStatus.COMPLETED,
+            story="L'empire survit trois siècles de plus.",
+            insight="Les institutions survivent à leurs fondateurs.",
+        )
+
+        async def _fake_llm_call(prompt, **kwargs):
+            assert "Simulation results" in prompt
+            assert "français" in prompt
+            return "Copie sociale en français"
+
+        monkeypatch.setattr("app.services.llm_client.llm_call", _fake_llm_call)
+
+        resp = client.post(f"/api/scenario/{sid}/social/x", json={})
+
+        assert resp.status_code == 200
+        assert resp.json()["copy"] == "Copie sociale en français"
 
     def test_social_copy_get_openapi_does_not_advertise_provider_query_params(self, client):
         app.openapi_schema = None

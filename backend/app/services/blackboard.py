@@ -51,6 +51,7 @@ class Blackboard:
 
     def __init__(self, *, max_activity_entries: int = _DEFAULT_MAX_ACTIVITY):
         self.global_summary: str = ""
+        self.consensus: str = ""
         self.active_debates: list[str] = []
         self.tension_points: list[str] = []
         self.agent_positions: dict[str, str] = {}   # {agent_name: "立场(情绪)"}
@@ -116,12 +117,9 @@ class Blackboard:
         Expected keys: situation, active_debates, tension_points, consensus.
         """
         self.global_summary = compressed.get("situation", "")
+        self.consensus = compressed.get("consensus", "")
         self.active_debates = list(compressed.get("active_debates", []))
         self.tension_points = list(compressed.get("tension_points", []))
-        # Append consensus to summary if present
-        consensus = compressed.get("consensus", "")
-        if consensus:
-            self.global_summary += f"  共识: {consensus}"
 
     # ── Read API ─────────────────────────────────────────
 
@@ -150,6 +148,7 @@ class Blackboard:
 
         return {
             "summary": self.global_summary,
+            "consensus": self.consensus,
             "recent": self.activity_log[-max_entries:],
             "positions": positions,
             "tensions": list(self.tension_points),
@@ -184,6 +183,7 @@ class Blackboard:
 
         return {
             "summary": self.global_summary,
+            "consensus": self.consensus,
             "recent": group_activity,
             "positions": group_positions,
             "tensions": list(self.tension_points),
@@ -209,6 +209,7 @@ class Blackboard:
 
         return {
             "summary": self.global_summary,
+            "consensus": self.consensus,
             "recent": self.activity_log[-max_entries:],
             "positions": group_summaries,
             "tensions": list(self.tension_points),
@@ -276,6 +277,7 @@ class Blackboard:
         """
         child = Blackboard(max_activity_entries=self._max_activity_entries)
         child.global_summary = self.global_summary
+        child.consensus = self.consensus
         child.active_debates = list(self.active_debates)
         child.tension_points = list(self.tension_points)
         child.agent_positions = dict(self.agent_positions)

@@ -219,6 +219,81 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `frontend/src/hooks/useInputViewState.ts`
     - 新增 `probeResult / hasFreshProbe / disableUserQuota` 状态。
 
+## 2026-03-25 Audit Verification + Fix Pass
+
+- 目标：
+  - 逐项核实 `swarm_oracle_consolidated_audit.md` 中仍然成立的问题。
+  - 对确认存在且高价值的问题做最小修复，并补浏览器/E2E 证据。
+
+- 已确认仍真实存在并已修复：
+  - `backend/app/services/parser.py`
+    - `_generate_fallback_groups()` 之前会直接给传入 `agents` 写入 `group`，已改为纯函数；真正的 group 写入继续统一走 `_apply_group_memberships()`。
+  - `backend/app/api/interventions.py`
+    - `intervene_batch()` 之前没有复用单次干预的玩法卡费用/冷却校验，确实可绕过；现已在 batch 路径复用 `_persist_gameplay_card_usage()`，并在同一事务内串行更新 scenario gameplay authority，防止批量调用内部再次绕过冷却/点数。
+  - `frontend/src/hooks/useDebateWS.ts`
+    - `onopen / onmessage / onclose / onerror` 缺少 stale socket guard；现已补 `wsRef.current !== ws` 守卫，避免旧连接消息和关闭事件污染新连接。
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 409 “结果未就绪”之前会无限轮询；现已改为有上限重试，超过上限后显示已本地化的 pending 错误，不再无限打接口。
+
+- 已补测试：
+  - `backend/tests/test_agent_group.py`
+    - 改成验证 `_apply_group_memberships()` 返回带 group 的副本，而不是要求 `_generate_fallback_groups()` 直接改原数组。
+  - `backend/tests/test_intervention.py`
+    - 新增 batch 路径玩法卡冷却绕过回归测试，并断言失败时不会落 `InterventionLog` / `PendingIntervention`。
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+    - 新增 stale socket close 事件测试；既有 stale message 测试现在与新 guard 一致。
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 新增 repeated 409 后停止轮询、显示 pending 错误且调用数稳定的回归测试。
+
+- 本轮验证结果：
+  - 后端定向：
+    - `cd backend && python -m pytest tests/test_parser.py::TestParseQuestion::test_generate_fallback_groups_does_not_mutate_input_agents tests/test_agent_group.py::TestParserFallbackGroups::test_apply_group_memberships_returns_grouped_agent_copies tests/test_intervention.py::TestBatchIntervention::test_batch_rejects_gameplay_card_cooldown_bypass -q`
+    - `3 passed`
+  - 前端定向：
+    - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `16 passed`
+  - 前端类型检查：
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 本轮浏览器 / E2E 证据：
+  - 主模式移动端：
+    - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-mobile --headless`
+    - 通过，工件落于 `frontend/output/e2e/20260325-audit-mobile/`
+  - 主模式跨浏览器：
+    - 重新拉起前端到 `http://127.0.0.1:18929/`
+    - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18929 --output-dir output/e2e/20260325-audit-cross --browsers firefox,webkit --headless`
+    - 通过，工件落于 `frontend/output/e2e/20260325-audit-cross/`
+  - Debate 全链路：
+    - 首次跑 `20260325-audit-debate` 时业务工件已生成，但旧前端 dev server 在收尾阶段掉线。
+    - 重新在 `18929` 端口完整重跑：
+      - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260325-audit-debate-rerun --headless`
+      - 成功，工件落于 `frontend/output/e2e/20260325-audit-debate-rerun/`
+  - `develop-web-game` 客户端：
+    - 技能原始 `web_game_playwright_client.js` 仍是 `.js + ESM` 组合，直接用 `node` 会报 `Cannot use import statement outside a module`；本轮继续复用工作区已有的 `frontend/.tmp-web-game-client.mjs` 临时副本执行。
+    - 产物：
+      - `frontend/output/web-game-audit/shot-0.png`
+      - `frontend/output/web-game-audit/state-0.json`
+
+- 人工视觉抽查：
+  - 使用 `playwright-interactive` / `js_repl` 打开：
+    - 桌面 Debate 结果页 `http://127.0.0.1:18929/debate/<id>/result`
+    - 移动端首页 `http://127.0.0.1:18929/`
+  - 观察：
+    - Debate 结果页首屏层级清晰、裁决卡/信号卡/分享 CTA 可见。
+    - 移动端首页首屏能正常显示语言切换、Daily Challenge 与周报卡首段；周报卡需要继续下滚查看，符合滚动首页预期。
+
+- 本轮核实后判定为“报告已过时或不成立”的条目（至少）：
+  - `backend/app/main.py` 的 CORS 已不是硬编码单 origin，而是 `settings.CORS_ORIGINS`。
+  - `backend/app/services/debate.py` tie-break 不再“未知值默认偏正方”；当前会回退到 `base_plan.winner`。
+  - `backend/app/services/runtime_lock.py` 的 `runtime_lock_is_active()` 已不走 `BEGIN IMMEDIATE`。
+  - `frontend/src/game/managers/EventBridge.ts` 的 stop 竞争在当前实现和现有测试口径下不再构成同级问题。
+
+- 仍可继续观察但本轮未动的点：
+  - `scenarioMeta` 150ms localStorage 锁租约偏短，属于低优先级鲁棒性改进。
+  - `PhaserGame` 的 `replaySpeed` 仍会触发完整实例重建，这是真实体验问题，但修复面较大，适合单独一轮处理。
+  - 交付仍然是“跨浏览器 Web 应用”，不是原生 Windows/macOS/Linux/iOS/Android 客户端。
+
 ## 2026-03-25 Review Report Validation
 
 - 已读取 `code-review-report.md`，按条目映射到 backend/frontend 当前实现，而不是仅按报告文本判断。
@@ -10119,3 +10194,455 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 结果：`passed`
   - 绑定 git：`branch=master`，`commit=8c94b2bac5482c2ddaed44d8c8dbfc2fa0639787`，`dirty=true`
 - 已按这次真实代码与测试结果同步 `llmdoc/*` 与 `code_review_report.md`，不再保留旧的“待修复”口径。
+
+## 2026-03-25 Audit Verification + Targeted Fixes
+
+- 目标：
+  - 核对 `swarm_oracle_consolidated_audit.md` 中仍然真实存在的问题。
+  - 只修复当前代码仍存在、且能用最小改动闭环验证的问题；其余过时项/设计取舍留给最终汇总说明。
+
+- 已确认并修复：
+  - `backend/app/services/parser.py`
+    - `_generate_fallback_groups()` 不再回写传入 `agents`；配套失败测试现通过。
+  - `backend/app/api/interventions.py`
+    - `intervene_batch()` 现在会复用 `_persist_gameplay_card_usage()`，不再允许通过 batch API 绕过玩法卡费用 / 冷却 / 最低轮次校验。
+  - `backend/app/services/vector_store.py`
+    - Chroma 写路径改为“先拿 SQLite shared lease，再拿进程内 `_CHROMA_WRITE_LOCK`”，避免持有进程内锁去等待 SQLite 锁，降低锁顺序风险。
+  - `frontend/src/hooks/useDebateWS.ts`
+    - `onopen/onmessage/onclose/onerror` 全部补齐 stale socket guard，旧 debate socket 的迟到消息不再污染当前页面状态。
+  - `frontend/src/pages/DebateResultView.tsx`
+    - 结果页 `409` 轮询改为有上限的重试；超过阈值后显示本地化 pending/error，而不是无限重试。
+  - `frontend/src/stores/simulationStore.ts`
+    - `seenMessageKeys` 去重键加上 `scenario.id` 作用域，降低跨场景快速切换时误判重复消息的风险。
+
+- 本轮新增/更新测试：
+  - `backend/tests/test_intervention.py`
+    - 新增 batch 干预玩法卡冷却绕过回归测试。
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+    - 新增 stale socket 消息忽略回归测试。
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 新增 repeated `409` 最终停止轮询并展示 pending 提示的回归测试。
+
+- 本轮验证通过：
+  - `cd backend && python -m pytest tests/test_parser.py -k generate_fallback_groups_does_not_mutate_input_agents -q`
+    - `1 passed`
+  - `cd backend && python -m pytest tests/test_intervention.py -k batch_rejects_gameplay_card_cooldown_bypass -q`
+    - `1 passed`
+  - `cd backend && python -m pytest tests/test_vector_store.py -k 'store_serializes_concurrent_writes_with_process_lock or delete_collection_uses_canonical_name_clears_cache_and_wraps_runtime_lock or store_skips_immediately_when_shared_write_lock_is_busy' -q`
+    - `3 passed`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx src/stores/simulationStore.test.ts`
+    - `39 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `curl -s -X POST http://127.0.0.1:18927/api/health | jq`
+    - `server=ok, llm=ok, model=gpt-5.4-mini`
+
+- 本轮浏览器 / E2E 复验通过：
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-mobile --headless`
+    - 通过；首页移动端 challenge / weekly / growth 卡正常，Theater 首屏可用，结果页可读。
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-debate --headless`
+    - 通过；桌面/移动 Debate live + result + share + automation hooks 全通过，`adjudication_mode=llm_hybrid`。
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-cross-browser --headless`
+    - 通过；Firefox/WebKit 主模式 smoke 正常。
+
+- 人工可视检查：
+  - 已查看：
+    - `frontend/output/e2e/20260325-audit-mobile/mobile-home.png`
+    - `frontend/output/e2e/20260325-audit-mobile/mobile-theater.png`
+    - `frontend/output/e2e/20260325-audit-debate/mobile/live.png`
+    - 以及手动抓取的 `output/e2e/manual-debate-result-panel.png`
+  - 结论：
+    - 移动端首页首屏、Theater 面板、Debate 押注弹窗与结果页布局均可见、可读，未见明显裁切或遮挡。
+
+- 仍待最终汇总时说明的项：
+  - `PhaserGame` 的 `replaySpeed` 仍会触发完整实例重建，属于体验/性能问题。
+  - `runtime_lock.py` 每次 acquire/release 仍会执行 `CREATE TABLE/INDEX IF NOT EXISTS`，属于低风险优化项。
+  - 产品当前“跨平台”仍然是浏览器跨平台（桌面浏览器 + 移动浏览器 + Firefox/WebKit/Chromium），不是原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+
+## 2026-03-25 Audit Recheck + Targeted Fixes
+
+- 本轮目标：
+  - 核对 `swarm_oracle_consolidated_audit.md` 中仍然真实存在的前后端问题。
+  - 先修复已被代码/测试直接证实的问题，再进入真实浏览器 E2E。
+
+- 已确认并修复：
+  - `backend/app/services/parser.py`
+    - `_generate_fallback_groups()` 不再偷偷回写传入 `agents`；分组注入统一留给 `_apply_group_memberships()`。
+    - 直接证据：`tests/test_parser.py::test_generate_fallback_groups_does_not_mutate_input_agents` 之前失败，现已通过。
+  - `backend/app/api/interventions.py`
+    - `intervene_batch()` 现复用 `_persist_gameplay_card_usage()`，批量玩法卡不再绕过费用/冷却/最小轮次校验。
+    - 同时保持批量事务原子性：若其中一张卡非法，usage log / pending queue / intervention log 都不会半成功落库。
+  - `frontend/src/hooks/useDebateWS.ts`
+    - 已补齐与 `useSimulationWS` 同级的 stale socket guard：`onopen/onmessage/onclose/onerror` 都会检查 `wsRef.current === ws`。
+    - 避免旧 socket 在快速切 debate 或重连后继续处理消息/close 事件。
+  - `frontend/src/pages/DebateResultView.tsx`
+    - `409` 结果轮询现已加上上限，不再无限重试。
+
+- 已补回归：
+  - `backend/tests/test_agent_group.py`
+    - fallback groups 改为验证“返回分组 + 由 `_apply_group_memberships()` 生成带 group 的副本”，不再要求 `_generate_fallback_groups()` 直接改输入。
+  - `backend/tests/test_api.py`
+    - 新增 batch 玩法卡 usage 持久化、冷却拒绝、原子性三条覆盖。
+  - `frontend/src/hooks/useDebateWS.test.tsx`
+    - 新增 stale socket message/close 场景覆盖。
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - 新增 repeated `409` 后停止轮询的覆盖。
+
+- 本轮定向验证通过：
+  - `cd backend && source ../.venv/bin/activate && python -m pytest tests/test_parser.py tests/test_agent_group.py tests/test_api.py -k 'generate_fallback_groups_does_not_mutate_input_agents or fallback_groups or intervene_batch_persists_gameplay_card_usage or intervene_batch_rejects_gameplay_card_on_cooldown or intervene_batch_keeps_gameplay_card_validation_atomic' -q`
+    - `5 passed`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `16 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 下一步：
+  - 启 backend + frontend，跑浏览器 E2E / mobile / cross-browser / debate full。
+  - 重点复查：Debate 结果页、Theater 回放、i18n 显示、History/Leaderboard/Result 页面是否仍有审计报告中的残留问题。
+
+## 2026-03-25 Audit Recheck + E2E Signoff
+
+- 为了让本轮改动真正生效：
+  - 已重启 backend：
+    - `cd backend && source .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - 已使用 preview 形态起 frontend：
+    - `cd frontend && npm run build`
+    - `cd frontend && npm run preview -- --host 127.0.0.1 --port 18930`
+
+- 本轮额外确认的关联修复：
+  - `backend/app/services/runtime_lock.py`
+    - runtime lock schema 现在按 SQLite db path 缓存 ensure，不再每次 acquire/release/is_active 都跑一轮 DDL。
+  - `backend/app/services/vector_store.py`
+    - Chroma shared runtime lease 现在先拿 SQLite lease，再进进程内 `_CHROMA_WRITE_LOCK`，减少“持有本地锁时再去争跨进程锁”的嵌套风险。
+  - `frontend/src/stores/simulationStore.ts`
+    - message dedup key 现已带 `scenarioId`，避免模块级 `seenMessageKeys` 在跨场景切换时误去重。
+  - `frontend/src/game/PhaserGame.tsx`
+    - replaySpeed 改成通过 ref + replay resync 更新，不再触发整套 Phaser 实例销毁/重建。
+  - `frontend/scripts/e2e-suite.mjs`
+    - mobile suite 在采集首页摘要前会先等待 daily / weekly / growth 卡片真正渲染完成，避免假阴性。
+
+- 本轮补充验证通过：
+  - `cd backend && source ../.venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_intervention.py -q`
+    - `34 passed`
+  - `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/game/PhaserGame.test.ts src/pages/SimulationView.test.tsx`
+    - `47 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 浏览器 / 玩法回归通过：
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-audit-mobile --headless`
+    - 通过；首屏 challenge/growth 卡、移动端 Theater、结果页操作区均正常
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-audit-corners --headless`
+    - 通过；prediction、share、result loading gate、replay skip switch、director/gameplay authority roundtrip、history delete last page 均通过
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-audit-debate --headless`
+    - 通过；desktop + mobile Debate live/result/share/automation hooks 全通过
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-audit-cross-browser --headless`
+    - 通过；Firefox + WebKit 主模式 authority / result archive summary 一致
+
+- 交互式人工抽查：
+  - 已用 `playwright-interactive` 的持久浏览器直接打开：
+    - `http://127.0.0.1:18930/debate/b5033b3f-1742-42af-919d-d35dced05edb/result`
+    - `http://127.0.0.1:18930/result/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+  - 实际目视结果：
+    - Debate 结果页桌面端首屏结构完整，Hero / signal cards / phase map 布局正常
+    - 主模式结果页移动端首屏按钮可见，无明显裁切或首屏关键 CTA 丢失
+
+- 完整签收合同：
+  - `cd frontend && node scripts/release-signoff.mjs --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-root output/e2e/20260325-audit-signoff --headless`
+  - 结果：`passed`
+  - 工件：
+    - `frontend/output/e2e/20260325-audit-signoff/summary.json`
+
+## 2026-03-25 Audit Recheck Follow-up
+
+- 重新核对当前代码与定向测试后，发现审计报告里的多条问题已经在仓库当前版本中修复：
+  - `backend/app/services/parser.py` 当前 `_generate_fallback_groups()` 已不再改写输入；`tests/test_parser.py -k generate_fallback_groups_does_not_mutate_input_agents` 现已通过。
+  - `backend/app/api/interventions.py` 当前 `intervene_batch()` 已复用 `_persist_gameplay_card_usage()`；`tests/test_api.py -k 'intervene_batch and gameplay_card'` 现已通过。
+  - `frontend/src/hooks/useDebateWS.ts` 当前已带 `wsRef.current === ws` 守卫，审计报告中的 stale socket 条目已过时。
+
+- 本轮真实修复：
+  - `frontend/src/pages/DebateResultView.tsx`
+    - `409` 结果轮询除了已有上限外，又收掉了 effect 对 `t` 的不稳定依赖，改为依赖 `i18n.language`。
+    - 直接原因：测试环境里 `t` 引用会导致 effect 重跑，从而让“有上限的重试”表现成额外轮询。
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 本地写锁租约从 `150ms` 提高到 `1000ms`，降低多标签页/慢设备下误判忙锁的概率。
+
+- 本轮测试基线补强：
+  - `frontend/src/pages/DebateResultView.test.tsx`
+    - replay 导入测试现在为跳转后的 `/debate/:id/result` 提供 mock 结果，避免把测试缺少 mock 误判成产品回归。
+
+- 本轮验证通过：
+  - `cd frontend && npm test -- --run src/pages/DebateResultView.test.tsx src/hooks/useDebateWS.test.tsx src/stores/simulationStore.test.ts`
+    - `40 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts`
+    - `17 passed`
+  - `cd backend && . ../.venv/bin/activate && python -m pytest tests/test_parser.py -k generate_fallback_groups_does_not_mutate_input_agents -q`
+    - `1 passed`
+
+- 本轮浏览器 / E2E 复验：
+  - `frontend/scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928`
+    - 通过；桌面与移动 Debate live/result/share 全链路正常，`adjudication_mode=llm_hybrid`，automation hooks 正常。
+  - `frontend/scripts/e2e-suite.mjs mobile`
+    - 初次失败不是产品缺陷，而是脚本在首页 automation 摘要刚出现时就去查 `daily challenge` DOM。
+    - 已在 `frontend/scripts/e2e-suite.mjs` 收紧等待条件：先等 `daily challenge + weekly + growth` 卡片真正挂载，再做 surface 断言。
+    - 重跑 `--url http://127.0.0.1:18931` 后通过；移动端首页、Theater、Result 均拿到有效截图与 automation JSON。
+  - `frontend/scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18931`
+    - 通过；Firefox / WebKit 都拿到主模式 director/archive 摘要，说明当前“跨平台”浏览器口径成立。
+
+- 本轮人工视觉核查：
+  - 已查看 `frontend/output/e2e/20260325-audit-mobile/mobile-home.png`
+    - 移动端首页的 `daily challenge`、weekly track、growth 卡片可见，无明显裁切。
+  - 已查看 `frontend/output/e2e/20260325-audit-debate-full/desktop/result-ready.png`
+    - 桌面 Debate 结果页结构完整，hero/HUD/cards 可读。
+  - 已查看 `frontend/output/e2e/20260325-audit-debate-full/mobile/result-ready.png`
+    - 移动端 Debate 结果页首屏可用，主 CTA 可见，未见严重遮挡。
+
+## 2026-03-25 Consolidated Audit Follow-up
+
+- 本轮再次对 `swarm_oracle_consolidated_audit.md` 做了代码级复核，实际确认并修复的高置信问题：
+  - `backend/app/services/parser.py`：`_generate_fallback_groups()` 不再原地改写输入 `agents`。
+  - `backend/app/api/interventions.py`：batch 干预也会执行玩法卡费用 / 冷却 / 最小轮次校验。
+  - `frontend/src/hooks/useDebateWS.ts`：`onopen/onmessage/onclose/onerror` 全部带 `wsRef.current === ws` 守卫。
+  - `frontend/src/pages/DebateResultView.tsx`：`409 DEBATE_RESULT_NOT_READY` 轮询存在上限，超限后显示可见 pending 错误。
+- 本轮补充回归：
+  - `cd backend && . ../.venv/bin/activate && python -m pytest tests/test_parser.py::TestParseQuestion::test_generate_fallback_groups_does_not_mutate_input_agents tests/test_intervention.py::TestBatchIntervention::test_batch_rejects_gameplay_card_cooldown_bypass -q`
+    - `2 passed`
+  - `cd backend && . ../.venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_lang_detect.py -q`
+    - `38 passed`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `16 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 本轮 E2E / 浏览器验证：
+  - `frontend/scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-mobile --headless`
+    - 通过；首页 / Theater / Result 都落了截图与 automation JSON。
+  - `frontend/scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-debate --headless`
+    - 通过；桌面与移动 Debate 都到达结果页，`adjudication_mode=llm_hybrid`，share/capture hooks 正常。
+  - `frontend/scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-cross-browser --headless`
+    - 通过；Firefox / WebKit smoke 正常。
+- 本轮人工视觉核查：
+  - `frontend/output/e2e/20260325-audit-mobile/mobile-home.png`
+  - `frontend/output/e2e/20260325-audit-mobile/mobile-theater.png`
+  - `frontend/output/e2e/20260325-audit-mobile/mobile-result.png`
+  - `frontend/output/e2e/20260325-audit-debate/mobile/live.png`
+  - `frontend/output/e2e/20260325-audit-debate/mobile/result-ready.png`
+- 范围说明：
+  - 当前“跨平台”仍是浏览器跨平台能力，不是原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+  - `lang_detect.py` 的欧洲语言回退 `English`、`runtime_lock.py` 的 DDL 频次、`PhaserGame.tsx` 的 `replaySpeed` 重建问题，仍属于后续优化项。
+
+## 2026-03-25 Audit Repair + E2E Rerun
+
+- 本轮针对 `swarm_oracle_consolidated_audit.md` 再次做代码核实，最终收口并保留的修复如下：
+  - `backend/app/services/parser.py`
+    - `_generate_fallback_groups()` 已改为纯函数，不再原地写入 `agent["group"]`。
+    - 真实分组写回继续统一经 `_apply_group_memberships()` 完成。
+  - `backend/app/api/interventions.py`
+    - `intervene_batch()` 现在会复用 `_persist_gameplay_card_usage()`。
+    - 批量干预链路已补齐玩法卡最小轮次 / director points / cooldown 校验，并在同一事务里更新 gameplay authority。
+  - `backend/app/services/runtime_lock.py`
+    - 补了 SQLite schema ensure 缓存，避免 `runtime_lock` 每次读写都重复执行 `CREATE TABLE/INDEX IF NOT EXISTS`。
+  - `frontend/src/hooks/useDebateWS.ts`
+    - `onopen/onmessage/onclose/onerror` 现全部加上 stale socket guard：`wsRef.current !== ws` 直接返回。
+  - `frontend/src/pages/DebateResultView.tsx`
+    - `409 DEBATE_RESULT_NOT_READY` 现有重试上限；超过上限会显示本地化 pending 错误，而不是无限轮询。
+
+- 本轮补充测试与静态校验：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_runtime_lock.py tests/test_parser.py::TestParseQuestion::test_generate_fallback_groups_does_not_mutate_input_agents tests/test_agent_group.py::TestParserFallbackGroups::test_apply_group_memberships_returns_grouped_agent_copies tests/test_api.py::TestInterveneEndpoint::test_intervene_batch_persists_gameplay_card_usage tests/test_api.py::TestInterveneEndpoint::test_intervene_batch_rejects_gameplay_card_on_cooldown tests/test_api.py::TestInterveneEndpoint::test_intervene_batch_keeps_gameplay_card_validation_atomic -q`
+    - `17 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/parser.py app/api/interventions.py app/services/runtime_lock.py tests/test_agent_group.py tests/test_api.py tests/test_runtime_lock.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `16 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 本轮 E2E 产物：
+  - `frontend/output/e2e/20260325-audit-corners`
+    - 主模式 corners 套件通过；branch/ending/profile prediction、director/gameplay authority roundtrip、share retry、history delete 都落盘。
+  - `frontend/output/e2e/20260325-audit-mobile`
+    - 主模式 mobile 套件通过；首页 / Theater / Result 的 automation state 与截图已落盘。
+  - `frontend/output/e2e/20260325-audit-debate`
+    - Debate full 套件通过；桌面与移动都跑到 result，`adjudication_mode=llm_hybrid`，share/capture hooks 可用。
+  - `frontend/output/e2e/20260325-audit-cross`
+    - Firefox / WebKit cross-browser smoke 通过。
+
+- 环境坑记录：
+  - 初次 `cross-browser` 失败不是前端回归，而是当时本地 backend 已退出，前端 dev proxy 对 `/api/scenario` 返回了代理层 `500`。
+  - 已手动重启 backend（`uvicorn app.main:app --host 127.0.0.1 --port 18927`）后重跑通过。
+
+- 人工复核补充：
+  - 直接在持久 Playwright 会话里打开 Debate desktop/mobile result 路由，确认 settled 后页面文本与自动化 payload 一致。
+  - 首页语言切换可正常在 EN/ZH 间切换；Debate 结果页会按 payload `language` 自动同步语言，这是当前设计而非新问题。
+
+- 仍未并入本轮的可继续优化项：
+  - `frontend/src/game/PhaserGame.tsx` 的 `replaySpeed` 仍会触发整实例 effect 重建。
+  - `frontend/src/lib/scenarioMeta.ts` 的 `LOCK_LEASE_MS=150` 仍偏保守，跨标签页高并发下还有继续放宽空间。
+
+## 2026-03-25 Replay Speed + scenarioMeta Lock Follow-up
+
+- 本轮没有再重写运行时代码主逻辑，因为工作区里已经存在一版最小实现：
+  - `frontend/src/game/PhaserGame.tsx`
+    - 已把 `replaySpeed` 从 Phaser 主实例生命周期依赖里拿掉。
+    - 已通过 `replaySpeedRef + replayPlaybackSyncRef` 做“同实例重排 replay”。
+  - `frontend/src/lib/scenarioMeta.ts`
+    - `LOCK_LEASE_MS` 已经从旧审计提到的 `150` 提高到 `1000`。
+- 本轮处理重点改成“验证这版实现是否真的符合设计初衷，不符合就回滚”，新增内容：
+  - `frontend/src/game/PhaserGame.test.ts`
+    - 新增测试：切换 `replaySpeed` 时不会 `destroy()` / `new Phaser.Game()`。
+    - 同时验证 replay bubbles 会按新速度重新调度（`1x -> 4x` 时 interval 变为 `260ms` 下限值）。
+  - `frontend/src/lib/scenarioMeta.ts`
+    - 补充注释，明确 `1000ms` 的设计目的：降低误判竞争，同时不把 stale lock 恢复时间拉得过长。
+- 本轮前端验证：
+  - `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/lib/scenarioMeta.test.ts src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `37 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 本轮真实浏览器定向复核（Playwright interactive）：
+  - 打开 `/sim/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`
+  - 在 Theater replay 中点击速度按钮 `⚡ 1x`
+  - 观察到：
+    - `render_game_to_text().page.replay_state.replay_speed: 1 -> 2`
+    - `scene` 仍为 `WorldScene`
+    - `viewMode` 仍为 `theater`
+    - 页面内 `canvas` DOM 节点引用保持相同（未重建）
+- 本轮额外 E2E：
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-replayspeed-mobile-rerun --headless`
+    - 通过
+    - 工件：`frontend/output/e2e/20260325-replayspeed-mobile-rerun`
+- 结论：
+  - `replaySpeed` 优化当前可保留，不需要回滚。
+  - `scenarioMeta` 锁租约当前保留 `1000ms`，本轮没有继续上调；现有竞争锁测试仍通过，也不需要回滚。
+
+## 2026-03-25 replaySpeed E2E Contract
+
+- 按用户要求，将 `replaySpeed` 的真实行为校验接入仓库自带 E2E 脚本，而不是只靠手工 Playwright。
+- 变更：
+  - `frontend/scripts/e2e-suite.mjs`
+    - 新增 `runReplaySpeedSwitchCase(...)`
+    - 已接入 `runCornersSuite(...)`，输出 case 名为 `replay_speed_switch`
+    - 校验内容：
+      - `page.replay_state.replay_speed` 在点击 `⚡` 后发生变化
+      - `playback_mode` 仍为 `replay`
+      - `scene` 仍为 `WorldScene`
+      - 页面内 `canvas` DOM identity 不变（`sameCanvas === true`），证明没有重建 Phaser 实例
+- 本轮补充测试：
+  - `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/lib/scenarioMeta.test.ts src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
+    - `37 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 本轮新增 E2E 工件：
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-replayspeed-corners-rerun --headless`
+    - 通过
+    - `result.json` 中已包含：
+      - `cases.replay_speed_switch.before.replay_speed = 1`
+      - `cases.replay_speed_switch.after.replay_speed = 2`
+      - `cases.replay_speed_switch.sameCanvas = true`
+      - `cases.replay_speed_switch.scene = "WorldScene"`
+  - 工件目录：
+    - `frontend/output/e2e/20260325-replayspeed-corners-rerun`
+- 本轮判断：
+  - 新增脚本 case 可稳定跑通。
+  - `replaySpeed` 目前“同实例重排 replay”的实现与脚本校验一致，因此不回滚。
+
+## 2026-03-26 Result finalize cache + backend i18n cleanup
+
+- 本轮处理目标：
+  - `ResultView` 去掉同导演/同场景重复 `finalizeCampaign()` POST。
+  - 清理 backend 英文链路仍然吃中文 prompt / briefing scaffold 的问题。
+
+- 前端改动：
+  - `frontend/src/pages/ResultView.tsx`
+    - 新增会话级 `finalizeCampaign` 缓存（`sessionStorage`）。
+    - 只有在“`campaign summary` 已 finalized 且本会话已有同 `scenarioId + userId + profileId` 的 finalize 完整结果缓存”时，才跳过再次 `POST /finalize`。
+    - 首次进入结果页仍允许打一遍 finalize，以保留 `profile / mastery / badges / newly_unlocked_badges` 展示。
+    - 若该 scenario 属于别的导演，仍会保留 backend `409 conflict` 提示链路，不会被缓存逻辑吞掉。
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增测试：当 `getCampaignScenarioSummary()` 已返回 `finalized_at` 且 session cache 已命中时，不再调用 `finalizeCampaignMock`。
+
+- backend i18n 改动：
+  - `backend/app/services/narrator.py`
+    - `NARRATE_PROMPT` 改为按 `Chinese / English` 构造，不再只在中文 scaffold 后面拼一个 `language_directive`。
+  - `backend/app/services/memory.py`
+    - `COMPRESS_PROMPT` 改为按语言构造。
+    - `_format_previous_briefing()`、`format_briefing_for_context()`、`_build_crowd_context()`、`build_agent_context()` 现已按语言输出标题、说明和 JSON 回复格式提示。
+  - `backend/app/services/blackboard.py`
+    - `consensus` 从 `global_summary` 的中文拼接里拆出来，改成独立结构字段。
+  - `backend/app/services/simulator.py`
+    - 共享 briefing formatter 现显式传 `language`。
+    - 分层模式下 synthesized worker 文案也已做中英分流。
+
+- 本轮测试：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_memory.py tests/test_narrator.py tests/test_blackboard.py tests/test_simulator.py -q`
+    - `182 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/blackboard.py app/services/memory.py app/services/narrator.py app/services/simulator.py tests/test_blackboard.py tests/test_memory.py tests/test_narrator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `17 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 本轮真实验证：
+  - Playwright 真实浏览器验证（同导演 identity）：
+    - 同一浏览器会话第一次进入 `/result/72ae364d-3ea1-4959-939c-8fe1dbeca1c9`：
+      - `finalize` POST 次数 = `1`
+      - `sessionStorage` 已写入 finalize cache
+    - 第二次回到同一结果页：
+      - 新增 `finalize` POST 次数 = `0`
+    - 说明前端短路逻辑生效，且不依赖伪造 cache。
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-finalize-i18n-corners --headless`
+    - 通过
+    - 说明 ResultView 新缓存逻辑与 backend prompt 语言化改动没有打坏主模式完整 corners 流程。
+
+- 本轮结论：
+  - `ResultView.finalizeCampaign()` 的重复调用问题已按“最小安全方案”收口，不需要回滚。
+  - backend `memory / narrator / briefing formatter` 的英文链路已去掉主要中文 scaffold，当前测试与 E2E 都通过，不需要回滚。
+
+## 2026-03-26 social policy + lang_detect extension
+
+- 本轮继续修剩余两项边界：
+  - `backend/app/api/social.py`
+    - 新增显式 helper：`_resolve_social_output_language(platform, scenario_language)`
+    - 当前策略已明确为：**所有平台都跟随场景语言输出**
+    - 中文场景下的 Reddit / X 不再偷偷强制英文
+    - 非中英文场景当前复用英文 scaffold，但会显式加 `get_language_directive(output_language)`，要求模型输出目标语言
+  - `backend/app/services/lang_detect.py`
+    - 在原有 `Chinese / English / Japanese / Korean` 基础上，新增常见拉丁语系轻量检测：
+      - `French`
+      - `German`
+      - `Spanish`
+      - `Portuguese`
+      - `Italian`
+    - `get_language_directive()` 也已补齐这些语言的显式 directive
+
+- 本轮新增测试：
+  - `backend/tests/test_api.py`
+    - 中文场景下 Reddit 文案不再强制英文
+    - 法语场景下社交文案 prompt 会显式要求法语输出
+  - `backend/tests/test_lang_detect.py`
+    - 新增法语 / 德语 / 西语 / 葡语 / 意大利语检测样本
+    - `French` 现有显式 directive，未知语言 fallback 改为用 `Dutch` 覆盖
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'social_copy_uses_english_wrappers_for_english_scenarios or social_copy_reddit_follows_chinese_scenario_language or social_copy_non_english_scenario_adds_explicit_output_language' -q`
+    - `3 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_lang_detect.py -q`
+    - `32 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_memory.py tests/test_narrator.py tests/test_blackboard.py tests/test_simulator.py -q`
+    - `182 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/social.py app/services/lang_detect.py app/services/blackboard.py app/services/memory.py app/services/narrator.py app/services/simulator.py tests/test_api.py tests/test_lang_detect.py tests/test_blackboard.py tests/test_memory.py tests/test_narrator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `17 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-social-lang-corners --headless`
+    - 通过
+    - 说明 social policy 与 language detection 变更没有打坏主模式 corners 流程，也没有破坏 share_context / share_retry 链路
+
+- 本轮真实前端行为复核：
+  - 结果页 finalize cache：
+    - 同导演 identity 第一次进入 `result`：`POST /finalize = 1`
+    - 第二次同 tab 再进入：新增 `POST /finalize = 0`
+    - 说明结果页重复 finalize 已被真实短路

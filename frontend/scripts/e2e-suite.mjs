@@ -1476,6 +1476,93 @@ async function runReplayCornerCase(page, {
   };
 }
 
+async function runReplaySpeedSwitchCase(page, {
+  baseUrl,
+  scenarioId,
+  outputDir,
+}) {
+  ensureDir(outputDir);
+  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+
+  const initial = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.page?.replay_state?.available === true
+      && isCompletedReplayTheaterReady(payload)
+      && payload.simulation?.viewMode === "theater"
+    ),
+    30000,
+    "replay speed baseline",
+  );
+
+  const before = await page.evaluate(() => {
+    const raw = window.render_game_to_text?.() ?? null;
+    const payload = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const canvas = document.querySelector("canvas");
+    window.__swarmReplaySpeedCanvas = canvas;
+    return {
+      replayState: payload?.page?.replay_state ?? null,
+      scene: payload?.scene ?? null,
+      hasCanvas: Boolean(canvas),
+      sameCanvas: true,
+    };
+  });
+
+  if (!before.hasCanvas || typeof before.replayState?.replay_speed !== "number") {
+    throw new Error(`Replay speed baseline missing canvas or replay state for ${scenarioId}`);
+  }
+
+  const speedButton = page.locator("button").filter({ hasText: "⚡" }).first();
+  if (await speedButton.count() === 0) {
+    throw new Error(`Replay speed button not found for ${scenarioId}`);
+  }
+
+  await speedButton.click();
+  const expectedReplaySpeed = before.replayState.replay_speed === 1 ? 2 : 1;
+
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.replay_state?.replay_speed === expectedReplaySpeed,
+    10000,
+    "replay speed switch",
+  );
+
+  await advanceAutomationTime(page, 400);
+  await page.waitForTimeout(500);
+
+  const after = await page.evaluate(() => {
+    const raw = window.render_game_to_text?.() ?? null;
+    const payload = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const canvas = document.querySelector("canvas");
+    return {
+      replayState: payload?.page?.replay_state ?? null,
+      scene: payload?.scene ?? null,
+      hasCanvas: Boolean(canvas),
+      sameCanvas: window.__swarmReplaySpeedCanvas === canvas,
+    };
+  });
+
+  if (!after.hasCanvas || after.sameCanvas !== true) {
+    throw new Error(`Replay speed switch remounted or lost the canvas for ${scenarioId}`);
+  }
+  if (after.scene?.scene !== before.scene?.scene) {
+    throw new Error(
+      `Replay speed switch unexpectedly changed scene for ${scenarioId}: ${before.scene?.scene} -> ${after.scene?.scene}`,
+    );
+  }
+
+  writeJson(path.join(outputDir, "replay-speed-switch.json"), { before, after });
+  await saveScreenshot(page, path.join(outputDir, "replay-speed-switch.png"));
+
+  return {
+    before: before.replayState ?? null,
+    after: after.replayState ?? null,
+    sameCanvas: after.sameCanvas,
+    scene: after.scene?.scene ?? null,
+  };
+}
+
 async function runCaptureModesCase(page, {
   baseUrl,
   outputDir,
@@ -2134,6 +2221,12 @@ async function runCornersSuite(args) {
       outputDir: path.join(outputDir, "replay-skip-switch"),
     });
 
+    cases.replay_speed_switch = await runReplaySpeedSwitchCase(page, {
+      baseUrl: args.baseUrl,
+      scenarioId: governanceReplaySample.scenarioId,
+      outputDir: path.join(outputDir, "replay-speed-switch"),
+    });
+
     cases.director_state_roundtrip = await runDirectorStateRoundtripCase(page, {
       baseUrl: args.baseUrl,
       scenarioId: governanceReplaySample.scenarioId,
@@ -2206,6 +2299,14 @@ async function runMobileSuite(args) {
       (payload) => payload.page?.kind === "input",
       10000,
       "mobile homepage",
+    );
+    await page.waitForFunction(
+      () => (
+        Boolean(document.querySelector(".daily-challenge-card"))
+        && document.querySelectorAll(".weekly-challenge-card").length >= 2
+        && Boolean(document.querySelector(".weekly-challenge-card--growth"))
+      ),
+      { timeout: 10000 },
     );
     const homepageSurface = await page.evaluate(() => ({
       hasDailyChallengeCard: Boolean(document.querySelector(".daily-challenge-card")),

@@ -15,9 +15,22 @@ from app.services.llm_client import (
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
 
-NARRATE_PROMPT = """你是一位出色的故事讲述者。请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
+def _is_chinese(language: str) -> bool:
+    return language == "Chinese"
 
-{untrusted_input_guardrail}
+
+def _build_narration_prompt(
+    *,
+    branch_title_block: str,
+    probability: float,
+    agents_summary_block: str,
+    raw_rounds_block: str,
+    language: str,
+) -> str:
+    if _is_chinese(language):
+        return f"""你是一位出色的故事讲述者。请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
+
+{UNTRUSTED_INPUT_GUARDRAIL}
 
 【分支标题】
 {branch_title_block}
@@ -38,7 +51,33 @@ NARRATE_PROMPT = """你是一位出色的故事讲述者。请把以下群体推
 输出严格 JSON:
 {{"story": "叙事正文", "insight": "一句话启示", "key_moments": ["转折点1的简述", "转折点2的简述"]}}
 
-{language_directive}
+{get_language_directive(language)}
+"""
+
+    return f"""You are an excellent narrative writer. Rewrite the following raw simulation transcript into an engaging story.
+
+{UNTRUSTED_INPUT_GUARDRAIL}
+
+[Branch Title]
+{branch_title_block}
+[Final Probability] {probability:.0%}
+[Participants]
+{agents_summary_block}
+
+[Raw Interaction Transcript]
+{raw_rounds_block}
+
+Writing requirements:
+1. Use vivid third-person narration, like a strong documentary sequence
+2. Focus on concrete actions, lines, and internal tension instead of abstract summary
+3. Identify 2-3 real turning points that changed the outcome and build narrative tension around them
+4. End with one or two sentences that distill the deeper takeaway of this branch
+5. Keep the total length around 300-500 words
+
+Output strict JSON:
+{{"story": "narrative body", "insight": "one-sentence takeaway", "key_moments": ["turning point 1", "turning point 2"]}}
+
+{get_language_directive(language)}
 """
 
 
@@ -124,25 +163,24 @@ async def narrate_branch(
     Returns:
         dict with keys: story, insight, key_moments
     """
-    prompt = NARRATE_PROMPT.format(
+    prompt = _build_narration_prompt(
         branch_title_block=format_untrusted_text_block(
-            "分支标题",
-            branch_title or "未命名分支",
+            "分支标题" if _is_chinese(language) else "Branch Title",
+            branch_title or ("未命名分支" if _is_chinese(language) else "Untitled Branch"),
             max_chars=200,
         ),
         probability=probability,
         agents_summary_block=format_untrusted_text_block(
-            "参与角色",
+            "参与角色" if _is_chinese(language) else "Participants",
             agents_summary,
             max_chars=800,
         ),
         raw_rounds_block=format_untrusted_text_block(
-            "原始交互记录",
+            "原始交互记录" if _is_chinese(language) else "Raw Interaction Transcript",
             raw_rounds,
             max_chars=3200,
         ),
-        language_directive=get_language_directive(language),
-        untrusted_input_guardrail=UNTRUSTED_INPUT_GUARDRAIL,
+        language=language,
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)

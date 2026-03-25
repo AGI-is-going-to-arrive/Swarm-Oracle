@@ -18,6 +18,36 @@ _JA_PARTICLE_RE = re.compile(r"(の|は|が|を|に|へ|と|で|です|ます|�
 # Korean Hangul
 _KO_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff]")
 
+_LATIN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
+_FRENCH_HINT_RE = re.compile(
+    r"\b(le|la|les|des|une|un|est|avec|pour|dans|sur|pas|que|qui|nous|vous|elles|ils)\b",
+    re.IGNORECASE,
+)
+_SPANISH_HINT_RE = re.compile(
+    r"\b(el|la|los|las|un|una|es|con|para|por|que|como|pero|esta|este|del|al)\b",
+    re.IGNORECASE,
+)
+_PORTUGUESE_HINT_RE = re.compile(
+    r"\b(o|a|os|as|um|uma|é|com|para|por|que|como|mas|não|esta|este|dos|das)\b",
+    re.IGNORECASE,
+)
+_GERMAN_HINT_RE = re.compile(
+    r"\b(der|die|das|und|ist|mit|für|auf|nicht|ein|eine|zu|den|von|im|dem)\b",
+    re.IGNORECASE,
+)
+_ITALIAN_HINT_RE = re.compile(
+    r"\b(il|lo|la|gli|le|un|una|è|con|per|che|come|ma|non|del|della|nel|nella)\b",
+    re.IGNORECASE,
+)
+
+_LANGUAGE_HINTS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("French", _FRENCH_HINT_RE, "àâçéèêëîïôùûüÿœæ"),
+    ("Spanish", _SPANISH_HINT_RE, "áéíóúñ¿¡"),
+    ("Portuguese", _PORTUGUESE_HINT_RE, "ãõáâàçéêíóôú"),
+    ("German", _GERMAN_HINT_RE, "äöüß"),
+    ("Italian", _ITALIAN_HINT_RE, "àèéìíîòóù"),
+)
+
 
 def detect_language(text: str) -> str:
     """Detect the dominant language of the input text.
@@ -55,6 +85,27 @@ def detect_language(text: str) -> str:
     if cjk_count / total > 0.3:
         return "Chinese"
 
+    # Latin-script family: use lightweight stopword/diacritic heuristics
+    latin_count = len(_LATIN_RE.findall(text))
+    if latin_count > 0:
+        lowered = text.casefold()
+        best_language = "English"
+        best_score = 0
+        second_best = 0
+        for language, pattern, diacritics in _LANGUAGE_HINTS:
+            stopword_hits = len(pattern.findall(lowered))
+            diacritic_hits = sum(lowered.count(char) for char in diacritics)
+            score = stopword_hits + diacritic_hits * 2
+            if score > best_score:
+                second_best = best_score
+                best_score = score
+                best_language = language
+            elif score > second_best:
+                second_best = score
+
+        if best_score >= 2 and best_score > second_best:
+            return best_language
+
     # Default: English (covers Latin-script languages)
     return "English"
 
@@ -69,6 +120,11 @@ def get_language_directive(language: str) -> str:
         "English": "All output text MUST be in English",
         "Japanese": "すべてのテキストは日本語で出力してください (All output text must be in Japanese)",
         "Korean": "모든 텍스트는 한국어로 출력해 주세요 (All output text must be in Korean)",
+        "French": "Tout le texte de sortie doit être en français",
+        "German": "Alle Ausgaben müssen auf Deutsch sein",
+        "Spanish": "Todo el texto de salida debe estar en español",
+        "Portuguese": "Todo o texto de saída deve estar em português",
+        "Italian": "Tutto il testo in uscita deve essere in italiano",
     }
     return directives.get(language, f"All output text MUST be in {language}")
 

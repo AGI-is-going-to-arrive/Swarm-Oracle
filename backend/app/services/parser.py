@@ -775,8 +775,5 @@ def _generate_fallback_groups(agents: list[dict]) -> list[dict]:
             "members": members,
             "stance": stance,
         })
-        for agent in agents:
-            if agent.get("name") in members:
-                agent["group"] = group_name
 
     return groups

@@ -1,12 +1,9 @@
 """Tests for Blackboard shared space and briefing formatting."""
 
-import copy
 
-import pytest
 
-from app.services.blackboard import Blackboard, _DEFAULT_MAX_ACTIVITY
-from app.services.memory import format_briefing_for_context, build_agent_context
-
+from app.services.blackboard import _DEFAULT_MAX_ACTIVITY, Blackboard
+from app.services.memory import build_agent_context, format_briefing_for_context
 
 # ── TestBlackboardInit ───────────────────────────────────
 
@@ -116,15 +113,16 @@ class TestUpdateGlobalSummary:
             "consensus": "各方暂时休战",
         }
         bb.update_global_summary(compressed)
-        assert "北方局势紧张" in bb.global_summary
-        assert "各方暂时休战" in bb.global_summary
+        assert bb.global_summary == "北方局势紧张"
+        assert bb.consensus == "各方暂时休战"
         assert len(bb.active_debates) == 2
         assert len(bb.tension_points) == 2
 
     def test_empty_consensus(self):
         bb = Blackboard()
         bb.update_global_summary({"situation": "紧张", "consensus": ""})
-        assert bb.global_summary == "紧张"  # No " 共识:" appended
+        assert bb.global_summary == "紧张"
+        assert bb.consensus == ""
 
     def test_missing_fields(self):
         bb = Blackboard()
@@ -276,6 +274,7 @@ class TestFormatBriefingForContext:
     def test_full_briefing(self):
         briefing = {
             "summary": "三方对峙",
+            "consensus": "暂时停火",
             "debates": ["攻打荆州", "联盟"],
             "tensions": ["军事冲突"],
             "positions": {"曹操": "主战 (冷静)"},
@@ -286,6 +285,7 @@ class TestFormatBriefingForContext:
         assert "【当前争论焦点】" in result
         assert "攻打荆州" in result
         assert "【紧张点】军事冲突" in result
+        assert "共识: 暂时停火" in result
         assert "【各方立场】" in result
         assert "曹操" in result
         assert "【最近发言】" in result
@@ -305,6 +305,25 @@ class TestFormatBriefingForContext:
         result = format_briefing_for_context(briefing)
         assert "[曹操](冷静): 统一" in result
         assert "[刘备](坚定): 仁义" in result
+
+    def test_english_briefing_is_language_aware(self):
+        briefing = {
+            "summary": "The room is split",
+            "consensus": "No durable consensus yet",
+            "debates": ["Whether to escalate"],
+            "tensions": ["Military brinkmanship"],
+            "positions": {"Cao Cao": "Escalate (calm)"},
+            "recent": [{"agent": "Cao Cao", "emotion": "calm", "summary": "We move at dawn"}],
+        }
+
+        result = format_briefing_for_context(briefing, language="English")
+
+        assert "[Global Situation] The room is split" in result
+        assert "[Current Debate Focus] Whether to escalate" in result
+        assert "[Tension Points] Military brinkmanship" in result
+        assert "Consensus: No durable consensus yet" in result
+        assert "[Positions]" in result
+        assert "[Recent Turns]" in result
 
 
 # ── TestBuildAgentContextSharedBriefing ───────────────────

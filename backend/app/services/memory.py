@@ -53,7 +53,18 @@ _COMPRESS_PRIORITY_KEYWORDS = (
     "导演",
 )
 
-COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧和转折信号:
+def _is_chinese(language: str) -> bool:
+    return language == "Chinese"
+
+
+def _build_compress_prompt(
+    *,
+    language: str,
+    previous_briefing_block: str,
+    messages_text_block: str,
+) -> str:
+    if _is_chinese(language):
+        return f"""将以下讨论压缩为"态势简报"，重点保留分歧和转折信号:
 
 【此前滚动态势简报】
 {previous_briefing_block}
@@ -74,8 +85,131 @@ COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧
 - 如果此前滚动态势简报里有仍然有效的长期背景、未解冲突或既有共识，需要继续带入新的结果
 - 不要把此前摘要机械重复一遍，要把它与当前窗口原始对话合并成一份更新后的态势简报
 
-{language_directive}
+{get_language_directive(language)}
 """
+
+    return f"""Compress the following discussion into a compact situation briefing, preserving disagreements and turning points:
+
+[Previous Rolling Briefing]
+{previous_briefing_block}
+
+{messages_text_block}
+
+Output strict JSON:
+{{
+  "situation": "one-sentence overview of the current situation",
+  "active_debates": ["current debate focus 1", "focus 2"],
+  "key_quotes": ["[speaker]: the most consequential quote, keep the speaker name"],
+  "tension_points": ["fault lines that could split the worldline"],
+  "consensus": "summary of the current consensus, or an empty string"
+}}
+
+Requirements:
+- Prioritize concrete quotes, fresh stance shifts, and newly emerging disagreements from the current window
+- If the previous rolling briefing still contains relevant long-term context, unresolved conflicts, or durable consensus, carry it forward
+- Do not repeat the old briefing mechanically; merge it with the current raw dialogue into one updated situation briefing
+
+{get_language_directive(language)}
+"""
+
+
+def _memory_copy(language: str) -> dict[str, str]:
+    if _is_chinese(language):
+        return {
+            "none": "(无)",
+            "shared_empty": "(尚无共享信息)",
+            "no_memories": "(尚无历史记忆)",
+            "situation": "局势",
+            "debates": "争论焦点",
+            "quotes": "关键原话",
+            "tensions": "紧张点",
+            "consensus": "共识",
+            "briefing_heading": "【全局态势】",
+            "debates_heading": "【当前争论焦点】",
+            "tensions_heading": "【紧张点】",
+            "positions_heading": "【各方立场】",
+            "recent_heading": "【最近发言】",
+            "topic_label": "推演核心议题",
+            "dialogue_label": "刚才的对话",
+            "shared_label": "共享态势简报",
+            "intervention_label": "突发事件",
+            "intervention_heading": "【⚡ 突发事件 — 蝴蝶效应】",
+            "identity": "【你的身份】",
+            "persona": "【你的性格】",
+            "emotion": "【当前情绪】",
+            "background_brief": "【背景概要】",
+            "world_background": "【世界背景】",
+            "memories": "【你的记忆碎片】",
+            "roleplay_intro": "你正在扮演角色「{name}」参与一场群体推演。",
+            "crowd_instruction_title": "现在轮到你发言。请注意:",
+            "full_instruction_title": "现在轮到你发言。请注意:",
+            "crowd_instructions": "\n".join([
+                "1. 用角色真实的口吻说话",
+                "2. 发言控制在 1-2 句话",
+                "3. 可以附和、反驳、提问",
+                "4. 如果你感知到关键分歧，请在回复末尾标注 [DIVERGE: 分歧描述]{intervention_instruction}",
+            ]),
+            "full_instructions": "\n".join([
+                "1. 用角色真实的口吻说话，像真人对话而不是写论文",
+                "2. 说具体的事、举具体的例子，避免空泛的抽象论述",
+                "3. 可以附和、反驳、提问、或提出全新视角",
+                "4. 发言控制在 2-4 句话，自然流畅",
+                "5. 如果你感知到讨论中出现了可能导致历史走向分裂的关键分歧，请在回复末尾标注 [DIVERGE: 分歧点的具体描述]{intervention_instruction}",
+            ]),
+            "json_format": '回复格式 (严格 JSON):\n{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}',
+            "intervention_note_crowd": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）",
+            "intervention_note_full": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）",
+            "intervention_instruction_crowd": "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策",
+            "intervention_instruction_full": "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响",
+        }
+
+    return {
+        "none": "(none)",
+        "shared_empty": "(no shared briefing yet)",
+        "no_memories": "(no prior memories yet)",
+        "situation": "Situation",
+        "debates": "Debate Focus",
+        "quotes": "Key Quotes",
+        "tensions": "Tension Points",
+        "consensus": "Consensus",
+        "briefing_heading": "[Global Situation] ",
+        "debates_heading": "[Current Debate Focus] ",
+        "tensions_heading": "[Tension Points] ",
+        "positions_heading": "[Positions]",
+        "recent_heading": "[Recent Turns]",
+        "topic_label": "Core Simulation Question",
+        "dialogue_label": "Recent Dialogue",
+        "shared_label": "Shared Situation Briefing",
+        "intervention_label": "Priority Event",
+        "intervention_heading": "[Priority Event - Butterfly Effect]",
+        "identity": "[Your Role] ",
+        "persona": "[Your Persona] ",
+        "emotion": "[Current Emotion] ",
+        "background_brief": "[Background Summary] ",
+        "world_background": "[World Background]",
+        "memories": "[Your Memory Fragments]",
+        "roleplay_intro": 'You are roleplaying "{name}" in a collective what-if simulation.',
+        "crowd_instruction_title": "It is your turn to respond. Requirements:",
+        "full_instruction_title": "It is your turn to respond. Requirements:",
+        "crowd_instructions": "\n".join([
+            "1. Speak in the character's natural voice",
+            "2. Keep the reply to 1-2 sentences",
+            "3. You may agree, challenge, or ask a question",
+            "4. If you detect a key split in the discussion, end with [DIVERGE: concrete split description]{intervention_instruction}",
+        ]),
+        "full_instructions": "\n".join([
+            "1. Speak in the character's natural voice, like a real conversation instead of an essay",
+            "2. Stay concrete and specific; avoid vague abstractions",
+            "3. You may agree, challenge, ask a question, or introduce a new angle",
+            "4. Keep the reply to 2-4 natural sentences",
+            "5. If you detect a key split that could fracture the worldline, end with [DIVERGE: concrete split description]{intervention_instruction}",
+        ]),
+        "json_format": 'Reply format (strict JSON):\n{{"content": "your in-character reply", "emotion": "current emotion (for example: excited / worried / calm / angry / hopeful / relieved)", "diverge": "split description or null"}}',
+        "intervention_note_crowd": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. You must not treat it as background noise; respond to how it changes your stance, alliances, or action plan, and treat it as part of the current worldline.)",
+        "intervention_note_full": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. Treat it as a real state change already written into the worldline, not as optional side context. Respond to it first, then explain how it changes your judgment, stance, alliances, or risk assessment.)",
+        "intervention_instruction_crowd": "\n5. This round includes a high-priority event. Address it first, state how it affects you, and keep that effect visible in your follow-up decisions.",
+        "intervention_instruction_full": "\n6. This round includes a high-priority event. Address it first and explain, in character, what it changes for your judgment, stance, alliances, or risk assessment.",
+    }
 
 # Fields and their defaults for structured compression result
 _COMPRESS_DEFAULTS: dict = {
@@ -136,33 +270,36 @@ def _validate_compress_result(raw: dict) -> dict:
     return result
 
 
-def _format_previous_briefing(previous_briefing: dict | None) -> str:
+def _format_previous_briefing(previous_briefing: dict | None, language: str = "Chinese") -> str:
     """Render the rolling briefing carried forward from earlier windows."""
+    copy = _memory_copy(language)
     if not previous_briefing:
-        return "(无)"
+        return copy["none"]
 
     parts: list[str] = []
     situation = str(previous_briefing.get("situation", "") or "").strip()
     if situation:
-        parts.append(f"局势: {situation}")
+        parts.append(f'{copy["situation"]}: {situation}')
 
     active_debates = previous_briefing.get("active_debates", [])
     if isinstance(active_debates, list) and active_debates:
-        parts.append("争论焦点: " + "；".join(str(item) for item in active_debates if str(item).strip()))
+        separator = "；" if _is_chinese(language) else "; "
+        parts.append(f'{copy["debates"]}: ' + separator.join(str(item) for item in active_debates if str(item).strip()))
 
     key_quotes = previous_briefing.get("key_quotes", [])
     if isinstance(key_quotes, list) and key_quotes:
-        parts.append("关键原话:\n- " + "\n- ".join(str(item) for item in key_quotes if str(item).strip()))
+        parts.append(f'{copy["quotes"]}:\n- ' + "\n- ".join(str(item) for item in key_quotes if str(item).strip()))
 
     tension_points = previous_briefing.get("tension_points", [])
     if isinstance(tension_points, list) and tension_points:
-        parts.append("紧张点: " + "；".join(str(item) for item in tension_points if str(item).strip()))
+        separator = "；" if _is_chinese(language) else "; "
+        parts.append(f'{copy["tensions"]}: ' + separator.join(str(item) for item in tension_points if str(item).strip()))
 
     consensus = str(previous_briefing.get("consensus", "") or "").strip()
     if consensus:
-        parts.append(f"共识: {consensus}")
+        parts.append(f'{copy["consensus"]}: {consensus}')
 
-    return "\n".join(parts) if parts else "(无)"
+    return "\n".join(parts) if parts else copy["none"]
 
 
 async def compress_rounds(
@@ -292,17 +429,18 @@ def _build_crowd_context(
     # Truncate background to first 80 chars for CROWD
     bg_brief = setting_background[:80] + ("…" if len(setting_background) > 80 else "")
     lang_directive = get_language_directive(language)
+    copy = _memory_copy(language)
 
     # Intervention block — prominent and unmissable
     intervention_block = ""
     intervention_instruction = ""
-    topic_block = format_untrusted_text_block("推演核心议题", current_topic, max_chars=2000)
+    topic_block = format_untrusted_text_block(copy["topic_label"], current_topic, max_chars=2000)
 
     if intervention_text:
-        intervention_block = f"""\n\n【⚡ 突发事件 — 蝴蝶效应】
-{format_untrusted_text_block("突发事件", intervention_text, max_chars=1200)}
-（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）"""
-        intervention_instruction = "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策"
+        intervention_block = f"""\n\n{copy["intervention_heading"]}
+{format_untrusted_text_block(copy["intervention_label"], intervention_text, max_chars=1200)}
+{copy["intervention_note_crowd"]}"""
+        intervention_instruction = copy["intervention_instruction_crowd"]
 
     conversation_block = format_untrusted_text_block(
         conversation_label,
@@ -310,54 +448,57 @@ def _build_crowd_context(
         max_chars=2500,
     )
 
-    return f"""你正在扮演角色「{agent['name']}」参与一场群体推演。
+    return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
-【你的身份】{agent.get('role', '')}
-【当前情绪】{agent.get('emotion', 'neutral')}
-【背景概要】{bg_brief}
+{copy["identity"]}{agent.get('role', '')}
+{copy["emotion"]}{agent.get('emotion', 'neutral')}
+{copy["background_brief"]}{bg_brief}
 
-【推演核心议题】
+{copy["topic_label"]}
 {topic_block}{intervention_block}
 
-【刚才的对话】
+{conversation_label}
 {conversation_block}
 
-现在轮到你发言。请注意:
-1. 用角色真实的口吻说话
-2. 发言控制在 1-2 句话
-3. 可以附和、反驳、提问
-4. 如果你感知到关键分歧，请在回复末尾标注 [DIVERGE: 分歧描述]{intervention_instruction}
+{copy["crowd_instruction_title"]}
+{copy["crowd_instructions"].format(intervention_instruction=intervention_instruction)}
 
-回复格式 (严格 JSON):
-{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}
+{copy["json_format"]}
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""
 
 
-def format_briefing_for_context(briefing: dict) -> str:
+def format_briefing_for_context(briefing: dict, language: str = "Chinese") -> str:
     """Format a Blackboard shared briefing dict into agent-readable text.
 
     All agents receive the SAME formatted text (preserves emergence).
     """
+    copy = _memory_copy(language)
     parts: list[str] = []
 
     summary = briefing.get("summary", "")
     if summary:
-        parts.append(f"【全局态势】{summary}")
+        parts.append(f'{copy["briefing_heading"]}{summary}')
 
     debates = briefing.get("debates", [])
     if debates:
-        parts.append("【当前争论焦点】" + "；".join(debates))
+        separator = "；" if _is_chinese(language) else "; "
+        parts.append(copy["debates_heading"] + separator.join(debates))
 
     tensions = briefing.get("tensions", [])
     if tensions:
-        parts.append("【紧张点】" + "；".join(tensions))
+        separator = "；" if _is_chinese(language) else "; "
+        parts.append(copy["tensions_heading"] + separator.join(tensions))
+
+    consensus = briefing.get("consensus", "")
+    if consensus:
+        parts.append(f'{copy["consensus"]}: {consensus}')
 
     positions = briefing.get("positions", {})
     if positions:
         pos_lines = [f"  {name}: {stance}" for name, stance in positions.items()]
-        parts.append("【各方立场】\n" + "\n".join(pos_lines))
+        parts.append(copy["positions_heading"] + "\n" + "\n".join(pos_lines))
 
     recent = briefing.get("recent", [])
     if recent:
@@ -365,9 +506,9 @@ def format_briefing_for_context(briefing: dict) -> str:
             f"[{e.get('agent', '?')}]({e.get('emotion', '')}): {e.get('summary', '')}"
             for e in recent
         ]
-        parts.append("【最近发言】\n" + "\n".join(recent_lines))
+        parts.append(copy["recent_heading"] + "\n" + "\n".join(recent_lines))
 
-    return "\n\n".join(parts) if parts else "(尚无共享信息)"
+    return "\n\n".join(parts) if parts else copy["shared_empty"]
 
 
 def build_agent_context(
@@ -390,8 +531,9 @@ def build_agent_context(
     CORE/IMPORTANT agents receive the full context (~2,300 tokens).
     """
     # Determine conversation section: prefer Blackboard briefing over raw messages
+    copy = _memory_copy(language)
     conversation_section = shared_briefing if shared_briefing else recent_messages
-    memories_section = "" if shared_briefing else (retrieved_memories or "(尚无历史记忆)")
+    memories_section = "" if shared_briefing else (retrieved_memories or copy["no_memories"])
 
     if tier == "CROWD":
         return _build_crowd_context(
@@ -399,56 +541,51 @@ def build_agent_context(
             setting_background,
             current_topic,
             conversation_section,
-            conversation_label="共享态势简报" if shared_briefing else "刚才的对话",
+            conversation_label=copy["shared_label"] if shared_briefing else copy["dialogue_label"],
             intervention_text=intervention_text,
             language=language,
         )
 
     lang_directive = get_language_directive(language)
-    memories_block = f"\n\n【你的记忆碎片】\n{memories_section}" if memories_section else ""
+    memories_block = f'\n\n{copy["memories"]}\n{memories_section}' if memories_section else ""
     conversation_max_chars = _TIER_CONTEXT_MAX_CHARS.get(tier, 3000)
 
     # Intervention block — prominent and unmissable
     intervention_block = ""
     intervention_instruction = ""
-    topic_block = format_untrusted_text_block("推演核心议题", current_topic, max_chars=2000)
+    topic_block = format_untrusted_text_block(copy["topic_label"], current_topic, max_chars=2000)
 
     if intervention_text:
-        intervention_block = f"""\n\n【⚡ 突发事件 — 蝴蝶效应】
-{format_untrusted_text_block("突发事件", intervention_text, max_chars=1200)}
-（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）"""
-        intervention_instruction = "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响"
+        intervention_block = f"""\n\n{copy["intervention_heading"]}
+{format_untrusted_text_block(copy["intervention_label"], intervention_text, max_chars=1200)}
+{copy["intervention_note_full"]}"""
+        intervention_instruction = copy["intervention_instruction_full"]
 
     conversation_block = format_untrusted_text_block(
-        "共享态势简报" if shared_briefing else "刚才的对话",
+        copy["shared_label"] if shared_briefing else copy["dialogue_label"],
         conversation_section,
         max_chars=conversation_max_chars,
     )
 
-    return f"""你正在扮演角色「{agent['name']}」参与一场群体推演。
+    return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
-【你的身份】{agent.get('role', '')}
-【你的性格】{agent.get('persona', '')}
-【当前情绪】{agent.get('emotion', 'neutral')}
+{copy["identity"]}{agent.get('role', '')}
+{copy["persona"]}{agent.get('persona', '')}
+{copy["emotion"]}{agent.get('emotion', 'neutral')}
 
-【世界背景】
+{copy["world_background"]}
 {setting_background}
 
-【推演核心议题】
+{copy["topic_label"]}
 {topic_block}{intervention_block}
 
-【刚才的对话】
+{copy["dialogue_label"] if not shared_briefing else copy["shared_label"]}
 {conversation_block}{memories_block}
 
-现在轮到你发言。请注意:
-1. 用角色真实的口吻说话，像真人对话而不是写论文
-2. 说具体的事、举具体的例子，避免空泛的抽象论述
-3. 可以附和、反驳、提问、或提出全新视角
-4. 发言控制在 2-4 句话，自然流畅
-5. 如果你感知到讨论中出现了可能导致历史走向分裂的关键分歧，请在回复末尾标注 [DIVERGE: 分歧点的具体描述]{intervention_instruction}
+{copy["full_instruction_title"]}
+{copy["full_instructions"].format(intervention_instruction=intervention_instruction)}
 
-回复格式 (严格 JSON):
-{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}
+{copy["json_format"]}
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""
@@ -616,14 +753,14 @@ async def _compress_round_window(
     model: str | None,
     max_chars: int,
 ) -> dict:
-    prompt = COMPRESS_PROMPT.format(
-        previous_briefing_block=_format_previous_briefing(previous_briefing),
+    prompt = _build_compress_prompt(
+        language=language,
+        previous_briefing_block=_format_previous_briefing(previous_briefing, language=language),
         messages_text_block=format_untrusted_text_block(
-            "当前窗口原始对话",
+            "当前窗口原始对话" if _is_chinese(language) else "Current Raw Dialogue Window",
             messages_text,
             max_chars=max_chars,
         ),
-        language_directive=get_language_directive(language),
     )
 
     fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)

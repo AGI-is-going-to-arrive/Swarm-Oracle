@@ -12,7 +12,9 @@ import { CONTRACT_CARD_RULES } from './gameplayContract';
 
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
 const LOCK_KEY_PREFIX = `${STORAGE_KEY}:lock:`;
-const LOCK_LEASE_MS = 150;
+// Keep the lease long enough to reduce false cross-tab contention, but bounded
+// so a stale tab does not block best-effort cache recovery for long.
+const LOCK_LEASE_MS = 1000;
 const LOCK_RETRY_ATTEMPTS = 3;
 
 type ScenarioMetaLockRecord = {

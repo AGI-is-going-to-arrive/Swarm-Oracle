@@ -29,6 +29,9 @@ import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../li
 import type { DebatePrediction, DebateResultPayload } from '../types';
 import './DebateArena.css';
 
+const RESULT_RETRY_DELAY_MS = 1200;
+const MAX_RESULT_RETRY_ATTEMPTS = 10;
+
 function isPredictionHit(prediction: DebatePrediction, result: DebateResultPayload['result']): boolean {
   if (prediction.kind === 'winner') return prediction.target_value === result.winner;
   return prediction.target_value === result.verdict_tone;
@@ -70,6 +73,7 @@ export function DebateResultView() {
     }
     let cancelled = false;
     let timer: number | null = null;
+    let retryAttempts = 0;
 
     const load = async () => {
       try {
@@ -82,7 +86,16 @@ export function DebateResultView() {
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : t('debate.result_load_failed');
         if (isApiError(nextError) && nextError.status === 409) {
-          timer = window.setTimeout(() => void load(), 1200);
+          if (retryAttempts >= MAX_RESULT_RETRY_ATTEMPTS) {
+            if (!cancelled) {
+              setErrorCode(getApiErrorCode(nextError) ?? 'DEBATE_RESULT_NOT_READY');
+              setError(getLocalizedApiErrorMessage(nextError, t, message));
+              setLoading(false);
+            }
+            return;
+          }
+          retryAttempts += 1;
+          timer = window.setTimeout(() => void load(), RESULT_RETRY_DELAY_MS);
           return;
         }
         if (!cancelled) {
@@ -98,7 +111,7 @@ export function DebateResultView() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [id, replayPayload, t]);
+  }, [i18n.language, id, replayPayload]);
 
   const localCounterplayRecord = useMemo(
     () => (id ? loadDebateCounterplay(id) : null),

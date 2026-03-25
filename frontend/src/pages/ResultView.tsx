@@ -85,6 +85,47 @@ import ShareModal from '../components/ShareModal';
 import './ResultView.css';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
+const CAMPAIGN_FINALIZE_CACHE_KEY = 'swarmoracle:result-campaign-finalize:v1';
+
+function buildCampaignFinalizeCacheEntryKey(
+  scenarioId: string,
+  userId: string,
+  profileId: string,
+) {
+  return `${scenarioId}::${userId}::${profileId}`;
+}
+
+function readCachedCampaignFinalizeResult(
+  scenarioId: string,
+  userId: string,
+  profileId: string,
+): CampaignFinalizeResult | null {
+  try {
+    const raw = window.sessionStorage.getItem(CAMPAIGN_FINALIZE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, CampaignFinalizeResult>;
+    const entry = parsed[buildCampaignFinalizeCacheEntryKey(scenarioId, userId, profileId)];
+    return entry && entry.scenario_id === scenarioId ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedCampaignFinalizeResult(
+  scenarioId: string,
+  userId: string,
+  profileId: string,
+  result: CampaignFinalizeResult,
+) {
+  try {
+    const raw = window.sessionStorage.getItem(CAMPAIGN_FINALIZE_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, CampaignFinalizeResult> : {};
+    parsed[buildCampaignFinalizeCacheEntryKey(scenarioId, userId, profileId)] = result;
+    window.sessionStorage.setItem(CAMPAIGN_FINALIZE_CACHE_KEY, JSON.stringify(parsed));
+  } catch {
+    // Best-effort cache only; failing here must not block result rendering.
+  }
+}
 
 function getBetOutcomeLabel(
   outcome: StructuredBetOutcome,
@@ -378,6 +419,10 @@ export default function ResultView() {
         const challengeMatch = findChallengeProgressByScenarioId(id);
         const isDailyChallenge = Boolean(challengeMatch);
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
+        const finalizedProfileId = persistedCampaignSummary?.profile_id ?? profile.id;
+        const cachedCampaignSummary = persistedCampaignSummary?.finalized_at
+          ? readCachedCampaignFinalizeResult(id, directorIdentity.userId, finalizedProfileId)
+          : null;
         const remoteDirectorState = scenario.director_state ?? null;
         const remoteGameplayState = scenario.gameplay_state ?? null;
         const localMeta = loadScenarioMeta(id);
@@ -471,36 +516,45 @@ export default function ResultView() {
           }, challengeMatch.challengeDay ? new Date(`${challengeMatch.challengeDay}T12:00:00`) : new Date());
         }
 
-        const campaign = await finalizeCampaign(id, {
-          user_id: directorIdentity.userId,
-          user_name: directorIdentity.userName,
-          profile_id: profile.id,
-          archive_grade: archiveSummary.archiveGrade,
-          profile_resonance: archiveSummary.profileResonance,
-          betting_hit: archiveSummary.bettingHit ?? null,
-          bet_count: finalMeta.betting.bets.length,
-          most_used_card: archiveSummary.mostUsedCard ?? null,
-          completed_daily_challenge: isDailyChallenge,
-          objective_completed_count: completedObjectiveCount,
-          objective_total_count: evaluatedObjectives.length,
-          commitment_outcome: commitmentOutcome,
-        }).catch((err) => {
-          if (!cancelled) {
-            const kind = classifyCampaignFinalizeError(err);
-            if (kind === 'missing' || kind === 'conflict') {
-              setCampaignNotice(getCampaignBoundaryMessage(kind, isZhRef.current));
-            } else {
-              setCampaignError(err instanceof Error ? err.message : 'Failed to finalize campaign');
+        let campaign = cachedCampaignSummary;
+        if (!campaign) {
+          campaign = await finalizeCampaign(id, {
+            user_id: directorIdentity.userId,
+            user_name: directorIdentity.userName,
+            profile_id: profile.id,
+            archive_grade: archiveSummary.archiveGrade,
+            profile_resonance: archiveSummary.profileResonance,
+            betting_hit: archiveSummary.bettingHit ?? null,
+            bet_count: finalMeta.betting.bets.length,
+            most_used_card: archiveSummary.mostUsedCard ?? null,
+            completed_daily_challenge: isDailyChallenge,
+            objective_completed_count: completedObjectiveCount,
+            objective_total_count: evaluatedObjectives.length,
+            commitment_outcome: commitmentOutcome,
+          }).catch((err) => {
+            if (!cancelled) {
+              const kind = classifyCampaignFinalizeError(err);
+              if (kind === 'missing' || kind === 'conflict') {
+                setCampaignNotice(getCampaignBoundaryMessage(kind, isZhRef.current));
+              } else {
+                setCampaignError(err instanceof Error ? err.message : 'Failed to finalize campaign');
+              }
             }
-          }
-          return null;
-        });
+            return null;
+          });
+        }
         if (!cancelled) {
           setCampaignSummary(campaign);
           if (campaign) {
+            writeCachedCampaignFinalizeResult(
+              id,
+              directorIdentity.userId,
+              campaign.mastery.profile_id,
+              campaign,
+            );
             setCampaignScenarioSummary({
               scenario_id: id,
-              profile_id: profile.id,
+              profile_id: campaign.mastery.profile_id,
               archive_grade: archiveSummary.archiveGrade,
               profile_resonance: archiveSummary.profileResonance,
               betting_hit: archiveSummary.bettingHit ?? null,

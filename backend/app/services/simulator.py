@@ -1506,13 +1506,13 @@ async def _gather_agent_messages(
     # Build shared context: prefer Blackboard briefing, fall back to DB
     if blackboard is not None:
         briefing = blackboard.get_shared_briefing()
-        shared_text = format_briefing_for_context(briefing)
+        shared_text = format_briefing_for_context(briefing, language=language)
     else:
         shared_text = ""
 
     # Only hit the DB when the blackboard cannot provide usable context.
     recent_msgs = None
-    if not shared_text or shared_text == "(尚无共享信息)":
+    if not shared_text or shared_text in {"(尚无共享信息)", "(no shared briefing yet)"}:
         recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
     emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
 
@@ -1749,13 +1749,23 @@ async def _gather_hierarchical_messages(
             worker_stance = worker.get("stance", "")
             # Create a short synthesized response reflecting the worker's persona
             synth_content = (
-                f"({worker['name']}作为{worker.get('role', '成员')}，"
-                f"响应{leader_name}的立场) "
-                f"{leader_content[:80]}…"
-            )
+                (
+                    f"({worker['name']}作为{worker.get('role', '成员')}，"
+                    f"响应{leader_name}的立场) "
+                )
+                if language == "Chinese"
+                else (
+                    f"({worker['name']} acting as {worker.get('role', 'member')}, "
+                    f"responding to {leader_name}'s position) "
+                )
+            ) + f"{leader_content[:80]}…"
             emotion = leader_msg.get("emotion", "neutral")
         else:
-            synth_content = f"({worker['name']}保持沉默)"
+            synth_content = (
+                f"({worker['name']}保持沉默)"
+                if language == "Chinese"
+                else f"({worker['name']} stays silent)"
+            )
             emotion = "neutral"
 
         msg = {

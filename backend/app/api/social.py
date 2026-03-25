@@ -13,7 +13,7 @@ from app.api.errors import api_error, api_error_from_exception
 from app.api.helpers import parse_key_moments
 from app.models import Agent, Branch, BranchStatus, Scenario
 from app.models.database import get_engine
-from app.services.lang_detect import detect_language
+from app.services.lang_detect import detect_language, get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
@@ -122,11 +122,10 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "Reddit", "English": "Reddit"},
         "instruction": {
             "Chinese": (
-                "你是一位 Reddit 资深用户。请根据以下推演结果，写一篇英文 Reddit 帖子。\n"
+                "你是一位 Reddit 资深用户。请根据以下推演结果，写一篇 Reddit 帖子。\n"
                 "要求：\n"
                 "- 标题：有吸引力、简洁，少于 300 字符\n"
                 "- 正文：200-500 词，口语化但有分析感\n"
-                "- 使用英文\n"
                 "- 使用 markdown 格式\n"
                 "- 结尾附 TL;DR\n"
                 "- 可附 subreddit 提示，如 [r/whatif] 或 [r/alternatehistory]\n"
@@ -149,10 +148,9 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "X (Twitter)", "English": "X (Twitter)"},
         "instruction": {
             "Chinese": (
-                "你是一位擅长写爆款推文线程的作者。请根据以下推演结果，写一组英文 X 线程。\n"
+                "你是一位擅长写爆款推文线程的作者。请根据以下推演结果，写一组 X 线程。\n"
                 "要求：\n"
                 "- 主帖：≤280 字符，抓人\n"
-                "- 使用英文\n"
                 "- 可选 2-4 条跟帖\n"
                 "- 带 1-2 个话题标签\n"
                 "- 以钩子问题或强判断开头\n"
@@ -182,6 +180,18 @@ def _resolve_social_language(scenario: Scenario) -> str:
         if isinstance(scenario.parsed_context, dict)
         else None
     ) or detect_language(scenario.question)
+
+
+def _resolve_social_output_language(platform: str, scenario_language: str) -> str:
+    """Explicit social-copy language policy.
+
+    Current policy: social copy follows the scenario language for every platform.
+    Chinese uses Chinese prompt wrappers; all other languages reuse the English
+    scaffold plus an explicit output-language directive.
+    """
+    if platform not in SOCIAL_PLATFORM_PROMPTS:
+        return scenario_language
+    return scenario_language
 
 
 def _trim_social_copy(platform: str, copy: str) -> str:
@@ -286,6 +296,7 @@ async def _generate_social_copy(
         ).all())
 
     social_language = _resolve_social_language(scenario)
+    output_language = _resolve_social_output_language(platform, social_language)
     context = _build_social_context(
         scenario,
         agents,
@@ -298,9 +309,10 @@ async def _generate_social_copy(
     effective_api_key = req.llm_api_key
     quota_key = req.user_id or provider_policy.get("user_id")
 
-    platform_name = platform_config["name"].get(social_language, platform_config["name"]["English"])
+    prompt_language = "Chinese" if output_language == "Chinese" else "English"
+    platform_name = platform_config["name"].get(output_language, platform_config["name"]["English"])
     instruction = platform_config["instruction"].get(
-        social_language,
+        prompt_language,
         platform_config["instruction"]["English"],
     )
     results_label = "推演结果如下" if social_language == "Chinese" else "Simulation results"
@@ -312,6 +324,7 @@ async def _generate_social_copy(
 
     prompt = (
         f"{instruction}\n"
+        f"{get_language_directive(output_language)}\n"
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         f"---\n"
         f"{results_label}:\n\n"

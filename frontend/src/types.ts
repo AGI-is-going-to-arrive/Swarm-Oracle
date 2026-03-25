@@ -396,6 +396,7 @@ export interface BatchInterventionResponse {
   status: string;
   count: number;
   interventions: BatchInterventionEntry[];
+  gameplay_state?: ScenarioGameplayState | null;
 }
 
 export interface StoryData {
