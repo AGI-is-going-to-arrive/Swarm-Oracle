@@ -275,6 +275,8 @@ export function SimulationView() {
     setBackendDirectorState,
     backendGameplayState,
     setBackendGameplayState,
+    authorityConflictKind,
+    clearAuthorityConflictKind,
     storedScenarioMeta,
     scenarioMeta,
     refreshLocalMeta,
@@ -871,6 +873,17 @@ export function SimulationView() {
       showCommitmentFeedback('success', t('sim.director.commit_cleared'));
     }
   }, [scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId, showCommitmentFeedback, t]);
+
+  useEffect(() => {
+    if (!authorityConflictKind) return;
+    showCommitmentFeedback(
+      'info',
+      authorityConflictKind === 'director'
+        ? t('sim.director.commit_conflict_reloaded')
+        : t('sim.director.gameplay_conflict_reloaded'),
+    );
+    clearAuthorityConflictKind();
+  }, [authorityConflictKind, clearAuthorityConflictKind, showCommitmentFeedback, t]);
 
   const handleCommitBranchAction = useCallback(() => {
     if (!commitmentDraftBranchId) return;

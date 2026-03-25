@@ -109,18 +109,20 @@ alembic/ ──► Alembic 数据库迁移框架
   - `format_briefing_for_context(briefing)` — 黑板 dict → 中文结构化文本
   - `build_agent_context(..., tier, shared_briefing)` — Blackboard模式替换 messages+memories
   - `_build_crowd_context(...)` — CROWD精简prompt (~800 tokens)
-- **Tier映射**: `_TIER_MAX_RECENT` = CORE→8, IMPORTANT→5, CROWD→3
+- **Tier映射**: `_TIER_MAX_RECENT` = CORE→12, IMPORTANT→5, CROWD→3
 - **输出格式**: `{situation, active_debates, key_quotes, tension_points, consensus}`
 - **干预 / 玩法卡注入**:
   - `intervention_text` 当前会在 agent prompt 里被明确描述成“高优先级、持续生效的世界线事件”，要求先回应、再在后续轮次持续体现影响
   - 玩法卡当前仍通过 `/intervene` 注入 card prompt，但正式 card 调用现在会一并带 `card_id / profile_id / directive`
   - 后端会按 shared gameplay contract 校验 `manual_enabled / min_round / cooldown_rounds / director points`，通过后再把 usage 直接写进 `Scenario.gameplay_state_json`
-- **滚动压缩**: `compress_rounds()` 当前会把上一份结构化 briefing 和当前窗口原始消息合并成新的态势简报；旧 briefing 只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
+- **滚动压缩**: `compress_rounds()` 当前已改成“两段式”口径：超长窗口会先对较早原始对话做一轮 bounded overflow summary，再用这份摘要 + 最近原始窗口做最终压缩；旧 briefing 继续只保留关键局势/争点/原话/紧张点/共识，不再无限膨胀
+- **高信号优先保留**: 较早窗口进入 overflow summary 前，当前会先抽取 priority lines；规则优先照顾最近消息、`CORE/LEADER` 标记、`emotion/diverge` 变化，以及 `干预 / 玩法卡 / 下注 / fork / result` 相关中英文关键词。`simulator.py` 当前也会把压缩输入格式化成带 `round / tier / emotion / diverge` 标签的结构化行，供这层筛选使用
 - **摘要边界**: `situation / consensus` 与各 list 字段当前都有条目数和字符上限，避免滚动摘要反过来把压缩 prompt 撑爆
 - **输入防护与兜底**: `compress_rounds()` 当前会把“当前窗口原始对话”包进 `UNTRUSTED DATA` 区块；若压缩超时、LLM 报错或返回坏 payload，会回退到上一份 briefing（没有旧 briefing 时回默认空摘要），不再把整局场景直接打进 error
 - **Prompt 注入边界**: `build_agent_context()` / `_build_crowd_context()` 当前也会把 `shared_briefing / recent_messages` 统一包成 `UNTRUSTED DATA`，不再把共享简报或最近对话裸拼进 agent prompt
 - **BYOK 透传**: `compress_rounds()` 当前也接受 `api_key / base_url / model` 覆盖；`simulator.py` 会沿现有 `llm_overrides` 纯内存透传给压缩链路，不会把凭证写回场景记录
 - **temperature 透传**: `compress_rounds()` 当前也接受 scenario 级 `temperature` 覆盖；如果本次运行显式传了 `temperature`，压缩链路会沿用同一设置，不再偷偷回退默认采样
+- **开发者调参**: memory 预算当前已配置化到 backend `Settings`，包括 `MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS / MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS / MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS / MEMORY_CORE_MAX_RECENT / MEMORY_IMPORTANT_MAX_RECENT / MEMORY_CROWD_MAX_RECENT / MEMORY_CORE_CONTEXT_MAX_CHARS / MEMORY_IMPORTANT_CONTEXT_MAX_CHARS`；这组参数只给 backend 开发者/运维调试，不暴露到前端用户
 - **L2向量记忆**:
   - `store_memory(scenario_id, agent_name, content)` — 写入 ChromaDB（fire-and-forget）
   - `retrieve_relevant_memories(scenario_id, query, top_k)` → 格式化 Top-K 语义相关记忆
@@ -217,7 +219,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **temperature**: 解析阶段当前也接受 scenario 级 `temperature` 覆盖；首次 parse 与 under-filled retry 都会沿用同一 temperature，不再出现首轮和 retry 采样口径不一致
 - **retry 多样化**: under-filled retry 当前会把 `reasoning_effort` 提到 `medium`，若调用方显式给了 `temperature`，也会做一次小幅上调（`+0.1`，上限 `2.0`），不再是完全相同参数重试
 - **重名收口**: parser 当前会在 parse 结果层统一规范 agent 名称；若 LLM 返回同名角色，会自动去重并同步修正 hierarchical `groups[].members / leader`
-- **fallback helper 副作用收口**: `_generate_fallback_groups()` 当前只返回 groups 结构，不再偷偷改写传入的 `agents`；group 回填现在走显式步骤
+- **fallback helper 副作用收口**: `_generate_fallback_groups()` 当前会直接给 agent 回写 `group` 字段，和 helper / 测试契约保持一致；group 结构仍按显式步骤返回
 
 ### `logging_utils.py` (≈90行) — 结构化日志配置 (**NEW**)
 - **职责**: 统一 backend 运行时日志格式，不改各模块现有 `logger.info/warning/error` 调用方式

@@ -229,6 +229,7 @@ export function useSimulationDirectorState({
   const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(
     () => scenario?.gameplay_state ?? null,
   );
+  const [authorityConflictKind, setAuthorityConflictKind] = useState<'director' | 'gameplay' | null>(null);
 
   const storedScenarioMeta = useMemo(
     () => (replayScenarioMeta ?? (id ? loadScenarioMeta(id) : null)),
@@ -282,6 +283,7 @@ export function useSimulationDirectorState({
         if (latest) {
           setBackendDirectorState(latest);
         }
+        setAuthorityConflictKind('director');
       }
       console.warn('[DirectorState] Failed to persist backend state', err);
     }
@@ -303,6 +305,7 @@ export function useSimulationDirectorState({
         if (latest) {
           setBackendGameplayState(latest);
         }
+        setAuthorityConflictKind('gameplay');
       }
       console.warn('[GameplayState] Failed to persist backend state', err);
     }
@@ -378,6 +381,8 @@ export function useSimulationDirectorState({
     setBackendDirectorState,
     backendGameplayState,
     setBackendGameplayState,
+    authorityConflictKind,
+    clearAuthorityConflictKind: () => setAuthorityConflictKind(null),
     storedScenarioMeta,
     scenarioMeta,
     refreshLocalMeta,

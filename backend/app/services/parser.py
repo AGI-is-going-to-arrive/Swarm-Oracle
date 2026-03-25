@@ -768,11 +768,15 @@ def _generate_fallback_groups(agents: list[dict]) -> list[dict]:
             if agent["name"] in members and agent.get("tier", "").upper() == "CORE":
                 leader = agent["name"]
                 break
+        group_name = f"{stance}派"
         groups.append({
-            "name": f"{stance}派",
+            "name": group_name,
             "leader": leader,
             "members": members,
             "stance": stance,
         })
+        for agent in agents:
+            if agent.get("name") in members:
+                agent["group"] = group_name
 
     return groups

@@ -91,7 +91,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 
 - `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline.
 - If parse-stage LLM JSON is unrecoverably broken, or the model returns a structurally incomplete payload, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately; fallback rounds also honor the caller-provided default round count instead of hardcoding `10`.
-- `memory.py` now rolls the previous structured briefing forward into the next compression window, while keeping the current raw window verbatim.
+- `memory.py` now uses a two-stage rolling compaction path: long windows first summarize older dialogue into a bounded overflow briefing, then merge that briefing with the most recent raw window for the final summary. The older slice now also keeps high-signal lines first (`CORE/LEADER`, `emotion/diverge`, intervention / gameplay card / betting / fork / result markers) instead of relying on naive head-tail truncation.
 - `memory.py` and `narrator.py` now honor in-memory BYOK overrides from the simulation pipeline; credentials still stay in memory and are not persisted into scenario records.
 - `narrator.py` now wraps branch title / participant summary / raw rounds in the same untrusted-data guardrail style already used by other prompt builders.
 - `social.py` now selects wrapper / prompt language by scenario language, so English scenarios no longer receive Chinese wrapper text.
@@ -112,3 +112,17 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ## Environment Variables
 
 See `../.env.example` for the full list.
+
+Memory compression tuning now includes developer-only backend knobs:
+
+- `MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS`
+- `MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS`
+- `MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS`
+- `MEMORY_CORE_MAX_RECENT`
+- `MEMORY_IMPORTANT_MAX_RECENT`
+- `MEMORY_CROWD_MAX_RECENT`
+- `MEMORY_CORE_CONTEXT_MAX_CHARS`
+- `MEMORY_IMPORTANT_CONTEXT_MAX_CHARS`
+
+These values only affect backend prompt budgeting and context retention. They are
+not exposed to frontend users and should be tuned by developers/operators only.

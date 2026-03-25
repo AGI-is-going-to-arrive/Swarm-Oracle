@@ -728,4 +728,20 @@
   .result-view {
     padding: 40px 20px calc(136px + env(safe-area-inset-bottom, 0px));
   }
+
+  .result-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    width: min(100%, 360px);
+    margin: 20px auto 0;
+  }
+
+  .result-actions .btn {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+    white-space: normal;
+    line-height: 1.35;
+  }
 }

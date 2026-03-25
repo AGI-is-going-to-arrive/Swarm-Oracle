@@ -9,6 +9,8 @@ import app.services.memory as memory_module
 from app.services.memory import (
     _COMPRESS_DEFAULTS,
     _TIER_MAX_RECENT,
+    _extract_priority_lines,
+    _score_priority_line,
     _build_crowd_context,
     _validate_compress_result,
     build_agent_context,
@@ -333,9 +335,16 @@ class TestCompressRounds:
 
     @pytest.mark.asyncio
     async def test_very_long_input(self):
-        """Very long input (50K chars) should still be processed normally."""
+        """Very long input should be summarized in two bounded passes."""
         long_text = "[Agent]: " + "很长的发言内容" * 5000  # ~50K chars
-        mock_response = {
+        older_response = {
+            "situation": "较早窗口摘要",
+            "active_debates": ["旧争论A"],
+            "key_quotes": ["[A]: 旧原话"],
+            "tension_points": ["旧紧张点"],
+            "consensus": "旧共识",
+        }
+        final_response = {
             "situation": "漫长的讨论",
             "active_debates": ["争论A"],
             "key_quotes": [],
@@ -343,14 +352,18 @@ class TestCompressRounds:
             "consensus": "",
         }
         with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = mock_response
+            mock_llm.side_effect = [older_response, final_response]
             result = await compress_rounds(long_text)
 
         assert result["situation"] == "漫长的讨论"
-        # Verify LLM was called with the full text embedded in prompt
-        call_args = mock_llm.call_args
-        assert len(call_args[0][0]) > 35000  # prompt should contain the full text
-        assert "当前窗口原始对话 / UNTRUSTED DATA" in call_args[0][0]
+        assert mock_llm.call_count == 2
+        older_prompt = mock_llm.call_args_list[0][0][0]
+        recent_prompt = mock_llm.call_args_list[1][0][0]
+        assert len(older_prompt) < 20_000
+        assert len(recent_prompt) < 20_000
+        assert "较早窗口摘要" in recent_prompt
+        assert "当前窗口原始对话 / UNTRUSTED DATA" in older_prompt
+        assert "当前窗口原始对话 / UNTRUSTED DATA" in recent_prompt
 
     @pytest.mark.asyncio
     async def test_previous_briefing_is_carried_into_next_compaction(self):
@@ -399,6 +412,33 @@ class TestCompressRounds:
         assert kwargs["model"] == "gpt-test"
 
 
+class TestPriorityExtraction:
+    def test_score_priority_line_prefers_core_and_diverge_markers(self):
+        routine = "[R1][群众][emotion=neutral]: 普通讨论"
+        high_signal = "[R3][诸葛亮][CORE|emotion=tense|diverge=是否立刻北伐]: 我们必须立刻改变路线"
+        assert _score_priority_line(high_signal, index=5, total_lines=8) > _score_priority_line(
+            routine, index=1, total_lines=8
+        )
+
+    def test_extract_priority_lines_keeps_gameplay_and_intervention_signals(self):
+        raw = "\n".join([
+            f"[R1][路人{i}][emotion=neutral]: 例行讨论 {i}"
+            for i in range(20)
+        ] + [
+            "[R2][系统][CORE|emotion=alert]: ⚡ 干预事件：粮道被切断，所有计划重算",
+            "[R2][导演][CORE]: 🃏 Gameplay card triggered: public_hearing",
+            "[R3][诸葛亮][CORE|emotion=tense|diverge=是否立刻北伐]: 若不转向，世界线将分叉",
+            "[R3][预测官]: 🎯 bet locked on branch_winner",
+        ])
+
+        extracted = _extract_priority_lines(raw)
+
+        assert "干预事件" in extracted
+        assert "Gameplay card triggered" in extracted
+        assert "diverge=是否立刻北伐" in extracted
+        assert "bet locked" in extracted
+
+
 # ── Phase 2: Tier-based Context Tests ─────────────────────────
 
 
@@ -436,12 +476,12 @@ class TestFormatMessagesTier:
         lines = result.strip().split("\n")
         assert len(lines) == 6
 
-    def test_core_tier_gets_8(self):
-        """CORE agents should get 8 recent messages."""
+    def test_core_tier_gets_12(self):
+        """CORE agents should get a larger recent-message window."""
         result = format_messages_for_context(_SAMPLE_MESSAGES, tier="CORE")
         lines = result.strip().split("\n")
         assert len(lines) == _TIER_MAX_RECENT["CORE"]
-        assert lines[0].startswith("[Agent12]")  # 20 - 8 = 12
+        assert lines[0].startswith("[Agent8]")  # 20 - 12 = 8
 
     def test_important_tier_gets_5(self):
         """IMPORTANT agents should get 5 recent messages."""

@@ -110,6 +110,7 @@ npm run dev
 - `POST /api/health/test` 在 LLM 可用时还会返回 provider probe 摘要，供首页 BYOK 预检显示推荐的 `agents / rounds` 区间。
 - `disable_user_quota` 只对本地 / 自托管 provider 生效；它只跳过 user-level fairness cap，不会绕过全局并发闸门。
 - backend 默认输出结构化 JSON 日志；`uvicorn` 相关日志也会统一走同一套 root formatter。
+- memory 压缩预算当前也可在 backend `.env` 中调节；`MEMORY_COMPRESS_* / MEMORY_*_MAX_RECENT / MEMORY_*_CONTEXT_MAX_CHARS` 只给 backend 开发者/运维调参，不暴露到前端用户。
 
 ## Testing And Signoff
 
@@ -154,6 +155,10 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
   - frontend targeted set `107 passed`
   - `tsc` / `build` / perf budgets / assets check 通过
 - Current session focused verification:
+  - `backend/tests/test_agent_group.py + backend/tests/test_memory.py + backend/tests/test_simulator.py + backend/tests/test_config.py`: `142 passed in 4.18s`
+  - `frontend src/api/client.test.ts + src/hooks/useSimulationWS.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts`: `26 passed`
+  - `frontend/output/e2e/20260325-postfix-mobile-review/`：移动端结果页与主模式 mobile 后修复回归产物已落盘
+  - `frontend/output/e2e/20260325-postfix-debate-review/`：Debate full 后修复回归产物已落盘
   - `frontend src/pages/InputView.test.tsx + src/i18n/locales.test.ts`: `14 passed`
   - `frontend src/lib/shareEnvelope.test.ts + src/components/ShareModal.test.tsx + src/pages/ResultView.test.tsx`: `22 passed`
   - `backend/tests/test_api.py -k export_with_branches -q`: `1 passed`

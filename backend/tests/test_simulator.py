@@ -32,6 +32,7 @@ from app.services.simulator import (
     _create_round,
     _detect_fork,
     _format_setting,
+    _format_message_for_compression,
     _gather_agent_messages,
     _gather_hierarchical_messages,
     _get_branch,
@@ -1279,6 +1280,8 @@ class TestGetMessagesInRange:
         result = _get_messages_in_range(engine, bid, 3, 3)
         assert len(result) == 1
         assert result[0]["content"] == "only"
+        assert result[0]["emotion"] == "neutral"
+        assert result[0]["round"] == 3
 
     def test_out_of_range(self):
         engine = get_engine()
@@ -1290,6 +1293,28 @@ class TestGetMessagesInRange:
 
         result = _get_messages_in_range(engine, bid, 10, 20)
         assert result == []
+
+
+class TestFormatMessageForCompression:
+    def test_formats_priority_metadata_markers(self):
+        payload = {
+            "agent_name": "诸葛亮",
+            "content": "若不转向，世界线将分叉",
+            "emotion": "tense",
+            "diverge": "是否立刻北伐",
+            "round": 3,
+            "tier": "CORE",
+            "role": "Leader strategist",
+        }
+
+        result = _format_message_for_compression(payload)
+
+        assert "[R3]" in result
+        assert "[诸葛亮]" in result
+        assert "CORE" in result
+        assert "LEADER" in result
+        assert "emotion=tense" in result
+        assert "diverge=是否立刻北伐" in result
 
 
 # ── _update_branch_status ────────────────────────────────────

@@ -56,6 +56,7 @@ cp .env.example backend/.env
 - `.env.example` 是本地直启 backend 的模板，不再作为 Docker 默认环境文件。
 - 默认模型为 `gpt-5.4-mini`；若本地网关没有该模型映射，需要先更新网关。
 - backend 当前默认输出 JSON 结构化日志；如需切回传统文本，可在 `backend/.env` 里设 `LOG_FORMAT=plain`。`LOG_LEVEL` 默认 `INFO`。
+- memory 压缩预算当前也可通过 backend `.env` 调整；相关 `MEMORY_COMPRESS_* / MEMORY_*_MAX_RECENT / MEMORY_*_CONTEXT_MAX_CHARS` 仅供 backend 开发者/运维调参，不暴露到前端用户。
 
 ## 测试写法约定
 
@@ -79,6 +80,8 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - 当前 targeted backend set：`90 passed`
+- 本 session 这轮“parser fallback group 回写 / memory 两段式高信号压缩 + developer-only budget”改动，当前还额外实跑通过：
+  - `tests/test_agent_group.py + tests/test_memory.py + tests/test_simulator.py + tests/test_config.py`：`142 passed in 4.18s`
 - 本轮这类“runtime guard / rolling briefing / language-aware fallback / mtime-aware contract”改动，当前还额外实跑通过：
   - `tests/test_llm_client.py + tests/test_campaign_api.py + tests/test_campaign_service.py + tests/test_debate_api.py + tests/test_debate_service.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_models.py + tests/test_narrator.py + tests/test_predictions.py + tests/test_ws.py + tests/test_api.py`：`269 passed in 30.26s`
   - `tests/test_parser.py -k fallback_rounds_use_explicit_default_rounds`：`1 passed`
@@ -162,6 +165,11 @@ npm run test:spike:phaser-custom
 ```
 
 - 当前 targeted frontend set：`112 passed`
+- 本 session 这轮“安全读重试 / WS 去重与重连日志 / 409 可见反馈 / 移动端结果页操作区修复”改动，当前还额外实跑通过：
+  - `src/api/client.test.ts + src/hooks/useSimulationWS.test.tsx + src/hooks/useDebateWS.test.tsx + src/i18n/locales.test.ts`：`26 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-postfix-mobile-review --headless`：通过
+  - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-postfix-debate-review --headless`：通过
 - 当前推荐前端定向回归已收口到本 session 实跑过的 Input / Simulation / timeline / branch edge / GameplayCardsModal / VizSynthesizer / WorldScene / i18n 子集；类型检查、build 与 `phaser-custom` spike 单列执行。
 - 本 session 这轮“Input/Simulation hook 拆分 + `startSimulation(options)` + Simulation i18n 收口”改动，当前还额外实跑通过：
   - `src/lib/directorIdentity.test.ts + src/lib/debateCounterplay.test.ts + src/lib/scenarioMeta.test.ts + src/lib/dailyChallenge.test.ts + src/lib/llmProviderPolicy.test.ts + src/pages/InputView.test.tsx + src/pages/SimulationView.test.tsx + src/stores/simulationStore.test.ts + src/hooks/useSimulationWS.test.tsx`：`81 passed in 1.57s`

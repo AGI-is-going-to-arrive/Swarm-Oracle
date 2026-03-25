@@ -27,12 +27,16 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   const resyncRequestVersionRef = useRef(0);
   const lastSequenceRef = useRef(0);
   const lastStreamIdentityRef = useRef<string | null>(null);
-  const seenEventIdsRef = useRef<string[]>([]);
+  const seenEventIdsRef = useRef<Map<string, true>>(new Map());
 
   const rememberEventId = useCallback((eventId: string) => {
-    seenEventIdsRef.current.push(eventId);
-    if (seenEventIdsRef.current.length > 500) {
-      seenEventIdsRef.current.shift();
+    seenEventIdsRef.current.delete(eventId);
+    seenEventIdsRef.current.set(eventId, true);
+    if (seenEventIdsRef.current.size > 500) {
+      const oldest = seenEventIdsRef.current.keys().next().value;
+      if (oldest) {
+        seenEventIdsRef.current.delete(oldest);
+      }
     }
   }, []);
 
@@ -73,19 +77,20 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
       console.log(`[WS] Connected to scenario ${currentScenarioId}`);
-      const shouldResync = reconnectCount.current > 0;
+      const reconnectAttempts = reconnectCount.current;
+      const shouldResync = reconnectAttempts > 0;
       const messageVersionAtOpen = stateMessageVersionRef.current;
-      reconnectCount.current = 0;
 
       if (shouldResync) {
         console.log('[WS] Reconnected — polling backend for missed state...');
         logWsDebug('SimulationWS', 'resync_on_reconnect', {
           streamId: currentScenarioId,
-          reconnectCount: reconnectCount.current,
+          reconnectCount: reconnectAttempts,
           messageVersionAtOpen,
         });
         requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
       }
+      reconnectCount.current = 0;
     };
 
     ws.onmessage = (event) => {
@@ -112,10 +117,10 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
           if (lastStreamIdentityRef.current !== streamIdentity) {
             lastStreamIdentityRef.current = streamIdentity;
             lastSequenceRef.current = 0;
-            seenEventIdsRef.current = [];
+            seenEventIdsRef.current = new Map();
           }
 
-          if (meta.event_id && seenEventIdsRef.current.includes(meta.event_id)) {
+          if (meta.event_id && seenEventIdsRef.current.has(meta.event_id)) {
             logWsDebug('SimulationWS', 'drop_duplicate_event_id', {
               type: raw.type,
               streamId: meta.stream_id ?? currentScenarioId,
@@ -212,7 +217,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   useEffect(() => {
     lastSequenceRef.current = 0;
     lastStreamIdentityRef.current = null;
-    seenEventIdsRef.current = [];
+    seenEventIdsRef.current = new Map();
     stateMessageVersionRef.current = 0;
     resyncRequestVersionRef.current = 0;
 

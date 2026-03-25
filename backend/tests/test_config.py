@@ -16,6 +16,10 @@ def test_settings_defaults():
     assert s.MAX_AGENTS > 0
     assert s.MAX_ROUNDS > 0
     assert s.MAX_BRANCHES > 0
+    assert s.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS >= s.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS
+    assert s.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS >= s.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS
+    assert s.MEMORY_CROWD_MAX_RECENT <= s.MEMORY_IMPORTANT_MAX_RECENT <= s.MEMORY_CORE_MAX_RECENT
+    assert s.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS <= s.MEMORY_CORE_CONTEXT_MAX_CHARS
     assert 0 < s.BRANCH_PRUNE_THRESHOLD < 1
     assert 0 <= s.FORK_SENSITIVITY <= 1
     assert s.PORT > 0
@@ -32,6 +36,29 @@ def test_settings_from_env(monkeypatch):
     assert s.LLM_MODEL_NAME == "test-model-name"
     assert s.MAX_AGENTS == 42
     assert s.LLM_REASONING_EFFORT == "medium"
+
+
+def test_memory_budget_settings_from_env(monkeypatch):
+    monkeypatch.setenv("MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS", "24000")
+    monkeypatch.setenv("MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS", "14000")
+    monkeypatch.setenv("MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS", "10000")
+    monkeypatch.setenv("MEMORY_CORE_MAX_RECENT", "14")
+    monkeypatch.setenv("MEMORY_IMPORTANT_MAX_RECENT", "6")
+    monkeypatch.setenv("MEMORY_CROWD_MAX_RECENT", "3")
+    monkeypatch.setenv("MEMORY_CORE_CONTEXT_MAX_CHARS", "5200")
+    monkeypatch.setenv("MEMORY_IMPORTANT_CONTEXT_MAX_CHARS", "3600")
+
+    from app.config import Settings
+
+    s = Settings()
+    assert s.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS == 24000
+    assert s.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS == 14000
+    assert s.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS == 10000
+    assert s.MEMORY_CORE_MAX_RECENT == 14
+    assert s.MEMORY_IMPORTANT_MAX_RECENT == 6
+    assert s.MEMORY_CROWD_MAX_RECENT == 3
+    assert s.MEMORY_CORE_CONTEXT_MAX_CHARS == 5200
+    assert s.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS == 3600
 
 
 def test_settings_normalize_log_config(monkeypatch):
@@ -116,4 +143,24 @@ def test_settings_reject_invalid_log_format(monkeypatch):
     from app.config import Settings
 
     with pytest.raises(ValueError, match="LOG_FORMAT"):
+        Settings()
+
+
+def test_settings_reject_invalid_memory_budget_relationship(monkeypatch):
+    monkeypatch.setenv("MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS", "12000")
+    monkeypatch.setenv("MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS", "16000")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS"):
+        Settings()
+
+
+def test_settings_reject_invalid_memory_tier_order(monkeypatch):
+    monkeypatch.setenv("MEMORY_CORE_MAX_RECENT", "4")
+    monkeypatch.setenv("MEMORY_IMPORTANT_MAX_RECENT", "6")
+
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="CROWD <= IMPORTANT <= CORE"):
         Settings()

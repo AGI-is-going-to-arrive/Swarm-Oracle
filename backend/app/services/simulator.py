@@ -1895,7 +1895,7 @@ async def _compress_round_memory(
     if not msgs:
         return
 
-    msgs_text = "\n".join(f"[{m['agent_name']}]: {m['content']}" for m in msgs)
+    msgs_text = "\n".join(_format_message_for_compression(m) for m in msgs)
     previous_briefing = _load_latest_compressed_briefing(
         engine,
         branch_id,
@@ -2188,25 +2188,63 @@ def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:
 def _get_messages_in_range(engine, branch_id, start, end) -> list[dict]:
     """P0-2 fix: Uses JOIN to fetch agent names in a single query (no N+1)."""
     with Session(engine) as session:
-        round_ids = list(session.exec(
-            select(Round.id)
+        round_rows = list(session.exec(
+            select(Round.id, Round.round_number)
             .where(Round.branch_id == branch_id,
                    Round.round_number >= start,
                    Round.round_number <= end)
         ).all())
-        if not round_ids:
+        if not round_rows:
             return []
+        round_ids = [row[0] for row in round_rows]
+        round_num_map = {round_id: round_number for round_id, round_number in round_rows}
 
         rows = session.exec(
-            select(AgentMessage, Agent.name)
+            select(AgentMessage, Agent.name, Agent.tier, Agent.role)
             .outerjoin(Agent, AgentMessage.agent_id == Agent.id)
             .where(AgentMessage.round_id.in_(round_ids))
         ).all()
 
         return [
-            {"agent_name": agent_name or "Unknown", "content": msg.content}
-            for msg, agent_name in rows
+            {
+                "agent_name": agent_name or "Unknown",
+                "content": msg.content,
+                "emotion": msg.emotion,
+                "diverge": msg.diverge,
+                "round": round_num_map.get(msg.round_id),
+                "tier": getattr(agent_tier, "value", "") if agent_tier is not None else "",
+                "role": agent_role or "",
+            }
+            for msg, agent_name, agent_tier, agent_role in rows
         ]
+
+
+def _format_message_for_compression(message: dict[str, Any]) -> str:
+    parts: list[str] = []
+    round_number = message.get("round")
+    if round_number is not None:
+        parts.append(f"[R{round_number}]")
+
+    speaker = message.get("agent_name", "Unknown")
+    parts.append(f"[{speaker}]")
+
+    tags: list[str] = []
+    tier = str(message.get("tier", "") or "").strip()
+    role = str(message.get("role", "") or "").strip()
+    emotion = str(message.get("emotion", "") or "").strip()
+    diverge = str(message.get("diverge", "") or "").strip()
+
+    if tier:
+        tags.append(tier)
+    if role and ("leader" in role.lower() or "领袖" in role or "组长" in role):
+        tags.append("LEADER")
+    if emotion:
+        tags.append(f"emotion={emotion}")
+    if diverge:
+        tags.append(f"diverge={diverge}")
+
+    tag_block = f"[{'|'.join(tags)}]" if tags else ""
+    return f"{''.join(parts)}{tag_block}: {message.get('content', '')}"
 
 
 def _update_branch_status(engine, branch_id, status: BranchStatus):

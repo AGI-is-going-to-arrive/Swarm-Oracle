@@ -9691,3 +9691,202 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `190 passed`
   - `cd backend && .venv/bin/python -m ruff check --ignore E501 app/models/predictions.py app/api/predictions.py app/models/database.py app/services/runtime_lock.py app/services/vector_store.py tests/test_predictions.py tests/test_api.py tests/test_runtime_lock.py tests/test_vector_store.py alembic/versions/012_add_prediction_scenario_user_unique_index.py`
     - 通过
+
+## 2026-03-25 Review Verification Pass
+
+- 已再次读取 `llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/overview/backend.md`、`llmdoc/guides/development.md`、`code_review_report.md`，按“未完成项 + 真实运行”双线复核。
+- 当前明确确认仍然真实存在的问题：
+  - `backend/tests/test_agent_group.py -q` 仍失败：`TestParserFallbackGroups.test_fallback_groups_updates_agents` 触发 `KeyError: 'group'`，说明 `parser.py::_generate_fallback_groups()` 仍未给 agent 回写 `group` 字段；这不是历史残留描述错误，而是当前真 bug。
+  - `frontend/src/hooks/useSimulationWS.ts` / `frontend/src/hooks/useDebateWS.ts` 仍使用 `string[] + includes()` 做 event id 去重；当前不是功能故障，但仍是热路径 O(n) 实现。
+  - `frontend/src/hooks/useSimulationViewState.ts` 的 `persistDirectorMeta()` / `persistGameplayState()` 在 `409` 时仍是静默回拉最新 authority，无用户提示。
+  - `frontend/src/api/client.ts` 仍无 429/503/5xx 瞬态重试；当前更像 UX/韧性改进，不是已经爆炸的主流程 bug。
+  - `backend/app/services/lang_detect.py` 仍把大多数拉丁字母系语言归到 `English`；对当前 EN/ZH 产品面无阻塞，但若未来宣称更广 i18n，这会变成真缺口。
+- 当前明确确认“不应被表述为现阶段缺陷”的点：
+  - “跨平台”当前准确口径仍应是“桌面/移动浏览器可用”，不是原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+  - `scenarioGameplayDerivations.ts` 的 `maxPoints = 3` 在当前 contract 口径下一致，更接近未来配置化需求，而不是现阶段 bug。
+  - `EventBridge` 的 start/stop 时序与 teardown race 目前更像低概率健壮性改进，优先级低于真实 parser bug、重试与可观测性问题。
+- 本轮本地人工/自动化复核：
+  - 前端 dev server 当前起在 `http://127.0.0.1:18930`（`18928/18929` 被占用）。
+  - 用 `playwright-interactive` 实际打开了首页桌面/移动视口，并落盘：
+    - `output/playwright/20260325-review/home-desktop.png`
+    - `output/playwright/20260325-review/home-mobile.png`
+    - `output/playwright/20260325-review/home-desktop-zh.png`
+    - `output/playwright/20260325-review/home-mobile-zh.png`
+    - `output/playwright/20260325-review/sim-desktop.png`
+    - `output/playwright/20260325-review/result-desktop.png`
+  - 人工复核结论：
+    - 首页中英切换正常，桌面/移动都能看到 daily challenge、weekly track、director growth、起局区和快速开始卡。
+    - 主模式最小 Theater 场景可从 `/sim/:id` 进入并完成，`render_game_to_text` 显示 `viewMode = theater`、`status = done`。
+    - Result 页可正常打开，归档摘要与世界线内容可见。
+- 本轮 E2E 结果：
+  - `frontend/output/e2e/20260325-current-corners-review/result.json`
+    - `corners` 通过，覆盖预测、回放、director/gameplay authority、share retry、history/leaderboard 等关键角落。
+  - `frontend/output/e2e/20260325-current-mobile-review/result.json`
+    - `mobile` 通过，移动端首页、Theater、Result 路径可用。
+  - `frontend/output/e2e/20260325-current-debate-review/result.json`
+    - Debate `full` 通过，桌面/移动 live/result/share/hook 全链路通过，`adjudication_mode = llm_hybrid`。
+- 本轮额外验证：
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts src/pages/HistoryView.test.tsx src/pages/LeaderboardView.test.tsx src/hooks/useDebateWS.test.tsx src/hooks/useSimulationWS.test.tsx`
+    - `21 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_agent_group.py -q`
+    - `1 failed, 16 passed`
+- 当前保守结论：
+  - 产品在“浏览器优先、桌面/移动浏览器可玩、EN/ZH 可切换、主模式与 Debate 主链路可跑通”这一层面成立。
+  - 现在最值得继续改的是：
+    - `parser fallback group` 真 bug
+    - WS 去重结构与 reconnect 观测性
+    - API client 瞬态错误重试
+    - 409 authority 冲突的用户提示
+  - 当前不建议把“支持 windows/mac/linux ios android”解读成要立即补原生客户端壳，这会偏离现有 Web-first 设计。
+
+## 2026-03-25 Implementation Pass (Post-Review)
+
+- 已按当前确认的问题落地实现：
+  - `backend/app/services/parser.py`
+    - `_generate_fallback_groups()` 现在会直接给 agent 回写 `group` 字段，修复 helper 契约与 `tests/test_agent_group.py` 红灯。
+  - `backend/app/services/memory.py`
+    - `compress_rounds()` 改为“两段式压缩”：
+      - 超长窗口先对较早对话做一轮 bounded overflow summary
+      - 再用该摘要 + 最近原始窗口做最终压缩
+    - 不再使用 `max(4000, len(messages_text))` 这种失效上限。
+    - `CORE` tier 最近原始消息窗口从 `8` 提高到 `12`，并放宽对话 block 的字符预算。
+  - `frontend/src/pages/ResultView.css`
+    - 移动端 `result-actions` 改为单列自适应布局，按钮不再把左侧挤出视口。
+  - `frontend/src/hooks/useSimulationViewState.ts`
+    - director/gameplay authority 命中 `409` 时会记录冲突类型，并在 UI 层给出可见反馈。
+  - `frontend/src/pages/SimulationView.tsx`
+    - authority `409` 冲突现在会通过现有 Theater feedback 胶囊显示“已回拉最新状态”提示。
+  - `frontend/src/api/client.ts`
+    - 为安全读接口增加 opt-in 瞬态错误重试；当前 GET 路径会对 `429/500/502/503/504` 做有限退避重试，写接口保持不重试。
+  - `frontend/src/hooks/useSimulationWS.ts`
+    - event id 去重从 `string[] + includes()` 改为 bounded `Map`
+    - reconnect 日志改为在清零前记录真实次数
+  - `frontend/src/hooks/useDebateWS.ts`
+    - 同步收口 Debate WS 的 event id 去重和 reconnect 日志时序
+  - `frontend/src/i18n/locales/en.json` + `zh.json`
+    - 新增 authority 冲突提示文案
+
+- 新增/更新验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_agent_group.py tests/test_memory.py -q`
+    - `68 passed`
+  - `cd frontend && npm test -- --run src/api/client.test.ts src/hooks/useSimulationWS.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts`
+    - `26 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-postfix-mobile-review --headless`
+    - 通过；移动端结果页截图已确认操作区不再溢出
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-postfix-debate-review --headless`
+    - 通过；WS 改动后 Debate live/result/share 与 automation hooks 仍正常
+
+- 关键人工复核产物：
+  - `frontend/output/e2e/20260325-postfix-mobile-review/mobile-result.png`
+    - 移动端结果页按钮已完整进入视口
+  - `frontend/output/e2e/20260325-postfix-debate-review/mobile/share-open.png`
+    - Debate 移动端分享弹窗仍正常
+
+## 2026-03-25 Memory Budget Config + High-Signal Retention
+
+- 已把 memory 预算参数后端配置化，仅供开发者使用，不暴露到前端/API：
+  - `MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS`
+  - `MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS`
+  - `MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS`
+  - `MEMORY_CORE_MAX_RECENT`
+  - `MEMORY_IMPORTANT_MAX_RECENT`
+  - `MEMORY_CROWD_MAX_RECENT`
+  - `MEMORY_CORE_CONTEXT_MAX_CHARS`
+  - `MEMORY_IMPORTANT_CONTEXT_MAX_CHARS`
+- `backend/app/config.py`
+  - 为上述参数新增 Settings 字段与关系校验，确保 recent/overflow 不超过总预算，tier 顺序满足 `CROWD <= IMPORTANT <= CORE`。
+- `backend/app/services/memory.py`
+  - 预算常量改为读取 `settings`
+  - 在两段式压缩基础上继续加入“高信号优先保留”：
+    - 旧窗口不再仅按头尾截断
+    - 先抽取 priority lines，再参与 overflow summary
+    - 当前高信号优先规则覆盖：最新行、`CORE/leader` 标记、`emotion/diverge` 标记、以及 `干预/玩法卡/下注/fork/result` 中英关键词
+- `backend/app/services/simulator.py`
+  - `_compress_round_memory()` 现在会把压缩输入格式化为带 `round/tier/emotion/diverge` 标签的结构化行，便于高信号筛选层识别关键事件
+- 新增/更新回归：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_memory.py tests/test_simulator.py tests/test_config.py -q`
+    - `142 passed`
+- 开发者入口同步：
+  - 根目录 `.env.example` 已新增 memory 预算参数示例
+  - `backend/README.md` 已说明这组参数仅供 backend 开发者/运维调参，不暴露给前端用户
+
+## 2026-03-25 Review Re-Validation (Current Turn)
+
+- llmdoc / report / runtime boundary re-check:
+  - 当前产品定位仍是“浏览器优先的 Web 应用”，不是原生 Windows/macOS/Linux/iOS/Android 客户端壳。
+  - “跨平台”当前应解释为桌面/移动浏览器视口 + Chromium/WebKit/Firefox/Safari 路径，而不是补原生壳。
+
+- 代码层真值：
+  - `backend/tests/test_agent_group.py -q` 当前仍是 `1 failed, 16 passed`。
+  - 失败点仍是 `TestParserFallbackGroups.test_fallback_groups_updates_agents`，说明 `_generate_fallback_groups()` 仍未回写 agent `group` 字段。
+  - `frontend` 定向回归 `src/i18n/locales.test.ts + src/hooks/useSimulationWS.test.tsx + src/hooks/useDebateWS.test.tsx` 当前通过（`19 passed`），说明 i18n 基础资源和 WS hook 当前不是失效状态。
+
+- 主模式 E2E（当前本地 URL `http://127.0.0.1:18930`）：
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-main-local-corners --headless`
+    - 通过。
+    - 产物：`frontend/output/e2e/20260325-main-local-corners/result.json`
+    - 关键视觉产物：
+      - `frontend/output/e2e/20260325-main-local-corners/director-state-roundtrip/simulation.png`
+      - `frontend/output/e2e/20260325-main-local-corners/share-context/share-generated.png`
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-main-local-mobile --headless`
+    - 失败，断在 `mobile homepage missing daily challenge card`。
+    - 当前更像脚本等待条件 / 选择器漂移，而不是肉眼可见的首页缺卡：
+      - 本轮手工移动端首屏复核中，daily challenge 卡片、weekly challenge 卡片和语言切换器都可见。
+      - 该 suite 失败前只来得及落 `browser-launch.json`，没有后续截图。
+
+- Debate E2E（当前本地 URL `http://127.0.0.1:18930`）：
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260325-main-local-debate --headless`
+    - 通过。
+    - 桌面端结果：`adjudicationMode = llm_hybrid`，live/result/share hooks 都可用。
+    - 移动端结果：中文 live/result/share 路径都通过。
+    - 关键产物：
+      - `frontend/output/e2e/20260325-main-local-debate/desktop/live.png`
+      - `frontend/output/e2e/20260325-main-local-debate/desktop/share-generated.png`
+      - `frontend/output/e2e/20260325-main-local-debate/mobile/live.png`
+      - `frontend/output/e2e/20260325-main-local-debate/mobile/share-generated.png`
+
+- 本轮保守结论：
+  - 当前最像“真实待修复问题”的仍是 parser fallback `group` 契约缺口。
+  - 当前最像“值得继续改，但不必误判成产品坏掉”的是：
+    - 主模式 mobile suite 首页检查脚本漂移
+    - authority `409` 冲突静默恢复
+    - `client.ts` 缺少瞬态错误重试
+    - WS hook 事件去重仍是 `Array.includes()` 热路径
+
+## 2026-03-25 Read-Only Review Validation (Current Turn)
+
+- 目标：按 `code_review_report.md` 当前“待完成”条目重新核真值，并用真实浏览器/E2E 复验当前产品是否仍符合“浏览器优先、桌面/移动浏览器可玩”的设计边界。
+- 本轮运行态：
+  - backend 已监听 `127.0.0.1:18927`
+  - frontend 本轮以 Vite dev 启动在 `127.0.0.1:18931`（`18928/18929/18930` 当时已被占用）
+- 本轮只读复验通过：
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-review-corners --headless`
+  - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-review-mobile --headless`
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18931 --output-dir output/e2e/20260325-review-debate --headless`
+- 本轮人工视觉抽样：
+  - 桌面 Theater：`frontend/output/e2e/20260325-review-corners/director-state-roundtrip/simulation.png`
+  - 桌面结果页：`frontend/output/e2e/20260325-review-corners/director-state-roundtrip/result.png`
+  - 移动首页：`frontend/output/e2e/20260325-review-mobile/mobile-home.png`
+  - 移动 Theater：`frontend/output/e2e/20260325-review-mobile/mobile-theater.png`
+  - Debate 桌面 live：`frontend/output/e2e/20260325-review-debate/desktop/live.png`
+  - Debate 移动 bet modal：`frontend/output/e2e/20260325-review-debate/mobile/bet-open.png`
+- `playwright-interactive` 复验：
+  - 从 `frontend/node_modules/playwright` 成功加载本地 Playwright
+  - 桌面/移动上下文可同时打开 `http://127.0.0.1:18931`
+  - EN/ZH 切换会同步改变 `document.documentElement.lang` 与首页/辩论页文案
+  - 首页 viewport 数值检查：桌面/移动都 `canScrollX=false`，属于纵向滚动页面而非横向溢出
+- `develop-web-game` 客户端现状：
+  - 原技能脚本 `~/.codex/skills/develop-web-game/scripts/web_game_playwright_client.js` 仍因 `.js + ESM` 组合无法直接 `node` 执行，错误与历史记录一致
+  - 复用现有临时副本 `frontend/.tmp-web-game-client.mjs` 可正常执行
+  - 复验命令：
+    - `node frontend/.tmp-web-game-client.mjs --url http://127.0.0.1:18931/debate/23651f13-f1b2-4cf5-a061-22550a099234 --actions-file "$WEB_GAME_ACTIONS" --iterations 1 --pause-ms 250 --capture-mode panel --screenshot-dir frontend/output/web-game-review-debate`
+  - 产物：
+    - `frontend/output/web-game-review-debate/shot-0.png`
+    - `frontend/output/web-game-review-debate/state-0.json`
+- 当前边界结论（先记事实，最终判断以本轮总总结为准）：
+  - 自动化钩子 `render_game_to_text / advanceTime / capture_game_screenshot` 当前在主模式与 Debate 路径都可真实消费
+  - 当前“跨平台”应继续解释为现代桌面/移动浏览器覆盖，不应误写成已有原生 Windows/macOS/Linux/iOS/Android 客户端壳

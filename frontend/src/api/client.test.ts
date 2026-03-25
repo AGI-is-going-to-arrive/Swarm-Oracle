@@ -76,4 +76,54 @@ describe('api client request parsing', () => {
 
     await expect(exportScenario('scenario-1')).resolves.toBe('# export');
   });
+
+  it('retries transient GET failures for safe read endpoints', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+        },
+        text: vi.fn().mockResolvedValue(JSON.stringify({
+          detail: {
+            code: 'LLM_TEMPORARILY_UNAVAILABLE',
+            message: 'Provider unavailable',
+          },
+        })),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json; charset=utf-8' : null),
+        },
+        text: vi.fn().mockResolvedValue('{"id":"scenario-1"}'),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getScenario('scenario-1')).resolves.toEqual({ id: 'scenario-1' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry transient failures for write requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        detail: {
+          code: 'LLM_TEMPORARILY_UNAVAILABLE',
+          message: 'Provider unavailable',
+        },
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createReplayArtifact('scenario_result_v1', { example: true }),
+    ).rejects.toThrow('API 503 LLM_TEMPORARILY_UNAVAILABLE: Provider unavailable');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

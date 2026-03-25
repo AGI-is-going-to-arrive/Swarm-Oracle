@@ -188,7 +188,9 @@
         "clear": "Clear",
         "commit_saving": "Syncing commitment…",
         "commit_saved": "Commitment locked",
-        "commit_cleared": "Commitment cleared"
+        "commit_cleared": "Commitment cleared",
+        "commit_conflict_reloaded": "Another update landed first. Reloaded the latest commitment state.",
+        "gameplay_conflict_reloaded": "Another update landed first. Reloaded the latest gameplay state."
       },
       "theater_scene": {
         "boot": "Boot Scene",

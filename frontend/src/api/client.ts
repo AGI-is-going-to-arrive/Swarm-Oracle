@@ -21,6 +21,15 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+interface RequestRetryOptions {
+  retryTransient?: boolean;
+  retryAttempts?: number;
+}
+
+const RETRIABLE_RESPONSE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_RETRY_ATTEMPTS = 2;
+const DEFAULT_RETRY_BACKOFF_MS = 400;
+
 export class ApiError extends Error {
   status: number;
   code: string;
@@ -157,21 +166,58 @@ async function fetchWithTimeout(
   }
 }
 
-async function request<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT): Promise<T> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT,
+  retryOptions?: RequestRetryOptions,
+): Promise<T> {
   // M-9 fix: only set Content-Type for requests with a body
   const headers: Record<string, string> = {};
   if (init?.body) {
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetchWithTimeout(path, {
-    ...init,
-    // H-3 fix: spread init.headers AFTER defaults so user overrides win
-    headers: { ...headers, ...(init?.headers as Record<string, string>) },
-  }, timeoutMs);
-  if (!res.ok) {
-    throw await parseErrorResponse(res);
+  const retryTransient = retryOptions?.retryTransient ?? false;
+  const retryAttempts = retryOptions?.retryAttempts ?? 0;
+
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetchWithTimeout(path, {
+      ...init,
+      // H-3 fix: spread init.headers AFTER defaults so user overrides win
+      headers: { ...headers, ...(init?.headers as Record<string, string>) },
+    }, timeoutMs);
+    if (res.ok) {
+      return parseJsonResponse<T>(res, path);
+    }
+
+    const shouldRetry = (
+      retryTransient
+      && attempt < retryAttempts
+      && RETRIABLE_RESPONSE_STATUSES.has(res.status)
+    );
+    if (!shouldRetry) {
+      throw await parseErrorResponse(res);
+    }
+
+    await sleep(DEFAULT_RETRY_BACKOFF_MS * (attempt + 1));
   }
-  return parseJsonResponse<T>(res, path);
+}
+
+async function safeGet<T>(
+  path: string,
+  options?: RequestOptions,
+  timeoutMs = DEFAULT_TIMEOUT,
+): Promise<T> {
+  return request(
+    path,
+    { signal: options?.signal },
+    timeoutMs,
+    { retryTransient: true, retryAttempts: DEFAULT_RETRY_ATTEMPTS },
+  );
 }
 
 /** Fetch response as raw text (for Markdown export). */
@@ -272,12 +318,12 @@ export async function createDebate(
 
 /** GET /api/debate/:id — get debate live snapshot */
 export async function getDebate(id: string): Promise<DebateSnapshot> {
-  return request(`/debate/${id}`);
+  return safeGet(`/debate/${id}`);
 }
 
 /** GET /api/debate/:id/result — get finalized debate result */
 export async function getDebateResult(id: string): Promise<DebateResultPayload> {
-  return request(`/debate/${id}/result`);
+  return safeGet(`/debate/${id}/result`);
 }
 
 /** POST /api/debate/import-replay — persist a replay snapshot as a local debate run */
@@ -310,7 +356,7 @@ export async function predictDebate(
 
 /** GET /api/scenario/:id — get scenario status + agents + branches */
 export async function getScenario(id: string): Promise<Scenario> {
-  return request(`/scenario/${id}`);
+  return safeGet(`/scenario/${id}`);
 }
 
 /** POST /api/scenario/import-replay — persist a replay snapshot as a local scenario */
@@ -334,22 +380,22 @@ export async function createReplayArtifact(
 export async function getReplayArtifact(
   artifactId: string,
 ): Promise<{ id: string; kind: string; payload: Record<string, unknown>; created_at: string }> {
-  return request(`/replay-artifact/${artifactId}`);
+  return safeGet(`/replay-artifact/${artifactId}`);
 }
 
 /** GET /api/scenario/:id/branches — get branch tree */
 export async function getBranches(id: string): Promise<Branch[]> {
-  return request(`/scenario/${id}/branches`);
+  return safeGet(`/scenario/${id}/branches`);
 }
 
 /** GET /api/scenario/:id/story — get narrated stories for completed branches */
 export async function getStory(id: string): Promise<StoryData> {
-  return request(`/scenario/${id}/story`);
+  return safeGet(`/scenario/${id}/story`);
 }
 
 /** GET /api/scenario/:id/agents — get all agents for a scenario */
 export async function getAgents(id: string): Promise<AgentInfo[]> {
-  return request(`/scenario/${id}/agents`);
+  return safeGet(`/scenario/${id}/agents`);
 }
 
 /** POST /api/scenario/:id/intervene — butterfly effect intervention */
@@ -387,7 +433,7 @@ export async function interveneBatch(
 
 /** GET /api/scenario/:id/groups — get hierarchical groups (P3-A) */
 export async function getGroups(scenarioId: string): Promise<AgentGroupDetail[]> {
-  return request(`/scenario/${scenarioId}/groups`);
+  return safeGet(`/scenario/${scenarioId}/groups`);
 }
 
 // ── P5 API Wrappers ──────────────────────────────────────
@@ -418,7 +464,7 @@ export async function listScenarios(
   if (status) params.set('status', status);
   params.set('limit', String(limit));
   params.set('offset', String(offset));
-  return request(`/scenarios?${params.toString()}`);
+  return safeGet(`/scenarios?${params.toString()}`);
 }
 
 /** DELETE /api/scenario/:id — cascade delete a scenario (P5-A) */
@@ -469,7 +515,7 @@ export async function submitPrediction(
 
 /** GET /api/scenario/:id/predictions — list predictions for a scenario (P5-B) */
 export async function listPredictions(scenarioId: string): Promise<PredictionInfo[]> {
-  return request(`/scenario/${scenarioId}/predictions`);
+  return safeGet(`/scenario/${scenarioId}/predictions`);
 }
 
 export async function scorePredictions(
@@ -489,7 +535,7 @@ export async function scorePredictions(
 
 /** GET /api/leaderboard — global prediction leaderboard (P5-B) */
 export async function getLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
-  return request(`/leaderboard?limit=${limit}`);
+  return safeGet(`/leaderboard?limit=${limit}`);
 }
 
 export interface FinalizeCampaignPayload {
@@ -521,27 +567,27 @@ export async function getCampaignProfile(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignProfileSummary> {
-  return request(`/campaign/profile/${userId}`, { signal: options?.signal });
+  return safeGet(`/campaign/profile/${userId}`, options);
 }
 
 export async function getCampaignMastery(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignMastery[]> {
-  return request(`/campaign/profile/${userId}/mastery`, { signal: options?.signal });
+  return safeGet(`/campaign/profile/${userId}/mastery`, options);
 }
 
 export async function getCampaignBadges(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignBadge[]> {
-  return request(`/campaign/profile/${userId}/badges`, { signal: options?.signal });
+  return safeGet(`/campaign/profile/${userId}/badges`, options);
 }
 
 export async function getCampaignScenarioSummary(
   scenarioId: string,
 ): Promise<CampaignScenarioSummary> {
-  return request(`/campaign/scenario/${scenarioId}/summary`);
+  return safeGet(`/campaign/scenario/${scenarioId}/summary`);
 }
 
 export async function upsertScenarioDirectorState(
@@ -557,7 +603,7 @@ export async function upsertScenarioDirectorState(
 export async function getScenarioDirectorState(
   scenarioId: string,
 ): Promise<ScenarioDirectorStateResponse> {
-  return request(`/campaign/scenario/${scenarioId}/director-state`);
+  return safeGet(`/campaign/scenario/${scenarioId}/director-state`);
 }
 
 export async function upsertScenarioGameplayState(
@@ -573,7 +619,7 @@ export async function upsertScenarioGameplayState(
 export async function getScenarioGameplayState(
   scenarioId: string,
 ): Promise<ScenarioGameplayStateResponse> {
-  return request(`/campaign/scenario/${scenarioId}/gameplay-state`);
+  return safeGet(`/campaign/scenario/${scenarioId}/gameplay-state`);
 }
 
 export async function getCampaignDailyChallengeStatus(
@@ -588,9 +634,7 @@ export async function getCampaignDailyChallengeStatus(
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return request(`/campaign/profile/${userId}/daily-status?${params.toString()}`, {
-    signal: options?.signal,
-  });
+  return safeGet(`/campaign/profile/${userId}/daily-status?${params.toString()}`, options);
 }
 
 export async function getCampaignChallengeRotation(
@@ -602,9 +646,7 @@ export async function getCampaignChallengeRotation(
     local_date: localDate,
     weekly_count: String(weeklyCount),
   });
-  return request(`/campaign/challenges/rotation?${params.toString()}`, {
-    signal: options?.signal,
-  });
+  return safeGet(`/campaign/challenges/rotation?${params.toString()}`, options);
 }
 
 export async function getCampaignWeeklySummary(
@@ -617,9 +659,7 @@ export async function getCampaignWeeklySummary(
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return request(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`, {
-    signal: options?.signal,
-  });
+  return safeGet(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`, options);
 }
 
 /** Intervention template from backend */
@@ -632,5 +672,5 @@ export interface InterventionTemplate {
 
 /** GET /api/intervention-templates — pre-built intervention templates (P5-D) */
 export async function getInterventionTemplates(): Promise<InterventionTemplate[]> {
-  return request('/intervention-templates');
+  return safeGet('/intervention-templates');
 }

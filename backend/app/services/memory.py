@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.config import settings
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
@@ -21,6 +22,36 @@ from app.services.vector_store import get_vector_store
 logger = logging.getLogger(__name__)
 
 _COMPRESS_ROUNDS_TIMEOUT_SECONDS = 20.0
+_COMPRESS_MAX_RAW_WINDOW_CHARS = settings.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS
+_COMPRESS_RECENT_RAW_WINDOW_CHARS = settings.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS
+_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS = settings.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS
+_COMPRESS_ELLIPSIS_MARKER = "\n\n[... earlier routine discussion omitted here and summarized separately ...]\n\n"
+_COMPRESS_PRIORITY_MAX_LINES = 18
+_COMPRESS_PRIORITY_KEYWORDS = (
+    "intervention",
+    "interrupt",
+    "priority event",
+    "gameplay",
+    "card",
+    "bet",
+    "prediction",
+    "fork",
+    "branch",
+    "result",
+    "ending",
+    "director",
+    "世界线",
+    "干预",
+    "突发事件",
+    "玩法",
+    "卡牌",
+    "下注",
+    "预测",
+    "分叉",
+    "结局",
+    "结果",
+    "导演",
+)
 
 COMPRESS_PROMPT = """将以下讨论压缩为"态势简报"，重点保留分歧和转折信号:
 
@@ -158,49 +189,64 @@ async def compress_rounds(
         logger.debug("Empty messages_text, returning defaults")
         return dict(_COMPRESS_DEFAULTS)
 
-    prompt = COMPRESS_PROMPT.format(
-        previous_briefing_block=_format_previous_briefing(previous_briefing),
-        messages_text_block=format_untrusted_text_block(
-            "当前窗口原始对话",
-            messages_text,
-            max_chars=max(4000, len(messages_text)),
-        ),
-        language_directive=get_language_directive(language),
+    total_chars = len(messages_text)
+    if total_chars > _COMPRESS_MAX_RAW_WINDOW_CHARS:
+        older_window = messages_text[:-_COMPRESS_RECENT_RAW_WINDOW_CHARS]
+        recent_window = messages_text[-_COMPRESS_RECENT_RAW_WINDOW_CHARS:]
+        overflow_source = _build_overflow_summary_source(
+            older_window,
+            max_chars=_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,
+        )
+        logger.debug(
+            "Compressing %d chars via overflow summary + recent raw window (overflow=%d, recent=%d)",
+            total_chars,
+            len(overflow_source),
+            len(recent_window),
+        )
+        effective_previous_briefing = await _compress_round_window(
+            overflow_source,
+            language=language,
+            previous_briefing=previous_briefing,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            model=model,
+            max_chars=_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,
+        )
+        return await _compress_round_window(
+            recent_window,
+            language=language,
+            previous_briefing=effective_previous_briefing,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            model=model,
+            max_chars=_COMPRESS_RECENT_RAW_WINDOW_CHARS,
+        )
+
+    logger.debug("Compressing %d chars of messages", total_chars)
+    return await _compress_round_window(
+        messages_text,
+        language=language,
+        previous_briefing=previous_briefing,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=temperature,
+        model=model,
+        max_chars=_COMPRESS_MAX_RAW_WINDOW_CHARS,
     )
-
-    logger.debug("Compressing %d chars of messages", len(messages_text))
-    fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)
-    try:
-        result = await asyncio.wait_for(
-            llm_call_json(
-                prompt,
-                reasoning_effort="low",
-                api_key=api_key,
-                base_url=base_url,
-                temperature=temperature,
-                model=model,
-            ),
-            timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "compress_rounds timed out after %.1fs; using fallback briefing",
-            _COMPRESS_ROUNDS_TIMEOUT_SECONDS,
-        )
-        return fallback
-    except Exception as exc:
-        logger.warning("compress_rounds fallback due to LLM error: %s", exc)
-        return fallback
-
-    if not isinstance(result, dict):
-        logger.warning("compress_rounds received non-dict payload; using fallback briefing")
-        return fallback
-
-    return _validate_compress_result(result)
 
 
 # Tier → max_recent message count mapping
-_TIER_MAX_RECENT: dict[str, int] = {"CORE": 8, "IMPORTANT": 5, "CROWD": 3}
+_TIER_MAX_RECENT: dict[str, int] = {
+    "CORE": settings.MEMORY_CORE_MAX_RECENT,
+    "IMPORTANT": settings.MEMORY_IMPORTANT_MAX_RECENT,
+    "CROWD": settings.MEMORY_CROWD_MAX_RECENT,
+}
+_TIER_CONTEXT_MAX_CHARS: dict[str, int] = {
+    "CORE": settings.MEMORY_CORE_CONTEXT_MAX_CHARS,
+    "IMPORTANT": settings.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS,
+}
 
 
 def format_messages_for_context(
@@ -360,6 +406,7 @@ def build_agent_context(
 
     lang_directive = get_language_directive(language)
     memories_block = f"\n\n【你的记忆碎片】\n{memories_section}" if memories_section else ""
+    conversation_max_chars = _TIER_CONTEXT_MAX_CHARS.get(tier, 3000)
 
     # Intervention block — prominent and unmissable
     intervention_block = ""
@@ -375,7 +422,7 @@ def build_agent_context(
     conversation_block = format_untrusted_text_block(
         "共享态势简报" if shared_briefing else "刚才的对话",
         conversation_section,
-        max_chars=3000,
+        max_chars=conversation_max_chars,
     )
 
     return f"""你正在扮演角色「{agent['name']}」参与一场群体推演。
@@ -469,3 +516,141 @@ def retrieve_relevant_memories(
     except Exception as exc:
         logger.warning("L2 retrieve_relevant_memories failed (non-fatal): %s", exc)
         return ""
+
+
+def _build_overflow_summary_source(messages_text: str, *, max_chars: int) -> str:
+    """Build a bounded summary source by preserving the oldest and newest slices."""
+    if len(messages_text) <= max_chars:
+        return messages_text
+
+    priority_block = _extract_priority_lines(messages_text)
+    if not priority_block:
+        head_budget = min(max_chars // 3, 4_000)
+        tail_budget = max_chars - head_budget - len(_COMPRESS_ELLIPSIS_MARKER)
+        if tail_budget <= 0:
+            return messages_text[-max_chars:]
+        return (
+            messages_text[:head_budget]
+            + _COMPRESS_ELLIPSIS_MARKER
+            + messages_text[-tail_budget:]
+        )
+
+    priority_budget = min(max_chars // 2, len(priority_block))
+    priority_excerpt = priority_block[:priority_budget].rstrip()
+    remaining_budget = max_chars - len(priority_excerpt) - len(_COMPRESS_ELLIPSIS_MARKER)
+    if remaining_budget <= 0:
+        return priority_excerpt[:max_chars]
+
+    tail_excerpt = messages_text[-remaining_budget:]
+    return priority_excerpt + _COMPRESS_ELLIPSIS_MARKER + tail_excerpt
+
+
+def _extract_priority_lines(messages_text: str) -> str:
+    """Extract high-signal lines from a raw dialogue window.
+
+    Priority is biased toward:
+    - recent lines
+    - CORE / leader messages
+    - intervention / gameplay / betting / fork / result markers
+    - explicit diverge / emotion-change signals
+    """
+    lines = [line.strip() for line in messages_text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    scored: list[tuple[int, int, str]] = []
+    for index, line in enumerate(lines):
+        score = _score_priority_line(line, index=index, total_lines=len(lines))
+        if score <= 0:
+            continue
+        scored.append((score, index, line))
+
+    if not scored:
+        return ""
+
+    selected = sorted(
+        scored,
+        key=lambda item: (-item[0], -item[1]),
+    )[:_COMPRESS_PRIORITY_MAX_LINES]
+    selected.sort(key=lambda item: item[1])
+    return "\n".join(line for _, _, line in selected)
+
+
+def _score_priority_line(line: str, *, index: int, total_lines: int) -> int:
+    lower = line.lower()
+    score = 0
+
+    # Latest lines get a baseline boost.
+    if index >= max(total_lines - 8, 0):
+        score += 2
+
+    if "[core" in lower or "[core|" in lower or "|core]" in lower:
+        score += 6
+    if "leader" in lower or "领袖" in line or "组长" in line:
+        score += 5
+
+    if "diverge=" in lower or "分歧=" in line:
+        score += 6
+    if "emotion=" in lower or "情绪=" in line:
+        score += 3
+
+    for keyword in _COMPRESS_PRIORITY_KEYWORDS:
+        if keyword in lower if keyword.isascii() else keyword in line:
+            score += 5
+            break
+
+    if "⚡" in line or "🎯" in line or "🃏" in line or "📌" in line:
+        score += 3
+
+    return score
+
+
+async def _compress_round_window(
+    messages_text: str,
+    *,
+    language: str,
+    previous_briefing: dict | None,
+    api_key: str | None,
+    base_url: str | None,
+    temperature: float | None,
+    model: str | None,
+    max_chars: int,
+) -> dict:
+    prompt = COMPRESS_PROMPT.format(
+        previous_briefing_block=_format_previous_briefing(previous_briefing),
+        messages_text_block=format_untrusted_text_block(
+            "当前窗口原始对话",
+            messages_text,
+            max_chars=max_chars,
+        ),
+        language_directive=get_language_directive(language),
+    )
+
+    fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)
+    try:
+        result = await asyncio.wait_for(
+            llm_call_json(
+                prompt,
+                reasoning_effort="low",
+                api_key=api_key,
+                base_url=base_url,
+                temperature=temperature,
+                model=model,
+            ),
+            timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "compress_rounds timed out after %.1fs; using fallback briefing",
+            _COMPRESS_ROUNDS_TIMEOUT_SECONDS,
+        )
+        return fallback
+    except Exception as exc:
+        logger.warning("compress_rounds fallback due to LLM error: %s", exc)
+        return fallback
+
+    if not isinstance(result, dict):
+        logger.warning("compress_rounds received non-dict payload; using fallback briefing")
+        return fallback
+
+    return _validate_compress_result(result)

@@ -188,7 +188,9 @@
         "clear": "取消承诺",
         "commit_saving": "正在同步承诺…",
         "commit_saved": "已锁定当前承诺",
-        "commit_cleared": "已清除当前承诺"
+        "commit_cleared": "已清除当前承诺",
+        "commit_conflict_reloaded": "已有更新先一步写入，已回拉最新承诺状态。",
+        "gameplay_conflict_reloaded": "已有更新先一步写入，已回拉最新玩法状态。"
       },
       "theater_scene": {
         "boot": "启动场景",

@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     MAX_ROUNDS: int = 40
     MAX_BRANCHES: int = 8
     MEMORY_COMPRESS_INTERVAL: int = 5
+    MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS: int = 20_000
+    MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS: int = 12_000
+    MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS: int = 12_000
+    MEMORY_CORE_MAX_RECENT: int = 12
+    MEMORY_IMPORTANT_MAX_RECENT: int = 5
+    MEMORY_CROWD_MAX_RECENT: int = 3
+    MEMORY_CORE_CONTEXT_MAX_CHARS: int = 4_200
+    MEMORY_IMPORTANT_CONTEXT_MAX_CHARS: int = 3_000
     BRANCH_PRUNE_THRESHOLD: float = 0.05
     FORK_SENSITIVITY: float = 0.7
     DEFAULT_NUM_AGENTS: int = 20
@@ -127,6 +135,45 @@ class Settings(BaseSettings):
                 "CORS_ORIGINS cannot include '*' while allow_credentials is enabled"
             )
         self.CORS_ORIGINS = cors_origins
+
+        positive_int_fields = {
+            "MAX_AGENTS": self.MAX_AGENTS,
+            "MAX_ROUNDS": self.MAX_ROUNDS,
+            "MAX_BRANCHES": self.MAX_BRANCHES,
+            "MEMORY_COMPRESS_INTERVAL": self.MEMORY_COMPRESS_INTERVAL,
+            "MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS": self.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS,
+            "MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS": self.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS,
+            "MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS": self.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,
+            "MEMORY_CORE_MAX_RECENT": self.MEMORY_CORE_MAX_RECENT,
+            "MEMORY_IMPORTANT_MAX_RECENT": self.MEMORY_IMPORTANT_MAX_RECENT,
+            "MEMORY_CROWD_MAX_RECENT": self.MEMORY_CROWD_MAX_RECENT,
+            "MEMORY_CORE_CONTEXT_MAX_CHARS": self.MEMORY_CORE_CONTEXT_MAX_CHARS,
+            "MEMORY_IMPORTANT_CONTEXT_MAX_CHARS": self.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS,
+        }
+        for field_name, value in positive_int_fields.items():
+            if value <= 0:
+                raise ValueError(f"{field_name} must be > 0")
+
+        if self.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS > self.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS:
+            raise ValueError(
+                "MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS must be <= MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS"
+            )
+        if self.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS > self.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS:
+            raise ValueError(
+                "MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS must be <= MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS"
+            )
+        if not (
+            self.MEMORY_CROWD_MAX_RECENT
+            <= self.MEMORY_IMPORTANT_MAX_RECENT
+            <= self.MEMORY_CORE_MAX_RECENT
+        ):
+            raise ValueError(
+                "Memory tier recent-message limits must satisfy CROWD <= IMPORTANT <= CORE"
+            )
+        if self.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS > self.MEMORY_CORE_CONTEXT_MAX_CHARS:
+            raise ValueError(
+                "MEMORY_IMPORTANT_CONTEXT_MAX_CHARS must be <= MEMORY_CORE_CONTEXT_MAX_CHARS"
+            )
         return self
 
 

@@ -19,12 +19,16 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
   const resyncRequestVersionRef = useRef(0);
   const lastSequenceRef = useRef(0);
   const lastStreamIdentityRef = useRef<string | null>(null);
-  const seenEventIdsRef = useRef<string[]>([]);
+  const seenEventIdsRef = useRef<Map<string, true>>(new Map());
 
   const rememberEventId = useCallback((eventId: string) => {
-    seenEventIdsRef.current.push(eventId);
-    if (seenEventIdsRef.current.length > 500) {
-      seenEventIdsRef.current.shift();
+    seenEventIdsRef.current.delete(eventId);
+    seenEventIdsRef.current.set(eventId, true);
+    if (seenEventIdsRef.current.size > 500) {
+      const oldest = seenEventIdsRef.current.keys().next().value;
+      if (oldest) {
+        seenEventIdsRef.current.delete(oldest);
+      }
     }
   }, []);
 
@@ -59,18 +63,19 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      const shouldResync = reconnectCount.current > 0;
+      const reconnectAttempts = reconnectCount.current;
+      const shouldResync = reconnectAttempts > 0;
       const messageVersionAtOpen = stateMessageVersionRef.current;
-      reconnectCount.current = 0;
 
       if (shouldResync) {
         logWsDebug('DebateWS', 'resync_on_reconnect', {
           streamId: debateId,
-          reconnectCount: reconnectCount.current,
+          reconnectCount: reconnectAttempts,
           messageVersionAtOpen,
         });
         requestDebateResync(debateId, ws, messageVersionAtOpen);
       }
+      reconnectCount.current = 0;
     };
 
     ws.onmessage = (event) => {
@@ -94,10 +99,10 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
           if (lastStreamIdentityRef.current !== streamIdentity) {
             lastStreamIdentityRef.current = streamIdentity;
             lastSequenceRef.current = 0;
-            seenEventIdsRef.current = [];
+            seenEventIdsRef.current = new Map();
           }
 
-          if (meta.event_id && seenEventIdsRef.current.includes(meta.event_id)) {
+          if (meta.event_id && seenEventIdsRef.current.has(meta.event_id)) {
             logWsDebug('DebateWS', 'drop_duplicate_event_id', {
               type: payload.type,
               streamId: meta.stream_id ?? debateId,
@@ -223,7 +228,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
   useEffect(() => {
     lastSequenceRef.current = 0;
     lastStreamIdentityRef.current = null;
-    seenEventIdsRef.current = [];
+    seenEventIdsRef.current = new Map();
     stateMessageVersionRef.current = 0;
     resyncRequestVersionRef.current = 0;
 
