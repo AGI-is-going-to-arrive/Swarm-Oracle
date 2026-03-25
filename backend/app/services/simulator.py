@@ -6,10 +6,10 @@ import ast
 import asyncio
 import json
 import logging
-import sqlite3
 from typing import Any
 
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -370,36 +370,35 @@ async def pop_next_pending_intervention(key: str) -> str | None:
     db_path = _pending_intervention_db_path()
     if db_path is not None:
         scenario_id, branch_id = _split_intervention_key(key)
-        conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT id, user_input
-                FROM pending_intervention
-                WHERE scenario_id = ? AND branch_id = ?
-                ORDER BY id ASC
-                LIMIT 1
-                """,
-                (scenario_id, branch_id),
-            ).fetchone()
-            if row is None:
-                conn.execute("COMMIT")
-                return None
-            conn.execute(
-                "DELETE FROM pending_intervention WHERE id = ?",
-                (row[0],),
-            )
-            conn.execute("COMMIT")
-            return str(row[1])
-        except Exception:
+        engine = get_engine()
+        with engine.connect() as conn:
             try:
-                conn.execute("ROLLBACK")
-            except sqlite3.DatabaseError:
-                pass
-            raise
-        finally:
-            conn.close()
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                row = conn.exec_driver_sql(
+                    """
+                    SELECT id, user_input
+                    FROM pending_intervention
+                    WHERE scenario_id = ? AND branch_id = ?
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (scenario_id, branch_id),
+                ).first()
+                if row is None:
+                    conn.commit()
+                    return None
+                conn.exec_driver_sql(
+                    "DELETE FROM pending_intervention WHERE id = ?",
+                    (row[0],),
+                )
+                conn.commit()
+                return str(row[1])
+            except Exception:
+                try:
+                    conn.rollback()
+                except SQLAlchemyError:
+                    pass
+                raise
 
     async with _intervention_lock:
         queue = pending_interventions.get(key)

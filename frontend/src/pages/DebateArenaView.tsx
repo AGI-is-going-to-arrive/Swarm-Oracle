@@ -48,6 +48,27 @@ interface DebateRoomInsight {
   active: boolean;
 }
 
+type AvailablePredictionOptions = {
+  winner: string[];
+  verdict_tone: string[];
+};
+
+const DEFAULT_DEBATE_PREDICTION_OPTIONS: AvailablePredictionOptions = {
+  winner: ['proposition', 'opposition'],
+  verdict_tone: ['order', 'balance', 'rupture'],
+};
+
+function normalizePredictionOptions(
+  options: AvailablePredictionOptions | null | undefined,
+): AvailablePredictionOptions {
+  const winner = options?.winner.filter((value) => typeof value === 'string' && value.trim().length > 0) ?? [];
+  const verdictTone = options?.verdict_tone.filter((value) => typeof value === 'string' && value.trim().length > 0) ?? [];
+  return {
+    winner: winner.length > 0 ? winner : DEFAULT_DEBATE_PREDICTION_OPTIONS.winner,
+    verdict_tone: verdictTone.length > 0 ? verdictTone : DEFAULT_DEBATE_PREDICTION_OPTIONS.verdict_tone,
+  };
+}
+
 function getLeaderLabel(
   t: ReturnType<typeof useTranslation>['t'],
   leader: DebateLeader,
@@ -180,6 +201,10 @@ export function DebateArenaView() {
     [phaseSummaries, selectedPhase],
   );
   const selectedServerInsight = serverPhaseInsightMap.get(selectedPhase as DebatePhase) ?? null;
+  const availablePredictionOptions = useMemo(
+    () => normalizePredictionOptions(debate?.available_prediction_options),
+    [debate?.available_prediction_options],
+  );
 
   useEffect(() => {
     if (!phaseLocked) {
@@ -268,6 +293,9 @@ export function DebateArenaView() {
 
     const phaseSwing = Math.abs(phaseScoreDelta.proposition - phaseScoreDelta.opposition);
     if (phaseSwing === 0) {
+      if (!availablePredictionOptions.verdict_tone.includes('balance')) {
+        return null;
+      }
       return {
         kind: 'verdict_tone' as const,
         targetValue: 'balance',
@@ -282,6 +310,9 @@ export function DebateArenaView() {
     const trailingSide = phaseScoreDelta.proposition > phaseScoreDelta.opposition
       ? 'opposition'
       : 'proposition';
+    if (!availablePredictionOptions.winner.includes(trailingSide)) {
+      return null;
+    }
     const confidence = phaseSwing >= 8 ? 0.7 : phaseSwing >= 4 ? 0.6 : 0.5;
 
     return {
@@ -300,7 +331,7 @@ export function DebateArenaView() {
       }),
       variant: 'reversal' as const,
     };
-  }, [canBetNow, debate, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
+  }, [availablePredictionOptions.verdict_tone, availablePredictionOptions.winner, canBetNow, debate, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
   const feedFocusLabel = useMemo(() => {
     if (!latestVisibleTurn) return null;
     const sideLabel = getDebateSideLabel(t, latestVisibleTurn.speaker_side);
@@ -491,6 +522,7 @@ export function DebateArenaView() {
           active_modal: showBetModal ? 'bet' : null,
           show_bet_modal: showBetModal,
           bet_submitting: betSubmitting,
+          available_prediction_options: availablePredictionOptions,
           auto_reveal: autoReveal,
           cue_phase: phaseCue?.phase ?? null,
           cue_speaker: phaseCue?.speakerName ?? null,
@@ -537,6 +569,7 @@ export function DebateArenaView() {
     canBetNow,
     captureStatus,
     currentPhase,
+    availablePredictionOptions,
     debate,
     error,
     phaseLocked,
@@ -588,6 +621,10 @@ export function DebateArenaView() {
     confidence: number;
   }) => {
     if (!id || !canBetNow) return;
+    if (!availablePredictionOptions[payload.kind].includes(payload.targetValue)) {
+      setBetNotice(t('debate.bet_error'));
+      return;
+    }
     setBetSubmitting(true);
     try {
       await predictDebate(id, {
@@ -1077,6 +1114,7 @@ export function DebateArenaView() {
       {showBetModal && (
         <DebateBetModal
           loading={betSubmitting}
+          availableOptions={availablePredictionOptions}
           initialSelection={betPreset}
           strategyHint={betPreset?.strategyHint ?? null}
           onClose={() => {

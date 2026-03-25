@@ -61,6 +61,33 @@ describe('DebateBetModal automation callback', () => {
     expect(latestState.preset_target).toBe('balance');
   });
 
+  it('clamps an unsupported preset target to the backend-supported options', async () => {
+    const onAutomationStateChange = vi.fn();
+
+    render(
+      <DebateBetModal
+        availableOptions={{
+          winner: ['proposition'],
+          verdict_tone: ['order'],
+        }}
+        initialSelection={{
+          kind: 'winner',
+          targetValue: 'opposition',
+          confidence: 0.6,
+        }}
+        onClose={() => {}}
+        onSubmit={vi.fn(async () => undefined)}
+        onAutomationStateChange={onAutomationStateChange}
+      />,
+    );
+
+    const latestState = onAutomationStateChange.mock.calls.at(-1)?.[0];
+    expect(latestState.selected_kind).toBe('winner');
+    expect(latestState.selected_target).toBe('proposition');
+    expect(latestState.target_options).toEqual(['proposition']);
+    expect(screen.queryByRole('button', { name: 'debate.side_opposition' })).not.toBeInTheDocument();
+  });
+
   it('maps structured API errors to localized debate bet messages', async () => {
     const user = userEvent.setup();
 

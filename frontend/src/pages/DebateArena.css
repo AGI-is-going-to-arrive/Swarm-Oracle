@@ -974,9 +974,10 @@
 
   .debate-stage-ribbon__chip {
     flex: 0 0 auto;
-    min-width: 116px;
+    min-width: 96px;
     min-height: 40px;
-    padding: 8px 12px;
+    padding: 8px 10px;
+    font-size: 13px;
   }
 
   .debate-stage-ribbon__index {

@@ -1,6 +1,8 @@
 import type { CampaignDailyChallengeStatus } from '../types';
 
 const CHALLENGE_STORAGE_KEY = 'swarmoracle:daily-challenge:v1';
+const CHALLENGE_STORAGE_TTL_DAYS = 30;
+const CHALLENGE_STORAGE_TTL_MS = CHALLENGE_STORAGE_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 export interface ChallengeProgressEntry {
   challengeId?: string;
@@ -27,9 +29,46 @@ export function challengeDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function parseChallengeDayTimestamp(dayKey: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) return null;
+
+  const [, year, month, day] = match;
+  const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+  const timestamp = parsed.getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function loadProgressStore(): Record<string, Record<string, ChallengeProgressEntry>> {
   try {
-    return JSON.parse(window.localStorage.getItem(CHALLENGE_STORAGE_KEY) || '{}') as Record<string, Record<string, ChallengeProgressEntry>>;
+    const raw = window.localStorage.getItem(CHALLENGE_STORAGE_KEY);
+    if (!raw) return {};
+
+    const parsed = JSON.parse(raw) as Record<string, Record<string, ChallengeProgressEntry>>;
+    const cutoff = Date.now() - CHALLENGE_STORAGE_TTL_MS;
+    const nextStore: Record<string, Record<string, ChallengeProgressEntry>> = {};
+    let pruned = false;
+
+    for (const [dayKey, dayStore] of Object.entries(parsed ?? {})) {
+      if (!dayStore || typeof dayStore !== 'object') {
+        pruned = true;
+        continue;
+      }
+
+      const dayTimestamp = parseChallengeDayTimestamp(dayKey);
+      if (dayTimestamp !== null && dayTimestamp < cutoff) {
+        pruned = true;
+        continue;
+      }
+
+      nextStore[dayKey] = dayStore;
+    }
+
+    if (pruned) {
+      saveProgressStore(nextStore);
+    }
+
+    return nextStore;
   } catch {
     return {};
   }

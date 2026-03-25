@@ -1,5 +1,6 @@
 """Tests for app.services.parser — Stage 1 question parsing."""
 
+from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import pytest
@@ -172,6 +173,132 @@ class TestParseQuestion:
         assert len(result["agents"]) == 5
         assert len({agent["name"] for agent in result["agents"]}) == 5
         assert "路人甲" not in {agent["name"] for agent in result["agents"]}
+
+    @pytest.mark.asyncio
+    async def test_retry_uses_diversified_settings(self, monkeypatch):
+        first_result = {
+            "setting": {"time_period": "未来", "location": "边疆星域", "background": "测试背景"},
+            "key_variable": "自治城邦",
+            "initial_title": "边疆风暴",
+            "agents": [
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        }
+        retry_result = {
+            **first_result,
+            "agents": [
+                *first_result["agents"],
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+            ],
+        }
+
+        llm_mock = AsyncMock(side_effect=[first_result, retry_result])
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "如果一支远征舰队在荒芜边疆建立流动自治城邦，会发生什么？",
+            max_agents=3,
+            target_agents=3,
+            temperature=0.4,
+        )
+
+        assert len(result["agents"]) == 3
+        assert llm_mock.await_count == 2
+        retry_kwargs = llm_mock.await_args_list[1].kwargs
+        assert retry_kwargs["reasoning_effort"] == "medium"
+        assert retry_kwargs["temperature"] == pytest.approx(0.5)
+
+    @pytest.mark.asyncio
+    async def test_dedupes_duplicate_agent_names_and_resyncs_groups(self, monkeypatch):
+        duplicate_payload = {
+            "setting": {"time_period": "Future", "location": "Forum", "background": "Shared chamber"},
+            "key_variable": "Rotating review board",
+            "initial_title": "Forum Split",
+            "groups": [
+                {
+                    "name": "Reform Bloc",
+                    "leader": "Alex Ray",
+                    "members": ["Alex Ray", "Alex Ray", "June Vale"],
+                    "stance": "support",
+                },
+            ],
+            "agents": [
+                {"name": "Alex Ray", "role": "Mayor", "persona": "Direct", "stance": "support", "tier": "CORE", "group": "Reform Bloc"},
+                {"name": "Alex Ray", "role": "Auditor", "persona": "Exacting", "stance": "support", "tier": "IMPORTANT", "group": "Reform Bloc"},
+                {"name": "June Vale", "role": "Broker", "persona": "Measured", "stance": "neutral", "tier": "IMPORTANT", "group": "Reform Bloc"},
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        }
+
+        llm_mock = AsyncMock(return_value=duplicate_payload)
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "What if every emergency budget had to pass through a rotating civilian review board?",
+            max_agents=3,
+            target_agents=3,
+            hierarchical=True,
+        )
+
+        names = [agent["name"] for agent in result["agents"]]
+        assert len(names) == 3
+        assert len(set(names)) == 3
+        assert "Alex Ray" in names
+        assert "Alex Ray 2" in names
+        assert result["groups"][0]["leader"] in result["groups"][0]["members"]
+        assert set(result["groups"][0]["members"]) == set(names)
+
+    @pytest.mark.asyncio
+    async def test_tops_up_underfilled_payload_even_when_initial_names_collide(self, monkeypatch):
+        underfilled = {
+            "setting": {"time_period": "未来", "location": "边疆星域", "background": "测试背景"},
+            "key_variable": "自治城邦",
+            "initial_title": "边疆风暴",
+            "agents": [
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
+                {"name": "张启航", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        }
+
+        llm_mock = AsyncMock(side_effect=[underfilled, underfilled])
+        monkeypatch.setattr(parser_module, "llm_call_json", llm_mock)
+
+        result = await parse_question(
+            "如果一支远征舰队在荒芜边疆建立流动自治城邦，会发生什么？",
+            max_agents=5,
+            target_agents=5,
+            max_rounds=8,
+        )
+
+        names = [agent["name"] for agent in result["agents"]]
+        assert llm_mock.await_count == 2
+        assert len(names) == 5
+        assert len(set(names)) == 5
+        assert "张启航" in names
+        assert "张启航2" in names
+
+    def test_generate_fallback_groups_does_not_mutate_input_agents(self):
+        agents = [
+            {"name": "顾闻", "role": "边境联络官", "persona": "谨慎", "stance": "支持", "tier": "CORE"},
+            {"name": "林铎", "role": "资源调度员", "persona": "务实", "stance": "支持", "tier": "IMPORTANT"},
+            {"name": "周汐", "role": "民生观察员", "persona": "细致", "stance": "观望", "tier": "IMPORTANT"},
+        ]
+        original = deepcopy(agents)
+
+        groups = parser_module._generate_fallback_groups(agents)
+
+        assert agents == original
+        assert groups == [
+            {"name": "支持派", "leader": "顾闻", "members": ["顾闻", "林铎"], "stance": "支持"},
+            {"name": "观望派", "leader": "周汐", "members": ["周汐"], "stance": "观望"},
+        ]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_deterministic_parse_when_llm_json_is_invalid(self, monkeypatch):

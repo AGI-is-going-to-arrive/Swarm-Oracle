@@ -8,8 +8,50 @@ import {
   getDebateVerdictToneLabel,
 } from '../lib/debateLabels';
 
+const DEFAULT_AVAILABLE_OPTIONS: Record<DebatePredictionKind, string[]> = {
+  winner: ['proposition', 'opposition'],
+  verdict_tone: ['order', 'balance', 'rupture'],
+};
+
+function normalizeAvailableOptions(
+  availableOptions?: Partial<Record<DebatePredictionKind, string[]>> | null,
+): Record<DebatePredictionKind, string[]> {
+  const winner = Array.isArray(availableOptions?.winner)
+    ? availableOptions.winner.filter((value) => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const verdictTone = Array.isArray(availableOptions?.verdict_tone)
+    ? availableOptions.verdict_tone.filter((value) => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  return {
+    winner: winner.length > 0 ? winner : DEFAULT_AVAILABLE_OPTIONS.winner,
+    verdict_tone: verdictTone.length > 0 ? verdictTone : DEFAULT_AVAILABLE_OPTIONS.verdict_tone,
+  };
+}
+
+function resolveSupportedKind(
+  preferredKind: DebatePredictionKind,
+  availableOptions: Record<DebatePredictionKind, string[]>,
+): DebatePredictionKind {
+  if (availableOptions[preferredKind].length > 0) {
+    return preferredKind;
+  }
+  return availableOptions.winner.length > 0 ? 'winner' : 'verdict_tone';
+}
+
+function resolveSupportedTarget(
+  kind: DebatePredictionKind,
+  preferredTarget: string | undefined,
+  availableOptions: Record<DebatePredictionKind, string[]>,
+): string {
+  if (preferredTarget && availableOptions[kind].includes(preferredTarget)) {
+    return preferredTarget;
+  }
+  return availableOptions[kind][0] ?? '';
+}
+
 interface DebateBetModalProps {
   loading?: boolean;
+  availableOptions?: Partial<Record<DebatePredictionKind, string[]>> | null;
   initialSelection?: {
     kind: DebatePredictionKind;
     targetValue: string;
@@ -23,6 +65,7 @@ interface DebateBetModalProps {
 
 export function DebateBetModal({
   loading = false,
+  availableOptions = null,
   initialSelection = null,
   strategyHint = null,
   onClose,
@@ -30,27 +73,58 @@ export function DebateBetModal({
   onAutomationStateChange,
 }: DebateBetModalProps) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<DebatePredictionKind>(initialSelection?.kind ?? 'winner');
-  const [targetValue, setTargetValue] = useState<string>(initialSelection?.targetValue ?? 'proposition');
+  const normalizedOptions = useMemo(
+    () => normalizeAvailableOptions(availableOptions),
+    [availableOptions],
+  );
+  const availableKinds = useMemo(
+    () => (Object.entries(normalizedOptions)
+      .filter(([, options]) => options.length > 0)
+      .map(([optionKind]) => optionKind as DebatePredictionKind)),
+    [normalizedOptions],
+  );
+  const [kind, setKind] = useState<DebatePredictionKind>(() => resolveSupportedKind(
+    initialSelection?.kind ?? 'winner',
+    normalizedOptions,
+  ));
+  const [targetValue, setTargetValue] = useState<string>(() => resolveSupportedTarget(
+    resolveSupportedKind(initialSelection?.kind ?? 'winner', normalizedOptions),
+    initialSelection?.targetValue,
+    normalizedOptions,
+  ));
   const [confidence, setConfidence] = useState<number>(initialSelection?.confidence ?? 0.7);
   const [error, setError] = useState<string>('');
 
   useEffect(() => {
-    setKind(initialSelection?.kind ?? 'winner');
-    setTargetValue(initialSelection?.targetValue ?? 'proposition');
+    const nextKind = resolveSupportedKind(initialSelection?.kind ?? 'winner', normalizedOptions);
+    setKind(nextKind);
+    setTargetValue(resolveSupportedTarget(nextKind, initialSelection?.targetValue, normalizedOptions));
     setConfidence(initialSelection?.confidence ?? 0.7);
-  }, [initialSelection]);
+  }, [initialSelection, normalizedOptions]);
 
   const options = useMemo(
-    () => (kind === 'winner'
-      ? ['proposition', 'opposition']
-      : ['order', 'balance', 'rupture']),
-    [kind],
+    () => normalizedOptions[kind],
+    [kind, normalizedOptions],
   );
+
+  useEffect(() => {
+    const supportedKind = resolveSupportedKind(kind, normalizedOptions);
+    if (supportedKind !== kind) {
+      setKind(supportedKind);
+      setTargetValue(resolveSupportedTarget(supportedKind, targetValue, normalizedOptions));
+      return;
+    }
+    if (!options.includes(targetValue)) {
+      setTargetValue(resolveSupportedTarget(kind, targetValue, normalizedOptions));
+    }
+  }, [kind, normalizedOptions, options, targetValue]);
+
+  const submitDisabled = loading || !targetValue || !options.includes(targetValue);
 
   useEffect(() => {
     onAutomationStateChange?.({
       kind: 'debate_bet_modal',
+      available_kinds: availableKinds,
       selected_kind: kind,
       selected_target: targetValue,
       target_options: options,
@@ -58,16 +132,17 @@ export function DebateBetModal({
       confidence_percent: Math.round(confidence * 100),
       preset_kind: initialSelection?.kind ?? null,
       preset_target: initialSelection?.targetValue ?? null,
-      submit_disabled: loading,
+      submit_disabled: submitDisabled,
       error: error || null,
     });
 
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [confidence, error, kind, loading, onAutomationStateChange, options, targetValue]);
+  }, [availableKinds, confidence, error, initialSelection?.kind, initialSelection?.targetValue, kind, onAutomationStateChange, options, submitDisabled, targetValue]);
 
   const handleSubmit = async () => {
+    if (submitDisabled) return;
     setError('');
     try {
       await onSubmit({ kind, targetValue, confidence });
@@ -93,26 +168,21 @@ export function DebateBetModal({
               <p className="debate-rule-copy">{strategyHint}</p>
             )}
             <div className="debate-modal__options">
-              <button
-                type="button"
-                className={`mode-btn ${kind === 'winner' ? 'mode-btn--active' : ''}`}
-                onClick={() => {
-                  setKind('winner');
-                  setTargetValue('proposition');
-                }}
-              >
-                {t('debate.bet_kind_winner')}
-              </button>
-              <button
-                type="button"
-                className={`mode-btn ${kind === 'verdict_tone' ? 'mode-btn--active' : ''}`}
-                onClick={() => {
-                  setKind('verdict_tone');
-                  setTargetValue('order');
-                }}
-              >
-                {t('debate.bet_kind_tone')}
-              </button>
+              {availableKinds.map((optionKind) => (
+                <button
+                  key={optionKind}
+                  type="button"
+                  className={`mode-btn ${kind === optionKind ? 'mode-btn--active' : ''}`}
+                  onClick={() => {
+                    setKind(optionKind);
+                    setTargetValue(resolveSupportedTarget(optionKind, undefined, normalizedOptions));
+                  }}
+                >
+                  {optionKind === 'winner'
+                    ? t('debate.bet_kind_winner')
+                    : t('debate.bet_kind_tone')}
+                </button>
+              ))}
             </div>
             <p className="debate-rule-copy">
               {kind === 'winner' ? t('debate.bet_kind_winner_hint') : t('debate.bet_kind_tone_hint')}
@@ -162,7 +232,7 @@ export function DebateBetModal({
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             {t('common.cancel')}
           </button>
-          <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+          <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={submitDisabled}>
             {loading ? t('debate.bet_submitting') : t('debate.bet_submit')}
           </button>
         </footer>

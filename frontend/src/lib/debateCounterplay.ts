@@ -11,6 +11,8 @@ import type {
 import { getDebatePhaseLabel, getDebateSideLabel, getDebateVerdictToneLabel } from './debateLabels';
 
 const STORAGE_KEY = 'swarmoracle:debate-counterplay:v1';
+const COUNTERPLAY_STORAGE_TTL_DAYS = 30;
+const COUNTERPLAY_STORAGE_TTL_MS = COUNTERPLAY_STORAGE_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 export interface DebateCounterplayRecord {
   debateId: string;
@@ -27,6 +29,11 @@ interface DebateCounterplayStore {
   records: Record<string, DebateCounterplayRecord>;
 }
 
+function isFreshCounterplayRecord(record: DebateCounterplayRecord, cutoff: number): boolean {
+  const createdAt = Date.parse(record.createdAt);
+  return Number.isFinite(createdAt) && createdAt >= cutoff;
+}
+
 function safeReadStore(): DebateCounterplayStore {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -34,9 +41,20 @@ function safeReadStore(): DebateCounterplayStore {
       return { version: 1, records: {} };
     }
     const parsed = JSON.parse(raw) as DebateCounterplayStore;
+    const cutoff = Date.now() - COUNTERPLAY_STORAGE_TTL_MS;
+    const records = Object.fromEntries(
+      Object.entries(parsed.records ?? {}).filter(([, record]) => (
+        record != null
+        && typeof record === 'object'
+        && isFreshCounterplayRecord(record as DebateCounterplayRecord, cutoff)
+      )),
+    ) as Record<string, DebateCounterplayRecord>;
+    if (Object.keys(records).length !== Object.keys(parsed.records ?? {}).length) {
+      safeWriteStore({ version: 1, records });
+    }
     return {
       version: 1,
-      records: parsed.records ?? {},
+      records,
     };
   } catch {
     return { version: 1, records: {} };

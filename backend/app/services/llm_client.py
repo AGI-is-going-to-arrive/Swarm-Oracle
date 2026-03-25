@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -19,8 +20,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
+from app.models.database import get_engine
 
 logger = logging.getLogger(__name__)
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
@@ -381,6 +385,28 @@ def _runtime_guard_db_path() -> str | None:
     return db_path
 
 
+def _resolve_sqlite_db_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    return os.path.abspath(path)
+
+
+def _get_runtime_guard_engine(db_path: str | None) -> tuple[Any, bool]:
+    engine = get_engine()
+    engine_url = getattr(engine, "url", None)
+    engine_db_path = _resolve_sqlite_db_path(
+        getattr(engine_url, "database", None)
+    ) if engine_url is not None else None
+    target_db_path = _resolve_sqlite_db_path(db_path)
+    if engine_url is None or engine_db_path == target_db_path:
+        return engine, False
+    temp_engine = create_engine(
+        f"sqlite:///{target_db_path}",
+        connect_args={"timeout": _SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS},
+    )
+    return temp_engine, True
+
+
 def _current_event_loop() -> asyncio.AbstractEventLoop | None:
     try:
         return asyncio.get_running_loop()
@@ -454,8 +480,17 @@ async def close_shared_async_client() -> None:
         await _close_async_client_safely(client)
 
 
-def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
+def _exec_runtime_guard_sql(conn: Any, statement: str, params: tuple[Any, ...] | None = None):
+    if hasattr(conn, "exec_driver_sql"):
+        return conn.exec_driver_sql(statement, params)
+    if params is None:
+        return conn.execute(statement)
+    return conn.execute(statement, params)
+
+
+def _ensure_runtime_guard_table(conn: Any) -> None:
+    _exec_runtime_guard_sql(
+        conn,
         f"""
         CREATE TABLE IF NOT EXISTS {_RUNTIME_GUARD_TABLE} (
             reservation_id TEXT PRIMARY KEY,
@@ -465,13 +500,15 @@ def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
+    _exec_runtime_guard_sql(
+        conn,
         f"""
         CREATE INDEX IF NOT EXISTS idx_{_RUNTIME_GUARD_TABLE}_quota_key
         ON {_RUNTIME_GUARD_TABLE} (quota_key)
         """
     )
-    conn.execute(
+    _exec_runtime_guard_sql(
+        conn,
         f"""
         CREATE INDEX IF NOT EXISTS idx_{_RUNTIME_GUARD_TABLE}_expires_at
         ON {_RUNTIME_GUARD_TABLE} (expires_at)
@@ -481,7 +518,7 @@ def _ensure_runtime_guard_table(conn: sqlite3.Connection) -> None:
 
 def _reserve_sqlite_runtime_slot(
     *,
-    db_path: str,
+    db_path: str | None = None,
     quota_key: str | None,
     lease_seconds: float,
 ) -> str:
@@ -491,62 +528,79 @@ def _reserve_sqlite_runtime_slot(
     expires_at = now + max(lease_seconds, 30.0)
     user_limit = _get_user_pending_limit()
     global_pending_limit = _get_global_pending_limit()
-    conn = sqlite3.connect(
-        db_path,
-        timeout=_SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS,
-        isolation_level=None,
-    )
+    engine, should_dispose = _get_runtime_guard_engine(db_path)
 
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _ensure_runtime_guard_table(conn)
-        conn.execute(
-            f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
-            (now,),
-        )
-        if global_pending_limit is not None:
-            total_pending = conn.execute(
-                f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE}"
-            ).fetchone()[0]
-            if total_pending >= global_pending_limit:
-                conn.execute("ROLLBACK")
-                raise LLMBackpressureError("LLM queue is full; retry later")
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _ensure_runtime_guard_table(conn)
+                _exec_runtime_guard_sql(
+                    conn,
+                    f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
+                    (now,),
+                )
+                if global_pending_limit is not None:
+                    total_pending = int(
+                        _exec_runtime_guard_sql(
+                            conn,
+                            f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE}"
+                        ).scalar_one()
+                    )
+                    if total_pending >= global_pending_limit:
+                        raise LLMBackpressureError("LLM queue is full; retry later")
 
-        if quota_key and user_limit is not None:
-            quota_pending = conn.execute(
-                f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE} WHERE quota_key = ?",
-                (quota_key,),
-            ).fetchone()[0]
-            if quota_pending >= user_limit:
-                conn.execute("ROLLBACK")
-                raise LLMBackpressureError("Too many in-flight LLM requests for this user")
+                if quota_key and user_limit is not None:
+                    quota_pending = int(
+                        _exec_runtime_guard_sql(
+                            conn,
+                            f"SELECT COUNT(*) FROM {_RUNTIME_GUARD_TABLE} WHERE quota_key = ?",
+                            (quota_key,),
+                        ).scalar_one()
+                    )
+                    if quota_pending >= user_limit:
+                        raise LLMBackpressureError("Too many in-flight LLM requests for this user")
 
-        conn.execute(
-            f"""
-            INSERT INTO {_RUNTIME_GUARD_TABLE} (
-                reservation_id,
-                quota_key,
-                created_at,
-                expires_at
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (reservation_id, quota_key, now, expires_at),
-        )
-        conn.execute("COMMIT")
-        return reservation_id
+                _exec_runtime_guard_sql(
+                    conn,
+                    f"""
+                    INSERT INTO {_RUNTIME_GUARD_TABLE} (
+                        reservation_id,
+                        quota_key,
+                        created_at,
+                        expires_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (reservation_id, quota_key, now, expires_at),
+                )
+                conn.commit()
+                return reservation_id
+            except Exception:
+                conn.rollback()
+                raise
     finally:
-        conn.close()
+        if should_dispose:
+            engine.dispose()
 
 
-def _release_sqlite_runtime_slot(*, db_path: str, reservation_id: str) -> None:
-    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+def _release_sqlite_runtime_slot(*, db_path: str | None = None, reservation_id: str) -> None:
+    engine, should_dispose = _get_runtime_guard_engine(db_path)
     try:
-        conn.execute(
-            f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE reservation_id = ?",
-            (reservation_id,),
-        )
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _exec_runtime_guard_sql(
+                    conn,
+                    f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE reservation_id = ?",
+                    (reservation_id,),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
     finally:
-        conn.close()
+        if should_dispose:
+            engine.dispose()
 
 
 async def _reserve_runtime_slot(
@@ -579,7 +633,7 @@ async def _reserve_runtime_slot(
                 )
             except LLMBackpressureError:
                 raise
-            except sqlite3.Error as exc:
+            except (sqlite3.Error, SQLAlchemyError) as exc:
                 logger.warning(
                     "SQLite runtime guard unavailable; "
                     "falling back to in-process counts: %s",
@@ -617,7 +671,7 @@ async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | 
         if db_path is not None and reservation_id is not None:
             try:
                 _release_sqlite_runtime_slot(db_path=db_path, reservation_id=reservation_id)
-            except sqlite3.Error as exc:
+            except (sqlite3.Error, SQLAlchemyError) as exc:
                 logger.warning("SQLite runtime guard release failed: %s", exc)
 
         if reservation_id is None:

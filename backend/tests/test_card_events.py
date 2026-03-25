@@ -6,6 +6,7 @@ get_card_viz_event, and the spacetime_rift probability fix.
 
 import random
 
+import app.visualization.card_events as card_events_module
 from app.visualization.card_events import (
     CARD_TYPES,
     check_card_trigger,
@@ -131,6 +132,34 @@ class TestCheckCardTrigger:
         if total_triggered > 0:
             ratio = rift_count / total_triggered
             assert ratio < 0.60, f"spacetime_rift appeared {ratio:.1%} — still too dominant"
+
+    def test_bonus_miss_keeps_candidates_in_uniform_fallback(self, monkeypatch):
+        """Missing a bonus roll should not remove that card from fallback choice."""
+        monkeypatch.setattr(
+            card_events_module,
+            "CARD_TYPES",
+            {
+                "bonus_a": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.9},
+                "bonus_b": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.8},
+                "plain": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.0},
+            },
+        )
+        monkeypatch.setattr(card_events_module.random, "random", lambda: 0.99)
+        captured_choices: list[list[str]] = []
+        monkeypatch.setattr(
+            card_events_module.random,
+            "choice",
+            lambda items: captured_choices.append(list(items)) or items[0],
+        )
+
+        result = card_events_module.check_card_trigger(
+            round_number=9,
+            branch_count=3,
+            last_card_round=None,
+        )
+
+        assert result == "bonus_a"
+        assert captured_choices == [["bonus_a", "bonus_b", "plain"]]
 
     def test_cooldown_respected_per_card(self):
         """Cooldown should be relative to last_card_round, not absolute time."""

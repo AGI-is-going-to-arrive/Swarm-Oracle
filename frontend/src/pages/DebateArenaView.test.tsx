@@ -145,6 +145,10 @@ function resetMockDebateStore() {
     status: 'done',
     current_phase: 'verdict',
     result_ready: true,
+    available_prediction_options: {
+      winner: ['proposition', 'opposition'],
+      verdict_tone: ['order', 'balance', 'rupture'],
+    },
     score: { proposition: 80, opposition: 72, audience_meter: 8 },
     turns: [
       {
@@ -463,6 +467,84 @@ describe('DebateArenaView', () => {
     await user.click(await screen.findByRole('button', { name: 'debate.bet_submit' }));
 
     expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
+  });
+
+  it('renders only backend-supported winner options in the bet modal', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      available_prediction_options: {
+        winner: ['proposition'],
+        verdict_tone: ['order', 'balance', 'rupture'],
+      },
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click((await screen.findAllByRole('button', { name: 'debate.open_bet' }))[0]);
+
+    expect(screen.getByRole('button', { name: 'debate.side_proposition' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'debate.side_opposition' })).not.toBeInTheDocument();
+  });
+
+  it('suppresses quick counterplay when its winner target is not allowed by the snapshot contract', async () => {
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      available_prediction_options: {
+        winner: ['proposition'],
+        verdict_tone: ['order', 'balance', 'rupture'],
+      },
+      score: { proposition: 12, opposition: 0, audience_meter: 3 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 6, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('button', { name: 'debate.counterplay_submit' })).not.toBeInTheDocument();
   });
 
   it('ignores stale counterplay data from a different debate before the fresh load arrives', async () => {

@@ -86,7 +86,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **数据完整性**: LEFT JOIN 保证已删除 Agent 的消息仍可读取（显示 "Unknown"），不会静默丢失
 - **消息落库**: 普通 agent 发言与 synthesized Worker 发言当前都改成按批次写入 `AgentMessage`，不再每条消息单独 commit；`_save_message()` 仍保留给旧调用点和测试使用
 - **压缩链路**: `_compress_round_memory()` 当前会读取更早一轮的 `compressed_summary` 作为 `previous_briefing`，和当前窗口 raw messages 一起滚动压缩，而不是每次只看孤立窗口；新的 round summary 已统一按 JSON 持久化，同时保留对旧 `str(dict)` 历史数据的兼容回退读取
-- **干预队列**: API 层与模拟主循环当前都统一走 helper；当多个 worker 共用同一个 SQLite 文件时，待注入干预会先落到 `PendingIntervention` 共享队列表，再由模拟主循环按分支 FIFO 原子取出；scenario 结束或删除时也会一并清理残留队列
+- **干预队列**: API 层与模拟主循环当前都统一走 helper；当多个 worker 共用同一个 SQLite 文件时，待注入干预会先落到 `PendingIntervention` 共享队列表，再由模拟主循环按分支 FIFO 原子取出；当前 pop 路径也已改成复用 engine-managed SQLAlchemy connection，不再和主业务链路分成两套 SQLite 连接管理；scenario 结束或删除时也会一并清理残留队列
 
 ### `blackboard.py` (≈110行) — 共享空间 (**NEW**)
 - **职责**: 中央共享黑板，所有 Agent 共读同一份信息
@@ -189,7 +189,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `LLM_CONCURRENCY <= 0` 现在表示关闭全局并发上限；启用时，进程内全局 semaphore 会统一限制 LLM 并发，不再只靠单局内部 `Semaphore`，且当前 semaphore 在进程生命周期内保持单实例，运行期修改 `LLM_CONCURRENCY` 只会记录 warning，不会热替换现有对象
   - `LLM_MAX_PENDING / LLM_USER_MAX_PENDING <= 0` 现在表示关闭对应 pending 上限；启用时会在请求入队前做 backpressure，当 `DATABASE_URL` 指向同一个 SQLite 文件时，会优先使用 SQLite reservation 表作为全局/用户级 pending 真值，不再和进程内 pending 计数双重叠加
   - `get_runtime_parallelism_limit()` 会按当前 request scope 把全局并发、全局 pending 和用户 pending 收口成单次本地 fan-out 的安全上限；都关闭时回退 `MAX_AGENTS`
-  - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
+  - SQLite runtime guard 当前会先用较短 DB timeout 试一次 reservation；reservation/release 路径现已改为复用 engine-managed SQLAlchemy connection，不再直接走 raw `sqlite3.connect()`；若锁竞争或 SQLite 路径暂时不可用，外层会尽快打 warning 并退回进程内计数，不再长时间卡在 `BEGIN IMMEDIATE`
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
   - `llm_call_stream()` 当前也支持连接阶段重试；只有在首个 content 产出前才会重试，避免重复发出部分流片段
@@ -213,6 +213,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - **fallback rounds**: fallback 轮数当前不再写死 `10`；会优先使用调用方给的默认轮数，再按 `max_rounds` 做 clamp
 - **BYOK**: 接受 `api_key`/`base_url`/`model` 覆盖并透传到 `llm_call_json`
 - **temperature**: 解析阶段当前也接受 scenario 级 `temperature` 覆盖；首次 parse 与 under-filled retry 都会沿用同一 temperature，不再出现首轮和 retry 采样口径不一致
+- **retry 多样化**: under-filled retry 当前会把 `reasoning_effort` 提到 `medium`，若调用方显式给了 `temperature`，也会做一次小幅上调（`+0.1`，上限 `2.0`），不再是完全相同参数重试
+- **重名收口**: parser 当前会在 parse 结果层统一规范 agent 名称；若 LLM 返回同名角色，会自动去重并同步修正 hierarchical `groups[].members / leader`
+- **fallback helper 副作用收口**: `_generate_fallback_groups()` 当前只返回 groups 结构，不再偷偷改写传入的 `agents`；group 回填现在走显式步骤
 
 ### `logging_utils.py` (≈90行) — 结构化日志配置 (**NEW**)
 - **职责**: 统一 backend 运行时日志格式，不改各模块现有 `logger.info/warning/error` 调用方式
@@ -242,7 +245,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `mapper.py` (≈300行) — `VisualizationMapper` 类，8 个 `map_*` 方法（agent_speak、stance_move、branch_split、intervention、emotion_change、scene_change、ending、**weather_change**）；stance 参数统一 clamp [-1, 1]
   - `persona_mapper.py` (≈130行) — `assign_sprite()`/`assign_sprites_batch()`/`assign_position()` — 角色→精灵分配 + 坐标计算；本轮又补齐 `alchemist / assassin / bard / knight / monk / thief / witch` 7 张 sprite 的 persona/role 映射，并把 `general / scientist / monk` 等口径与前端拉齐；total_agents ≤ 0 守卫 + stance clamp [-1, 1]
   - `scene_selector.py` — `select_scene(question)` / `select_scene(era=, setting=)` 双签名；当前已扩到 30 个语义场景主题，优先扫描原始 `question`，再回退到 parser 的 `era/setting`，避免泛化词压过更贴题的场景语义；generic / law / faith 已补进 `switchboard_forum_variant / law_court_variant / faith_temple_variant`
-  - `card_events.py` (≈120行) — `check_card_trigger()`/`get_card_viz_event()` — 卡牌事件触发 + 冷却 + 加权随机（单候选安全回退）
+  - `card_events.py` (≈120行) — `check_card_trigger()`/`get_card_viz_event()` — 卡牌事件触发 + 冷却 + 加权随机（单候选安全回退；bonus roll 未命中时，当前也会保留该卡继续参与统一 fallback 池）
 - **集成点**: `simulator.py` (调用 `assign_sprites_batch`/`assign_position`) → WebSocket (`viz:*` 事件) → 前端 `EventBridge.ts` → Phaser `WorldScene.ts`
 - **测试覆盖**: `test_simulator_viz_integration.py` 覆盖 scene reachability、ending type 3级映射、Worker viz 事件和全流程 smoke
 
@@ -291,7 +294,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **空导演容错**: `profile / mastery / badges / daily-status` 读接口现在会给新设备返回空摘要或 `completed=false`，避免首页首次加载就打 404 噪声
 - **默认名策略**: finalize 时若 `user_name` 为空，当前会按 scenario 语言回退到匿名导演显示名，而不是固定中文
 - **徽章解锁**: `badge` 当前通过 SQLite `on_conflict_do_nothing` 风格的幂等写入保证唯一性；重复命中不会再靠“先查后插”判断
-- **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回
+- **防护**: 只接受 `ScenarioStatus.DONE` 的场景；对并发 finalize 通过 `IntegrityError` 回退到已存在日志，保持幂等返回；若该局 `gameplay_state.betting.bets` 已经有记录，但请求没带 `betting_hit`，当前会直接拒绝 finalize，而不是静默按缺省值继续结算
 
 ### `daily_challenges.py` (≈190行) — 每日/每周挑战轮换服务 (**NEW**)
 - **职责**: 提供首页 today / weekly challenge 的定义与轮换口径，不再让前端自己维护静态 challenge catalog
@@ -329,6 +332,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - replay import 这一轮又补了 payload 指纹；相同 replay 再导入时会直接命中已有 Debate snapshot，不再重复创建记录
   - replay import 当前还会校验 `winner / verdict_tone / turns[*].sequence / phase_insights` 的关键字段；坏快照会直接返回 `422`，同时 turn 会按 `sequence` 排序后再落库
   - `LLM hybrid` tie-break 当前若拿不到合法 `adjudicated_winner`，会回退到 deterministic `base_plan.winner`，不再默认偏向某一侧
+  - Debate runtime 当前会先把数据库里的 `Debate` entity 收成只读 snapshot，再驱动长流程；不再在 session 关闭后继续依赖 detached ORM 对象
+  - `available_prediction_options` 当前由 service/api 共用同一份 helper 生成，live snapshot、API 校验和前端下注契约保持同口径
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
   - 如果 debate background runner 失败，当前发给前端的 `status=error` 事件也已统一成结构化 `error = {code, message}`；详细异常仍只留在后端日志，不再把原始 `str(exc)` 直接透给前端
   - Debate 结果 payload 当前还会返回结构化 `judge_rationale`（`winner_reason / loser_gap / swing_factor / closing_note / dimension_rationales`）以及 `supporting_turns`
@@ -396,7 +401,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `POST /api/scenario/{id}/intervene` | POST | 注入蝴蝶效应干预（文本上限 2000 字符；正式玩法卡调用当前也走这条路由） |
-| `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演；当前最大 fork depth = 5） |
+| `POST /api/scenario/{id}/intervene/retrospective` | POST | 回溯干预（回到第N轮重新推演；当前最大 fork depth = 5，且新分支概率带 `0.3` 下限） |
 | `POST /api/scenario/{id}/intervene/batch` | POST | 多点干预（同时注入多个分支；当前单次请求最多 50 条） |
 
 > intervene / retrospective / batch 这三条路由当前都走共享 pending queue；当多个 worker 共用同一个 SQLite 文件时，请求落在哪个 worker、模拟跑在哪个 worker，不再影响干预是否能被真正消费。
@@ -437,6 +442,13 @@ alembic/ ──► Alembic 数据库迁移框架
 | `POST /api/campaign/scenario/{scenario_id}/finalize` | POST | 对已完成 scenario 做 campaign 结算，返回积分增量、profile、mastery 与 badge 结果 |
 
 > 读接口边界已按当前代码更新：若导演档案尚不存在，`profile` 返回空摘要，`mastery / badges` 返回空数组，`daily-status` 返回 `completed = false`；首页不再因为新用户首次进入而打 404。`scenario/{id}/summary` 只在该局已有 campaign log 时返回结果，否则给 `404`。`scenario/{id}/director-state` 与 `scenario/{id}/gameplay-state` 只要场景存在就返回结果，未写入时会回安全默认值，且当前都会带 `revision = 0`。authority PUT 若带来的 `revision` 已过期，会返回 `409`，前端再回读最新 authority。`daily-status` 的 `completed_at` 当前返回 UTC ISO 字符串。`finalize` 若传空 `user_name`，会按场景语言落匿名导演名。`challenges/rotation` 当前只依赖 `local_date` 和可选 `weekly_count`；日期非法时返回 `400`，challenge 定义 payload 里会直接带 `question / question_en / subtitle_zh / subtitle_en / profile_id / rounds / num_agents / mode / visualization_enabled`。
+>
+> `POST /api/campaign/scenario/{scenario_id}/finalize` 这一轮还补了一条防呆口径：
+> - 若该 scenario 的 `gameplay_state.betting.bets` 已经有 bet
+> - 但请求体仍然没带 `betting_hit`
+> - 后端会返回 `400 CAMPAIGN_FINALIZE_INVALID`
+>
+> 这样可以避免前端漏传下注结果时，被静默按错误默认值结算。
 
 **安全防护**:
 - simulation / debate 当前都同时有进程内 fast path 和 SQLite shared runtime lock；当多个 worker 共用同一个 SQLite 文件时，同一 `scenario_id / debate_id` 不会被重复启动

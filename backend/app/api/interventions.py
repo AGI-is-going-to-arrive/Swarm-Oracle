@@ -33,6 +33,7 @@ from app.services.simulator import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 MAX_RETROSPECTIVE_FORK_DEPTH = 5
+RETROSPECTIVE_BRANCH_PROBABILITY_FLOOR = 0.3
 
 
 def _build_gameplay_card_defs() -> dict[str, dict]:
@@ -393,7 +394,10 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
             fork_round=req.round_number,
             fork_reason=f"回溯干预: {req.text.strip()[:50]}",
             title=f"回溯 R{req.round_number}: {req.text.strip()[:30]}",
-            probability=branch.probability * 0.8,  # slightly lower than parent
+            probability=max(
+                branch.probability * 0.8,
+                RETROSPECTIVE_BRANCH_PROBABILITY_FLOOR,
+            ),
         )
         session.add(new_branch)
         session.flush()

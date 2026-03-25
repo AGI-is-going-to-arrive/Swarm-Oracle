@@ -179,11 +179,14 @@ class TestRetrospectiveIntervention:
             assert logs[0].user_input == "蝴蝶效应"
             assert logs[0].round_number == 1
 
-    def test_new_branch_probability(self, client):
-        """Single-branch retrospective rerun normalizes probability to 1.0."""
+    def test_new_branch_probability_has_floor(self, client, monkeypatch):
+        """Retrospective reruns should not decay below the configured floor."""
+        import app.api.helpers as helpers_module
+
+        monkeypatch.setattr(helpers_module, "schedule_background_task", lambda coro: coro.close())
         engine = get_engine()
         sid = _seed_scenario(engine)
-        bid = _seed_branch(engine, sid, probability=0.8)
+        bid = _seed_branch(engine, sid, probability=0.1)
         _seed_round(engine, bid, 1)
 
         resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
@@ -193,7 +196,7 @@ class TestRetrospectiveIntervention:
 
         with Session(engine) as session:
             new_branch = session.get(Branch, data["new_branch_id"])
-            assert new_branch.probability == 1.0
+            assert new_branch.probability == 0.3
 
     def test_no_rounds_branch(self, client):
         """Branch with no rounds: round_number=1 should exceed max_round=0."""

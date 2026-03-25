@@ -214,27 +214,76 @@ class TestLLMCall:
 
         assert llm_client.get_runtime_parallelism_limit() == 123
 
-    def test_sqlite_runtime_guard_uses_short_sqlite_timeout(self, monkeypatch, tmp_path):
-        """SQLite runtime guard should fail fast before falling back."""
+    def test_sqlite_runtime_guard_reuses_engine_managed_connection(self, monkeypatch, tmp_path):
+        """SQLite runtime guard should use engine-managed connections instead of sqlite3.connect."""
         self._reset_runtime_guard()
-        db_path = tmp_path / "runtime_guard_timeout.db"
-        connect_calls: list[float] = []
-        real_connect = sqlite3.connect
+        db_path = tmp_path / "runtime_guard_engine.db"
 
-        def _recording_connect(path, timeout, isolation_level=None):
-            connect_calls.append(timeout)
-            return real_connect(path, timeout=timeout, isolation_level=isolation_level)
+        class _FakeConnection:
+            def __init__(self):
+                self.commands: list[tuple[str, object]] = []
+                self.commits = 0
 
-        monkeypatch.setattr(llm_client.sqlite3, "connect", _recording_connect)
+            def exec_driver_sql(self, statement: str, params=None):
+                normalized = " ".join(statement.split())
+                self.commands.append((normalized, params))
+
+                class _FakeResult:
+                    def scalar_one(self):
+                        return 0
+
+                return _FakeResult()
+
+            def commit(self):
+                self.commits += 1
+
+            def rollback(self):
+                return None
+
+        class _FakeConnectContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def connect(self):
+                return _FakeConnectContext(self.connection)
+
+        fake_connection = _FakeConnection()
+        fake_engine = _FakeEngine(fake_connection)
+
+        monkeypatch.setattr(llm_client, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(
+            llm_client.sqlite3,
+            "connect",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("runtime guard should reuse engine-managed connections")
+            ),
+        )
 
         reservation_id = llm_client._reserve_sqlite_runtime_slot(
-            db_path=str(db_path),
             quota_key=None,
             lease_seconds=30,
         )
 
         assert reservation_id
-        assert connect_calls == [llm_client._SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS]
+        assert fake_connection.commits == 1
+        assert any(command == "BEGIN IMMEDIATE" for command, _ in fake_connection.commands)
+        assert any(
+            command.startswith("INSERT INTO llm_runtime_guard")
+            for command, _ in fake_connection.commands
+        )
 
     @pytest.mark.asyncio
     async def test_global_semaphore_is_not_replaced_after_runtime_change(self, monkeypatch):

@@ -180,6 +180,53 @@ describe('dailyChallenge progress storage', () => {
     });
   });
 
+  it('prunes stale day buckets while keeping recent progress', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-20T12:00:00Z'));
+
+    window.localStorage.setItem('swarmoracle:daily-challenge:v1', JSON.stringify({
+      '2026-03-10': {
+        stale: {
+          challengeId: 'stale',
+          scenarioId: 'scenario-stale',
+          startedAt: '2026-03-10T12:00:00Z',
+          completed: false,
+          usedCards: [],
+          betPlaced: false,
+        },
+      },
+      '2026-04-19': {
+        recent: {
+          challengeId: 'recent',
+          scenarioId: 'scenario-recent',
+          startedAt: '2026-04-19T12:00:00Z',
+          completed: true,
+          usedCards: ['civilization_debate'],
+          betPlaced: true,
+        },
+      },
+    }));
+
+    expect(getChallengeProgress('stale')).toBeNull();
+    expect(getChallengeProgress('recent', new Date('2026-04-19T12:00:00Z'))).toMatchObject({
+      scenarioId: 'scenario-recent',
+      completed: true,
+    });
+
+    expect(window.localStorage.getItem('swarmoracle:daily-challenge:v1')).toBe(JSON.stringify({
+      '2026-04-19': {
+        recent: {
+          challengeId: 'recent',
+          scenarioId: 'scenario-recent',
+          startedAt: '2026-04-19T12:00:00Z',
+          completed: true,
+          usedCards: ['civilization_debate'],
+          betPlaced: true,
+        },
+      },
+    }));
+  });
+
   it('swallows storage write failures', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     Object.defineProperty(window, 'localStorage', {

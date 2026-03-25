@@ -194,6 +194,19 @@ npm run test:spike:phaser-custom
   - `cd frontend && npm test -- --run src/lib/scenarioMeta.test.ts src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx`：`41 passed in 1.80s`
   - `cd frontend && npm test -- --run src/pages/HistoryView.test.tsx src/pages/LeaderboardView.test.tsx`：`2 passed in 496ms`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+- 本 session 这轮“review fix 批次：回溯概率下限 / Debate 下注契约 / daily challenge & counterplay TTL / engine-managed SQLite guard / parser retry+重名收口 / detached Debate runtime”还额外实跑通过：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_intervention.py tests/test_campaign_service.py tests/test_card_events.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_parser.py tests/test_debate_api.py tests/test_debate_service.py -q`：`183 passed in 157.35s`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_parser.py -q`：`14 passed in 100.08s`
+  - `cd frontend && npm test -- --run src/components/DebateBetModal.test.tsx src/pages/DebateArenaView.test.tsx src/lib/dailyChallenge.test.ts src/lib/debateCounterplay.test.ts`：`25 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - 浏览器验收产物：
+    - `output/web-game-debate/shot-0.png`
+    - `output/web-game-debate/shot-1.png`
+    - `output/web-game-debate/state-0.json`
+    - `output/web-game-debate/state-1.json`
+    - `output/e2e/debate-live-modal-playwright.png`
+    - `output/e2e/debate-live-mobile-post-fix.png`
+    - `output/e2e/debate-result-zh-playwright.png`
 - 本 session 这轮 `InputView / SimulationView / simulationStore / TimelineBar / BranchEdge / GameplayCardsModal / VizSynthesizer / WorldScene / locales` 定向回归，当前还额外实跑通过：
   - `npm test -- --run src/pages/InputView.test.tsx src/pages/SimulationView.test.tsx src/stores/simulationStore.test.ts src/components/TimelineBar.test.tsx src/components/BranchEdge.test.tsx src/components/GameplayCardsModal.test.tsx src/game/managers/VizSynthesizer.test.ts src/game/scenes/WorldScene.test.ts src/i18n/locales.test.ts`：`112 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`：通过

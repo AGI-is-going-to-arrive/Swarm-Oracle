@@ -83,16 +83,12 @@ def check_card_trigger(
     # uniform fallback pool is used. This keeps the trigger logic generic
     # while allowing individual cards to bias toward branch-heavy states.
     if branch_count >= 2:
-        for card_key in list(candidates):
+        for card_key in candidates:
             bonus = CARD_TYPES[card_key].get("branching_bonus", 0)
             if bonus <= 0:
                 continue
             if random.random() < bonus:
                 return card_key
-
-            other_candidates = [candidate for candidate in candidates if candidate != card_key]
-            if other_candidates:
-                candidates = other_candidates
 
     return random.choice(candidates)
 

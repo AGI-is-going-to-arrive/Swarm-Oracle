@@ -129,6 +129,35 @@ async def test_run_debate_background_finishes_with_structured_result():
 
 
 @pytest.mark.asyncio
+async def test_run_debate_background_emits_finalize_fallback_when_result_reload_is_missing(monkeypatch):
+    debate = create_debate_record("Should every emergency council publish its failed fallback ladder?")
+    pushed_events: list[dict] = []
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    original_loader = debate_module.load_debate_result_payload
+
+    def _missing_once(debate_id: str):
+        payload = original_loader(debate_id)
+        if payload is None or payload.get("result") is None:
+            return payload
+        return None
+
+    monkeypatch.setattr(debate_module, "load_debate_result_payload", _missing_once)
+
+    await run_debate_background(debate.id, ws_callback=_push)
+
+    verdict_events = [event for event in pushed_events if event["type"] == "debate_verdict"]
+    assert verdict_events
+    verdict = verdict_events[-1]["data"]
+    assert verdict["winner"] in {"proposition", "opposition"}
+    assert verdict["verdict_tone"] in {"order", "balance", "rupture"}
+    assert verdict["phase_insights"]
+    assert verdict["judge_summary"]
+
+
+@pytest.mark.asyncio
 async def test_run_debate_background_skips_when_sqlite_runtime_lock_is_held():
     debate = create_debate_record("如果紧急仲裁官拥有最终裁量权，会更稳定吗？")
     pushed_events: list[dict] = []

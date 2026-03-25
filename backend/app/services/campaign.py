@@ -115,6 +115,18 @@ def _has_resolved_bet(bet_count: int, betting_hit: bool | None) -> bool:
     return bet_count > 0 or betting_hit is not None
 
 
+def _resolve_finalize_betting_inputs(
+    *,
+    scenario: Scenario,
+    bet_count: int,
+    betting_hit: bool | None,
+) -> tuple[int, bool | None]:
+    effective_bet_count = max(bet_count, _scenario_bet_count(scenario.gameplay_state_json))
+    if effective_bet_count > 0 and betting_hit is None:
+        raise CampaignError("betting_hit is required when the scenario has bets")
+    return effective_bet_count, betting_hit
+
+
 def _normalize_objective_counts(
     objective_completed_count: int,
     objective_total_count: int,
@@ -955,6 +967,11 @@ def finalize_scenario_campaign(
             if isinstance(scenario.parsed_context, dict)
             else None
         ) or detect_language(scenario.question)
+        effective_bet_count, effective_betting_hit = _resolve_finalize_betting_inputs(
+            scenario=scenario,
+            bet_count=bet_count,
+            betting_hit=betting_hit,
+        )
 
         existing_log = session.exec(
             select(ScenarioCampaignLog).where(ScenarioCampaignLog.scenario_id == scenario_id)
@@ -990,8 +1007,8 @@ def finalize_scenario_campaign(
             archive_grade=normalized_grade,
             profile_resonance=normalized_resonance,
             completed_daily_challenge=completed_daily_challenge,
-            bet_count=bet_count,
-            betting_hit=betting_hit,
+            bet_count=effective_bet_count,
+            betting_hit=effective_betting_hit,
             objective_completed_count=normalized_completed_count,
             objective_total_count=normalized_total_count,
             commitment_outcome=normalized_commitment_outcome,
@@ -1000,10 +1017,10 @@ def finalize_scenario_campaign(
         director_profile.total_runs += 1
         director_profile.completed_challenges += int(completed_daily_challenge)
         director_profile.total_bets += max(
-            bet_count,
-            int(_has_resolved_bet(bet_count, betting_hit)),
+            effective_bet_count,
+            int(_has_resolved_bet(effective_bet_count, effective_betting_hit)),
         )
-        director_profile.hit_bets += int(betting_hit is True)
+        director_profile.hit_bets += int(effective_betting_hit is True)
         director_profile.highest_archive_grade = _better_archive_grade(
             director_profile.highest_archive_grade,
             normalized_grade,
@@ -1028,7 +1045,7 @@ def finalize_scenario_campaign(
             profile_id=mastery.profile_id,
             archive_grade=normalized_grade,
             profile_resonance=normalized_resonance,
-            betting_hit=betting_hit,
+            betting_hit=effective_betting_hit,
             most_used_card=(most_used_card or "").strip() or None,
             completed_daily_challenge=completed_daily_challenge,
             objective_completed_count=normalized_completed_count,
@@ -1045,7 +1062,7 @@ def finalize_scenario_campaign(
             scenario_id=scenario_id,
             archive_grade=normalized_grade,
             completed_daily_challenge=completed_daily_challenge,
-            betting_hit=betting_hit,
+            betting_hit=effective_betting_hit,
         )
 
         try:

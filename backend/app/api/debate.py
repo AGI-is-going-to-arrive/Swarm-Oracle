@@ -28,6 +28,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.debate import (
     create_debate_record,
+    get_debate_prediction_options,
     load_debate_result_payload,
     load_debate_snapshot,
     run_debate_background,
@@ -45,8 +46,8 @@ logger = logging.getLogger(__name__)
 _REPLAY_IMPORT_FINGERPRINT_KEY = "replay_import_fingerprint"
 
 _PREDICTION_OPTIONS = {
-    DebatePredictionKind.WINNER: {"proposition", "opposition"},
-    DebatePredictionKind.VERDICT_TONE: {"order", "balance", "rupture"},
+    DebatePredictionKind.WINNER: set(get_debate_prediction_options()["winner"]),
+    DebatePredictionKind.VERDICT_TONE: set(get_debate_prediction_options()["verdict_tone"]),
 }
 _COUNTERPLAY_VARIANTS = {"balanced", "reversal"}
 _PHASE_INSIGHT_DIRECTIONS = {"balanced", "proposition", "opposition"}

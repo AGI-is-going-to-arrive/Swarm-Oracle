@@ -306,6 +306,164 @@ def _fallback_initial_title(question: str, language: str) -> str:
     return (compact[:24] or "Turning Point").strip()
 
 
+def _build_unique_agent_name(
+    base_name: str,
+    *,
+    existing_names: set[str],
+    language: str,
+    fallback_role: str = "",
+) -> str:
+    cleaned_base = base_name.strip() or fallback_role.strip()
+    if not cleaned_base:
+        cleaned_base = "角色" if language == "Chinese" else "Agent"
+
+    candidate_name = cleaned_base
+    suffix = 2
+    while candidate_name in existing_names:
+        candidate_name = (
+            f"{cleaned_base}{suffix}"
+            if language == "Chinese"
+            else f"{cleaned_base} {suffix}"
+        )
+        suffix += 1
+    existing_names.add(candidate_name)
+    return candidate_name
+
+
+def _sync_group_members_from_agents(groups: list[dict] | None, agents: list[dict]) -> None:
+    if not groups:
+        return
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_name = str(group.get("name", "") or "").strip()
+        if not group_name:
+            continue
+
+        members = [
+            str(agent.get("name", "")).strip()
+            for agent in agents
+            if isinstance(agent, dict)
+            and str(agent.get("group", "") or "").strip() == group_name
+            and str(agent.get("name", "")).strip()
+        ]
+        if not members:
+            group["members"] = []
+            continue
+
+        group["members"] = members
+        preferred_leader = str(group.get("leader", "") or "").strip()
+        if preferred_leader in members:
+            continue
+
+        core_leader = next(
+            (
+                str(agent.get("name", "")).strip()
+                for agent in agents
+                if isinstance(agent, dict)
+                and str(agent.get("group", "") or "").strip() == group_name
+                and str(agent.get("tier", "")).upper() == "CORE"
+                and str(agent.get("name", "")).strip()
+            ),
+            None,
+        )
+        group["leader"] = core_leader or members[0]
+
+
+def _apply_group_memberships(agents: list[dict], groups: list[dict] | None) -> list[dict]:
+    if not groups:
+        return list(agents)
+
+    member_to_group: dict[str, str] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_name = str(group.get("name", "") or "").strip()
+        if not group_name:
+            continue
+        for member in group.get("members") or []:
+            member_name = str(member or "").strip()
+            if member_name:
+                member_to_group[member_name] = group_name
+
+    applied_agents: list[dict] = []
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        next_agent = dict(agent)
+        group_name = member_to_group.get(str(next_agent.get("name", "") or "").strip())
+        if group_name:
+            next_agent["group"] = group_name
+        applied_agents.append(next_agent)
+    return applied_agents
+
+
+def _normalize_agent_names(
+    agents: list[dict],
+    *,
+    language: str,
+    groups: list[dict] | None = None,
+) -> list[dict]:
+    existing_names: set[str] = set()
+    normalized_agents: list[dict] = []
+
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+
+        normalized_agent = dict(agent)
+        normalized_agent["name"] = _build_unique_agent_name(
+            str(normalized_agent.get("name", "") or ""),
+            existing_names=existing_names,
+            language=language,
+            fallback_role=str(normalized_agent.get("role", "") or ""),
+        )
+        normalized_agents.append(normalized_agent)
+
+    _sync_group_members_from_agents(groups, normalized_agents)
+    return normalized_agents
+
+
+def _normalize_parse_result(
+    payload: dict,
+    *,
+    language: str,
+    hierarchical: bool,
+) -> dict:
+    if not isinstance(payload, dict):
+        return payload
+
+    raw_agents = payload.get("agents")
+    if isinstance(raw_agents, list):
+        payload["agents"] = _normalize_agent_names(
+            raw_agents,
+            language=language,
+            groups=payload.get("groups") if hierarchical and isinstance(payload.get("groups"), list) else None,
+        )
+    return payload
+
+
+def _build_parser_retry_kwargs(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    temperature: float | None,
+    model: str | None,
+) -> dict:
+    diversified_temperature = None
+    if temperature is not None:
+        diversified_temperature = min(2.0, max(0.0, round(temperature + 0.1, 2)))
+
+    return {
+        "reasoning_effort": "medium",
+        "api_key": api_key,
+        "base_url": base_url,
+        "temperature": diversified_temperature,
+        "model": model,
+    }
+
+
 def _synthesize_missing_agents(
     agents: list[dict],
     *,
@@ -317,7 +475,11 @@ def _synthesize_missing_agents(
         return agents
 
     templates = _FALLBACK_AGENT_TEMPLATES_ZH if language == "Chinese" else _FALLBACK_AGENT_TEMPLATES_EN
-    existing_names = {agent.get("name", "") for agent in agents}
+    existing_names = {
+        str(agent.get("name", "") or "").strip()
+        for agent in agents
+        if isinstance(agent, dict) and str(agent.get("name", "") or "").strip()
+    }
     missing = target_agents - len(agents)
     enriched_agents = list(agents)
 
@@ -328,12 +490,12 @@ def _synthesize_missing_agents(
 
     for index in range(missing):
         base_name, persona = templates[index % len(templates)]
-        suffix = 1
-        candidate_name = base_name
-        while candidate_name in existing_names:
-            suffix += 1
-            candidate_name = f"{base_name}{suffix}" if language == "Chinese" else f"{base_name} {suffix}"
-        existing_names.add(candidate_name)
+        candidate_name = _build_unique_agent_name(
+            base_name,
+            existing_names=existing_names,
+            language=language,
+            fallback_role=base_name,
+        )
 
         tier = "IMPORTANT" if len(enriched_agents) < 6 else "CROWD"
         agent = {
@@ -377,6 +539,8 @@ def _build_parser_fallback_result(
         language=language,
     )
     groups = _generate_fallback_groups(agents) if hierarchical else []
+    if hierarchical:
+        agents = _apply_group_memberships(agents, groups)
     background = (
         "围绕这个假设问题的多方推演会从同一个临界起点展开，各方都在重新定义风险、秩序与机会。"
         if language == "Chinese"
@@ -462,6 +626,7 @@ async def parse_question(
             prompt, reasoning_effort="low",
             api_key=api_key, base_url=base_url, temperature=temperature, model=model,
         )
+        result = _normalize_parse_result(result, language=language, hierarchical=hierarchical)
     except (LLMError, ValueError, TypeError) as exc:
         logger.warning(
             "Parser JSON failed for '%s'; using deterministic fallback: %s",
@@ -476,6 +641,7 @@ async def parse_question(
             language=language,
             hierarchical=hierarchical,
         )
+        result = _normalize_parse_result(result, language=language, hierarchical=hierarchical)
 
     if len(result.get("agents", [])) < requested_agents:
         logger.warning(
@@ -493,8 +659,18 @@ async def parse_question(
         )
         try:
             retry_result = await llm_call_json(
-                retry_prompt, reasoning_effort="low",
-                api_key=api_key, base_url=base_url, temperature=temperature, model=model,
+                retry_prompt,
+                **_build_parser_retry_kwargs(
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=temperature,
+                    model=model,
+                ),
+            )
+            retry_result = _normalize_parse_result(
+                retry_result,
+                language=language,
+                hierarchical=hierarchical,
             )
         except (LLMError, ValueError, TypeError) as exc:
             logger.warning("Parser retry failed for '%s'; keeping best-effort result: %s", question[:80], exc)
@@ -532,6 +708,7 @@ async def parse_question(
         if "groups" not in result or len(result.get("groups", [])) == 0:
             logger.warning("Hierarchical mode but no groups returned; generating fallback groups")
             result["groups"] = _generate_fallback_groups(result["agents"])
+            result["agents"] = _apply_group_memberships(result["agents"], result["groups"])
         else:
             # Ensure all agents have a group field
             group_names = {g["name"] for g in result["groups"]}
@@ -597,9 +774,5 @@ def _generate_fallback_groups(agents: list[dict]) -> list[dict]:
             "members": members,
             "stance": stance,
         })
-        # Tag agents with group
-        for agent in agents:
-            if agent["name"] in members:
-                agent["group"] = f"{stance}派"
 
     return groups

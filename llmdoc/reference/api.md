@@ -61,6 +61,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `POST /api/scenario/{id}/intervene/retrospective` 当前还新增了 fork depth 限制：
 > - 当来源分支的 parent 链深度已经达到 `5`
 > - 后端会返回 `400 RETROSPECTIVE_FORK_DEPTH_EXCEEDED`
+> - 新建回溯分支的初始 `probability` 当前还会带 `0.3` 下限，不再随着连续回溯一路衰减到过低
 >
 > `POST /api/scenario` 当前也由 `CreateScenarioRequest` 在 schema 层校验 `question`：
 > - 空字符串或纯空白：返回 `422`
@@ -238,6 +239,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `404 Not Found`：目标场景不存在，或命中旧日志但关联导演档案不存在。
 > - `409 Conflict`：该场景已被另一位导演档案结算。
 > - `400 Bad Request`：场景尚未完成，或 `user_id / profile_id / archive_grade / profile_resonance / bet_count` 等请求字段不合法。
+> - 另外，若该局 `gameplay_state.betting.bets` 已经有 bet，但请求体仍没带 `betting_hit`，后端也会按 `400 CAMPAIGN_FINALIZE_INVALID` 拒绝这次 finalize，而不是静默猜测下注结果。
 > - 上面这些业务错误当前都会通过 `detail.code/detail.message` 返回；例如：
 >   - `CAMPAIGN_FINALIZE_NOT_FOUND`
 >   - `CAMPAIGN_FINALIZE_STATE_INVALID`
@@ -418,6 +420,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > prediction 只支持两类：
 > - `winner`
 > - `verdict_tone`
+>
+> `GET /api/debate/{id}` 的 `available_prediction_options` 当前就是前端下注 UI 的单一契约来源；如果将来后端按房间状态或玩法裁掉某些 target，前端应直接按这份 snapshot 渲染。
 >
 > `POST /api/debate` 当前会在返回 live snapshot 后保留约 `5s` pre-roll，再启动后台阶段推进；这样前端 live 页能稳定出现下注窗口。
 >

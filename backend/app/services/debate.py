@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -72,6 +73,51 @@ _DEBATE_DIMENSION_LABELS = {
 _VALID_DEBATE_WINNERS = {"proposition", "opposition"}
 _VALID_VERDICT_TONES = {"order", "balance", "rupture"}
 _VALID_PRESSURE_SIDES = {"balanced", "proposition", "opposition"}
+_DEBATE_PREDICTION_OPTIONS = {
+    "winner": ("proposition", "opposition"),
+    "verdict_tone": ("order", "balance", "rupture"),
+}
+
+
+@dataclass(frozen=True)
+class DebateRuntimeSnapshot:
+    id: str
+    question: str
+    motion: str
+    language: str
+    profile_id: str
+    scene_theme: str | None
+    winner: str | None
+    verdict_tone: str | None
+    proposition_name: str
+    proposition_role: str
+    opposition_name: str
+    opposition_role: str
+    judge_name: str
+    judge_role: str
+
+
+def get_debate_prediction_options() -> dict[str, list[str]]:
+    return {key: list(values) for key, values in _DEBATE_PREDICTION_OPTIONS.items()}
+
+
+def _snapshot_debate_runtime(debate: Debate) -> DebateRuntimeSnapshot:
+    return DebateRuntimeSnapshot(
+        id=debate.id,
+        question=debate.question,
+        motion=debate.motion,
+        language=debate.language,
+        profile_id=debate.profile_id,
+        scene_theme=debate.scene_theme,
+        winner=debate.winner,
+        verdict_tone=debate.verdict_tone,
+        proposition_name=debate.proposition_name,
+        proposition_role=debate.proposition_role,
+        opposition_name=debate.opposition_name,
+        opposition_role=debate.opposition_role,
+        judge_name=debate.judge_name,
+        judge_role=debate.judge_role,
+    )
 
 
 def _try_mark_debate_running(debate_id: str) -> bool:
@@ -1410,9 +1456,10 @@ async def run_debate_background(
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})
         engine = get_engine()
         with Session(engine) as session:
-            debate = session.get(Debate, debate_id)
-            if debate is None:
+            stored_debate = session.get(Debate, debate_id)
+            if stored_debate is None:
                 return
+            debate = _snapshot_debate_runtime(stored_debate)
             plan = build_debate_plan(debate.question)
 
         running_score = {"proposition": 0, "opposition": 0}
@@ -1475,13 +1522,13 @@ async def run_debate_background(
                     {
                         "type": "agent_speak",
                         "data": {
-                            "id": persisted_turn.id,
-                            "sequence": sequence,
-                            "phase": phase.value,
-                            "speaker_side": side.value,
-                            "speaker_name": speaker_name,
-                            "content": content,
-                            "score_delta": score_delta,
+                            "id": persisted_turn["id"],
+                            "sequence": persisted_turn["sequence"],
+                            "phase": persisted_turn["phase"],
+                            "speaker_side": persisted_turn["speaker_side"],
+                            "speaker_name": persisted_turn["speaker_name"],
+                            "content": persisted_turn["content"],
+                            "score_delta": persisted_turn["score_delta"],
                         },
                     },
                 )
@@ -1555,13 +1602,13 @@ async def run_debate_background(
             {
                 "type": "agent_speak",
                 "data": {
-                    "id": persisted_turn.id,
-                    "sequence": sequence,
-                    "phase": phase.value,
-                    "speaker_side": side.value,
-                    "speaker_name": speaker_name,
-                    "content": content,
-                    "score_delta": score_delta,
+                    "id": persisted_turn["id"],
+                    "sequence": persisted_turn["sequence"],
+                    "phase": persisted_turn["phase"],
+                    "speaker_side": persisted_turn["speaker_side"],
+                    "speaker_name": persisted_turn["speaker_name"],
+                    "content": persisted_turn["content"],
+                    "score_delta": persisted_turn["score_delta"],
                 },
             },
         )
@@ -1584,22 +1631,8 @@ async def run_debate_background(
                     }
                     if result_payload is not None
                     else {
-                        "winner": finalized.winner,
-                        "verdict_tone": finalized.verdict_tone,
-                        "score": {
-                            "proposition": finalized.score_proposition,
-                            "opposition": finalized.score_opposition,
-                        },
-                        "breakdown": _extract_breakdown_dimensions(finalized.breakdown_json),
-                        "best_argument": finalized.best_argument,
-                        "best_rebuttal": finalized.best_rebuttal,
-                        "judge_summary": finalized.judge_summary,
-                        "judge_rationale": _extract_judge_rationale(finalized.breakdown_json),
-                        "adjudication_mode": str(
-                            _extract_breakdown_metadata(finalized.breakdown_json).get("adjudication_mode")
-                            or "deterministic"
-                        ),
-                        "phase_insights": [],
+                        **{key: value for key, value in finalized.items() if key != "phase_insights"},
+                        "phase_insights": finalized.get("phase_insights", []),
                     }
                 ),
             },
@@ -1719,7 +1752,7 @@ def _persist_turn(
     speaker_name: str,
     content: str,
     score_delta: dict[str, int] | None,
-) -> DebateTurn:
+) -> dict[str, Any]:
     engine = get_engine()
     turn = DebateTurn(
         debate_id=debate_id,
@@ -1734,7 +1767,15 @@ def _persist_turn(
         session.add(turn)
         session.commit()
         session.refresh(turn)
-        return turn
+        return {
+            "id": turn.id,
+            "sequence": turn.sequence,
+            "phase": turn.phase.value,
+            "speaker_side": turn.speaker_side.value,
+            "speaker_name": turn.speaker_name,
+            "content": turn.content,
+            "score_delta": turn.score_delta_json,
+        }
 
 
 def _update_phase(debate_id: str, phase: DebatePhase) -> None:
@@ -1769,7 +1810,7 @@ def _finalize_debate(
     *,
     judge_analysis: dict[str, Any] | None = None,
     adjudication_mode: str = "deterministic",
-) -> Debate:
+) -> dict[str, Any]:
     engine = get_engine()
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
@@ -1859,11 +1900,26 @@ def _finalize_debate(
         debate.updated_at = _now()
         session.add(debate)
 
+        finalized_summary = {
+            "winner": debate.winner,
+            "verdict_tone": debate.verdict_tone,
+            "score": {
+                "proposition": debate.score_proposition,
+                "opposition": debate.score_opposition,
+            },
+            "breakdown": plan.breakdown,
+            "best_argument": debate.best_argument,
+            "best_rebuttal": debate.best_rebuttal,
+            "judge_summary": debate.judge_summary,
+            "judge_rationale": _extract_judge_rationale(debate.breakdown_json),
+            "adjudication_mode": adjudication_mode,
+            "phase_insights": persisted_phase_insights,
+        }
+
         session.commit()
-        session.refresh(debate)
 
     score_existing_predictions(debate_id)
-    return debate
+    return finalized_summary
 
 
 def _mark_debate_error(debate_id: str) -> None:
@@ -1932,10 +1988,7 @@ def _serialize_debate(
             }
             for turn in turns
         ],
-        "available_prediction_options": {
-            "winner": ["proposition", "opposition"],
-            "verdict_tone": ["order", "balance", "rupture"],
-        },
+        "available_prediction_options": get_debate_prediction_options(),
         "phase_insights": phase_insights
         if phase_insights is not None
         else _build_phase_insights(

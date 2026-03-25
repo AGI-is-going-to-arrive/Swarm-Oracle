@@ -438,6 +438,168 @@ class TestSQLitePathParsing:
         assert (connection, "agent_group", "ix_agent_group_scenario_id") in calls
 
 
+class TestEngineManagedSqlitePaths:
+    def test_llm_runtime_guard_reuses_engine_managed_connection(self, monkeypatch):
+        from app.services import llm_client as llm_client_module
+
+        class _FakeResult:
+            def __init__(self, *, scalar_value: int = 0, row=None):
+                self._scalar_value = scalar_value
+                self._row = row
+
+            def scalar_one(self):
+                return self._scalar_value
+
+            def first(self):
+                return self._row
+
+        class _FakeConnection:
+            def __init__(self):
+                self.commands: list[tuple[str, object]] = []
+                self.commits = 0
+                self.rollbacks = 0
+
+            def exec_driver_sql(self, statement: str, params=None):
+                normalized = " ".join(statement.split())
+                self.commands.append((normalized, params))
+                if normalized.startswith("SELECT COUNT(*)"):
+                    return _FakeResult(scalar_value=0)
+                return _FakeResult()
+
+            def commit(self):
+                self.commits += 1
+
+            def rollback(self):
+                self.rollbacks += 1
+
+        class _FakeConnectContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def connect(self):
+                return _FakeConnectContext(self.connection)
+
+        fake_connection = _FakeConnection()
+        fake_engine = _FakeEngine(fake_connection)
+
+        monkeypatch.setattr(llm_client_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(llm_client_module, "_get_global_pending_limit", lambda: 4)
+        monkeypatch.setattr(llm_client_module, "_get_user_pending_limit", lambda: 2)
+        monkeypatch.setattr(
+            sqlite3,
+            "connect",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("runtime guard should reuse engine-managed connections")
+            ),
+        )
+
+        reservation_id = llm_client_module._reserve_sqlite_runtime_slot(
+            quota_key="user:test",
+            lease_seconds=30.0,
+        )
+        llm_client_module._release_sqlite_runtime_slot(reservation_id=reservation_id)
+
+        assert fake_connection.commits == 2
+        assert fake_connection.rollbacks == 0
+        assert any(command == "BEGIN IMMEDIATE" for command, _ in fake_connection.commands)
+        assert any(
+            command.startswith("INSERT INTO llm_runtime_guard")
+            for command, _ in fake_connection.commands
+        )
+        assert any(
+            command.startswith("DELETE FROM llm_runtime_guard WHERE reservation_id = ?")
+            for command, _ in fake_connection.commands
+        )
+
+    @pytest.mark.asyncio
+    async def test_pending_intervention_pop_reuses_engine_managed_connection(self, monkeypatch):
+        from app.services import simulator as simulator_module
+
+        class _FakeResult:
+            def __init__(self, *, row=None):
+                self._row = row
+
+            def first(self):
+                return self._row
+
+        class _FakeConnection:
+            def __init__(self):
+                self.commands: list[tuple[str, object]] = []
+                self.rows = [(1, "第一条"), (2, "第二条")]
+                self.commits = 0
+                self.rollbacks = 0
+
+            def exec_driver_sql(self, statement: str, params=None):
+                normalized = " ".join(statement.split())
+                self.commands.append((normalized, params))
+                if normalized.startswith("SELECT id, user_input FROM pending_intervention"):
+                    row = self.rows[0] if self.rows else None
+                    return _FakeResult(row=row)
+                if normalized.startswith("DELETE FROM pending_intervention WHERE id = ?"):
+                    target_id = params[0]
+                    self.rows = [row for row in self.rows if row[0] != target_id]
+                return _FakeResult()
+
+            def commit(self):
+                self.commits += 1
+
+            def rollback(self):
+                self.rollbacks += 1
+
+        class _FakeConnectContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self.connection
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def connect(self):
+                return _FakeConnectContext(self.connection)
+
+        fake_connection = _FakeConnection()
+        fake_engine = _FakeEngine(fake_connection)
+
+        monkeypatch.setattr(simulator_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(simulator_module, "_pending_intervention_db_path", lambda: "/tmp/pending.db")
+        monkeypatch.setattr(
+            sqlite3,
+            "connect",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("pending intervention pop should reuse engine-managed connections")
+            ),
+        )
+
+        key = "scenario-1:branch-1"
+        assert await simulator_module.pop_next_pending_intervention(key) == "第一条"
+        assert await simulator_module.pop_next_pending_intervention(key) == "第二条"
+        assert await simulator_module.pop_next_pending_intervention(key) is None
+
+        assert fake_connection.commits == 3
+        assert fake_connection.rollbacks == 0
+        assert any(command == "BEGIN IMMEDIATE" for command, _ in fake_connection.commands)
+        assert any(
+            command.startswith("DELETE FROM pending_intervention WHERE id = ?")
+            for command, _ in fake_connection.commands
+        )
+
+
 # ─────────────────────────────────────────────────────────
 # Additional edge cases from deep review
 # ─────────────────────────────────────────────────────────

@@ -9477,3 +9477,73 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `frontend/output/e2e/mobile-20260325`
     - `frontend/output/e2e/debate-desktop-20260325`
     - `frontend/output/e2e/debate-mobile-20260325`
+## 2026-03-25 Review Fix Batch
+
+- 已处理的 review 项：
+  - `#3` 回溯分支概率下限：`backend/app/api/interventions.py`
+  - `#4` Debate 预测前后端契约对齐：`backend/app/api/debate.py`、`backend/app/services/debate.py`、`frontend/src/components/DebateBetModal.tsx`、`frontend/src/pages/DebateArenaView.tsx`
+  - `#5` `dailyChallenge` / `debateCounterplay` localStorage TTL 清理：`frontend/src/lib/dailyChallenge.ts`、`frontend/src/lib/debateCounterplay.ts`
+  - `#8` campaign `betting_hit=None` 脆弱语义：`backend/app/services/campaign.py`
+  - `#11` auto-trigger bonus 候选池偏置：`backend/app/visualization/card_events.py`
+  - `#17` SQLite 原生连接与 SQLAlchemy 混用：`backend/app/services/llm_client.py`、`backend/app/services/simulator.py`
+  - `#18` parser retry 参数多样化：`backend/app/services/parser.py`
+  - `#21` Debate detached-object 风格问题：`backend/app/services/debate.py`
+  - `#25` parser 同名 agent 风险：`backend/app/services/parser.py`
+
+- 这轮后端实现补充：
+  - Debate runtime 现在先把 DB entity 收成只读 snapshot，再驱动长流程；不再在 session 关闭后继续依赖 detached ORM 对象。
+  - Debate prediction options 改为 service/api 共用同一份 helper，snapshot 和 API 校验口径一致。
+  - `llm_client` / `simulator` 的 SQLite `BEGIN IMMEDIATE` 路径改走 engine-managed connection，减少双连接模式。
+  - campaign finalize 在场景已有 bets 但 `betting_hit` 缺失时改为显式报错，避免静默少结算。
+
+- 这轮前端实现补充：
+  - Debate bet modal 不再硬编码 winner/tone 选项，全部由后端 `available_prediction_options` 驱动。
+  - `DebateArenaView` 会对普通下注和 quick counterplay 都做前端契约兜底；不再展示或提交不被后端支持的 target。
+  - `dailyChallenge` / `debateCounterplay` 都加了 30 天 TTL，并在读路径懒清理旧记录。
+
+- 本轮定向验证通过：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_intervention.py tests/test_campaign_service.py tests/test_card_events.py tests/test_corner_cases.py tests/test_llm_client.py tests/test_parser.py tests/test_debate_api.py tests/test_debate_service.py -q`
+    - `183 passed in 157.35s`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_debate_api.py tests/test_debate_service.py -q`
+    - `38 passed in 1.34s`
+  - `cd frontend && npm test -- --run src/components/DebateBetModal.test.tsx src/pages/DebateArenaView.test.tsx src/lib/dailyChallenge.test.ts src/lib/debateCounterplay.test.ts`
+    - `25 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+
+- 本轮浏览器验收：
+  - 已拉起 backend `http://127.0.0.1:18927` 与 frontend `http://127.0.0.1:18928`
+  - `develop-web-game` 客户端已跑 Debate live 页，产物落盘：
+    - `output/web-game-debate/shot-0.png`
+    - `output/web-game-debate/shot-1.png`
+    - `output/web-game-debate/state-0.json`
+    - `output/web-game-debate/state-1.json`
+  - `playwright-interactive` / Playwright MCP 已验证：
+    - fresh live Debate 页面能显示后端提供的 `available_prediction_options`
+    - `Open Bet` modal 中只出现允许的 winner/tone 目标
+    - live 页面在窗口关闭前可打开下注 modal；如果在 modal 打开后 debate 进入 closing，前端会收到后端锁单错误并显示本地化提示
+    - 中文 Debate result 页文案正常，截图已落盘：
+      - `output/e2e/debate-live-desktop.png`
+      - `output/e2e/debate-live-modal-playwright.png`
+      - `output/e2e/debate-live-mobile-playwright.png`
+      - `output/e2e/debate-result-zh-playwright.png`
+  - `debateCounterplay` 的浏览器级 TTL 验证已完成：
+    - 手动写入 2025-01-01 的 stale record 后刷新 `/debate/:id/result`
+    - localStorage 被收敛为 `{\"version\":1,\"records\":{}}`
+
+- 仍需说明的现实行为：
+  - Debate 局内推进很快，`Open Bet` modal 打开后可能在用户确认前跨入 `closing`，此时后端会返回 `DEBATE_PREDICTIONS_LOCKED`；这不是本轮契约回归，但是真实可见的节奏约束。
+  - `dailyChallenge` 的 TTL 已有单测覆盖；本轮浏览器侧重点放在 Debate 契约与 `debateCounterplay` 清理。
+  - 额外顺手做了一个移动端样式小修：`frontend/src/pages/DebateArena.css` 把 390px 下的 stage chip 宽度压小，`Opening / Crossfire / Rebuttal` 首屏现在能完整露出，不再像之前那样被明显截断；复验截图：`output/e2e/debate-live-mobile-post-fix.png`
+
+## 2026-03-25 Review Fix Batch (Follow-up #19)
+
+- 已补 `#19`：`backend/app/services/parser.py` 的 `_generate_fallback_groups()` 不再就地写回 `agent["group"]`。
+- 当前行为改为：
+  - helper 只负责返回 fallback `groups`
+  - agent `group` 回填移到显式调用处（`_build_parser_fallback_result()` / `parse_question()` 的 hierarchical fallback 分支）
+- 新增回归测试：
+  - `backend/tests/test_parser.py::test_generate_fallback_groups_does_not_mutate_input_agents`
+- 本轮验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_parser.py -q`
+    - `14 passed in 100.08s`

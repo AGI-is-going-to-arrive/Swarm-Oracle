@@ -20,6 +20,7 @@ from app.models.campaign import (
 from app.models.database import get_engine
 from app.services.campaign import (
     CampaignConflictError,
+    CampaignError,
     finalize_scenario_campaign,
     get_campaign_profile_summary,
     get_daily_challenge_summary,
@@ -39,6 +40,16 @@ def _seed_completed_scenario(question: str = "测试 campaign") -> str:
         session.commit()
         session.refresh(scenario)
         return scenario.id
+
+
+def _set_scenario_gameplay_state(scenario_id: str, gameplay_state: dict) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.gameplay_state_json = gameplay_state
+        session.add(scenario)
+        session.commit()
 
 
 def _set_campaign_log_created_at(scenario_id: str, created_at: datetime) -> None:
@@ -174,6 +185,84 @@ def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
     )
 
     assert result["campaign_score_delta"] == 1
+
+
+def test_finalize_uses_gameplay_bet_count_when_request_under_reports_it():
+    scenario_id = _seed_completed_scenario("scenario with stored bets")
+    _set_scenario_gameplay_state(
+        scenario_id,
+        {
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "bet-1",
+                        "kind": "ending_tone",
+                        "target_id": "order",
+                        "target_label": "Order",
+                        "placed_at": "2026-03-25T00:00:00+00:00",
+                    },
+                    {
+                        "bet_id": "bet-2",
+                        "kind": "profile_resonance",
+                        "target_id": "aligned",
+                        "target_label": "Aligned",
+                        "placed_at": "2026-03-25T00:01:00+00:00",
+                    },
+                ]
+            }
+        },
+    )
+
+    result = finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-bet-count",
+        user_name="Mina",
+        profile_id="trade",
+        archive_grade="A",
+        profile_resonance="aligned",
+        betting_hit=True,
+        bet_count=0,
+        most_used_card="backchannel_pact",
+        completed_daily_challenge=False,
+    )
+
+    assert result["campaign_score_delta"] == 6
+    assert result["profile"]["total_bets"] == 2
+    assert result["profile"]["hit_bets"] == 1
+
+
+def test_finalize_rejects_missing_betting_hit_when_scenario_has_bets():
+    scenario_id = _seed_completed_scenario("scenario missing betting_hit")
+    _set_scenario_gameplay_state(
+        scenario_id,
+        {
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "bet-1",
+                        "kind": "branch_winner",
+                        "target_id": "branch-1",
+                        "target_label": "Branch 1",
+                        "placed_at": "2026-03-25T00:00:00+00:00",
+                    }
+                ]
+            }
+        },
+    )
+
+    with pytest.raises(CampaignError, match="betting_hit is required when the scenario has bets"):
+        finalize_scenario_campaign(
+            scenario_id,
+            user_id="director-bet-missing",
+            user_name="Nova",
+            profile_id="governance",
+            archive_grade="B",
+            profile_resonance="aligned",
+            betting_hit=None,
+            bet_count=0,
+            most_used_card=None,
+            completed_daily_challenge=False,
+        )
 
 
 def test_finalize_is_idempotent_for_same_scenario():
