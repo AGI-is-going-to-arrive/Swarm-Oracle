@@ -429,6 +429,12 @@ class TestRunSimulation:
             )
             session.commit()
 
+        pushed_events: list[dict] = []
+
+        async def _fake_ws_callback(current_scenario_id: str, event: dict):
+            assert current_scenario_id == scenario_id
+            pushed_events.append(event)
+
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
             if isinstance(prompt, str) and "输出严格 JSON" in prompt:
                 return {
@@ -466,7 +472,7 @@ class TestRunSimulation:
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
-        await run_simulation(scenario_id)
+        await run_simulation(scenario_id, ws_callback=_fake_ws_callback)
 
         with Session(engine) as session:
             scenario = session.get(Scenario, scenario_id)
@@ -475,11 +481,16 @@ class TestRunSimulation:
             branches = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
 
         fork_entry = next(entry for entry in trace if entry["decision"] == "fork_created")
+        branch_fork_event = next(
+            event for event in pushed_events if event.get("type") == "branch_fork"
+        )
+
         assert fork_entry["detector_invoked"] is True
         assert fork_entry["detector_result"]["should_fork"] is True
         assert fork_entry["created_branch_count"] == 2
         assert set(fork_entry["created_branch_titles"]) == {"外审夺权", "内阁守权"}
         assert len(branches) == 3
+        assert {child["fork_round"] for child in branch_fork_event["data"]["children"]} == {1}
 
     @pytest.mark.asyncio
     async def test_detector_branch_budget_skips_lower_ranked_active_branch(self, monkeypatch):

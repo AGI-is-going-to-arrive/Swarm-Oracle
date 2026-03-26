@@ -1563,6 +1563,327 @@ async function runReplaySpeedSwitchCase(page, {
   };
 }
 
+async function runLiveForkMarkerFixtureCase(page, {
+  baseUrl,
+  outputDir,
+}) {
+  ensureDir(outputDir);
+
+  const scenarioId = "fixture-live-fork-marker";
+  const rootBranchId = "fixture-root";
+  const childBranchId = "fixture-child-r1";
+  const rootBranchTitle = "历史拐点";
+  const childBranchTitle = "R1 分裂支线";
+
+  const scenarioPayload = {
+    id: scenarioId,
+    question: "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
+    status: "simulating",
+    created_at: new Date().toISOString(),
+    total_rounds: 3,
+    mode: "blackboard",
+    agents: [
+      { id: "fixture-agent-1", name: "外审议长", role: "裁决者", tier: "CORE", emotion: "focused" },
+    ],
+    branches: [
+      {
+        id: rootBranchId,
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: rootBranchTitle,
+        description: "",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "ACTIVE",
+      },
+    ],
+    groups: [],
+    hierarchical: false,
+    messages: [],
+    visualization_enabled: true,
+    scene_theme: "law_court_variant",
+    director_state: {
+      revision: 0,
+      objectives: {
+        generated_for_question: null,
+        generated_for_profile: null,
+        goals: [],
+        last_updated_at: null,
+      },
+      commitment: {
+        active: false,
+        branch_id: null,
+        branch_title: null,
+        committed_at_round: null,
+        committed_at: null,
+        outcome: null,
+      },
+    },
+    gameplay_state: {
+      revision: 0,
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    },
+    fork_debug: null,
+  };
+
+  const directorStatePayload = {
+    scenario_id: scenarioId,
+    revision: 0,
+    objectives: {
+      generated_for_question: null,
+      generated_for_profile: null,
+      goals: [],
+      last_updated_at: null,
+    },
+    commitment: {
+      active: false,
+      branch_id: null,
+      branch_title: null,
+      committed_at_round: null,
+      committed_at: null,
+      outcome: null,
+    },
+  };
+
+  const gameplayStatePayload = {
+    scenario_id: scenarioId,
+    revision: 0,
+    cards: { usage_log: [] },
+    betting: { bets: [] },
+    archive: { key_moments: [], branch_snapshots: [] },
+  };
+
+  const scenarioRoutePattern = `**/api/scenario/${scenarioId}`;
+  const directorRoutePattern = `**/api/campaign/scenario/${scenarioId}/director-state`;
+  const gameplayRoutePattern = `**/api/campaign/scenario/${scenarioId}/gameplay-state`;
+
+  await page.addInitScript(({ fixtureScenarioId, fixtureRootBranchId, fixtureChildBranchId, fixtureRootBranchTitle, fixtureChildBranchTitle }) => {
+    const NativeWebSocket = window.WebSocket;
+
+    class FixtureWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      constructor(url, protocols) {
+        this.url = String(url);
+        this.protocol = "";
+        this.extensions = "";
+        this.readyState = FixtureWebSocket.CONNECTING;
+        this.bufferedAmount = 0;
+        this.binaryType = "blob";
+        this.onopen = null;
+        this.onmessage = null;
+        this.onerror = null;
+        this.onclose = null;
+        this._listeners = new Map();
+        this._timers = [];
+
+        if (!this.url.endsWith(`/ws/scenario/${fixtureScenarioId}`)) {
+          return new NativeWebSocket(url, protocols);
+        }
+
+        this._schedule(() => {
+          this.readyState = FixtureWebSocket.OPEN;
+          this._emit("open", new Event("open"));
+        }, 20);
+
+        const events = [
+          {
+            type: "status",
+            data: { status: "simulating", hierarchical: false },
+          },
+          {
+            type: "agent_speak",
+            data: {
+              agent: "外审议长",
+              agent_id: "fixture-agent-1",
+              message: "把最终裁决权交给外审，会立刻分裂出不同制度轨道。",
+              emotion: "focused",
+              branch: fixtureRootBranchId,
+              round: 1,
+            },
+          },
+          {
+            type: "round_summary",
+            data: {
+              branch_id: fixtureRootBranchId,
+              round: 1,
+              summary: "Round 1 complete, 1 message",
+            },
+          },
+          {
+            type: "branch_fork",
+            data: {
+              parent: fixtureRootBranchId,
+              reason: "外部评审团是否拥有最终裁决权，导致世界线在 R1 分裂。",
+              children: [
+                {
+                  id: fixtureChildBranchId,
+                  title: fixtureChildBranchTitle,
+                  description: "R1 forced fork child",
+                  fork_round: 1,
+                  probability: 0.42,
+                },
+              ],
+            },
+          },
+          {
+            type: "simulation_done",
+          },
+        ];
+
+        events.forEach((payload, index) => {
+          this._schedule(() => {
+            if (this.readyState !== FixtureWebSocket.OPEN) return;
+            this._emit(
+              "message",
+              new MessageEvent("message", {
+                data: JSON.stringify({
+                  ...payload,
+                  meta: {
+                    stream_id: fixtureScenarioId,
+                    sequence: index + 1,
+                    event_id: `${fixtureScenarioId}:${index + 1}`,
+                    manager_instance_id: "fixture-live-fork",
+                    emitted_at: new Date().toISOString(),
+                  },
+                }),
+              }),
+            );
+          }, 60 * (index + 1));
+        });
+      }
+
+      _schedule(fn, delay) {
+        const timer = window.setTimeout(fn, delay);
+        this._timers.push(timer);
+      }
+
+      _emit(type, event) {
+        const handler = this[`on${type}`];
+        if (typeof handler === "function") {
+          handler.call(this, event);
+        }
+        const listeners = this._listeners.get(type) || [];
+        for (const listener of listeners) {
+          listener.call(this, event);
+        }
+      }
+
+      addEventListener(type, listener) {
+        const list = this._listeners.get(type) || [];
+        list.push(listener);
+        this._listeners.set(type, list);
+      }
+
+      removeEventListener(type, listener) {
+        const list = this._listeners.get(type) || [];
+        this._listeners.set(type, list.filter((entry) => entry !== listener));
+      }
+
+      send() {}
+
+      close(code = 1000, reason = "fixture closed") {
+        if (this.readyState === FixtureWebSocket.CLOSED) return;
+        this.readyState = FixtureWebSocket.CLOSING;
+        for (const timer of this._timers) {
+          window.clearTimeout(timer);
+        }
+        this._timers = [];
+        this.readyState = FixtureWebSocket.CLOSED;
+        this._emit("close", new CloseEvent("close", { code, reason, wasClean: true }));
+      }
+    }
+
+    window.WebSocket = FixtureWebSocket;
+  }, {
+    fixtureScenarioId: scenarioId,
+    fixtureRootBranchId: rootBranchId,
+    fixtureChildBranchId: childBranchId,
+    fixtureRootBranchTitle: rootBranchTitle,
+    fixtureChildBranchTitle: childBranchTitle,
+  });
+
+  await page.route(scenarioRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(scenarioPayload),
+    });
+  });
+
+  await page.route(directorRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(directorStatePayload),
+    });
+  });
+
+  await page.route(gameplayRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(gameplayStatePayload),
+    });
+  });
+
+  try {
+    await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    const fixtureState = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.kind === "simulation"
+        && payload.simulation?.currentRound === 1
+        && payload.simulation?.isSimulationComplete === true
+        && payload.page?.replay_state?.available === true
+        && payload.page?.branches?.some((branch) => branch.id === childBranchId)
+      ),
+      15000,
+      "live fork fixture state",
+    );
+
+    const roundOneMarker = page.locator('.timeline-round[title="R1 · fork 1"]');
+    await roundOneMarker.waitFor({ state: "visible", timeout: 10000 });
+    const roundTwoMarkerCount = await page.locator('.timeline-round[title="R2 · fork 1"]').count();
+
+    const markerTitles = await page.locator('.timeline-round[title]').evaluateAll((nodes) => (
+      nodes.map((node) => ({
+        title: node.getAttribute("title") || "",
+        text: node.textContent?.replace(/\s+/g, " ").trim() || "",
+      }))
+    ));
+
+    writeJson(path.join(outputDir, "live-fork-marker.json"), {
+      fixtureState,
+      markerTitles,
+    });
+    await saveScreenshot(page, path.join(outputDir, "live-fork-marker.png"));
+
+    return {
+      scenarioId,
+      currentRound: fixtureState.simulation?.currentRound ?? null,
+      branchCount: fixtureState.simulation?.branchCount ?? null,
+      replayState: fixtureState.page?.replay_state ?? null,
+      roundOneMarkerVisible: true,
+      roundTwoMarkerCount,
+      markerTitles,
+    };
+  } finally {
+    await page.unroute(scenarioRoutePattern);
+    await page.unroute(directorRoutePattern);
+    await page.unroute(gameplayRoutePattern);
+  }
+}
+
 async function runCaptureModesCase(page, {
   baseUrl,
   outputDir,
@@ -2213,6 +2534,11 @@ async function runCornersSuite(args) {
       baseUrl: args.baseUrl,
       outputDir: path.join(outputDir, "result-loading-gate"),
       question: "如果最高法院拥有算法社会的最终紧急复核权，会发生什么？",
+    });
+
+    cases.live_fork_marker = await runLiveForkMarkerFixtureCase(page, {
+      baseUrl: args.baseUrl,
+      outputDir: path.join(outputDir, "live-fork-marker"),
     });
 
     cases.replay_skip_switch = await runReplayCornerCase(page, {

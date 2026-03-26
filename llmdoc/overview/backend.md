@@ -69,6 +69,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **viz_push 辅助函数**: 统一所有 viz 广播调用，含 `viz_mapper is not None` 安全守卫
 - **Fork 抑制**: 最后一轮不 fork，保证所有叶子分支都有 Agent 发言
 - **Fork detector 调试**: 当前会把每轮 fork 判定记录到 `Scenario.parsed_context["fork_debug_trace"]`，并在 API 层聚合成 `fork_debug.round_checks`；内容包括 `branch_id / branch_title / round / diverge_signals / detector_invoked / skip_reason / decision / detector_result / created_branch_titles`
+- **live fork_round 对齐**: `branch_fork` WebSocket 事件里的 `children[*]` 当前也会显式带 `fork_round`，和数据库里的 `Branch.fork_round` 以及 `GET /api/scenario/{id}` / `GET /api/scenario/{id}/branches` 保持同一口径；前端 live 时间线和 completed replay-ready round marker 不会再把新子分支临时看成 `R0`
 - **Fork detector 运行时调参**: scenario 级运行当前可显式透传 `temperature / branch_sensitivity / fork_prompt_variant / fork_detector_active_branch_limit`
 - **Detector budget**: `fork_detector_active_branch_limit` 当前只限制“每轮还有多少个 ACTIVE branch 有资格继续跑 detector”；不会阻止这些分支发言、压缩记忆或进入 narration。当前排序规则是 `probability desc, branch_id asc`，超出预算的分支会在 `round_checks` 里带 `skip_reason = detector_budget_exceeded`
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning；这一轮又补了 prune 后的二次归一化，避免低概率分支被剪掉后剩余 `ACTIVE` 分支概率和继续小于 `1.0`
@@ -499,6 +500,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `ws.py` — WebSocket路由
 - `WS /ws/scenario/{scenario_id}` — 实时事件流
 - **事件类型**: `heartbeat`, `status`, `agent_speak_start`, `agent_speak_delta`, `agent_speak`, `round_summary`, `branch_fork`, `branch_prune`, `narration`, `intervention_applied`, `intervention_injected`, `retrospective_start`, `batch_intervention_applied`, `simulation_done`, `simulation_error`
+- **`branch_fork` 口径**: 当前 payload = `{parent, children[], reason}`，其中 `children[*]` 至少包含 `id / title / description? / fork_round / probability`；也就是说，live 事件本身就会告诉前端“这条子世界线是在第几轮分出来的”
 - `WS /ws/debate/{debate_id}` — Debate Arena 实时事件流
 - **接入边界**: scenario / debate 两条 WS 当前都会先检查目标资源是否存在；不存在就直接拒绝接入。这里只收住“无效 id 也能监听”的问题，还不等于完整鉴权。
 - **连接清理**: scenario / debate 两条 receive loop 当前都会在 `finally` 中执行 disconnect；除正常 `WebSocketDisconnect` 外，意外异常路径也不会把连接残留在 manager 列表里；空闲期还会发送应用层 `heartbeat`，让半断开连接在发送路径上更快暴露并清理

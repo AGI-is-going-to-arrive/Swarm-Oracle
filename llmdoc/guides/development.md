@@ -91,6 +91,20 @@ cp .env.example backend/.env
   - 通过；覆盖 `ResultView finalize cache` 与 backend prompt i18n 改动
 - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-social-lang-corners --headless`
   - 通过；覆盖 `social language policy` 与 `lang_detect` 扩展后的主模式真实链路
+- `cd backend && ../.venv/bin/python -m pytest tests/test_simulator.py -k 'records_fork_debug_trace_when_detector_creates_fork' -q`
+  - `1 passed`
+- `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/simulator.py tests/test_simulator.py`
+  - `All checks passed!`
+- `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/pages/SimulationView.test.tsx`
+  - `46 passed`
+- `cd frontend && npm test -- --run src/components/TimelineBar.test.tsx`
+  - `3 passed`
+- `cd frontend && npm run build`
+  - 通过
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-live-fork-marker-corners-v2 --headless`
+  - 通过；当前 `corners` 已新增 deterministic `live_fork_marker` fixture，会固定 scenario API + fake WebSocket，直接断言 `R1 · fork 1` marker 可见、`R2 · fork 1` 不存在
+- `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-fork-round-cross-browser --headless`
+  - 通过；Firefox / WebKit smoke 均通过
 
 ## 当前推荐定向回归
 

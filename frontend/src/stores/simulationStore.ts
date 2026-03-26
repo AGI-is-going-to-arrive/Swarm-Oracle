@@ -412,7 +412,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             ...event.data.children.map((c) => ({
               id: c.id,
               parent_branch_id: event.data.parent,
-              fork_round: 0,
+              fork_round: c.fork_round ?? 0,
               fork_reason: event.data.reason,
               title: c.title,
               description: c.description || '',

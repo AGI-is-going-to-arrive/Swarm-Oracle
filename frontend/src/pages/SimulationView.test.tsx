@@ -232,10 +232,13 @@ vi.mock('../components/TimelineBar', () => ({
     roundMarkers,
   }: {
     compact?: boolean;
-    roundMarkers?: Array<{ resultCount?: number }>;
+    roundMarkers?: Array<{ round?: number; forkCount?: number; resultCount?: number }>;
   }) => (
     <div data-testid={compact ? 'timeline-compact' : 'timeline-default'}>
       {roundMarkers?.some((marker) => marker.resultCount) ? 'timeline-result-marker' : 'timeline'}
+      {roundMarkers?.map((marker) => (
+        <div key={marker.round}>{`timeline-round-${marker.round}-fork-${marker.forkCount ?? 0}`}</div>
+      ))}
     </div>
   ),
 }));
@@ -913,6 +916,60 @@ describe('SimulationView replay automation output', () => {
 
     expect(await screen.findByTestId('timeline-compact')).toBeInTheDocument();
     expect(screen.getByText('timeline-result-marker')).toBeInTheDocument();
+  });
+
+  it('maps fork markers to the child branch fork round in timeline summaries', async () => {
+    mockStore.isSimulationComplete = false;
+    mockStore.status = 'simulating';
+    mockStore.currentRound = 1;
+    mockStore.scenario = {
+      ...baseScenario,
+      status: 'simulating',
+      total_rounds: 2,
+    };
+    mockStore.branches = [
+      {
+        id: 'b1',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '中央路线',
+        summary: '',
+        story: '',
+        insight: '',
+        key_moments: [],
+        probability: 0.6,
+        status: 'COMPLETED' as const,
+      },
+      {
+        id: 'b2',
+        parent_branch_id: 'b1',
+        fork_round: 1,
+        fork_reason: '制度决裂',
+        title: '子世界线',
+        summary: '',
+        story: '',
+        insight: '',
+        key_moments: [],
+        probability: 0.4,
+        status: 'ACTIVE' as const,
+      },
+    ];
+    mockStore.messages = [
+      { agent: '奥勒留斯', agent_id: 'a1', message: 'root-1', emotion: 'calm', branch: 'b1', round: 1 },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('timeline-default')).toBeInTheDocument();
+    expect(screen.getByText('timeline-round-1-fork-1')).toBeInTheDocument();
+    expect(screen.getByText('timeline-round-2-fork-0')).toBeInTheDocument();
   });
 
   it('shows explicit fallback feedback when GIF recording degrades to PNG', async () => {

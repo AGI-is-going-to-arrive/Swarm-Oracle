@@ -620,7 +620,7 @@ export type WSEvent =
     | { type: 'agent_speak'; data: AgentMessage }
     | { type: 'round_summary'; data: { branch_id: string; round: number; summary: string } }
     | { type: 'branch_init'; data: { id: string; title: string; probability: number; status: string; parent_branch_id: string | null } }
-    | { type: 'branch_fork'; data: { parent: string; children: Array<{ id: string; title: string; description?: string; probability: number }>; reason: string } }
+    | { type: 'branch_fork'; data: { parent: string; children: Array<{ id: string; title: string; description?: string; fork_round: number; probability: number }>; reason: string } }
     | { type: 'branch_prune'; data: { branch_id: string; reason: string } }
     | { type: 'branch_update'; data: { branch_id: string; status: string } }
     | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }

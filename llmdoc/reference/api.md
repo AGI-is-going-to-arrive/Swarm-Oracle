@@ -524,7 +524,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `agent_speak_delta` | `{agent, agent_id, delta, branch, round}` | S→C | agent发言增量token |
 | `agent_speak` | AgentMessage | S→C | agent发言完成 |
 | `round_summary` | `{branch_id, round, summary}` | S→C | 轮次摘要 |
-| `branch_fork` | `{parent, children[], reason}` | S→C | 分支分裂 |
+| `branch_fork` | `{parent, children[{id, title, description?, fork_round, probability}], reason}` | S→C | 分支分裂；`children[*].fork_round` 当前会直接给出这条新世界线是在第几轮分出来的 |
 | `branch_prune` | `{branch_id, reason}` | S→C | 分支剪枝 |
 | `narration` | `{branch_id, title, story, insight}` | S→C | 叙事完成 |
 | `intervention_applied` | `{branch_id, text, round, intervention_id}` | S→C | 干预已应用 |

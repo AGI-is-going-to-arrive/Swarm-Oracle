@@ -1343,6 +1343,7 @@ async def run_simulation(
                                 "id": new_id,
                                 "title": fb["title"],
                                 "description": fb.get("description", ""),
+                                "fork_round": round_num,
                                 "probability": fb["probability"],
                             })
 

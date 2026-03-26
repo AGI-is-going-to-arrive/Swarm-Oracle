@@ -350,6 +350,66 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().branches[0].title).toBe("永世帝国");
   });
 
+  it("uses the live fork_round from 'branch_fork' for child branches", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "s1",
+      question: "如果罗马帝国从未衰落？",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [{
+        id: "b1",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "历史拐点",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "ACTIVE",
+      }],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    store.getState().handleWSEvent({
+      type: "branch_fork",
+      data: {
+        parent: "b1",
+        reason: "关键制度分歧",
+        children: [
+          {
+            id: "b2",
+            title: "子世界线",
+            description: "新的未来",
+            fork_round: 2,
+            probability: 0.4,
+          },
+        ],
+      },
+    } as WSEvent);
+
+    expect(store.getState().branches).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "b1",
+        status: "COMPLETED",
+      }),
+      expect.objectContaining({
+        id: "b2",
+        parent_branch_id: "b1",
+        fork_round: 2,
+        fork_reason: "关键制度分歧",
+        status: "ACTIVE",
+      }),
+    ]));
+  });
+
   it("does not let branch_update regress a completed branch back to active", () => {
     const store = useSimulationStore;
     store.getState().setScenario({
