@@ -493,6 +493,50 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 
+### Oracle Chambers Draft Contract (Phase A Frozen, Not Implemented Yet)
+
+> 注意：
+> - 本节是 `神谕会客厅 / 世界线圆桌` 的 **Phase A 契约草案**
+> - 当前 backend **尚未实现** 以下端点与 WebSocket
+> - 它们被记录在这里，是为了冻结命名、作用域键、事件形状和前后端接口边界，方便下一轮直接进入 Phase B
+
+| 端点 | 方法 | 描述 | 请求体 | 响应 |
+|------|------|------|--------|------|
+| `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
+| `GET /api/ending-room/{room_id}` | GET | 获取房间 live snapshot | — | EndingRoomSnapshot |
+| `GET /api/ending-room/{room_id}/result` | GET | 获取房间完成态结果 | — | EndingRoomResultPayload |
+| `POST /api/ending-room/{room_id}/replay-artifact` | POST | 持久化 replay payload（第二阶段再实现） | `{"payload": {...}}` | `{"id", "kind", "created_at"}` |
+
+> 这条线的统一作用域键固定为：
+>
+> ```json
+> {
+>   "scenario_id": "scn_xxx",
+>   "anchor_branch_id": "br_xxx",
+>   "room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery",
+>   "participant_set_hash": "sha256(...)",
+>   "language": "zh|en"
+> }
+> ```
+>
+> 所有以下链路都必须按这组 key 分桶：
+> - 持久化
+> - WebSocket stream
+> - replay / import
+> - 摘要缓存
+> - 向量检索
+
+> 当前已冻结的读取边界：
+> - `ending_chamber`：只允许读取当前 `anchor_branch_id` 全文；其他 branch 只允许摘要字段
+> - `worldline_roundtable`：每个代表只读自己 branch 全文；`Archivist` 只读多线摘要，不读多线全文
+> - `crossline_gallery`：只读摘要与引文，不读全文 transcript
+
+> 当前已冻结的流式策略：
+> - 若这条线启用流式输出，只允许 **混合流式**
+> - 标准事件链必须是：`turn_start -> turn_delta -> turn_commit`
+> - `turn_delta` 只用于 live UI
+> - `turn_commit` 才是唯一正式版本；落库 / replay / share / quote extraction 一律以 committed turn 为准
+
 ## WebSocket API
 
 连接: `ws://localhost:18927/ws/scenario/{scenario_id}`

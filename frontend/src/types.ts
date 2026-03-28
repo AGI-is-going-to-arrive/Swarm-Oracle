@@ -579,6 +579,99 @@ export interface DebatePredictionRequest {
   counterplayVariant?: 'balanced' | 'reversal';
 }
 
+// Phase A contract freeze: Oracle Chambers / Worldline Roundtable
+export type EndingRoomType =
+  | 'ending_chamber'
+  | 'worldline_roundtable'
+  | 'one_move_only'
+  | 'crossline_gallery';
+
+export type EndingRoomStatus = 'draft' | 'live' | 'done' | 'error';
+export type EndingRoomPhase = 'opening' | 'crossfire' | 'rebuttal' | 'closing' | 'verdict';
+export type EndingRoomRoleSlot = 'agent' | 'representative' | 'archivist' | 'critic' | 'observer';
+
+export interface EndingRoomScope {
+  scenario_id: string;
+  anchor_branch_id: string | null;
+  room_type: EndingRoomType;
+  participant_set_hash: string;
+  language: 'zh' | 'en';
+}
+
+export interface EndingRoomParticipant {
+  id: string;
+  room_id: string;
+  source_branch_id?: string | null;
+  source_agent_id?: string | null;
+  role_slot: EndingRoomRoleSlot;
+  display_name: string;
+  persona_snapshot_json?: Record<string, unknown> | null;
+  visibility_scope_json?: Record<string, unknown> | null;
+}
+
+export interface EndingRoomTurn {
+  id: string;
+  room_id: string;
+  sequence: number;
+  phase: EndingRoomPhase;
+  participant_id: string;
+  content: string;
+  emotion: string;
+  cited_branch_id?: string | null;
+  cited_refs_json?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface EndingRoomPhaseInsight {
+  phase: EndingRoomPhase;
+  stakes: string;
+  moderator_focus: string;
+  commentary: string;
+}
+
+export interface EndingRoomSupportingTurn {
+  turn_id: string;
+  phase: EndingRoomPhase;
+  participant_id: string;
+  label: string;
+  explanation: string;
+}
+
+export interface EndingRoomResult {
+  summary: string;
+  next_move?: string | null;
+  archivist_note?: string | null;
+  phase_insights?: EndingRoomPhaseInsight[];
+  supporting_turns?: EndingRoomSupportingTurn[];
+}
+
+export interface EndingRoomSnapshot {
+  id: string;
+  scenario_id: string;
+  anchor_branch_id: string | null;
+  room_type: EndingRoomType;
+  title: string;
+  language: 'zh' | 'en';
+  status: EndingRoomStatus;
+  current_phase: EndingRoomPhase;
+  created_at: string;
+  updated_at: string;
+  participants: EndingRoomParticipant[];
+  turns: EndingRoomTurn[];
+  result_ready: boolean;
+}
+
+export interface EndingRoomResultPayload extends EndingRoomSnapshot {
+  result: EndingRoomResult;
+}
+
+export interface CreateEndingRoomRequest {
+  roomType: EndingRoomType;
+  anchorBranchId?: string | null;
+  selectedBranchIds: string[];
+  language?: 'zh' | 'en';
+}
+
 export interface StructuredWsError {
   code?: string;
   message?: string;
@@ -607,6 +700,18 @@ export type DebateWSEvent =
     | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
     | { type: 'debate_counterplay'; data: DebateCounterplayResult }
     | { type: 'debate_verdict'; data: DebateVerdictEventPayload }
+  ) & { meta?: WsEventMeta };
+
+export type EndingRoomWSEvent =
+  (
+    | { type: 'heartbeat'; data: { ts: string } }
+    | { type: 'status'; data: { status: EndingRoomStatus; error?: string | StructuredWsError } }
+    | { type: 'ending_room_turn_start'; data: { room_id: string; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
+    | { type: 'ending_room_turn_delta'; data: { room_id: string; turn_id: string; participant_id: string; delta: string; chunk_index: number } }
+    | { type: 'ending_room_turn_commit'; data: EndingRoomTurn }
+    | { type: 'ending_room_turn_error'; data: { room_id: string; turn_id: string; participant_id: string; message: string } }
+    | { type: 'ending_room_phase_change'; data: { phase: EndingRoomPhase } }
+    | { type: 'ending_room_result_ready'; data: { result: EndingRoomResult } }
   ) & { meta?: WsEventMeta };
 
 // ── WebSocket Events ─────────────────────────────────────

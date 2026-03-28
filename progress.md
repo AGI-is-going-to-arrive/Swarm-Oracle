@@ -10646,3 +10646,40 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - 同导演 identity 第一次进入 `result`：`POST /finalize = 1`
     - 第二次同 tab 再进入：新增 `POST /finalize = 0`
     - 说明结果页重复 finalize 已被真实短路
+
+## 2026-03-29 Oracle Chambers Phase A Freeze
+
+- 已将 `神谕会客厅 / 世界线圆桌` 的 Phase A 基础契约补齐到仓库内，可作为下次直接进入 Phase B 的起点。
+- 已更新实施文档：
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - 文档内已明确标记：Phase A 的设计冻结、类型骨架、i18n 命名空间骨架和 API 草案已完成。
+- 已更新 `llmdoc/reference/api.md`：
+  - 新增 `Oracle Chambers Draft Contract (Phase A Frozen, Not Implemented Yet)` 段落
+  - 明确该段仅是 Phase A 草案，当前 backend 尚未实现，避免被误读成 current truth
+  - 冻结了 future API 草案、统一 scope key，以及混合流式输出口径：`turn_start -> turn_delta -> turn_commit`
+- 已更新 `frontend/src/types.ts`：
+  - 新增 Phase A 公共类型骨架：
+    - `EndingRoomType / EndingRoomStatus / EndingRoomPhase / EndingRoomRoleSlot`
+    - `EndingRoomScope`
+    - `EndingRoomParticipant`
+    - `EndingRoomTurn`
+    - `EndingRoomPhaseInsight`
+    - `EndingRoomSupportingTurn`
+    - `EndingRoomResult`
+    - `EndingRoomSnapshot / EndingRoomResultPayload`
+    - `CreateEndingRoomRequest`
+    - `EndingRoomWSEvent`
+- 已更新中英词条骨架：
+  - `frontend/src/i18n/locales/zh.json`
+  - `frontend/src/i18n/locales/en.json`
+  - 新增命名空间：
+    - `ending_room.*`
+    - `roundtable.*`
+- 本轮未进入 Phase B：
+  - 未新建 backend `ending_room*` 表
+  - 未实现 API / WS
+  - 未落地 UI 组件
+  - 未运行业务层新增测试
+- 下次若继续执行，建议直接从：
+  - `Phase B — 后端新域与世界线隔离`
+  - 然后进入 `Phase C — 结果页单结局会客厅 MVP`

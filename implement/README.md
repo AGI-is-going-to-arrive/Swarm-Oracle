@@ -35,6 +35,7 @@
 | 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | active archive | Debate Arena 设计基线与实现状态同步；不再按待开发清单阅读 | 当前会话 |
 | 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | active archive | Debate Arena 蓝图与验收参考；phase 拆解按历史设计基线阅读 | 当前会话 |
 | 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | active archive | 跨设备状态 authority 收口报告 | 当前会话 |
+| 23 | [神谕会客厅 / 世界线圆桌 详细设计与实施任务单](23_oracle_chambers_worldline_roundtable_execution_plan.md) | active archive | 结局会客厅、世界线圆桌、轻玩法扩展的执行手册；覆盖命名、阶段开发、i18n、跨平台、E2E、review 与素材计划 | 当前会话 |
 
 ---
 
@@ -43,7 +44,7 @@
 - `current truth`
   - 不在本目录内维护；请优先阅读仓库根 `README.md`、`llmdoc/overview/project.md`、`llmdoc/guides/development.md`。
 - `active archive`
-  - `11 / 19 / 20 / 21 / 22`
+- `11 / 19 / 20 / 21 / 22 / 23`
   - 这些文件保留当前设计基线或收口报告，但正文里若仍含计划段，按文件顶部状态说明阅读。
 - `historical snapshot`
   - `01 / 02 / 03 / 04 / 05 / 06 / 07 / 09 / 10`
@@ -127,3 +128,5 @@
    看 Debate MVP 蓝图与验收参考。
 5. `22_cross_device_state_closure_plan.md`
    看 authority 收口与剩余边界。
+6. `23_oracle_chambers_worldline_roundtable_execution_plan.md`
+   看神谕会客厅 / 世界线圆桌的可直接开工任务单。
