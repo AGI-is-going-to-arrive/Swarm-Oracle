@@ -17,6 +17,10 @@ from app.models import (
     BranchStatus,
     EndingRoom,
     EndingRoomInteractionMode,
+    EndingRoomParticipant,
+    EndingRoomThread,
+    EndingRoomTurn,
+    EndingRoomTurnSource,
     EndingRoomType,
     Round,
     Scenario,
@@ -24,6 +28,9 @@ from app.models import (
 )
 from app.models.database import get_engine, init_db
 from app.services.ending_room_service import (
+    EndingRoomServiceError,
+    _build_room_plan,
+    _room_memory_partition,
     append_room_user_turn,
     append_thread_user_turn,
     build_branch_scope_context,
@@ -149,6 +156,76 @@ def _seed_multi_agent_branch_world() -> tuple[str, str, list[str]]:
         return scenario.id, branch.id, [agent.id for agent in agents]
 
 
+def _seed_roundtable_reselection_world() -> tuple[str, str, str, str]:
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)
+        session.add(scenario)
+        session.flush()
+
+        shared_agent = Agent(scenario_id=scenario.id, name="共用史官", role="宫廷史官", persona="我只记录被真正执行的命令")
+        branch_a_agent = Agent(scenario_id=scenario.id, name="秩序督军", role="军政总管", persona="先把兵权和粮道扣住")
+        branch_b_agent = Agent(scenario_id=scenario.id, name="裂变议长", role="地方议长", persona="先让地方议会掌握财政解释权")
+        for agent in (shared_agent, branch_a_agent, branch_b_agent):
+            session.add(agent)
+        session.flush()
+
+        branch_a = Branch(
+            scenario_id=scenario.id,
+            title="秩序线",
+            story="秩序线把兵权重新收拢回中枢。",
+            insight="先稳住命令链，秩序才不会碎。",
+            summary="秩序线 summary",
+            status=BranchStatus.COMPLETED,
+        )
+        branch_b = Branch(
+            scenario_id=scenario.id,
+            title="裂变线",
+            story="裂变线让地方议会先拿到了财政解释权。",
+            insight="先失去财政解释权，地方就会脱缰。",
+            summary="裂变线 summary",
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(branch_a)
+        session.add(branch_b)
+        session.flush()
+
+        round_a = Round(branch_id=branch_a.id, round_number=1)
+        round_b = Round(branch_id=branch_b.id, round_number=1)
+        session.add(round_a)
+        session.add(round_b)
+        session.flush()
+
+        for agent_id, content in (
+            (shared_agent.id, "我看到命令链出现第一次分叉。"),
+            (branch_a_agent.id, "先扣住兵权，秩序才不会继续松动。"),
+            (branch_a_agent.id, "粮道和军旗必须一起收回。"),
+        ):
+            session.add(
+                AgentMessage(
+                    round_id=round_a.id,
+                    agent_id=agent_id,
+                    content=content,
+                    emotion="focused",
+                )
+            )
+        for agent_id, content in (
+            (shared_agent.id, "我看到财政解释权开始外移。"),
+            (branch_b_agent.id, "先让地方议会解释税令，裂变就会自我强化。"),
+            (branch_b_agent.id, "一旦预算权下沉，中央就追不上了。"),
+        ):
+            session.add(
+                AgentMessage(
+                    round_id=round_b.id,
+                    agent_id=agent_id,
+                    content=content,
+                    emotion="focused",
+                )
+            )
+
+        session.commit()
+        return scenario.id, branch_a.id, branch_b.id, shared_agent.id
+
+
 def test_create_ending_room_deduplicates_scope():
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
 
@@ -255,6 +332,40 @@ def test_create_ending_room_rejects_agent_ids_outside_visible_branch_roster():
         )
 
 
+def test_run_ending_room_background_uses_selected_agents_in_auto_recap():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    payload = load_ending_room_result_payload(snapshot["id"])
+
+    recap_participants = {
+        turn["participant_id"]
+        for turn in payload["turns"]
+        if turn["source"] == "auto_recap"
+    }
+    participant_lookup = {
+        participant["id"]: participant
+        for participant in payload["participants"]
+    }
+    selected_participant_ids = {
+        participant_id
+        for participant_id, participant in participant_lookup.items()
+        if participant["source_agent_id"] in set(agent_ids[:2])
+    }
+
+    assert recap_participants >= selected_participant_ids
+    assert any(participant_lookup[turn["participant_id"]]["role_slot"] == "archivist" for turn in payload["turns"])
+
+
 def test_create_ending_room_deduplicates_under_concurrency():
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
 
@@ -312,6 +423,80 @@ def test_create_roundtable_deduplicates_reordered_branch_scope():
         room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
         anchor_branch_id=None,
         selected_branch_ids=[branch_b_id, branch_a_id],
+        language="zh",
+    )
+
+    assert first_created is True
+    assert second_created is False
+    assert first_snapshot["id"] == second_snapshot["id"]
+
+
+def test_worldline_roundtable_supports_branch_scoped_selected_representatives():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+        ],
+        language="zh",
+    )
+
+    assert created is True
+    representatives = {
+        participant["source_branch_id"]: participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    }
+    assert set(representatives) == {branch_a_id, branch_b_id}
+    assert all(
+        participant["source_agent_id"] == shared_agent_id
+        for participant in representatives.values()
+    )
+    assert all(
+        participant["persona_snapshot_json"]["selection_reason"] == "user_selected"
+        for participant in representatives.values()
+    )
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        scope_branch_ids = list((room.config_json or {}).get("selected_branch_ids") or [])
+        selected_representatives = list((room.config_json or {}).get("selected_representatives") or [])
+
+    assert selected_representatives == [
+        {"branch_id": branch_id, "agent_id": shared_agent_id}
+        for branch_id in scope_branch_ids
+    ]
+
+
+def test_worldline_roundtable_selected_representatives_hash_is_branch_scoped():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    first_snapshot, first_created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        language="zh",
+    )
+    second_snapshot, second_created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_b_id, branch_a_id],
+        selected_representatives=[
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+        ],
         language="zh",
     )
 
@@ -445,6 +630,29 @@ def test_roundtable_snapshot_keeps_representatives_in_scope_order():
 
     assert ordered_roles[-1] == "archivist"
     assert ordered_branch_ids == scope_branch_ids
+
+
+def test_worldline_roundtable_rejects_all_present_followup():
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+
+    with pytest.raises(EndingRoomServiceError) as exc_info:
+        append_room_user_turn(
+            snapshot["id"],
+            content="让当前桌面所有代表都同时回应。",
+            interaction_mode=EndingRoomInteractionMode.ALL_PRESENT,
+        )
+
+    assert exc_info.value.code == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
 
 
 async def _noop_broadcast(_room_id: str, _payload: dict) -> None:
@@ -589,14 +797,89 @@ def test_all_present_followup_returns_multiple_current_worldline_responses():
         interaction_mode=EndingRoomInteractionMode.ALL_PRESENT,
     )
 
-    assert len(followup["turns"]) == 4
+    assert len(followup["turns"]) == 3
     assert followup["turns"][0]["source"] == "user_turn"
     assert all(turn["interaction_mode"] == "all_present" for turn in followup["turns"][1:])
-    assert {turn["participant_id"] for turn in followup["turns"][1:]} >= {
+    assert {turn["participant_id"] for turn in followup["turns"][1:]} == {
         participant["id"]
         for participant in load_ending_room_snapshot(snapshot["id"])["participants"]
-        if participant["role_slot"] in {"agent", "archivist"}
+        if participant["role_slot"] == "agent"
     }
+    assert all("Let me add one more angle" not in turn["content"] for turn in followup["turns"][1:])
+
+
+def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="为什么这里会转向？",
+        addressed_agent_ids=[agent_ids[0]],
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+    )
+
+    assert len(followup["turns"]) == 3
+    assert followup["turns"][1]["content"].startswith("狄奥多西一世：你点到的就是这一下。")
+    assert followup["turns"][2]["content"].startswith("档案官：这轮热座先听")
+    assert "I will answer the point you addressed first" not in followup["turns"][1]["content"]
+    assert "I will answer the point you addressed first" not in followup["turns"][2]["content"]
+
+
+def test_archivist_route_followup_returns_distinct_grounded_responses():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="如果这里多等一轮，结局会改变吗？",
+        interaction_mode=EndingRoomInteractionMode.ARCHIVIST_ROUTE,
+    )
+
+    response_texts = [turn["content"] for turn in followup["turns"][1:]]
+    assert len(response_texts) == 3
+    assert len(set(response_texts)) == len(response_texts)
+    assert "最相关的 1-2 位参与者" in response_texts[0]
+    assert any("我在 R" in text for text in response_texts[1:])
+
+
+def test_one_move_only_result_uses_action_reason_cost_contract():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ONE_MOVE_ONLY,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=[agent_ids[0]],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    payload = load_ending_room_result_payload(snapshot["id"])
+
+    assert len(payload["turns"]) == 2
+    assert "动作：" in payload["result"]["next_move"]
+    assert "理由：" in payload["result"]["next_move"]
+    assert "代价：" in payload["result"]["next_move"]
 
 
 def test_run_ending_room_background_is_idempotent_after_done():
@@ -617,6 +900,60 @@ def test_run_ending_room_background_is_idempotent_after_done():
     second_payload = load_ending_room_result_payload(snapshot["id"])
 
     assert len(first_payload["turns"]) == len(second_payload["turns"])
+
+
+def test_run_ending_room_background_recovers_from_partial_auto_recap_progress():
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        room_thread = session.exec(
+            select(EndingRoomThread)
+            .where(EndingRoomThread.room_id == room.id)
+            .order_by(EndingRoomThread.created_at, EndingRoomThread.id)
+        ).first()
+        assert room_thread is not None
+        participants = session.exec(
+            select(EndingRoomParticipant)
+            .where(EndingRoomParticipant.room_id == room.id)
+            .order_by(EndingRoomParticipant.id)
+        ).all()
+        planned_turns, _result = _build_room_plan(session, room, participants)
+        first_turn = planned_turns[0]
+        session.add(
+            EndingRoomTurn(
+                room_id=room.id,
+                thread_id=room_thread.id,
+                sequence=1,
+                phase=first_turn["phase"],
+                participant_id=first_turn["participant_id"],
+                content=first_turn["content"],
+                emotion=first_turn["emotion"],
+                source=EndingRoomTurnSource.AUTO_RECAP,
+                interaction_mode=EndingRoomInteractionMode.AUTO_RECAP,
+                memory_partition_id=_room_memory_partition(room),
+                cited_branch_id=first_turn["cited_branch_id"],
+                cited_refs_json=first_turn["cited_refs_json"],
+            )
+        )
+        session.commit()
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    result_payload = load_ending_room_result_payload(snapshot["id"])
+
+    sequences = [turn["sequence"] for turn in result_payload["turns"]]
+    assert sequences == list(range(1, len(result_payload["turns"]) + 1))
+    assert len(sequences) == len(set(sequences))
+    assert len(result_payload["turns"]) >= 1
 
 
 def test_room_phase_and_current_phase_stay_in_sync():

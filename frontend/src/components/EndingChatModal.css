@@ -15,7 +15,7 @@
 .ending-chat-modal {
   position: relative;
   width: min(1120px, 100%);
-  max-height: min(92vh, 920px);
+  max-height: min(96vh, 960px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -40,6 +40,14 @@
   gap: 16px;
   padding: 28px 32px 18px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.ending-chat-header__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .ending-chat-header::after {
@@ -415,6 +423,7 @@
   flex-direction: column;
   gap: 12px;
   flex: 1;
+  min-height: 180px;
   overflow: auto;
   padding: 18px 20px 22px;
 }
@@ -429,8 +438,9 @@
 .ending-chat-bubble.is-current-speaker {
   border-color: color-mix(in oklab, var(--color-primary) 38%, var(--border-default));
   background:
-    url('/assets/ui/generated/ending_room_speaker_glow.png') top right / 120px 120px no-repeat,
+    url('/assets/ui/generated/ending_room_speaker_glow.png') calc(100% - 10px) 10px / 84px 84px no-repeat,
     color-mix(in oklab, var(--bg-hover) 72%, transparent);
+  padding-inline-end: 104px;
 }
 
 .ending-chat-bubble.is-archivist {
@@ -479,8 +489,8 @@
 
 .ending-chat-composer {
   display: grid;
-  gap: 12px;
-  padding: 14px 20px 20px;
+  gap: 10px;
+  padding: 12px 20px 16px;
   border-top: 1px solid var(--border-subtle);
   background: color-mix(in oklab, var(--bg-surface) 92%, transparent);
 }
@@ -488,7 +498,7 @@
 .ending-chat-composer__row {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .ending-chat-mode-switch,
@@ -506,7 +516,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  padding: 8px 12px;
+  padding: 7px 11px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -525,7 +535,7 @@
 
 .ending-chat-composer__input {
   flex: 1;
-  min-height: 84px;
+  min-height: 68px;
   border-radius: 16px;
   border: 1px solid var(--border-subtle);
   background: color-mix(in oklab, var(--bg-surface-elevated) 94%, transparent);
@@ -537,7 +547,7 @@
 
 .ending-chat-send {
   align-self: stretch;
-  min-width: 120px;
+  min-width: 108px;
   border: 0;
   border-radius: 16px;
   background: var(--color-primary);
@@ -600,6 +610,18 @@
   }
 }
 
+@media (min-width: 961px) {
+  .ending-chat-composer__row {
+    flex-wrap: wrap;
+  }
+
+  .ending-chat-anchor-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+}
+
 @media (max-width: 560px) {
   .ending-chat-overlay {
     padding: 10px;
@@ -618,6 +640,18 @@
     padding: 20px 16px 16px;
   }
 
+  .ending-chat-header::after {
+    display: none;
+  }
+
+  .ending-chat-title {
+    max-width: calc(100% - 12px);
+    font-size: clamp(1.55rem, 7vw, 2.15rem);
+    line-height: 1.08;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   .ending-chat-tabs,
   .ending-chat-body {
     padding-left: 16px;
@@ -625,9 +659,9 @@
   }
 
   .ending-chat-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    display: grid;
+    grid-template-rows: minmax(210px, 28vh) minmax(0, 1fr);
+    gap: 12px;
     padding-top: 14px;
   }
 
@@ -640,8 +674,10 @@
   }
 
   .ending-chat-sidebar {
-    max-height: 15vh;
+    min-height: 0;
+    max-height: none;
     gap: 10px;
+    padding-right: 2px;
   }
 
   .ending-chat-panel {
@@ -679,6 +715,7 @@
   .ending-chat-transcript {
     min-height: 0;
     display: flex;
+    flex-direction: column;
     overflow: hidden;
     background: color-mix(in oklab, var(--bg-surface) 97%, white 3%);
   }
@@ -691,6 +728,8 @@
   }
 
   .ending-chat-thread-rail {
+    overflow-x: auto;
+    flex-wrap: nowrap;
     padding: 10px 16px 0;
   }
 
@@ -715,10 +754,19 @@
     gap: 10px;
     padding: 10px 16px 12px;
     background: color-mix(in oklab, var(--bg-surface) 98%, white 2%);
+    flex-shrink: 0;
   }
 
   .ending-chat-composer__row {
     gap: 10px;
+  }
+
+  .ending-chat-mode-switch,
+  .ending-chat-hotseat-row,
+  .ending-chat-anchor-row {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
   }
 
   .ending-chat-composer__input {

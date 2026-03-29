@@ -22,6 +22,7 @@ const DebateResultView = lazy(() =>
   import('./pages/DebateResultView').then((mod) => ({ default: mod.DebateResultView }))
 );
 const ResultView = lazy(() => import('./pages/ResultView'));
+const WorldlineRoundtableView = lazy(() => import('./pages/WorldlineRoundtableView'));
 const HistoryView = lazy(() => import('./pages/HistoryView'));
 const LeaderboardView = lazy(() => import('./pages/LeaderboardView'));
 
@@ -44,6 +45,8 @@ export default function App() {
             <Route path="/debate/replay/result" element={<DebateResultView />} />
             <Route path="/result/:id" element={<ResultView />} />
             <Route path="/result/replay" element={<ResultView />} />
+            <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+            <Route path="/roundtable/replay" element={<WorldlineRoundtableView />} />
             <Route path="/history" element={<HistoryView />} />
             <Route path="/leaderboard" element={<LeaderboardView />} />
             <Route path="*" element={<Navigate to="/" replace />} />

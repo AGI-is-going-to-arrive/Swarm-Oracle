@@ -706,11 +706,17 @@ export interface EndingRoomResultPayload extends EndingRoomSnapshot {
   result: EndingRoomResult;
 }
 
+export interface RoundtableRepresentativeSelection {
+  branchId: string;
+  agentId: string;
+}
+
 export interface CreateEndingRoomRequest {
   roomType: EndingRoomType;
   anchorBranchId?: string | null;
   selectedBranchIds: string[];
   selectedAgentIds?: string[];
+  selectedRepresentatives?: RoundtableRepresentativeSelection[];
   language?: 'zh' | 'en';
 }
 

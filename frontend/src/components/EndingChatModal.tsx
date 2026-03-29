@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
@@ -9,12 +9,17 @@ import type {
   AgentMessage,
   EndingRoomInteractionMode,
   EndingRoomParticipant,
+  EndingRoomResult,
+  EndingRoomSnapshot,
   EndingRoomThreadSnapshot,
   EndingRoomType,
   StoryData,
 } from '../types';
 
 import './EndingChatModal.css';
+
+const EMPTY_SELECTED_AGENT_IDS: string[] = [];
+const EMPTY_FALLBACK_MESSAGES: AgentMessage[] = [];
 
 interface EndingChatModalProps {
   open: boolean;
@@ -25,6 +30,16 @@ interface EndingChatModalProps {
   language: 'zh' | 'en';
   readOnly: boolean;
   fallbackMessages?: AgentMessage[];
+  replayState?: {
+    snapshot: EndingRoomSnapshot;
+    result: EndingRoomResult | null;
+    roomType?: EndingRoomType;
+    scenarioId?: string;
+    selectedBranchIds?: string[];
+    activeThreadId?: string | null;
+    selectedAgentIds?: string[];
+  } | null;
+  headerActions?: ReactNode;
   onClose: () => void;
   onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
@@ -65,9 +80,9 @@ function scopeText(
   isZh: boolean,
 ): string {
   if (scopeNotice && thread && scopeNotice.threadId === thread.id) {
-    return isZh
-      ? `当前只基于线程分区 ${scopeNotice.memoryPartitionId}`
-      : `Scoped to thread partition ${scopeNotice.memoryPartitionId}`;
+    return thread.mode === 'followup'
+      ? (isZh ? '当前只基于这条追问线程' : 'Scoped to this follow-up thread only')
+      : (isZh ? '当前只基于当前桌面 transcript' : 'Scoped to the current room desk only');
   }
   if (thread?.mode === 'followup') {
     return isZh ? '只基于当前追问线程' : 'Only using the current follow-up thread';
@@ -80,19 +95,26 @@ export default function EndingChatModal({
   scenarioId,
   branch,
   roomType,
-  selectedAgentIds = [],
+  selectedAgentIds: selectedAgentIdsProp,
   language,
   readOnly,
-  fallbackMessages = [],
+  fallbackMessages: fallbackMessagesProp,
+  replayState = null,
+  headerActions = null,
   onClose,
   onModeChange,
   onAutomationStateChange,
 }: EndingChatModalProps) {
   const { t } = useTranslation();
+  const selectedAgentIds = selectedAgentIdsProp ?? EMPTY_SELECTED_AGENT_IDS;
+  const fallbackMessages = fallbackMessagesProp ?? EMPTY_FALLBACK_MESSAGES;
   const modalRef = useRef<HTMLDivElement>(null);
   const transcriptListRef = useRef<HTMLDivElement>(null);
+  const transcriptHydratedRef = useRef(false);
+  const transcriptAutoStickRef = useRef(false);
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
   const isZh = language === 'zh';
   const {
     snapshot,
@@ -120,8 +142,39 @@ export default function EndingChatModal({
 
   useEndingRoomWS(
     snapshot?.id,
-    open && !readOnly && Boolean(snapshot?.id) && status !== 'done' && status !== 'error',
+    open && !readOnly && Boolean(snapshot?.id) && status !== 'error',
   );
+
+  const effectiveSnapshot = readOnly && replayState?.snapshot
+    ? replayState.snapshot
+    : snapshot;
+  const effectiveResult = readOnly && replayState
+    ? replayState.result
+    : result;
+  const effectiveThreadsById = useMemo(() => {
+    if (!readOnly || !replayState?.snapshot) {
+      return threadsById;
+    }
+    return replayState.snapshot.threads.reduce<Record<string, EndingRoomThreadSnapshot>>((acc, thread) => {
+      const turns = replayState.snapshot.turns
+        .filter((turn) => {
+          if (turn.thread_id) {
+            return turn.thread_id === thread.id;
+          }
+          return thread.mode === 'room';
+        })
+        .sort((left, right) => left.sequence - right.sequence);
+      acc[thread.id] = {
+        ...thread,
+        room_type: replayState.snapshot.room_type,
+        room_title: replayState.snapshot.title,
+        room_status: replayState.snapshot.status,
+        language: replayState.snapshot.language,
+        turns,
+      };
+      return acc;
+    }, {});
+  }, [readOnly, replayState, threadsById]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -149,6 +202,7 @@ export default function EndingChatModal({
     }
 
     let cancelled = false;
+    let bootstrapDelayTimer: number | null = null;
     reset();
     void openRoom(scenarioId, {
       roomType,
@@ -157,7 +211,13 @@ export default function EndingChatModal({
       ...(selectedAgentIds.length > 0 ? { selectedAgentIds } : {}),
       language,
     }).then(async (roomId) => {
-      await new Promise((resolve) => window.setTimeout(resolve, 150));
+      if (cancelled) return;
+      await new Promise<void>((resolve) => {
+        bootstrapDelayTimer = window.setTimeout(() => {
+          bootstrapDelayTimer = null;
+          resolve();
+        }, 150);
+      });
       if (cancelled) return;
       await loadRoom(roomId);
     }).catch(() => {
@@ -166,27 +226,58 @@ export default function EndingChatModal({
 
     return () => {
       cancelled = true;
+      if (bootstrapDelayTimer !== null) {
+        window.clearTimeout(bootstrapDelayTimer);
+      }
     };
   }, [branch, language, loadRoom, open, openRoom, readOnly, reset, roomType, scenarioId, selectedAgentIds]);
 
+  const finalResultSyncRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!open || readOnly || !snapshot?.id) {
+      finalResultSyncRef.current = null;
+      return;
+    }
+    if (result || snapshot.status !== 'done') {
+      finalResultSyncRef.current = null;
+      return;
+    }
+    if (finalResultSyncRef.current === snapshot.id) {
+      return;
+    }
+    finalResultSyncRef.current = snapshot.id;
+    void loadRoom(snapshot.id);
+  }, [loadRoom, open, readOnly, result, snapshot?.id, snapshot?.status]);
+
   const defaultThreadId = useMemo(
-    () => snapshot?.threads.find((thread) => thread.mode === 'room')?.id ?? snapshot?.threads[0]?.id ?? null,
-    [snapshot?.threads],
+    () => effectiveSnapshot?.threads.find((thread) => thread.mode === 'room')?.id ?? effectiveSnapshot?.threads[0]?.id ?? null,
+    [effectiveSnapshot?.threads],
   );
+  const effectiveActiveThreadId = readOnly && replayState
+    ? (replayActiveThreadId ?? replayState.activeThreadId ?? defaultThreadId)
+    : activeThreadId;
 
   const activeThread = useMemo(
-    () => (activeThreadId ? threadsById[activeThreadId] : null) ?? (defaultThreadId ? threadsById[defaultThreadId] : null) ?? null,
-    [activeThreadId, defaultThreadId, threadsById],
+    () => (effectiveActiveThreadId ? effectiveThreadsById[effectiveActiveThreadId] : null)
+      ?? (defaultThreadId ? effectiveThreadsById[defaultThreadId] : null)
+      ?? null,
+    [defaultThreadId, effectiveActiveThreadId, effectiveThreadsById],
   );
 
   const threads = useMemo(
-    () => threadOrder.map((threadId) => threadsById[threadId]).filter(Boolean),
-    [threadOrder, threadsById],
+    () => {
+      const order = readOnly && replayState?.snapshot
+        ? replayState.snapshot.threads.map((thread) => thread.id)
+        : threadOrder;
+      return order.map((threadId) => effectiveThreadsById[threadId]).filter(Boolean);
+    },
+    [effectiveThreadsById, readOnly, replayState?.snapshot, threadOrder],
   );
 
   const participants = useMemo(
-    () => (snapshot?.participants ?? []).filter((participant) => participant.role_slot !== 'user'),
-    [snapshot?.participants],
+    () => (effectiveSnapshot?.participants ?? []).filter((participant) => participant.role_slot !== 'user'),
+    [effectiveSnapshot?.participants],
   );
 
   const targetableParticipants = useMemo(
@@ -205,9 +296,19 @@ export default function EndingChatModal({
       : participant.persona_snapshot_json?.agent_persona
         ? String(participant.persona_snapshot_json.agent_persona)
       : null;
-    const relatedMessages = participant.source_agent_id
-      ? fallbackMessages.filter((message) => message.agent_id === participant.source_agent_id)
+    const replayTurns = readOnly && replayState?.snapshot
+      ? replayState.snapshot.turns.filter((turn) => turn.participant_id === participant.id)
       : [];
+    const relatedMessages = replayTurns.length > 0
+      ? replayTurns.map((turn) => ({
+          round: turn.sequence,
+          message: turn.content,
+        }))
+      : (
+        participant.source_agent_id
+          ? fallbackMessages.filter((message) => message.agent_id === participant.source_agent_id)
+          : []
+      );
     const turnCount = relatedMessages.length;
     const lastRoundSpoken = relatedMessages.reduce((maxRound, message) => Math.max(maxRound, message.round ?? 0), 0);
     const keyMomentHits = relatedMessages.reduce((count, message) => (
@@ -230,22 +331,60 @@ export default function EndingChatModal({
   }
 
   useEffect(() => {
-    const preferredAgentId = selectedAgentIds[0] ?? null;
+    const currentStillValid = selectedAgentId
+      ? targetableParticipants.some((participant) => participant.source_agent_id === selectedAgentId)
+      : false;
+    if (currentStillValid) {
+      return;
+    }
+    const preferredAgentId = replayState?.selectedAgentIds?.[0] ?? selectedAgentIds[0] ?? null;
     if (preferredAgentId && targetableParticipants.some((participant) => participant.source_agent_id === preferredAgentId)) {
       setSelectedAgentId(preferredAgentId);
       return;
     }
-    if (!selectedAgentId && targetableParticipants.length > 0) {
+    if (targetableParticipants.length > 0) {
       setSelectedAgentId(targetableParticipants[0].source_agent_id ?? null);
+      return;
     }
-  }, [selectedAgentId, selectedAgentIds, targetableParticipants]);
+    if (selectedAgentId !== null) {
+      setSelectedAgentId(null);
+    }
+  }, [replayState?.selectedAgentIds, selectedAgentId, selectedAgentIds, targetableParticipants]);
 
   const participantsById = useMemo(
-    () => new Map((snapshot?.participants ?? []).map((participant) => [participant.id, participant])),
-    [snapshot?.participants],
+    () => new Map((effectiveSnapshot?.participants ?? []).map((participant) => [participant.id, participant])),
+    [effectiveSnapshot?.participants],
   );
 
   const currentTurns = useMemo(() => {
+    if (readOnly && replayState?.snapshot) {
+      const defaultRoomTurns = (effectiveSnapshot?.turns ?? []).filter((turn) => {
+        if (turn.thread_id && defaultThreadId) {
+          return turn.thread_id === defaultThreadId;
+        }
+        if (effectiveSnapshot?.memory_partition_id && turn.memory_partition_id) {
+          return turn.memory_partition_id === effectiveSnapshot.memory_partition_id;
+        }
+        return !turn.thread_id;
+      });
+      const replayTurns = activeThread?.turns.length
+        ? activeThread.turns
+        : activeThread?.mode === 'followup'
+          ? (effectiveSnapshot?.turns ?? []).filter((turn) => turn.thread_id === activeThread.id)
+          : defaultRoomTurns;
+      return replayTurns.map((turn) => {
+        const participant = participantsById.get(turn.participant_id);
+        return {
+          key: turn.id,
+          speaker: participant?.display_name
+            ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : t('ending_room.participant_unknown')),
+          phase: getEndingRoomPhaseLabel(turn.phase, t),
+          content: turn.content,
+          participantId: turn.participant_id,
+          roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
+        };
+      });
+    }
     if (readOnly) {
       return fallbackMessages.map((message, index) => ({
         key: `${message.branch}-${message.round}-${message.agent_id}-${index}`,
@@ -261,16 +400,16 @@ export default function EndingChatModal({
       if (turn.thread_id && defaultThreadId) {
         return turn.thread_id === defaultThreadId;
       }
-      if (snapshot?.memory_partition_id && turn.memory_partition_id) {
-        return turn.memory_partition_id === snapshot.memory_partition_id;
+      if (effectiveSnapshot?.memory_partition_id && turn.memory_partition_id) {
+        return turn.memory_partition_id === effectiveSnapshot.memory_partition_id;
       }
       return !turn.thread_id;
     });
-    const turns = activeThread?.mode === 'followup'
-      ? (activeThread.turns.length > 0
-        ? activeThread.turns
-        : (snapshot?.turns ?? []).filter((turn) => turn.thread_id === activeThread.id))
-      : defaultRoomTurns;
+    const turns = activeThread?.turns.length
+      ? activeThread.turns
+      : activeThread?.mode === 'followup'
+        ? (snapshot?.turns ?? []).filter((turn) => turn.thread_id === activeThread.id)
+        : defaultRoomTurns;
     return turns.map((turn) => {
       const participant = participantsById.get(turn.participant_id);
       return {
@@ -283,18 +422,48 @@ export default function EndingChatModal({
         roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
       };
     });
-  }, [activeThread, defaultThreadId, fallbackMessages, isZh, participantsById, readOnly, snapshot?.turns, t]);
+  }, [activeThread, defaultThreadId, effectiveSnapshot?.memory_partition_id, effectiveSnapshot?.turns, fallbackMessages, isZh, participantsById, readOnly, replayState?.snapshot, t]);
 
   const sortedDrafts = useMemo(
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
     [pendingDrafts],
   );
+  const visibleDrafts = readOnly ? [] : sortedDrafts;
+
+  const effectiveInteractionMode = readOnly
+    ? (activeThread?.mode === 'followup' ? activeThread.interaction_mode : 'archivist_route')
+    : interactionMode;
 
   useEffect(() => {
-    if (transcriptListRef.current) {
-      transcriptListRef.current.scrollTop = transcriptListRef.current.scrollHeight;
+    setReplayActiveThreadId(replayState?.activeThreadId ?? null);
+  }, [replayState?.activeThreadId, replayState?.snapshot?.id]);
+
+  useEffect(() => {
+    transcriptHydratedRef.current = false;
+    transcriptAutoStickRef.current = false;
+  }, [activeThread?.id, effectiveSnapshot?.id]);
+
+  useEffect(() => {
+    const transcriptList = transcriptListRef.current;
+    if (!transcriptList) return;
+    const visibleTurnCount = currentTurns.length + visibleDrafts.length;
+    if (visibleTurnCount === 0) {
+      transcriptHydratedRef.current = false;
+      transcriptAutoStickRef.current = false;
+      return;
     }
-  }, [currentTurns.length, sortedDrafts.length]);
+    if (!transcriptHydratedRef.current) {
+      transcriptHydratedRef.current = true;
+      transcriptList.scrollTop = 0;
+      return;
+    }
+    if (visibleDrafts.length > 0 || transcriptAutoStickRef.current) {
+      transcriptList.scrollTop = transcriptList.scrollHeight;
+      if (visibleDrafts.length === 0) {
+        transcriptAutoStickRef.current = false;
+      }
+    }
+  }, [activeThread?.id, currentTurns.length, effectiveSnapshot?.id, visibleDrafts.length]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -305,18 +474,23 @@ export default function EndingChatModal({
     onAutomationStateChange?.({
       kind: 'ending_room_modal',
       branch_id: branch.id,
-      room_id: snapshot?.id ?? null,
-      room_type: roomType,
+      room_id: effectiveSnapshot?.id ?? null,
+      room_type: effectiveSnapshot?.room_type ?? roomType,
       read_only: readOnly,
-      status,
-      has_result: Boolean(result),
+      read_only_source: readOnly
+        ? (replayState?.snapshot ? 'ending_room_replay' : 'scenario_replay')
+        : 'live',
+      status: readOnly ? 'done' : status,
+      has_result: Boolean(effectiveResult),
       turn_count: currentTurns.length,
-      pending_draft_count: sortedDrafts.length,
-      active_phase: snapshot?.current_phase ?? null,
+      pending_draft_count: visibleDrafts.length,
+      active_phase: effectiveSnapshot?.current_phase ?? null,
       active_thread_id: activeThread?.id ?? null,
       thread_count: threads.length,
-      interaction_mode: interactionMode,
-      can_send: Boolean(!readOnly && result && snapshot?.id),
+      interaction_mode: effectiveInteractionMode,
+      can_send: Boolean(!readOnly && effectiveResult && effectiveSnapshot?.id),
+      can_share_replay: Boolean(effectiveSnapshot?.id && effectiveResult),
+      can_import_replay: Boolean(readOnly && replayState?.snapshot),
       sending,
     });
 
@@ -327,16 +501,18 @@ export default function EndingChatModal({
     activeThread?.id,
     branch,
     currentTurns.length,
+    effectiveInteractionMode,
     interactionMode,
     onAutomationStateChange,
     open,
     readOnly,
-    result,
+    effectiveResult,
+    replayState?.snapshot,
     roomType,
     sending,
-    snapshot?.current_phase,
-    snapshot?.id,
-    sortedDrafts.length,
+    effectiveSnapshot?.current_phase,
+    effectiveSnapshot?.id,
+    visibleDrafts.length,
     status,
     threads.length,
   ]);
@@ -349,7 +525,7 @@ export default function EndingChatModal({
   const collapsedStory = storyText.length > 280 && !storyExpanded
     ? `${storyText.slice(0, 280)}…`
     : storyText;
-  const composerEnabled = !readOnly && Boolean(result) && Boolean(snapshot?.id);
+  const composerEnabled = !readOnly && Boolean(effectiveResult) && Boolean(effectiveSnapshot?.id);
   const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
     ? [selectedAgentId]
     : interactionMode === 'all_present'
@@ -372,6 +548,19 @@ export default function EndingChatModal({
   const transcriptSubtitle = activeThread
     ? scopeText(activeThread, scopeNotice, isZh)
     : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
+  const threadDisplayLabels = useMemo(() => {
+    const seen = new Map<string, number>();
+    const labels: Record<string, string> = {};
+    for (const thread of threads) {
+      const base = threadLabel(thread, isZh);
+      const count = (seen.get(base) ?? 0) + 1;
+      seen.set(base, count);
+      labels[thread.id] = count === 1
+        ? base
+        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
+    }
+    return labels;
+  }, [isZh, threads]);
 
   const handleCreateThread = async () => {
     if (!snapshot?.id || readOnly) return;
@@ -393,6 +582,7 @@ export default function EndingChatModal({
   const handleSend = async () => {
     const content = composerDraft.trim();
     if (!content) return;
+    transcriptAutoStickRef.current = true;
     if (interactionMode !== 'hotseat' && defaultThreadId && activeThread?.mode === 'followup') {
       setActiveThread(defaultThreadId);
     }
@@ -435,79 +625,48 @@ export default function EndingChatModal({
             <h2 id="ending-chat-title" className="ending-chat-title">{branch.title}</h2>
             <div className="ending-chat-meta-row">
               <span className="ending-chat-badge ending-chat-badge--primary">
-                {getEndingRoomModeLabel(roomType, t)}
+                {getEndingRoomModeLabel(effectiveSnapshot?.room_type ?? roomType, t)}
               </span>
               <span className="ending-chat-badge">
-                {getEndingRoomStatusLabel(readOnly ? 'done' : (snapshot?.status ?? (status === 'loading' ? 'draft' : 'error')), t)}
+                {getEndingRoomStatusLabel(readOnly ? 'done' : (effectiveSnapshot?.status ?? (status === 'loading' ? 'draft' : 'error')), t)}
               </span>
               <span className="ending-chat-badge">{t('ending_room.current_branch_badge')}</span>
               <span className="ending-chat-probability">{((branch.probability ?? 0) * 100).toFixed(1)}%</span>
             </div>
           </div>
-          <button type="button" className="ending-chat-close" onClick={onClose} aria-label={t('common.close')}>
-            ×
-          </button>
+          <div className="ending-chat-header__actions">
+            {headerActions}
+            <button type="button" className="ending-chat-close" onClick={onClose} aria-label={t('common.close')}>
+              ×
+            </button>
+          </div>
         </header>
 
-        <div className="ending-chat-tabs" role="tablist" aria-label={t('ending_room.title')}>
-          <button
-            type="button"
-            className={`ending-chat-tab ${roomType === 'ending_chamber' ? 'is-active' : ''}`}
-            onClick={() => onModeChange('ending_chamber')}
-          >
-            {t('ending_room.mode_debrief')}
-          </button>
-          <button
-            type="button"
-            className={`ending-chat-tab ${roomType === 'one_move_only' ? 'is-active' : ''}`}
-            onClick={() => onModeChange('one_move_only')}
-          >
-            {t('ending_room.mode_one_move_only')}
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="ending-chat-tabs" role="tablist" aria-label={t('ending_room.title')}>
+            <button
+              type="button"
+              className={`ending-chat-tab ${roomType === 'ending_chamber' ? 'is-active' : ''}`}
+              onClick={() => onModeChange('ending_chamber')}
+            >
+              {t('ending_room.mode_debrief')}
+            </button>
+            <button
+              type="button"
+              className={`ending-chat-tab ${roomType === 'one_move_only' ? 'is-active' : ''}`}
+              onClick={() => onModeChange('one_move_only')}
+            >
+              {t('ending_room.mode_one_move_only')}
+            </button>
+          </div>
+        )}
 
         <div className="ending-chat-body">
           <aside className="ending-chat-sidebar">
             <section className="ending-chat-panel">
               <div className="ending-chat-panel__heading">
-                <h3>{t('result.story')}</h3>
-                {storyText.length > 280 && (
-                  <button
-                    type="button"
-                    className="ending-chat-inline-button"
-                    onClick={() => setStoryExpanded((current) => !current)}
-                  >
-                    {storyExpanded ? (isZh ? '收起' : 'Collapse') : (isZh ? '展开' : 'Expand')}
-                  </button>
-                )}
-              </div>
-              <p>{collapsedStory}</p>
-            </section>
-
-            {branch.insight && (
-              <section className="ending-chat-panel">
-                <h3>{t('result.insight')}</h3>
-                <blockquote>{branch.insight}</blockquote>
-              </section>
-            )}
-
-            {result && (
-              <section className="ending-chat-panel ending-chat-panel--summary">
-                <h3>{t('roundtable.phase_verdict')}</h3>
-                <p>{result.summary}</p>
-                {result.next_move && result.next_move !== result.summary && (
-                  <>
-                    <h4>{t('ending_room.mode_one_move_only')}</h4>
-                    <p>{result.next_move}</p>
-                  </>
-                )}
-              </section>
-            )}
-
-            <section className="ending-chat-panel">
-              <div className="ending-chat-panel__heading">
                 <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
-                {!readOnly && snapshot?.id && (
+                {!readOnly && effectiveSnapshot?.id && (
                   <div className="ending-chat-panel__actions">
                     <button
                       type="button"
@@ -570,6 +729,42 @@ export default function EndingChatModal({
               </div>
             </section>
 
+            {effectiveResult && (
+              <section className="ending-chat-panel ending-chat-panel--summary">
+                <h3>{t('roundtable.phase_verdict')}</h3>
+                <p>{effectiveResult.summary}</p>
+                {effectiveResult.next_move && effectiveResult.next_move !== effectiveResult.summary && (
+                  <>
+                    <h4>{t('ending_room.mode_one_move_only')}</h4>
+                    <p>{effectiveResult.next_move}</p>
+                  </>
+                )}
+              </section>
+            )}
+
+            <section className="ending-chat-panel">
+              <div className="ending-chat-panel__heading">
+                <h3>{t('result.story')}</h3>
+                {storyText.length > 280 && (
+                  <button
+                    type="button"
+                    className="ending-chat-inline-button"
+                    onClick={() => setStoryExpanded((current) => !current)}
+                  >
+                    {storyExpanded ? (isZh ? '收起' : 'Collapse') : (isZh ? '展开' : 'Expand')}
+                  </button>
+                )}
+              </div>
+              <p>{collapsedStory}</p>
+            </section>
+
+            {branch.insight && (
+              <section className="ending-chat-panel">
+                <h3>{t('result.insight')}</h3>
+                <blockquote>{branch.insight}</blockquote>
+              </section>
+            )}
+
             {readOnly && (
               <section className="ending-chat-panel ending-chat-panel--notice">
                 <p>{t('ending_room.replay_readonly')}</p>
@@ -590,7 +785,7 @@ export default function EndingChatModal({
                 <p>{transcriptSubtitle}</p>
               </div>
               <span className="ending-chat-note">
-                {activeThread ? threadLabel(activeThread, isZh) : t('ending_room.loading')}
+                {activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading')}
               </span>
             </div>
 
@@ -602,26 +797,30 @@ export default function EndingChatModal({
                     type="button"
                     className={`ending-chat-thread-chip ${(activeThread?.id ?? defaultThreadId) === thread.id ? 'is-active' : ''} ${thread.mode === 'room' ? 'is-room-thread' : ''} ${thread.interaction_mode === 'hotseat' ? 'is-hotseat-thread' : ''}`}
                     onClick={() => {
-                      setActiveThread(thread.id);
-                      setInteractionMode(thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route');
+                      if (readOnly) {
+                        setReplayActiveThreadId(thread.id);
+                      } else {
+                        setActiveThread(thread.id);
+                        setInteractionMode(thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route');
+                      }
                       setSelectedAgentId(thread.addressed_agent_ids_json?.[0] ?? null);
-                      if (thread.mode === 'followup') {
+                      if (!readOnly && thread.mode === 'followup') {
                         void loadThread(thread.id);
                       }
                     }}
                   >
                     {thread.mode === 'room' && <span className="ending-chat-thread-chip__icon ending-chat-thread-chip__icon--archivist" aria-hidden="true" />}
-                    {threadLabel(thread, isZh)}
+                    {threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh)}
                   </button>
                 ))}
               </div>
             )}
 
             <div ref={transcriptListRef} className="ending-chat-transcript-list">
-              {!readOnly && currentTurns.length === 0 && sortedDrafts.length === 0 && status === 'loading' && (
+              {!readOnly && currentTurns.length === 0 && visibleDrafts.length === 0 && status === 'loading' && (
                 <div className="ending-chat-empty-state">{t('ending_room.loading')}</div>
               )}
-              {!readOnly && currentTurns.length === 0 && sortedDrafts.length === 0 && status !== 'loading' && (
+              {!readOnly && currentTurns.length === 0 && visibleDrafts.length === 0 && status !== 'loading' && (
                 <div className="ending-chat-empty-state">
                   {readOnly ? t('ending_room.replay_readonly') : t('ending_room.empty')}
                 </div>
@@ -639,7 +838,7 @@ export default function EndingChatModal({
                   <p>{message.content}</p>
                 </article>
               ))}
-              {(activeThread?.mode !== 'followup' ? sortedDrafts : []).map((draft) => (
+              {(activeThread?.mode !== 'followup' ? visibleDrafts : []).map((draft) => (
                 <article key={draft.turnId} className="ending-chat-bubble ending-chat-bubble--draft">
                   <header>
                     <strong>{participantsById.get(draft.participantId)?.display_name ?? t('ending_room.participant_unknown')}</strong>
@@ -719,7 +918,7 @@ export default function EndingChatModal({
                   placeholder={isZh ? '继续追问这个结局为什么成立，或追问某位当前世界线参与者。' : 'Keep probing why this ending held, or question one participant from the current worldline.'}
                   onChange={(event) => setComposerDraft(event.target.value)}
                   disabled={!composerEnabled || sending}
-                  rows={3}
+                  rows={2}
                 />
                 <button
                   type="button"

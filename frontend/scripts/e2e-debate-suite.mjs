@@ -584,6 +584,27 @@ async function openBet(page, mode, locale) {
 }
 
 async function openResult(page, mode, locale) {
+  const waitForResultNavigation = async (timeout = 5000) => {
+    try {
+      await page.waitForURL(/\/debate\/[^/]+\/result(?:[?#].*)?$/, { timeout });
+      return true;
+    } catch {
+      // Fall through to automation state polling below.
+    }
+
+    try {
+      await waitForAutomation(
+        page,
+        (payload) => payload?.page?.kind === "debate_result",
+        timeout,
+        "debate result route",
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   if (mode === "mobile") {
     const railClicked = await page.evaluate(() => {
       const button = document.querySelector(".debate-mobile-rail .btn");
@@ -592,9 +613,7 @@ async function openResult(page, mode, locale) {
       return true;
     });
     if (railClicked) {
-      await page.waitForTimeout(250);
-      const payload = await readAutomation(page);
-      if (payload?.page?.kind === "debate_result") {
+      if (await waitForResultNavigation()) {
         return;
       }
     }
@@ -609,6 +628,9 @@ async function openResult(page, mode, locale) {
     if (!heroClicked) {
       throw new Error("Failed to click mobile debate result button");
     }
+    if (await waitForResultNavigation()) {
+      return;
+    }
     return;
   }
 
@@ -622,6 +644,7 @@ async function openResult(page, mode, locale) {
   if (!clicked) {
     throw new Error("Failed to click desktop debate result button");
   }
+  await waitForResultNavigation();
 }
 
 async function disableAutoReveal(page) {

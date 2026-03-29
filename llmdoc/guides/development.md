@@ -71,6 +71,21 @@ cp .env.example backend/.env
 
 ## 本 session 新增定向验证
 
+- `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+  - `58 passed in 4.92s`
+- `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+  - `38 passed`
+- `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260330-debate-full-rerun --headless`
+  - `通过`
+  - 本轮同时修掉了移动端 Debate 结果页 CTA 的 signoff 等待逻辑，`debate_full` 现已稳定穿链
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18930 --output-dir output/e2e/20260330-corners-rerun-stable --headless`
+  - `通过`
+  - 当前 `share_context / share_retry` 也已在稳定 backend 环境下通过
+- `cd frontend && node scripts/release-signoff.mjs --headless --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-root output/e2e/20260330-full-release-signoff-stable`
+  - `通过`
+  - 当前稳定工件：`frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`
+  - 其中 `ending_room_followup / roundtable_full / debate_full` 均为 `passed`
+
 - `cd backend && source .venv/bin/activate && python -m pytest tests/test_memory.py tests/test_narrator.py tests/test_blackboard.py tests/test_simulator.py -q`
   - `182 passed`
 - `cd backend && source .venv/bin/activate && python -m pytest tests/test_lang_detect.py -q`

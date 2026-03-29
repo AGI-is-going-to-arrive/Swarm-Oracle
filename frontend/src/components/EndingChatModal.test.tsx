@@ -1,10 +1,11 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import EndingChatModal from './EndingChatModal';
 
 const onAutomationStateChangeMock = vi.fn();
+const useEndingRoomWSMock = vi.fn();
 
 const storeState = {
   snapshot: null as any,
@@ -81,7 +82,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../hooks/useEndingRoomWS', () => ({
-  useEndingRoomWS: vi.fn(),
+  useEndingRoomWS: (...args: unknown[]) => useEndingRoomWSMock(...args),
 }));
 
 vi.mock('../game/managers/VizSynthesizer', () => ({
@@ -118,6 +119,7 @@ describe('EndingChatModal', () => {
     storeState.setInteractionMode.mockReset();
     storeState.setComposerDraft.mockReset();
     storeState.reset.mockReset();
+    useEndingRoomWSMock.mockReset();
   });
 
   const branch = {
@@ -288,12 +290,179 @@ describe('EndingChatModal', () => {
     expect(screen.getAllByText('Follow-up Thread').length).toBeGreaterThan(0);
     expect(screen.getByText('Current participants')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(storeState.openRoom).toHaveBeenCalledTimes(1);
     expect(storeState.openRoom).toHaveBeenCalledWith('scenario-1', {
       roomType: 'one_move_only',
       anchorBranchId: 'branch-1',
       selectedBranchIds: ['branch-1'],
-      language: 'en',
     });
+  });
+
+  it('cleans up the delayed room bootstrap timer on unmount', async () => {
+    vi.useFakeTimers();
+
+    const rendered = render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    rendered.unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('keeps the ending-room websocket alive and refetches once when the room is done but the result is still missing', () => {
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      result_ready: true,
+      participants: [],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+    };
+    storeState.threadsById = {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Ending Chamber',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    };
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.result = null;
+    storeState.status = 'done';
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    expect(useEndingRoomWSMock).toHaveBeenCalledWith('room-1', true);
+    expect(storeState.loadRoom).toHaveBeenCalledWith('room-1');
+  });
+
+  it('keeps the ending-room websocket active after the result is ready so follow-up broadcasts still sync', () => {
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      result_ready: true,
+      participants: [],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+    };
+    storeState.threadsById = {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Ending Chamber',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    };
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.result = {
+      summary: 'Final summary.',
+    };
+    storeState.status = 'done';
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    expect(useEndingRoomWSMock).toHaveBeenCalledWith('room-1', true);
   });
 
   it('sends follow-up turns and supports creating a thread', async () => {
@@ -397,6 +566,94 @@ describe('EndingChatModal', () => {
     await user.click(screen.getByRole('button', { name: 'One Move Only' }));
 
     expect(onModeChange).toHaveBeenCalledWith('one_move_only');
+  });
+
+  it('keeps a manually selected hotseat target instead of snapping back to the preferred first agent', async () => {
+    const user = userEvent.setup();
+
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:00Z',
+      result_ready: true,
+      participants: [
+        {
+          id: 'p-1',
+          room_id: 'room-1',
+          role_slot: 'agent',
+          source_agent_id: 'agent-1',
+          display_name: 'Archivist',
+          persona_snapshot_json: {
+            agent_role: 'Judge',
+          },
+        },
+        {
+          id: 'p-2',
+          room_id: 'room-1',
+          role_slot: 'agent',
+          source_agent_id: 'agent-2',
+          display_name: 'Strategist',
+          persona_snapshot_json: {
+            agent_role: 'Planner',
+          },
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+    };
+    storeState.threadsById = {
+      'thread-room': {
+        ...storeState.snapshot.threads[0],
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    };
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.interactionMode = 'hotseat';
+    storeState.result = { summary: 'Final summary.' };
+    storeState.status = 'done';
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        selectedAgentIds={['agent-1']}
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const strategistPill = screen.getByRole('button', { name: 'Strategist' });
+    await user.click(strategistPill);
+
+    expect(strategistPill.className).toContain('is-active');
   });
 
   it('renders user follow-up turns as You when the user participant is not in the visible participant list', () => {

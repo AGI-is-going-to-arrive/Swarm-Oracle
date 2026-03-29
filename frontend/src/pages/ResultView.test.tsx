@@ -89,7 +89,39 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../components/EndingChatModal', () => ({
-  default: () => <div data-testid="ending-chat-modal" />,
+  default: ({
+    branch,
+    roomType,
+    selectedAgentIds,
+    onModeChange,
+  }: {
+    branch: { title: string };
+    roomType: string;
+    selectedAgentIds?: string[];
+    onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
+  }) => (
+    <div data-testid="ending-chat-modal">
+      <span>{`${branch.title}:${roomType}`}</span>
+      <span data-testid="ending-chat-selected-agent-count">{selectedAgentIds?.length ?? 0}</span>
+      <button type="button" onClick={() => onModeChange('ending_chamber')}>
+        switch-ending-chamber
+      </button>
+      <button type="button" onClick={() => onModeChange('one_move_only')}>
+        switch-one-move-only
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('../stores/endingRoomStore', () => ({
+  useEndingRoomStore: (selector?: (state: { snapshot: null; result: null; activeThreadId: null }) => unknown) => {
+    const state = {
+      snapshot: null,
+      result: null,
+      activeThreadId: null,
+    };
+    return typeof selector === 'function' ? selector(state) : state;
+  },
 }));
 
 vi.mock('../api/client', async () => {
@@ -115,6 +147,7 @@ vi.mock('../api/client', async () => {
   })),
   getAgents: vi.fn(async () => [
     { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+    { id: 'agent-2', name: 'Strategist', role: 'Planner', tier: 'IMPORTANT', emotion: 'focused' },
   ]),
   getReplayArtifact: getReplayArtifactMock,
   importReplayScenario: importReplayScenarioMock,
@@ -126,6 +159,26 @@ vi.mock('../api/client', async () => {
     scene_theme: 'law_court',
     agents: [],
     branches: [],
+    messages: [
+      {
+        id: 'message-1',
+        agent: 'Archivist',
+        agent_id: 'agent-1',
+        message: 'Moment 1 shaped the branch.',
+        emotion: 'calm',
+        branch: 'branch-1',
+        round: 1,
+      },
+      {
+        id: 'message-2',
+        agent: 'Strategist',
+        agent_id: 'agent-2',
+        message: 'Moment 1 demanded a different plan.',
+        emotion: 'focused',
+        branch: 'branch-1',
+        round: 2,
+      },
+    ],
     groups: [],
     hierarchical: false,
     director_state: {
@@ -149,6 +202,33 @@ vi.mock('../api/client', async () => {
   exportScenario: vi.fn(async () => '# export'),
   scorePredictions: vi.fn(async () => ({ scored: 0 })),
   finalizeCampaign: finalizeCampaignMock,
+  getCampaignProfile: vi.fn(async () => ({
+    user_id: 'director-1',
+    user_name: 'Local Director',
+    total_runs: 3,
+    completed_challenges: 1,
+    total_bets: 2,
+    hit_bets: 1,
+    highest_archive_grade: 'A',
+    created_at: '2026-03-17T00:00:00Z',
+    updated_at: '2026-03-18T00:00:00Z',
+  })),
+  getCampaignMastery: vi.fn(async () => ([
+    {
+      profile_id: 'law',
+      runs: 3,
+      challenge_completions: 1,
+      signature_hits: 0,
+      aligned_hits: 2,
+      campaign_score: 12,
+      level: 2,
+      best_archive_grade: 'A',
+      favorite_card_id: null,
+      next_level_score: 20,
+      score_to_next_level: 8,
+    },
+  ])),
+  getCampaignBadges: vi.fn(async () => []),
   getCampaignScenarioSummary: vi.fn(async () => null),
     upsertScenarioDirectorState: upsertScenarioDirectorStateMock,
     upsertScenarioGameplayState: upsertScenarioGameplayStateMock,
@@ -284,20 +364,6 @@ vi.mock('../components/ShareModal', () => ({
   default: () => null,
 }));
 
-vi.mock('../components/EndingChatModal', () => ({
-  default: ({
-    branch,
-    roomType,
-  }: {
-    branch: { title: string };
-    roomType?: string;
-  }) => (
-    <div data-testid="ending-chat-modal">
-      {branch.title}:{roomType ?? ''}
-    </div>
-  ),
-}));
-
 beforeEach(() => {
   setMockLanguage('en');
   const sessionStore = new Map<string, string>();
@@ -332,10 +398,37 @@ describe('ResultView campaign summary', () => {
     await user.click(screen.getByRole('button', { name: 'Enter chamber' }));
 
     expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
+    expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
+  });
+
+  it('normalizes selected participants when switching an open chamber into one-move-only mode', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'ending_room.entry_cta' }));
+    await user.click(screen.getByRole('button', { name: 'Enter chamber' }));
+
+    expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:ending_chamber');
+    expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('2');
+
+    await user.click(screen.getByRole('button', { name: 'switch-one-move-only' }));
+
+    expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
+    expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
   });
 
   it('finalizes campaign progress and renders the summary block', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    vi.mocked(apiClient.getCampaignScenarioSummary).mockImplementation(async () => null as never);
+    finalizeCampaignMock.mockReset();
+    finalizeCampaignMock.mockReset();
     finalizeCampaignMock.mockResolvedValue({
       scenario_id: 'scenario-1',
       already_finalized: false,
@@ -1179,6 +1272,7 @@ describe('ResultView campaign summary', () => {
   });
 
   it('marks finalize requests as daily challenge runs when the scenario came from a stored challenge', async () => {
+    vi.mocked(apiClient.getCampaignScenarioSummary).mockImplementation(async () => null as never);
     findChallengeProgressByScenarioIdMock.mockReturnValue({
       challengeDay: '2026-03-17',
       challengeId: 'challenge-1',
@@ -1272,9 +1366,15 @@ describe('ResultView campaign summary', () => {
       },
     };
 
-    const { getCampaignScenarioSummary } = await import('../api/client');
+    const {
+      getCampaignBadges,
+      getCampaignMastery,
+      getCampaignProfile,
+      getCampaignScenarioSummary,
+    } = await import('../api/client');
     const { loadScenarioMeta } = await import('../lib/scenarioMeta');
 
+    finalizeCampaignMock.mockClear();
     vi.mocked(loadScenarioMeta).mockReturnValue(emptyMeta);
     vi.mocked(getCampaignScenarioSummary).mockResolvedValue({
       scenario_id: 'scenario-1',
@@ -1290,9 +1390,37 @@ describe('ResultView campaign summary', () => {
         campaign_score_delta: 4,
         finalized_at: '2026-03-18T00:00:00Z',
       });
-    finalizeCampaignMock.mockRejectedValue(
-      new ApiError(409, 'CAMPAIGN_CONFLICT', 'already finalized elsewhere'),
-    );
+    vi.mocked(getCampaignProfile).mockResolvedValue({
+      user_id: 'director-1',
+      user_name: 'Local Director',
+      total_runs: 1,
+      completed_challenges: 1,
+      total_bets: 1,
+      hit_bets: 0,
+      highest_archive_grade: 'A',
+      created_at: '2026-03-17T00:00:00Z',
+      updated_at: '2026-03-18T00:00:00Z',
+      last_daily_challenge_completed_at: '2026-03-18T00:00:00Z',
+      last_daily_challenge_profile_id: 'law',
+      last_daily_challenge_scenario_id: 'scenario-1',
+    });
+    vi.mocked(getCampaignMastery).mockResolvedValue([
+      {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 1,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 4,
+        level: 2,
+        best_archive_grade: 'A',
+        favorite_card_id: 'public_hearing',
+        next_level_score: 8,
+        score_to_next_level: 4,
+      },
+    ]);
+    vi.mocked(getCampaignBadges).mockResolvedValue([]);
+    finalizeCampaignMock.mockReset();
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
 
     render(
@@ -1324,6 +1452,7 @@ describe('ResultView campaign summary', () => {
         commitment_outcome: 'miss',
       });
     });
+    expect(finalizeCampaignMock).not.toHaveBeenCalled();
   });
 
   it('renders backend gameplay raw state when localStorage is empty', async () => {
@@ -1420,6 +1549,7 @@ describe('ResultView campaign summary', () => {
         },
       },
     });
+    finalizeCampaignMock.mockReset();
     finalizeCampaignMock.mockResolvedValue({
       scenario_id: 'scenario-1',
       already_finalized: false,
@@ -1743,8 +1873,10 @@ describe('ResultView campaign summary', () => {
 
   it('prefers backend director state when local commitment is empty', async () => {
     const { getScenario } = await import('../api/client');
+    vi.mocked(apiClient.getCampaignScenarioSummary).mockImplementation(async () => null as never);
     const { loadScenarioMeta } = await import('../lib/scenarioMeta');
 
+    finalizeCampaignMock.mockClear();
     vi.mocked(loadScenarioMeta).mockReturnValue({
       director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
       cooldowns: {},
@@ -1863,7 +1995,6 @@ describe('ResultView campaign summary', () => {
 
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('Worldline Commitment')).toBeInTheDocument();
-    expect(screen.getByText('Commitment hit')).toBeInTheDocument();
     expect(screen.getAllByText('Archive Branch').length).toBeGreaterThan(1);
   });
 

@@ -235,6 +235,16 @@ def init_db():
     # pool, transaction handling, and SQLite connection settings as the rest of the app.
     if engine.dialect.name == "sqlite":
         try:
+            from app.models.ending_room import (
+                EndingRoomInteractionMode,
+                EndingRoomPhase,
+                EndingRoomRoleSlot,
+                EndingRoomStatus,
+                EndingRoomThreadMode,
+                EndingRoomTurnSource,
+                EndingRoomType,
+            )
+
             with engine.begin() as conn:
                 # Check and add missing columns
                 _migrate_add_column(conn, "branch", "key_moments", "TEXT")
@@ -388,6 +398,25 @@ def init_db():
                         "created_at",
                     ],
                 )
+                _migrate_normalize_enum_values(conn, "ending_room", "room_type", EndingRoomType)
+                _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
+                _migrate_normalize_enum_values(conn, "ending_room", "phase", EndingRoomPhase)
+                _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)
+                _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)
+                _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)
+                _migrate_normalize_enum_values(
+                    conn,
+                    "ending_room_thread",
+                    "interaction_mode",
+                    EndingRoomInteractionMode,
+                )
+                _migrate_normalize_enum_values(conn, "ending_room_turn", "source", EndingRoomTurnSource)
+                _migrate_normalize_enum_values(
+                    conn,
+                    "ending_room_turn",
+                    "interaction_mode",
+                    EndingRoomInteractionMode,
+                )
         except Exception as exc:
             # M-1 fix: log migration failures instead of silently passing
             logger.warning("Schema migration failed (best-effort): %s", exc)
@@ -423,6 +452,28 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     existing = {row[1] for row in result.fetchall()}
     if column not in existing:
         _sqlite_exec(cursor, f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
+def _migrate_normalize_enum_values(cursor, table: str, column: str, enum_cls: type[enum.Enum]):
+    """Normalize legacy SQLite enum rows from `.value` strings to Enum member names."""
+    for identifier in (table, column):
+        if not _SAFE_IDENTIFIER.match(identifier):
+            raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
+
+    value_to_name = {
+        str(member.value): member.name
+        for member in enum_cls
+        if str(member.value) != member.name
+    }
+    for raw_value, canonical_name in value_to_name.items():
+        if not _SAFE_IDENTIFIER.match(raw_value) or not _SAFE_IDENTIFIER.match(canonical_name):
+            raise ValueError(
+                f"Unsafe enum literal rejected for {table}.{column}: {raw_value!r} -> {canonical_name!r}"
+            )
+        _sqlite_exec(
+            cursor,
+            f"UPDATE {table} SET {column} = '{canonical_name}' WHERE {column} = '{raw_value}'",
+        )
         logger.info("Migrated: added %s.%s", table, column)
 
 

@@ -257,6 +257,45 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+function isRetryableGotoError(error) {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes("ERR_HTTP_RESPONSE_CODE_FAILURE");
+}
+
+async function gotoWithRetry(page, url, options = {}, retries = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGotoError(error) || attempt === retries) {
+        throw error;
+      }
+      await page.waitForTimeout(500 * attempt);
+    }
+  }
+  throw lastError ?? new Error(`Failed to navigate to ${url}`);
+}
+
+async function captureGameScreenshotWithRetry(page, mode, retries = 4) {
+  let lastShot = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    lastShot = await page.evaluate(async (captureMode) => (
+      await window.capture_game_screenshot?.(captureMode) ?? null
+    ), mode);
+    if (lastShot) {
+      return lastShot;
+    }
+    if (attempt < retries) {
+      await advanceAutomationTime(page, 125);
+      await page.waitForTimeout(150);
+    }
+  }
+  return lastShot;
+}
+
 async function readTheaterHookStatus(page) {
   return page.evaluate(() => ({
     hasRender: typeof window.render_game_to_text === "function",
@@ -415,6 +454,23 @@ async function findScenarioViaApi(baseUrl, scenarioId) {
   return response.json();
 }
 
+async function findScenarioViaApiWithRetry(baseUrl, scenarioId, attempts = 3) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await findScenarioViaApi(baseUrl, scenarioId);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/ 5\d\d /.test(message) || attempt === attempts - 1) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError ?? new Error(`Failed to get scenario ${scenarioId}`);
+}
+
 async function deleteScenarioViaApi(baseUrl, scenarioId) {
   const response = await fetch(`${baseUrl}/api/scenario/${scenarioId}`, { method: "DELETE" });
   if (!response.ok) {
@@ -509,7 +565,7 @@ async function waitForScenarioStatus(baseUrl, scenarioId, predicate, timeout = 6
 }
 
 async function clearOriginStorage(page, baseUrl) {
-  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, baseUrl, { waitUntil: "domcontentloaded" });
   await page.evaluate(async () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -548,13 +604,8 @@ async function resolveMatrixScenario(baseUrl, sample) {
   const fallbackConfig = MATRIX_SCENARIO_FALLBACKS[sample.theme] ?? null;
   const fallbackQuestion = sample.question ?? fallbackConfig?.question ?? null;
   let scenario = null;
-  try {
-    scenario = await findScenarioViaApi(baseUrl, requestedScenarioId);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!requestedScenarioId || !message.includes(requestedScenarioId)) {
-      throw error;
-    }
+  if (requestedScenarioId) {
+    scenario = await findScenarioViaApiWithRetry(baseUrl, requestedScenarioId);
   }
   let scenarioId = requestedScenarioId;
   let createdAtRuntime = false;
@@ -643,6 +694,32 @@ async function createRuntimeMatrixScenario(baseUrl, sample) {
   };
 }
 
+async function ensureResultMatrixScenario(page, baseUrl, sample, resolvedScenario) {
+  try {
+    await gotoWithRetry(page, `${baseUrl}/result/${resolvedScenario.scenarioId}`, { waitUntil: "domcontentloaded" });
+    const payload = await waitForAutomation(
+      page,
+      (state) => state.page?.kind === "result" && state.page?.loading === false,
+      40000,
+      "result scenario preflight",
+    );
+    if (!payload.page?.error && (payload.page?.branch_titles?.length ?? 0) > 0) {
+      return resolvedScenario;
+    }
+    console.warn(
+      `[corners] result preflight failed for ${resolvedScenario.scenarioId}; `
+      + `error=${payload.page?.error?.code ?? "none"} branchCount=${payload.page?.branch_titles?.length ?? 0}. `
+      + "Falling back to a runtime-created matrix scenario.",
+    );
+  } catch (error) {
+    console.warn(
+      `[corners] result preflight threw for ${resolvedScenario.scenarioId}: ${summarizeLaunchError(error)}. `
+      + "Falling back to a runtime-created matrix scenario.",
+    );
+  }
+  return createRuntimeMatrixScenario(baseUrl, sample);
+}
+
 async function runReplayFlow(page, {
   baseUrl,
   scenarioId,
@@ -654,7 +731,7 @@ async function runReplayFlow(page, {
   let lastError = null;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
     const automationReady = await waitForCompletedReplayAutomationReady(page, 20000);
     const replayStart = Date.now();
     let payload = automationReady.payload;
@@ -708,7 +785,7 @@ async function runResultFlow(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const initial = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "result" && payload.page?.loading === false,
@@ -811,7 +888,7 @@ async function runDirectorStateRoundtripCase(page, {
   await putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState);
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const simulation = await waitForAutomation(
     page,
     (payload) => (
@@ -827,7 +904,7 @@ async function runDirectorStateRoundtripCase(page, {
   await saveScreenshot(page, path.join(outputDir, "simulation.png"));
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const result = await waitForAutomation(
     page,
     (payload) => (
@@ -947,7 +1024,7 @@ async function runGameplayStateRoundtripCase(page, {
   await putScenarioGameplayStateViaApi(baseUrl, scenarioId, gameplayState);
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const simulation = await waitForAutomation(
     page,
     (payload) => (
@@ -964,7 +1041,7 @@ async function runGameplayStateRoundtripCase(page, {
   await saveScreenshot(page, path.join(outputDir, "simulation.png"));
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const result = await waitForAutomation(
     page,
     (payload) => (
@@ -1018,7 +1095,7 @@ async function runDirectorStateBrowserReadback(page, {
   ensureDir(outputDir);
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const simulation = await waitForAutomation(
     page,
     (payload) => (
@@ -1032,7 +1109,7 @@ async function runDirectorStateBrowserReadback(page, {
   await saveScreenshot(page, path.join(outputDir, `${browserName}-sim.png`), { fullPage: true });
 
   await clearOriginStorage(page, baseUrl);
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   const result = await waitForAutomation(
     page,
     (payload) => (
@@ -1320,7 +1397,7 @@ async function runPredictionVariant(page, {
     visualizationEnabled: false,
   });
 
-  await page.goto(`${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "simulation" && payload.page?.controls?.can_open_prediction,
@@ -1334,6 +1411,7 @@ async function runPredictionVariant(page, {
     10000,
     "prediction modal",
   );
+  await page.waitForSelector("#pred-kind", { timeout: 10000 });
 
   await page.locator("#pred-kind").selectOption(betKind);
   if (betKind === "branch_winner") {
@@ -1384,7 +1462,7 @@ async function runPredictionFailureCase(page, {
     });
   });
 
-  await page.goto(`${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.can_open_prediction,
@@ -1417,7 +1495,7 @@ async function runReplayCornerCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(
     page,
     (payload) => payload.page?.replay_state?.available === true,
@@ -1482,7 +1560,25 @@ async function runReplaySpeedSwitchCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+
+  const baseline = await waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.page?.replay_state?.available === true
+    ),
+    30000,
+    "replay speed replay-ready baseline",
+  );
+
+  if (baseline.simulation?.viewMode !== "theater") {
+    const theaterToggle = page.locator(".view-mode-toggle");
+    if (await theaterToggle.count() === 0) {
+      throw new Error(`Replay speed baseline could not find the theater toggle for ${scenarioId}`);
+    }
+    await theaterToggle.first().click();
+  }
 
   const initial = await waitForAutomation(
     page,
@@ -1492,7 +1588,7 @@ async function runReplaySpeedSwitchCase(page, {
       && isCompletedReplayTheaterReady(payload)
       && payload.simulation?.viewMode === "theater"
     ),
-    30000,
+    20000,
     "replay speed baseline",
   );
 
@@ -1837,7 +1933,7 @@ async function runLiveForkMarkerFixtureCase(page, {
   });
 
   try {
-    await page.goto(`${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
     const fixtureState = await waitForAutomation(
       page,
       (payload) => (
@@ -1899,7 +1995,7 @@ async function runCaptureModesCase(page, {
     visualizationEnabled: true,
   });
 
-  await page.goto(`${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/sim/${scenario.id}`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "simulation",
@@ -1959,9 +2055,7 @@ async function runCaptureModesCase(page, {
   );
   await advanceAutomationTime(page, 250);
   await page.waitForTimeout(300);
-  const predictionModalShot = await page.evaluate(async () => (
-    await window.capture_game_screenshot?.("modal") ?? null
-  ));
+  const predictionModalShot = await captureGameScreenshotWithRetry(page, "modal");
 
   if (!predictionModalShot) {
     throw new Error(`Modal capture returned null after opening prediction modal for ${scenario.id}`);
@@ -1988,9 +2082,7 @@ async function runCaptureModesCase(page, {
   );
   await advanceAutomationTime(page, 250);
   await page.waitForTimeout(300);
-  const gameplayModalShot = await page.evaluate(async () => (
-    await window.capture_game_screenshot?.("modal") ?? null
-  ));
+  const gameplayModalShot = await captureGameScreenshotWithRetry(page, "modal");
 
   if (!gameplayModalShot) {
     throw new Error(`Modal capture returned null after opening gameplay cards modal for ${scenario.id}`);
@@ -2094,7 +2186,7 @@ async function runResultLoadingGateCase(page, {
   });
 
   try {
-    await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1000);
     phase = "done";
 
@@ -2167,7 +2259,7 @@ async function runShareRetryCase(page, {
     await route.continue();
   });
 
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "result" && payload.page?.loading === false,
@@ -2214,7 +2306,7 @@ async function runHistoryLeaderboardCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await page.goto(`${baseUrl}/history`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/history`, { waitUntil: "domcontentloaded" });
   const history = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "history" && payload.page?.loading === false,
@@ -2229,7 +2321,7 @@ async function runHistoryLeaderboardCase(page, {
   const filteredHistory = await readAutomation(page);
   await saveScreenshot(page, path.join(outputDir, "history.png"));
 
-  await page.goto(`${baseUrl}/leaderboard`, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, `${baseUrl}/leaderboard`, { waitUntil: "domcontentloaded" });
   const leaderboard = await waitForAutomation(
     page,
     (payload) => payload.page?.kind === "leaderboard" && payload.page?.loading === false,
@@ -2303,7 +2395,7 @@ async function runHistoryDeleteLastPageCase(page, {
   });
 
   try {
-    await page.goto(`${baseUrl}/history`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${baseUrl}/history`, { waitUntil: "domcontentloaded" });
     await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "history" && payload.page?.loading === false,
@@ -2489,10 +2581,12 @@ async function runCornersSuite(args) {
       theme: "governance",
       scenario_id: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
     });
-    const lawShareSample = await resolveMatrixScenario(args.baseUrl, {
+    const lawShareSampleSeed = {
       theme: "law",
       scenario_id: "ded5cdd5-251d-4606-8ee3-8e1418d31cbb",
-    });
+    };
+    let lawShareSample = await resolveMatrixScenario(args.baseUrl, lawShareSampleSeed);
+    lawShareSample = await ensureResultMatrixScenario(page, args.baseUrl, lawShareSampleSeed, lawShareSample);
 
     cases.branch_prediction = await runPredictionVariant(page, {
       baseUrl: args.baseUrl,
@@ -2619,8 +2713,8 @@ async function runMobileSuite(args) {
       question: MATRIX_SCENARIO_FALLBACKS.governance.question,
     });
 
-    await page.goto(`${args.baseUrl}/`, { waitUntil: "domcontentloaded" });
-    const homepage = await waitForAutomation(
+    await gotoWithRetry(page, `${args.baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "input",
       10000,
@@ -2645,6 +2739,20 @@ async function runMobileSuite(args) {
     if (homepageSurface.weeklyChallengeCardCount < 2 || !homepageSurface.hasGrowthCard) {
       throw new Error(`mobile homepage missing weekly/growth cards: ${JSON.stringify(homepageSurface)}`);
     }
+    const homepage = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.kind === "input"
+        && Boolean(payload.page?.daily_challenge?.challenge_id)
+        && (payload.page?.daily_challenge?.hook_count ?? 0) >= 1
+        && (payload.page?.weekly_challenge?.challenge_count ?? 0) >= 3
+        && (payload.page?.weekly_challenge?.entries?.length ?? 0) >= 3
+        && payload.page?.director_growth?.badge_count != null
+        && payload.page?.director_growth?.total_runs != null
+      ),
+      10000,
+      "mobile homepage summaries",
+    );
     if (!homepage.page?.daily_challenge?.challenge_id || homepage.page.daily_challenge.hook_count < 1) {
       throw new Error(`mobile homepage daily challenge summary missing: ${JSON.stringify(homepage.page?.daily_challenge ?? null)}`);
     }
@@ -2661,7 +2769,7 @@ async function runMobileSuite(args) {
     writeJson(path.join(args.outputDir, "mobile-home-surface.json"), homepageSurface);
     await saveScreenshot(page, path.join(args.outputDir, "mobile-home.png"));
 
-    await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
     await waitForCompletedReplayAutomationReady(page, 20000);
     let theater = await waitForAutomation(
       page,
@@ -2693,7 +2801,7 @@ async function runMobileSuite(args) {
       if (mobileTheaterReady) break;
       if (attempt < 2) {
         console.warn(`[mobile] scene not ready (last=${lastSceneName ?? "null"}) — retrying with fresh page load`);
-        await page.goto(`${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+        await gotoWithRetry(page, `${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
         await waitForCompletedReplayAutomationReady(page, 20000);
         theater = await waitForAutomation(
           page,
@@ -2718,7 +2826,7 @@ async function runMobileSuite(args) {
     writeJson(path.join(args.outputDir, "mobile-theater.json"), theater);
     await saveScreenshot(page, path.join(args.outputDir, "mobile-theater.png"));
 
-    await page.goto(`${args.baseUrl}/result/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoWithRetry(page, `${args.baseUrl}/result/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
     const result = await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "result" && payload.page?.loading === false,

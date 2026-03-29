@@ -1,0 +1,844 @@
+.worldline-roundtable-view {
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, rgba(196, 160, 88, 0.12), transparent 38%),
+    linear-gradient(180deg, rgba(17, 22, 32, 0.98), rgba(12, 15, 22, 1));
+}
+
+.worldline-roundtable-hero {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 20px 22px;
+  border: 1px solid rgba(217, 181, 108, 0.28);
+  border-radius: 24px;
+  background: rgba(14, 18, 28, 0.92);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+}
+
+.worldline-roundtable-hero__topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.worldline-roundtable-hero__body {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  align-items: stretch;
+}
+
+.worldline-roundtable-hero__copy h1 {
+  margin: 0 0 6px;
+  font-size: clamp(2rem, 3vw, 3rem);
+  color: rgba(236, 233, 227, 0.96);
+}
+
+.worldline-roundtable-hero__copy p {
+  margin: 0;
+  color: rgba(236, 233, 227, 0.78);
+}
+
+.worldline-roundtable-hero__kicker {
+  margin-bottom: 6px;
+  font-size: 0.82rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(217, 181, 108, 0.86);
+}
+
+.worldline-roundtable-hero__meta,
+.worldline-roundtable-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.worldline-roundtable-hero__stage {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  min-height: 100%;
+  padding: 18px;
+  border: 1px solid rgba(217, 181, 108, 0.26);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(10, 13, 20, 0.28), rgba(10, 13, 20, 0.9)),
+    rgba(18, 22, 31, 0.92);
+  background-position: center;
+  background-size: cover;
+  overflow: hidden;
+}
+
+.worldline-roundtable-hero__stage::after {
+  content: '';
+  position: absolute;
+  inset: auto 18px 0;
+  height: 16px;
+  background: url('/assets/ui/generated/worldline_dossier_divider.png') center / contain no-repeat;
+  opacity: 0.5;
+}
+
+.worldline-roundtable-hero__stage > * {
+  position: relative;
+  z-index: 1;
+}
+
+.worldline-roundtable-hero__stage-head {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.worldline-roundtable-hero__stage-head > div,
+.worldline-roundtable-hero__stage-note {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(11, 14, 21, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.worldline-roundtable-hero__stage-badge {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.24));
+}
+
+.worldline-roundtable-hero__stage-kicker {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(217, 181, 108, 0.86);
+}
+
+.worldline-roundtable-hero__stage-head strong {
+  display: block;
+  color: rgba(244, 240, 231, 0.98);
+  font-size: 1.02rem;
+  line-height: 1.45;
+}
+
+.worldline-roundtable-hero__stage-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.worldline-roundtable-hero__stage-metrics span {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 181, 108, 0.18);
+  background: rgba(12, 16, 24, 0.56);
+  color: rgba(236, 233, 227, 0.74);
+  font-size: 0.76rem;
+}
+
+.worldline-roundtable-hero__stage-note {
+  margin: 0 0 8px;
+  max-width: 56ch;
+  color: rgba(236, 233, 227, 0.78);
+  line-height: 1.6;
+}
+
+.worldline-roundtable-hero .btn {
+  border-color: rgba(217, 181, 108, 0.28);
+  background: rgba(20, 26, 37, 0.88);
+  color: rgba(236, 233, 227, 0.92);
+}
+
+.worldline-roundtable-hero .btn:hover {
+  border-color: rgba(217, 181, 108, 0.48);
+  background: rgba(28, 35, 48, 0.96);
+}
+
+.worldline-roundtable-shell {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.worldline-roundtable-sidebar,
+.worldline-roundtable-main {
+  display: grid;
+  gap: 16px;
+}
+
+.worldline-roundtable-card {
+  padding: 18px;
+  border: 1px solid rgba(217, 181, 108, 0.2);
+  border-radius: 20px;
+  background: rgba(18, 22, 31, 0.9);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22);
+}
+
+.worldline-roundtable-card--summary {
+  position: relative;
+  background-position: center;
+  background-size: cover;
+  overflow: hidden;
+}
+
+.worldline-roundtable-card--summary::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(9, 12, 19, 0.2), rgba(9, 12, 19, 0.86) 44%, rgba(9, 12, 19, 0.96));
+}
+
+.worldline-roundtable-card--summary > * {
+  position: relative;
+  z-index: 1;
+}
+
+.worldline-roundtable-card__banner {
+  display: block;
+  width: min(280px, 100%);
+  margin: -4px auto 14px;
+}
+
+.worldline-roundtable-card--summary h2,
+.worldline-roundtable-card--summary p {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(14, 18, 28, 0.76);
+  backdrop-filter: blur(8px);
+}
+
+.worldline-roundtable-card--summary h2 {
+  margin: 0 0 10px;
+  color: rgba(236, 233, 227, 0.96);
+  line-height: 1.25;
+}
+
+.worldline-roundtable-card--summary p {
+  margin: 0;
+  color: rgba(236, 233, 227, 0.8);
+}
+
+.worldline-roundtable-card__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.worldline-roundtable-card__heading h3 {
+  margin: 0;
+}
+
+.worldline-roundtable-card__heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.worldline-roundtable-card__heading--stacked {
+  align-items: flex-start;
+}
+
+.worldline-roundtable-picker__hint {
+  margin: 8px 0 0;
+  color: rgba(236, 233, 227, 0.72);
+  line-height: 1.5;
+}
+
+.worldline-roundtable-picker__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.worldline-roundtable-picker-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.worldline-roundtable-picker-branch {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(217, 181, 108, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.worldline-roundtable-picker-branch__header div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.worldline-roundtable-picker-branch__header strong {
+  color: rgba(236, 233, 227, 0.94);
+}
+
+.worldline-roundtable-picker-branch__header span,
+.worldline-roundtable-picker-branch__header p {
+  color: rgba(236, 233, 227, 0.72);
+}
+
+.worldline-roundtable-picker-branch__header p {
+  margin: 6px 0 0;
+  line-height: 1.55;
+}
+
+.worldline-roundtable-picker-branch__options {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.worldline-roundtable-picker-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(217, 181, 108, 0.16);
+  background: rgba(13, 17, 25, 0.68);
+  color: inherit;
+  text-align: left;
+}
+
+.worldline-roundtable-picker-card.is-selected {
+  border-color: rgba(217, 181, 108, 0.6);
+  box-shadow: 0 0 0 1px rgba(217, 181, 108, 0.26);
+  background: radial-gradient(circle at top right, rgba(217, 181, 108, 0.16), transparent 45%), rgba(13, 17, 25, 0.76);
+}
+
+.worldline-roundtable-picker-card__title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.worldline-roundtable-picker-card__title span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(217, 181, 108, 0.14);
+  color: rgba(236, 233, 227, 0.82);
+  font-size: 0.72rem;
+}
+
+.worldline-roundtable-picker-card > span,
+.worldline-roundtable-picker-card > small,
+.worldline-roundtable-picker-card > em {
+  color: rgba(236, 233, 227, 0.72);
+}
+
+.worldline-roundtable-picker-card > em {
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.worldline-roundtable-roster,
+.worldline-roundtable-insights {
+  display: grid;
+  gap: 10px;
+}
+
+.worldline-roundtable-seat,
+.worldline-roundtable-insight {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 181, 108, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+
+.worldline-roundtable-seat__frame {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 45%),
+    url('/assets/ui/generated/ending_room_participant_frame.png') center / cover no-repeat;
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+.worldline-roundtable-seat img {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.worldline-roundtable-seat__copy {
+  position: relative;
+  z-index: 1;
+}
+
+.worldline-roundtable-seat__title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.worldline-roundtable-seat strong,
+.worldline-roundtable-insight strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.worldline-roundtable-seat span,
+.worldline-roundtable-seat small,
+.worldline-roundtable-insight p {
+  color: rgba(236, 233, 227, 0.72);
+}
+
+.worldline-roundtable-seat.is-selected {
+  border-color: rgba(217, 181, 108, 0.72);
+  box-shadow: 0 0 0 1px rgba(217, 181, 108, 0.32);
+}
+
+.worldline-roundtable-seat.is-current-speaker {
+  border-color: rgba(233, 205, 143, 0.72);
+  background:
+    radial-gradient(circle at top right, rgba(233, 205, 143, 0.22), transparent 38%),
+    rgba(255, 255, 255, 0.05);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.22);
+}
+
+.worldline-roundtable-seat.is-hotseat-target {
+  border-color: rgba(214, 120, 165, 0.6);
+}
+
+.worldline-roundtable-seat.is-archivist {
+  background: rgba(205, 179, 120, 0.08);
+}
+
+.worldline-roundtable-seat__status,
+.worldline-roundtable-transcript-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 181, 108, 0.24);
+  background: rgba(18, 22, 31, 0.72);
+  color: rgba(236, 233, 227, 0.82);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.worldline-roundtable-seat__status--hotseat,
+.worldline-roundtable-transcript-badge--hotseat {
+  border-color: rgba(214, 120, 165, 0.34);
+  color: rgba(244, 186, 214, 0.92);
+}
+
+.worldline-roundtable-seat__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.worldline-roundtable-seat__metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(12, 16, 24, 0.56);
+  color: rgba(236, 233, 227, 0.72);
+  font-size: 0.72rem;
+}
+
+.worldline-roundtable-main {
+  min-width: 0;
+}
+
+.worldline-roundtable-transcript-header {
+  padding: 18px;
+  border: 1px solid rgba(217, 181, 108, 0.18);
+  border-radius: 18px;
+  background: rgba(18, 22, 31, 0.92);
+}
+
+.worldline-roundtable-transcript-list {
+  min-height: 260px;
+  max-height: min(38vh, 420px);
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble {
+  background: rgba(231, 228, 220, 0.9);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.12);
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble.is-current-speaker {
+  background:
+    url('/assets/ui/generated/ending_room_speaker_glow.png') calc(100% - 10px) 10px / 84px 84px no-repeat,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(239, 231, 211, 0.94));
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble.is-hotseat-target:not(.is-current-speaker) {
+  border-color: rgba(214, 120, 165, 0.34);
+  background: linear-gradient(180deg, rgba(255, 251, 254, 0.96), rgba(243, 232, 239, 0.92));
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble strong,
+.worldline-roundtable-transcript-list .ending-chat-bubble p {
+  color: rgba(25, 28, 36, 0.92);
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble span {
+  color: rgba(69, 72, 82, 0.76);
+}
+
+.worldline-roundtable-composer {
+  padding-bottom: 4px;
+}
+
+.worldline-roundtable-empty {
+  padding: 32px;
+  border: 1px solid rgba(217, 181, 108, 0.18);
+  border-radius: 20px;
+  background: rgba(18, 22, 31, 0.9);
+  text-align: center;
+}
+
+.worldline-roundtable-empty--error {
+  color: #ffb3b3;
+}
+
+@media (max-width: 980px) {
+  .worldline-roundtable-hero__body {
+    grid-template-columns: 1fr;
+  }
+
+  .worldline-roundtable-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .worldline-roundtable-main {
+    order: 1;
+  }
+
+  .worldline-roundtable-sidebar {
+    order: 2;
+  }
+}
+
+@media (max-width: 640px) {
+  .worldline-roundtable-view {
+    padding: 8px;
+  }
+
+  .worldline-roundtable-hero,
+  .worldline-roundtable-card,
+  .worldline-roundtable-transcript-header {
+    padding: 10px;
+  }
+
+  .worldline-roundtable-card__banner {
+    width: min(220px, 100%);
+  }
+
+  .worldline-roundtable-hero__topline {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  .worldline-roundtable-hero__topline > .btn {
+    width: auto;
+    min-width: 0;
+    padding-inline: 12px;
+  }
+
+  .worldline-roundtable-hero__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .worldline-roundtable-hero__actions .btn {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+    padding-inline: 8px;
+    padding-block: 9px;
+    font-size: 0.76rem;
+    line-height: 1.15;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__actions .btn {
+    padding-inline: 6px;
+    padding-block: 8px;
+    font-size: 0.72rem;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__topline {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    align-items: stretch;
+    padding-right: 92px;
+    margin-top: 28px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__topline > .btn {
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__actions .btn {
+    width: 100%;
+    min-height: 42px;
+    padding-inline: 8px;
+    padding-block: 7px;
+    font-size: 0.69rem;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .worldline-roundtable-hero__copy h1 {
+    font-size: 2.25rem;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero {
+    gap: 6px;
+    margin-bottom: 10px;
+    padding: 8px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__kicker {
+    display: none;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__copy h1 {
+    margin-bottom: 4px;
+    font-size: 1.56rem;
+    line-height: 1;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__copy p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 0.82rem;
+    line-height: 1.26;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta {
+    gap: 6px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta .archive-chip {
+    padding: 4px 7px;
+    font-size: 0.68rem;
+  }
+
+  .worldline-roundtable-hero__body {
+    gap: 12px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__body {
+    gap: 2px;
+  }
+
+  .worldline-roundtable-shell {
+    gap: 10px;
+  }
+
+  .worldline-roundtable-picker-branch {
+    padding: 12px;
+  }
+
+  .worldline-roundtable-picker-branch__options {
+    grid-template-columns: 1fr;
+  }
+
+  .worldline-roundtable-picker-card {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+
+  .worldline-roundtable-picker-card > small,
+  .worldline-roundtable-picker-card > em {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+  }
+
+  .worldline-roundtable-main {
+    order: 1;
+  }
+
+  .worldline-roundtable-sidebar {
+    order: 2;
+  }
+
+  .worldline-roundtable-seat {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .worldline-roundtable-seat img {
+    width: 48px;
+    height: 48px;
+  }
+
+  .worldline-roundtable-roster {
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .worldline-roundtable-hero__stage-head {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .worldline-roundtable-hero__stage-badge {
+    width: 44px;
+    height: 44px;
+  }
+
+  .worldline-roundtable-hero__stage {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage {
+    gap: 3px;
+    padding: 7px;
+  }
+
+  .worldline-roundtable-hero__stage-head > div,
+  .worldline-roundtable-hero__stage-note {
+    padding: 8px 10px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-head {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-badge {
+    width: 34px;
+    height: 34px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-head > div {
+    padding: 5px 6px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-head strong {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: 0.8rem;
+    line-height: 1.18;
+  }
+
+  .worldline-roundtable-hero__stage-note {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    -webkit-line-clamp: 3;
+    font-size: 0.9rem;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-note,
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage::after {
+    display: none;
+  }
+
+  .worldline-roundtable-hero__stage-metrics {
+    gap: 6px;
+  }
+
+  .worldline-roundtable-hero__stage-metrics span {
+    padding: 5px 8px;
+    font-size: 0.68rem;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-metrics {
+    gap: 3px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-metrics span {
+    padding: 3px 5px;
+    font-size: 0.54rem;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__stage-metrics span:last-child {
+    display: none;
+  }
+
+  .worldline-roundtable-transcript-list {
+    min-height: 240px;
+    max-height: 44vh;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-transcript-list {
+    min-height: 176px;
+    max-height: 31vh;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-transcript-header {
+    padding: 8px 10px;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-transcript-header p {
+    font-size: 0.74rem;
+    line-height: 1.35;
+  }
+
+  .worldline-roundtable-card__heading-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .worldline-roundtable-card__heading-actions .btn {
+    padding-inline: 10px;
+    font-size: 0.74rem;
+  }
+
+  .worldline-roundtable-main .ending-chat-composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: -6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(217, 181, 108, 0.16);
+    background: rgba(18, 22, 31, 0.96);
+    backdrop-filter: blur(10px);
+  }
+}

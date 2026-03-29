@@ -102,6 +102,83 @@ def _append_completed_branch(scenario_id: str, *, title: str, story: str, insigh
         return branch.id
 
 
+def _seed_roundtable_reselection_scenario() -> dict[str, str]:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)
+        session.add(scenario)
+        session.flush()
+
+        shared_agent = Agent(scenario_id=scenario.id, name="共用史官", role="宫廷史官")
+        branch_a_agent = Agent(scenario_id=scenario.id, name="秩序督军", role="军政总管")
+        branch_b_agent = Agent(scenario_id=scenario.id, name="裂变议长", role="地方议长")
+        for agent in (shared_agent, branch_a_agent, branch_b_agent):
+            session.add(agent)
+        session.flush()
+
+        branch_a = Branch(
+            scenario_id=scenario.id,
+            title="秩序线",
+            status=BranchStatus.COMPLETED,
+            story="秩序线把兵权重新收拢回中枢。",
+            insight="先稳住命令链，秩序才不会碎。",
+            key_moments=json.dumps(["秩序线"], ensure_ascii=False),
+        )
+        branch_b = Branch(
+            scenario_id=scenario.id,
+            title="裂变线",
+            status=BranchStatus.COMPLETED,
+            story="裂变线让地方议会先拿到了财政解释权。",
+            insight="先失去财政解释权，地方就会脱缰。",
+            key_moments=json.dumps(["裂变线"], ensure_ascii=False),
+        )
+        session.add(branch_a)
+        session.add(branch_b)
+        session.flush()
+
+        round_a = Round(branch_id=branch_a.id, round_number=1)
+        round_b = Round(branch_id=branch_b.id, round_number=1)
+        session.add(round_a)
+        session.add(round_b)
+        session.flush()
+
+        for round_id, entries in (
+            (
+                round_a.id,
+                [
+                    (shared_agent.id, "我看到命令链出现第一次分叉。"),
+                    (branch_a_agent.id, "先扣住兵权，秩序才不会继续松动。"),
+                    (branch_a_agent.id, "粮道和军旗必须一起收回。"),
+                ],
+            ),
+            (
+                round_b.id,
+                [
+                    (shared_agent.id, "我看到财政解释权开始外移。"),
+                    (branch_b_agent.id, "先让地方议会解释税令，裂变就会自我强化。"),
+                    (branch_b_agent.id, "一旦预算权下沉，中央就追不上了。"),
+                ],
+            ),
+        ):
+            for agent_id, content in entries:
+                session.add(
+                    AgentMessage(
+                        round_id=round_id,
+                        agent_id=agent_id,
+                        content=content,
+                        emotion="steady",
+                    )
+                )
+
+        session.commit()
+        return {
+            "scenario_id": scenario.id,
+            "branch_a_id": branch_a.id,
+            "branch_b_id": branch_b.id,
+            "shared_agent_id": shared_agent.id,
+        }
+
+
 def _wait_until_done(client: TestClient, room_id: str, *, timeout_seconds: float = 2.0) -> dict:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -313,6 +390,70 @@ def test_create_worldline_roundtable_and_fetch_result(client):
     assert result_payload["status"] == "done"
     assert result_payload["room_type"] == "worldline_roundtable"
     assert result_payload["result"]["summary"]
+
+
+def test_worldline_roundtable_api_accepts_branch_scoped_selected_representatives(client):
+    fixture = _seed_roundtable_reselection_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selected_representatives": [
+                {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
+                {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+            ],
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    representatives = {
+        participant["source_branch_id"]: participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    }
+    assert set(representatives) == {fixture["branch_a_id"], fixture["branch_b_id"]}
+    assert all(
+        participant["source_agent_id"] == fixture["shared_agent_id"]
+        for participant in representatives.values()
+    )
+
+
+def test_worldline_roundtable_api_rejects_all_present_followup(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+
+    asyncio.run(run_ending_room_background(snapshot["id"]))
+
+    followup_resp = client.post(
+        f"/api/ending-room/{snapshot['id']}/user-turn",
+        json={
+            "content": "让当前桌面所有代表都同时回应。",
+            "interaction_mode": "all_present",
+        },
+    )
+
+    assert followup_resp.status_code == 422
+    assert followup_resp.json()["detail"]["code"] == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
 
 
 def test_deleted_scenario_invalidates_ending_room_endpoints(client):

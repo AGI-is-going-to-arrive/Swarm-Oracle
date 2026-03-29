@@ -11,10 +11,7 @@ const MAX_RECONNECTS = 5;
 const DEV_BACKEND_WS_HOST = '127.0.0.1:18927';
 
 function resolveEndingRoomWsHost() {
-  if (
-    import.meta.env.DEV
-    && /^127\.0\.0\.1:(1892[89]|1893[0-9])$/.test(window.location.host)
-  ) {
+  if (/^127\.0\.0\.1:(1892[89]|1893[0-9])$/.test(window.location.host)) {
     return DEV_BACKEND_WS_HOST;
   }
   return window.location.host;

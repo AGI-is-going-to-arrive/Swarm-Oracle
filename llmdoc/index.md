@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-29（本轮已补 `Oracle Chambers` 单结局 `Phase C2/C3` 真值：participant picker、`selected_agent_ids`、follow-up thread、`archivist_route / hotseat / all_present`、Oracle 专属 UI 资产；`世界线圆桌` 页面与 ending-room replay/share/import 仍未签收）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-30（本轮已对齐 `Oracle Chambers / 世界线圆桌` 真值：single-ending chamber、roundtable live/reseat/replay readonly 已进入稳定 `release:signoff` 总链；当前残余集中在 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感）
 
 ## 阅读顺序
 

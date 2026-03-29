@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import threading
-from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -105,6 +104,37 @@ def _normalize_branch_ids(selected_branch_ids: list[str]) -> list[str]:
             continue
         seen.add(branch_id)
         normalized.append(branch_id)
+    return normalized
+
+
+def _normalize_selected_representatives(
+    selected_representatives: list[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen_branch_ids: set[str] = set()
+    for raw_item in selected_representatives or []:
+        if not isinstance(raw_item, dict):
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                "selected_representatives must be objects with branch_id and agent_id",
+            )
+        branch_id = str(raw_item.get("branch_id") or "").strip()
+        agent_id = str(raw_item.get("agent_id") or "").strip()
+        if not branch_id or not agent_id:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                "selected_representatives must include branch_id and agent_id",
+            )
+        if branch_id in seen_branch_ids:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                "selected_representatives must use unique branch_id",
+            )
+        seen_branch_ids.add(branch_id)
+        normalized.append({"branch_id": branch_id, "agent_id": agent_id})
     return normalized
 
 
@@ -258,21 +288,83 @@ def _impact_score(raw_score: float, max_score: float) -> float:
     return round(min(0.99, raw_score / max_score), 2)
 
 
-def _pick_branch_speaker(session: Session, scenario_id: str, branch_id: str, *, fallback_index: int = 0) -> Agent | None:
-    speaker_ids = session.exec(
-        select(AgentMessage.agent_id)
-        .join(Round, Round.id == AgentMessage.round_id)
-        .where(Round.branch_id == branch_id)
-    ).all()
-    speakers = _speaker_lookup(session, scenario_id)
-    for agent_id, _count in Counter(str(item) for item in speaker_ids if item).most_common():
-        agent = speakers.get(agent_id)
-        if agent is not None:
-            return agent
-    ordered = sorted(speakers.values(), key=lambda item: item.name)
-    if not ordered:
+def _compact_text(value: str | None, *, limit: int = 96) -> str | None:
+    text = str(value or "").strip()
+    if not text:
         return None
-    return ordered[min(fallback_index, len(ordered) - 1)]
+    text = re.sub(r"\s+", " ", text)
+    return text if len(text) <= limit else f"{text[: limit - 1].rstrip()}…"
+
+
+def _load_branch_rows(
+    session: Session,
+    branch_id: str,
+    *,
+    language: str,
+) -> list[dict[str, Any]]:
+    unknown_speaker = "未知角色" if language == "zh" else "Unknown"
+    rows = session.exec(
+        select(Round.round_number, Agent.id, Agent.name, AgentMessage.content)
+        .join(AgentMessage, AgentMessage.round_id == Round.id)
+        .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
+        .where(Round.branch_id == branch_id)
+        .order_by(Round.round_number, AgentMessage.id)
+    ).all()
+    return [
+        {
+            "round_number": int(round_number or 0),
+            "agent_id": str(agent_id or "").strip() or None,
+            "agent_name": agent_name or unknown_speaker,
+            "content": str(content or "").strip(),
+        }
+        for round_number, agent_id, agent_name, content in rows
+        if str(content or "").strip()
+    ]
+
+
+def _latest_row_for_agent(
+    rows: list[dict[str, Any]],
+    agent_id: str | None,
+) -> dict[str, Any] | None:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        return None
+    for row in reversed(rows):
+        if row.get("agent_id") == normalized_agent_id:
+            return row
+    return None
+
+
+def _followup_angle_label(role_hint: str | None, *, language: str) -> str:
+    normalized = str(role_hint or "").strip().lower()
+    if any(token in normalized for token in ("皇", "king", "queen", "emperor", "court", "judge", "crown")):
+        return "权力链" if language == "zh" else "the authority chain"
+    if any(token in normalized for token in ("将", "统帅", "general", "commander", "captain", "marshal", "guard")):
+        return "执行链" if language == "zh" else "the execution chain"
+    if any(token in normalized for token in ("档案", "scribe", "record", "ledger", "minister", "文书", "coordinator")):
+        return "记录链" if language == "zh" else "the records chain"
+    return "因果链" if language == "zh" else "the causal chain"
+
+
+def _build_participant_followup_evidence(
+    participant: EndingRoomParticipant,
+    *,
+    branch_rows: list[dict[str, Any]],
+    evidence_hook: str,
+) -> dict[str, Any]:
+    snapshot = participant.persona_snapshot_json or {}
+    latest_row = _latest_row_for_agent(branch_rows, participant.source_agent_id)
+    latest_round = int(latest_row["round_number"]) if latest_row else int(snapshot.get("last_round_spoken") or 0)
+    latest_quote = _compact_text(latest_row["content"] if latest_row else None)
+    bio_hint = _compact_text(snapshot.get("bio_short") or snapshot.get("agent_persona"), limit=72)
+    role_hint = _compact_text(snapshot.get("agent_role") or snapshot.get("role"), limit=40)
+    return {
+        "latest_round": latest_round,
+        "latest_quote": latest_quote,
+        "bio_hint": bio_hint,
+        "role_hint": role_hint,
+        "evidence_hook": _compact_text(evidence_hook, limit=84) or evidence_hook,
+    }
 
 
 def _visible_branch_agents(
@@ -384,6 +476,90 @@ def _visible_branch_agents(
     return ordered
 
 
+def _sort_selected_representatives(
+    selected_representatives: list[dict[str, str]],
+    selected_branch_ids: list[str],
+) -> list[dict[str, str]]:
+    branch_order = {
+        branch_id: index
+        for index, branch_id in enumerate(selected_branch_ids)
+    }
+    return sorted(
+        selected_representatives,
+        key=lambda item: (
+            branch_order.get(item["branch_id"], len(branch_order)),
+            item["agent_id"],
+        ),
+    )
+
+
+def _roundtable_representative_def(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch: Branch,
+    selected_branch_ids: list[str],
+    selected_agent_id: str | None,
+    language: str,
+) -> dict[str, Any]:
+    branch_agents = _visible_branch_agents(
+        session,
+        scenario_id,
+        branch.id,
+        language=language,
+    )
+    branch_agents_by_id = {
+        str(agent["source_agent_id"]): agent
+        for agent in branch_agents
+        if agent.get("source_agent_id")
+    }
+    speaker: dict[str, Any] | None
+    if selected_agent_id is not None:
+        speaker = branch_agents_by_id.get(selected_agent_id)
+        if speaker is None:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_AGENT_NOT_VISIBLE",
+                "selected_representatives must belong to the target worldline roster",
+            )
+        speaker = {
+            **speaker,
+            "selection_reason": "user_selected",
+        }
+    else:
+        speaker = branch_agents[0] if branch_agents else None
+    persona_snapshot = {
+        "branch_title": branch.title,
+        "branch_probability": branch.probability,
+    }
+    if speaker is not None:
+        persona_snapshot.update(
+            {
+                "agent_role": speaker.get("agent_role") or "",
+                "agent_persona": speaker.get("agent_persona") or "",
+                "bio_short": speaker.get("bio_short"),
+                "impact_score": speaker.get("impact_score"),
+                "turn_count": speaker.get("turn_count"),
+                "key_moment_hits": speaker.get("key_moment_hits"),
+                "last_round_spoken": speaker.get("last_round_spoken"),
+                "selection_reason": speaker.get("selection_reason"),
+                "fallback_cast": speaker.get("fallback_cast", False),
+                "tier": speaker.get("tier"),
+            }
+        )
+    return {
+        "role_slot": EndingRoomRoleSlot.REPRESENTATIVE.value,
+        "display_name": f"{speaker['display_name']} · {branch.title}" if speaker else branch.title,
+        "source_branch_id": branch.id,
+        "source_agent_id": speaker["source_agent_id"] if speaker else None,
+        "persona_snapshot_json": persona_snapshot,
+        "visibility_scope_json": {
+            "fulltext_branch_ids": [branch.id],
+            "summary_branch_ids": [item for item in selected_branch_ids if item != branch.id],
+        },
+    }
+
+
 def _participant_defs(
     session: Session,
     *,
@@ -392,38 +568,28 @@ def _participant_defs(
     anchor_branch_id: str | None,
     selected_branch_ids: list[str],
     selected_agent_ids: list[str],
+    selected_representatives: list[dict[str, str]],
     language: str,
 ) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
     used_agent_ids: set[str] = set()
     branch_map = _branch_lookup(session, scenario.id)
     if room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
-        for index, branch_id in enumerate(selected_branch_ids):
+        selected_representative_by_branch = {
+            item["branch_id"]: item["agent_id"]
+            for item in selected_representatives
+        }
+        for branch_id in selected_branch_ids:
             branch = branch_map[branch_id]
-            speaker = _pick_branch_speaker(session, scenario.id, branch_id, fallback_index=index)
             participants.append(
-                {
-                    "role_slot": EndingRoomRoleSlot.REPRESENTATIVE.value,
-                    "display_name": f"{speaker.name} · {branch.title}" if speaker else branch.title,
-                    "source_branch_id": branch_id,
-                    "source_agent_id": speaker.id if speaker else None,
-                    "persona_snapshot_json": {
-                        "branch_title": branch.title,
-                        "branch_probability": branch.probability,
-                        **(
-                            {
-                                "agent_role": speaker.role,
-                                "agent_persona": speaker.persona,
-                            }
-                            if speaker
-                            else {}
-                        ),
-                    },
-                    "visibility_scope_json": {
-                        "fulltext_branch_ids": [branch_id],
-                        "summary_branch_ids": [item for item in selected_branch_ids if item != branch_id],
-                    },
-                }
+                _roundtable_representative_def(
+                    session,
+                    scenario_id=scenario.id,
+                    branch=branch,
+                    selected_branch_ids=selected_branch_ids,
+                    selected_agent_id=selected_representative_by_branch.get(branch_id),
+                    language=language,
+                )
             )
     elif room_type != EndingRoomType.CROSSLINE_GALLERY:
         assert anchor_branch_id is not None
@@ -618,6 +784,7 @@ def _participant_set_hash(
     anchor_branch_id: str | None,
     selected_branch_ids: list[str],
     selected_agent_ids: list[str],
+    selected_representatives: list[dict[str, str]],
     language: str,
     participant_defs: list[dict[str, Any]],
 ) -> str:
@@ -627,6 +794,7 @@ def _participant_set_hash(
             "anchor_branch_id": anchor_branch_id,
             "selected_branch_ids": selected_branch_ids,
             "selected_agent_ids": selected_agent_ids,
+            "selected_representatives": selected_representatives,
             "language": language,
             "participants": [
                 {
@@ -686,6 +854,7 @@ def create_ending_room(
     anchor_branch_id: str | None,
     selected_branch_ids: list[str],
     selected_agent_ids: list[str] | None = None,
+    selected_representatives: list[dict[str, Any]] | None = None,
     language: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
@@ -696,6 +865,7 @@ def create_ending_room(
     normalized_anchor_branch_id = str(anchor_branch_id).strip() if anchor_branch_id else None
     normalized_branch_ids = _normalize_branch_ids(selected_branch_ids)
     normalized_agent_ids = _normalize_branch_ids(selected_agent_ids or [])
+    normalized_representatives = _normalize_selected_representatives(selected_representatives)
     if not normalized_branch_ids:
         raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")
 
@@ -715,6 +885,18 @@ def create_ending_room(
             raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
         if normalized_anchor_branch_id and normalized_anchor_branch_id not in branch_map:
             raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Anchor branch not found")
+        if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_agent_ids:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                "worldline_roundtable must use selected_representatives instead of selected_agent_ids",
+            )
+        if normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_representatives:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                "selected_representatives is only supported for worldline roundtables",
+            )
         if normalized_room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY}:
             if normalized_anchor_branch_id is None:
                 raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required for single-branch rooms")
@@ -736,6 +918,22 @@ def create_ending_room(
         if any(branch.status != BranchStatus.COMPLETED for branch in branches):
             raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "Ending rooms require completed branches")
         normalized_branch_ids = _sort_scope_branch_ids(branches)
+        if normalized_representatives:
+            invalid_representative_branch_ids = [
+                item["branch_id"]
+                for item in normalized_representatives
+                if item["branch_id"] not in normalized_branch_ids
+            ]
+            if invalid_representative_branch_ids:
+                raise EndingRoomServiceError(
+                    422,
+                    "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                    "selected_representatives must target selected branches",
+                )
+            normalized_representatives = _sort_selected_representatives(
+                normalized_representatives,
+                normalized_branch_ids,
+            )
 
         resolved_language = _detect_language(scenario.question, language)
         participant_defs = _participant_defs(
@@ -745,6 +943,7 @@ def create_ending_room(
             anchor_branch_id=normalized_anchor_branch_id,
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
+            selected_representatives=normalized_representatives,
             language=resolved_language,
         )
         participant_hash = _participant_set_hash(
@@ -752,6 +951,7 @@ def create_ending_room(
             anchor_branch_id=normalized_anchor_branch_id,
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
+            selected_representatives=normalized_representatives,
             language=resolved_language,
             participant_defs=participant_defs,
         )
@@ -825,6 +1025,7 @@ def create_ending_room(
                 **(room.config_json or {}),
                 "memory_partition_id": _room_memory_partition_id(room.id),
                 "selected_agent_ids": normalized_agent_ids,
+                "selected_representatives": normalized_representatives,
             }
             session.add(room)
             _ensure_default_thread(session, room)
@@ -1062,19 +1263,35 @@ def _resolve_addressed_participants(
     normalized = [agent_id.strip() for agent_id in addressed_agent_ids if agent_id and agent_id.strip()]
     if not normalized:
         return []
-    by_agent_id = {
-        participant.source_agent_id: participant
-        for participant in participants
-        if participant.source_agent_id
-    }
-    missing = [agent_id for agent_id in normalized if agent_id not in by_agent_id]
+
+    keyed_participants: dict[str, EndingRoomParticipant] = {}
+    for participant in participants:
+        for candidate in (
+            participant.id,
+            participant.worldline_echo_key,
+            participant.source_agent_id,
+        ):
+            normalized_candidate = str(candidate or "").strip()
+            if normalized_candidate:
+                keyed_participants[normalized_candidate] = participant
+
+    missing = [agent_id for agent_id in normalized if agent_id not in keyed_participants]
     if missing:
         raise EndingRoomServiceError(
             422,
             "ENDING_ROOM_ADDRESSED_AGENT_INVALID",
             "addressed_agent_ids must belong to current room participants",
         )
-    return [by_agent_id[agent_id] for agent_id in normalized]
+    return [keyed_participants[agent_id] for agent_id in normalized]
+
+
+def _address_reference_for_participant(
+    room: EndingRoom,
+    participant: EndingRoomParticipant,
+) -> str | None:
+    if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+        return participant.id
+    return participant.source_agent_id or participant.id
 
 
 def _pick_followup_responder(
@@ -1109,12 +1326,6 @@ def _pick_followup_responder(
         return [primary] + ([archivist] if archivist is not None and archivist.id != primary.id else [])
     if interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
         responders = addressed_participants or agent_participants
-        archivist = next(
-            (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
-            None,
-        )
-        if archivist is not None and all(item.id != archivist.id for item in responders):
-            responders = [*responders, archivist]
         return responders or participants[:1]
     archivist = next(
         (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
@@ -1128,6 +1339,21 @@ def _pick_followup_responder(
     if archivist is not None:
         return [archivist]
     return participants[:1]
+
+
+def _ensure_interaction_mode_allowed(
+    room: EndingRoom,
+    interaction_mode: EndingRoomInteractionMode,
+) -> None:
+    if (
+        room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE
+        and interaction_mode == EndingRoomInteractionMode.ALL_PRESENT
+    ):
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED",
+            "all_present is not supported for worldline roundtables",
+        )
 
 
 def _thread_title_for_request(language: str, title: str | None) -> str:
@@ -1163,7 +1389,12 @@ def create_ending_room_thread(
                 {
                     "room_id": room_id,
                     "interaction_mode": interaction_mode.value,
-                    "addressed_agent_ids": [participant.source_agent_id for participant in addressed],
+                    "addressed_agent_ids": [
+                        key
+                        for participant in addressed
+                        for key in [_address_reference_for_participant(room, participant)]
+                        if key
+                    ],
                     "title": resolved_title,
                 },
                 ensure_ascii=False,
@@ -1178,7 +1409,12 @@ def create_ending_room_thread(
             interaction_mode=interaction_mode,
             participant_set_hash=participant_hash,
             memory_partition_id="",
-            addressed_agent_ids_json=[participant.source_agent_id for participant in addressed if participant.source_agent_id],
+            addressed_agent_ids_json=[
+                key
+                for participant in addressed
+                for key in [_address_reference_for_participant(room, participant)]
+                if key
+            ],
         )
         thread.memory_partition_id = _thread_memory_partition_id(room_id, thread.id)
         session.add(thread)
@@ -1197,46 +1433,117 @@ def _build_followup_reply_content(
     interaction_mode: EndingRoomInteractionMode,
     response_index: int,
     response_count: int,
+    participant_evidence: dict[str, Any],
 ) -> str:
     target_label = response_participant.display_name
-    addressed_label = ", ".join(participant.display_name for participant in addressed_participants)
-    persona = response_participant.persona_snapshot_json or {}
-    role_hint = str(persona.get("agent_role") or persona.get("role") or "").strip()
-    bio_hint = str(persona.get("bio_short") or persona.get("agent_persona") or "").strip()
-    evidence_hint = (
-        (room.result_json or {}).get("next_move")
-        or (room.result_json or {}).get("summary")
-        or room.title
-    )
+    addressed_label = " / ".join(participant.display_name for participant in addressed_participants)
+    is_archivist = response_participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+    role_hint = str(participant_evidence.get("role_hint") or "").strip()
+    bio_hint = str(participant_evidence.get("bio_hint") or "").strip()
+    evidence_hint = str(participant_evidence.get("evidence_hook") or room.title).strip()
+    latest_quote = str(participant_evidence.get("latest_quote") or "").strip()
+    latest_round = int(participant_evidence.get("latest_round") or 0)
+    angle_label = _followup_angle_label(role_hint, language=room.language)
     if room.language == "zh":
         if thread.mode == EndingRoomThreadMode.ROOM:
             focus = "只引用当前 room transcript，不读取其他 thread。"
         else:
             focus = "我只追加当前 thread transcript，并沿用 room 级摘要，不会混入别的 thread。"
+        quote_clause = (
+            f"我在 R{latest_round} 当时说过「{latest_quote}」。"
+            if latest_quote and latest_round > 0
+            else f"我会继续沿着「{evidence_hint}」这根线说下去。"
+        )
         if interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
-            opener = "我补一句" if response_index > 0 else "我先接住这个问题"
-            role_prefix = f"{role_hint}，" if role_hint else ""
-            return f"{target_label}：{opener}。{role_prefix}这条结局真正卡住的是「{evidence_hint}」，所以我会把回答压在当前世界线，不往别的线程外溢。{focus}"
+            if is_archivist:
+                return (
+                    f"{target_label}：这轮我不替所有人抢结论。"
+                    f"{addressed_label or '当前阵容'}各守一条线，我只把焦点锁在「{evidence_hint}」上。{focus}"
+                )
+            opener = "我先补一句" if response_index == 0 else "我再接一层"
+            role_prefix = f"{role_hint}。" if role_hint else ""
+            stance_prefix = f"{bio_hint} " if bio_hint else ""
+            return (
+                f"{target_label}：{opener}{role_prefix}"
+                f"{stance_prefix}{quote_clause}"
+                f"所以这轮我只把 {angle_label} 讲具体，不把责任抹平成抽象命运。{focus}"
+            )
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+            if is_archivist:
+                return (
+                    f"{target_label}：这轮热座先听 {addressed_label or '被点名角色'} 把自己的判断说透。"
+                    f"我只补两件事：那一步为什么会锁死后续，以及改它要付什么代价。{focus}"
+                )
             persona_prefix = f"{bio_hint} " if bio_hint else ""
-            return f"{target_label}：围绕「{user_content}」，{persona_prefix}我会先回应你点名的这一处因果，再由档案官替我收束。{focus}"
+            role_prefix = f"{role_hint}。" if role_hint else ""
+            return (
+                f"{target_label}：你点到的就是这一下。{role_prefix}"
+                f"{persona_prefix}{quote_clause}"
+                f"如果只改一手，我会先把「{evidence_hint}」前的判断慢半拍，先把 {angle_label} 重新对齐；这样能压住失控，但短期一定更乱。"
+                f"{focus}"
+            )
+        if is_archivist:
+            return (
+                f"{target_label}：我先替你筛掉噪声。"
+                f"这一问先压回「{evidence_hint}」，再只点当前世界线里最相关的 1-2 位参与者回答。{focus}"
+            )
         if addressed_label:
-            return f"{target_label} 回应：围绕「{user_content}」，我只按当前房间里点名的世界线回声回答。{focus}"
-        return f"{target_label} 回应：围绕「{user_content}」，我会先把「{evidence_hint}」这处转折说清，再把问题路由给最相关的参与者。{focus}"
+            return (
+                f"{target_label}：围绕「{user_content}」，我只按当前房间里点名的世界线回声回答。"
+                f"{quote_clause}我先解释为什么「{evidence_hint}」在我这里看起来不能再拖。{focus}"
+            )
+        return (
+            f"{target_label}：{quote_clause}"
+            f"围绕「{user_content}」，我先把「{evidence_hint}」这处转折说清，再把代价讲明白。{focus}"
+        )
     if thread.mode == EndingRoomThreadMode.ROOM:
         focus = "I am using the room transcript only and not reading other threads."
     else:
         focus = "I am appending only this thread transcript on top of the room summary and not mixing in other threads."
+    quote_clause = (
+        f"In R{latest_round} I said '{latest_quote}'."
+        if latest_quote and latest_round > 0
+        else f"I am still staying on the hinge '{evidence_hint}'."
+    )
     if interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
-        opener = "Let me add one more angle" if response_index > 0 else "I will take the first angle"
-        role_prefix = f"{role_hint}, " if role_hint else ""
-        return f"{target_label}: {opener}. {role_prefix}the hinge is '{evidence_hint}', so I will stay inside the current worldline instead of leaking across threads. {focus}"
+        if is_archivist:
+            return (
+                f"{target_label}: this pass is about division of labor, not instant consensus. "
+                f"{addressed_label or 'The current table'} each hold one strand while I keep the hinge on '{evidence_hint}'. {focus}"
+            )
+        opener = "I will take the first angle" if response_index == 0 else "Let me add one more angle"
+        role_prefix = f"{role_hint}. " if role_hint else ""
+        stance_prefix = f"{bio_hint} " if bio_hint else ""
+        return (
+            f"{target_label}: {opener} {role_prefix}{stance_prefix}{quote_clause} "
+            f"In this round I am only covering {angle_label}, not dissolving into generic commentary. {focus}"
+        )
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+        if is_archivist:
+            return (
+                f"{target_label}: the hotseat answer comes first from {addressed_label or 'the addressed speaker'}. "
+                f"I only collapse the tradeoff after that answer lands. {focus}"
+            )
         persona_prefix = f"{bio_hint} " if bio_hint else ""
-        return f"{target_label}: on '{user_content}', {persona_prefix}I will answer the point you addressed first, then let the Archivist collapse it. {focus}"
+        role_prefix = f"{role_hint}. " if role_hint else ""
+        return (
+            f"{target_label}: you pointed at the exact hinge. {role_prefix}{persona_prefix}{quote_clause} "
+            f"If I only get one correction, I slow down the move right before '{evidence_hint}' and realign {angle_label}; it buys control at the cost of tempo. {focus}"
+        )
+    if is_archivist:
+        return (
+            f"{target_label}: I will route from the current room memory first. "
+            f"The question stays pinned to '{evidence_hint}', then I hand it only to the most relevant current-worldline speakers. {focus}"
+        )
     if addressed_label:
-        return f"{target_label}: on '{user_content}', I will answer through the addressed worldline echo only. {focus}"
-    return f"{target_label}: on '{user_content}', I will route from the current room memory, starting with '{evidence_hint}' as the hinge. {focus}"
+        return (
+            f"{target_label}: on '{user_content}', I will answer through the addressed worldline echo only. "
+            f"{quote_clause} I am starting with '{evidence_hint}' as the hinge. {focus}"
+        )
+    return (
+        f"{target_label}: {quote_clause} "
+        f"On '{user_content}', I will stay with '{evidence_hint}' as the hinge and make the tradeoff explicit. {focus}"
+    )
 
 
 def _persist_followup_turns(
@@ -1252,7 +1559,34 @@ def _persist_followup_turns(
     question_anchor_ids: list[str],
     interaction_mode: EndingRoomInteractionMode,
 ) -> list[EndingRoomTurn]:
+    branch_rows: list[dict[str, Any]] = []
+    evidence_hook = room.title
+    if room.anchor_branch_id:
+        branch = session.get(Branch, room.anchor_branch_id)
+        if branch is not None:
+            branch_rows = _load_branch_rows(session, room.anchor_branch_id, language=room.language)
+            evidence_hook = (
+                (_parse_key_moments(branch.key_moments) or [None])[0]
+                or _compact_text(branch.insight, limit=84)
+                or _compact_text(branch.story, limit=84)
+                or branch.title
+            )
+    participant_evidence = {
+        participant.id: _build_participant_followup_evidence(
+            participant,
+            branch_rows=branch_rows,
+            evidence_hook=evidence_hook,
+        )
+        for participant in [*response_participants, *addressed_participants]
+    }
     room_partition_id = _room_memory_partition(room)
+    normalized_addressed_refs = [
+        _address_reference_for_participant(room, participant)
+        for participant in addressed_participants
+    ]
+    normalized_addressed_refs = [item for item in normalized_addressed_refs if item]
+    if not normalized_addressed_refs:
+        normalized_addressed_refs = addressed_agent_ids or None
     memory_partition_id = (
         room_partition_id
         if thread.mode == EndingRoomThreadMode.ROOM
@@ -1273,7 +1607,7 @@ def _persist_followup_turns(
         source=EndingRoomTurnSource.USER_TURN,
         interaction_mode=interaction_mode,
         memory_partition_id=memory_partition_id,
-        addressed_agent_ids_json=addressed_agent_ids or None,
+        addressed_agent_ids_json=normalized_addressed_refs,
         question_anchor_ids_json=question_anchor_ids or None,
         cited_branch_id=None,
         cited_refs_json={"kind": "user_turn"},
@@ -1296,12 +1630,13 @@ def _persist_followup_turns(
                 interaction_mode=interaction_mode,
                 response_index=index - 1,
                 response_count=len(response_participants),
+                participant_evidence=participant_evidence.get(response_participant.id, {}),
             ),
             emotion="measured",
             source=EndingRoomTurnSource.ASSISTANT_FOLLOWUP,
             interaction_mode=interaction_mode,
             memory_partition_id=memory_partition_id,
-            addressed_agent_ids_json=addressed_agent_ids or None,
+            addressed_agent_ids_json=normalized_addressed_refs,
             question_anchor_ids_json=question_anchor_ids or None,
             cited_branch_id=response_participant.source_branch_id,
             cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
@@ -1359,6 +1694,7 @@ def _append_followup_turns_with_retry(
                     )
                     room, participants = _resolve_room_and_participants(session, thread.room_id)
                     _ensure_followup_write_allowed(room)
+                    _ensure_interaction_mode_allowed(room, interaction_mode)
                     user_participant = _ensure_user_participant(session, room)
                     addressed_participants = _resolve_addressed_participants(
                         participants,
@@ -1605,6 +1941,82 @@ def _delta_chunks(content: str) -> list[str]:
     return [chunk for chunk in [content[:midpoint], content[midpoint:]] if chunk]
 
 
+def _bind_supporting_turn_id(
+    result: dict[str, Any],
+    *,
+    phase: EndingRoomPhase,
+    participant_id: str,
+    content: str,
+    turn_id: str,
+) -> None:
+    supporting_turns = result.get("supporting_turns")
+    if not isinstance(supporting_turns, list):
+        return
+    for supporting_turn in supporting_turns:
+        if supporting_turn.get("turn_id") is not None:
+            continue
+        if supporting_turn.get("phase") != phase.value:
+            continue
+        if supporting_turn.get("participant_id") != participant_id:
+            continue
+        if supporting_turn.get("explanation") != content:
+            continue
+        supporting_turn["turn_id"] = turn_id
+        break
+
+
+def _planned_turn_matches_committed(
+    planned_turn: dict[str, Any],
+    committed_turn: EndingRoomTurn,
+) -> bool:
+    return (
+        committed_turn.source == EndingRoomTurnSource.AUTO_RECAP
+        and committed_turn.phase == planned_turn["phase"]
+        and committed_turn.participant_id == planned_turn["participant_id"]
+        and committed_turn.content == planned_turn["content"]
+    )
+
+
+def _reconcile_auto_recap_progress(
+    session: Session,
+    *,
+    room_id: str,
+    thread_id: str,
+    planned_turns: list[dict[str, Any]],
+) -> list[EndingRoomTurn]:
+    existing_turns = session.exec(
+        select(EndingRoomTurn)
+        .where(
+            EndingRoomTurn.room_id == room_id,
+            EndingRoomTurn.thread_id == thread_id,
+            EndingRoomTurn.source == EndingRoomTurnSource.AUTO_RECAP,
+        )
+        .order_by(EndingRoomTurn.sequence, EndingRoomTurn.id)
+    ).all()
+    if not existing_turns:
+        return []
+
+    prefix_matches = (
+        len(existing_turns) <= len(planned_turns)
+        and all(
+            _planned_turn_matches_committed(planned_turns[index], turn)
+            for index, turn in enumerate(existing_turns)
+        )
+    )
+    if prefix_matches:
+        return existing_turns
+
+    session.exec(
+        sa_delete(EndingRoomTurn).where(
+            EndingRoomTurn.room_id == room_id,
+            EndingRoomTurn.thread_id == thread_id,
+            EndingRoomTurn.source == EndingRoomTurnSource.AUTO_RECAP,
+        )
+    )
+    session.flush()
+    return []
+
+
 def _build_room_plan(session: Session, room: EndingRoom, participants: list[EndingRoomParticipant]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     selected_branch_ids = _normalize_branch_ids((room.config_json or {}).get("selected_branch_ids") or [])
     archivist = next(participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST)
@@ -1685,7 +2097,14 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
     if room.anchor_branch_id is None:
         raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required")
     context = build_branch_scope_context(room.scenario_id, room.anchor_branch_id, language=room.language, selected_branch_ids=selected_branch_ids)
+    branch_rows = _load_branch_rows(session, room.anchor_branch_id, language=room.language)
     primary_speaker = next((item for item in participants if item.role_slot == EndingRoomRoleSlot.AGENT), archivist)
+    agent_speakers = [
+        participant
+        for participant in participants
+        if participant.role_slot == EndingRoomRoleSlot.AGENT
+    ]
+    secondary_speaker = next((participant for participant in agent_speakers if participant.id != primary_speaker.id), None)
     primary_meta = primary_speaker.persona_snapshot_json or {}
     evidence_hook = (
         (context["anchor_branch"]["key_moments"] or [None])[0]
@@ -1693,22 +2112,56 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         or context["anchor_branch"]["story"]
         or context["anchor_branch"]["title"]
     )
+    primary_evidence = _build_participant_followup_evidence(
+        primary_speaker,
+        branch_rows=branch_rows,
+        evidence_hook=evidence_hook,
+    )
+    secondary_evidence = (
+        _build_participant_followup_evidence(
+            secondary_speaker,
+            branch_rows=branch_rows,
+            evidence_hook=evidence_hook,
+        )
+        if secondary_speaker is not None
+        else None
+    )
     role_hint = str(primary_meta.get("agent_role") or "").strip()
     persona_hint = str(primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip()
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
         move_text = (
-            f"只改一步：先把「{evidence_hook}」前的那次判断慢一拍。这样能给补给和情绪各留一次重新校准的窗口，但代价是短期节奏会更乱。"
+            f"动作：在「{evidence_hook}」发生前先插入一轮复核。"
+            f" 理由：这样能把误判从全局扩散，改成局部复核。"
+            f" 代价：短期节奏会更乱，且会暴露更多协调成本。"
             if room.language == "zh"
-            else f"One move only: slow down the call right before '{evidence_hook}'. That buys one recalibration window for logistics and sentiment, but the short-term rhythm gets messier."
+            else (
+                f"Move: insert one verification pass right before '{evidence_hook}'."
+                f" Why: that turns a system-wide mistake into a local re-check."
+                f" Risk: the short-term rhythm gets messier and coordination costs rise."
+            )
         )
+        primary_quote = primary_evidence.get("latest_quote")
+        primary_round = int(primary_evidence.get("latest_round") or 0)
+        primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""
+        primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote}'. " if primary_quote and primary_round > 0 else ""
         planned_turns = [
             {
                 "participant_id": primary_speaker.id,
                 "phase": EndingRoomPhase.OPENING,
                 "content": (
-                    f"{primary_speaker.display_name}：真正把这条线推到《{context['anchor_branch']['title']}》的是「{evidence_hook}」。{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"
+                    f"{primary_speaker.display_name}："
+                    f"{primary_quote_clause_zh}"
+                    f"那一步也把世界线推到了《{context['anchor_branch']['title']}》。"
+                    f"{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"
+                    f"如果只让我改一手，我会先把「{evidence_hook}」前的判断慢半拍，再让复核真正跟上。"
                     if room.language == "zh"
-                    else f"{primary_speaker.display_name}: '{evidence_hook}' is what really pushed this branch toward {context['anchor_branch']['title']}. {(role_hint + '. ') if role_hint else ''}{persona_hint or 'I was optimizing for immediate stability.'}"
+                    else (
+                        f"{primary_speaker.display_name}: "
+                        f"{primary_quote_clause_en}"
+                        f"That also pushed the branch toward {context['anchor_branch']['title']}. "
+                        f"{(role_hint + '. ') if role_hint else ''}{persona_hint or 'I was optimizing for immediate stability.'} "
+                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook}' and make the verification loop catch up."
+                    )
                 ),
                 "emotion": "reflective",
                 "cited_branch_id": room.anchor_branch_id,
@@ -1716,7 +2169,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             },
             {
                 "participant_id": archivist.id,
-                "phase": EndingRoomPhase.REBUTTAL,
+                "phase": EndingRoomPhase.VERDICT,
                 "content": move_text,
                 "emotion": "measured",
                 "cited_branch_id": room.anchor_branch_id,
@@ -1745,35 +2198,92 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         }
 
     verdict_text = (
-        f"档案官结论：这条世界线真正站得住脚的，不是抽象的命运，而是「{evidence_hook}」这处转折没被人及时掐断。只要权限守在当前分支，复盘就能盯住真实因果，而不是跨线拼贴。"
+        f"档案官结论：这条线之所以成立，不是因为命运自己滑过去了，"
+        f"而是「{evidence_hook}」这处转折没人及时踩刹车。权限守在当前分支，复盘才盯得住真实因果。"
         if room.language == "zh"
-        else f"Archivist note: this branch held not because of abstract fate, but because '{evidence_hook}' was never cut off in time. Keep permissions inside the current branch and the debrief stays causal instead of becoming collage."
+        else (
+            f"Archivist note: this branch held not because fate drifted there on its own, "
+            f"but because '{evidence_hook}' was never cut off in time. Keep permissions inside the current branch "
+            f"and the debrief stays causal instead of turning into collage."
+        )
+    )
+    primary_debrief_quote_zh = (
+        f"我在 R{primary_evidence.get('latest_round')} 当时说过「{primary_evidence.get('latest_quote')}」。"
+        if primary_evidence.get("latest_quote") and primary_evidence.get("latest_round")
+        else ""
+    )
+    primary_debrief_quote_en = (
+        f"In R{primary_evidence.get('latest_round')} I said '{primary_evidence.get('latest_quote')}'. "
+        if primary_evidence.get("latest_quote") and primary_evidence.get("latest_round")
+        else ""
     )
     planned_turns = [
         {
             "participant_id": primary_speaker.id,
             "phase": EndingRoomPhase.OPENING,
             "content": (
-                f"{primary_speaker.display_name}：先把焦点放回《{context['anchor_branch']['title']}》。真正的支点是「{evidence_hook}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
+                f"{primary_speaker.display_name}：先把焦点放回《{context['anchor_branch']['title']}》。"
+                f"{primary_debrief_quote_zh}"
+                f"真正的支点是「{evidence_hook}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
                 if room.language == "zh"
-                else f"{primary_speaker.display_name}: let me put the focus back on {context['anchor_branch']['title']}. The hinge was '{evidence_hook}', and once nobody interrupted it, the rest of the ending rolled downhill from there."
+                else (
+                    f"{primary_speaker.display_name}: let me put the focus back on {context['anchor_branch']['title']}. "
+                    f"{primary_debrief_quote_en}"
+                    f"The hinge was '{evidence_hook}', and once nobody interrupted it, the rest of the ending rolled downhill from there."
+                )
             ),
             "emotion": "focused",
             "cited_branch_id": room.anchor_branch_id,
             "cited_refs_json": {"mode": "own_fulltext"},
         },
-        {
-            "participant_id": archivist.id,
-            "phase": EndingRoomPhase.CROSSFIRE,
-            "content": (
-                "我会把异线内容锁在摘要层。这里只追当前世界线里是谁推了一把、谁没能踩住刹车，不把别的全文偷渡进来。"
-                if room.language == "zh"
-                else "I will lock foreign branches at the summary layer. This room is only about who pushed and who failed to brake inside the current worldline, not about smuggling in other full transcripts."
-            ),
-            "emotion": "measured",
-            "cited_branch_id": None,
-            "cited_refs_json": {"mode": "summary_only"},
-        },
+    ]
+    if secondary_speaker is not None:
+        secondary_quote_clause_zh = (
+            f"我在 R{secondary_evidence.get('latest_round')} 其实更在意「{secondary_evidence.get('latest_quote')}」。"
+            if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")
+            else ""
+        )
+        secondary_quote_clause_en = (
+            f"In R{secondary_evidence.get('latest_round')} I leaned on '{secondary_evidence.get('latest_quote')}'. "
+            if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")
+            else ""
+        )
+        planned_turns.append(
+            {
+                "participant_id": secondary_speaker.id,
+                "phase": EndingRoomPhase.CROSSFIRE,
+                "content": (
+                    f"{secondary_speaker.display_name}：我看的断点更直接。"
+                    f"{secondary_quote_clause_zh}"
+                    "所以我会把责任落在谁先让命令、账册或执行链失去闭环，而不是把它说成一场抽象事故。"
+                    if room.language == "zh"
+                    else (
+                        f"{secondary_speaker.display_name}: my cut of the hinge is more concrete. "
+                        f"{secondary_quote_clause_en}"
+                        "I would pin the failure on the moment the order, ledger, or execution chain stopped closing, not on abstract accident."
+                    )
+                ),
+                "emotion": "measured",
+                "cited_branch_id": room.anchor_branch_id,
+                "cited_refs_json": {"mode": "own_fulltext"},
+            }
+        )
+    else:
+        planned_turns.append(
+            {
+                "participant_id": archivist.id,
+                "phase": EndingRoomPhase.CROSSFIRE,
+                "content": (
+                    "我会把异线内容锁在摘要层。这里只追当前世界线里是谁推了一把、谁没能踩住刹车，不把别的全文偷渡进来。"
+                    if room.language == "zh"
+                    else "I will lock foreign branches at the summary layer. This room is only about who pushed and who failed to brake inside the current worldline, not about smuggling in other full transcripts."
+                ),
+                "emotion": "measured",
+                "cited_branch_id": None,
+                "cited_refs_json": {"mode": "summary_only"},
+            }
+        )
+    planned_turns.append(
         {
             "participant_id": archivist.id,
             "phase": EndingRoomPhase.VERDICT,
@@ -1781,8 +2291,8 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             "emotion": "neutral",
             "cited_branch_id": room.anchor_branch_id,
             "cited_refs_json": {"mode": "archive_summary"},
-        },
-    ]
+        }
+    )
     return planned_turns, {
         "summary": verdict_text,
         "next_move": None,
@@ -1885,10 +2395,37 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
             )
             participants = _sort_room_participants(participants, selected_branch_ids)
             planned_turns, result = _build_room_plan(session, room, participants)
+            existing_auto_turns = _reconcile_auto_recap_progress(
+                session,
+                room_id=room_id,
+                thread_id=room_thread_id,
+                planned_turns=planned_turns,
+            )
+            existing_auto_turn_refs = [
+                {
+                    "id": turn.id,
+                    "phase": turn.phase,
+                    "participant_id": turn.participant_id,
+                    "content": turn.content,
+                }
+                for turn in existing_auto_turns
+            ]
             session.commit()
 
-        current_phase = EndingRoomPhase.OPENING
-        for sequence, turn_plan in enumerate(planned_turns, start=1):
+        for committed_turn in existing_auto_turn_refs:
+            _bind_supporting_turn_id(
+                result,
+                phase=committed_turn["phase"],
+                participant_id=committed_turn["participant_id"],
+                content=committed_turn["content"],
+                turn_id=committed_turn["id"],
+            )
+
+        current_phase = existing_auto_turn_refs[-1]["phase"] if existing_auto_turn_refs else EndingRoomPhase.OPENING
+        for sequence, turn_plan in enumerate(
+            planned_turns[len(existing_auto_turn_refs):],
+            start=len(existing_auto_turn_refs) + 1,
+        ):
             if turn_plan["phase"] != current_phase:
                 current_phase = turn_plan["phase"]
                 with Session(get_engine()) as session:
@@ -1958,19 +2495,13 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                 session.commit()
                 session.refresh(committed_turn)
 
-            supporting_turns = result.get("supporting_turns")
-            if isinstance(supporting_turns, list):
-                for supporting_turn in supporting_turns:
-                    if supporting_turn.get("turn_id") is not None:
-                        continue
-                    if supporting_turn.get("phase") != turn_plan["phase"].value:
-                        continue
-                    if supporting_turn.get("participant_id") != turn_plan["participant_id"]:
-                        continue
-                    if supporting_turn.get("explanation") != turn_plan["content"]:
-                        continue
-                    supporting_turn["turn_id"] = committed_turn.id
-                    break
+            _bind_supporting_turn_id(
+                result,
+                phase=turn_plan["phase"],
+                participant_id=turn_plan["participant_id"],
+                content=turn_plan["content"],
+                turn_id=committed_turn.id,
+            )
 
             await _broadcast(room_id, ws_callback, {"type": "ending_room_turn_commit", "data": _serialize_turn(committed_turn)})
 

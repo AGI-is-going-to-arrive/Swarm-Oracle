@@ -9,6 +9,9 @@ import {
   createReplayArtifact,
   finalizeCampaign,
   getAgents,
+  getCampaignBadges,
+  getCampaignMastery,
+  getCampaignProfile,
   getCampaignScenarioSummary,
   getReplayArtifact,
   getScenario,
@@ -20,10 +23,22 @@ import {
 } from '../api/client';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { getDirectorIdentity } from '../lib/directorIdentity';
+import {
+  buildBranchEndingRoomCandidates,
+} from '../lib/endingRoomCandidates';
 import { buildSharedChallengeUrl } from '../lib/challengeShare';
 import { copyText } from '../lib/copyText';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
+import {
+  buildOracleReplayShareUrl,
+  buildOracleReplayUrl,
+  loadOracleReplayLocalCopy,
+  normalizeOracleReplayPayload,
+  readOracleReplayPayload,
+  saveOracleReplayLocalCopy,
+  type OracleReplayPayload,
+} from '../lib/oracleReplay';
 import {
   findChallengeProgressByScenarioId,
   markChallengeCompleted,
@@ -74,9 +89,13 @@ import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import {
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
+import { useEndingRoomStore } from '../stores/endingRoomStore';
 import type {
   AgentInfo,
+  CampaignBadge,
   CampaignFinalizeResult,
+  CampaignMastery,
+  CampaignProfileSummary,
   CampaignScenarioSummary,
   PredictionInfo,
   Scenario,
@@ -129,19 +148,6 @@ function writeCachedCampaignFinalizeResult(
   }
 }
 
-function getEndingRoomCandidateVariantRank(candidate: Pick<AgentInfo, 'name' | 'role'>): number {
-  const normalizedName = candidate.name.trim().toLowerCase().replace(/\s+/g, '');
-  const normalizedRole = candidate.role.trim().toLowerCase().replace(/\s+/g, '');
-  if (!normalizedName || !normalizedRole) return 0;
-
-  const withoutNumericSuffix = normalizedName.replace(/\d+$/, '');
-  if (normalizedName === normalizedRole || withoutNumericSuffix === normalizedRole) {
-    return 1;
-  }
-
-  return 0;
-}
-
 function getBetOutcomeLabel(
   outcome: StructuredBetOutcome,
   t: (key: string, options?: Record<string, unknown>) => string,
@@ -153,19 +159,6 @@ function getBetOutcomeLabel(
 
 function getBetOutcomeClass(outcome: StructuredBetOutcome) {
   return `bet-outcome-chip bet-outcome-chip--${outcome}`;
-}
-
-interface EndingRoomCandidate {
-  id: string;
-  name: string;
-  role: string;
-  persona?: string;
-  contributionCount: number;
-  keyMomentHits: number;
-  lastRound: number;
-  impactScore: number;
-  fallbackCast: boolean;
-  tier?: AgentInfo['tier'];
 }
 
 function getEndingRoomCandidateAvatar(role: string, name: string): string {
@@ -230,6 +223,27 @@ function getCampaignBoundaryMessage(kind: 'missing' | 'conflict', isZh: boolean)
     : 'This archived run already belongs to another director profile, so it will not be counted again on this device.';
 }
 
+function buildCampaignSummaryFromExistingData(
+  persistedSummary: CampaignScenarioSummary,
+  profile: CampaignProfileSummary,
+  masteryList: CampaignMastery[],
+  badges: CampaignBadge[],
+): CampaignFinalizeResult | null {
+  const mastery = masteryList.find((entry) => entry.profile_id === persistedSummary.profile_id);
+  if (!mastery) {
+    return null;
+  }
+  return {
+    scenario_id: persistedSummary.scenario_id,
+    already_finalized: true,
+    campaign_score_delta: persistedSummary.campaign_score_delta,
+    profile,
+    mastery,
+    badges,
+    newly_unlocked_badges: [],
+  };
+}
+
 function buildStoryKeyMoments(story: StoryData): string[] {
   return Array.from(new Set(
     story.branches
@@ -270,6 +284,8 @@ export default function ResultView() {
   const [searchParams] = useSearchParams();
   const replayToken = searchParams.get('replay');
   const replayShareId = searchParams.get('share');
+  const roomReplayShareId = searchParams.get('roomShare');
+  const roomReplayLocalId = searchParams.get('roomLocal');
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
@@ -297,8 +313,12 @@ export default function ResultView() {
   const [endingRoomAutomation, setEndingRoomAutomation] = useState<Record<string, unknown> | null>(null);
   const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
+  const [endingRoomPermalinkCopied, setEndingRoomPermalinkCopied] = useState(false);
+  const [endingRoomLocalCopySaved, setEndingRoomLocalCopySaved] = useState(false);
+  const [importingEndingRoomReplay, setImportingEndingRoomReplay] = useState(false);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [replayPayload, setReplayPayload] = useState<ScenarioResultReplayPayload | null>(null);
+  const [replayEndingRoomPayload, setReplayEndingRoomPayload] = useState<OracleReplayPayload | null>(null);
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
@@ -310,6 +330,9 @@ export default function ResultView() {
   const [campaignNotice, setCampaignNotice] = useState('');
   const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
+  const endingRoomLiveSnapshot = useEndingRoomStore((state) => state.snapshot);
+  const endingRoomLiveResult = useEndingRoomStore((state) => state.result);
+  const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
   const isReplayMode = Boolean(replayPayload);
   const hasUnscored = predictions.some((p) => p.score == null);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
@@ -355,11 +378,56 @@ export default function ResultView() {
     translationRef.current = t;
   }, [isZh, loadResultErrorMessage, replayInvalidMessage, t]);
 
+  const applyScenarioReplay = useCallback((replay: ScenarioResultReplayPayload) => {
+    const replayProfile = inferGameplayProfile(replay.scenario.question, replay.scenario.scene_theme);
+    const replayAuthorityMeta = mergeScenarioMetaAuthority(
+      replay.scenarioMeta,
+      replay.scenario.gameplay_state ?? null,
+      replay.scenario.director_state ?? null,
+      { resetGameplayCompat: true },
+    );
+    const mergedReplayMeta = mergeScenarioArchive(replayAuthorityMeta, {
+      profileId: replayProfile.id,
+      keyMoments: Array.from(new Set([
+        ...replayAuthorityMeta.archive.keyMoments,
+        ...buildStoryKeyMoments(replay.storyData),
+      ])),
+      branchSnapshots: replay.storyData.branches.map((branch) => ({
+        branchId: branch.id,
+        title: branch.title,
+        probability: branch.probability,
+      })),
+    });
+    setReplayPayload(replay);
+    setStoryData(replay.storyData);
+    setScenario(replay.scenario);
+    setAgents(replay.agents);
+    setPredictions(replay.predictions);
+    setCampaignSummary(replay.campaignSummary ?? null);
+    setCampaignScenarioSummary(replay.campaignScenarioSummary ?? null);
+    setDerivedScenarioMeta(mergedReplayMeta);
+  }, []);
+
+  const applyEndingRoomReplay = useCallback((payload: OracleReplayPayload) => {
+    if (payload.scenarioReplay) {
+      applyScenarioReplay(payload.scenarioReplay);
+    }
+    setReplayEndingRoomPayload(payload);
+    if (payload.branchId) {
+      setActiveEndingRoomBranchId(payload.branchId);
+    }
+    if (payload.roomSnapshot.room_type === 'one_move_only' || payload.roomSnapshot.room_type === 'ending_chamber') {
+      setActiveEndingRoomMode(payload.roomSnapshot.room_type);
+    }
+    setActiveEndingRoomSelectedAgentIds(payload.selectedAgentIds ?? []);
+  }, [applyScenarioReplay]);
+
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
 
     const load = async () => {
+      setReplayEndingRoomPayload(null);
       if (replayShareId) {
         const artifact = await Promise.resolve()
           .then(() => getReplayArtifact(replayShareId))
@@ -379,13 +447,29 @@ export default function ResultView() {
           setLoading(false);
           return;
         }
-        setReplayPayload(replay);
-        setStoryData(replay.storyData);
-        setScenario(replay.scenario);
-        setAgents(replay.agents);
-        setPredictions(replay.predictions);
-        setCampaignSummary(replay.campaignSummary ?? null);
-        setCampaignScenarioSummary(replay.campaignScenarioSummary ?? null);
+        applyScenarioReplay(replay);
+        setCampaignError('');
+        setCampaignNotice('');
+        setLoading(false);
+        return;
+      }
+      if (roomReplayShareId || roomReplayLocalId || searchParams.get('roomReplay')) {
+        const roomReplay = roomReplayLocalId
+          ? loadOracleReplayLocalCopy(roomReplayLocalId, 'ending_room_v1')
+          : roomReplayShareId
+            ? await Promise.resolve()
+              .then(() => getReplayArtifact(roomReplayShareId))
+              .then((artifact) => normalizeOracleReplayPayload(artifact.payload, 'ending_room_v1'))
+              .catch(() => null)
+            : await readOracleReplayPayload(searchParams, 'ending_room_v1');
+        if (cancelled) return;
+        if (!roomReplay) {
+          setError(replayInvalidMessageRef.current);
+          setErrorCode('REPLAY_INVALID');
+          setLoading(false);
+          return;
+        }
+        applyEndingRoomReplay(roomReplay);
         setCampaignError('');
         setCampaignNotice('');
         setLoading(false);
@@ -403,13 +487,7 @@ export default function ResultView() {
           setLoading(false);
           return;
         }
-        setReplayPayload(replay);
-        setStoryData(replay.storyData);
-        setScenario(replay.scenario);
-        setAgents(replay.agents);
-        setPredictions(replay.predictions);
-        setCampaignSummary(replay.campaignSummary ?? null);
-        setCampaignScenarioSummary(replay.campaignScenarioSummary ?? null);
+        applyScenarioReplay(replay);
         setCampaignError('');
         setCampaignNotice('');
         setLoading(false);
@@ -558,7 +636,27 @@ export default function ResultView() {
         }
 
         let campaign = cachedCampaignSummary;
-        if (!campaign) {
+        if (!campaign && persistedCampaignSummary?.finalized_at) {
+          const existingCampaign = await Promise.all([
+            getCampaignProfile(directorIdentity.userId).catch(() => null),
+            getCampaignMastery(directorIdentity.userId).catch(() => []),
+            getCampaignBadges(directorIdentity.userId).catch(() => []),
+          ]).then(([profileSummary, masteryList, badgeList]) => (
+            profileSummary
+              ? buildCampaignSummaryFromExistingData(
+                  persistedCampaignSummary,
+                  profileSummary,
+                  masteryList,
+                  badgeList,
+                )
+              : null
+          ));
+          if (existingCampaign) {
+            campaign = existingCampaign;
+          }
+        }
+        const shouldFinalizeCampaign = !persistedCampaignSummary?.finalized_at;
+        if (!campaign && shouldFinalizeCampaign) {
           campaign = await finalizeCampaign(id, {
             user_id: directorIdentity.userId,
             user_name: directorIdentity.userName,
@@ -593,20 +691,24 @@ export default function ResultView() {
               campaign.mastery.profile_id,
               campaign,
             );
-            setCampaignScenarioSummary({
-              scenario_id: id,
-              profile_id: campaign.mastery.profile_id,
-              archive_grade: archiveSummary.archiveGrade,
-              profile_resonance: archiveSummary.profileResonance,
-              betting_hit: archiveSummary.bettingHit ?? null,
-              most_used_card: archiveSummary.mostUsedCard ?? null,
-              completed_daily_challenge: isDailyChallenge,
-              objective_completed_count: completedObjectiveCount,
-              objective_total_count: evaluatedObjectives.length,
-              commitment_outcome: commitmentOutcome,
-              campaign_score_delta: campaign.campaign_score_delta,
-              finalized_at: null,
-            });
+            setCampaignScenarioSummary(
+              persistedCampaignSummary?.finalized_at
+                ? persistedCampaignSummary
+                : {
+                    scenario_id: id,
+                    profile_id: campaign.mastery.profile_id,
+                    archive_grade: archiveSummary.archiveGrade,
+                    profile_resonance: archiveSummary.profileResonance,
+                    betting_hit: archiveSummary.bettingHit ?? null,
+                    most_used_card: archiveSummary.mostUsedCard ?? null,
+                    completed_daily_challenge: isDailyChallenge,
+                    objective_completed_count: completedObjectiveCount,
+                    objective_total_count: evaluatedObjectives.length,
+                    commitment_outcome: commitmentOutcome,
+                    campaign_score_delta: campaign.campaign_score_delta,
+                    finalized_at: null,
+                  },
+            );
           }
         }
       } catch (err) {
@@ -635,7 +737,18 @@ export default function ResultView() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [directorIdentity.userId, directorIdentity.userName, id, replayShareId, replayToken]);
+  }, [
+    applyEndingRoomReplay,
+    applyScenarioReplay,
+    directorIdentity.userId,
+    directorIdentity.userName,
+    id,
+    replayShareId,
+    replayToken,
+    searchParams,
+    roomReplayLocalId,
+    roomReplayShareId,
+  ]);
 
   const handleExport = async () => {
     if (!id || exporting || isReplayMode) return;
@@ -722,100 +835,12 @@ export default function ResultView() {
   };
 
   const branchEndingRoomCandidates = useMemo(() => {
-    const candidatesByBranchId: Record<string, EndingRoomCandidate[]> = {};
-    const messageStats = new Map<string, Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>>();
-    const agentById = new Map(agents.map((agent) => [agent.id, agent]));
-    for (const message of scenario?.messages ?? []) {
-      if (!message.branch || !message.agent_id) continue;
-      const branchStats = messageStats.get(message.branch) ?? new Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>();
-      const current = branchStats.get(message.agent_id) ?? {
-        count: 0,
-        lastRound: 0,
-        keyMomentHits: 0,
-        name: agentById.get(message.agent_id)?.name ?? message.agent,
-      };
-      const branchKeyMoments = (storyData?.branches ?? [])
-        .find((branch) => branch.id === message.branch)?.key_moments ?? [];
-      branchStats.set(message.agent_id, {
-        count: current.count + 1,
-        lastRound: Math.max(current.lastRound, message.round ?? 0),
-        keyMomentHits: current.keyMomentHits + (
-          branchKeyMoments.some((moment) => message.message.toLowerCase().includes(moment.toLowerCase())) ? 1 : 0
-        ),
-        name: current.name,
-      });
-      messageStats.set(message.branch, branchStats);
-    }
-
-    const tierRank: Record<AgentInfo['tier'], number> = {
-      CORE: 0,
-      IMPORTANT: 1,
-      CROWD: 2,
-    };
-
-    for (const branch of storyData?.branches ?? []) {
-      const branchStats = messageStats.get(branch.id) ?? new Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>();
-      const sourceAgents = branchStats.size > 0
-        ? [...branchStats.entries()].map(([agentId, stats]) => {
-            const agent = agentById.get(agentId);
-            return {
-              id: agentId,
-              name: agent?.name ?? stats.name,
-              role: agent?.role ?? (isZh ? '当前世界线参与者' : 'Current worldline participant'),
-              persona: agent?.persona ?? '',
-              contributionCount: stats.count,
-              keyMomentHits: stats.keyMomentHits,
-              lastRound: stats.lastRound,
-              tier: agent?.tier ?? 'CROWD',
-              fallbackCast: !agent,
-            } satisfies Omit<EndingRoomCandidate, 'impactScore'>;
-          })
-        : agents.map((agent) => ({
-            id: agent.id,
-            name: agent.name,
-            role: agent.role,
-            persona: agent.persona,
-            contributionCount: 0,
-            keyMomentHits: 0,
-            lastRound: 0,
-            tier: agent.tier,
-            fallbackCast: true,
-          }));
-      const maxImpactRaw = Math.max(
-        1,
-        ...sourceAgents.map((candidate) => (
-          candidate.contributionCount * 1.1
-          + candidate.keyMomentHits * 1.6
-          + candidate.lastRound * 0.35
-          + (candidate.tier ? (3 - tierRank[candidate.tier]) : 1) * 0.8
-        )),
-      );
-      const branchCandidates = sourceAgents
-        .map((candidate) => ({
-          ...candidate,
-          impactScore: Number(Math.min(
-            0.99,
-            (
-              candidate.contributionCount * 1.1
-              + candidate.keyMomentHits * 1.6
-              + candidate.lastRound * 0.35
-              + (candidate.tier ? (3 - tierRank[candidate.tier]) : 1) * 0.8
-            ) / maxImpactRaw,
-          ).toFixed(2)),
-        }))
-        .sort((left, right) => (
-          right.impactScore - left.impactScore
-          || right.keyMomentHits - left.keyMomentHits
-          || right.contributionCount - left.contributionCount
-          || right.lastRound - left.lastRound
-          || getEndingRoomCandidateVariantRank(left) - getEndingRoomCandidateVariantRank(right)
-          || tierRank[left.tier ?? 'CROWD'] - tierRank[right.tier ?? 'CROWD']
-          || left.name.localeCompare(right.name, isZh ? 'zh-Hans' : 'en')
-        ));
-      candidatesByBranchId[branch.id] = branchCandidates;
-    }
-
-    return candidatesByBranchId;
+    return buildBranchEndingRoomCandidates({
+      agents,
+      branches: storyData?.branches ?? [],
+      messages: scenario?.messages ?? [],
+      isZh,
+    });
   }, [agents, isZh, scenario?.messages, storyData?.branches]);
 
   const openEndingRoomDirect = useCallback((
@@ -829,6 +854,32 @@ export default function ResultView() {
     setPendingEndingRoomPicker(null);
     setEndingRoomAutomation(null);
   }, []);
+
+  const normalizeEndingRoomSelection = useCallback((
+    branchId: string,
+    roomType: 'ending_chamber' | 'one_move_only',
+    selectedAgentIds: string[],
+  ) => {
+    const candidates = branchEndingRoomCandidates[branchId] ?? [];
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const maxSelectable = roomType === 'one_move_only' ? 1 : Math.min(3, candidates.length);
+    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+    const kept = selectedAgentIds
+      .filter((agentId) => candidateIds.has(agentId))
+      .slice(0, maxSelectable);
+
+    if (kept.length > 0) {
+      return kept;
+    }
+
+    const defaultCount = roomType === 'one_move_only' ? 1 : Math.min(2, maxSelectable);
+    return candidates
+      .slice(0, defaultCount)
+      .map((candidate) => candidate.id);
+  }, [branchEndingRoomCandidates]);
 
   const handleOpenEndingRoom = useCallback((
     branchId: string,
@@ -854,6 +905,19 @@ export default function ResultView() {
     setActiveEndingRoomSelectedAgentIds([]);
     setEndingRoomAutomation(null);
   }, []);
+
+  const handleEndingRoomModeChange = useCallback((nextMode: 'ending_chamber' | 'one_move_only') => {
+    if (!activeEndingRoomBranchId) {
+      setActiveEndingRoomMode(nextMode);
+      return;
+    }
+
+    setActiveEndingRoomSelectedAgentIds((current) => (
+      normalizeEndingRoomSelection(activeEndingRoomBranchId, nextMode, current)
+    ));
+    setActiveEndingRoomMode(nextMode);
+    setEndingRoomAutomation(null);
+  }, [activeEndingRoomBranchId, normalizeEndingRoomSelection]);
 
   const branches = storyData?.branches ?? [];
   const fallbackScenarioMeta = useMemo(() => {
@@ -1158,6 +1222,90 @@ export default function ResultView() {
     () => branches.find((branch) => branch.id === activeEndingRoomBranchId) ?? null,
     [activeEndingRoomBranchId, branches],
   );
+  const activeEndingRoomReplayPayload = useMemo(
+    () => (
+      activeEndingRoomBranch
+      && replayEndingRoomPayload
+      && replayEndingRoomPayload.branchId === activeEndingRoomBranch.id
+    )
+      ? replayEndingRoomPayload
+      : null,
+    [activeEndingRoomBranch, replayEndingRoomPayload],
+  );
+  const liveEndingRoomReplayPayload = useMemo<OracleReplayPayload | null>(() => {
+    if (
+      !activeEndingRoomBranch
+      || !replaySnapshot
+      || !endingRoomLiveSnapshot
+      || !endingRoomLiveResult
+      || endingRoomLiveSnapshot.room_type === 'worldline_roundtable'
+    ) {
+      return null;
+    }
+    return {
+      kind: 'ending_room_v1',
+      scenarioReplay: replaySnapshot,
+      roomSnapshot: endingRoomLiveSnapshot,
+      roomResult: endingRoomLiveResult,
+      branchId: activeEndingRoomBranch.id,
+      selectedAgentIds: activeEndingRoomSelectedAgentIds,
+      activeThreadId: endingRoomLiveActiveThreadId,
+    };
+  }, [
+    activeEndingRoomBranch,
+    activeEndingRoomSelectedAgentIds,
+    endingRoomLiveActiveThreadId,
+    endingRoomLiveResult,
+    endingRoomLiveSnapshot,
+    replaySnapshot,
+  ]);
+  const effectiveEndingRoomReplayPayload = activeEndingRoomReplayPayload ?? liveEndingRoomReplayPayload;
+  const handleOpenRoundtable = useCallback(() => {
+    if (!scenario?.id || isReplayMode || branches.length < 2) {
+      return;
+    }
+    navigate(`/roundtable/${scenario.id}`);
+  }, [branches.length, isReplayMode, navigate, scenario?.id]);
+  const handleCopyEndingRoomReplayLink = useCallback(async () => {
+    if (!effectiveEndingRoomReplayPayload) return;
+    const artifact = await createReplayArtifact(
+      effectiveEndingRoomReplayPayload.kind,
+      effectiveEndingRoomReplayPayload as unknown as Record<string, unknown>,
+    ).catch(() => null);
+    const url = artifact
+      ? buildOracleReplayShareUrl(window.location.origin, effectiveEndingRoomReplayPayload, artifact.id)
+      : await buildOracleReplayUrl(window.location.origin, effectiveEndingRoomReplayPayload);
+    await copyText(url);
+    setEndingRoomPermalinkCopied(true);
+    window.setTimeout(() => setEndingRoomPermalinkCopied(false), 1800);
+  }, [effectiveEndingRoomReplayPayload]);
+  const handleSaveEndingRoomReadonlyCopy = useCallback(() => {
+    if (!effectiveEndingRoomReplayPayload) return;
+    const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
+    navigate(`/result/replay?roomLocal=${localId}`, { replace: true });
+    setEndingRoomLocalCopySaved(true);
+    window.setTimeout(() => setEndingRoomLocalCopySaved(false), 1800);
+  }, [effectiveEndingRoomReplayPayload, navigate]);
+  const handleImportEndingRoomReplay = useCallback(async () => {
+    const scenarioReplay = effectiveEndingRoomReplayPayload?.scenarioReplay;
+    if (!scenarioReplay || importingEndingRoomReplay) return;
+    setImportingEndingRoomReplay(true);
+    setImportError('');
+    try {
+      const imported = await importReplayScenario(scenarioReplay.scenario);
+      navigate(`/sim/${imported.id}`);
+    } catch (nextError) {
+      setImportError(
+        getLocalizedApiErrorMessage(
+          nextError,
+          t,
+          isZh ? '导入会客厅回放失败' : 'Failed to import chamber replay',
+        ),
+      );
+    } finally {
+      setImportingEndingRoomReplay(false);
+    }
+  }, [effectiveEndingRoomReplayPayload?.scenarioReplay, importingEndingRoomReplay, isZh, navigate, t]);
   const pendingEndingRoomBranch = useMemo<StoryData['branches'][number] | null>(
     () => branches.find((branch) => branch.id === pendingEndingRoomPicker?.branchId) ?? null,
     [branches, pendingEndingRoomPicker?.branchId],
@@ -1165,6 +1313,52 @@ export default function ResultView() {
   const pendingEndingRoomCandidates = pendingEndingRoomPicker
     ? (branchEndingRoomCandidates[pendingEndingRoomPicker.branchId] ?? [])
     : [];
+  const endingRoomHeaderActions = useMemo(() => {
+    if (!effectiveEndingRoomReplayPayload) return null;
+    return (
+      <>
+        <button
+          type="button"
+          className="ending-chat-inline-button"
+          onClick={() => void handleCopyEndingRoomReplayLink()}
+        >
+          {endingRoomPermalinkCopied
+            ? (isZh ? '回放已复制' : 'Replay copied')
+            : (isZh ? '复制会客厅回放' : 'Copy chamber replay')}
+        </button>
+        <button
+          type="button"
+          className="ending-chat-inline-button"
+          onClick={handleSaveEndingRoomReadonlyCopy}
+        >
+          {endingRoomLocalCopySaved
+            ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
+            : (isZh ? '保存本地只读副本' : 'Save local read-only copy')}
+        </button>
+        {effectiveEndingRoomReplayPayload?.scenarioReplay && (
+          <button
+            type="button"
+            className="ending-chat-inline-button"
+            onClick={() => void handleImportEndingRoomReplay()}
+            disabled={importingEndingRoomReplay}
+          >
+            {importingEndingRoomReplay
+              ? (isZh ? '导入中…' : 'Importing…')
+              : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+          </button>
+        )}
+      </>
+    );
+  }, [
+    effectiveEndingRoomReplayPayload,
+    endingRoomLocalCopySaved,
+    endingRoomPermalinkCopied,
+    handleCopyEndingRoomReplayLink,
+    handleImportEndingRoomReplay,
+    handleSaveEndingRoomReadonlyCopy,
+    importingEndingRoomReplay,
+    isZh,
+  ]);
   const betOutcomeContext = useMemo(() => ({
     dominantBranchId: dominantBranchFromStory?.id ?? null,
     dominantBranchTitle: displayArchive?.dominantBranchTitle ?? null,
@@ -1374,6 +1568,15 @@ export default function ResultView() {
           </span>
         </div>
         <div className="result-actions">
+          {branches.length > 1 && (
+            <button
+              className="btn"
+              onClick={handleOpenRoundtable}
+              disabled={isReplayMode || scenario?.status !== 'done'}
+            >
+              {t('roundtable.entry_cta')}
+            </button>
+          )}
           <button
             className="btn"
             onClick={handleExport}
@@ -2021,14 +2224,21 @@ export default function ResultView() {
           roomType={activeEndingRoomMode}
           selectedAgentIds={activeEndingRoomSelectedAgentIds}
           language={isZh ? 'zh' : 'en'}
-          readOnly={isReplayMode}
+          readOnly={isReplayMode || Boolean(activeEndingRoomReplayPayload)}
           fallbackMessages={
             activeEndingRoomBranch
               ? (scenario?.messages ?? []).filter((message) => message.branch === activeEndingRoomBranch.id)
               : []
           }
+          replayState={activeEndingRoomReplayPayload ? {
+            snapshot: activeEndingRoomReplayPayload.roomSnapshot,
+            result: activeEndingRoomReplayPayload.roomResult,
+            activeThreadId: activeEndingRoomReplayPayload.activeThreadId,
+            selectedAgentIds: activeEndingRoomReplayPayload.selectedAgentIds,
+          } : null}
+          headerActions={endingRoomHeaderActions}
           onAutomationStateChange={setEndingRoomAutomation}
-          onModeChange={(nextMode) => setActiveEndingRoomMode(nextMode)}
+          onModeChange={handleEndingRoomModeChange}
           onClose={handleCloseEndingRoom}
         />
       )}

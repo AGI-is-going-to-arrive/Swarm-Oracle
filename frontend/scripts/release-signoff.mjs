@@ -329,6 +329,8 @@ function main() {
   const mobileOutput = path.join(args.outputRoot, "mobile");
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
   const debateOutput = path.join(args.outputRoot, "debate-full");
+  const endingRoomOutput = path.join(args.outputRoot, "ending-room-followup");
+  const roundtableOutput = path.join(args.outputRoot, "roundtable-full");
   const safariOutput = path.join(args.outputRoot, "safari");
   const summary = {
     version: 1,
@@ -434,6 +436,45 @@ function main() {
       {
         artifactDir: crossBrowserOutput,
         resultFile: path.join(crossBrowserOutput, "result.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "ending_room_followup",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        endingRoomOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomOutput,
+        resultFile: path.join(endingRoomOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "roundtable_full",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--output-dir",
+        roundtableOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableOutput,
+        resultFile: path.join(roundtableOutput, "summary.json"),
       },
     );
     runStep(

@@ -3,7 +3,8 @@
 > 文档类型：active archive
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
-> 当前时间：2026-03-29
+> 当前时间：2026-03-30
+> 状态更新（2026-03-30）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；当前残余主要集中在 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
 
 ---
 
@@ -15,9 +16,9 @@
 
 `推演结束 -> 结果页每个结局卡进入“结局会客厅” -> 只读取当前世界线全文 -> 自动复盘 -> 用户可继续围绕该结局追问当前世界线参与者`
 
-第二阶段再做：
+第二阶段当前已落地的最小闭环是：
 
-`多结局完成 -> 发起“世界线圆桌” -> 每条结局只派代表发言或专家证人 -> 档案官主持并总结`
+`多结局完成 -> 发起“世界线圆桌” -> 每条结局派 1 名代表 -> 档案官主持并总结 -> 支持改选重开 / live follow-up / 只读 replay`
 
 绝不允许把这条线做成：
 
@@ -484,8 +485,9 @@ POST /api/ending-room/{room_id}/replay-artifact     # 第二阶段可补
 > - 当前真实代码里，结果页 CTA 会先进入 participant picker，再把 `selected_agent_ids` 带进 room scope
 > - 单结局 `EndingChatModal` 当前已接上 thread rail、follow-up composer、`archivist_route / hotseat / all_present`
 > - 单结局桌面 `1600x900` 与移动端 `390x844` 的 picker / chamber / hotseat / all-present 当前已做真实浏览器验收
-> - 多结局结果页当前至少已验证过按各自 ending 打开 picker / chamber，但尚未做完整独立签收
-> - `Worldline Roundtable` 页面、ending-room replay/share/import 仍未完成
+> - 多结局结果页当前已通过专项 E2E：按各自 ending 打开 picker / chamber / one-move
+> - `WorldlineRoundtableView` 当前已落地 live / reseat / replay readonly，并进入稳定 `release:signoff` 总链
+> - 当前仍未单独签收的残余主要是 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
 
 ### 目标
 

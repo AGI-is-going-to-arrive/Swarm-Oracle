@@ -339,6 +339,14 @@ export async function createEndingRoom(
       ...(payload.anchorBranchId ? { anchor_branch_id: payload.anchorBranchId } : {}),
       selected_branch_ids: payload.selectedBranchIds,
       ...(payload.selectedAgentIds?.length ? { selected_agent_ids: payload.selectedAgentIds } : {}),
+      ...(payload.selectedRepresentatives?.length
+        ? {
+            selected_representatives: payload.selectedRepresentatives.map((selection) => ({
+              branch_id: selection.branchId,
+              agent_id: selection.agentId,
+            })),
+          }
+        : {}),
       ...(payload.language ? { language: payload.language } : {}),
     }),
   });

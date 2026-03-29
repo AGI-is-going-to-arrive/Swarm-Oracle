@@ -32,11 +32,25 @@ ENDING_ROOM_START_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
 
 
+class SelectedRepresentativeRequest(BaseModel):
+    branch_id: str
+    agent_id: str
+
+    @field_validator("branch_id", "agent_id")
+    @classmethod
+    def normalize_required_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("representative ids must not be empty")
+        return cleaned
+
+
 class CreateEndingRoomRequest(BaseModel):
     room_type: EndingRoomType
     anchor_branch_id: str | None = None
     selected_branch_ids: list[str]
     selected_agent_ids: list[str] = Field(default_factory=list)
+    selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list)
     language: str | None = None
 
     @field_validator("anchor_branch_id", "language")
@@ -62,12 +76,27 @@ class CreateEndingRoomRequest(BaseModel):
             raise ValueError("selected_branch_ids must not be empty")
         return value
 
+    @field_validator("selected_representatives")
+    @classmethod
+    def validate_selected_representatives(
+        cls,
+        value: list[SelectedRepresentativeRequest],
+    ) -> list[SelectedRepresentativeRequest]:
+        branch_ids = [item.branch_id for item in value]
+        if len(branch_ids) != len(set(branch_ids)):
+            raise ValueError("selected_representatives must use unique branch_id")
+        return value
+
     @model_validator(mode="after")
     def validate_shape(self) -> "CreateEndingRoomRequest":
         if self.language is not None and self.language not in {"zh", "en"}:
             raise ValueError("language must be zh or en")
         if self.room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY} and self.anchor_branch_id is None:
             raise ValueError("anchor_branch_id is required for single-branch rooms")
+        if self.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_agent_ids:
+            raise ValueError("worldline_roundtable must use selected_representatives instead of selected_agent_ids")
+        if self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_representatives:
+            raise ValueError("selected_representatives is only supported for worldline_roundtable")
         return self
 
 
@@ -135,6 +164,10 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
             anchor_branch_id=req.anchor_branch_id,
             selected_branch_ids=req.selected_branch_ids,
             selected_agent_ids=req.selected_agent_ids,
+            selected_representatives=[
+                item.model_dump(mode="python")
+                for item in req.selected_representatives
+            ],
             language=req.language,
         )
     except EndingRoomServiceError as exc:
