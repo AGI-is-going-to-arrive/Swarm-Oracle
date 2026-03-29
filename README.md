@@ -20,7 +20,7 @@
 - 当前自动生成内容已统一跟随输入语言：主模式 agent 发言 / 压缩摘要 / 叙事、Debate live/result 文本、分享文案与导出摘要都按输入语言输出；`reddit / x` 不再单独强制英文，backend 语言检测也已扩到 `French / German / Spanish / Portuguese / Italian`。
 - 仓库内最近一次通过的 clean real full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff-clean/summary.json`。
 - 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
-- CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8317`）。
+- CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8318`）。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
 
 ## Documentation Contract
@@ -81,7 +81,7 @@ docker compose up --build -d
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
 - `docker compose` 默认读取仓库根目录 `.env.docker`。
-- 如果 LLM 服务跑在宿主机本地，默认 Docker 配置已经使用 `http://host.docker.internal:8317/v1/chat/completions`。
+- 如果 LLM 服务跑在宿主机本地，默认 Docker 配置已经使用 `http://host.docker.internal:8318/v1/chat/completions`。
 
 ### Local Development
 
@@ -102,7 +102,7 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8317/v1/chat/completions` |
+| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8318/v1/chat/completions` |
 | `LLM_API_KEY` | API key | `sk-12345678` |
 | `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
 | `MAX_AGENTS` | Max agents per scenario | `1500` |

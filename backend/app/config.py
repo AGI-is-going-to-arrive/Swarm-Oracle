@@ -18,7 +18,7 @@ def _is_local_llm_url(url: str) -> bool:
 
 class Settings(BaseSettings):
     # ── LLM ──────────────────────────────────────────────
-    LLM_RESPONSES_URL: str = "http://127.0.0.1:8317/v1/chat/completions"
+    LLM_RESPONSES_URL: str = "http://127.0.0.1:8318/v1/chat/completions"
     LLM_API_KEY: str = "sk-12345678"
     LLM_MODEL_NAME: str = "gpt-5.4-mini"
     LLM_REASONING_EFFORT: str = "none"  # none | low | medium | high

@@ -8,7 +8,7 @@
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8317/v1/chat/completions` | OpenAI兼容API端点；Docker 默认模板 `.env.docker` 会改写成 `http://host.docker.internal:8317/v1/chat/completions` |
+| `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8318/v1/chat/completions` | OpenAI兼容API端点；Docker 默认模板 `.env.docker` 会改写成 `http://host.docker.internal:8318/v1/chat/completions` |
 | `LLM_API_KEY` | str | `sk-12345678` | API密钥 |
 | `LLM_MODEL_NAME` | str | `gpt-5.4-mini` | 模型名称 |
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
@@ -21,7 +21,7 @@
 > - 若 `LLM_RESPONSES_URL` 指向非本地端点，配置加载阶段就会拒绝占位 key，而不是等到第一次 LLM 调用才失败
 > - `LLM_MODEL_NAME` 当前不能为空；空白值会在配置加载阶段直接报错
 
-> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8317/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
+> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8318/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
 
 ## Scenario Runtime Tuning
 
