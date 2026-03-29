@@ -5,9 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
+from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 import app.api.ending_rooms as ending_rooms_api
+from app.main import app
 from app.models import (
     Agent,
     AgentMessage,
@@ -59,6 +61,11 @@ def _seed_ready_room_fixture() -> dict[str, str]:
             "scenario_id": scenario.id,
             "branch_id": branch.id,
         }
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
 @pytest.mark.asyncio
@@ -157,3 +164,17 @@ async def test_ending_room_background_broadcasts_hybrid_stream_events():
             assert payload["data"]["turn_id"] not in seen_commits
 
     ending_rooms_api.ending_room_ws_manager._connections.clear()
+
+
+def test_websocket_alias_route_accepts_real_connections(client):
+    fixture = _seed_ready_room_fixture()
+    snapshot, _created = create_ending_room(
+        fixture["scenario_id"],
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=fixture["branch_id"],
+        selected_branch_ids=[fixture["branch_id"]],
+        language="zh",
+    )
+
+    with client.websocket_connect(f"/ws/ending-room/{snapshot['id']}"):
+        pass

@@ -22,6 +22,7 @@ from app.services.ending_room_service import (
 )
 
 router = APIRouter(prefix="/api", tags=["ending-room"])
+ws_router = APIRouter(tags=["ending-room"])
 ending_room_ws_manager = WSManager()
 ENDING_ROOM_START_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
@@ -78,7 +79,11 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
 
-    if created and snapshot["status"] == "draft":
+    should_schedule = (
+        snapshot["status"] in {"draft", "live"}
+        and not snapshot.get("result_ready", False)
+    )
+    if should_schedule:
         async def _runner() -> None:
             await asyncio.sleep(ENDING_ROOM_START_DELAY_SECONDS)
             await run_ending_room_background(
@@ -87,7 +92,12 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
             )
 
         schedule_background_task(_runner())
-        logger.info("Created ending room %s for scenario %s", snapshot["id"], scenario_id)
+        logger.info(
+            "%s ending room %s for scenario %s",
+            "Created" if created else "Re-scheduled",
+            snapshot["id"],
+            scenario_id,
+        )
     else:
         logger.info("Reused ending room %s for scenario %s", snapshot["id"], scenario_id)
     return snapshot
@@ -115,8 +125,7 @@ async def get_ending_room_result_endpoint(room_id: str):
     return payload
 
 
-@router.websocket("/ws/ending-room/{room_id}")
-async def ending_room_websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
+async def _run_ending_room_websocket_session(websocket: WebSocket, room_id: str) -> None:
     await run_websocket_session(
         ending_room_ws_manager,
         room_id,
@@ -125,3 +134,13 @@ async def ending_room_websocket_endpoint(websocket: WebSocket, room_id: str) -> 
         missing_resource_name="ending room",
         log_client_messages=False,
     )
+
+
+@router.websocket("/ws/ending-room/{room_id}")
+async def ending_room_websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
+    await _run_ending_room_websocket_session(websocket, room_id)
+
+
+@ws_router.websocket("/ws/ending-room/{room_id}")
+async def ending_room_websocket_alias_endpoint(websocket: WebSocket, room_id: str) -> None:
+    await _run_ending_room_websocket_session(websocket, room_id)

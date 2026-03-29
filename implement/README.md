@@ -35,7 +35,7 @@
 | 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | active archive | Debate Arena 设计基线与实现状态同步；不再按待开发清单阅读 | 当前会话 |
 | 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | active archive | Debate Arena 蓝图与验收参考；phase 拆解按历史设计基线阅读 | 当前会话 |
 | 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | active archive | 跨设备状态 authority 收口报告 | 当前会话 |
-| 23 | [神谕会客厅 / 世界线圆桌 详细设计与实施任务单](23_oracle_chambers_worldline_roundtable_execution_plan.md) | active archive | 结局会客厅、世界线圆桌、轻玩法扩展的执行手册；覆盖命名、阶段开发、i18n、跨平台、E2E、review 与素材计划 | 当前会话 |
+| 23 | [神谕会客厅 / 世界线圆桌 详细设计与实施任务单](23_oracle_chambers_worldline_roundtable_execution_plan.md) | active archive | 结局会客厅、世界线圆桌、轻玩法扩展的执行手册；现已额外纳入 `Phase C2` 强制 gate：真实参与者选人、去模板化文案、像素头像/动效、多结局单独签收、replay 稳定性与素材策略 | 当前会话 |
 
 ---
 
@@ -129,4 +129,4 @@
 5. `22_cross_device_state_closure_plan.md`
    看 authority 收口与剩余边界。
 6. `23_oracle_chambers_worldline_roundtable_execution_plan.md`
-   看神谕会客厅 / 世界线圆桌的可直接开工任务单。
+   看神谕会客厅 / 世界线圆桌的可直接开工任务单；当前进入 `Phase D` 前，必须先满足文档里的 `Phase C2` gate。

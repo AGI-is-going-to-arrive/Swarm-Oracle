@@ -321,6 +321,30 @@ class TestLeaderboardUpdate(unittest.TestCase):
             self.assertEqual(entry.best_score, 40.0)
             self.assertEqual(entry.win_streak, 0)
 
+    def test_recompute_leaderboard_deletes_empty_row_when_last_score_disappears(self):
+        prediction_id = self._create_scored_prediction(
+            user_id="u1",
+            user_name="Alice",
+            score=95.0,
+            minutes=1,
+        )
+
+        with Session(self.engine) as session:
+            _update_leaderboard(session, "u1", "Alice", 95.0)
+            session.commit()
+
+        with Session(self.engine) as session:
+            pred = session.get(Prediction, prediction_id)
+            assert pred is not None
+            session.delete(pred)
+            session.commit()
+            recompute_leaderboard_entry(session, "u1", "Alice")
+            session.commit()
+
+        with Session(self.engine) as session:
+            entry = session.exec(select(Leaderboard).where(Leaderboard.user_id == "u1")).first()
+            self.assertIsNone(entry)
+
     def test_update_recomputes_from_predictions_instead_of_incrementing_stale_row(self):
         self._create_scored_prediction(user_id="u1", user_name="Alice", score=80.0, minutes=1)
         self._create_scored_prediction(user_id="u1", user_name="Alice", score=40.0, minutes=2)

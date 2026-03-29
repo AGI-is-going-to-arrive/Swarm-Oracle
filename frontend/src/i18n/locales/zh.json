@@ -710,6 +710,7 @@
     "ending_room": {
       "title": "结局会客厅",
       "entry_cta": "进入会客厅",
+      "one_move_cta": "只改一步",
       "secondary_cta": "为什么走到这里",
       "loading": "正在整理当前结局的会客厅...",
       "status_draft": "准备中",
@@ -723,6 +724,9 @@
       "empty": "当前结局还没有会客厅记录。",
       "load_failed": "加载结局会客厅失败。",
       "start_failed": "发起结局会客厅失败。",
+      "transcript_title": "会客厅记录",
+      "participant_unknown": "未知角色",
+      "archivist_note": "档案官注记",
       "current_branch_badge": "当前世界线",
       "foreign_summary_badge": "异线摘要"
     },

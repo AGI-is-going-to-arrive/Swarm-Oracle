@@ -74,6 +74,10 @@ const {
 });
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: {
+    type: '3rdParty',
+    init: () => {},
+  },
   useTranslation: () => ({
     t: stableTranslator,
     i18n: {
@@ -82,6 +86,10 @@ vi.mock('react-i18next', () => ({
       },
     },
   }),
+}));
+
+vi.mock('../components/EndingChatModal', () => ({
+  default: () => <div data-testid="ending-chat-modal" />,
 }));
 
 vi.mock('../api/client', async () => {
@@ -276,6 +284,20 @@ vi.mock('../components/ShareModal', () => ({
   default: () => null,
 }));
 
+vi.mock('../components/EndingChatModal', () => ({
+  default: ({
+    branch,
+    roomType,
+  }: {
+    branch: { title: string };
+    roomType?: string;
+  }) => (
+    <div data-testid="ending-chat-modal">
+      {branch.title}:{roomType ?? ''}
+    </div>
+  ),
+}));
+
 beforeEach(() => {
   setMockLanguage('en');
   const sessionStore = new Map<string, string>();
@@ -291,6 +313,25 @@ beforeEach(() => {
 });
 
 describe('ResultView campaign summary', () => {
+  it('renders ending-room CTAs and opens the modal with the selected mode', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'ending_room.entry_cta' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ending_room.one_move_cta' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'ending_room.one_move_cta' }));
+
+    expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
+  });
+
   it('finalizes campaign progress and renders the summary block', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockResolvedValue({

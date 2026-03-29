@@ -710,6 +710,7 @@
     "ending_room": {
       "title": "Ending Chamber",
       "entry_cta": "Enter Chamber",
+      "one_move_cta": "One Move Only",
       "secondary_cta": "Why This Ending",
       "loading": "Preparing the current ending chamber...",
       "status_draft": "Preparing",
@@ -723,6 +724,9 @@
       "empty": "No chamber record is available for this ending yet.",
       "load_failed": "Failed to load the ending chamber.",
       "start_failed": "Failed to start the ending chamber.",
+      "transcript_title": "Chamber Transcript",
+      "participant_unknown": "Unknown",
+      "archivist_note": "Archivist Note",
       "current_branch_badge": "Current worldline",
       "foreign_summary_badge": "Crossline summary"
     },

@@ -56,11 +56,11 @@ export default defineConfig({
     port: 18928,
     proxy: {
       '/api': {
-        target: 'http://localhost:18927',
+        target: 'http://127.0.0.1:18927',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:18927',
+        target: 'ws://127.0.0.1:18927',
         ws: true,
       },
     },

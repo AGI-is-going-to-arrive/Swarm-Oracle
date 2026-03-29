@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -30,8 +31,14 @@ from app.models import (
     EndingRoomType,
     Round,
     Scenario,
+    ScenarioStatus,
 )
 from app.models.database import _uuid, get_engine
+from app.services.runtime_lock import (
+    acquire_runtime_lock,
+    ending_room_lock_key,
+    release_runtime_lock,
+)
 
 logger = logging.getLogger(__name__)
 EndingRoomBroadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -42,6 +49,7 @@ ENDING_ROOM_RUNTIME_ERROR = {
     "code": "ENDING_ROOM_RUNTIME_FAILED",
     "message": "Ending room failed unexpectedly. Please retry.",
 }
+_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
 
 
 class EndingRoomServiceError(Exception):
@@ -94,6 +102,16 @@ def _normalize_branch_ids(selected_branch_ids: list[str]) -> list[str]:
         seen.add(branch_id)
         normalized.append(branch_id)
     return normalized
+
+
+def _sort_scope_branch_ids(branches: list[Branch]) -> list[str]:
+    return [
+        branch.id
+        for branch in sorted(
+            branches,
+            key=lambda item: (-float(item.probability or 0.0), item.id),
+        )
+    ]
 
 
 def _parse_key_moments(raw_value: str | None) -> list[str]:
@@ -178,6 +196,7 @@ def _participant_defs(
     language: str,
 ) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
+    used_agent_ids: set[str] = set()
     branch_map = _branch_lookup(session, scenario.id)
     if room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
         for index, branch_id in enumerate(selected_branch_ids):
@@ -213,6 +232,9 @@ def _participant_defs(
             speaker = _pick_branch_speaker(session, scenario.id, anchor_branch_id, fallback_index=index)
             if speaker is None:
                 continue
+            if speaker.id in used_agent_ids:
+                continue
+            used_agent_ids.add(speaker.id)
             participants.append(
                 {
                     "role_slot": EndingRoomRoleSlot.AGENT.value,
@@ -244,6 +266,32 @@ def _participant_defs(
         }
     )
     return participants
+
+
+def _sort_room_participants(
+    participants: list[EndingRoomParticipant],
+    selected_branch_ids: list[str],
+) -> list[EndingRoomParticipant]:
+    branch_order = {
+        branch_id: index
+        for index, branch_id in enumerate(selected_branch_ids)
+    }
+    role_order = {
+        EndingRoomRoleSlot.AGENT: 0,
+        EndingRoomRoleSlot.REPRESENTATIVE: 1,
+        EndingRoomRoleSlot.ARCHIVIST: 2,
+        EndingRoomRoleSlot.CRITIC: 3,
+        EndingRoomRoleSlot.OBSERVER: 4,
+    }
+    return sorted(
+        participants,
+        key=lambda participant: (
+            role_order.get(participant.role_slot, 99),
+            branch_order.get(participant.source_branch_id or "", len(branch_order)),
+            participant.display_name.lower(),
+            participant.id,
+        ),
+    )
 
 
 def _participant_set_hash(
@@ -301,6 +349,16 @@ def _find_existing_room(
     return None
 
 
+def _reset_room_for_retry(session: Session, room: EndingRoom) -> None:
+    session.exec(sa_delete(EndingRoomTurn).where(EndingRoomTurn.room_id == room.id))
+    room.status = EndingRoomStatus.DRAFT
+    room.result_json = None
+    room.updated_at = _now()
+    _set_room_phase(room, EndingRoomPhase.OPENING)
+    session.add(room)
+    session.commit()
+
+
 def create_ending_room(
     scenario_id: str,
     *,
@@ -323,6 +381,12 @@ def create_ending_room(
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             raise EndingRoomServiceError(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        if scenario.status != ScenarioStatus.DONE:
+            raise EndingRoomServiceError(
+                409,
+                "ENDING_ROOM_SCENARIO_NOT_READY",
+                "Ending room is only available after the scenario is done",
+            )
         branch_map = _branch_lookup(session, scenario_id)
         missing = [branch_id for branch_id in normalized_branch_ids if branch_id not in branch_map]
         if missing:
@@ -337,6 +401,7 @@ def create_ending_room(
         branches = [branch_map[branch_id] for branch_id in normalized_branch_ids]
         if any(branch.status != BranchStatus.COMPLETED for branch in branches):
             raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "Ending rooms require completed branches")
+        normalized_branch_ids = _sort_scope_branch_ids(branches)
 
         resolved_language = _detect_language(scenario.question, language)
         participant_defs = _participant_defs(
@@ -363,6 +428,9 @@ def create_ending_room(
             language=resolved_language,
         )
         if existing_room is not None:
+            if existing_room.status == EndingRoomStatus.ERROR:
+                _reset_room_for_retry(session, existing_room)
+                return load_ending_room_snapshot(existing_room.id), True
             return load_ending_room_snapshot(existing_room.id), False
 
         title_map = {
@@ -456,6 +524,10 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         participants = session.exec(
             select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id).order_by(EndingRoomParticipant.id)
         ).all()
+        selected_branch_ids = _normalize_branch_ids(
+            ((room.config_json or {}).get("selected_branch_ids") or []),
+        )
+        participants = _sort_room_participants(participants, selected_branch_ids)
         turns = session.exec(
             select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id).order_by(EndingRoomTurn.sequence)
         ).all()
@@ -498,20 +570,28 @@ def build_branch_scope_context(scenario_id: str, anchor_branch_id: str, *, langu
         branch = session.get(Branch, anchor_branch_id)
         if scenario is None or branch is None or branch.scenario_id != scenario_id:
             raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Branch not found")
+        branch_map = _branch_lookup(session, scenario_id)
+        resolved_language = _detect_language(scenario.question, language)
+        unknown_speaker = "未知角色" if resolved_language == "zh" else "Unknown"
         rows = session.exec(
             select(Round.round_number, Agent.name, AgentMessage.content)
             .join(AgentMessage, AgentMessage.round_id == Round.id)
-            .join(Agent, Agent.id == AgentMessage.agent_id)
+            .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
             .where(Round.branch_id == branch.id)
             .order_by(Round.round_number, AgentMessage.id)
         ).all()
-        transcript = "\n".join(f"[R{round_number}] {agent_name}: {content}" for round_number, agent_name, content in rows)
+        transcript = "\n".join(
+            f"[R{round_number}] {agent_name or unknown_speaker}: {content}"
+            for round_number, agent_name, content in rows
+        )
         foreign_branch_ids = [item for item in _normalize_branch_ids(selected_branch_ids or []) if item != anchor_branch_id]
-        foreign_branches = [session.get(Branch, branch_id) for branch_id in foreign_branch_ids]
+        foreign_branches = [branch_map.get(branch_id) for branch_id in foreign_branch_ids]
+        if any(foreign is None for foreign in foreign_branches):
+            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
         return {
             "scenario_id": scenario.id,
             "question": scenario.question,
-            "language": _detect_language(scenario.question, language),
+            "language": resolved_language,
             "anchor_branch": {
                 "branch_id": branch.id,
                 "title": branch.title,
@@ -544,6 +624,9 @@ def build_roundtable_scope_context(scenario_id: str, selected_branch_ids: list[s
         branches = [branch_map[branch_id] for branch_id in normalized_branch_ids if branch_id in branch_map]
         if len(branches) != len(normalized_branch_ids):
             raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
+        resolved_language = _detect_language(scenario.question, language)
+        unknown_speaker = "未知角色" if resolved_language == "zh" else "Unknown"
+        branches = [branch_map[branch_id] for branch_id in _sort_scope_branch_ids(branches)]
         branch_cards = [
             {
                 "branch_id": branch.id,
@@ -559,7 +642,7 @@ def build_roundtable_scope_context(scenario_id: str, selected_branch_ids: list[s
             own_rows = session.exec(
                 select(Round.round_number, Agent.name, AgentMessage.content)
                 .join(AgentMessage, AgentMessage.round_id == Round.id)
-                .join(Agent, Agent.id == AgentMessage.agent_id)
+                .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
                 .where(Round.branch_id == branch.id)
                 .order_by(Round.round_number, AgentMessage.id)
             ).all()
@@ -573,7 +656,7 @@ def build_roundtable_scope_context(scenario_id: str, selected_branch_ids: list[s
                         "key_moments": _parse_key_moments(branch.key_moments),
                     },
                     "own_transcript": "\n".join(
-                        f"[R{round_number}] {agent_name}: {content}"
+                        f"[R{round_number}] {agent_name or unknown_speaker}: {content}"
                         for round_number, agent_name, content in own_rows
                     ),
                     "other_branch_summaries": [
@@ -586,7 +669,7 @@ def build_roundtable_scope_context(scenario_id: str, selected_branch_ids: list[s
         return {
             "scenario_id": scenario.id,
             "question": scenario.question,
-            "language": _detect_language(scenario.question, language),
+            "language": resolved_language,
             "branches": branch_cards,
             "representatives": representatives,
         }
@@ -849,7 +932,15 @@ def _mark_room_error(room_id: str) -> None:
 async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBroadcast | None = None) -> None:
     if not _claim_room(room_id):
         return
+    lock_lease = None
     try:
+        lock_lease = acquire_runtime_lock(
+            ending_room_lock_key(room_id),
+            lease_seconds=_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
+        )
+        if lock_lease is None:
+            return
+
         with Session(get_engine()) as session:
             room = session.get(EndingRoom, room_id)
             if room is None:
@@ -868,7 +959,15 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
             room = session.get(EndingRoom, room_id)
             if room is None:
                 return
-            participants = session.exec(select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id).order_by(EndingRoomParticipant.id)).all()
+            participants = session.exec(
+                select(EndingRoomParticipant)
+                .where(EndingRoomParticipant.room_id == room_id)
+                .order_by(EndingRoomParticipant.id)
+            ).all()
+            selected_branch_ids = _normalize_branch_ids(
+                ((room.config_json or {}).get("selected_branch_ids") or []),
+            )
+            participants = _sort_room_participants(participants, selected_branch_ids)
             planned_turns, result = _build_room_plan(session, room, participants)
 
         current_phase = EndingRoomPhase.OPENING
@@ -938,6 +1037,20 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                 session.commit()
                 session.refresh(committed_turn)
 
+            supporting_turns = result.get("supporting_turns")
+            if isinstance(supporting_turns, list):
+                for supporting_turn in supporting_turns:
+                    if supporting_turn.get("turn_id") is not None:
+                        continue
+                    if supporting_turn.get("phase") != turn_plan["phase"].value:
+                        continue
+                    if supporting_turn.get("participant_id") != turn_plan["participant_id"]:
+                        continue
+                    if supporting_turn.get("explanation") != turn_plan["content"]:
+                        continue
+                    supporting_turn["turn_id"] = committed_turn.id
+                    break
+
             await _broadcast(room_id, ws_callback, {"type": "ending_room_turn_commit", "data": _serialize_turn(committed_turn)})
 
         with Session(get_engine()) as session:
@@ -982,4 +1095,5 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
         )
         raise
     finally:
+        release_runtime_lock(lock_lease)
         _release_room(room_id)

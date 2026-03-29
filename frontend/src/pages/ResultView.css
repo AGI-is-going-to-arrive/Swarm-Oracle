@@ -283,6 +283,17 @@
   font-weight: 600;
 }
 
+.ending-room-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.ending-room-actions .btn {
+  flex: 1 1 180px;
+}
+
 /* ── Agent Roster ────────────────────────────────────── */
 
 .result-agents {

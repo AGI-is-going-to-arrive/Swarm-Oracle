@@ -630,7 +630,7 @@ export interface EndingRoomPhaseInsight {
 }
 
 export interface EndingRoomSupportingTurn {
-  turn_id: string;
+  turn_id: string | null;
   phase: EndingRoomPhase;
   participant_id: string;
   label: string;
@@ -643,6 +643,8 @@ export interface EndingRoomResult {
   archivist_note?: string | null;
   phase_insights?: EndingRoomPhaseInsight[];
   supporting_turns?: EndingRoomSupportingTurn[];
+  scope?: Record<string, unknown> | null;
+  error?: StructuredWsError | null;
 }
 
 export interface EndingRoomSnapshot {

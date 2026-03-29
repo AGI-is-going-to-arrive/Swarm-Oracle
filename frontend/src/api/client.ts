@@ -8,6 +8,7 @@ import type {
   RetrospectiveInterventionResponse, BatchInterventionPayload, BatchInterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
+  CreateEndingRoomRequest, EndingRoomResultPayload, EndingRoomSnapshot,
   CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
@@ -324,6 +325,32 @@ export async function getDebate(id: string): Promise<DebateSnapshot> {
 /** GET /api/debate/:id/result — get finalized debate result */
 export async function getDebateResult(id: string): Promise<DebateResultPayload> {
   return safeGet(`/debate/${id}/result`);
+}
+
+/** POST /api/scenario/:id/ending-room — create or reuse an ending room scope */
+export async function createEndingRoom(
+  scenarioId: string,
+  payload: CreateEndingRoomRequest,
+): Promise<EndingRoomSnapshot> {
+  return request(`/scenario/${scenarioId}/ending-room`, {
+    method: 'POST',
+    body: JSON.stringify({
+      room_type: payload.roomType,
+      ...(payload.anchorBranchId ? { anchor_branch_id: payload.anchorBranchId } : {}),
+      selected_branch_ids: payload.selectedBranchIds,
+      ...(payload.language ? { language: payload.language } : {}),
+    }),
+  });
+}
+
+/** GET /api/ending-room/:id — get ending room live snapshot */
+export async function getEndingRoom(roomId: string): Promise<EndingRoomSnapshot> {
+  return safeGet(`/ending-room/${roomId}`);
+}
+
+/** GET /api/ending-room/:id/result — get finalized ending room payload */
+export async function getEndingRoomResult(roomId: string): Promise<EndingRoomResultPayload> {
+  return safeGet(`/ending-room/${roomId}/result`);
 }
 
 /** POST /api/debate/import-replay — persist a replay snapshot as a local debate run */

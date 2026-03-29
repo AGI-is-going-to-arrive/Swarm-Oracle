@@ -30,13 +30,13 @@ api/campaign.py ──► services/campaign.py / daily_challenges.py (Track A / 
     │
 api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.py (Track D)
     │
-api/ending_rooms.py ──► services/ending_room_service.py (Oracle Chambers / Worldline Roundtable, Phase B)
+api/ending_rooms.py ──► services/ending_room_service.py (Oracle Chambers / Worldline Roundtable, Phase B backend + Phase C support)
     │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；存在性检查当前已通过 `asyncio.to_thread(...)` 包装同步 DB read，不再在 async WS 握手里直接阻塞事件循环；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；除 `heartbeat` 外，当前还会给所有出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`；空闲期仍会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key；`LOG_LEVEL = DEBUG` 时，broadcast 还会记录 `stream/type/seq/event_id/client count` 便于排查)
     │
-main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter；未处理异常当前也会统一收口成 `500 + INTERNAL_ERROR`，不再直接把默认 FastAPI 500 形状暴露给客户端
+main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；本轮还额外挂载了 ending-room 的 `/api/ws/ending-room/{room_id}` 主路径与 `/ws/ending-room/{room_id}` alias；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter；未处理异常当前也会统一收口成 `500 + INTERNAL_ERROR`，不再直接把默认 FastAPI 500 形状暴露给客户端
     │
 models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理；`_migrate_add_column()` 当前也已接受常见单引号字符串默认值，如 `TEXT DEFAULT '{}'`，不再只允许 `0/1`)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A；`scenario_id` 已加索引)
@@ -170,6 +170,12 @@ alembic/ ──► Alembic 数据库迁移框架
   - `ending_chamber / one_move_only` 必须带 `anchor_branch_id`
   - 所选 branch 当前都必须是 `COMPLETED`
   - `crossline_gallery` 当前会直接返回 `status=done`，不再起后台任务
+  - scenario 本身若还没到 `DONE`，当前会直接拒绝创建 ending-room room，不再让结果页过早接入这条线
+  - room 若上次跑成 `status=error`，当前重进会先 reset 成 `draft` 再重排后台任务
+  - 单结局房间当前会去重同一个 `source_agent_id`，避免同一 agent 被重复塞成两席
+  - branch / roundtable transcript 当前都改成 `LEFT JOIN Agent`，agent 记录缺失时会回退 `Unknown / 未知角色`，不再把旧消息直接吞掉
+  - participant 列表当前会按 `role + selected branch order + display_name` 稳定排序；不再依赖随机 UUID 顺序
+  - committed turn 落库后，`supporting_turns[*].turn_id` 当前会回填真实 turn id，不再永远停在 `null`
   - room 后台运行失败时，当前会显式落 `status=error`，并广播 `ending_room_turn_error + status=error`
   - 并发创建同 scope room 时，唯一键冲突当前会在服务层回收并复用既有 room，不再把 `IntegrityError` 直接暴露给调用方
 
@@ -179,6 +185,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - `acquire_runtime_lock(lock_key, lease_seconds)` → `RuntimeLockLease | None`
   - `release_runtime_lock(lease)` → `bool`
   - `simulation_lock_key(scenario_id)` / `debate_lock_key(debate_id)` — 构造运行锁 key
+  - `ending_room_lock_key(room_id)` — 构造 ending-room 运行锁 key
 - **设计**:
   - 当 `DATABASE_URL` 指向同一个 SQLite 文件时，当前会通过单表 `runtime_lock` 共享运行锁状态
   - 获取新锁前会清理过期 lease；worker crash 后只要 lease 到期，后续 worker 仍可接管
@@ -189,6 +196,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **集成点**:
   - `api/helpers.py` 的 `run_sim_background()` 当前会在真正启动 simulation 前拿 `simulation:{scenario_id}` 锁
   - `services/debate.py` 的 `run_debate_background()` 当前会在广播 `LIVE` 前拿 `debate:{debate_id}` 锁
+  - `services/ending_room_service.py` 当前也会在 `run_ending_room_background()` 真正执行前拿 `ending-room:{room_id}` 锁，避免多 worker 下同一 room 重复跑 turn
 
 ### `gameplay_contract.py` (≈15行) — shared gameplay contract 载入器 (**NEW**)
 - **职责**: 从 `shared/gameplay_contract.v1.json` 读取后端与前端共用的玩法契约

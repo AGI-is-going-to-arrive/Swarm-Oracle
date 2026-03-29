@@ -82,6 +82,7 @@ import type {
   StoryData,
 } from '../types';
 import ShareModal from '../components/ShareModal';
+import EndingChatModal from '../components/EndingChatModal';
 import './ResultView.css';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
@@ -253,6 +254,9 @@ export default function ResultView() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
   const [showShare, setShowShare] = useState(false);
+  const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
+  const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only'>('ending_chamber');
+  const [endingRoomAutomation, setEndingRoomAutomation] = useState<Record<string, unknown> | null>(null);
   const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
@@ -301,7 +305,6 @@ export default function ResultView() {
   const refreshLocalMeta = useCallback(() => {
     setLocalMetaRevision((current) => current + 1);
   }, []);
-
   useEffect(() => {
     if (!id || isReplayMode) return;
     return subscribeScenarioMeta(id, refreshLocalMeta);
@@ -680,6 +683,20 @@ export default function ResultView() {
     }
   };
 
+  const handleOpenEndingRoom = useCallback((
+    branchId: string,
+    roomType: 'ending_chamber' | 'one_move_only',
+  ) => {
+    setActiveEndingRoomBranchId(branchId);
+    setActiveEndingRoomMode(roomType);
+    setEndingRoomAutomation(null);
+  }, []);
+
+  const handleCloseEndingRoom = useCallback(() => {
+    setActiveEndingRoomBranchId(null);
+    setEndingRoomAutomation(null);
+  }, []);
+
   const branches = storyData?.branches ?? [];
   const fallbackScenarioMeta = useMemo(() => {
     if (!id || derivedScenarioMeta || replayPayload?.scenarioMeta) {
@@ -923,6 +940,10 @@ export default function ResultView() {
           compactReplaySnapshot as unknown as Record<string, unknown>,
         ))
         .catch(() => null);
+      const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`;
+      if (!cancelled) {
+        setReplayUrl(fallbackUrl);
+      }
       try {
         const url = artifact
           ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
@@ -932,9 +953,6 @@ export default function ResultView() {
         }
       } catch (error) {
         console.warn('[ResultView] Failed to build replay URL', error);
-        if (!cancelled) {
-          setReplayUrl(`${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`);
-        }
       }
     };
 
@@ -978,6 +996,10 @@ export default function ResultView() {
     replayUrl,
     t,
   ]);
+  const activeEndingRoomBranch = useMemo<StoryData['branches'][number] | null>(
+    () => branches.find((branch) => branch.id === activeEndingRoomBranchId) ?? null,
+    [activeEndingRoomBranchId, branches],
+  );
   const betOutcomeContext = useMemo(() => ({
     dominantBranchId: dominantBranchFromStory?.id ?? null,
     dominantBranchTitle: displayArchive?.dominantBranchTitle ?? null,
@@ -1091,8 +1113,8 @@ export default function ResultView() {
           can_open_share_modal: !isReplayMode && Boolean(replayUrl),
           can_open_leaderboard: true,
           can_score_predictions: hasUnscored && !scoring && !isReplayMode,
-          active_modal: showShare ? 'share' : null,
-          modal_state: showShare ? shareAutomation : null,
+          active_modal: showShare ? 'share' : activeEndingRoomBranch ? 'ending_room' : null,
+          modal_state: showShare ? shareAutomation : activeEndingRoomBranch ? endingRoomAutomation : null,
           expanded_branch_id: expandedBranch,
         },
         branches: (storyData?.branches ?? []).slice(0, 8).map((branch) => ({
@@ -1101,6 +1123,7 @@ export default function ResultView() {
           probability: branch.probability,
           has_story: Boolean(branch.story),
           can_expand_story: Boolean(branch.story && branch.story.length > 150),
+          can_open_ending_room: Boolean(branch.story || branch.insight),
           expanded: expandedBranch === branch.id,
         })),
       },
@@ -1112,7 +1135,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
+  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, endingRoomAutomation, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
     return (
@@ -1321,6 +1344,25 @@ export default function ResultView() {
                   </ol>
                 </div>
               )}
+
+              <div className="ending-room-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void handleOpenEndingRoom(branch.id, 'ending_chamber')}
+                  disabled={!isReplayMode && scenario?.status !== 'done'}
+                >
+                  {t('ending_room.entry_cta')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => void handleOpenEndingRoom(branch.id, 'one_move_only')}
+                  disabled={!isReplayMode && scenario?.status !== 'done'}
+                >
+                  {t('ending_room.one_move_cta')}
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -1665,6 +1707,24 @@ export default function ResultView() {
           shareContext={shareFlavorContext}
           onAutomationStateChange={setShareAutomation}
           onClose={() => setShowShare(false)}
+        />
+      )}
+      {activeEndingRoomBranch && scenario && (
+        <EndingChatModal
+          open={Boolean(activeEndingRoomBranch)}
+          scenarioId={scenario.id}
+          branch={activeEndingRoomBranch}
+          roomType={activeEndingRoomMode}
+          language={isZh ? 'zh' : 'en'}
+          readOnly={isReplayMode}
+          fallbackMessages={
+            activeEndingRoomBranch
+              ? (scenario?.messages ?? []).filter((message) => message.branch === activeEndingRoomBranch.id)
+              : []
+          }
+          onAutomationStateChange={setEndingRoomAutomation}
+          onModeChange={(nextMode) => setActiveEndingRoomMode(nextMode)}
+          onClose={handleCloseEndingRoom}
         />
       )}
     </div>

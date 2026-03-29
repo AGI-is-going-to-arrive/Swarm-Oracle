@@ -494,18 +494,24 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 
-### Oracle Chambers / Worldline Roundtable (Phase B Backend)
+### Oracle Chambers / Worldline Roundtable (Phase C MVP Contract)
 
 > 当前状态：
 > - backend 已实现这条线的 `ending_room` 独立数据域、REST 接口与 WebSocket
-> - 当前只完成到 `Phase B`；结果页入口、会客厅 modal、圆桌页面仍未开始
-> - 也就是说，这里记录的是 **backend 真值**，不是前端已可玩状态
+> - frontend 当前已把这组接口接进结果页单结局 `进入会客厅 / 只改一步` modal
+> - 这轮只实测签收了单结局桌面/移动端闭环；多结局结果页、手动选人，以及 ending-room replay/share/import 仍未签收
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}` | GET | 获取房间 live snapshot | — | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}/result` | GET | 获取房间完成态结果 | — | EndingRoomResultPayload |
+
+> 当前 ending-room WebSocket 可用路径：
+> - 主路径：`/api/ws/ending-room/{room_id}`
+> - 兼容 alias：`/ws/ending-room/{room_id}`
+>
+> 前端 fresh dev session 当前默认连接主路径。
 
 > 这条线的统一作用域键固定为：
 >
@@ -543,12 +549,18 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >     - `anchor_branch_id` 必填
 >     - `anchor_branch_id` 必须属于 `selected_branch_ids`
 >     - 所选 branch 都必须是 `COMPLETED`
+>   - scenario 自身若还未进入 `DONE`，当前会返回 `409 ENDING_ROOM_SCENARIO_NOT_READY`
+>   - 若同 scope room 已存在但上次跑成 `status=error`，当前会先 reset 后再重排后台任务
 >   - `crossline_gallery` 会直接返回 `status=done`，不会再调度后台任务
 > - `GET /api/ending-room/{room_id}`
 >   - 找不到 room：返回 `404 ENDING_ROOM_NOT_FOUND`
 > - `GET /api/ending-room/{room_id}/result`
 >   - room 还没完成：返回 `409 ENDING_ROOM_RESULT_NOT_READY`
 >   - 找不到 room：返回 `404 ENDING_ROOM_NOT_FOUND`
+> - 当前单结局结果页前端只会用：
+>   - `selected_branch_ids = [anchor_branch_id]`
+>   - `room_type = ending_chamber | one_move_only`
+>   - 还没有 `selected_agent_ids`
 >
 > backend 当前会下发的 ending-room WebSocket 事件：
 > - `status`
@@ -566,6 +578,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - room 后台运行失败时，当前会显式把 room 持久化成 `status=error`，并广播：
 >   - `ending_room_turn_error`
 >   - `status = error`
+> - 由于 ending-room room 可能在 WS 建连前就已 `done`，前端当前还会在 `onopen` 后主动补拉一次 `GET /api/ending-room/{room_id}` / `.../result`
 
 ## WebSocket API
 

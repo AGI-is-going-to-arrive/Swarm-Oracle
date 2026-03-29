@@ -197,13 +197,16 @@ def recompute_leaderboard_entry(
     session: Session,
     user_id: str,
     user_name: str,
-) -> Leaderboard:
-    """Rebuild one leaderboard row from the current scored predictions."""
+) -> Leaderboard | None:
+    """Rebuild one leaderboard row from the current scored predictions.
+
+    If a user no longer has any scored predictions, remove the materialized
+    leaderboard row entirely so application-layer scenario deletion does not
+    leave behind empty leaderboard records.
+    """
     entry = session.exec(
         select(Leaderboard).where(Leaderboard.user_id == user_id)
     ).first()
-    if entry is None:
-        entry = Leaderboard(user_id=user_id, user_name=user_name)
 
     total_predictions, total_score, best_score = session.exec(
         select(
@@ -220,11 +223,19 @@ def recompute_leaderboard_entry(
     total_score = float(total_score or 0.0)
     best_score = float(best_score or 0.0)
 
+    if total_predictions == 0:
+        if entry is not None:
+            session.delete(entry)
+        return None
+
+    if entry is None:
+        entry = Leaderboard(user_id=user_id, user_name=user_name)
+
     entry.total_predictions = total_predictions
     entry.total_score = total_score
-    entry.avg_score = total_score / total_predictions if total_predictions > 0 else 0.0
-    entry.best_score = best_score if total_predictions > 0 else 0.0
-    entry.win_streak = _calculate_win_streak(session, user_id) if total_predictions > 0 else 0
+    entry.avg_score = total_score / total_predictions
+    entry.best_score = best_score
+    entry.win_streak = _calculate_win_streak(session, user_id)
     entry.user_name = user_name
     entry.updated_at = datetime.now(timezone.utc)
     session.add(entry)

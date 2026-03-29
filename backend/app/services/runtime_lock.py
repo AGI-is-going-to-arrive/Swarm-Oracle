@@ -41,6 +41,10 @@ def debate_lock_key(debate_id: str) -> str:
     return f"debate:{debate_id}"
 
 
+def ending_room_lock_key(room_id: str) -> str:
+    return f"ending-room:{room_id}"
+
+
 def _runtime_lock_db_path() -> str | None:
     db_url = settings.DATABASE_URL.strip()
     prefix = "sqlite:///"

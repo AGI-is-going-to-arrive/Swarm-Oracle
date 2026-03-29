@@ -239,6 +239,168 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `ending_chamber / one_move_only / worldline_roundtable / crossline_gallery` 均有后端域对象和权限边界
   - `vector_store.retrieve()` 现在要求显式 `branch_id` 或 `allowed_branch_ids`；默认不再放宽到整个 scenario
 
+## 2026-03-29 Phase C — ResultView Ending Chamber MVP
+
+- 已完成 Phase C 结果页单结局会客厅 MVP：
+  - `frontend/src/components/EndingChatModal.tsx/.css`
+  - `frontend/src/hooks/useEndingRoomWS.ts`
+  - `frontend/src/stores/endingRoomStore.ts`
+  - `frontend/src/lib/endingRoomLabels.ts`
+  - `frontend/src/pages/ResultView.tsx/.css`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/pages/ResultView.test.tsx`
+  - `frontend/src/components/EndingChatModal.test.tsx`
+  - `frontend/src/hooks/useEndingRoomWS.test.tsx`
+  - `frontend/src/stores/endingRoomStore.test.ts`
+
+- 当前结果页实现口径：
+  - 每张 ending card 已新增 `进入会客厅 / 只改一步` 两个 CTA。
+  - 点击后会打开沿用现有结果页视觉语言的 modal，不另起一套聊天室 UI。
+  - `ending_chamber` 与 `one_move_only` 都直接复用 backend `ending_room` 域；ResultView 本身不再强依赖 `simulationStore`。
+  - replay 模式下会客厅只读：继续显示当前 branch 摘要与该 branch 的历史消息，不创建新 live room。
+  - `render_game_to_text()` 已纳入会客厅 modal 自动化状态，包含 `active_modal / modal_state / room_type / status / turn_count / pending_draft_count`。
+
+- 本轮前端修复：
+  - `useEndingRoomWS.ts` 已把错误的 `/ws/ending-room/:id` 改为后端真实路由 `/api/ws/ending-room/:id`，收掉了新 room fresh session 下的 `403` WS 握手错误。
+  - `EndingChatModal` 的 CSS 已和实际类名对齐，modal 不再掉到结果页底部做成未样式化块。
+  - `one_move_only` 结果卡里 `summary === next_move` 时不再重复渲染两遍同一句建议。
+
+- 本轮验证通过：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+    - `72 passed in 7.88s`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_api.py -k 'test_delete_cascade_removes_ending_room_domain or test_delete_removes_ending_room_domain_records' -q`
+    - `2 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py app/services/memory.py app/services/simulator.py app/api/ws.py app/api/scenarios.py app/models/ending_room.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_ws.py tests/test_api.py`
+    - `All checks passed!`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx src/components/EndingChatModal.test.tsx src/pages/ResultView.test.tsx`
+    - `26 passed`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `28 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 真实浏览器 / E2E 结论：
+  - 桌面端 `1600x900`：
+    - `ResultView` 已可见 `进入会客厅 / 只改一步` 两个新入口。
+    - `ending_chamber` modal 可稳定走到 `status=done / turn_count=3 / room_type=ending_chamber`。
+    - `one_move_only` modal 可稳定走到 `status=done / turn_count=2 / room_type=one_move_only`。
+  - 移动端 `390x844`：
+    - 结果页 CTA 可点击。
+    - modal `getBoundingClientRect()` 为 `{top:12,left:12,width:366,height:820,bottom:832}`，在视口内，无首屏裁切。
+    - 复盘 / 只改一步 两种模式都已验证可打开并完成。
+
+- `develop-web-game` / Playwright 自动化备注：
+  - `frontend/.tmp-web-game-client-phaseb.mjs` 仍是当前仓库里可用的 ESM 临时包装；原始 skill 脚本 `.js` 版本继续有 Node ESM 扩展名问题。
+  - 用 `develop-web-game` client 跑 `ending_chamber` 与 `one_move_only` 时，`state-0.json` 都能读到正确的 `active_modal=ending_room`、对应 `room_type` 和 `turn_count`。
+  - 但这个 client 会给结果页注入虚拟时间 shim；对于非实时结果页，fresh context 下可能提前打断异步请求，产出一次与真实人工浏览不一致的 `500/409` 控制台噪声。当前已确认核心 API 与人工浏览链路正常，因此把这条噪声记录为工具侧限制，而不是产品主链故障。
+
+- 待后续：
+  - Phase D `世界线圆桌` 前端页和结果页入口仍未做。
+  - 若后续继续追求“fresh headless full clean console”，优先排查 ResultView 在 fresh context 下的 `campaign finalize 409` 和 `develop-web-game` 虚拟时钟副作用，而不是先动会客厅主逻辑。
+
+## 2026-03-29 Phase B review + runtime QA
+
+- 已复读 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`implement/README.md`，并按当前真值重建 QA 清单。
+- 本轮定向验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -k 'delete_' -q`
+    - `12 passed, 173 deselected`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py app/api/scenarios.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `17 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 本轮真实运行态验证：
+  - 新建最小中文场景 `2fd9e199-72d2-4d47-bcea-9d9703757616`，完成后依次创建：
+    - `ending_chamber`：`4db775df-22ab-432d-aa0b-76d721298eba`
+    - `one_move_only`：`dc277ce0-408a-413f-9978-e22f1249d35a`
+  - 复用了现有多结局场景 `eeed9fe9-7080-4b82-a5d2-9c809c332d2b`，创建：
+    - `worldline_roundtable`：`94a03428-5e54-415a-b271-d465b4314390`
+    - `crossline_gallery`：`959559b7-2be6-43e4-aaa3-c09fa73e88bd`
+  - API 层验证通过：room 创建去重、result payload、summary-only gallery、worldline roundtable 摘要边界都能返回。
+  - WS 层验证通过：对 `one_move_only` 英文 room `8db2b9b2-b1b7-43fe-8146-21adbf9e7b06` 实测收到完整 mixed stream：
+    - `status(live) -> turn_start -> turn_delta x2 -> turn_commit -> phase_change -> turn_start -> turn_delta x2 -> turn_commit -> result_ready -> status(done)`
+- 浏览器/E2E 验证：
+  - 已用 `playwright-interactive` 打开结果页 `/result/2fd9e199-72d2-4d47-bcea-9d9703757616`，桌面/移动端截图均已检查。
+  - 已用 `develop-web-game` 客户端（仓库内 `.tmp` 的 `.mjs` 副本）跑 `render_game_to_text`/截图，输出落在 `output/web-game/phaseb-result/`。
+  - `output/web-game/phaseb-result/errors-0.json` 记录到结果页会额外打出一次 `409 Conflict` 资源错误；结合 backend log，来源是 `POST /api/campaign/scenario/.../finalize` 的已完成重复 finalize。
+- 本轮发现的阻塞问题：
+  - **WS 路径合同不一致**：执行方案/文档口径是 `/ws/ending-room/{room_id}`，真实可用路径是 `/api/ws/ending-room/{room_id}`。按文档路径直连会 `403`。这会直接阻塞前端 `useEndingRoomWS` 和本地 dev proxy。
+  - **ending_chamber 参与者重复**：实测 `4db775df-22ab-432d-aa0b-76d721298eba` 与 `81c4ce6a-e575-4f59-b108-9a1f1bfad0a6` 都出现两个 `agent` participant 指向同一个 `source_agent_id`，不符合“双席复盘”预期。
+  - **Phase C 不是未开始，而是半接入且断链**：
+    - `frontend/src/pages/ResultView.tsx` 已有 CTA 和 `EndingChatModal` 挂点。
+    - `frontend/src/api/client.ts`、`frontend/src/stores/endingRoomStore.ts`、`frontend/src/hooks/useEndingRoomWS.ts`、`frontend/src/components/EndingChatModal.tsx` 已存在。
+    - 但实测点击 `进入会客厅` 后，`render_game_to_text()` 会进入 `active_modal = ending_room`，DOM 中却没有真正 modal；当前 `ResultView -> EndingChatModal` 的 props 接口已失配，UI 处于“状态已切换但组件没渲染”的断链状态。
+  - **前端测试残留失效**：`cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts`
+    - `useEndingRoomWS` / `endingRoomStore` 通过
+    - `EndingChatModal.test.tsx` 直接语法错误，说明这套 Phase C 残留测试已失效，当前不具备签收价值。
+- 当前结论：
+  - **Phase B 后端核心域可运行，但不能算“严格签收无隐患”**，至少需要先修：
+    - WS 路径合同 / 前端连接路径不一致
+    - `ending_chamber` 重复 participant
+  - **Oracle Chambers 前端并非未实现，而是存在一套半完成且已失配的 Phase C 残留实现**。后续不能从零开始假设空白，必须先清理这条断链。
+
+## 2026-03-29 Phase B audit + hardening
+
+- 已完成 Phase B 后端 code review + 定向实跑：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`：`29 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_vector_store.py tests/test_api.py -k 'delete_ or ending_room' -q`：`12 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/ending_room_service.py tests/test_ending_room_service.py`：通过
+- 本轮确认并修复的隐性问题：
+  - `build_branch_scope_context()` 之前会对 `selected_branch_ids` 中的 foreign branch 直接 `session.get()`，缺少同 `scenario_id` 边界校验；现在会强制只接受当前 scenario 内分支，否则返回 `ENDING_ROOM_BRANCH_NOT_FOUND`。
+  - `result.supporting_turns[*].turn_id` 之前一直是 `null`，会影响后续 Phase C 引文定位 / 类型对接；现在在 turn commit 后会回填真实 `turn_id`。
+  - 额外补了“相同 roundtable 仅因 branch 顺序不同也必须复用同一 room”的回归测试，锁住 scope dedupe 行为。
+- 当前残余风险（尚未修）：
+  - `ending_room` 后台任务只有进程内 `_RUNNING_ROOMS` 守卫，没有像 simulation/debate 那样的跨 worker runtime lock；多 worker 同时重跑同一 room 仍缺显式防重入测试。
+  - WS 侧目前有 hybrid stream happy-path 覆盖，但仍缺“迟到 delta / reconnect 后只认 committed transcript / 多标签页重复订阅恢复”这类更强状态机测试。
+  - 前端 Phase C/D 仍未接入，所以“已可玩”暂时仍不能成立；下一步进入结果页会客厅 MVP。
+
+## 2026-03-29 Phase C — Ending Chamber MVP
+
+- 已把结果页单结局会客厅接入到前端：
+  - `ResultView` 每张结局卡现在提供 `进入会客厅 / 只改一步` 两个 CTA。
+  - 新增 `frontend/src/components/EndingChatModal.tsx`，沿用当前 Result/Share 的视觉语言，不另起品牌风格。
+  - 会客厅 modal 当前支持：
+    - live room 创建/复用
+    - hybrid stream transcript（draft -> commit）
+    - `one_move_only` 模式切换
+    - replay 只读查看（使用当前 branch fallback transcript，不发起新 live room）
+- 前端验证已通过：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json --incremental false`：通过
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx`：`3 passed`
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx`：`4 passed`
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts`：`3 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`：`18 passed`
+  - `cd frontend && npm run build`：通过
+- 待执行：
+  - 启动真实 backend + frontend 服务
+  - 使用 Playwright / develop-web-game / playwright-interactive 做桌面端、移动端和 replay 只读 E2E
+  - 验证当前美术和主题适配是否仍有缺口
+
+## 2026-03-29 Phase B Review + Hardening
+
+- 已完成本轮 Phase B 定向审计与回归：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+    - `67 passed in 7.38s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'delete_' -q`
+    - `11 passed, 113 deselected in 1.46s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/ending_room_service.py tests/test_ending_room_service.py tests/test_ending_room_api.py`
+    - 通过
+- 审计中实际复现出两个未被原测试覆盖的 Phase B 缺陷，并已修复：
+  - `ending_room` 后台运行失败后，同 scope 再次创建会直接复用 `error` room，用户无法重试。
+  - `POST /api/scenario/{id}/ending-room` 在 `scenario.status != done` 时也允许创建 post-ending room，违反执行文档“结果页之后的复盘层”边界。
+- 已在 `backend/app/services/ending_room_service.py` 修复：
+  - `ScenarioStatus.DONE` 之前拒绝创建 ending room，返回 `ENDING_ROOM_SCENARIO_NOT_READY`
+  - 对已有 `error` room 允许 reset 后重试：清空已提交 room turns、恢复 `draft/opening`，并重新触发后台运行
+- 新增回归测试：
+  - `backend/tests/test_ending_room_service.py::test_create_ending_room_retries_from_error_state`
+  - `backend/tests/test_ending_room_api.py::test_create_ending_room_rejects_scenario_not_done`
+- 当前结论：
+  - Phase B backend 经过补强后可继续进入 Phase C
+  - 仍需在 Phase C/D 前端接入时继续关注的残余点：room 错误态前端提示、roundtable 参与者顺序稳定性、实际浏览器端 WS 重连与 draft/commit 可视化收口
+
 - 本轮测试与回归：
   - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
     - `50 passed`
@@ -11367,3 +11529,161 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 但这不等于“新玩法已可玩”：
     - 前端 `Phase C/D` 仍未实现
     - 因此当前通过的是 `Phase B backend signoff`，不是整条玩法线的最终签收
+
+## 2026-03-29 Phase B Re-review + Hardening
+
+- 本轮重新对照 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 做了 Phase B code review 和定向回归，不只看既有绿测。
+- 新发现并已修复的隐藏边界：
+  - `backend/app/api/ending_rooms.py`
+    - 之前只有 `created && status=draft` 才会调度后台 runner；如果同 scope room 已存在但仍是 `draft/live` 且未完成，重复打开不会补启动，存在“房间卡死但后续请求不再拉起”的风险。
+    - 现改为：只要 room 仍未 `result_ready` 且状态为 `draft/live`，就允许补调度 runner；重复 runner 由服务层 claim 逻辑收口。
+  - `backend/app/services/ending_room_service.py`
+    - 单分支会客厅在“只有一个真实 speaker”时，原先会生成两个相同 agent 席位，导致重复参与者。
+    - 现改为：单分支 agent participant 按 `source_agent_id` 去重，不再重复占位。
+  - `backend/app/services/ending_room_service.py`
+    - `build_branch_scope_context()` / `build_roundtable_scope_context()` 原先对 `Agent` 用内连接；若历史消息对应 agent 记录已缺失，会把那条消息整个丢掉。
+    - 现改为外连接并回退 `未知角色 / Unknown`，保证 transcript 不因历史 agent 缺失而断裂。
+
+- 新增/补强测试：
+  - `backend/tests/test_ending_room_service.py`
+    - `test_single_speaker_branch_does_not_duplicate_agent_participants`
+    - 既有 `test_scope_context_keeps_transcript_when_agent_record_is_missing` 现在被纳入实际回归并通过
+  - `backend/tests/test_ending_room_api.py`
+    - `test_reused_draft_room_is_rescheduled`
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+    - `67 passed in 7.17s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py app/api/scenarios.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py`
+    - `All checks passed!`
+
+- 当前判断：
+  - `Phase B` 经过这轮补强后可继续进入 `Phase C`。
+  - 仍然保留的非阻断空洞：
+    - 还没有真实前端 room UI，所以“玩法已可玩”依然不成立。
+    - 还没有针对多 worker/跨进程 ending-room runner 争抢的专门回归。
+
+## 2026-03-29 Phase B Runtime-Lock + Ordering Hardening
+
+- 本轮继续复查当前代码后，确认前一段日志里提到的 `draft/live` 重调度与 `ScenarioStatus.DONE` 守卫已经在当前代码上；这次实际补的是两个此前没有被测试锁住的隐性点：
+  - `backend/app/services/runtime_lock.py`
+    - 新增 `ending_room_lock_key(room_id)`，让 ending-room runner 也能复用 SQLite 共享 lease。
+  - `backend/app/services/ending_room_service.py`
+    - `run_ending_room_background()` 现在在进程内 claim 之外，再拿一层跨 worker runtime lock，避免同一个 room 在多 worker 下被重复执行。
+    - `load_ending_room_snapshot()` 与 `run_ending_room_background()` 现在都会按 scope branch 顺序稳定排序 participant，不再依赖随机 UUID 排序；这样圆桌代表席位和 opening turn 顺序不会随机抖动。
+- 新增测试：
+  - `backend/tests/test_ending_room_service.py`
+    - `test_roundtable_snapshot_keeps_representatives_in_scope_order`
+    - `test_run_ending_room_background_skips_when_runtime_lock_is_busy`
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+    - `71 passed in 7.59s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/services/runtime_lock.py app/services/ending_room_service.py tests/test_ending_room_service.py`
+    - `All checks passed!`
+- 当前判断：
+  - `Phase B backend signoff` 可以继续维持通过。
+  - 接下来进入 `Phase C`，优先做结果页单结局会客厅 MVP；圆桌页面仍后置。
+
+## 2026-03-29 Phase C — 结果页单结局会客厅 MVP
+
+- 当前落地：
+  - `frontend/src/pages/ResultView.tsx`
+    - 每个 ending card 已增加两枚 CTA：`进入会客厅` / `只改一步`
+    - 结果页 automation payload 已纳入 `can_open_ending_room`、`active_modal = ending_room` 和 modal state
+  - 新增前端会客厅链路：
+    - `frontend/src/components/EndingChatModal.tsx`
+    - `frontend/src/hooks/useEndingRoomWS.ts`
+    - `frontend/src/stores/endingRoomStore.ts`
+    - 对应测试 `EndingChatModal.test.tsx / useEndingRoomWS.test.tsx / endingRoomStore.test.ts`
+- 本轮关键修复：
+  - `useEndingRoomWS` 现在会在 **首次** socket open 时就主动 resync snapshot/result，不再只在 reconnect 或 sequence gap 后补拉。
+  - 这是因为 ending-room backend 完成得很快，如果房间在 WS 建连前就从 `draft -> done`，前端之前会永久卡在 `draft`。
+  - 修复后，即使 live delta 全部错过，modal 仍会在首次 open 后补齐 transcript/result。
+- 本轮验证：
+  - `cd frontend && npx tsc --noEmit --incremental false -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx src/components/EndingChatModal.test.tsx src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `29 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - Playwright interactive 实机验证：
+    - 桌面端 `1600x900`
+      - 结果页 CTA 可见
+      - `进入会客厅` 可打开 `ending_chamber`
+      - modal 最终状态为 `done + turn_count=3 + has_result=true`
+      - 切到 `只改一步` 后，modal 最终状态为 `done + room_type=one_move_only + turn_count=2 + has_result=true`
+    - 移动端 `390x844`
+      - ending card CTA 仍可见、可点
+      - 会客厅 modal 可打开，无明显遮挡；`进入会客厅` 与 `只改一步` 都已实测可达 `done`
+- develop-web-game 工件：
+  - `frontend/output/web-game/ending-room-phasec/shot-0.png`
+  - `frontend/output/web-game/ending-room-phasec/state-0.json`
+  - `frontend/output/web-game/ending-room-phasec/errors-0.json`
+  - 当前这组黑盒工件暴露了一个额外现象：通过 `vite dev` 的同源地址跑脚本时，`/ws/ending-room/*` 握手会出现 `403`，因此黑盒脚本更多落到了 REST/resync 路径；手工 Playwright interactive 验收不受阻，功能仍可完成。
+- 当前判断：
+  - `Phase C` 已形成最小可玩闭环：`结果页 -> 进入会客厅 / 只改一步 -> transcript/result`
+  - 视觉上已沿用当前 parchment / archive 语系，没有额外长出第二套产品风格
+  - 但这轮仍未进入 `Phase D`：世界线圆桌页面、跨结局布局和专门 roundtable E2E 仍未开始
+## 2026-03-29 Phase C — Ending Chamber MVP
+
+- 已接入结果页单结局会客厅 MVP：
+  - `frontend/src/api/client.ts` 新增 `createEndingRoom / getEndingRoom / getEndingRoomResult`
+  - `frontend/src/stores/endingRoomStore.ts` 新增会客厅快照 / result / draft 状态管理
+  - `frontend/src/hooks/useEndingRoomWS.ts` 新增 ending-room WS 重连、去重、gap resync
+  - `frontend/src/components/EndingChatModal.tsx` 与 `EndingChatModal.css` 落地结果页 modal，支持 `复盘 / 只改一步` 模式切换、draft -> commit 收口、replay 只读提示
+  - `frontend/src/pages/ResultView.tsx` 每张结局卡新增 `进入会客厅 / 只改一步` CTA，并把 modal 状态接入 automation payload
+- i18n：
+  - `frontend/src/i18n/locales/{zh,en}.json` 新增 `ending_room.one_move_cta / transcript_title / participant_unknown`
+- 当前前端定向验证已通过：
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts`
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - `cd frontend && npm run build`
+- 当前后端 Phase B 回归重新实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+  - 最新结果：`72 passed`
+- 下一步：
+  - 启动本地前后端，使用 `playwright-interactive` + Playwright CLI 做结果页会客厅桌面/移动端 E2E
+  - 用 `develop-web-game` 客户端补跑“点击结果卡 CTA -> modal 打开 -> 模式切换 -> transcript 可见 / replay 只读”链路截图验证
+
+## 2026-03-29 Phase C — Live Observation Pass
+
+- 已重新启动：
+  - backend `uvicorn app.main:app --host 127.0.0.1 --port 18927`
+  - frontend `vite --host 127.0.0.1 --port 18928`
+- 已现场盯过一轮真实交互，验证对象：
+  - `http://127.0.0.1:18928/result/fec49255-de7c-4060-8cb4-807138370e7b`
+- 桌面端 `1600x900` 现场确认：
+  - 结果页 CTA `Enter Chamber / One Move Only` 可见且可点
+  - `Enter Chamber` 可稳定打开 modal，并进入 `status=done / room_type=ending_chamber / turn_count=3`
+  - transcript 可见三条正式 turn：opening / crossfire / verdict
+  - 在同一 modal 内切到 `One Move Only` 后，可进入 `status=done / room_type=one_move_only / turn_count=2`
+  - 关闭后再重开 `Enter Chamber` 仍能恢复正确内容，不会卡死在空 modal
+- 移动端 `390x844` 现场确认：
+  - modal `getBoundingClientRect()` 为 `x=12 y=12 width=366 height=820`
+  - `fitsVertically=true`
+  - `fitsHorizontally=true`
+  - 也就是说当前 modal 在目标移动视口内可完整落下，没有明显裁切出屏
+- `develop-web-game` 黑盒工件复查：
+  - `output/web-game/ending-room-phasec/shot-0.png`
+  - `output/web-game/ending-room-phasec/state-0.json`
+  - 当前截图与 state 都确认 `active_modal=ending_room`、`status=done`、`turn_count=3`
+- 本轮现场新发现的残余问题：
+  - replay permalink 仍不稳定：从 live 结果页复制出来的 `result/replay?share=...` 在 CLI / 独立 fresh context 下会落到“这个回放链接无效或内容不完整”，同时伴随 `GET /api/replay-artifact/:id` 500/异常表现；这条问题不阻塞 Phase C 单结局会客厅本身，但会影响后续 `Phase E replay/share/import`
+  - 页面控制台仍会看到一次 `POST /api/campaign/scenario/<id>/finalize` 的 `409 Conflict` 噪声；当前 UI 已按预期退化成 notice，不会阻塞会客厅交互，但仍属于观感噪声
+  - 本轮现场观察主要覆盖了单结局结果页；“多结局结果页下，每张结局卡分别进入 `进入会客厅 / 只改一步`”尚未做成单独签收，后续必须补成独立 E2E 与视觉验收
+
+## 2026-03-29 Docs Sync — Phase D/E/F Follow-up
+
+- 已继续更新 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`：
+  - 把本轮提出的四类问题外溢到 `Phase D / E / F`
+  - 明确 `Phase C2` 是进入 `Phase D` 前的强制 gate
+  - 增补多结局结果页下 `ending_chamber / one_move_only` 的单独签收要求
+  - 增补 participant picker、角色卡、像素头像/动效、去模板化文案、replay 稳定性、corner cases、QA inventory、E2E 命令与素材优先级
+- 已更新 `implement/README.md`：
+  - 明确 `23` 号文档当前不仅是执行手册，也承载 `Phase C2` gate
+- 当前文档结论：
+  - 下次继续执行时，不能再只拿单结局演示通过
+  - 必须把多结局结果页中每张结局卡的 `进入会客厅 / 只改一步` 分别验收

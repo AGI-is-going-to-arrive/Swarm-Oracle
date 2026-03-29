@@ -117,6 +117,23 @@ cp .env.example backend/.env
   - 返回 `server=ok, llm=ok`
 - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260329-corners-8317 --headless`
   - 通过；`capture_modes` 不再卡 `capture-ready Theater scene`
+- 本 session 这轮 `Oracle Chambers Phase C MVP` 改动，当前还额外实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `32 passed in 2.30s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -k 'ending_room or delete_' -q`
+    - `39 passed, 152 deselected in 2.77s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/runtime_lock.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `27 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - 手工浏览器验收：
+    - 单结局结果页 `1600x900`：`进入会客厅 -> done(turn_count=3)`、`只改一步 -> done(turn_count=2)`
+    - 单结局结果页 `390x844`：modal `fitsVertically=true`、`fitsHorizontally=true`
+    - 多结局结果页下两种模式当前还没有单独签收；下次执行需按 `implement/23...` 的 `Phase C2` 和多结局 QA 合同补齐
 
 ## 当前推荐定向回归
 

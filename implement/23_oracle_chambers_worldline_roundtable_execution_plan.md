@@ -120,6 +120,19 @@ crossline_gallery:
 - 摘要缓存
 - 向量检索
 
+补充约束：
+
+- 一旦引入“手动选人”，scope key 必须再显式纳入：
+  - `selection_mode = auto | manual`
+  - `selected_agent_ids_hash = sha256(sorted selected_agent_ids) | auto`
+- `participant_set_hash` 不得只由 `branch scope` 计算；手动选人必须参与 dedupe。
+- 同一 worldline 下：
+  - `auto(top-2)`
+  - `manual([A])`
+  - `manual([A,B])`
+  - `manual([B,A])`
+  必须被稳定区分或稳定去重，不能出现“顺序不同 -> room 重复创建”或“选人不同 -> 命中同一个 room”的错误。
+
 ### 2.3 与现有域的关系
 
 - 复用主模式：
@@ -360,7 +373,7 @@ retrieve(
 POST /api/scenario/{id}/ending-room
 GET  /api/ending-room/{room_id}
 GET  /api/ending-room/{room_id}/result
-WS   /ws/ending-room/{room_id}
+WS   /api/ws/ending-room/{room_id}
 POST /api/ending-room/{room_id}/replay-artifact     # 第二阶段可补
 ```
 
@@ -439,6 +452,291 @@ frontend/src/i18n/*                 # 中文/英文词条
 - transcript 只来自当前世界线
 - 中英双语文案正确
 - 移动端 `390x844` 下无遮挡、无溢出
+
+### 当前体验评审结论（2026-03-29 晚）
+
+`Phase C` 当前只能算“功能打通”，还不能算“确实可玩”。
+
+本轮现场 review 暴露的根因如下：
+
+1. 会客厅 participant 不是“这条世界线里真实参与讨论的 agent roster”
+   - 当前后端是从 `anchor_branch_id` 里裁出 `1-2` 个代表，再加一个 `Archivist`
+   - 用户在结果页底部看到的整局参与 Agent，与会客厅里看到的人不是同一语义层
+2. 用户当前无法指定“哪个 agent / 哪几个 agent”进入 `进入会客厅 / 只改一步`
+   - 现有 contract 没有 `selected_agent_ids`
+   - 现有 CTA 只带 `branch id + mode`
+3. 文案过于 deterministic 和模板化
+   - 当前 `_build_room_plan()` 更像 Phase B/Phase C 的数据链路验证文案，不像角色复盘
+   - 典型问题是“像总结报告，不像人说话”
+4. 右侧缺少角色感与玩法感
+   - 没有复用 Theater 的像素头像
+   - 没有 active speaker 动效
+   - 没有角色简介、persona、影响度说明
+5. 左侧直接铺一整段 story，阅读成本太高
+   - 用户进入玩法后，第一眼看到的是信息墙，而不是“和谁复盘、为什么是这些人”
+6. replay permalink 仍有不稳定表现
+   - 不阻塞单结局会客厅主链
+   - 但阻塞后续 `Phase E replay/share/import`
+7. 本轮现场演示与实机观察主要集中在**单结局结果页**
+   - 还没有把“多结局结果页下，每张 ending card 分别进入 `进入会客厅 / 只改一步`”做成单独签收
+   - 因此当前不能声称“多结局场景下这两个模式已经充分验收”
+
+因此在进入 `Phase D` 前，必须补一个新的强制阶段：
+
+- `Phase C2 — 参与者驱动与可玩性修复`
+
+---
+
+## 3.3.1 Phase C2 — 参与者驱动与可玩性修复（Mandatory Before Phase D）
+
+### 目标
+
+把当前“结果页附属文本框”升级成真正可玩的复盘玩法。
+
+一句话要求：
+
+`真实参与者 -> 手动选人 -> 像素人物卡 -> 去模板化发言 -> 再谈圆桌`
+
+### 必须先解决的五类问题
+
+#### A. 参与者错位
+
+当前用户在结果页底部看到的是这局的真实参与 roster，但会客厅里只看到后端 auto-pick 的一小撮代表，认知错位严重。
+
+下轮必须改成：
+
+- 先基于 `anchor_branch_id` 统计当前世界线里**真实发过言**的 agent
+- CTA 打开后先展示该 branch 的真实参与者 roster
+- `auto` 模式可以预选 top-impact 的 `1-3` 人
+- 但 UI 必须允许用户手动改选
+
+#### B. 缺少手动选人
+
+下一轮 contract 必须扩成：
+
+```json
+{
+  "room_type": "ending_chamber | one_move_only | worldline_roundtable | crossline_gallery",
+  "anchor_branch_id": "br_xxx",
+  "selected_branch_ids": ["br_xxx"],
+  "selection_mode": "auto | manual",
+  "selected_agent_ids": ["ag_x", "ag_y"],
+  "language": "zh | en"
+}
+```
+
+并约束：
+
+- `ending_chamber`
+  - 允许 `1-3` 名真实参与者
+  - 默认 `auto` 预选 `2`
+- `one_move_only`
+  - 必须且仅允许 `1` 名主回应者
+  - `Archivist` 可固定附带，但不能替代用户选的人
+- `worldline_roundtable`
+  - 每条 branch 仍只派 `1` 名代表
+  - 但这个代表必须允许用户在候选 roster 里改选
+
+#### C. 套话化文案
+
+当前 deterministic 模板句适合做链路验证，不适合做最终玩法。
+
+下一轮必须改成：
+
+- 每条发言都从当前 branch 的真实 transcript / story / insight / key moments 抽证据
+- prompt 明确要求：
+  - 保持角色口吻
+  - 至少给出 `1` 个具体 hinge / decision / tradeoff
+  - 不允许空泛句式
+  - 句子要短，像人在复盘，不像系统在解释
+- `one_move_only` 的输出固定成：
+  - `1` 个动作
+  - `1` 句原因
+  - `1` 句代价/风险
+
+#### D. 缺少角色感和玩法感
+
+下一轮必须增加：
+
+- 像素头像
+- 角色标题
+- persona 短句
+- 影响力标签
+- 发言高亮/脉冲
+- turn 切换动效
+- story 折叠摘要，而不是默认整堵长文
+
+#### E. 多结局结果页覆盖不足
+
+下一轮必须把以下场景单独签收，而不是只在单结局局面下通过：
+
+- `multi-ending + ending_chamber(ending A)`
+- `multi-ending + ending_chamber(ending B)`
+- `multi-ending + one_move_only(ending A)`
+- `multi-ending + one_move_only(ending B)`
+
+必须确认：
+
+- 每张结局卡进入的会客厅都只读取自己的 `anchor_branch_id`
+- 从结局 A 打开的 chamber，不会因为之前打开过结局 B 而串房间
+- 切换不同 ending card 后，participant picker、推荐阵容、story 摘要、transcript、impact score 都跟着变
+- 在多结局结果页里关闭并重开不同 ending 的 modal，不会复用错 room 或显示错 transcript
+
+### 后端合同
+
+#### 新增服务层 helper
+
+```text
+collect_branch_participant_candidates(...)
+rank_branch_participant_candidates(...)
+validate_selected_agent_ids(...)
+build_manual_participant_defs(...)
+build_auto_participant_defs(...)
+```
+
+#### 候选参与者规则
+
+- 候选集只来自：
+  - 当前 `anchor_branch_id` 中真实发过言的 `AgentMessage.agent_id`
+- 排序至少综合：
+  - `turn_count`
+  - 是否命中 `key_moments`
+  - 是否在后段轮次仍发言
+  - `CORE / IMPORTANT` 权重
+- 若当前 branch 完全没有 message：
+  - fallback 到该 scenario 的 agent roster
+  - 但 UI 必须明确标记 `fallback cast`
+
+#### `ending_room_participant` 返回 payload 至少补齐
+
+```json
+{
+  "id": "erp_xxx",
+  "source_agent_id": "ag_xxx",
+  "display_name": "Mara Veld",
+  "role_slot": "agent | representative | archivist",
+  "persona_snapshot_json": {
+    "agent_role": "Chief Emergency Coordinator",
+    "agent_persona": "Moves first, justifies later, and hates ceremonial delay.",
+    "sprite_key": "sprite_general",
+    "bio_short": "Frontline coordinator who treats delay as a hidden casualty.",
+    "impact_score": 0.84,
+    "turn_count": 4,
+    "key_moment_hits": 2,
+    "last_round_spoken": 3,
+    "selection_reason": "top_impact | user_selected | fallback"
+  }
+}
+```
+
+#### 输入校验
+
+- `selected_agent_ids` 不能为空（manual）
+- `selected_agent_ids` 不得包含不属于该 `scenario_id` 的 agent
+- `selected_agent_ids` 不得包含从未参与该 `anchor_branch_id` 的 agent，除非显式 fallback
+- duplicate agent id 要去重
+- `one_move_only` 超过 `1` 个选人时必须 `422`
+- `ending_chamber` 超过 `3` 个选人时必须 `422`
+
+### 前端合同
+
+#### 结果页 CTA 改成两步
+
+当前：
+
+`点击按钮 -> 直接建 room`
+
+必须改成：
+
+`点击按钮 -> 打开选人面板 -> 确认后建 room`
+
+#### 新增组件建议
+
+```text
+frontend/src/components/EndingRoomParticipantPicker.tsx
+frontend/src/components/EndingRoomParticipantPicker.css
+frontend/src/components/EndingRoomParticipantCard.tsx
+frontend/src/components/EndingRoomParticipantCard.css
+frontend/src/components/EndingRoomSpeakerBadge.tsx
+frontend/src/components/EndingRoomSpeakerBadge.css
+```
+
+#### 选人面板要求
+
+- 展示当前 branch 的真实参与者 roster
+- 每个参与者卡必须展示：
+  - 像素头像
+  - 名字
+  - role
+  - persona 短句
+  - impact score
+  - 发言轮次 / 关键转折命中数
+- 默认预选：
+  - `ending_chamber`: top 2
+  - `one_move_only`: top 1
+- 支持：
+  - 单选
+  - 多选
+  - reset 为推荐阵容
+
+#### 会客厅布局必须改成“玩法信息架构”
+
+左侧：
+
+- `结局摘要卡`
+- `故事摘要（折叠）`
+- `关键转折卡`
+- `参与者快速卡`
+
+右侧：
+
+- `发言记录`
+- 每条发言都带：
+  - 像素头像
+  - 名字
+  - role
+  - 发言阶段
+  - 内容
+- 当前 speaker 有 active 高亮
+
+### 文案质量合同
+
+禁止风格：
+
+- 审计报告腔
+- AI 总结腔
+- 空泛因果句
+- 连续多条同构模板
+
+目标风格：
+
+- 像角色在复盘，而不是系统在讲解
+- 有立场
+- 有偏好
+- 有冲突
+- 有一点“会客厅戏剧感”，但不过火
+
+具体约束：
+
+- 每条发言 `1-3` 句
+- 避免重复 branch title
+- 避免连续两条 turn 用同一种开头
+- `Archivist` 负责收束，不抢戏
+
+### Phase C2 验收
+
+只有以下全部成立，才能把 Phase C 从“功能打通”升级成“真的可玩”：
+
+1. 用户看得见当前世界线真实参与者，而不是只看到神秘代表
+2. 用户能手动指定 1 个或多个参与者进入玩法
+3. 角色卡有头像、角色、persona、影响度
+4. 发言不再是套话模板
+5. 左侧 story 不是默认整堵长文
+6. 右侧 transcript 有角色感和动态反馈
+7. `390x844` 下仍完整可用
+8. 中英双语都自然
+9. replay 只读且稳定
+10. 才允许进入 `Phase D`
 
 ---
 
@@ -585,7 +883,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ### B3. WS
 
-- 新增 `/ws/ending-room/{room_id}`
+- 新增 `/api/ws/ending-room/{room_id}`
 - 事件形状：
   - `status`
   - `room_turn_start`
@@ -622,17 +920,43 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
   - narration 未完成时禁用
   - replay 模式下只读
 
+### C2.5 结果页选人面板（新增，Mandatory）
+
+- CTA 不再直接建 room
+- 先打开 `participant picker`
+- picker 负责：
+  - 展示当前 worldline 实际参与者
+  - 预选推荐阵容
+  - 手动改单选/多选
+  - 解释“为什么推荐这些人”
+
+### C2.6 结果页 roster 对齐（新增，Mandatory）
+
+- 底部 `参与 Agent` 区块和会客厅里的参与者列表必须语义对齐：
+  - 前者：整局实际 roster
+  - 后者：当前 branch 候选 roster + 当前选中 roster
+- UI 必须显式说明：
+  - 谁是“参与过这条世界线”
+  - 谁是“本次进入会客厅”
+
 ### C3. 单结局会客厅组件
 
 - `EndingChatModal.tsx`
   - transcript
   - 当前结局摘要
   - 模式切换
+  - participant strip
+  - sprite avatar
+  - role / persona / impact
   - close / share / replay-ready 保留位
   - 若启用流式：
     - `pendingDraftByTurnId`
     - draft -> commit 替换逻辑
     - 自动滚动但不抖动
+  - 必须支持：
+    - story 摘要折叠 / 展开
+    - 当前 speaker 高亮
+    - 重新选人后重建 room
 
 ### D1. 世界线圆桌页面
 
@@ -651,6 +975,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 - 中英双语全部同时落地
 - 不允许先写中文后补英文
+- `agent role / persona / influence / selection_reason / active speaker` 等新增字段必须中英同时齐全
+- 不允许出现“中文 UI + 英文套话正文”或反向串语
 
 ## 4.3 测试任务
 
@@ -659,6 +985,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 补结果页行为测试
 - 补新 E2E suite
 - 补 cross-browser / mobile smoke
+- 补 participant picker / avatar / replay permalink / read-only chamber 场景
 
 ---
 
@@ -674,6 +1001,14 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - branch 被剪枝但仍保留历史消息
 - agent 信息缺失时 participant fallback
 - 删除 scenario 后，已打开 room 的错误态
+- branch 有 `10+` 参与者时，默认推荐阵容是否稳定
+- selected agent 在 room 创建后被删除时，replay 是否仍能显示人物卡
+- agent 全程 silent 时，是否会错误进入候选 roster
+- `one_move_only` 若用户不选人，是否会稳定 fallback 到 top 1
+- `ending_chamber` 若用户改选后刷新页面，room 是否按选人维度正确恢复
+- 多结局结果页中，从 ending A 打开 chamber 后立刻关闭，再打开 ending B，是否仍正确命中 B 的 branch
+- 多结局结果页中，两张 ending card 的默认推荐阵容是否各自独立
+- 多结局结果页中，A/B 两个 ending 的 story / insight / key_moments / participant roster 是否串线
 
 ### 5.2 隔离与权限
 
@@ -682,6 +1017,10 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - `crossline_gallery` 不显示全文 transcript
 - replay/import 不扩大权限边界
 - L2 向量检索不串 branch
+- 手动选人不会扩大世界线全文读取范围
+- `selected_agent_ids` 只影响 participant roster，不得影响 branch scope
+- 角色 bio / 影响力说明不得泄露其他 branch 才知道的信息
+- 多结局结果页下，从 ending A 进入 `one_move_only` 时，不得读取 ending B 的全文或 key moments
 
 ### 5.3 WS 与并发
 
@@ -692,6 +1031,11 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - `turn_delta` 丢包后，`turn_commit` 仍能正确收口
 - 迟到的 `turn_delta` 不能覆盖已 commit 内容
 - draft 气泡不能因 sequence 重放生成重复卡片
+- 选人后立刻建 room，如果 room 比 WS 建连更快完成，前端是否会主动 resync
+- `selection_mode=manual` 与 `selection_mode=auto` 不能互相串 room
+- 同一 branch 但不同 `selected_agent_ids` 不得被 dedupe 成同一 room
+- 多结局结果页下，同时打开 ending A / ending B 的两个标签页时，不得串 `room_id`
+- 多结局结果页下，先后快速点击两张卡的 CTA，不得把后到事件写进先开的 modal
 
 ### 5.4 i18n
 
@@ -701,6 +1045,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 长中文结局标题不溢出
 - 流式中文分句不应出现明显断裂或半个标点单独闪烁
 - 流式英文长句换行不应引发 layout 抖动
+- 中英双语下 agent bio 都必须读起来自然，不像字段拼接
+- 中英混合名字（如 `Mara Veld`）在中文 UI 下仍不应破版
 
 ### 5.5 响应式
 
@@ -710,12 +1056,31 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - `430x932`
 - `390x844`
 - `375x812`
+- 选人面板打开态
+- 选人面板 -> modal 过渡态
+- story 展开后 modal 高度
+- transcript 超长后滚动
+- avatar + role + persona 卡片在窄屏两列/单列时不挤压
 
 ### 5.6 只读与回放
 
 - replay 模式禁止 live room 创建
 - imported room 只读
 - share 后打开结果一致
+- share permalink 不得出现“artifact 能创建但 fresh context 打不开”的不稳定状态
+- replay 下点击 `进入会客厅 / 只改一步` 只能读取既有 payload，不得重新发 POST
+
+### 5.7 可玩性与观感
+
+- 用户第一次进入 modal 时，能否在 `3` 秒内理解“我在和谁复盘”
+- 用户能否一眼区分：
+  - 角色发言
+  - 档案官收束
+  - `只改一步` 建议
+- 长 story 是否默认可读，而不是一眼就是信息墙
+- 当前发言者是否有足够明显但不刺眼的动态反馈
+- 像素头像是否与角色/题材匹配，而不是随机感过强
+- 文案是否像“角色说话”，而不是“系统解释”
 
 ---
 
@@ -731,6 +1096,11 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
      - 维护 `progress.md`
      - 每轮改动后运行 Playwright 客户端动作
      - 检查 `render_game_to_text()` 与截图
+     - 对本条线新增专项：
+       - `结果页 CTA -> picker -> confirm -> chamber done`
+       - `结果页 CTA -> picker -> one_move_only done`
+       - `关闭 -> 重开 -> 状态恢复`
+       - `390x844` 小屏动作链
      - 对流式场景额外覆盖：
        - `turn_start` 截图
        - `turn_delta` 中间态截图
@@ -742,8 +1112,16 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
      - 文本增长是否平滑
      - draft / commit 替换是否正确
      - 小屏滚动跟随是否稳定
+   - 对本条线新增专项：
+      - participant card 是否与当前世界线 roster 对齐
+      - speaker avatar / active ring / pulse 是否正确
+      - `one_move_only` 是否像人物建议，而不是系统提示
 3. `Playwright CLI Skill`
    - 用于快速 smoke、按钮文案、路由、modal、只读态检查
+   - 对本条线新增专项：
+      - picker 文案与按钮可达性
+      - replay permalink / replay 只读
+      - 中文/英文文案切换后 refetch 是否稳定
 4. `teach-impeccable`
    - 本项目已有 `.impeccable.md`，本轮不需要再问用户新设计问题
    - 实施时必须遵守其设计原则，不得单独长出新品牌语言
@@ -761,6 +1139,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ```text
 frontend/scripts/e2e-ending-room-suite.mjs
+frontend/scripts/e2e-ending-room-picker-suite.mjs
 ```
 
 运行命令建议：
@@ -770,6 +1149,8 @@ cd frontend
 node scripts/e2e-ending-room-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-desktop --headless
 node scripts/e2e-ending-room-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-mobile --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-full --headless
+node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-picker-full --headless
+node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/ending-room-multi-ending-full --headless
 ```
 
 ## 6.3 QA Inventory 模板
@@ -779,14 +1160,24 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 ```yaml
 claims:
   - 结果页每张结局卡可进入会客厅
+  - 用户可看见当前世界线真实参与者
+  - 用户可手动选择进入会客厅/只改一步的 agent
   - 会客厅只读取当前世界线全文
+  - 多结局结果页里，每张结局卡分别进入时也只读取自己的世界线
   - 世界线圆桌只读取他线摘要
   - 中文/英文都自然、无溢出
   - 390px 移动端可用
   - 流式时 draft 与 commit 状态一致且不重复
+  - 会客厅文案像人话，不像系统套话
+  - 头像/角色卡/影响度让用户能理解“为什么是这些人”
 
 controls:
   - 进入会客厅
+  - 从第二张 / 第三张 ending card 进入会客厅
+  - 打开选人面板
+  - 单选 agent
+  - 多选 agent
+  - reset 推荐阵容
   - 关闭会客厅
   - 发起圆桌
   - 切换阶段
@@ -795,11 +1186,18 @@ controls:
 
 state_checks:
   - loading -> live -> done
+  - picker open -> selection -> confirm -> room create
   - single ending -> chamber
+  - multi ending -> chamber on ending A
+  - multi ending -> chamber on ending B
+  - multi ending -> one_move_only on ending A
+  - multi ending -> one_move_only on ending B
   - multi ending -> roundtable
   - replay -> read only
   - zh -> en locale
   - turn_start -> turn_delta -> turn_commit
+  - ending_chamber(selected A+B) -> reopen(selected A+B)
+  - ending_chamber(selected A+B) -> reopen(selected A)
 
 exploratory:
   - 多标签同时开同一个房间
@@ -807,6 +1205,9 @@ exploratory:
   - 切英文后重新进入结果页
   - 在流式过程中关闭再重开 modal
   - 在流式过程中刷新页面观察 committed turn 恢复
+  - 手动改选一个冷门 agent，观察文案是否仍具体
+  - 连续切 `复盘 <-> 只改一步`，确认不会串状态
+  - 在多结局结果页里交替点两张 ending card 的 CTA，观察是否串 ending
 ```
 
 ## 6.4 发布前命令合同
@@ -830,6 +1231,8 @@ npm run build
 node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-corners --headless
 node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-cross-browser --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room --headless
+node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-picker --headless
+node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/post-ending-room-multi-ending --headless
 ```
 
 流式专项建议：
@@ -857,6 +1260,11 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 是否移动端入口、正文、按钮无裁切
 - 是否 replay 只读态可靠
 - 是否所有中英 copy 都有对应 key
+- 是否会客厅 participant roster 与当前 worldline 实际参与者一致
+- 是否支持手动选人，且选人结果真正影响 room
+- 是否存在“选了 A，结果发言的是 B”的错位
+- 是否发言卡上有头像 / role / persona / impact，而不是只有名字
+- 是否存在大段信息墙压垮可读性的情况
 
 ## 7.3 QA Review
 
@@ -867,6 +1275,17 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 对启用流式的页面，必须同时保留：
   - draft 中间态截图
   - commit 完成态截图
+  - 对应 `render_game_to_text` 状态
+- 对 participant picker 与角色卡，必须同时保留：
+  - picker 初始态截图
+  - manual selection 态截图
+  - chamber done 态截图
+  - mobile `390x844` 截图
+- 对多结局结果页，必须额外保留：
+  - ending A -> chamber done 截图
+  - ending B -> chamber done 截图
+  - ending A -> one_move_only done 截图
+  - ending B -> one_move_only done 截图
   - 对应 `render_game_to_text` 状态
 
 ## 7.4 发布 Gate
@@ -880,6 +1299,11 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 新增 console error / unhandled rejection
 - 流式 draft 与最终 commit 不一致
 - 迟到 delta 覆盖已 commit 内容
+- 用户无法理解“为什么是这些 agent”
+- `只改一步` 像系统总结而不是人物建议
+- 角色卡没有头像/角色/背景说明
+- replay permalink 在 fresh context 下不稳定
+- 多结局结果页里，不同结局卡进入 chamber 时发生串线
 
 ---
 
@@ -909,6 +1333,8 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - `debate_quote_frame`
 - `gameplay_panel`
 - `badge_*`
+- `sprite_*` 角色资源
+- `VizSynthesizer` 的 role/name -> sprite 映射
 
 参考：
 
@@ -926,6 +1352,11 @@ badge_worldline_roundtable
 badge_crossline_gallery
 timeline_marker_chamber
 timeline_marker_roundtable
+ending_room_participant_frame
+ending_room_speaker_glow
+ending_room_influence_badge
+archivist_emblem
+worldline_dossier_divider
 ```
 
 ## 8.4 AI 素材生成流程
@@ -935,11 +1366,16 @@ timeline_marker_roundtable
 执行顺序必须固定：
 
 1. 先盘点缺口
-2. 只生成缺的 UI asset
-3. 优先 `gemini-3.1-flash-image-preview`
-4. 细节不够再升 `gemini-3-pro-image-preview`
-5. 生成后写 provenance sidecar
-6. 跑：
+2. 先确认现有 `sprite_*` 是否足够
+3. 只生成缺的 UI asset
+4. 生成内容优先是：
+   - panel / badge / emblem / ornament
+   - dossier portrait / archivist portrait
+   - 不优先替换已有 runtime sprite
+5. 优先 `gemini-3.1-flash-image-preview`
+6. 细节不够再升 `gemini-3-pro-image-preview`
+7. 生成后写 provenance sidecar
+8. 跑：
 
 ```bash
 cd frontend
@@ -952,6 +1388,30 @@ npm run assets:provenance:check
 - 实际调用时通过环境变量或本地安全配置注入
 - 生成风格需与现有档案/圆桌/UI frame 调性对齐
 
+补充风格要求：
+
+- 若生成 portrait，必须与现有像素 sprite 风格兼容
+- 不得出现高写实头像贴进像素 UI 的风格断层
+- 不得生成“像社交 app 头像”的现代照片质感头像
+
+## 8.5 会客厅体验层的素材优先级
+
+第一优先（必须做）：
+
+- 复用现有 sprite 作为 participant avatar
+- speaker pulse / active ring / focus frame
+- 角色影响力 badge
+
+第二优先（如工期允许）：
+
+- `Archivist` 专属像素肖像或徽章
+- 按题材 profile 区分的 chamber accent ornament
+
+第三优先（后续）：
+
+- 每个 gameplay profile 的 chamber side motif
+- `worldline_roundtable` 专属台面/席位背景
+
 ---
 
 ## 9. 可玩性验收标准
@@ -959,14 +1419,22 @@ npm run assets:provenance:check
 只有满足以下全部条件，才能声称“功能正常实现，且确实可玩”：
 
 1. 单结局会客厅可以稳定进入、退出、重开
-2. transcript 与当前世界线一致
-3. 世界线圆桌的代表逻辑可理解、结果可复盘
-4. `只改一步` 在 30 秒内给出清晰建议
-5. `异线旁听席` 轻量、清楚、不泄露他线全文
-6. 中英双语都自然
-7. 桌面/移动主流浏览器中 UI 不裁切、不失真
-8. 无新增显性或隐性跨世界线污染
-9. 若开启流式，用户能感知到“正在发言”，但最终 transcript、replay、share 只依赖 committed turn
+2. 用户能看见当前世界线真实参与者
+3. 用户能手动选择 1 个或多个参与者
+4. transcript 与当前世界线一致
+5. 角色卡能解释：
+   - 他是谁
+   - 为什么在这里
+   - 对该结局影响有多大
+6. 世界线圆桌的代表逻辑可理解、结果可复盘
+7. `只改一步` 在 30 秒内给出具体、像人话的建议
+8. `异线旁听席` 轻量、清楚、不泄露他线全文
+9. 中英双语都自然
+10. 桌面/移动主流浏览器中 UI 不裁切、不失真
+11. 无新增显性或隐性跨世界线污染
+12. 若开启流式，用户能感知到“正在发言”，但最终 transcript、replay、share 只依赖 committed turn
+13. 头像、动态效果、排版与题材语义一致，不像另一款产品
+14. 单结局与多结局结果页都分别签收过 `进入会客厅 / 只改一步`
 
 ---
 
@@ -977,19 +1445,22 @@ npm run assets:provenance:check
 1. Phase A：冻结命名、契约、i18n key
 2. Phase B：后端新域 + L2 隔离修复
 3. Phase C：结果页单结局会客厅 MVP
-4. Phase C 回归测试 + cross-browser + mobile
-5. Phase D：世界线圆桌
-6. Phase D 回归测试 + visual QA
-7. Phase E：replay/share/import
-8. Phase F：轻玩法扩展
-9. 资产补齐与 provenance 收口
-10. 最终 `release:signoff`
+4. Phase C2：参与者驱动与可玩性修复
+5. Phase C2 回归测试 + cross-browser + mobile + visual QA
+6. Phase D：世界线圆桌
+7. Phase D 回归测试 + visual QA
+8. Phase E：replay/share/import
+9. Phase F：轻玩法扩展
+10. 资产补齐与 provenance 收口
+11. 最终 `release:signoff`
 
 如果资源有限，首个可交付里只做：
 
 - `结局会客厅`
 - `只改一步`
+- `真实参与者选人`
+- `像素头像 + 人物卡 + 影响度`
 - 必要 i18n
 - 桌面 + 移动 E2E
 
-把 `世界线圆桌` 放到第二个迭代里，会更稳。
+把 `世界线圆桌` 放到第二个迭代里，会更稳；但 **不允许** 在缺少选人、人物卡和去模板化发言的情况下就直接跳进 `Phase D`。

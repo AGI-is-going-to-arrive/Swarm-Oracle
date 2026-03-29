@@ -161,6 +161,33 @@ def test_create_ending_room_dedupes_same_scope(client):
     assert first.json()["id"] == second.json()["id"]
 
 
+def test_reused_draft_room_is_rescheduled(client, monkeypatch):
+    fixture = _seed_ready_scenario()
+    scheduled = []
+
+    def _capture(coro):
+        scheduled.append(coro)
+
+    monkeypatch.setattr("app.api.ending_rooms.schedule_background_task", _capture)
+
+    payload = {
+        "room_type": "ending_chamber",
+        "anchor_branch_id": fixture["branch_id"],
+        "selected_branch_ids": [fixture["branch_id"]],
+        "language": "zh",
+    }
+    first = client.post(f"/api/scenario/{fixture['scenario_id']}/ending-room", json=payload)
+    second = client.post(f"/api/scenario/{fixture['scenario_id']}/ending-room", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+    assert len(scheduled) == 2
+
+    for coro in scheduled:
+        coro.close()
+
+
 def test_create_ending_room_rejects_missing_selected_branches(client):
     fixture = _seed_ready_scenario()
 
@@ -173,6 +200,29 @@ def test_create_ending_room_rejects_missing_selected_branches(client):
     )
 
     assert resp.status_code == 422
+
+
+def test_create_ending_room_rejects_scenario_not_done(client):
+    fixture = _seed_ready_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, fixture["scenario_id"])
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+
+    resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "ENDING_ROOM_SCENARIO_NOT_READY"
 
 
 def test_get_ending_room_result_returns_not_ready_while_running(client, monkeypatch):
