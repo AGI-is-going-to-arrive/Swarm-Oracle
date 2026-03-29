@@ -219,6 +219,231 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `frontend/src/hooks/useInputViewState.ts`
     - 新增 `probeResult / hasFreshProbe / disableUserQuota` 状态。
 
+## 2026-03-29 Phase B — Oracle Chambers backend domain
+
+- 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B，并完成后端独立域落地：
+  - 新增 `backend/app/models/ending_room.py`
+  - 新增 `backend/app/api/ending_rooms.py`
+  - 新增 `backend/app/services/ending_room_service.py`
+  - 接入 `backend/app/main.py` 路由挂载
+  - 接入 `backend/app/api/scenarios.py` 的 scenario 删除清理与完整性校验
+  - 接入 `backend/app/services/vector_store.py` 的 branch whitelist 检索
+  - 接入 `backend/app/services/memory.py` / `backend/app/services/simulator.py` 的 branch-scoped L2 读取
+
+- 当前 Phase B 实现口径：
+  - `POST /api/scenario/{id}/ending-room`
+  - `GET /api/ending-room/{room_id}`
+  - `GET /api/ending-room/{room_id}/result`
+  - `WS /ws/ending-room/{room_id}`
+  - 首版 `ending_room` 采用 deterministic mixed-stream：`turn_start -> turn_delta -> turn_commit -> result_ready`
+  - `ending_chamber / one_move_only / worldline_roundtable / crossline_gallery` 均有后端域对象和权限边界
+  - `vector_store.retrieve()` 现在要求显式 `branch_id` 或 `allowed_branch_ids`；默认不再放宽到整个 scenario
+
+- 本轮测试与回归：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py -q`
+    - `50 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ws.py -q`
+    - `28 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'delete or replay_artifact' -q`
+    - `13 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_ws.py -q`
+    - `78 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/api/ws.py app/services/ending_room_service.py app/services/vector_store.py app/services/memory.py app/services/simulator.py app/models/ending_room.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_ws.py`
+    - `All checks passed!`
+
+- 真实进程级 smoke：
+  - 用临时库 `DATABASE_URL=sqlite:////tmp/swarmoracle_phaseb_smoke.db` 启动 backend `uvicorn app.main:app --host 127.0.0.1 --port 18937`
+  - 手工 seed 一个 `done` scenario + completed branch + one transcript turn
+  - 实测 `POST /api/scenario/<id>/ending-room` 返回 `draft` snapshot
+  - 轮询 `GET /api/ending-room/<room_id>` 成功转为 `done`
+  - `GET /api/ending-room/<room_id>/result` 成功返回 result payload
+
+- 浏览器/automation 现状补记：
+  - Playwright MCP / Chrome DevTools MCP 在本机都被已有浏览器 profile 占用，无法复用该通道做页面 smoke
+  - 已改用 Playwright CLI wrapper 成功打开前端 preview 首页并抓取 snapshot
+  - 当前首页可正常加载；snapshot 可见 daily challenge、weekly track、director growth、主模式配置、快速开始卡片
+
+- 当前前端 Phase C/D 现状：
+  - `frontend/src/types.ts` 已有 `EndingRoom*` / `EndingRoomWSEvent` 类型
+  - `frontend/src/i18n/locales/{zh,en}.json` 已有 `ending_room.* / roundtable.*`
+  - 但 `frontend/src` 仍没有 `EndingChatModal`、`useEndingRoomWS`、`endingRoomStore`、`WorldlineRoundtableView`
+  - `ResultView.tsx` 也还没有会客厅 / 圆桌入口挂点，因此 Phase C/D 尚未开始
+
+- 美术与主题适配判断：
+  - `frontend/src/lib/themeRegistry.ts` 当前登记约 `33` 个 scene themes、`25` 个 runtime character sprites、`6` 个 ending assets、若干 generated UI assets
+  - `frontend/public/assets` 下静态图片约 `87` 张，已覆盖 scenes / characters / endings / effects / generated ui
+  - 现有视觉语言是统一的像素剧场风格，扩新玩法时继续沿用是可行的
+  - 但“尽可能全主题”仍做不到：更多是靠 keyword -> scene/sprite fallback，而不是每个题材都有专属高保真素材
+  - 当前素材丰富度对已覆盖题材足够，但对长尾主题仍偏模板化；下一阶段若扩玩法 UI，不一定先缺卡框，反而更容易缺专属 scene / ending art / gameplay affordance 图层
+
+- 下一步建议：
+  - 直接进入 Phase C：结果页 ending-card CTA + `EndingChatModal` + `useEndingRoomWS` + `endingRoomStore`
+  - 然后接 Phase D：`WorldlineRoundtableView`
+  - 若要补美术，不建议现在打散风格；应优先按现有 `themeRegistry` 的像素剧场语言补少量“高频缺口主题”而不是全量铺开
+
+## 2026-03-29 Phase B 实施中
+
+- 已读取并对齐：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 已落地 Phase B 后端最小闭环：
+  - 新增 `backend/app/models/ending_room.py`
+  - 新增 `backend/app/services/ending_room_service.py`
+  - 新增 `backend/app/api/ending_rooms.py`
+  - `backend/app/main.py` 已挂载新 router
+  - `backend/app/services/vector_store.py` / `backend/app/services/memory.py` / `backend/app/services/simulator.py` 已接入 branch 级 L2 检索过滤
+  - `backend/app/api/scenarios.py` 已把 `ending_room*` 纳入 scenario 删除清理和完整性守卫
+- 已新增/补齐测试：
+  - `backend/tests/test_ending_room_service.py`
+  - `backend/tests/test_ending_room_api.py`
+  - `backend/tests/test_ending_room_ws.py`
+  - `backend/tests/test_vector_store.py` 新增 branch 过滤断言
+- 当前验证结果：
+  - `source backend/.venv/bin/activate && python -m pytest ./backend/tests/test_ending_room_service.py ./backend/tests/test_ending_room_api.py ./backend/tests/test_ending_room_ws.py ./backend/tests/test_vector_store.py -q`
+  - 结果：`50 passed`
+  - `source backend/.venv/bin/activate && python -m ruff check --ignore E501 ./backend/app/api/ending_rooms.py ./backend/app/api/ws.py ./backend/app/main.py ./backend/app/models/ending_room.py ./backend/app/models/__init__.py ./backend/app/services/ending_room_service.py ./backend/app/services/memory.py ./backend/app/services/simulator.py ./backend/app/services/vector_store.py ./backend/app/api/scenarios.py ./backend/tests/test_ending_room_service.py ./backend/tests/test_ending_room_api.py ./backend/tests/test_ending_room_ws.py ./backend/tests/test_vector_store.py ./backend/tests/test_api.py`
+  - 结果：`All checks passed!`
+- 下一步：
+  - 启动前后端服务，跑现有主链路 E2E / Playwright 视觉 QA
+  - 评估当前项目“是否可玩”与素材/主题覆盖缺口
+  - 再决定是否继续进入 Phase C 前端挂点实现
+
+## 2026-03-29 浏览器 QA / 素材盘点
+
+- 浏览器运行环境：
+  - backend 新实例曾在 `http://127.0.0.1:19031` 起过用于本轮代码验证，后已手动关闭
+  - frontend 本轮 QA 基于 `vite dev` 实际落在 `http://127.0.0.1:18930`
+- 已执行自动化：
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260329-phaseb-debate --headless`
+  - 结果：通过；桌面/移动 Debate live -> result -> share 全链路落盘，`render_game_to_text` / `advanceTime` / `capture_game_screenshot` 钩子都存在
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18930 --output-dir output/e2e/20260329-phaseb-corners --headless`
+  - 结果：大部分 case 产物已落盘，包括 `gameplay-state-roundtrip / director-state-roundtrip / branch-prediction / ending-tone-prediction / replay-speed-switch / share-context / capture-modes`；命令最终在 `capture-modes` 后续步骤报一次 `predict` 按钮超时
+  - 复跑 `corners` 仍未拿到完整稳定结束信号，但已额外落盘 `branch-prediction / ending-tone-prediction` 产物
+- 已执行手动 Playwright 检查：
+  - 首页 quick start 可进入 `/sim/:id`
+  - Simulation 页可见 `🎯 预测`、`⚡ 干预`、结果 CTA；按钮真实存在，不像静态缺失
+  - 桌面/移动 ResultView 截图无明显裁切，基础布局可用
+- 当前体验结论：
+  - Debate Arena：当前可玩、自动化稳定、视觉完成度较高
+  - 主模式：主链路基本可玩，但存在脚本脆弱点；手动查看时 Result 页正文出现“叙事服务暂时不可用，已回退为基于原始记录的简化摘要”，说明 narrate 路径至少在本轮环境下不是稳定满配体验
+- 素材与主题盘点：
+  - 现有资产库存较厚：`scenes=66`, `ui/generated=62`, `ui=10`, `characters=25`, `endings=6`
+  - `themeRegistry` 已覆盖大量现有题材与 Debate 专属场景，足够复用当前品牌语言
+  - 但实施方案里为 `Oracle Chambers / Roundtable` 列的最小缺口资产当前仍未出现：
+    - `ending_room_panel`
+    - `worldline_roundtable_banner`
+    - `badge_ending_chamber`
+    - `badge_worldline_roundtable`
+    - `badge_crossline_gallery`
+    - `timeline_marker_chamber`
+    - `timeline_marker_roundtable`
+- 对后续阶段的判断：
+  - 进入 Phase C 前端挂点时，应优先复用 `archive_panel / archive_seal / debate_* / gameplay_panel` 这些现有资产
+  - 若要把新玩法做成真正“完成态”，仍建议至少补齐上面那 7 个 UI 资产；否则功能能接上，但识别度和主题完整性会偏弱
+
+## 2026-03-29 Phase B — Oracle Chambers Backend
+
+- 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B，并完成后端最小闭环：
+  - 新增 `backend/app/models/ending_room.py`
+  - 新增 `backend/app/api/ending_rooms.py`
+  - 新增 `backend/app/services/ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_api.py`
+  - 新增 `backend/tests/test_ending_room_ws.py`
+- 已接入的能力：
+  - post-ending 独立数据域：`EndingRoom / EndingRoomParticipant / EndingRoomTurn`
+  - `POST /api/scenario/{id}/ending-room`
+  - `GET /api/ending-room/{room_id}`
+  - `GET /api/ending-room/{room_id}/result`
+  - `WS /ws/ending-room/{room_id}`
+  - room 域事件：`ending_room_turn_start / delta / commit / error / phase_change / result_ready`
+  - `scenario delete` 显式清理 ending room 域
+  - `vector_store.retrieve(..., branch_id|allowed_branch_ids)` 白名单隔离
+- 当前实现口径：
+  - `ending_chamber / one_move_only` 只允许单 branch scope
+  - `worldline_roundtable` 允许多 branch 摘要比较
+  - `crossline_gallery` 初版直接生成只读完成态，不做 live transcript
+  - transcript / result payload 只依赖 committed turn，不把 delta 落库
+- 已实跑验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `10 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -k 'TestDeleteScenario or test_ending_room' -q`
+    - `21 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/api/scenarios.py app/api/ws.py app/models/ending_room.py app/models/database.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py`
+    - `All checks passed!`
+- 待继续：
+  - 启动本地前后端，做实际 API + WS 流转验证
+  - 继续评估现有前端是否已能承接 Phase C UI 挂点
+  - 做项目整体可玩性、素材丰富度、主题适配能力与视觉 QA
+
+## 2026-03-29 Phase B 实施
+
+- 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B。
+- 已新增后端 ending room 新域：
+  - `backend/app/models/ending_room.py`
+  - `backend/app/services/ending_room_service.py`
+  - `backend/app/api/ending_rooms.py`
+- 已完成的 Phase B 能力：
+  - `POST /api/scenario/{id}/ending-room`
+  - `GET /api/ending-room/{room_id}`
+  - `GET /api/ending-room/{room_id}/result`
+  - `WS /ws/ending-room/{room_id}`
+  - ending room 后台生成 mixed stream 事件：`status / ending_room_turn_start / ending_room_turn_delta / ending_room_turn_commit / ending_room_phase_change / ending_room_result_ready`
+  - `vector_store.retrieve()` 已支持 `branch_id / allowed_branch_ids`
+  - `memory.py` / `simulator.py` 已改为按 branch scope 读取 L2
+  - `DELETE /api/scenario/{id}` 已级联清理 `ending_room / ending_room_participant / ending_room_turn`
+- SQLite 轻量迁移已补：
+  - `ending_room.scope_fingerprint`
+  - `ending_room.current_phase`（兼容旧表）
+- 本轮后端验证已通过：
+  - `cd backend && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+  - `cd backend && python -m pytest tests/test_vector_store.py tests/test_api.py -q`
+  - `cd backend && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/models/ending_room.py app/api/scenarios.py app/models/database.py app/services/vector_store.py app/services/memory.py app/services/simulator.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_api.py tests/test_vector_store.py`
+- 待继续：
+  - 前端/浏览器侧还未进入 Phase C，当前仅完成 Phase B 后端闭环
+  - 需继续做现有产品 E2E、可玩性判断、素材/主题覆盖度盘点
+
+## 2026-03-29 Phase B — Oracle Chambers Backend
+
+- 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B，完成后端新域骨架：
+  - 新增 `backend/app/models/ending_room.py`
+  - 新增 `backend/app/api/ending_rooms.py`
+  - 新增 `backend/app/services/ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_api.py`
+  - 新增 `backend/tests/test_ending_room_ws.py`
+- 已接入的能力：
+  - `POST /api/scenario/{id}/ending-room`
+  - `GET /api/ending-room/{room_id}`
+  - `GET /api/ending-room/{room_id}/result`
+  - `WS /ws/ending-room/{room_id}`
+  - `ending_room` / `ending_room_participant` / `ending_room_turn` 数据表
+  - 基于 scope 的房间去重
+  - `ending_chamber` 单线全文读取、`worldline_roundtable` 代表仅读本线全文的上下文构造
+  - 混合流式事件：`turn_start -> turn_delta -> turn_commit -> result_ready`
+  - `scenario delete` 级联清理新域数据
+  - `vector_store.retrieve()` 支持 `branch_id / allowed_branch_ids`
+- 本轮定向验证通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `10 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_vector_store.py -q`
+    - `40 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -q`
+    - `124 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/api/ws.py app/api/scenarios.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py`
+    - `All checks passed!`
+- 当前范围结论：
+  - Phase B 后端域已落地，但前端 Phase C/D 的 `ResultView` 入口、`EndingChatModal`、`WorldlineRoundtableView`、专用 E2E suite 还未开始。
+  - 也就是说，后端 API/WS 已可用，但用户侧还没有正式 UI 挂点，不能算“完整玩法已对外可玩”。
+- 下一轮建议：
+  - 直接进入 Phase C：结果页单结局会客厅入口 + store/hook/client
+  - 然后补 `frontend/scripts/e2e-ending-room-suite.mjs`
+  - 最后再做 Phase D 的世界线圆桌页面与移动端视觉 QA
+
 ## 2026-03-25 Audit Verification + Fix Pass
 
 - 目标：
@@ -238,61 +463,23 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 已补测试：
   - `backend/tests/test_agent_group.py`
     - 改成验证 `_apply_group_memberships()` 返回带 group 的副本，而不是要求 `_generate_fallback_groups()` 直接改原数组。
-  - `backend/tests/test_intervention.py`
-    - 新增 batch 路径玩法卡冷却绕过回归测试，并断言失败时不会落 `InterventionLog` / `PendingIntervention`。
-  - `frontend/src/hooks/useDebateWS.test.tsx`
-    - 新增 stale socket close 事件测试；既有 stale message 测试现在与新 guard 一致。
-  - `frontend/src/pages/DebateResultView.test.tsx`
-    - 新增 repeated 409 后停止轮询、显示 pending 错误且调用数稳定的回归测试。
 
-- 本轮验证结果：
-  - 后端定向：
-    - `cd backend && python -m pytest tests/test_parser.py::TestParseQuestion::test_generate_fallback_groups_does_not_mutate_input_agents tests/test_agent_group.py::TestParserFallbackGroups::test_apply_group_memberships_returns_grouped_agent_copies tests/test_intervention.py::TestBatchIntervention::test_batch_rejects_gameplay_card_cooldown_bypass -q`
-    - `3 passed`
-  - 前端定向：
-    - `cd frontend && npm test -- --run src/hooks/useDebateWS.test.tsx src/pages/DebateResultView.test.tsx`
-    - `16 passed`
-  - 前端类型检查：
-    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
-    - 通过
+## 2026-03-26 Remaining Audit Item Verification
 
-- 本轮浏览器 / E2E 证据：
-  - 主模式移动端：
-    - `cd frontend && node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260325-audit-mobile --headless`
-    - 通过，工件落于 `frontend/output/e2e/20260325-audit-mobile/`
-  - 主模式跨浏览器：
-    - 重新拉起前端到 `http://127.0.0.1:18929/`
-    - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18929 --output-dir output/e2e/20260325-audit-cross --browsers firefox,webkit --headless`
-    - 通过，工件落于 `frontend/output/e2e/20260325-audit-cross/`
-  - Debate 全链路：
-    - 首次跑 `20260325-audit-debate` 时业务工件已生成，但旧前端 dev server 在收尾阶段掉线。
-    - 重新在 `18929` 端口完整重跑：
-      - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260325-audit-debate-rerun --headless`
-      - 成功，工件落于 `frontend/output/e2e/20260325-audit-debate-rerun/`
-  - `develop-web-game` 客户端：
-    - 技能原始 `web_game_playwright_client.js` 仍是 `.js + ESM` 组合，直接用 `node` 会报 `Cannot use import statement outside a module`；本轮继续复用工作区已有的 `frontend/.tmp-web-game-client.mjs` 临时副本执行。
-    - 产物：
-      - `frontend/output/web-game-audit/shot-0.png`
-      - `frontend/output/web-game-audit/state-0.json`
-
-- 人工视觉抽查：
-  - 使用 `playwright-interactive` / `js_repl` 打开：
-    - 桌面 Debate 结果页 `http://127.0.0.1:18929/debate/<id>/result`
-    - 移动端首页 `http://127.0.0.1:18929/`
-  - 观察：
-    - Debate 结果页首屏层级清晰、裁决卡/信号卡/分享 CTA 可见。
-    - 移动端首页首屏能正常显示语言切换、Daily Challenge 与周报卡首段；周报卡需要继续下滚查看，符合滚动首页预期。
-
-- 本轮核实后判定为“报告已过时或不成立”的条目（至少）：
-  - `backend/app/main.py` 的 CORS 已不是硬编码单 origin，而是 `settings.CORS_ORIGINS`。
-  - `backend/app/services/debate.py` tie-break 不再“未知值默认偏正方”；当前会回退到 `base_plan.winner`。
-  - `backend/app/services/runtime_lock.py` 的 `runtime_lock_is_active()` 已不走 `BEGIN IMMEDIATE`。
-  - `frontend/src/game/managers/EventBridge.ts` 的 stop 竞争在当前实现和现有测试口径下不再构成同级问题。
-
-- 仍可继续观察但本轮未动的点：
-  - `scenarioMeta` 150ms localStorage 锁租约偏短，属于低优先级鲁棒性改进。
-  - `PhaserGame` 的 `replaySpeed` 仍会触发完整实例重建，这是真实体验问题，但修复面较大，适合单独一轮处理。
-  - 交付仍然是“跨浏览器 Web 应用”，不是原生 Windows/macOS/Linux/iOS/Android 客户端。
+- 该段为第一次压缩版核查记录，完整结论与后续执行已移到：
+  - `## 2026-03-26 audit remaining-items verification`
+  - `## 2026-03-26 #19 execution pass`
+  - `## 2026-03-26 #19 leaderboard cleanup pass`
+- 这里仅保留不在后文重复展开的早期验收工件索引：
+  - `frontend/output/e2e/20260325-audit-mobile/`
+  - `frontend/output/e2e/20260325-audit-cross/`
+  - `frontend/output/e2e/20260325-audit-debate-rerun/`
+  - `frontend/output/web-game-audit/shot-0.png`
+  - `frontend/output/web-game-audit/state-0.json`
+- 压缩后口径：
+  - `#7 #17`：低优先级残余，继续观察
+  - `#12 #13`：设计边界，不按 bug 处理
+  - `#19`：后续已按“应用层 orchestrated delete + 完整性守卫 + leaderboard 空行清理”完成收口
 
 ## 2026-03-25 Review Report Validation
 
@@ -10647,6 +10834,294 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - 第二次同 tab 再进入：新增 `POST /finalize = 0`
     - 说明结果页重复 finalize 已被真实短路
 
+## 2026-03-26 audit remaining-items verification
+
+- 当前目标：
+  - 复核 `swarm_oracle_consolidated_audit.md` 中“仍开放”的 5 项是否仍真实存在。
+  - 判断这些项是否值得继续修，前提是不偏离当前项目设计初衷。
+  - 用现有 Playwright/E2E/浏览器链路补真实证据，顺手再看一遍 i18n 与浏览器端可用性。
+
+- 本轮已读取：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `swarm_oracle_consolidated_audit.md`
+
+- 本轮对剩余 5 项的结论：
+  - `#7 seenMessageKeys`：
+    - 仍真实存在；`frontend/src/stores/simulationStore.ts` 仍使用模块级 `Set`
+    - 但 dedup key 已带 `scenarioId`，且 hydration 时会重建
+    - 当前更像低风险实现残余，不值得单独继续动
+  - `#12 GAMEPLAY_CARD_DEFS`：
+    - 仍真实存在；`backend/app/api/interventions.py` 仍在模块导入时构建 `GAMEPLAY_CARD_DEFS`
+    - `load_gameplay_contract()` 本身支持 mtime 重载，但 intervention 路径仍吃导入时快照
+    - 若设计仍是“改 contract 后重启服务”，当前不值得修
+  - `#13 debate tie-break`：
+    - 仍真实存在；平局时仍按 `base_plan.winner` 打破
+    - 这更像可复现 replay 的设计取舍，不建议在当前阶段改
+  - `#17 EventBridge teardown`：
+    - 理论窗口仍存在，但 `active=false` + stale listener test 已把风险压得很低
+    - 当前收益不足以支撑继续改
+  - `#19 delete cascade`：
+    - 仍真实存在；删除仍主要依赖应用层 orchestration，而不是数据库级 `ON DELETE CASCADE`
+    - 但删除链路包含 leaderboard/campaign/vector-store 补偿逻辑，不适合直接改成“纯 DB cascade”
+    - 适合保留为中期技术债，不适合本轮继续修
+
+- 本轮定向验证：
+  - `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/game/managers/EventBridge.test.ts src/game/PhaserGame.test.ts`
+    - `42 passed`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_gameplay_contract_sync.py -q`
+    - `7 passed`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_gameplay_contract_sync.py tests/test_debate_api.py -k 'build_hybrid_plan_uses_base_plan_winner_when_adjudication_winner_is_missing' tests/test_api.py -k 'delete_cascade' -q`
+    - `2 passed, 150 deselected`
+    - 这里只是最小命中 tie-break / delete 路径；contract reload 已由单独 suite 覆盖
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-audit-corners --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-audit-debate --headless`
+    - 通过
+
+- 本轮浏览器/Playwright 复核：
+  - 用 `playwright-interactive` 建立持久浏览器会话，复看：
+    - 桌面 `History` 页
+    - 移动端首页语言切换（`En -> 中文`）
+  - 用 Playwright CLI wrapper 对 `/history` 做了快照确认
+  - 真实观察结论：
+    - 移动端语言切换正常，首页 daily challenge / weekly track 会随语言切换成中文
+    - `corners` 与 `debate full` 产物截图可见主模式 / Debate 桌面与移动界面均可用
+    - 本轮一度出现 `18927 backend` 本地进程消失，导致手动浏览器查看 `History` 时报错；重新拉起 backend 后页面恢复。该问题来自本地服务进程波动，不是这 5 个审计条目导致的产品缺陷
+
+- 本轮额外观察：
+  - `gameplay-state-roundtrip/simulation.png` 这张产物里 Theater 画布是黑的，但对应 automation JSON 里 `theater_ready=false`
+  - 同批 `replay-speed-switch` 产物里 Theater 正常可见，说明这更像截取时机差异，不足以单独判成当前回归
+
+- 本轮结论：
+  - 当前“剩余未改动条目”里，没有一项值得在本轮继续直接修改业务代码
+  - 真正应继续关注的只有 `#19`，但方向应是“保留应用层 orchestrated delete，补更强完整性测试/约束”，而不是直接改成 DB cascade
+  - i18n 当前没有被这 5 项拖坏；跨平台当前仍以桌面/移动浏览器为真实交付范围，不是原生客户端壳
+
+## 2026-03-26 #19 execution pass
+
+- 用户确认继续执行 `#19`，本轮按既定方向处理：
+  - **不**改成数据库级 `ON DELETE CASCADE`
+  - 保留应用层 orchestrated delete
+  - 新增删除后的完整性断言，让删除链路在有残留引用时显式回滚并报错
+
+- backend 改动：
+  - `backend/app/api/scenarios.py`
+    - 新增 `_collect_scenario_delete_integrity_issues(...)`
+    - 在 `delete_scenario()` 完成现有批量删除后，先 `flush()` 再检查残留：
+      - `AgentMessage`
+      - `Round`
+      - `InterventionLog`
+      - `PendingIntervention`
+      - `AgentGroupMember`
+      - `AgentGroup`
+      - `Prediction`
+      - `ScenarioCampaignLog`
+      - `DirectorBadgeUnlock.source_scenario_id`
+      - `Branch`
+      - `Agent`
+      - `Scenario`
+    - 若仍有残留，当前会：
+      - `rollback()`
+      - 记录 error 日志
+      - 返回 `500 SCENARIO_DELETE_INTEGRITY_FAILED`
+
+- 测试改动：
+  - `backend/tests/test_api.py`
+    - 扩大 `test_delete_cascade_data` 覆盖面：
+      - 新增 `AgentMessage`
+      - 新增 `InterventionLog`
+      - 新增 `Prediction`
+      - 新增 `AgentGroup / AgentGroupMember`
+      - 删除后断言这些记录都消失
+    - 新增 `test_delete_integrity_guard_rolls_back_on_residual_records`
+      - 通过 monkeypatch 残留检查 helper，验证 API 在完整性检查失败时返回 `500`
+      - 同时验证事务回滚，`Scenario / Branch` 不会被半删
+
+- 本轮验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_api.py -k 'delete_cascade_data or delete_cascade_removes_campaign_log_and_detaches_badge_source or delete_uses_vector_store_cleanup or delete_integrity_guard_rolls_back_on_residual_records' -q`
+    - `4 passed, 117 deselected`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/api/scenarios.py tests/test_api.py`
+    - `All checks passed!`
+
+- 本轮结论：
+  - `#19` 已按“当前设计不变、删除合同更硬”的方向完成第一轮收口
+  - 这次没有引入 DB cascade，也没有改 campaign / leaderboard / vector-store 的职责边界
+
+## 2026-03-26 #19 leaderboard cleanup pass
+
+- 用户同意继续做 `#19` 的第二轮小收口：清掉“删除最后一条 scored prediction 后残留的空 leaderboard 行”。
+
+- backend 改动：
+  - `backend/app/services/scoring.py`
+    - `recompute_leaderboard_entry(...)` 当前改为：
+      - 若用户仍有 scored predictions：照常重建/更新 `Leaderboard`
+      - 若 `total_predictions == 0`：
+        - 若旧 row 存在，直接 `session.delete(entry)`
+        - 返回 `None`
+    - 目的：避免应用层 scenario delete 在删掉最后一条 scored prediction 后留下 `total_predictions = 0` 的 materialized 空行
+
+- 测试改动：
+  - `backend/tests/test_predictions.py`
+    - 新增 `test_recompute_leaderboard_deletes_empty_row_when_last_score_disappears`
+    - 验证删除最后一条 scored prediction 后，`recompute_leaderboard_entry()` 会把 leaderboard row 删掉
+  - `backend/tests/test_api.py`
+    - 新增 `test_delete_removes_empty_leaderboard_row_after_last_scored_prediction`
+    - 验证 scenario delete 删除某用户最后一条 scored prediction 后，API 链路也会把对应 leaderboard row 清掉
+
+- 本轮验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_predictions.py -k 'recompute_leaderboard_after_prediction_removal or recompute_leaderboard_deletes_empty_row_when_last_score_disappears' -q`
+    - `2 passed, 32 deselected`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_api.py -k 'delete_cascade_data or delete_cascade_removes_campaign_log_and_detaches_badge_source or delete_uses_vector_store_cleanup or delete_removes_empty_leaderboard_row_after_last_scored_prediction or delete_integrity_guard_rolls_back_on_residual_records' -q`
+    - `5 passed, 117 deselected`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/scoring.py app/api/scenarios.py tests/test_predictions.py tests/test_api.py`
+    - `All checks passed!`
+
+- 本轮结论：
+  - `#19` 当前已完成两段式收口：
+    - 删除链路完整性守卫
+    - leaderboard 空行清理
+  - 仍然保持当前设计边界：
+    - 不引入 DB cascade
+    - 不改变 campaign / vector-store / orchestrated delete 职责分工
+
+## 2026-03-26 fork_round live bug fix
+
+- 目标：修复 live `branch_fork` 事件把子分支 `fork_round` 临时写成 `0`，导致 Simulation/Theater 时间线 fork marker 轮次不准的问题。
+
+- 已确认根因：
+  - backend `run_simulation()` 创建分支时已正确持久化 `fork_round=round_num`
+  - 但同一处发出的 `branch_fork` WS 事件此前没有带 `fork_round`
+  - frontend `simulationStore.handleWSEvent('branch_fork')` 因此只能把 child `fork_round` 写死成 `0`
+
+- 已完成修改：
+  - `backend/app/services/simulator.py`
+    - `branch_fork.data.children[*]` 现在显式带 `fork_round`
+  - `frontend/src/types.ts`
+    - `WSEvent['branch_fork']` children 类型补齐 `fork_round`
+  - `frontend/src/stores/simulationStore.ts`
+    - child branch 现在消费 live event 自带的 `fork_round`
+  - 新增/扩展测试：
+    - `backend/tests/test_simulator.py`
+    - `frontend/src/stores/simulationStore.test.ts`
+    - `frontend/src/pages/SimulationView.test.tsx`
+
+- 待执行验证：
+  - backend fork payload 定向单测
+  - frontend store/UI 定向单测
+  - frontend typecheck
+  - 本地浏览器 smoke（Simulation timeline / replay 相关）
+
+- 本轮验证结果：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_simulator.py -k 'records_fork_debug_trace_when_detector_creates_fork' -q`
+    - `1 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/simulator.py tests/test_simulator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/pages/SimulationView.test.tsx`
+    - `46 passed`
+  - `cd frontend && npm test -- --run src/components/TimelineBar.test.tsx`
+    - `3 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir ../output/e2e/20260326-fork-round-corners --headless`
+    - 通过；产物落在 `output/e2e/20260326-fork-round-corners`
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir ../output/e2e/20260326-fork-round-cross-browser --headless`
+    - 通过；Firefox/WebKit smoke 均通过，产物落在 `output/e2e/20260326-fork-round-cross-browser`
+
+- 浏览器 QA 摘要：
+  - `Playwright CLI` 已确认本地页面可打开并拿到 snapshot
+  - `js_repl + Playwright` 对 `SimulationView(/sim/72ae364d-3ea1-4959-939c-8fe1dbeca1c9)` 做了桌面/移动端检查：
+    - 桌面 `1600x900` 与移动端 `390x844` 均无 `pageerror`
+    - 两端 `scrollWidth == clientWidth`、`scrollHeight == clientHeight`，初始视口未出现额外横纵滚动
+    - 桌面页可见 timeline marker 文案：`R1 · fork 3 · cards 1`、`R2 · fork 9 · cards 1 · bets 1`
+  - `develop-web-game` action-loop 已运行：
+    - headless `output/web-game/fork-round`
+    - headed `output/web-game/fork-round-headed`
+    - headless panel 截图出现 Phaser/canvas 采集差异，headed 复验后画面恢复正常；`state-0.json/state-1.json` 中 `fork_debug.fork_events[*].fork_round` 为真实轮次（`1/2`）
+
+- 本轮 review 结论：
+  - 当前未发现本次补丁引入的显性回归
+  - 残余说明：
+    - 这次浏览器验证覆盖的是“已存在分支的 Simulation 页面 + 现有回归场景”，不是新开 live 场景强制诱发一次 fork；live 事件链已由后端单测 + 前端 store/UI 单测补足
+    - `branch_fork` 重复事件去重仍依赖现有 WS `meta` 去重链路，这不是本轮新增风险，但仍是 store 侧的既有前提
+
+## 2026-03-26 live fork marker e2e fixture
+
+- 用户追加要求：补一个“新开 live 场景并强制触发一次 fork，然后浏览器直接断言 marker 落在正确 Rn”的专门 e2e fixture。
+
+- 实现位置：
+  - `frontend/scripts/e2e-suite.mjs`
+  - 新增 `runLiveForkMarkerFixtureCase(...)`
+  - 并已接入 `runCornersSuite(...)` 的 `cases.live_fork_marker`
+
+- fixture 设计：
+  - 不依赖真实 LLM fork，避免 flaky
+  - 通过页面级 route mock 固定：
+    - `GET /api/scenario/fixture-live-fork-marker`
+    - `GET /api/campaign/scenario/fixture-live-fork-marker/director-state`
+    - `GET /api/campaign/scenario/fixture-live-fork-marker/gameplay-state`
+  - 通过 `page.addInitScript(...)` 覆盖仅命中该 scenario id 的 `WebSocket`
+  - 事件顺序为：
+    - `status(simulating)`
+    - `agent_speak(round=1)`
+    - `round_summary(round=1)`
+    - `branch_fork(children[0].fork_round=1)`
+    - `simulation_done`
+  - 这样 fixture 会从 live 状态推进到 replay-ready，使 `.timeline-round` marker 真正渲染出来，而不是只停留在 live 阶段的 stage bar
+
+- 浏览器断言面：
+  - 直接等待 `.timeline-round[title=\"R1 · fork 1\"]` 可见
+  - 同时断言 `.timeline-round[title=\"R2 · fork 1\"]` 数量为 `0`
+  - 产物会把 `fixtureState + markerTitles` 写入：
+    - `output/e2e/20260326-live-fork-marker-corners-v2/live-fork-marker/live-fork-marker.json`
+    - `output/e2e/20260326-live-fork-marker-corners-v2/live-fork-marker/live-fork-marker.png`
+
+- 本轮验证：
+  - `cd frontend && npx eslint scripts/e2e-suite.mjs`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir ../output/e2e/20260326-live-fork-marker-corners-v2 --headless`
+    - 通过
+    - `cases.live_fork_marker.markerTitles` 中已出现：
+      - `R1 · fork 1`
+      - `R2`
+      - `R3 · results 1`
+    - `roundTwoMarkerCount = 0`
+
+- 结论：
+  - 现在已经有 deterministic e2e fixture 专门锁住这条回归：
+    - live `branch_fork` 先写入 store
+    - 同页进入 completed/replay-ready
+    - 浏览器直接验证 fork marker 出现在正确轮次
+
+- 本轮验证结果：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_simulator.py -k 'records_fork_debug_trace_when_detector_creates_fork' -q`
+    - `1 passed`
+  - `cd backend && ../.venv/bin/python -m ruff check --ignore E501 app/services/simulator.py tests/test_simulator.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/pages/SimulationView.test.tsx`
+    - `46 passed`
+  - `cd frontend && npm test -- --run src/components/TimelineBar.test.tsx`
+    - `3 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir ../output/e2e/20260326-fork-round-corners --headless`
+    - 通过；artifact 已写入 `output/e2e/20260326-fork-round-corners`
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir ../output/e2e/20260326-fork-round-cross-browser --headless`
+    - 通过；Firefox / WebKit smoke artifact 已写入 `output/e2e/20260326-fork-round-cross-browser`
+  - `develop-web-game` action loop：
+    - 使用临时 `.mjs` 兼容脚本跑过 `frontend/.tmp-web-game-client.mjs`
+    - artifact 已写入 `output/web-game/fork-round/{shot-0,shot-1,state-0,state-1}`
+
+- 浏览器观察：
+  - 桌面 `SimulationView` 已能看到按轮次分布的 fork marker 文案（例如 `R1 · fork 3`、`R2 · fork 9`），未见新的控制台 error
+  - 移动端 `390x844` Simulation 页面首屏可用；未见横向/纵向滚动异常，WebSocket 与 Phaser 初始化无 pageerror
+
 ## 2026-03-29 Oracle Chambers Phase A Freeze
 
 - 已将 `神谕会客厅 / 世界线圆桌` 的 Phase A 基础契约补齐到仓库内，可作为下次直接进入 Phase B 的起点。
@@ -10683,3 +11158,212 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 下次若继续执行，建议直接从：
   - `Phase B — 后端新域与世界线隔离`
   - 然后进入 `Phase C — 结果页单结局会客厅 MVP`
+## 2026-03-29 Oracle Chambers Phase B Backend Pass
+
+- 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B，并完成后端首轮可运行实现：
+  - 新增 `backend/app/models/ending_room.py`
+  - 新增 `backend/app/api/ending_rooms.py`
+  - 新增 `backend/app/services/ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_service.py`
+  - 新增 `backend/tests/test_ending_room_api.py`
+  - 新增 `backend/tests/test_ending_room_ws.py`
+- 已完成的新域能力：
+  - `ending_room / ending_room_participant / ending_room_turn` 持久化域
+  - `POST /api/scenario/{id}/ending-room`
+  - `GET /api/ending-room/{room_id}`
+  - `GET /api/ending-room/{room_id}/result`
+  - `WS /ws/ending-room/{room_id}`
+  - 混合流式事件：`ending_room_turn_start / delta / commit / result_ready / status`
+- 权限/隔离侧：
+  - `build_branch_scope_context()` 只暴露锚定世界线全文 + 他线摘要
+  - `build_roundtable_scope_context()` 为每个代表暴露自己的全文，并仅给他线摘要
+  - `VectorStore.retrieve()` 已新增 `branch_id / allowed_branch_ids`
+  - 主模式 `memory -> simulator` 已显式带当前 `branch_id`
+- 删除链路：
+  - `DELETE /api/scenario/{id}` 已显式清理 `ending_room*`
+  - 完整性守卫已纳入 `ending_room / ending_room_participant / ending_room_turn`
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `174 passed`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/models/ending_room.py app/api/scenarios.py app/services/vector_store.py app/services/memory.py app/services/simulator.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py`
+    - `All checks passed!`
+- 仍待后续阶段实现：
+  - ResultView 入口 / EndingChatModal / Roundtable UI
+  - replay/share/import
+  - 更丰富的房间文案与前端可视化包装
+  - 基于真实页面的 ending room E2E（当前只能做 API/WS 级验证）
+
+## 2026-03-29 Phase B Backend + Browser QA
+
+- 本轮继续完成真实联调与浏览器核查：
+  - 重启本地 backend / frontend 到：
+    - `http://127.0.0.1:18927`
+    - `http://127.0.0.1:18928`
+  - 真实 API smoke：
+    - 对已有 `done` scenario `52c975f3-8f70-4f6c-a15c-bc3935f42da0`
+    - 调用 `POST /api/scenario/{id}/ending-room`
+    - 新建英文 room `3f7aa7c9-421c-4557-8a49-de67d2f1240f`
+    - 约 `300ms` 后可成功拿到 `GET /api/ending-room/{room_id}/result`
+    - 返回 `status=done`、`current_phase=verdict`、`turns=3`、`result_ready=true`
+- Playwright / CLI / interactive 结果：
+  - `Playwright CLI` 打开 `/result/52c975f3-8f70-4f6c-a15c-bc3935f42da0`
+    - 页面可加载
+    - 当前结果页按钮只有：
+      - `导出 Markdown`
+      - `生成文案`
+      - `复制固定链接`
+      - `分享挑战`
+      - `查看排行榜`
+    - 没有 `进入会客厅 / 只改一步 / 发起圆桌`
+  - `playwright-interactive` 桌面 `1600x900` 与移动 `390x844` 核查：
+    - 首页 `/` 正常，`render_game_to_text()` 输出完整
+    - 结果页 `/result/:id` 正常，`render_game_to_text()` 输出完整
+    - 两端均无横向滚动，纵向滚动属于结果页正常长内容
+    - 截图工件：
+      - `output/result-desktop-phaseb.png`
+      - `output/result-mobile-phaseb.png`
+- `develop-web-game` / 自动化链路：
+  - 官方技能脚本 `~/.codex/skills/develop-web-game/scripts/web_game_playwright_client.js`
+    - 仍然命中既有问题：`.js` 文件按 ESM 写法发布，直接 `node` 运行会报 `Cannot use import statement outside a module`
+  - 已按既有 fallback 继续使用：
+    - `frontend/.tmp-web-game-client.mjs`
+  - 本轮最新产物：
+    - `frontend/output/web-game/shot-0.png`
+    - `frontend/output/web-game/state-0.json`
+    - `frontend/output/web-game/errors-0.json`
+  - 该次自动化命中的是现有 `/sim/...` 场景，而不是新 ending-room UI（因为 Phase C 尚未开始）
+- 现有产品可玩性 / 稳定性观察：
+  - 现有主产品并非完全不可玩：
+    - 旧的已完成 scenario 结果页能正常查看
+    - `frontend/output/web-game/shot-0.png` 显示现有 Simulation 完成态 UI 正常
+  - 但当前环境的“新开一局真实推演”不适合签成稳定：
+    - `POST /api/health` 当前返回 `LLM returned 502`
+    - `frontend/scripts/e2e-suite.mjs corners` 本轮失败于：
+      - `Timed out waiting for capture-ready Theater scene`
+    - 因此本轮不能把“当前整个产品在现网依赖下完全可玩”签成通过
+- 新玩法状态结论（严格按方案）：
+  - `Oracle Chambers / Worldline Roundtable`
+    - 后端能力：已可运行
+    - 前端入口与 UI：未实现
+    - 因此当前不应声称“新玩法已可玩”
+- 美术 / 主题适配结论：
+  - 现有风格可直接沿用到会客厅/圆桌，不需要另起品牌语言
+  - 资产库存并不贫瘠，但不是“尽可能全主题”：
+    - `themeRegistry` 里当前约 `33` 个 scene themes
+    - `25` 个角色 sprite key
+    - `6` 个 ending asset key
+    - `frontend/public/assets` 当前静态文件约 `184` 个
+  - 结论：
+    - 足够支撑 Phase C/D 先做风格一致的 MVP
+    - 若追求“高保真覆盖尽可能多主题”，后续仍需补专属背景 / UI frame / ending art
+
+## 2026-03-29 Phase B Strict Signoff Pass
+
+- 本轮目的：
+  - 把 `Phase B` 从“后端可运行”补到“后端严格签收通过”。
+  - 优先补方案里剩余的 corner case，而不是提前进入 `Phase C`。
+
+- 本轮补强项：
+  - `ending_room_service.py`
+    - 并发创建同 scope room 时，`IntegrityError` 现在会在 `flush()` 路径被回收并返回既有 room，不再把唯一键冲突直接抛给调用方。
+    - background run 失败时，room 现在会显式落到 `status=error`，并广播：
+      - `ending_room_turn_error`
+      - `status=error`
+  - `ending_rooms.py`
+    - 补了请求级 shape 校验：
+      - `language ∈ {zh,en}`
+      - 单分支房间必须带 `anchor_branch_id`
+    - `GET /api/ending-room/{room_id}` / `result` 对缺失 room 显式返回 `404`
+    - WS 缺失资源原因统一为 `ending room`
+  - 测试新增/补强：
+    - 并发 dedupe
+    - `crossline_gallery` 立即完成态且不调度后台任务
+    - `worldline_roundtable` 结果存在且不泄露他线全文
+    - ending-room 背景任务二次执行幂等
+    - ending-room 背景任务失败时状态显式化
+    - ending-room WS 正常关闭 cleanup
+    - hybrid stream 顺序：同一 turn 的 delta 不会晚于 commit
+
+- 本轮验证：
+  - `cd backend && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `21 passed`
+  - `cd backend && python -m pytest tests/test_api.py -k 'delete_' -q`
+    - `11 passed, 113 deselected`
+  - `cd backend && python -m pytest tests/test_vector_store.py tests/test_ws.py -q`
+    - `68 passed`
+  - `cd backend && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py app/services/memory.py app/services/simulator.py app/api/ws.py app/api/scenarios.py app/models/ending_room.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_ws.py tests/test_api.py`
+    - `All checks passed!`
+
+- 当前签收结论：
+  - `Phase B` 现在可以签成：
+    - **后端严格签收通过**
+  - 但仍不能签成：
+    - **整条新玩法已可玩**
+  - 原因不变：
+    - `Phase C/D` 前端入口和 UI 还没做
+    - 结果页当前仍没有 `进入会客厅 / 只改一步 / 发起圆桌`
+
+- 下一步建议：
+  - 直接进入 `Phase C`
+  - 从 `ResultView` CTA、`EndingChatModal`、`useEndingRoomWS`、`endingRoomStore` 开始
+
+## 2026-03-29 Docs Sync + 8317 Default
+
+- 已把本 session 相关文档与代码默认值统一到同一口径：
+  - `LLM_RESPONSES_URL` 默认上游改为 `8317`
+  - `README / llmdoc / env template / backend/.env / backend/tests/conftest.py` 已同步
+  - `llmdoc/reference/api.md` 已从 Phase A draft 改为 Phase B backend 真值
+  - `README / llmdoc/overview/project.md / implement/23...` 当前都已明确：
+    - `Phase B` 后端严格签收通过
+    - 前端 `Phase C/D` 还没开始，所以新玩法仍不可玩
+- 这轮文档同步按“代码真值 + 本 session 实测结果”更新，没有补写未实现内容。
+
+## 2026-03-29 Phase B Strict Signoff Pass
+
+- 目标：
+  - 把 `Phase B` 从“后端已落地”推进到“后端严格签收通过”
+  - 重点补齐此前仍偏薄的 corner case：
+    - 并发去重
+    - `crossline_gallery` 立即完成态
+    - `worldline_roundtable` 摘要隔离
+    - `DELETE scenario` 后 room 失效
+    - WebSocket 正常断开 / 异常断开
+    - `phase/current_phase` 双字段一致性
+
+- 实现修正：
+  - `backend/app/services/ending_room_service.py`
+    - 新增/统一使用相位同步 helper，确保 `phase` 与 `current_phase` 同步更新，不再只改单侧字段
+
+- 新增/补强测试：
+  - `backend/tests/test_ending_room_service.py`
+    - 并发创建同 scope room 的 dedupe 测试
+    - `crossline_gallery` 立即完成态测试
+    - `worldline_roundtable` 结果里不泄露他线全文测试
+    - background runner 幂等测试
+    - `phase/current_phase` 同步测试
+  - `backend/tests/test_ending_room_api.py`
+    - 删除 scenario 后，`GET /api/ending-room/{room_id}` / `result` 均返回 `404`
+  - `backend/tests/test_ending_room_ws.py`
+    - 正常关闭断链清理
+    - 非正常异常断链清理
+
+- 本轮验证：
+  - `cd backend && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `21 passed`
+  - `cd backend && python -m pytest tests/test_api.py -k 'delete_removes_ending_room_domain_records or delete_' -q`
+    - `11 passed, 113 deselected`
+  - `cd backend && python -m pytest tests/test_vector_store.py -q`
+    - `40 passed`
+  - `cd backend && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py`
+    - `All checks passed!`
+
+- 当前签收结论：
+  - `Phase B` 的后端严格签收现在可以通过：
+    - room 创建可去重
+    - WS 可连接/可清理
+    - `ending_chamber / worldline_roundtable / crossline_gallery` 的基础隔离语义已覆盖
+    - scenario 删除时新域数据会一起清理
+    - L2 检索不会默认跨 branch 放宽
+  - 但这不等于“新玩法已可玩”：
+    - 前端 `Phase C/D` 仍未实现
+    - 因此当前通过的是 `Phase B backend signoff`，不是整条玩法线的最终签收

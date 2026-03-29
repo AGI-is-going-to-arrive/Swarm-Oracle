@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.api.campaign import router as campaign_router
 from app.api.debate import router as debate_router
+from app.api.ending_rooms import router as ending_rooms_router
 from app.api.interventions import router as interventions_router
 from app.api.predictions import router as predictions_router
 from app.api.scenarios import router as scenarios_router
@@ -87,6 +88,7 @@ app.include_router(interventions_router)
 app.include_router(social_router)
 app.include_router(campaign_router)
 app.include_router(debate_router)
+app.include_router(ending_rooms_router)
 app.include_router(predictions_router)
 app.include_router(ws_router)
 

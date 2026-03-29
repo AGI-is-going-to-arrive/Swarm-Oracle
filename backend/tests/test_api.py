@@ -14,11 +14,20 @@ from app.api.schemas import CreateScenarioRequest
 from app.main import app
 from app.models import (
     Agent,
+    AgentGroup,
+    AgentGroupMember,
     AgentMessage,
     AgentTier,
     Branch,
     BranchStatus,
     DirectorBadgeUnlock,
+    EndingRoom,
+    EndingRoomParticipant,
+    EndingRoomPhase,
+    EndingRoomRoleSlot,
+    EndingRoomStatus,
+    EndingRoomTurn,
+    EndingRoomType,
     InterventionLog,
     Leaderboard,
     PendingIntervention,
@@ -30,6 +39,7 @@ from app.models import (
 )
 from app.models.campaign import DirectorProfile, ProfileMastery
 from app.models.database import get_engine
+from app.services.scoring import recompute_leaderboard_entry
 
 
 @pytest.fixture
@@ -1991,10 +2001,59 @@ class TestDeleteScenario:
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
-        _seed_agent(engine, sid, name="Agent1")
-        _seed_round(engine, bid, 1)
+        agent_id = _seed_agent(engine, sid, name="Agent1")
+        round_id = _seed_round(engine, bid, 1)
+        _seed_message(engine, round_id, agent_id, content="待删除消息")
         with Session(engine) as session:
             session.add(PendingIntervention(scenario_id=sid, branch_id=bid, user_input="待处理干预"))
+            session.add(InterventionLog(scenario_id=sid, branch_id=bid, round_number=1, user_input="已处理干预"))
+            session.add(
+                Prediction(
+                    scenario_id=sid,
+                    user_id="delete-checker",
+                    user_name="Delete Checker",
+                    prediction_text="会留下孤儿记录吗？",
+                    confidence=0.6,
+                )
+            )
+            group = AgentGroup(scenario_id=sid, name="删除验证组", leader_agent_id=agent_id, member_count=1)
+            session.add(group)
+            session.flush()
+            session.add(AgentGroupMember(group_id=group.id, agent_id=agent_id, is_leader=True))
+            room = EndingRoom(
+                scenario_id=sid,
+                anchor_branch_id=bid,
+                room_type=EndingRoomType.ENDING_CHAMBER,
+                participant_set_hash="delete-room-hash",
+                scope_fingerprint="delete-room-scope",
+                title="删除测试会客厅",
+                language="zh",
+                status=EndingRoomStatus.DONE,
+                current_phase=EndingRoomPhase.VERDICT,
+                config_json={"selected_branch_ids": [bid]},
+                result_json={"summary": "done"},
+            )
+            session.add(room)
+            session.flush()
+            participant = EndingRoomParticipant(
+                room_id=room.id,
+                source_branch_id=bid,
+                role_slot=EndingRoomRoleSlot.ARCHIVIST,
+                display_name="档案官",
+            )
+            session.add(participant)
+            session.flush()
+            session.add(
+                EndingRoomTurn(
+                    room_id=room.id,
+                    sequence=1,
+                    phase=EndingRoomPhase.OPENING,
+                    participant_id=participant.id,
+                    content="删除前的复盘记录",
+                    emotion="steady",
+                    cited_branch_id=bid,
+                )
+            )
             session.commit()
 
         resp = client.delete(f"/api/scenario/{sid}")
@@ -2002,11 +2061,31 @@ class TestDeleteScenario:
 
         # Verify all related data is gone
         with Session(engine) as session:
+            assert session.get(Scenario, sid) is None
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is None
             assert session.exec(select(Agent).where(Agent.scenario_id == sid)).first() is None
+            assert session.exec(select(Round).where(Round.branch_id == bid)).first() is None
+            assert session.exec(select(AgentMessage).where(AgentMessage.round_id == round_id)).first() is None
             assert session.exec(
                 select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
             ).first() is None
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).first() is None
+            assert session.exec(
+                select(Prediction).where(Prediction.scenario_id == sid)
+            ).first() is None
+            assert session.exec(
+                select(AgentGroup).where(AgentGroup.scenario_id == sid)
+            ).first() is None
+            assert session.exec(
+                select(AgentGroupMember).where(AgentGroupMember.agent_id == agent_id)
+            ).first() is None
+            assert session.exec(
+                select(EndingRoom).where(EndingRoom.scenario_id == sid)
+            ).first() is None
+            assert session.exec(select(EndingRoomParticipant)).first() is None
+            assert session.exec(select(EndingRoomTurn)).first() is None
 
     def test_delete_cascade_removes_campaign_log_and_detaches_badge_source(self, client):
         from app.services.campaign import finalize_scenario_campaign
@@ -2063,6 +2142,177 @@ class TestDeleteScenario:
 
         assert resp.status_code == 200
         assert deleted["scenario_id"] == sid
+
+    def test_delete_cascade_removes_ending_room_domain(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, title="终局线", status=BranchStatus.COMPLETED)
+
+        with Session(engine) as session:
+            room = EndingRoom(
+                scenario_id=sid,
+                anchor_branch_id=bid,
+                room_type=EndingRoomType.ENDING_CHAMBER,
+                participant_set_hash="hash",
+                scope_fingerprint="hash",
+                title="结局会客厅",
+                language="zh",
+                status=EndingRoomStatus.DONE,
+                current_phase=EndingRoomPhase.VERDICT,
+                result_json={"summary": "done"},
+            )
+            session.add(room)
+            session.flush()
+            participant = EndingRoomParticipant(
+                room_id=room.id,
+                source_branch_id=bid,
+                role_slot=EndingRoomRoleSlot.ARCHIVIST,
+                display_name="档案官",
+            )
+            session.add(participant)
+            session.flush()
+            session.add(
+                EndingRoomTurn(
+                    room_id=room.id,
+                    sequence=1,
+                    phase=EndingRoomPhase.VERDICT,
+                    participant_id=participant.id,
+                    content="收口",
+                    emotion="neutral",
+                    cited_branch_id=bid,
+                )
+            )
+            session.commit()
+            room_id = room.id
+            participant_id = participant.id
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+        with Session(engine) as session:
+            assert session.get(EndingRoom, room_id) is None
+            assert session.get(EndingRoomParticipant, participant_id) is None
+            assert session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first() is None
+
+    def test_delete_removes_ending_room_domain_records(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        branch_id = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+
+        with Session(engine) as session:
+            room = EndingRoom(
+                scenario_id=sid,
+                anchor_branch_id=branch_id,
+                room_type=EndingRoomType.ENDING_CHAMBER,
+                participant_set_hash="ending-room-scope",
+                scope_fingerprint="ending-room-scope",
+                title="Ending Chamber",
+                language="en",
+                status=EndingRoomStatus.DONE,
+                current_phase=EndingRoomPhase.VERDICT,
+            )
+            session.add(room)
+            session.commit()
+            session.refresh(room)
+
+            participant = EndingRoomParticipant(
+                room_id=room.id,
+                source_branch_id=branch_id,
+                role_slot=EndingRoomRoleSlot.ARCHIVIST,
+                display_name="Archivist",
+            )
+            session.add(participant)
+            session.commit()
+            session.refresh(participant)
+
+            session.add(
+                EndingRoomTurn(
+                    room_id=room.id,
+                    sequence=1,
+                    phase=EndingRoomPhase.OPENING,
+                    participant_id=participant.id,
+                    content="Scoped post-ending turn",
+                )
+            )
+            session.commit()
+            room_id = room.id
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+
+        with Session(engine) as session:
+            assert session.exec(select(EndingRoom).where(EndingRoom.scenario_id == sid)).first() is None
+            assert (
+                session.exec(
+                    select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id)
+                ).first()
+                is None
+            )
+            assert (
+                session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first()
+                is None
+            )
+
+    def test_delete_removes_empty_leaderboard_row_after_last_scored_prediction(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+
+        with Session(engine) as session:
+            session.add(
+                Prediction(
+                    scenario_id=sid,
+                    user_id="leaderboard-cleanup-user",
+                    user_name="Cleanup User",
+                    prediction_text="最终会进入排行榜",
+                    confidence=0.8,
+                    score=88.0,
+                )
+            )
+            session.commit()
+            recompute_leaderboard_entry(session, "leaderboard-cleanup-user", "Cleanup User")
+            session.commit()
+
+        with Session(engine) as session:
+            entry = session.exec(
+                select(Leaderboard).where(Leaderboard.user_id == "leaderboard-cleanup-user")
+            ).first()
+            assert entry is not None
+            assert entry.total_predictions == 1
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+
+        with Session(engine) as session:
+            entry = session.exec(
+                select(Leaderboard).where(Leaderboard.user_id == "leaderboard-cleanup-user")
+            ).first()
+            assert entry is None
+
+    def test_delete_integrity_guard_rolls_back_on_residual_records(self, client, monkeypatch):
+        """Delete should fail loudly if post-delete integrity checks still find rows."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+
+        def _fake_integrity_issues(*_args, **_kwargs):
+            return {"prediction": 1}
+
+        monkeypatch.setattr(
+            scenarios_api,
+            "_collect_scenario_delete_integrity_issues",
+            _fake_integrity_issues,
+        )
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "SCENARIO_DELETE_INTEGRITY_FAILED"
+
+        with Session(engine) as session:
+            assert session.get(Scenario, sid) is not None
+            assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is not None
 
 
 # ── P4-C: Export Scenario ────────────────────────────────

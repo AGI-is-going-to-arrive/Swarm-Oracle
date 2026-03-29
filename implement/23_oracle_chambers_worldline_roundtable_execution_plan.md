@@ -176,6 +176,11 @@ crossline_gallery:
 
 ## 3.2 Phase B — 后端新域与世界线隔离
 
+> 状态更新（2026-03-29）：
+> - backend 独立 `ending_room` 域、REST/WS、scenario 删除清理、L2 branch scope 检索已落地
+> - `Phase B` 当前可签成：**后端严格签收通过**
+> - 结果页入口、会客厅 modal、圆桌页面仍未开始；前端可玩性验收要到 `Phase C/D`
+
 ### 目标
 
 建立 post-ending 独立数据域，并修正当前 L2 检索的跨世界线污染风险。

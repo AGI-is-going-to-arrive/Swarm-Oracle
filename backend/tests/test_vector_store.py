@@ -42,11 +42,11 @@ class TestVectorStore:
         vs = VectorStore(persist_dir=temp_dir)
         assert vs.available
 
-        vs.store("s1", "曹操", "我要统一天下，征服南方", round_num=1, emotion="determined")
-        vs.store("s1", "刘备", "汉室必须复兴，不能让曹操得逞", round_num=1, emotion="passionate")
-        vs.store("s1", "诸葛亮", "北伐是唯一出路", round_num=2, emotion="thoughtful")
+        vs.store("s1", "曹操", "我要统一天下，征服南方", round_num=1, emotion="determined", branch_id="b-main")
+        vs.store("s1", "刘备", "汉室必须复兴，不能让曹操得逞", round_num=1, emotion="passionate", branch_id="b-main")
+        vs.store("s1", "诸葛亮", "北伐是唯一出路", round_num=2, emotion="thoughtful", branch_id="b-main")
 
-        results = vs.retrieve("s1", "关于统一天下的讨论", top_k=3)
+        results = vs.retrieve("s1", "关于统一天下的讨论", top_k=3, branch_id="b-main")
         assert len(results) == 3
         # Each result should have expected keys
         for r in results:
@@ -59,25 +59,25 @@ class TestVectorStore:
         """Retrieve should return at most top_k results."""
         vs = VectorStore(persist_dir=temp_dir)
         for i in range(10):
-            vs.store("s1", f"Agent{i}", f"Content {i}", round_num=i)
+            vs.store("s1", f"Agent{i}", f"Content {i}", round_num=i, branch_id="b-main")
 
-        results = vs.retrieve("s1", "content", top_k=3)
+        results = vs.retrieve("s1", "content", top_k=3, branch_id="b-main")
         assert len(results) <= 3
 
     def test_retrieve_empty_collection(self, temp_dir):
         """Retrieve from empty collection should return []."""
         vs = VectorStore(persist_dir=temp_dir)
-        results = vs.retrieve("s_new", "anything", top_k=5)
+        results = vs.retrieve("s_new", "anything", top_k=5, branch_id="b-main")
         assert results == []
 
     def test_scenario_isolation(self, temp_dir):
         """Different scenarios should have isolated collections."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "A", "Scenario 1 content", round_num=1)
-        vs.store("s2", "B", "Scenario 2 content", round_num=1)
+        vs.store("s1", "A", "Scenario 1 content", round_num=1, branch_id="branch-a")
+        vs.store("s2", "B", "Scenario 2 content", round_num=1, branch_id="branch-b")
 
-        r1 = vs.retrieve("s1", "content", top_k=10)
-        r2 = vs.retrieve("s2", "content", top_k=10)
+        r1 = vs.retrieve("s1", "content", top_k=10, branch_id="branch-a")
+        r2 = vs.retrieve("s2", "content", top_k=10, branch_id="branch-b")
         assert len(r1) == 1
         assert len(r2) == 1
         assert r1[0]["agent_name"] == "A"
@@ -89,25 +89,95 @@ class TestVectorStore:
         vs.store("s1", "曹操", "吾乃天命所归", round_num=3,
                  emotion="proud", branch_id="b-001")
 
-        results = vs.retrieve("s1", "天命", top_k=1)
+        results = vs.retrieve("s1", "天命", top_k=1, branch_id="b-001")
         assert len(results) == 1
         assert results[0]["agent_name"] == "曹操"
         assert results[0]["round"] == 3
         assert results[0]["emotion"] == "proud"
+        assert results[0]["branch_id"] == "b-001"
+
+    def test_retrieve_filters_by_branch_id(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "A", "Alpha branch message", round_num=1, branch_id="b-alpha")
+        vs.store("s1", "B", "Beta branch message", round_num=1, branch_id="b-beta")
+
+        results = vs.retrieve("s1", "branch message", top_k=10, branch_id="b-beta")
+
+        assert len(results) == 1
+        assert results[0]["agent_name"] == "B"
+        assert results[0]["branch_id"] == "b-beta"
+
+    def test_retrieve_filters_by_allowed_branch_ids(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "A", "Alpha branch message", round_num=1, branch_id="b-alpha")
+        vs.store("s1", "B", "Beta branch message", round_num=1, branch_id="b-beta")
+        vs.store("s1", "C", "Gamma branch message", round_num=1, branch_id="b-gamma")
+
+        results = vs.retrieve(
+            "s1",
+            "branch message",
+            top_k=10,
+            allowed_branch_ids=["b-alpha", "b-gamma"],
+        )
+
+        returned_ids = {result["branch_id"] for result in results}
+        assert returned_ids == {"b-alpha", "b-gamma"}
+
+    def test_retrieve_can_filter_to_single_branch(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "甲", "同一世界线的证据", round_num=1, branch_id="branch-a")
+        vs.store("s1", "乙", "另一条世界线的证据", round_num=1, branch_id="branch-b")
+
+        results = vs.retrieve("s1", "世界线", top_k=10, branch_id="branch-a")
+
+        assert len(results) == 1
+        assert results[0]["agent_name"] == "甲"
+        assert results[0]["branch_id"] == "branch-a"
+
+    def test_retrieve_can_filter_to_branch_whitelist(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "甲", "A 支线", round_num=1, branch_id="branch-a")
+        vs.store("s1", "乙", "B 支线", round_num=1, branch_id="branch-b")
+        vs.store("s1", "丙", "C 支线", round_num=1, branch_id="branch-c")
+
+        results = vs.retrieve(
+            "s1",
+            "支线",
+            top_k=10,
+            allowed_branch_ids=["branch-a", "branch-c"],
+        )
+
+        assert {item["branch_id"] for item in results} == {"branch-a", "branch-c"}
+
+    def test_retrieve_requires_branch_scope(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "曹操", "主线记忆", round_num=1, branch_id="b-main")
+
+        assert vs.retrieve("s1", "记忆", top_k=5) == []
+
+    def test_retrieve_filters_to_requested_branch(self, temp_dir):
+        vs = VectorStore(persist_dir=temp_dir)
+        vs.store("s1", "曹操", "主线记忆", round_num=1, branch_id="b-main")
+        vs.store("s1", "刘备", "支线记忆", round_num=1, branch_id="b-side")
+
+        results = vs.retrieve("s1", "记忆", top_k=5, branch_id="b-side")
+
+        assert len(results) == 1
+        assert results[0]["agent_name"] == "刘备"
 
     def test_store_empty_content_ignored(self, temp_dir):
         """Empty content should be silently ignored."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "A", "", round_num=1)
-        vs.store("s1", "A", "   ", round_num=2)
+        vs.store("s1", "A", "", round_num=1, branch_id="b-main")
+        vs.store("s1", "A", "   ", round_num=2, branch_id="b-main")
 
-        results = vs.retrieve("s1", "anything", top_k=10)
+        results = vs.retrieve("s1", "anything", top_k=10, branch_id="b-main")
         assert results == []
 
     def test_retrieve_empty_query(self, temp_dir):
         """Empty query should return []."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "A", "Content", round_num=1)
+        vs.store("s1", "A", "Content", round_num=1, branch_id="b-main")
 
         assert vs.retrieve("s1", "", top_k=5) == []
         assert vs.retrieve("s1", "   ", top_k=5) == []
@@ -121,18 +191,18 @@ class TestVectorStore:
     def test_duplicate_store_no_error(self, temp_dir):
         """Storing the same content twice should not crash."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "A", "Repeated content", round_num=1)
-        vs.store("s1", "A", "Repeated content", round_num=2)
+        vs.store("s1", "A", "Repeated content", round_num=1, branch_id="b-main")
+        vs.store("s1", "A", "Repeated content", round_num=2, branch_id="b-main")
 
-        results = vs.retrieve("s1", "Repeated content", top_k=10)
+        results = vs.retrieve("s1", "Repeated content", top_k=10, branch_id="b-main")
         assert len(results) == 2
 
     def test_unicode_content(self, temp_dir):
         """Unicode and emoji content should be handled correctly."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "路人甲", "🦋 蝴蝶效应来了！「转折」", round_num=1)
+        vs.store("s1", "路人甲", "🦋 蝴蝶效应来了！「转折」", round_num=1, branch_id="b-main")
 
-        results = vs.retrieve("s1", "蝴蝶效应", top_k=1)
+        results = vs.retrieve("s1", "蝴蝶效应", top_k=1, branch_id="b-main")
         assert len(results) == 1
         assert "🦋" in results[0]["content"]
 
@@ -254,26 +324,26 @@ class TestVectorStoreEdgeCases:
         """Very long content should be stored and retrievable."""
         vs = VectorStore(persist_dir=temp_dir)
         long_text = "长" * 10000
-        vs.store("s1", "A", long_text, round_num=1)
+        vs.store("s1", "A", long_text, round_num=1, branch_id="b-main")
 
-        results = vs.retrieve("s1", "长", top_k=1)
+        results = vs.retrieve("s1", "长", top_k=1, branch_id="b-main")
         assert len(results) == 1
 
     def test_special_chars_in_scenario_id(self, temp_dir):
         """Scenario IDs with hyphens should be sanitized properly."""
         vs = VectorStore(persist_dir=temp_dir)
         sid = "abc-def-123-456"
-        vs.store(sid, "A", "Content", round_num=1)
+        vs.store(sid, "A", "Content", round_num=1, branch_id="b-main")
 
-        results = vs.retrieve(sid, "Content", top_k=1)
+        results = vs.retrieve(sid, "Content", top_k=1, branch_id="b-main")
         assert len(results) == 1
 
     def test_top_k_larger_than_available(self, temp_dir):
         """top_k larger than available docs should return all docs."""
         vs = VectorStore(persist_dir=temp_dir)
-        vs.store("s1", "A", "Only one", round_num=1)
+        vs.store("s1", "A", "Only one", round_num=1, branch_id="b-main")
 
-        results = vs.retrieve("s1", "one", top_k=100)
+        results = vs.retrieve("s1", "one", top_k=100, branch_id="b-main")
         assert len(results) == 1
 
     def test_runtime_collection_failure_invalidates_client_when_health_cannot_be_verified(self):
@@ -336,7 +406,7 @@ class TestVectorStoreEdgeCases:
         })
         vs._get_collection = lambda _scenario_id: vs._collections["scenario-a"]
 
-        assert vs.retrieve("scenario-a", "query", top_k=3) == []
+        assert vs.retrieve("scenario-a", "query", top_k=3, branch_id="branch-a") == []
         assert vs._client is not None
         assert "scenario-a" not in vs._collections
         assert vs._collections["scenario-b"] is cached

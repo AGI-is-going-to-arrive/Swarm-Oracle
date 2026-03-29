@@ -627,6 +627,9 @@ def retrieve_relevant_memories(
     scenario_id: str,
     query: str,
     top_k: int = 5,
+    *,
+    branch_id: str | None = None,
+    allowed_branch_ids: list[str] | None = None,
 ) -> str:
     """Retrieve Top-K semantically similar memories from L2 and format as text.
 
@@ -638,7 +641,13 @@ def retrieve_relevant_memories(
         if not vs.available:
             return ""
 
-        memories = vs.retrieve(scenario_id, query, top_k=top_k)
+        memories = vs.retrieve(
+            scenario_id,
+            query,
+            top_k=top_k,
+            branch_id=branch_id,
+            allowed_branch_ids=allowed_branch_ids,
+        )
         if not memories:
             return ""
 

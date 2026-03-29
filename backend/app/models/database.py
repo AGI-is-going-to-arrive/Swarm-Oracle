@@ -244,6 +244,8 @@ def init_db():
                 _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
                 _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
                 _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
+                _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
+                _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
                 # Track A follow-up: commitment/objective settlement fields
                 _migrate_add_column(
                     conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
@@ -267,6 +269,30 @@ def init_db():
                     conn, "agent_group", "ix_agent_group_scenario_id", ["scenario_id"]
                 )
                 _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
+                _migrate_create_index(
+                    conn,
+                    "ending_room",
+                    "ix_ending_room_scenario_anchor",
+                    ["scenario_id", "anchor_branch_id"],
+                )
+                _migrate_create_unique_index(
+                    conn,
+                    "ending_room",
+                    "uq_ending_room_scope",
+                    ["scenario_id", "room_type", "participant_set_hash", "language"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_participant",
+                    "ix_ending_room_participant_room_id",
+                    ["room_id"],
+                )
+                _migrate_create_unique_index(
+                    conn,
+                    "ending_room_turn",
+                    "ix_ending_room_turn_room_sequence",
+                    ["room_id", "sequence"],
+                )
                 _migrate_create_index(
                     conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
                 )

@@ -1530,7 +1530,12 @@ async def _gather_agent_messages(
             l2_memories = ""
             if agent_tier in ("CORE", "IMPORTANT"):
                 query = f"{topic} {agent.get('name', '')} {agent.get('role', '')}"
-                l2_memories = retrieve_relevant_memories(scenario_id, query, top_k=5)
+                l2_memories = retrieve_relevant_memories(
+                    scenario_id,
+                    query,
+                    top_k=5,
+                    branch_id=branch_id,
+                )
 
             # Build context: Blackboard shared briefing + DB fallback
             if shared_text and shared_text != "(尚无共享信息)":

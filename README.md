@@ -8,6 +8,9 @@
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.mjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
 - 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.94 kB`，gzip 从 `328.41 kB` 降到 `203.76 kB`。
+- `Oracle Chambers / 世界线圆桌` 当前只完成到 `Phase B`：
+  - backend 已有独立 `ending_room` 域、REST/WS 接口和 branch-scoped transcript isolation
+  - frontend 的结果页入口、会客厅 modal 和圆桌页面还没做，所以这条新玩法现在还不能算“已可玩”
 - 首页当前已把主模式 runtime tuning 正式收成 `神谕档位 / Oracle Profile`。三档分别是 `守望 / 校准 / 裂界`（`Watchful / Calibrated / Riftbound`），只作用于主模式 worldline branching；首页还会按当前 `Agent 数量 × 推演轮数` 给出预计耗时，`3-5 分钟` 提示现在也明确只对应 Debate Arena。
 - 主模式 `SimulationView / ResultView` 当前都只保留一个 runtime preset 标签，不再展开 prompt / sensitivity / budget 细节 chip；`分享挑战` 链接会继续把当前 `preset` 一起带回首页预填。
 - 主模式结果页 `ShareModal` 当前已收掉上方 context chips，社交文案也不再自动在正文前拼题材/神谕/permalink 前缀；`导出 Markdown` 当前改成浏览器直连后端附件下载，目标是更稳定地拿到 `.md` 文件名，而不是继续依赖前端 `blob:` 下载。
@@ -15,7 +18,7 @@
 - 当前自动生成内容已统一跟随输入语言：主模式 agent 发言 / 压缩摘要 / 叙事、Debate live/result 文本、分享文案与导出摘要都按输入语言输出；`reddit / x` 不再单独强制英文，backend 语言检测也已扩到 `French / German / Spanish / Portuguese / Italian`。
 - 仓库内最近一次通过的 clean real full `release:signoff` 工件位于 `frontend/output/e2e/post-commit-signoff-clean/summary.json`。
 - 这份工件绑定 commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473`，状态为 `passed`，并记录当前工作树为 `dirty=false`。
-- CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8318`）。
+- CI 现额外包含 `release-signoff-fixture`：无 secrets 的 deterministic full-flow signoff，主模式走隔离 mock LLM；mock 默认使用 `18318`，不影响真实 LLM 路径（本地默认仍走 `8317`）。
 - `release:signoff` 的 `summary.json` 会记录 git commit / worktree 绑定信息；引用工件时，以工件里的 git metadata 为准，不要只看目录名猜当前代码状态。
 
 ## Documentation Contract
@@ -44,6 +47,7 @@
 | Oracle Profile | 首页提供主模式 `神谕档位 / Oracle Profile` 三档，收口 `branchSensitivity / forkPromptVariant / forkDetectorActiveBranchLimit` |
 | Director Campaign | 导演目标、风险/资源轨道、worldline 承诺、成长与徽章 |
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
+| Oracle Chambers (Phase B) | 后端已实现 `ending_room` 域、REST/WS 和世界线隔离；前端 `Phase C/D` 入口与 UI 尚未接入 |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
 | i18n | 中英文界面与输入语言联动输出；自动生成内容当前统一跟随输入语言，backend 语言检测已扩到 `Chinese / English / Japanese / Korean / French / German / Spanish / Portuguese / Italian` |
 | BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；`POST /api/health/test` 当前会返回 provider probe 摘要，本地 / 自托管 provider 还可按次关闭 user-level quota；同一 SQLite `DATABASE_URL` 下的多进程仍会共享 pending / quota 计数 |
@@ -75,7 +79,7 @@ docker compose up --build -d
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
 - `docker compose` 默认读取仓库根目录 `.env.docker`。
-- 如果 LLM 服务跑在宿主机本地，默认 Docker 配置已经使用 `http://host.docker.internal:8318/v1/chat/completions`。
+- 如果 LLM 服务跑在宿主机本地，默认 Docker 配置已经使用 `http://host.docker.internal:8317/v1/chat/completions`。
 
 ### Local Development
 
@@ -96,7 +100,7 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8318/v1/chat/completions` |
+| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8317/v1/chat/completions` |
 | `LLM_API_KEY` | API key | `sk-12345678` |
 | `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
 | `MAX_AGENTS` | Max agents per scenario | `1500` |

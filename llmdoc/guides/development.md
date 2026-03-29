@@ -105,6 +105,18 @@ cp .env.example backend/.env
   - 通过；当前 `corners` 已新增 deterministic `live_fork_marker` fixture，会固定 scenario API + fake WebSocket，直接断言 `R1 · fork 1` marker 可见、`R2 · fork 1` 不存在
 - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260326-fork-round-cross-browser --headless`
   - 通过；Firefox / WebKit smoke 均通过
+- `cd backend && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+  - `21 passed`
+- `cd backend && python -m pytest tests/test_api.py -k 'delete_' -q`
+  - `11 passed, 113 deselected`
+- `cd backend && python -m pytest tests/test_vector_store.py tests/test_ws.py -q`
+  - `68 passed`
+- `cd backend && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py app/services/memory.py app/services/simulator.py app/api/ws.py app/api/scenarios.py app/models/ending_room.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_ws.py tests/test_api.py`
+  - `All checks passed!`
+- `cd backend && source .venv/bin/activate && export LLM_RESPONSES_URL=http://127.0.0.1:8317/v1/chat/completions && curl -X POST http://127.0.0.1:18927/api/health`
+  - 返回 `server=ok, llm=ok`
+- `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/20260329-corners-8317 --headless`
+  - 通过；`capture_modes` 不再卡 `capture-ready Theater scene`
 
 ## 当前推荐定向回归
 
@@ -476,7 +488,7 @@ docker compose up --build -d
 
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
-- Docker 默认 LLM 地址是 `http://host.docker.internal:8318/v1/chat/completions`，用于容器访问宿主机本地代理。
+- Docker 默认 LLM 地址是 `http://host.docker.internal:8317/v1/chat/completions`，用于容器访问宿主机本地代理。
 
 ## 数据库迁移
 

@@ -42,12 +42,17 @@ from app.models import (
     AgentTier,
     Branch,
     BranchStatus,
+    DirectorBadgeUnlock,
+    EndingRoom,
+    EndingRoomParticipant,
+    EndingRoomTurn,
     InterventionLog,
     PendingIntervention,
     Prediction,
     ReplayArtifact,
     Round,
     Scenario,
+    ScenarioCampaignLog,
     ScenarioStatus,
 )
 from app.models.database import get_engine
@@ -122,6 +127,193 @@ def _coerce_int(value: Any, default: int = 0, *, minimum: int | None = None) -> 
     if minimum is not None:
         parsed = max(minimum, parsed)
     return parsed
+
+
+def _collect_scenario_delete_integrity_issues(
+    session: Session,
+    scenario_id: str,
+    *,
+    branch_ids: list[str],
+    round_ids: list[str],
+    group_ids: list[str],
+    room_ids: list[str],
+) -> dict[str, int]:
+    """Return residual scenario-linked rows after application-layer cleanup.
+
+    We intentionally keep delete orchestration in application code because
+    leaderboard, campaign, and vector-store cleanup have side effects that a
+    plain DB cascade cannot express. This guard makes the orchestrated path
+    fail loudly if a future table is forgotten or a delete step regresses.
+    """
+
+    issues: dict[str, int] = {}
+
+    def record(label: str, count: int) -> None:
+        if count > 0:
+            issues[label] = count
+
+    if round_ids:
+        record(
+            "agent_message",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(AgentMessage)
+                    .where(AgentMessage.round_id.in_(round_ids))
+                ).one()
+            ),
+        )
+
+    if branch_ids:
+        record(
+            "round",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(Round)
+                    .where(Round.branch_id.in_(branch_ids))
+                ).one()
+            ),
+        )
+
+    record(
+        "intervention_log",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(InterventionLog)
+                .where(InterventionLog.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "pending_intervention",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(PendingIntervention)
+                .where(PendingIntervention.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+
+    if group_ids:
+        record(
+            "agent_group_member",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(AgentGroupMember)
+                    .where(AgentGroupMember.group_id.in_(group_ids))
+                ).one()
+            ),
+        )
+
+    if room_ids:
+        record(
+            "ending_room_turn",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(EndingRoomTurn)
+                    .where(EndingRoomTurn.room_id.in_(room_ids))
+                ).one()
+            ),
+        )
+        record(
+            "ending_room_participant",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(EndingRoomParticipant)
+                    .where(EndingRoomParticipant.room_id.in_(room_ids))
+                ).one()
+            ),
+        )
+
+    record(
+        "ending_room",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(EndingRoom)
+                .where(EndingRoom.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+
+    record(
+        "agent_group",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(AgentGroup)
+                .where(AgentGroup.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "prediction",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(Prediction)
+                .where(Prediction.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "scenario_campaign_log",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(ScenarioCampaignLog)
+                .where(ScenarioCampaignLog.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "director_badge_unlock.source_scenario_id",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(DirectorBadgeUnlock)
+                .where(DirectorBadgeUnlock.source_scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "branch",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(Branch)
+                .where(Branch.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "agent",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(Agent)
+                .where(Agent.scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
+        "scenario",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(Scenario)
+                .where(Scenario.id == scenario_id)
+            ).one()
+        ),
+    )
+
+    return issues
 
 
 # ── Health Endpoints ─────────────────────────────────────
@@ -763,6 +955,9 @@ async def delete_scenario(scenario_id: str):
         group_ids = list(session.exec(
             select(AgentGroup.id).where(AgentGroup.scenario_id == scenario_id)
         ).all())
+        room_ids = list(
+            session.exec(select(EndingRoom.id).where(EndingRoom.scenario_id == scenario_id)).all()
+        )
 
         # P2-7: Batch cascade delete in dependency order
         # 1. Messages (depend on round + agent)
@@ -783,6 +978,14 @@ async def delete_scenario(scenario_id: str):
         if group_ids:
             session.exec(sa_delete(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids)))
         session.exec(sa_delete(AgentGroup).where(AgentGroup.scenario_id == scenario_id))
+
+        # 4b. Ending room domain
+        if room_ids:
+            session.exec(sa_delete(EndingRoomTurn).where(EndingRoomTurn.room_id.in_(room_ids)))
+            session.exec(
+                sa_delete(EndingRoomParticipant).where(EndingRoomParticipant.room_id.in_(room_ids))
+            )
+        session.exec(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
 
         # 5. Predictions — collect affected users so leaderboard rows can be rebuilt
         preds = list(session.exec(select(Prediction).where(Prediction.scenario_id == scenario_id)).all())
@@ -810,6 +1013,32 @@ async def delete_scenario(scenario_id: str):
 
         # 8. Scenario
         session.delete(scenario)
+        session.flush()
+
+        integrity_issues = _collect_scenario_delete_integrity_issues(
+            session,
+            scenario_id,
+            branch_ids=branch_ids,
+            round_ids=round_ids,
+            group_ids=group_ids,
+            room_ids=room_ids,
+        )
+        if integrity_issues:
+            issue_summary = ", ".join(
+                f"{label}={count}" for label, count in sorted(integrity_issues.items())
+            )
+            logger.error(
+                "Scenario delete integrity failed for %s: %s",
+                scenario_id,
+                issue_summary,
+            )
+            session.rollback()
+            raise api_error(
+                500,
+                "SCENARIO_DELETE_INTEGRITY_FAILED",
+                f"Scenario delete left residual records: {issue_summary}",
+            )
+
         session.commit()
 
     # 9. Clean up ChromaDB collection (best-effort)

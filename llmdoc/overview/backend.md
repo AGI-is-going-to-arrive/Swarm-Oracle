@@ -30,6 +30,8 @@ api/campaign.py ──► services/campaign.py / daily_challenges.py (Track A / 
     │
 api/debate.py ──► services/debate.py / debate_prompts.py / debate_scoring.py (Track D)
     │
+api/ending_rooms.py ──► services/ending_room_service.py (Oracle Chambers / Worldline Roundtable, Phase B)
+    │
 api/predictions.py ──► services/scoring.py (P3-B)
     │
 api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop 当前复用同一套 session wrapper，并都会在 `finally` 中清理连接；connect 前会先检查目标 `scenario / debate` 是否存在，不存在就直接拒绝接入；这层当前只收住“无效 id 也能监听”的问题，不承担真正的用户级鉴权；存在性检查当前已通过 `asyncio.to_thread(...)` 包装同步 DB read，不再在 async WS 握手里直接阻塞事件循环；broadcast 已改为并行发送，不再被单个慢连接拖住整组广播；除 `heartbeat` 外，当前还会给所有出站事件统一补顶层 `meta = {stream_id, sequence, event_id, manager_instance_id, emitted_at}`；空闲期仍会发送轻量 `heartbeat` 让半断开连接更快暴露；当某个 scenario 的连接列表清空后，会同步移除空 key；`LOG_LEVEL = DEBUG` 时，broadcast 还会记录 `stream/type/seq/event_id/client count` 便于排查)
@@ -40,6 +42,7 @@ models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, 
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A；`scenario_id` 已加索引)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
+models/ending_room.py ──► EndingRoom, EndingRoomParticipant, EndingRoomTurn
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
 config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空；当前额外提供 `LOG_LEVEL / LOG_FORMAT`，默认 `INFO + json`；`BRANCH_PRUNE_THRESHOLD / FORK_SENSITIVITY` 当前也已补范围校验)
@@ -73,7 +76,8 @@ alembic/ ──► Alembic 数据库迁移框架
 - **Fork detector 运行时调参**: scenario 级运行当前可显式透传 `temperature / branch_sensitivity / fork_prompt_variant / fork_detector_active_branch_limit`
 - **Detector budget**: `fork_detector_active_branch_limit` 当前只限制“每轮还有多少个 ACTIVE branch 有资格继续跑 detector”；不会阻止这些分支发言、压缩记忆或进入 narration。当前排序规则是 `probability desc, branch_id asc`，超出预算的分支会在 `round_checks` 里带 `skip_reason = detector_budget_exceeded`
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning；这一轮又补了 prune 后的二次归一化，避免低概率分支被剪掉后剩余 `ACTIVE` 分支概率和继续小于 `1.0`
-- **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7）
+- **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7），但整体仍是应用层 orchestrated delete，不依赖数据库级 `ON DELETE CASCADE`
+- **删除完整性守卫**: `delete_scenario` 当前会在所有显式删除步骤后执行残留检查；若 `AgentMessage / Round / InterventionLog / PendingIntervention / AgentGroupMember / AgentGroup / Prediction / ScenarioCampaignLog / DirectorBadgeUnlock.source_scenario_id / Branch / Agent / Scenario` 任一仍残留，事务会直接回滚并返回 `SCENARIO_DELETE_INTEGRITY_FAILED`
 - **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
 - **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
 - **Blackboard 热路径**: `_gather_agent_messages()` 当前只有在 blackboard 没有可用共享简报时才会回退 `_get_recent_messages()`；默认 blackboard 主路径不再白做 recent DB query
@@ -135,7 +139,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **职责**: L2 层语义记忆检索，跨 session 记忆存储与检索
 - **关键API**:
   - `VectorStore.store(scenario_id, agent_name, content, ...)` — 存入 ChromaDB
-  - `VectorStore.retrieve(scenario_id, query_text, top_k)` → `list[dict]` — 余弦相似度检索
+  - `VectorStore.retrieve(scenario_id, query_text, top_k, branch_id?, allowed_branch_ids?)` → `list[dict]` — 余弦相似度检索
   - `VectorStore.delete_collection(scenario_id)` — 按 canonical collection name 删除单个 scenario 的 collection
   - `VectorStore.health_check()` — 连通性检查
 - **设计**:
@@ -148,7 +152,26 @@ alembic/ ──► Alembic 数据库迁移框架
   - 写入与删 collection 当前都会先拿进程内锁，再尝试拿 SQLite shared runtime lock；shared lock key 现已按 `scenario_id` 分片，不同 scenario 的 Chroma 写入不再被全局单 key 串成一条队列
   - shared runtime lock 当前是 best-effort：若别的 worker 正在写同一 scenario，当前这次写入会直接跳过，不再在调用方里 busy-wait 轮询
   - 全局单例初始化当前也已补进程内锁，避免并发首次访问时创建出多个 `VectorStore` 实例
+  - Phase B 起，读取默认不再“放宽到整个 scenario”：
+    - 显式给 `branch_id` 时，只读该 branch 的 L2 记忆
+    - 显式给 `allowed_branch_ids` 时，只读白名单 branch
+    - 两者都不传时，当前直接返回空列表，避免 ending-room / roundtable 串线
   - ChromaDB 不可用时静默降级
+
+### `ending_room_service.py` (≈800行) — Oracle Chambers / 世界线圆桌 (**NEW**)
+- **职责**: `ending_room` 域的创建、dedupe、scope 构建、后台转录生成与结果收口
+- **关键函数**:
+  - `create_ending_room(...)` — 按 `scenario + anchor_branch + room_type + participant_set_hash + language` 生成或复用 room
+  - `load_ending_room_snapshot(room_id)` / `load_ending_room_result_payload(room_id)` — 读取 live/result payload
+  - `build_branch_scope_context(...)` — 当前世界线全文 + 他线摘要
+  - `build_roundtable_scope_context(...)` — 每个代表自己的全文 + 他线摘要
+  - `run_ending_room_background(room_id, ws_callback)` — 生成 turn、广播 hybrid stream、收口 result
+- **当前口径**:
+  - `ending_chamber / one_move_only` 必须带 `anchor_branch_id`
+  - 所选 branch 当前都必须是 `COMPLETED`
+  - `crossline_gallery` 当前会直接返回 `status=done`，不再起后台任务
+  - room 后台运行失败时，当前会显式落 `status=error`，并广播 `ending_room_turn_error + status=error`
+  - 并发创建同 scope room 时，唯一键冲突当前会在服务层回收并复用既有 room，不再把 `IntegrityError` 直接暴露给调用方
 
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
 - **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease
@@ -344,7 +367,7 @@ alembic/ ──► Alembic 数据库迁移框架
   - replay import 当前会把输入 payload 里的 `phase_insights` 一并持久化；后续 live/result 读路径会优先回放这份已导入的阶段洞察，而不是只靠重算
   - replay import 这一轮又补了 payload 指纹；相同 replay 再导入时会直接命中已有 Debate snapshot，不再重复创建记录
   - replay import 当前还会校验 `winner / verdict_tone / turns[*].sequence / phase_insights` 的关键字段；坏快照会直接返回 `422`，同时 turn 会按 `sequence` 排序后再落库
-  - `LLM hybrid` tie-break 当前若拿不到合法 `adjudicated_winner`，会回退到 deterministic `base_plan.winner`，不再默认偏向某一侧
+  - `LLM hybrid` tie-break 当前若拿不到合法 `adjudicated_winner`，会回退到 deterministic `base_plan.winner`，不再默认偏向某一侧；这里继续优先 replay determinism，而不是随机公平模型
   - Debate runtime 当前会先把数据库里的 `Debate` entity 收成只读 snapshot，再驱动长流程；不再在 session 关闭后继续依赖 detached ORM 对象
   - `available_prediction_options` 当前由 service/api 共用同一份 helper 生成，live snapshot、API 校验和前端下注契约保持同口径
   - `debate_verdict` WS 事件当前会发送 `DebateResultSummary + phase_insights`，这样前端 live 页在 verdict 到来时就能直接看到完整阶段洞察
@@ -361,12 +384,13 @@ alembic/ ──► Alembic 数据库迁移框架
   - `score_prediction(prediction_id)` — 评估单条预测，自动读取场景 `_language` 匹配输出语言
   - `score_all_for_scenario(scenario_id)` — 批量评分场景所有未评预测
   - `_update_leaderboard(session, user_id, user_name, score)` — 按已评分 `Prediction` 真值全量重算单个排行榜行，不再继续信任旧聚合值
-  - `recompute_leaderboard_entry(session, user_id, user_name)` — 在删 scenario / 删 prediction 后按剩余已评分预测重建单个排行榜行
+  - `recompute_leaderboard_entry(session, user_id, user_name)` — 在删 scenario / 删 prediction 后按剩余已评分预测重建单个排行榜行；若已没有任何 scored prediction，会直接删除这条 materialized leaderboard row
 - **排行榜物化**:
   - `total_predictions / total_score / avg_score / best_score / win_streak` 当前都按已评分 `Prediction` 真值重算；即使 `Leaderboard` 行先前是 stale 值，也会在下一次更新时被纠正
   - `GET /api/scenario/{id}/predictions` 当前默认分页上限为 `50`；`win_streak` 计算也已改成分批扫描最新已评分预测，不再一次性 `.all()` 整个用户历史
   - `entry.user_name` 当前始终使用本次请求传入的显示名，不再回跳到历史 prediction 上的旧名字
   - 匿名预测当前不会再刷新 leaderboard row；`win_streak` 对匿名用户也固定返回 `0`
+  - 删掉某用户最后一条已评分 prediction 后，当前不会再留下 `total_predictions = 0` 的空 leaderboard 行
 - **原子持久化**:
   - `score_prediction()` 当前会先用单条 `UPDATE ... WHERE score IS NULL` 原子 claim 未评分 prediction，再落 leaderboard 事务
   - 若并发 scorer 已经先写入，该请求会回读已有分数返回，不再重复覆盖

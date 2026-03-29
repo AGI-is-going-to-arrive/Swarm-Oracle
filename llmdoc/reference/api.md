@@ -140,10 +140,11 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > `DELETE /api/scenario/{id}` 当前除了级联删除 SQL 数据外，还会：
 > - 清理该 scenario 残留的 `pending_intervention` 队列项
 > - 通过 shared `VectorStore` 清理该 scenario 对应的 Chroma collection
-> - 对受影响用户的 leaderboard row 做重建，避免删除已评分 prediction 后留下过期统计
+> - 对受影响用户的 leaderboard row 做重建；若某用户已没有任何 scored prediction，对应 leaderboard row 现在会被直接删除，不再留下空 materialized 行
 > - 若该 scenario 已写入 campaign 进度，还会同步删除对应 `ScenarioCampaignLog`
 > - 若某个 badge 的 `source_scenario_id` 指向这局 scenario，会把这条来源指针清空
 > - 会按删除后的剩余日志重算受影响的 `DirectorProfile / ProfileMastery` 聚合值，不再把这局继续算进累计结果
+> - 在所有显式删除步骤后，还会执行一次删除完整性守卫；若仍发现残留的 scenario 关联记录，事务会回滚并返回 `500 / SCENARIO_DELETE_INTEGRITY_FAILED`
 >
 > `DELETE /api/scenario/{id}` 当前不会因为该 scenario 已经 finalize 到 campaign 就拒删；只要场景状态本身允许删除，后端会先回滚这局的 campaign side effects，再继续删主记录。
 
@@ -493,19 +494,18 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > 容器健康检查建议使用 `GET /`，不要直接把 `POST /api/health` 用作 liveness probe。后者会同步探测外部 LLM，可把“服务已启动但上游暂时不可达”误判成容器不健康。
 
-### Oracle Chambers Draft Contract (Phase A Frozen, Not Implemented Yet)
+### Oracle Chambers / Worldline Roundtable (Phase B Backend)
 
-> 注意：
-> - 本节是 `神谕会客厅 / 世界线圆桌` 的 **Phase A 契约草案**
-> - 当前 backend **尚未实现** 以下端点与 WebSocket
-> - 它们被记录在这里，是为了冻结命名、作用域键、事件形状和前后端接口边界，方便下一轮直接进入 Phase B
+> 当前状态：
+> - backend 已实现这条线的 `ending_room` 独立数据域、REST 接口与 WebSocket
+> - 当前只完成到 `Phase B`；结果页入口、会客厅 modal、圆桌页面仍未开始
+> - 也就是说，这里记录的是 **backend 真值**，不是前端已可玩状态
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}` | GET | 获取房间 live snapshot | — | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}/result` | GET | 获取房间完成态结果 | — | EndingRoomResultPayload |
-| `POST /api/ending-room/{room_id}/replay-artifact` | POST | 持久化 replay payload（第二阶段再实现） | `{"payload": {...}}` | `{"id", "kind", "created_at"}` |
 
 > 这条线的统一作用域键固定为：
 >
@@ -536,6 +536,36 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 标准事件链必须是：`turn_start -> turn_delta -> turn_commit`
 > - `turn_delta` 只用于 live UI
 > - `turn_commit` 才是唯一正式版本；落库 / replay / share / quote extraction 一律以 committed turn 为准
+
+> 当前后端实际口径：
+> - `POST /api/scenario/{id}/ending-room`
+>   - `ending_chamber / one_move_only` 当前要求：
+>     - `anchor_branch_id` 必填
+>     - `anchor_branch_id` 必须属于 `selected_branch_ids`
+>     - 所选 branch 都必须是 `COMPLETED`
+>   - `crossline_gallery` 会直接返回 `status=done`，不会再调度后台任务
+> - `GET /api/ending-room/{room_id}`
+>   - 找不到 room：返回 `404 ENDING_ROOM_NOT_FOUND`
+> - `GET /api/ending-room/{room_id}/result`
+>   - room 还没完成：返回 `409 ENDING_ROOM_RESULT_NOT_READY`
+>   - 找不到 room：返回 `404 ENDING_ROOM_NOT_FOUND`
+>
+> backend 当前会下发的 ending-room WebSocket 事件：
+> - `status`
+> - `ending_room_phase_change`
+> - `ending_room_turn_start`
+> - `ending_room_turn_delta`
+> - `ending_room_turn_commit`
+> - `ending_room_turn_error`
+> - `ending_room_result_ready`
+> - `heartbeat`
+>
+> 与 `scenario / debate` 一样：
+> - 除 `heartbeat` 外，ending-room WebSocket 当前也统一带顶层 `meta`
+> - `meta` 包含：`stream_id / sequence / event_id / manager_instance_id / emitted_at`
+> - room 后台运行失败时，当前会显式把 room 持久化成 `status=error`，并广播：
+>   - `ending_room_turn_error`
+>   - `status = error`
 
 ## WebSocket API
 

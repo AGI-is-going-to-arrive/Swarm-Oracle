@@ -322,6 +322,9 @@ class VectorStore:
         scenario_id: str,
         query_text: str,
         top_k: int = 5,
+        *,
+        branch_id: str | None = None,
+        allowed_branch_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve Top-K semantically similar memories.
 
@@ -330,21 +333,38 @@ class VectorStore:
         """
         if not query_text or not query_text.strip():
             return []
+        if branch_id is not None:
+            branch_id = branch_id.strip() or None
 
         collection = self._get_collection(scenario_id)
         if collection is None:
             return []
 
+        normalized_allowed_branch_ids = [
+            candidate.strip()
+            for candidate in (allowed_branch_ids or [])
+            if candidate and candidate.strip()
+        ]
+        if branch_id is not None:
+            normalized_allowed_branch_ids = [branch_id]
+        if not normalized_allowed_branch_ids:
+            return []
+
+        allowed_branch_set = set(normalized_allowed_branch_ids)
+        where: dict[str, Any] | None = None
+        if len(normalized_allowed_branch_ids) == 1:
+            where = {"branch_id": normalized_allowed_branch_ids[0]}
+
         try:
-            # Don't query more than available
             count = collection.count()
             if count == 0:
                 return []
-            effective_k = min(top_k, count)
+            effective_k = count if len(normalized_allowed_branch_ids) > 1 else min(top_k, count)
 
             results = collection.query(
                 query_texts=[query_text],
                 n_results=effective_k,
+                **({"where": where} if where is not None else {}),
             )
 
             memories = []
@@ -352,13 +372,18 @@ class VectorStore:
                 docs = results["documents"][0]  # first query
                 metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
                 for doc, meta in zip(docs, metas):
+                    if allowed_branch_set and str(meta.get("branch_id", "")).strip() not in allowed_branch_set:
+                        continue
                     memories.append({
                         "content": doc,
                         "agent_name": meta.get("agent_name", ""),
                         "round": meta.get("round", 0),
                         "emotion": meta.get("emotion", ""),
+                        "branch_id": meta.get("branch_id", ""),
                     })
-            return memories
+                    if len(memories) >= top_k:
+                        break
+            return memories[:top_k]
         except Exception as exc:
             self._handle_operation_failure(
                 scenario_id=scenario_id,
