@@ -1,5 +1,6 @@
 """Tests for ending-room WebSocket flow."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -178,3 +179,27 @@ def test_websocket_alias_route_accepts_real_connections(client):
 
     with client.websocket_connect(f"/ws/ending-room/{snapshot['id']}"):
         pass
+
+
+def test_room_user_turn_reuses_existing_ws_manager_broadcast(client, monkeypatch):
+    fixture = _seed_ready_room_fixture()
+    snapshot, _created = create_ending_room(
+        fixture["scenario_id"],
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=fixture["branch_id"],
+        selected_branch_ids=[fixture["branch_id"]],
+        language="zh",
+    )
+    asyncio.run(run_ending_room_background(snapshot["id"]))
+
+    broadcast = AsyncMock()
+    monkeypatch.setattr(ending_rooms_api.ending_room_ws_manager, "broadcast", broadcast)
+
+    resp = client.post(
+        f"/api/ending-room/{snapshot['id']}/user-turn",
+        json={"content": "继续追问这条线。"},
+    )
+
+    assert resp.status_code == 200
+    event_types = [call.args[1]["type"] for call in broadcast.await_args_list]
+    assert event_types == ["ending_room_turn_commit", "ending_room_turn_commit"]

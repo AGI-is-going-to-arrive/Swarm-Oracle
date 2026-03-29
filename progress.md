@@ -11638,6 +11638,112 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts`
   - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx`
   - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx`
+
+## 2026-03-29 Phase B+ — ending room follow-up threads
+
+- 本轮原则：
+  - 不推翻现有 `create_ending_room` 主链
+  - 不重做已有 ending-room 基础 WS
+  - 只把 Phase B 扩成可继续支撑 Phase C2/C3 的最小后端增量
+
+- 保留不动的旧资产：
+  - `backend/app/models/ending_room.py`
+  - `backend/app/api/ending_rooms.py`
+  - `backend/app/services/ending_room_service.py`
+  - 既有 room 去重
+  - 既有 branch-scoped transcript isolation
+  - 既有 `worldline_roundtable` “本线全文 + 他线摘要”
+  - 既有 ending-room REST/WS
+  - 既有 `tests/test_ending_room_service.py / test_ending_room_api.py / test_ending_room_ws.py`
+
+- 本轮新增后端能力：
+  - `backend/app/models/ending_room.py`
+    - 新增 `EndingRoomThread`
+    - `EndingRoom` 新增 `memory_partition_version`
+    - `EndingRoomParticipant` 新增 `worldline_echo_key`
+    - `EndingRoomTurn` 新增：
+      - `thread_id`
+      - `source`
+      - `interaction_mode`
+      - `memory_partition_id`
+      - `addressed_agent_ids_json`
+      - `question_anchor_ids_json`
+  - `backend/app/services/ending_room_service.py`
+    - 新增 thread / follow-up 相关能力：
+      - `load_ending_room_thread_snapshot`
+      - `build_room_memory`
+      - `build_thread_memory`
+      - `build_room_followup_context`
+      - `build_thread_followup_context`
+      - `create_ending_room_thread`
+      - `append_room_user_turn`
+      - `append_thread_user_turn`
+    - room 自动复盘 turn 现显式写入 default room thread，并带 `memory_partition_id`
+    - room 级追问继续写入 room partition
+    - thread 级追问只写当前 thread partition，不复用兄弟 thread transcript
+  - `backend/app/api/ending_rooms.py`
+    - 新增：
+      - `POST /api/ending-room/{room_id}/thread`
+      - `GET /api/ending-room/thread/{thread_id}`
+      - `POST /api/ending-room/{room_id}/user-turn`
+      - `POST /api/ending-room/thread/{thread_id}/user-turn`
+    - follow-up 继续复用现有 `ending_room_turn_commit`
+    - thread user-turn 还会补发：
+      - `ending_room_thread_created`
+      - `ending_room_scope_notice`
+  - `backend/app/api/scenarios.py`
+    - scenario 删除链路现显式清理 `ending_room_thread`
+    - 删除完整性守卫也已把 `ending_room_thread` 纳入残留检查
+  - `backend/app/models/database.py`
+    - SQLite best-effort migration 补齐了本轮新增字段与索引
+
+- 本轮新增测试：
+  - `backend/tests/test_ending_room_service.py`
+    - room 默认 thread / room partition
+    - `worldline_echo_key`
+    - room/thread follow-up memory partition 隔离
+    - room 级追问保持 room partition
+    - 不同 thread 之间 transcript 不串
+  - `backend/tests/test_ending_room_api.py`
+    - thread 创建与 thread user-turn
+    - scenario 删除后 thread endpoint 失效
+  - `backend/tests/test_ending_room_ws.py`
+    - room user-turn 继续复用现有 WS manager 广播
+
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 2.70s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/models/ending_room.py app/models/database.py app/models/__init__.py app/api/scenarios.py app/services/ending_room_service.py app/api/ending_rooms.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+
+- 当前判断：
+  - `Phase B` 现已不只是“房间创建 + 自动复盘”，还具备了后续 `Phase C3` 所需的 follow-up thread 基座。
+
+## 2026-03-29 Docs Sync — Phase B+ current truth
+
+- 本轮已把文档按“代码真值 + 本 session 实测结果”同步到同一口径：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/reference/api.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+- 当前统一口径：
+  - backend 已到 `Phase B+`：
+    - `ending_room_thread`
+    - room / thread follow-up turn
+    - `memory_partition_id`
+    - `worldline_echo_key`
+    - scenario 删除时显式清理 `ending_room_thread`
+  - frontend 当前仍主要停在单结局结果页 MVP：
+    - `进入会客厅`
+    - `只改一步`
+    - 还没有 thread UI / participant picker / 多结局 roundtable 页面签收
+- 本轮写入文档时使用的真实验证结果：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 2.70s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/models/ending_room.py app/models/database.py app/models/__init__.py app/api/scenarios.py app/services/ending_room_service.py app/api/ending_rooms.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+  - 但前端 thread UI / thread store / thread replay 仍未开始，所以这轮仍不能把 `Phase C3` 签成已完成。
   - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
   - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
   - `cd frontend && npm run build`
@@ -11687,3 +11793,79 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 当前文档结论：
   - 下次继续执行时，不能再只拿单结局演示通过
   - 必须把多结局结果页中每张结局卡的 `进入会客厅 / 只改一步` 分别验收
+
+## 2026-03-29 Phase B+ — Ending Room Thread / User-Turn Backend
+
+- 本轮先按当前真实代码和测试评估 `Phase B`，结论是：
+  - 现有 `create_ending_room` 主链、room 去重、branch-scoped transcript isolation、`worldline_roundtable` 的“本线全文 + 他线摘要”、既有 ending-room REST/WS 都可继续复用
+  - 没有发现必须推倒重做的代码级硬冲突
+  - 因此直接按最小增量进入 `Phase B+`
+- 已落地的后端增量：
+  - `backend/app/models/ending_room.py`
+    - 新增 `EndingRoom.memory_partition_version`
+    - 新增 `EndingRoomParticipant.worldline_echo_key`
+    - 新增 `EndingRoomThread`
+    - `EndingRoomTurn` 新增 `thread_id / source / interaction_mode / memory_partition_id / addressed_agent_ids_json / question_anchor_ids_json`
+  - `backend/app/services/ending_room_service.py`
+    - room 创建时会补默认 room thread、room memory partition 与 participant `worldline_echo_key`
+    - 新增：
+      - `load_ending_room_thread_snapshot()`
+      - `build_room_memory()`
+      - `build_thread_memory()`
+      - `build_room_followup_context()`
+      - `build_thread_followup_context()`
+      - `create_ending_room_thread()`
+      - `append_room_user_turn()`
+      - `append_thread_user_turn()`
+    - 当前口径：
+      - room 自动复盘 turn 继续走现有 `create_ending_room -> run_ending_room_background` 主链
+      - room 级追问只写 room memory partition
+      - thread 级追问只写当前 thread memory partition，不读取兄弟 thread transcript
+  - `backend/app/api/ending_rooms.py`
+    - 新增：
+      - `POST /api/ending-room/{room_id}/thread`
+      - `GET /api/ending-room/thread/{thread_id}`
+      - `POST /api/ending-room/{room_id}/user-turn`
+      - `POST /api/ending-room/thread/{thread_id}/user-turn`
+    - follow-up turn 当前继续复用现有 `ending_room_turn_commit` 广播，不另起第二套 WS 主链
+    - thread 创建与 thread user-turn 会补发：
+      - `ending_room_thread_created`
+      - `ending_room_scope_notice`
+  - `backend/app/api/scenarios.py`
+    - scenario 删除清理与完整性检查已把 `ending_room_thread` 纳入
+  - `backend/app/models/database.py`
+    - 已补 SQLite lightweight migration，对应 thread / memory partition / worldline echo 新字段与索引
+- 本轮新增/补强测试：
+  - `backend/tests/test_ending_room_service.py`
+    - room 默认 thread / room partition
+    - `worldline_echo_key`
+    - room / thread follow-up memory partition 隔离
+    - thread 间 transcript 不串读
+  - `backend/tests/test_ending_room_api.py`
+    - thread 创建与 thread user-turn
+    - scenario 删除后 thread endpoint 失效
+  - `backend/tests/test_ending_room_ws.py`
+    - room user-turn 继续复用现有 WS manager broadcast
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 2.70s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/models/ending_room.py app/models/database.py app/models/__init__.py app/api/scenarios.py app/services/ending_room_service.py app/api/ending_rooms.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+- 当前判断：
+  - backend 已进入 `Phase B+`，可作为下一轮 `Phase C` 的真实基座
+  - 但当前仍不应宣称“follow-up thread 前端已完成”：
+    - 现阶段只有 backend thread / user-turn / partition 已落地
+    - 前端 thread UI / thread store / thread replay / 多结局 roundtable 页面仍未签收
+
+## 2026-03-29 Docs Sync — Phase B+ Backend Truth
+
+- 已按本 session 的真实代码和真实验证结果同步相关文档：
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/overview/project.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `llmdoc/index.md`
+- 本轮文档同步口径：
+  - 不把 backend `Phase B+` 夸成完整玩法签收
+  - 明确 thread / user-turn / room-thread memory partition 已落地
+  - 明确 frontend 目前仍主要停在单结局 `Phase C` MVP

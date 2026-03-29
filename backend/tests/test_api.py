@@ -26,6 +26,7 @@ from app.models import (
     EndingRoomPhase,
     EndingRoomRoleSlot,
     EndingRoomStatus,
+    EndingRoomThread,
     EndingRoomTurn,
     EndingRoomType,
     InterventionLog,
@@ -2035,6 +2036,15 @@ class TestDeleteScenario:
             )
             session.add(room)
             session.flush()
+            thread = EndingRoomThread(
+                room_id=room.id,
+                title="默认线程",
+                mode="room",
+                participant_set_hash="delete-room-thread-hash",
+                memory_partition_id=f"ending-room:{room.id}:thread:default",
+            )
+            session.add(thread)
+            session.flush()
             participant = EndingRoomParticipant(
                 room_id=room.id,
                 source_branch_id=bid,
@@ -2046,6 +2056,7 @@ class TestDeleteScenario:
             session.add(
                 EndingRoomTurn(
                     room_id=room.id,
+                    thread_id=thread.id,
                     sequence=1,
                     phase=EndingRoomPhase.OPENING,
                     participant_id=participant.id,
@@ -2085,6 +2096,7 @@ class TestDeleteScenario:
                 select(EndingRoom).where(EndingRoom.scenario_id == sid)
             ).first() is None
             assert session.exec(select(EndingRoomParticipant)).first() is None
+            assert session.exec(select(EndingRoomThread)).first() is None
             assert session.exec(select(EndingRoomTurn)).first() is None
 
     def test_delete_cascade_removes_campaign_log_and_detaches_badge_source(self, client):
@@ -2163,6 +2175,15 @@ class TestDeleteScenario:
             )
             session.add(room)
             session.flush()
+            thread = EndingRoomThread(
+                room_id=room.id,
+                title="结局线程",
+                mode="room",
+                participant_set_hash="hash-thread",
+                memory_partition_id=f"ending-room:{room.id}:thread:default",
+            )
+            session.add(thread)
+            session.flush()
             participant = EndingRoomParticipant(
                 room_id=room.id,
                 source_branch_id=bid,
@@ -2174,6 +2195,7 @@ class TestDeleteScenario:
             session.add(
                 EndingRoomTurn(
                     room_id=room.id,
+                    thread_id=thread.id,
                     sequence=1,
                     phase=EndingRoomPhase.VERDICT,
                     participant_id=participant.id,
@@ -2184,6 +2206,7 @@ class TestDeleteScenario:
             )
             session.commit()
             room_id = room.id
+            thread_id = thread.id
             participant_id = participant.id
 
         resp = client.delete(f"/api/scenario/{sid}")
@@ -2191,6 +2214,7 @@ class TestDeleteScenario:
         assert resp.status_code == 200
         with Session(engine) as session:
             assert session.get(EndingRoom, room_id) is None
+            assert session.get(EndingRoomThread, thread_id) is None
             assert session.get(EndingRoomParticipant, participant_id) is None
             assert session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first() is None
 

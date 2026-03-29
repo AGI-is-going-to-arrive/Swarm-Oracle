@@ -246,6 +246,36 @@ def init_db():
                 _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
                 _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
                 _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
+                _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")
+                _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
+                _migrate_add_column(
+                    conn,
+                    "ending_room_thread",
+                    "interaction_mode",
+                    "TEXT DEFAULT 'archivist_route'",
+                )
+                _migrate_add_column(conn, "ending_room_thread", "addressed_agent_ids_json", "TEXT")
+                _migrate_add_column(conn, "ending_room_turn", "thread_id", "TEXT")
+                _migrate_add_column(conn, "ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'")
+                _migrate_add_column(
+                    conn,
+                    "ending_room_turn",
+                    "interaction_mode",
+                    "TEXT DEFAULT 'auto_recap'",
+                )
+                _migrate_add_column(conn, "ending_room_turn", "memory_partition_id", "TEXT")
+                _migrate_add_column(
+                    conn,
+                    "ending_room_turn",
+                    "addressed_agent_ids_json",
+                    "TEXT",
+                )
+                _migrate_add_column(
+                    conn,
+                    "ending_room_turn",
+                    "question_anchor_ids_json",
+                    "TEXT",
+                )
                 # Track A follow-up: commitment/objective settlement fields
                 _migrate_add_column(
                     conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
@@ -287,11 +317,41 @@ def init_db():
                     "ix_ending_room_participant_room_id",
                     ["room_id"],
                 )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_participant",
+                    "ix_ending_room_participant_worldline_echo_key",
+                    ["worldline_echo_key"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_thread",
+                    "ix_ending_room_thread_room_id",
+                    ["room_id"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_thread",
+                    "ix_ending_room_thread_room_id_mode",
+                    ["room_id", "mode"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_thread",
+                    "ix_ending_room_thread_memory_partition_id",
+                    ["memory_partition_id"],
+                )
                 _migrate_create_unique_index(
                     conn,
                     "ending_room_turn",
                     "ix_ending_room_turn_room_sequence",
                     ["room_id", "sequence"],
+                )
+                _migrate_create_index(
+                    conn,
+                    "ending_room_turn",
+                    "ix_ending_room_turn_thread_id",
+                    ["thread_id"],
                 )
                 _migrate_create_index(
                     conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
@@ -350,7 +410,7 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     for token in col_type.split():
         if (
             not _SAFE_IDENTIFIER.match(token)
-            and token not in ("0", "1")
+            and not token.isdigit()
             and not (
                 len(token) >= 2
                 and token[0] == "'"

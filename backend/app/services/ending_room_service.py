@@ -23,11 +23,15 @@ from app.models import (
     Branch,
     BranchStatus,
     EndingRoom,
+    EndingRoomInteractionMode,
     EndingRoomParticipant,
     EndingRoomPhase,
     EndingRoomRoleSlot,
     EndingRoomStatus,
+    EndingRoomThread,
+    EndingRoomThreadMode,
     EndingRoomTurn,
+    EndingRoomTurnSource,
     EndingRoomType,
     Round,
     Scenario,
@@ -127,6 +131,56 @@ def _parse_key_moments(raw_value: str | None) -> list[str]:
     return [str(item).strip() for item in parsed if str(item).strip()]
 
 
+def _room_memory_partition_id(room_id: str) -> str:
+    return f"ending-room:{room_id}"
+
+
+def _thread_memory_partition_id(room_id: str, thread_id: str) -> str:
+    return f"{_room_memory_partition_id(room_id)}:thread:{thread_id}"
+
+
+def _build_worldline_echo_key(
+    *,
+    scenario_id: str,
+    anchor_branch_id: str | None,
+    room_id: str,
+    source_branch_id: str | None,
+    source_agent_id: str | None,
+) -> str | None:
+    if source_branch_id is None and source_agent_id is None:
+        return None
+    payload = "|".join(
+        [
+            scenario_id,
+            anchor_branch_id or "-",
+            room_id,
+            source_branch_id or "-",
+            source_agent_id or "-",
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _serialize_thread(thread: EndingRoomThread) -> dict[str, Any]:
+    interaction_mode = (
+        thread.interaction_mode.value
+        if isinstance(thread.interaction_mode, EndingRoomInteractionMode)
+        else str(thread.interaction_mode or EndingRoomInteractionMode.ARCHIVIST_ROUTE.value)
+    )
+    return {
+        "id": thread.id,
+        "room_id": thread.room_id,
+        "title": thread.title,
+        "mode": thread.mode.value,
+        "interaction_mode": interaction_mode,
+        "participant_set_hash": thread.participant_set_hash,
+        "memory_partition_id": thread.memory_partition_id,
+        "addressed_agent_ids_json": thread.addressed_agent_ids_json,
+        "created_at": thread.created_at.isoformat(),
+        "updated_at": thread.updated_at.isoformat(),
+    }
+
+
 def _serialize_participant(participant: EndingRoomParticipant) -> dict[str, Any]:
     return {
         "id": participant.id,
@@ -135,20 +189,33 @@ def _serialize_participant(participant: EndingRoomParticipant) -> dict[str, Any]
         "source_agent_id": participant.source_agent_id,
         "role_slot": participant.role_slot.value,
         "display_name": participant.display_name,
+        "worldline_echo_key": participant.worldline_echo_key,
         "persona_snapshot_json": participant.persona_snapshot_json,
         "visibility_scope_json": participant.visibility_scope_json,
     }
 
 
 def _serialize_turn(turn: EndingRoomTurn) -> dict[str, Any]:
+    source = turn.source.value if isinstance(turn.source, EndingRoomTurnSource) else str(turn.source or EndingRoomTurnSource.AUTO_RECAP.value)
+    interaction_mode = (
+        turn.interaction_mode.value
+        if isinstance(turn.interaction_mode, EndingRoomInteractionMode)
+        else str(turn.interaction_mode or EndingRoomInteractionMode.AUTO_RECAP.value)
+    )
     return {
         "id": turn.id,
         "room_id": turn.room_id,
+        "thread_id": turn.thread_id,
         "sequence": turn.sequence,
         "phase": turn.phase.value,
         "participant_id": turn.participant_id,
         "content": turn.content,
         "emotion": turn.emotion,
+        "source": source,
+        "interaction_mode": interaction_mode,
+        "memory_partition_id": turn.memory_partition_id,
+        "addressed_agent_ids_json": turn.addressed_agent_ids_json,
+        "question_anchor_ids_json": turn.question_anchor_ids_json,
         "cited_branch_id": turn.cited_branch_id,
         "cited_refs_json": turn.cited_refs_json,
         "created_at": turn.created_at.isoformat(),
@@ -282,6 +349,7 @@ def _sort_room_participants(
         EndingRoomRoleSlot.ARCHIVIST: 2,
         EndingRoomRoleSlot.CRITIC: 3,
         EndingRoomRoleSlot.OBSERVER: 4,
+        EndingRoomRoleSlot.USER: 5,
     }
     return sorted(
         participants,
@@ -292,6 +360,78 @@ def _sort_room_participants(
             participant.id,
         ),
     )
+
+
+def _load_room_threads(session: Session, room_id: str) -> list[EndingRoomThread]:
+    return session.exec(
+        select(EndingRoomThread)
+        .where(EndingRoomThread.room_id == room_id)
+        .order_by(EndingRoomThread.created_at, EndingRoomThread.id)
+    ).all()
+
+
+def _default_thread_title(room: EndingRoom) -> str:
+    return room.title
+
+
+def _ensure_default_thread(session: Session, room: EndingRoom) -> EndingRoomThread:
+    existing = session.exec(
+        select(EndingRoomThread)
+        .where(
+            EndingRoomThread.room_id == room.id,
+            EndingRoomThread.mode == EndingRoomThreadMode.ROOM,
+        )
+        .order_by(EndingRoomThread.created_at, EndingRoomThread.id)
+    ).first()
+    if existing is not None:
+        if existing.memory_partition_id != _room_memory_partition_id(room.id):
+            existing.memory_partition_id = _room_memory_partition_id(room.id)
+            existing.interaction_mode = EndingRoomInteractionMode.AUTO_RECAP
+            existing.updated_at = _now()
+            session.add(existing)
+            session.flush()
+        return existing
+
+    thread = EndingRoomThread(
+        room_id=room.id,
+        title=_default_thread_title(room),
+        mode=EndingRoomThreadMode.ROOM,
+        interaction_mode=EndingRoomInteractionMode.AUTO_RECAP,
+        participant_set_hash=room.participant_set_hash,
+        memory_partition_id=_room_memory_partition_id(room.id),
+        addressed_agent_ids_json=[],
+    )
+    session.add(thread)
+    session.flush()
+    return thread
+
+
+def _ensure_user_participant(session: Session, room: EndingRoom) -> EndingRoomParticipant:
+    existing = session.exec(
+        select(EndingRoomParticipant)
+        .where(
+            EndingRoomParticipant.room_id == room.id,
+            EndingRoomParticipant.role_slot == EndingRoomRoleSlot.USER,
+        )
+        .order_by(EndingRoomParticipant.id)
+    ).first()
+    if existing is not None:
+        return existing
+
+    participant = EndingRoomParticipant(
+        room_id=room.id,
+        role_slot=EndingRoomRoleSlot.USER,
+        display_name="你" if room.language == "zh" else "You",
+        worldline_echo_key=None,
+        persona_snapshot_json={"role": "user"},
+        visibility_scope_json={
+            "fulltext_branch_ids": [],
+            "summary_branch_ids": (room.config_json or {}).get("selected_branch_ids") or [],
+        },
+    )
+    session.add(participant)
+    session.flush()
+    return participant
 
 
 def _participant_set_hash(
@@ -485,6 +625,12 @@ def create_ending_room(
         try:
             session.add(room)
             session.flush()
+            room.config_json = {
+                **(room.config_json or {}),
+                "memory_partition_id": _room_memory_partition_id(room.id),
+            }
+            session.add(room)
+            _ensure_default_thread(session, room)
             for participant_def in participant_defs:
                 session.add(
                     EndingRoomParticipant(
@@ -493,6 +639,13 @@ def create_ending_room(
                         source_agent_id=participant_def.get("source_agent_id"),
                         role_slot=EndingRoomRoleSlot(participant_def["role_slot"]),
                         display_name=participant_def["display_name"],
+                        worldline_echo_key=_build_worldline_echo_key(
+                            scenario_id=scenario_id,
+                            anchor_branch_id=normalized_anchor_branch_id,
+                            room_id=room.id,
+                            source_branch_id=participant_def.get("source_branch_id"),
+                            source_agent_id=participant_def.get("source_agent_id"),
+                        ),
                         persona_snapshot_json=participant_def.get("persona_snapshot_json"),
                         visibility_scope_json=participant_def.get("visibility_scope_json"),
                     )
@@ -524,6 +677,7 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         participants = session.exec(
             select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id).order_by(EndingRoomParticipant.id)
         ).all()
+        threads = _load_room_threads(session, room_id)
         selected_branch_ids = _normalize_branch_ids(
             ((room.config_json or {}).get("selected_branch_ids") or []),
         )
@@ -542,7 +696,10 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
             "current_phase": _get_room_phase(room).value,
             "created_at": room.created_at.isoformat(),
             "updated_at": room.updated_at.isoformat(),
+            "memory_partition_version": room.memory_partition_version,
+            "memory_partition_id": (room.config_json or {}).get("memory_partition_id"),
             "participants": [_serialize_participant(item) for item in participants],
+            "threads": [_serialize_thread(item) for item in threads],
             "turns": [_serialize_turn(item) for item in turns],
             "result_ready": room.result_json is not None,
         }
@@ -563,6 +720,482 @@ def load_ending_room_result_payload(room_id: str) -> dict[str, Any]:
             raise EndingRoomServiceError(409, "ENDING_ROOM_RESULT_NOT_READY", "Ending room result is not ready")
         return {**snapshot, "result": room.result_json}
 
+
+def load_ending_room_thread_snapshot(thread_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        thread = session.get(EndingRoomThread, thread_id)
+        if thread is None:
+            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")
+        room = session.get(EndingRoom, thread.room_id)
+        if room is None:
+            raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
+        turns = session.exec(
+            select(EndingRoomTurn)
+            .where(EndingRoomTurn.thread_id == thread_id)
+            .order_by(EndingRoomTurn.sequence, EndingRoomTurn.id)
+        ).all()
+        return {
+            **_serialize_thread(thread),
+            "room_type": room.room_type.value,
+            "room_title": room.title,
+            "room_status": room.status.value,
+            "language": room.language,
+            "turns": [_serialize_turn(turn) for turn in turns],
+        }
+
+
+def load_ending_room_thread(thread_id: str) -> dict[str, Any]:
+    return load_ending_room_thread_snapshot(thread_id)
+
+
+def _room_memory_partition(room: EndingRoom) -> str:
+    config = room.config_json or {}
+    memory_partition_id = str(config.get("memory_partition_id") or "").strip()
+    if memory_partition_id:
+        return memory_partition_id
+    return _room_memory_partition_id(room.id)
+
+
+def build_room_memory(room_id: str) -> list[dict[str, Any]]:
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, room_id)
+        if room is None:
+            raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
+        partition_id = _room_memory_partition(room)
+        turns = session.exec(
+            select(EndingRoomTurn)
+            .where(
+                EndingRoomTurn.room_id == room_id,
+                EndingRoomTurn.memory_partition_id == partition_id,
+            )
+            .order_by(EndingRoomTurn.sequence, EndingRoomTurn.id)
+        ).all()
+        return [_serialize_turn(turn) for turn in turns]
+
+
+def build_thread_memory(thread_id: str) -> list[dict[str, Any]]:
+    with Session(get_engine()) as session:
+        thread = session.get(EndingRoomThread, thread_id)
+        if thread is None:
+            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")
+        turns = session.exec(
+            select(EndingRoomTurn)
+            .where(EndingRoomTurn.thread_id == thread_id)
+            .order_by(EndingRoomTurn.sequence, EndingRoomTurn.id)
+        ).all()
+        return [_serialize_turn(turn) for turn in turns]
+
+
+def build_room_followup_context(room_id: str) -> dict[str, Any]:
+    snapshot = load_ending_room_result_payload(room_id)
+    transcript = "\n".join(
+        f"{turn['sequence']}. {turn['content']}"
+        for turn in build_room_memory(room_id)
+    )
+    return {
+        "room_id": snapshot["id"],
+        "room_type": snapshot["room_type"],
+        "memory_partition_id": snapshot.get("memory_partition_id"),
+        "current_phase": snapshot["current_phase"],
+        "room_transcript": transcript,
+        "participants": snapshot["participants"],
+        "result": snapshot["result"],
+    }
+
+
+def build_thread_followup_context(thread_id: str) -> dict[str, Any]:
+    thread_snapshot = load_ending_room_thread_snapshot(thread_id)
+    room_context = build_room_followup_context(thread_snapshot["room_id"])
+    thread_transcript = "\n".join(
+        f"{turn['sequence']}. {turn['content']}"
+        for turn in thread_snapshot["turns"]
+    )
+    return {
+        **room_context,
+        "thread_id": thread_snapshot["id"],
+        "thread_title": thread_snapshot["title"],
+        "thread_memory_partition_id": thread_snapshot["memory_partition_id"],
+        "thread_transcript": thread_transcript,
+    }
+
+
+def _resolve_room_and_participants(
+    session: Session,
+    room_id: str,
+) -> tuple[EndingRoom, list[EndingRoomParticipant]]:
+    room = session.get(EndingRoom, room_id)
+    if room is None:
+        raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
+    participants = session.exec(
+        select(EndingRoomParticipant)
+        .where(EndingRoomParticipant.room_id == room_id)
+        .order_by(EndingRoomParticipant.id)
+    ).all()
+    selected_branch_ids = _normalize_branch_ids(
+        ((room.config_json or {}).get("selected_branch_ids") or []),
+    )
+    return room, _sort_room_participants(participants, selected_branch_ids)
+
+
+def _ensure_followup_write_allowed(room: EndingRoom) -> None:
+    if room.status == EndingRoomStatus.ERROR:
+        raise EndingRoomServiceError(
+            409,
+            "ENDING_ROOM_UNAVAILABLE",
+            "Ending room is not available for follow-up",
+        )
+    if room.room_type == EndingRoomType.CROSSLINE_GALLERY or (room.config_json or {}).get("read_only"):
+        raise EndingRoomServiceError(
+            409,
+            "ENDING_ROOM_READ_ONLY",
+            "Ending room is read only",
+        )
+
+
+def _resolve_addressed_participants(
+    participants: list[EndingRoomParticipant],
+    addressed_agent_ids: list[str],
+) -> list[EndingRoomParticipant]:
+    normalized = [agent_id.strip() for agent_id in addressed_agent_ids if agent_id and agent_id.strip()]
+    if not normalized:
+        return []
+    by_agent_id = {
+        participant.source_agent_id: participant
+        for participant in participants
+        if participant.source_agent_id
+    }
+    missing = [agent_id for agent_id in normalized if agent_id not in by_agent_id]
+    if missing:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_ADDRESSED_AGENT_INVALID",
+            "addressed_agent_ids must belong to current room participants",
+        )
+    return [by_agent_id[agent_id] for agent_id in normalized]
+
+
+def _pick_followup_responder(
+    participants: list[EndingRoomParticipant],
+    addressed_participants: list[EndingRoomParticipant],
+    interaction_mode: EndingRoomInteractionMode,
+) -> EndingRoomParticipant:
+    if interaction_mode == EndingRoomInteractionMode.HOTSEAT and addressed_participants:
+        return addressed_participants[0]
+    archivist = next(
+        (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
+        None,
+    )
+    if archivist is not None:
+        return archivist
+    return participants[0]
+
+
+def _thread_title_for_request(language: str, title: str | None) -> str:
+    cleaned = str(title or "").strip()
+    if cleaned:
+        return cleaned
+    return "追问线程" if language == "zh" else "Follow-up Thread"
+
+
+def create_ending_room_thread(
+    room_id: str,
+    *,
+    title: str | None = None,
+    addressed_agent_ids: list[str] | None = None,
+    interaction_mode: EndingRoomInteractionMode = EndingRoomInteractionMode.THREAD_FOLLOWUP,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        room, participants = _resolve_room_and_participants(session, room_id)
+        _ensure_followup_write_allowed(room)
+        addressed = _resolve_addressed_participants(participants, addressed_agent_ids or [])
+        if interaction_mode == EndingRoomInteractionMode.HOTSEAT and len(addressed) != 1:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_HOTSEAT_REQUIRES_SINGLE_TARGET",
+                "hotseat mode requires exactly one addressed agent",
+            )
+        if interaction_mode == EndingRoomInteractionMode.HOTSEAT and addressed:
+            resolved_title = addressed[0].display_name if title is None else _thread_title_for_request(room.language, title)
+        else:
+            resolved_title = _thread_title_for_request(room.language, title)
+        participant_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "room_id": room_id,
+                    "interaction_mode": interaction_mode.value,
+                    "addressed_agent_ids": [participant.source_agent_id for participant in addressed],
+                    "title": resolved_title,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        thread = EndingRoomThread(
+            room_id=room_id,
+            title=resolved_title,
+            mode=EndingRoomThreadMode.FOLLOWUP,
+            interaction_mode=interaction_mode,
+            participant_set_hash=participant_hash,
+            memory_partition_id="",
+            addressed_agent_ids_json=[participant.source_agent_id for participant in addressed if participant.source_agent_id],
+        )
+        thread.memory_partition_id = _thread_memory_partition_id(room_id, thread.id)
+        session.add(thread)
+        session.commit()
+        session.refresh(thread)
+        return load_ending_room_thread_snapshot(thread.id)
+
+
+def _build_followup_reply_content(
+    room: EndingRoom,
+    *,
+    thread: EndingRoomThread,
+    response_participant: EndingRoomParticipant,
+    user_content: str,
+    addressed_participants: list[EndingRoomParticipant],
+) -> str:
+    target_label = response_participant.display_name
+    addressed_label = ", ".join(participant.display_name for participant in addressed_participants)
+    if room.language == "zh":
+        if thread.mode == EndingRoomThreadMode.ROOM:
+            focus = "只引用当前 room transcript，不读取其他 thread。"
+        else:
+            focus = "我只追加当前 thread transcript，并沿用 room 级摘要，不会混入别的 thread。"
+        if addressed_label:
+            return f"{target_label} 回应：围绕「{user_content}」，我只按当前房间里点名的世界线回声回答。{focus}"
+        return f"{target_label} 回应：围绕「{user_content}」，我先按当前房间记忆收口，再给出最小必要追问。{focus}"
+    if thread.mode == EndingRoomThreadMode.ROOM:
+        focus = "I am using the room transcript only and not reading other threads."
+    else:
+        focus = "I am appending only this thread transcript on top of the room summary and not mixing in other threads."
+    if addressed_label:
+        return f"{target_label}: on '{user_content}', I will answer through the addressed worldline echo only. {focus}"
+    return f"{target_label}: on '{user_content}', I will stay inside the current room memory and keep the follow-up narrow. {focus}"
+
+
+def _persist_followup_turns(
+    session: Session,
+    *,
+    room: EndingRoom,
+    thread: EndingRoomThread,
+    user_participant: EndingRoomParticipant,
+    response_participant: EndingRoomParticipant,
+    content: str,
+    addressed_participants: list[EndingRoomParticipant],
+    addressed_agent_ids: list[str],
+    question_anchor_ids: list[str],
+    interaction_mode: EndingRoomInteractionMode,
+) -> list[EndingRoomTurn]:
+    room_partition_id = _room_memory_partition(room)
+    memory_partition_id = (
+        room_partition_id
+        if thread.mode == EndingRoomThreadMode.ROOM
+        else thread.memory_partition_id
+    )
+    sequences = session.exec(
+        select(EndingRoomTurn.sequence).where(EndingRoomTurn.room_id == room.id)
+    ).all()
+    base_sequence = max((int(sequence) for sequence in sequences), default=0)
+    user_turn = EndingRoomTurn(
+        room_id=room.id,
+        thread_id=thread.id,
+        sequence=base_sequence + 1,
+        phase=_get_room_phase(room),
+        participant_id=user_participant.id,
+        content=content,
+        emotion="curious",
+        source=EndingRoomTurnSource.USER_TURN,
+        interaction_mode=interaction_mode,
+        memory_partition_id=memory_partition_id,
+        addressed_agent_ids_json=addressed_agent_ids or None,
+        question_anchor_ids_json=question_anchor_ids or None,
+        cited_branch_id=None,
+        cited_refs_json={"kind": "user_turn"},
+    )
+    response_turn = EndingRoomTurn(
+        room_id=room.id,
+        thread_id=thread.id,
+        sequence=base_sequence + 2,
+        phase=_get_room_phase(room),
+        participant_id=response_participant.id,
+        content=_build_followup_reply_content(
+            room,
+            thread=thread,
+            response_participant=response_participant,
+            user_content=content,
+            addressed_participants=addressed_participants,
+        ),
+        emotion="measured",
+        source=EndingRoomTurnSource.ASSISTANT_FOLLOWUP,
+        interaction_mode=interaction_mode,
+        memory_partition_id=memory_partition_id,
+        addressed_agent_ids_json=addressed_agent_ids or None,
+        question_anchor_ids_json=question_anchor_ids or None,
+        cited_branch_id=response_participant.source_branch_id,
+        cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
+    )
+    session.add(user_turn)
+    session.add(response_turn)
+    room.updated_at = _now()
+    thread.updated_at = _now()
+    session.add(room)
+    session.add(thread)
+    session.flush()
+    return [user_turn, response_turn]
+
+
+def _append_followup_turns_with_retry(
+    *,
+    thread_id: str,
+    content: str,
+    addressed_agent_ids: list[str],
+    question_anchor_ids: list[str],
+    interaction_mode: EndingRoomInteractionMode,
+) -> list[dict[str, Any]]:
+    normalized_content = str(content or "").strip()
+    if not normalized_content:
+        raise EndingRoomServiceError(422, "ENDING_ROOM_USER_TURN_EMPTY", "content must not be empty")
+
+    normalized_addressed_agent_ids = [
+        agent_id.strip()
+        for agent_id in addressed_agent_ids
+        if agent_id and agent_id.strip()
+    ]
+    normalized_question_anchor_ids = [
+        anchor_id.strip()
+        for anchor_id in question_anchor_ids
+        if anchor_id and anchor_id.strip()
+    ]
+
+    for _attempt in range(3):
+        try:
+                with Session(get_engine()) as session:
+                    thread = session.get(EndingRoomThread, thread_id)
+                    if thread is None:
+                        raise EndingRoomServiceError(
+                            404,
+                        "ENDING_ROOM_THREAD_NOT_FOUND",
+                            "Ending room thread not found",
+                        )
+                    effective_addressed_agent_ids = (
+                        normalized_addressed_agent_ids
+                        or [
+                            agent_id.strip()
+                            for agent_id in (thread.addressed_agent_ids_json or [])
+                            if agent_id and agent_id.strip()
+                        ]
+                    )
+                    room, participants = _resolve_room_and_participants(session, thread.room_id)
+                    _ensure_followup_write_allowed(room)
+                    user_participant = _ensure_user_participant(session, room)
+                    addressed_participants = _resolve_addressed_participants(
+                        participants,
+                        effective_addressed_agent_ids,
+                    )
+                    if interaction_mode == EndingRoomInteractionMode.HOTSEAT and len(addressed_participants) != 1:
+                        raise EndingRoomServiceError(
+                            422,
+                            "ENDING_ROOM_HOTSEAT_REQUIRES_SINGLE_TARGET",
+                        "hotseat mode requires exactly one addressed agent",
+                    )
+                responder = _pick_followup_responder(
+                    participants,
+                    addressed_participants,
+                    interaction_mode,
+                )
+                turns = _persist_followup_turns(
+                    session,
+                    room=room,
+                    thread=thread,
+                        user_participant=user_participant,
+                        response_participant=responder,
+                        content=normalized_content,
+                        addressed_participants=addressed_participants,
+                        addressed_agent_ids=effective_addressed_agent_ids,
+                        question_anchor_ids=normalized_question_anchor_ids,
+                        interaction_mode=interaction_mode,
+                    )
+                session.commit()
+                for turn in turns:
+                    session.refresh(turn)
+                return [_serialize_turn(turn) for turn in turns]
+        except IntegrityError:
+            continue
+
+    raise EndingRoomServiceError(
+        409,
+        "ENDING_ROOM_SEQUENCE_CONFLICT",
+        "Failed to append follow-up turns because the room changed concurrently",
+    )
+
+
+def append_room_user_turn(
+    room_id: str,
+    *,
+    content: str,
+    addressed_agent_ids: list[str] | None = None,
+    question_anchor_ids: list[str] | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, room_id)
+        if room is None:
+            raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
+        _ensure_followup_write_allowed(room)
+        thread = _ensure_default_thread(session, room)
+        session.commit()
+        thread_id = thread.id
+
+    resolved_mode = interaction_mode
+    if resolved_mode is None:
+        resolved_mode = (
+            EndingRoomInteractionMode.HOTSEAT
+            if addressed_agent_ids
+            else EndingRoomInteractionMode.ARCHIVIST_ROUTE
+        )
+    turns = _append_followup_turns_with_retry(
+        thread_id=thread_id,
+        content=content,
+        addressed_agent_ids=addressed_agent_ids or [],
+        question_anchor_ids=question_anchor_ids or [],
+        interaction_mode=resolved_mode,
+    )
+    return {
+        "room_id": room_id,
+        "thread_id": thread_id,
+        "memory_partition_id": load_ending_room_snapshot(room_id).get("memory_partition_id"),
+        "turns": turns,
+    }
+
+
+def append_thread_user_turn(
+    thread_id: str,
+    *,
+    content: str,
+    addressed_agent_ids: list[str] | None = None,
+    question_anchor_ids: list[str] | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+) -> dict[str, Any]:
+    if interaction_mode is None:
+        thread_snapshot = load_ending_room_thread_snapshot(thread_id)
+        resolved_mode = EndingRoomInteractionMode(thread_snapshot["interaction_mode"])
+    else:
+        resolved_mode = interaction_mode
+    turns = _append_followup_turns_with_retry(
+        thread_id=thread_id,
+        content=content,
+        addressed_agent_ids=addressed_agent_ids or [],
+        question_anchor_ids=question_anchor_ids or [],
+        interaction_mode=resolved_mode,
+    )
+    thread_snapshot = load_ending_room_thread_snapshot(thread_id)
+    return {
+        "room_id": thread_snapshot["room_id"],
+        "thread_id": thread_id,
+        "memory_partition_id": thread_snapshot["memory_partition_id"],
+        "turns": turns,
+    }
 
 def build_branch_scope_context(scenario_id: str, anchor_branch_id: str, *, language: str | None = None, selected_branch_ids: list[str] | None = None) -> dict[str, Any]:
     with Session(get_engine()) as session:
@@ -959,6 +1592,9 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
             room = session.get(EndingRoom, room_id)
             if room is None:
                 return
+            room_thread = _ensure_default_thread(session, room)
+            room_thread_id = room_thread.id
+            room_memory_partition_id = _room_memory_partition(room)
             participants = session.exec(
                 select(EndingRoomParticipant)
                 .where(EndingRoomParticipant.room_id == room_id)
@@ -969,6 +1605,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
             )
             participants = _sort_room_participants(participants, selected_branch_ids)
             planned_turns, result = _build_room_plan(session, room, participants)
+            session.commit()
 
         current_phase = EndingRoomPhase.OPENING
         for sequence, turn_plan in enumerate(planned_turns, start=1):
@@ -1022,11 +1659,15 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                 committed_turn = EndingRoomTurn(
                     id=turn_id,
                     room_id=room_id,
+                    thread_id=room_thread_id,
                     sequence=sequence,
                     phase=turn_plan["phase"],
                     participant_id=turn_plan["participant_id"],
                     content=turn_plan["content"],
                     emotion=turn_plan["emotion"],
+                    source=EndingRoomTurnSource.AUTO_RECAP,
+                    interaction_mode=EndingRoomInteractionMode.AUTO_RECAP,
+                    memory_partition_id=room_memory_partition_id,
                     cited_branch_id=turn_plan["cited_branch_id"],
                     cited_refs_json=turn_plan["cited_refs_json"],
                 )

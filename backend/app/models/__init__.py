@@ -26,11 +26,15 @@ from .debate import (
 )
 from .ending_room import (
     EndingRoom,
+    EndingRoomInteractionMode,
     EndingRoomParticipant,
     EndingRoomPhase,
     EndingRoomRoleSlot,
     EndingRoomStatus,
+    EndingRoomThread,
+    EndingRoomThreadMode,
     EndingRoomTurn,
+    EndingRoomTurnSource,
     EndingRoomType,
 )
 from .predictions import Leaderboard, Prediction
@@ -41,7 +45,7 @@ __all__ = [
     "AgentGroup", "AgentGroupMember",
     "DirectorProfile", "ProfileMastery", "DirectorBadgeUnlock", "ScenarioCampaignLog",
     "Debate", "DebateCounterplay", "DebatePhase", "DebatePrediction", "DebatePredictionKind", "DebateSide", "DebateStatus", "DebateTurn",
-    "EndingRoom", "EndingRoomParticipant", "EndingRoomPhase", "EndingRoomRoleSlot", "EndingRoomStatus", "EndingRoomTurn", "EndingRoomType",
+    "EndingRoom", "EndingRoomInteractionMode", "EndingRoomParticipant", "EndingRoomPhase", "EndingRoomRoleSlot", "EndingRoomStatus", "EndingRoomThread", "EndingRoomThreadMode", "EndingRoomTurn", "EndingRoomTurnSource", "EndingRoomType",
     "Prediction", "Leaderboard",
     "init_db",
 ]

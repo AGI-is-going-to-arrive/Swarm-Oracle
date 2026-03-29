@@ -38,11 +38,11 @@ api/ws.py ──► WebSocket Manager (内联；scenario / debate receive loop �
     │
 main.py ──► 汇总挂载 scenarios / interventions / social / campaign / predictions / ws routers + `GET /` 根信息端点；本轮还额外挂载了 ending-room 的 `/api/ws/ending-room/{room_id}` 主路径与 `/ws/ending-room/{room_id}` alias；`GET /metrics` 在依赖齐全时暴露完整 Prometheus 指标，缺依赖时回退为最小文本指标；进程日志当前默认走结构化 JSON，`uvicorn / uvicorn.error / uvicorn.access` 也统一复用同一套 root formatter；未处理异常当前也会统一收口成 `500 + INTERNAL_ERROR`，不再直接把默认 FastAPI 500 形状暴露给客户端
     │
-models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理；`_migrate_add_column()` 当前也已接受常见单引号字符串默认值，如 `TEXT DEFAULT '{}'`，不再只允许 `0/1`)
+models/database.py ──► SQLModel (Scenario, Agent, Branch, Round, Message, InterventionLog, PendingIntervention, ReplayArtifact；`Scenario` 当前额外带 `director_state_json / gameplay_state_json`，这些 JSON 字段现在走 `MutableDict.as_mutable(JSON)`，就地修改也能被持久化；hot-path 外键已补索引；`AgentGroup.scenario_id` 现在也有索引与轻量迁移兜底；`get_engine / dispose_engine` 当前也已补上进程内锁，避免首次并发初始化撞出多个 engine；`init_db()` 的 SQLite best-effort migration 现也复用 engine-managed 连接，不再额外绕开 SQLAlchemy 连接管理；本 session 又补齐了 `ending_room_thread / worldline_echo_key / interaction_mode / memory_partition_id` 这组 ending-room follow-up 字段与索引；`_migrate_add_column()` 当前也已接受常见单引号字符串默认值，如 `TEXT DEFAULT '{}'`，不再只允许 `0/1`)
 models/agent_group.py ──► AgentGroup, AgentGroupMember (P3-A；`scenario_id` 已加索引)
 models/campaign.py ──► DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog
 models/debate.py ──► Debate, DebateTurn, DebatePrediction, DebateCounterplay
-models/ending_room.py ──► EndingRoom, EndingRoomParticipant, EndingRoomTurn
+models/ending_room.py ──► EndingRoom, EndingRoomParticipant, EndingRoomThread, EndingRoomTurn（含 follow-up thread / interaction mode / memory partition 字段）
 models/predictions.py ──► Prediction, Leaderboard (P3-B)
 services/runtime_lock.py ──► SQLite 共享运行锁（simulation / debate 跨 worker lease）
 config.py ──► pydantic-settings (Settings singleton；默认 `.env` / SQLite / Chroma 路径都锚到 `backend/` 根目录；非本地 LLM 端点会拒绝占位 `LLM_API_KEY`，`LLM_MODEL_NAME` 不能为空；当前额外提供 `LOG_LEVEL / LOG_FORMAT`，默认 `INFO + json`；`BRANCH_PRUNE_THRESHOLD / FORK_SENSITIVITY` 当前也已补范围校验)
@@ -77,7 +77,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **Detector budget**: `fork_detector_active_branch_limit` 当前只限制“每轮还有多少个 ACTIVE branch 有资格继续跑 detector”；不会阻止这些分支发言、压缩记忆或进入 narration。当前排序规则是 `probability desc, branch_id asc`，超出预算的分支会在 `round_checks` 里带 `skip_reason = detector_budget_exceeded`
 - **分支归一化**: fork 后自动归一化子分支概率使总和为 1.0；若活跃分支概率和意外掉到 `<= 0`，当前会退回均匀分布并记 warning；这一轮又补了 prune 后的二次归一化，避免低概率分支被剪掉后剩余 `ACTIVE` 分支概率和继续小于 `1.0`
 - **批量删除**: `delete_scenario` 使用批量 SQL DELETE（P2-7），但整体仍是应用层 orchestrated delete，不依赖数据库级 `ON DELETE CASCADE`
-- **删除完整性守卫**: `delete_scenario` 当前会在所有显式删除步骤后执行残留检查；若 `AgentMessage / Round / InterventionLog / PendingIntervention / AgentGroupMember / AgentGroup / Prediction / ScenarioCampaignLog / DirectorBadgeUnlock.source_scenario_id / Branch / Agent / Scenario` 任一仍残留，事务会直接回滚并返回 `SCENARIO_DELETE_INTEGRITY_FAILED`
+- **删除完整性守卫**: `delete_scenario` 当前会在所有显式删除步骤后执行残留检查；若 `AgentMessage / Round / InterventionLog / PendingIntervention / AgentGroupMember / AgentGroup / Prediction / ScenarioCampaignLog / DirectorBadgeUnlock.source_scenario_id / ending_room / ending_room_participant / ending_room_thread / ending_room_turn / Branch / Agent / Scenario` 任一仍残留，事务会直接回滚并返回 `SCENARIO_DELETE_INTEGRITY_FAILED`
 - **状态收口**: 进入 narration 前会先持久化 `ScenarioStatus.NARRATING` 再广播 `status=narrating`；后续读场景响应时，helpers 会把卡在 `SIMULATING / NARRATING` 且所有分支都已终局的 scenario reconcile 到 `DONE`
 - **并发**: `_gather_agent_messages()` 当前按 `get_runtime_parallelism_limit()` 创建局部 semaphore，不直接硬读 `LLM_CONCURRENCY`；有请求级 quota 时会自动收口到安全 fan-out 上限
 - **Blackboard 热路径**: `_gather_agent_messages()` 当前只有在 blackboard 没有可用共享简报时才会回退 `_get_recent_messages()`；默认 blackboard 主路径不再白做 recent DB query
@@ -159,12 +159,17 @@ alembic/ ──► Alembic 数据库迁移框架
   - ChromaDB 不可用时静默降级
 
 ### `ending_room_service.py` (≈800行) — Oracle Chambers / 世界线圆桌 (**NEW**)
-- **职责**: `ending_room` 域的创建、dedupe、scope 构建、后台转录生成与结果收口
+- **职责**: `ending_room` 域的创建、dedupe、scope 构建、follow-up thread / user-turn 追加、后台转录生成与结果收口
 - **关键函数**:
   - `create_ending_room(...)` — 按 `scenario + anchor_branch + room_type + participant_set_hash + language` 生成或复用 room
   - `load_ending_room_snapshot(room_id)` / `load_ending_room_result_payload(room_id)` — 读取 live/result payload
+  - `load_ending_room_thread_snapshot(thread_id)` — 读取 follow-up thread snapshot
   - `build_branch_scope_context(...)` — 当前世界线全文 + 他线摘要
   - `build_roundtable_scope_context(...)` — 每个代表自己的全文 + 他线摘要
+  - `build_room_memory(...)` / `build_thread_memory(...)` — 分别读取 room 级与 thread 级 committed transcript
+  - `build_room_followup_context(...)` / `build_thread_followup_context(...)` — 构建 follow-up 可见上下文
+  - `create_ending_room_thread(...)` — 在既有 room 下创建 follow-up thread
+  - `append_room_user_turn(...)` / `append_thread_user_turn(...)` — 追加 room / thread 级用户追问与后续回应
   - `run_ending_room_background(room_id, ws_callback)` — 生成 turn、广播 hybrid stream、收口 result
 - **当前口径**:
   - `ending_chamber / one_move_only` 必须带 `anchor_branch_id`
@@ -175,6 +180,10 @@ alembic/ ──► Alembic 数据库迁移框架
   - 单结局房间当前会去重同一个 `source_agent_id`，避免同一 agent 被重复塞成两席
   - branch / roundtable transcript 当前都改成 `LEFT JOIN Agent`，agent 记录缺失时会回退 `Unknown / 未知角色`，不再把旧消息直接吞掉
   - participant 列表当前会按 `role + selected branch order + display_name` 稳定排序；不再依赖随机 UUID 顺序
+  - room 创建后当前会自动补一个 default room thread；自动复盘 turn 会显式写入这条 room thread，并带 room 级 `memory_partition_id`
+  - `EndingRoomParticipant` 当前会带 `worldline_echo_key`，供后续追问按当前 worldline roster 分桶
+  - room 级追问会继续写入 room partition；thread 级追问只写当前 thread partition，不会复用兄弟 thread transcript
+  - `delete_scenario` 当前也会显式清理 `ending_room_thread`，删除完整性守卫已把这层一起纳入残留检查
   - committed turn 落库后，`supporting_turns[*].turn_id` 当前会回填真实 turn id，不再永远停在 `null`
   - room 后台运行失败时，当前会显式落 `status=error`，并广播 `ending_room_turn_error + status=error`
   - 并发创建同 scope room 时，唯一键冲突当前会在服务层回收并复用既有 room，不再把 `IntegrityError` 直接暴露给调用方

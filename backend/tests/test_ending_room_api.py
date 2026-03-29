@@ -16,6 +16,7 @@ from app.models import (
     BranchStatus,
     EndingRoom,
     EndingRoomStatus,
+    EndingRoomThread,
     Round,
     Scenario,
     ScenarioStatus,
@@ -339,3 +340,101 @@ def test_deleted_scenario_invalidates_ending_room_endpoints(client):
     result_resp = client.get(f"/api/ending-room/{room_id}/result")
     assert result_resp.status_code == 404
     assert result_resp.json()["detail"]["code"] == "ENDING_ROOM_NOT_FOUND"
+
+
+def test_create_thread_and_append_thread_user_turn(client):
+    fixture = _seed_ready_scenario()
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_snapshot = create_resp.json()
+    asyncio.run(run_ending_room_background(room_snapshot["id"]))
+
+    thread_resp = client.post(
+        f"/api/ending-room/{room_snapshot['id']}/thread",
+        json={"title": "追问支线"},
+    )
+    assert thread_resp.status_code == 200
+    thread_payload = thread_resp.json()
+    assert thread_payload["mode"] == "followup"
+
+    user_turn_resp = client.post(
+        f"/api/ending-room/thread/{thread_payload['id']}/user-turn",
+        json={"content": "只在这个线程里继续说。"},
+    )
+    assert user_turn_resp.status_code == 200
+    followup_payload = user_turn_resp.json()
+    assert followup_payload["thread_id"] == thread_payload["id"]
+    assert len(followup_payload["turns"]) == 2
+    assert all(turn["thread_id"] == thread_payload["id"] for turn in followup_payload["turns"])
+    assert all(turn["memory_partition_id"] == thread_payload["memory_partition_id"] for turn in followup_payload["turns"])
+
+    get_thread_resp = client.get(f"/api/ending-room/thread/{thread_payload['id']}")
+    assert get_thread_resp.status_code == 200
+    assert any(turn["content"] == "只在这个线程里继续说。" for turn in get_thread_resp.json()["turns"])
+
+
+def test_room_user_turn_rejects_invalid_addressed_agent(client):
+    fixture = _seed_ready_scenario()
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_id = create_resp.json()["id"]
+    asyncio.run(run_ending_room_background(room_id))
+
+    resp = client.post(
+        f"/api/ending-room/{room_id}/user-turn",
+        json={
+            "content": "请点名回答。",
+            "addressed_agent_ids": ["missing-agent"],
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "ENDING_ROOM_ADDRESSED_AGENT_INVALID"
+
+
+def test_delete_scenario_invalidates_thread_endpoint(client):
+    fixture = _seed_ready_scenario()
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_id = create_resp.json()["id"]
+    asyncio.run(run_ending_room_background(room_id))
+
+    thread_resp = client.post(
+        f"/api/ending-room/{room_id}/thread",
+        json={"title": "删除前线程"},
+    )
+    assert thread_resp.status_code == 200
+    thread_id = thread_resp.json()["id"]
+
+    delete_resp = client.delete(f"/api/scenario/{fixture['scenario_id']}")
+    assert delete_resp.status_code == 200
+
+    get_thread_resp = client.get(f"/api/ending-room/thread/{thread_id}")
+    assert get_thread_resp.status_code == 404
+    assert get_thread_resp.json()["detail"]["code"] == "ENDING_ROOM_THREAD_NOT_FOUND"
+
+    with Session(get_engine()) as session:
+        assert session.get(EndingRoomThread, thread_id) is None

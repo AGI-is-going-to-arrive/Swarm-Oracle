@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-29（本轮已补 `Oracle Chambers Phase C MVP`：result CTA / EndingChatModal / endingRoomStore / ending-room WS `/api/ws` 主路径 + `/ws` alias，以及本 session 的 ending-room 定向回归与桌面/移动端实机观察）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-29（本轮已补 `Oracle Chambers Phase B+` 后端真值：ending-room thread / user-turn / room-thread memory partition / worldline echo / delete cleanup，并同步收口 `Phase C` 当前仍主要停在单结局 MVP 的口径）
 
 ## 阅读顺序
 

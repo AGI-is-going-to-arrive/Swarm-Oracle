@@ -45,6 +45,7 @@ from app.models import (
     DirectorBadgeUnlock,
     EndingRoom,
     EndingRoomParticipant,
+    EndingRoomThread,
     EndingRoomTurn,
     InterventionLog,
     PendingIntervention,
@@ -227,6 +228,16 @@ def _collect_scenario_delete_integrity_issues(
                     select(sa_func.count())
                     .select_from(EndingRoomParticipant)
                     .where(EndingRoomParticipant.room_id.in_(room_ids))
+                ).one()
+            ),
+        )
+        record(
+            "ending_room_thread",
+            int(
+                session.exec(
+                    select(sa_func.count())
+                    .select_from(EndingRoomThread)
+                    .where(EndingRoomThread.room_id.in_(room_ids))
                 ).one()
             ),
         )
@@ -985,6 +996,7 @@ async def delete_scenario(scenario_id: str):
             session.exec(
                 sa_delete(EndingRoomParticipant).where(EndingRoomParticipant.room_id.in_(room_ids))
             )
+            session.exec(sa_delete(EndingRoomThread).where(EndingRoomThread.room_id.in_(room_ids)))
         session.exec(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
 
         # 5. Predictions — collect affected users so leaderboard rows can be rebuilt

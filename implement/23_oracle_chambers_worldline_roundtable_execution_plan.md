@@ -280,7 +280,9 @@ SwarmOracle 自己的独特点必须保持：
 > 状态更新（2026-03-29）：
 > - backend 独立 `ending_room` 域、REST/WS、scenario 删除清理、L2 branch scope 检索已落地
 > - `Phase B` 当前可签成：**后端严格签收通过**
-> - 结果页入口、会客厅 modal、圆桌页面仍未开始；前端可玩性验收要到 `Phase C/D`
+> - 本 session 又补齐了 `Phase B+` 最小后端增量：`ending_room_thread`、`GET /api/ending-room/thread/{thread_id}`、`POST /api/ending-room/{room_id}/user-turn`、`POST /api/ending-room/{room_id}/thread`、`POST /api/ending-room/thread/{thread_id}/user-turn`、room/thread memory partition、`worldline_echo_key`
+> - 前端当前不是空白，但仍只签到单结局结果页 MVP；多结局结果页、participant picker、thread UI 的正式验收要到 `Phase C2/C3`
+> - 本轮后端定向验证：`tests/test_ending_room_service.py + tests/test_ending_room_api.py + tests/test_ending_room_ws.py = 43 passed`
 
 ### 目标
 
@@ -959,6 +961,12 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 ---
 
 ## 3.3.2 Phase C3 — 同线听证 / 热座追问（Strongly Recommended Before Phase D Signoff）
+
+> 状态更新（2026-03-29）：
+> - backend 侧 `follow-up thread / user-turn / memory partition` 已先按 `Phase B+` 最小口径落地
+> - 当前已能创建 thread、读取 thread snapshot、写 room/thread follow-up turn，并显式区分 room memory 与 thread memory
+> - `delete_scenario` 也已把 `ending_room_thread` 纳入清理
+> - 但前端 thread UI / thread store / thread WS 还没做，这一节仍不能签收
 
 ### 目标
 
