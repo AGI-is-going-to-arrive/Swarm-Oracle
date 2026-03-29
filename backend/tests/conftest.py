@@ -15,6 +15,7 @@ os.environ.setdefault("LLM_API_KEY", "sk-12345678")
 os.environ.setdefault("LLM_MODEL_NAME", "gpt-5.4-mini")
 os.environ.setdefault("LLM_REASONING_EFFORT", "low")
 os.environ.setdefault("DEBATE_USE_LLM", "false")
+os.environ.setdefault("ORACLE_CHAMBERS_USE_LLM", "false")
 
 
 @pytest.fixture(autouse=True)

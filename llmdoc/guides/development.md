@@ -73,6 +73,24 @@ cp .env.example backend/.env
 
 - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
   - `58 passed in 4.92s`
+- 本轮 Oracle 后续补充验证（2026-03-30）：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `227 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx`
+    - `45 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd backend && curl -sS -X POST http://127.0.0.1:18927/api/health`
+    - `server=ok, llm=ok`（当前本地 backend `.env` 已切到 `8317`）
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-8317-ending-room --headless true`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-mobile-pass-roundtable --headless`
+    - 通过
+  - 当前已确认的真实口径：
+    - Oracle 关键文案链路已是 `LLM-first + deterministic fallback`
+    - follow-up 当前仍不是经典模式同级的完整流式，仍以 committed turn 返回为主
 - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
   - `38 passed`
 - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260330-debate-full-rerun --headless`

@@ -548,6 +548,31 @@ def test_room_user_turn_rejects_invalid_addressed_agent(client):
     assert resp.json()["detail"]["code"] == "ENDING_ROOM_ADDRESSED_AGENT_INVALID"
 
 
+def test_room_user_turn_rejects_when_room_is_not_done(client):
+    fixture = _seed_ready_scenario()
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_id = create_resp.json()["id"]
+
+    resp = client.post(
+        f"/api/ending-room/{room_id}/user-turn",
+        json={
+            "content": "在自动复盘还没结束前先追问。",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "ENDING_ROOM_RESULT_NOT_READY"
+
+
 def test_delete_scenario_invalidates_thread_endpoint(client):
     fixture = _seed_ready_scenario()
     create_resp = client.post(

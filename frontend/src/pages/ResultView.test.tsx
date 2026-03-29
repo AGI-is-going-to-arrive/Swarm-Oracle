@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,6 +74,14 @@ const {
   };
 });
 
+const { endingRoomStoreState } = vi.hoisted(() => ({
+  endingRoomStoreState: {
+    snapshot: null as unknown,
+    result: null as unknown,
+    activeThreadId: null as string | null,
+  },
+}));
+
 vi.mock('react-i18next', () => ({
   initReactI18next: {
     type: '3rdParty',
@@ -84,6 +93,9 @@ vi.mock('react-i18next', () => ({
       get language() {
         return getMockLanguage();
       },
+      changeLanguage: vi.fn(async (language: string) => {
+        setMockLanguage(language);
+      }),
     },
   }),
 }));
@@ -93,16 +105,22 @@ vi.mock('../components/EndingChatModal', () => ({
     branch,
     roomType,
     selectedAgentIds,
+    readOnly,
+    headerActions,
     onModeChange,
   }: {
     branch: { title: string };
     roomType: string;
     selectedAgentIds?: string[];
+    readOnly: boolean;
+    headerActions?: ReactNode;
     onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
   }) => (
     <div data-testid="ending-chat-modal">
       <span>{`${branch.title}:${roomType}`}</span>
       <span data-testid="ending-chat-selected-agent-count">{selectedAgentIds?.length ?? 0}</span>
+      <span data-testid="ending-chat-readonly">{readOnly ? 'readonly' : 'live'}</span>
+      {headerActions}
       <button type="button" onClick={() => onModeChange('ending_chamber')}>
         switch-ending-chamber
       </button>
@@ -114,12 +132,8 @@ vi.mock('../components/EndingChatModal', () => ({
 }));
 
 vi.mock('../stores/endingRoomStore', () => ({
-  useEndingRoomStore: (selector?: (state: { snapshot: null; result: null; activeThreadId: null }) => unknown) => {
-    const state = {
-      snapshot: null,
-      result: null,
-      activeThreadId: null,
-    };
+  useEndingRoomStore: (selector?: (state: typeof endingRoomStoreState) => unknown) => {
+    const state = endingRoomStoreState;
     return typeof selector === 'function' ? selector(state) : state;
   },
 }));
@@ -366,7 +380,11 @@ vi.mock('../components/ShareModal', () => ({
 
 beforeEach(() => {
   setMockLanguage('en');
+  endingRoomStoreState.snapshot = null;
+  endingRoomStoreState.result = null;
+  endingRoomStoreState.activeThreadId = null;
   const sessionStore = new Map<string, string>();
+  const localStore = new Map<string, string>();
   vi.stubGlobal('sessionStorage', {
     getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
     setItem: vi.fn((key: string, value: string) => {
@@ -374,6 +392,15 @@ beforeEach(() => {
     }),
     removeItem: vi.fn((key: string) => {
       sessionStore.delete(key);
+    }),
+  });
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn((key: string) => localStore.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      localStore.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      localStore.delete(key);
     }),
   });
 });
@@ -422,6 +449,57 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
     expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
+  });
+
+  it('switches an open live chamber into read-only replay immediately after saving a local copy', async () => {
+    endingRoomStoreState.snapshot = {
+      id: 'room-live',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      result_ready: true,
+      participants: [],
+      threads: [],
+      turns: [],
+    };
+    endingRoomStoreState.result = {
+      summary: 'The chamber wrapped.',
+      archivist_note: 'Keep the scope narrow.',
+      supporting_turns: [],
+      next_move: null,
+      by_phase: [],
+      quotes: [],
+    };
+    endingRoomStoreState.activeThreadId = 'thread-room';
+
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+          <Route path="/result/replay" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'ending_room.entry_cta' }));
+    await user.click(screen.getByRole('button', { name: 'Enter chamber' }));
+
+    expect(await screen.findByTestId('ending-chat-readonly')).toHaveTextContent('live');
+    await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
+    });
+    expect(screen.getByRole('button', { name: 'Import as Local Run' })).toBeInTheDocument();
   });
 
   it('finalizes campaign progress and renders the summary block', async () => {

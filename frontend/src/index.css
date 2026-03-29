@@ -239,8 +239,10 @@ body:has(.simulation-view--theater) .lang-switch--global {
   }
 
   body:has(.worldline-roundtable-view) .lang-switch--global {
-    top: calc(12px + env(safe-area-inset-top, 0px));
+    top: calc(8px + env(safe-area-inset-top, 0px));
     bottom: auto;
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    transform: scale(0.8);
     transform-origin: top right;
   }
 

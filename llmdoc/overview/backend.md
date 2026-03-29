@@ -181,12 +181,19 @@ alembic/ ──► Alembic 数据库迁移框架
   - branch / roundtable transcript 当前都改成 `LEFT JOIN Agent`，agent 记录缺失时会回退 `Unknown / 未知角色`，不再把旧消息直接吞掉
   - participant 列表当前会按 `role + selected branch order + display_name` 稳定排序；不再依赖随机 UUID 顺序
   - room 创建后当前会自动补一个 default room thread；自动复盘 turn 会显式写入这条 room thread，并带 room 级 `memory_partition_id`
+  - room 创建时当前也会预建稳定 `user participant`；follow-up 路径不再等第一次追问时临时插 user participant 抢 SQLite 写锁
   - `EndingRoomParticipant` 当前会带 `worldline_echo_key`，供后续追问按当前 worldline roster 分桶
   - room 级追问会继续写入 room partition；thread 级追问只写当前 thread partition，不会复用兄弟 thread transcript
   - `delete_scenario` 当前也会显式清理 `ending_room_thread`，删除完整性守卫已把这层一起纳入残留检查
   - committed turn 落库后，`supporting_turns[*].turn_id` 当前会回填真实 turn id，不再永远停在 `null`
   - room 后台运行失败时，当前会显式落 `status=error`，并广播 `ending_room_turn_error + status=error`
   - 并发创建同 scope room 时，唯一键冲突当前会在服务层回收并复用既有 room，不再把 `IntegrityError` 直接暴露给调用方
+  - Oracle 关键文本链路当前已升级成 `LLM-first + deterministic fallback`：
+    - `verdict`
+    - `one_move_only` opening / verdict
+    - follow-up replies
+  - Oracle LLM 重写当前带短超时；provider 不可用时会快速退回 deterministic anchor copy，而不是拖死房间生成
+  - follow-up 写路径当前还补了 SQLite `database is locked` 的短重试
 
 #### 本轮补充口径（2026-03-29）
 
@@ -200,9 +207,10 @@ alembic/ ──► Alembic 数据库迁移框架
 - follow-up 这轮又前进了一步：
   - `EndingRoomInteractionMode` 已补 `all_present`
   - room/thread follow-up 不再只会回 1 个 responder；`archivist_route / hotseat / all_present` 都会按当前 room scope 追加多条 committed turn
+  - 但 follow-up 当前仍以“后端算完后 committed turn 回来”为主，还没有升级成和经典模式同级的 `turn_start -> turn_delta -> turn_commit` 完整流式
 - `_build_room_plan()` 的单结局 auto recap 这轮也不再只是一套纯模板句：
   - 当前会显式把 `key_moment / insight / branch title / role/persona hint` 编进 opening / verdict
-  - 仍然是 deterministic 文案，但已经比之前更贴近当前 branch 的证据钩子
+  - 当前又补了 LLM-first 重写层，fresh room 下 `one_move_only` 与 roundtable opening/follow-up 都比旧 deterministic 文案更像人在复盘
 
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
 - **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease

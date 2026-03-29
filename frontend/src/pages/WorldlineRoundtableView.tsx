@@ -55,7 +55,7 @@ function getParticipantSprite(participant: EndingRoomParticipant) {
 
 function getThreadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean) {
   return thread.mode === 'room'
-    ? (isZh ? '主桌记录' : 'Main desk')
+    ? (isZh ? '主桌记录' : 'Main table')
     : thread.title;
 }
 
@@ -66,17 +66,79 @@ function getParticipantImpactScore(participant: EndingRoomParticipant) {
 function getSelectionReasonLabel(reason: string, isZh: boolean) {
   switch (reason) {
     case 'user_selected':
-      return isZh ? '手动点名' : 'User selected';
+      return isZh ? '你点的' : 'Your pick';
     case 'fallback':
     case 'fallback_cast':
-      return isZh ? '兜底阵容' : 'Fallback cast';
+      return isZh ? '兜底阵容' : 'Fallback lineup';
     case 'top_impact':
-      return isZh ? '高影响代表' : 'Top impact';
+      return isZh ? '高影响代表' : 'High impact';
     default:
       return reason
         ? (isZh ? `原因：${reason}` : reason)
         : '';
   }
+}
+
+function getArchivistModeLabel(isZh: boolean): string {
+  return isZh ? '档案官主持' : 'Archivist lead';
+}
+
+function getRepresentativeHotseatLabel(isZh: boolean): string {
+  return isZh ? '点名代表' : 'Question one representative';
+}
+
+function getRoundtableModeNote(
+  mode: EndingRoomThreadSnapshot['interaction_mode'],
+  isZh: boolean,
+  selectedName?: string | null,
+): string {
+  if (mode === 'hotseat') {
+    return selectedName
+      ? (isZh
+        ? `只追问 ${selectedName}，适合看这条线如何为自己辩解。`
+        : `Push only ${selectedName} when you want this worldline to defend itself.`)
+      : (isZh
+        ? '只追问一个代表，适合把这条线的解释问透。'
+        : 'Question one representative when you want a single worldline to answer cleanly.');
+  }
+  return isZh
+    ? '先让档案官收束争点，再把问题抛回最相关的代表。'
+    : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
+}
+
+function chooseRepresentativeDefaults(
+  branchOrder: string[],
+  branchCandidates: Record<string, ReturnType<typeof buildBranchEndingRoomCandidates>[string]>,
+  current: Record<string, string>,
+): { next: Record<string, string>; changed: boolean } {
+  const next: Record<string, string> = {};
+  const reservedAgentIds = new Set<string>();
+  let changed = false;
+
+  for (const branchId of branchOrder) {
+    const candidates = branchCandidates[branchId] ?? [];
+    const currentAgentId = current[branchId];
+    const currentStillValid = currentAgentId && candidates.some((candidate) => candidate.id === currentAgentId);
+
+    if (currentStillValid) {
+      next[branchId] = currentAgentId;
+      reservedAgentIds.add(currentAgentId);
+      continue;
+    }
+
+    const fallbackCandidate = candidates[0];
+    const diversifiedCandidate = candidates.find((candidate) => !reservedAgentIds.has(candidate.id));
+    const chosenAgentId = diversifiedCandidate?.id ?? fallbackCandidate?.id;
+    if (chosenAgentId) {
+      next[branchId] = chosenAgentId;
+      reservedAgentIds.add(chosenAgentId);
+    }
+    if (currentAgentId !== chosenAgentId) {
+      changed = true;
+    }
+  }
+
+  return { next, changed };
 }
 
 function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
@@ -99,6 +161,17 @@ function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
     };
     return acc;
   }, {});
+}
+
+function inferOracleLanguage(...candidates: Array<string | null | undefined>): 'zh' | 'en' | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (/[\u4e00-\u9fff]/.test(candidate)) {
+      return 'zh';
+    }
+    return 'en';
+  }
+  return null;
 }
 
 export default function WorldlineRoundtableView() {
@@ -162,6 +235,15 @@ export default function WorldlineRoundtableView() {
   const effectiveThreadOrder = replaySnapshot
     ? replaySnapshot.threads.map((thread) => thread.id)
     : threadOrder;
+  const targetLanguageSource = replayPayload?.roomSnapshot.language
+    ?? replayPayload?.scenarioReplay?.scenario.language
+    ?? scenario?.language
+    ?? inferOracleLanguage(
+      replayPayload?.scenarioReplay?.storyData.question,
+      storyData?.question,
+      scenario?.question,
+    );
+  const preferredLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
   const defaultThreadId = useMemo(
     () => effectiveSnapshot?.threads.find((thread) => thread.mode === 'room')?.id
       ?? effectiveSnapshot?.threads[0]?.id
@@ -196,6 +278,14 @@ export default function WorldlineRoundtableView() {
     snapshot?.id,
     !replayPayload && Boolean(snapshot?.id) && status !== 'error',
   );
+
+  useEffect(() => {
+    if (!targetLanguageSource) return;
+    const targetLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
+    if (!i18n.language.startsWith(targetLanguage)) {
+      void i18n.changeLanguage(targetLanguage);
+    }
+  }, [i18n, targetLanguageSource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,24 +393,7 @@ export default function WorldlineRoundtableView() {
       return;
     }
     setSelectedRepresentatives((current) => {
-      let changed = false;
-      const next: Record<string, string> = {};
-      for (const branchId of branchOrder) {
-        const candidates = branchCandidates[branchId] ?? [];
-        const currentAgentId = current[branchId];
-        const currentStillValid = currentAgentId && candidates.some((candidate) => candidate.id === currentAgentId);
-        if (currentStillValid) {
-          next[branchId] = currentAgentId;
-          continue;
-        }
-        const fallbackAgentId = candidates[0]?.id;
-        if (fallbackAgentId) {
-          next[branchId] = fallbackAgentId;
-        }
-        if (currentAgentId !== fallbackAgentId) {
-          changed = true;
-        }
-      }
+      const { next, changed } = chooseRepresentativeDefaults(branchOrder, branchCandidates, current);
       if (!changed && Object.keys(current).length === Object.keys(next).length) {
         return current;
       }
@@ -406,6 +479,7 @@ export default function WorldlineRoundtableView() {
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
     [pendingDrafts],
   );
+  const activeSpeakerTurnKey = sortedDrafts.at(-1)?.turnId ?? currentTurns.at(-1)?.key ?? null;
   const currentSpeakerParticipantId = sortedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
@@ -422,19 +496,22 @@ export default function WorldlineRoundtableView() {
   }, [currentTurns.length, sortedDrafts.length]);
 
   const composerEnabled = !replayPayload && Boolean(effectiveResult) && Boolean(snapshot?.id);
+  const selectedRepresentative = representatives.find(
+    (participant) => participant.id === selectedRepresentativeId,
+  ) ?? null;
   const addressedAgentIds = interactionMode === 'hotseat' && selectedRepresentativeId
     ? [selectedRepresentativeId]
     : [];
   const transcriptSubtitle = scopeNotice && activeThread && scopeNotice.threadId === activeThread.id
     ? (
       activeThread.mode === 'followup'
-        ? (isZh ? '当前只基于这条圆桌追问线程' : 'Scoped to this roundtable follow-up thread only')
-        : (isZh ? '当前只基于这桌 transcript 与他线摘要' : 'Scoped to this table transcript plus crossline summaries only')
+        ? (isZh ? '当前只沿这条圆桌追问继续' : 'Following this roundtable thread only')
+        : (isZh ? '当前只看本桌记录与异线摘要' : 'Using this table and crossline summaries only')
     )
     : (
       activeThread?.mode === 'followup'
-        ? (isZh ? '只基于当前追问线程与本桌 scope' : 'Only using the active follow-up thread and this table scope')
-        : (isZh ? '只基于本桌 transcript 与他线摘要' : 'Only using this table transcript and crossline summaries')
+        ? (isZh ? '只沿当前这条圆桌追问继续' : 'Using the active roundtable thread only')
+        : (isZh ? '只看本桌记录与异线摘要' : 'Using this table and crossline summaries')
     );
   const threadDisplayLabels = useMemo(() => {
     const seen = new Map<string, number>();
@@ -449,6 +526,9 @@ export default function WorldlineRoundtableView() {
     }
     return labels;
   }, [isZh, threadList]);
+  const interactionModeNote = replayPayload
+    ? (isZh ? '回放模式下只读查看当前桌面。' : 'Replay mode is read-only for this table.')
+    : getRoundtableModeNote(interactionMode, isZh, selectedRepresentative?.display_name ?? null);
 
   const scenarioReplaySnapshot = useMemo(
     () => replayPayload?.scenarioReplay ?? (
@@ -554,7 +634,7 @@ export default function WorldlineRoundtableView() {
               : null;
           })
           .filter((value): value is RoundtableRepresentativeSelection => Boolean(value)),
-        language: isZh ? 'zh' : 'en',
+        language: preferredLanguage,
       });
       await loadRoom(roomId);
       setEditingRepresentatives(false);
@@ -587,18 +667,35 @@ export default function WorldlineRoundtableView() {
         || participant.worldline_echo_key === currentTargetRef
         || participant.source_agent_id === currentTargetRef
       ))?.id ?? currentTargetRef;
+      const existingHotseatThread = threadList.find((thread) => {
+        if (thread.mode !== 'followup' || thread.interaction_mode !== 'hotseat') {
+          return false;
+        }
+        const threadTargetRef = thread.addressed_agent_ids_json?.[0] ?? null;
+        const threadTarget = representatives.find((participant) => (
+          participant.id === threadTargetRef
+          || participant.worldline_echo_key === threadTargetRef
+          || participant.source_agent_id === threadTargetRef
+        ))?.id ?? threadTargetRef;
+        return threadTarget === selectedRepresentativeId;
+      });
       const needsThread = !activeThread
         || activeThread.mode !== 'followup'
         || activeThread.interaction_mode !== 'hotseat'
         || currentTarget !== selectedRepresentativeId;
       if (needsThread) {
-        const selectedRepresentative = representatives.find((participant) => participant.id === selectedRepresentativeId);
-        const thread = await createThread(snapshot.id, {
-          title: selectedRepresentative?.display_name ?? null,
-          addressedAgentIds,
-          interactionMode: 'hotseat',
-        });
-        await loadThread(thread.id);
+        if (existingHotseatThread) {
+          setActiveThread(existingHotseatThread.id);
+          await loadThread(existingHotseatThread.id);
+        } else {
+          const selectedRepresentative = representatives.find((participant) => participant.id === selectedRepresentativeId);
+          const thread = await createThread(snapshot.id, {
+            title: selectedRepresentative?.display_name ?? null,
+            addressedAgentIds,
+            interactionMode: 'hotseat',
+          });
+          await loadThread(thread.id);
+        }
       }
     }
     await appendUserTurn({
@@ -631,7 +728,7 @@ export default function WorldlineRoundtableView() {
         totalRounds: effectiveSnapshot?.turns.length ?? 0,
         viewMode: 'classic',
         visualizationEnabled: true,
-        isSimulationComplete: effectiveSnapshot?.result_ready ?? false,
+        isSimulationComplete: Boolean(effectiveResult),
         messageCount: currentTurns.length,
         agentCount: participants.length,
         branchCount: storyData?.branches.length ?? 0,
@@ -733,7 +830,7 @@ export default function WorldlineRoundtableView() {
             >
               {permalinkCopied
                 ? (isZh ? '回放链接已复制' : 'Replay link copied')
-                : (isZh ? '复制圆桌回放' : 'Copy roundtable replay')}
+                : (isZh ? '复制回放' : 'Copy replay')}
             </button>
             <button
               type="button"
@@ -742,8 +839,8 @@ export default function WorldlineRoundtableView() {
               disabled={!effectiveReplayPayload}
             >
               {localCopySaved
-                ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
-                : (isZh ? '保存本地只读副本' : 'Save local read-only copy')}
+                ? (isZh ? '只读副本已保存' : 'Read-only copy saved')
+                : (isZh ? '保存只读副本' : 'Save read-only copy')}
             </button>
             {replayPayload?.scenarioReplay && (
               <button
@@ -754,7 +851,7 @@ export default function WorldlineRoundtableView() {
               >
                 {importingReplay
                   ? (isZh ? '导入中…' : 'Importing…')
-                  : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+                  : (isZh ? '导入本地运行' : 'Import local run')}
               </button>
             )}
           </div>
@@ -828,10 +925,10 @@ export default function WorldlineRoundtableView() {
                 {isZh
                   ? (effectiveSnapshot
                     ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
-                    : '每条结局只派一位代表入席。默认已按影响度预选，你可以逐条改选后再开桌。')
+                    : '每条结局只派一位代表入席。系统会优先按影响度预选，并尽量错开代表，让这桌更有比较价值。')
                   : (effectiveSnapshot
                     ? 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.'
-                    : 'Seat one representative for each ending. The table is prefilled by impact, but you can swap seats before opening the roundtable.')}
+                    : 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.')}
               </p>
             </div>
             <div className="worldline-roundtable-picker__actions">
@@ -854,8 +951,8 @@ export default function WorldlineRoundtableView() {
                 {launchingRoom
                   ? (isZh ? '正在开桌…' : 'Launching…')
                   : (effectiveSnapshot
-                    ? (isZh ? '按当前改选重建圆桌' : 'Rebuild the roundtable with this seating')
-                    : (isZh ? '以当前代表开桌' : 'Open with selected representatives'))}
+                    ? (isZh ? '按当前阵容重开' : 'Reopen this lineup')
+                    : (isZh ? '按当前代表开桌' : 'Open this lineup'))}
               </button>
             </div>
           </div>
@@ -1060,14 +1157,14 @@ export default function WorldlineRoundtableView() {
                 {currentTurns.map((turn) => (
                   <article
                     key={turn.key}
-                    className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.participantId === currentSpeakerParticipantId ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''}`}
+                    className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''}`}
                   >
                     <header>
                       {turn.roleSlot === 'archivist' && (
                         <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
                       )}
                       <strong>{turn.speaker}</strong>
-                      {turn.participantId === currentSpeakerParticipantId && (
+                      {turn.key === activeSpeakerTurnKey && (
                         <span className="worldline-roundtable-transcript-badge">
                           {isZh ? '当前发言' : 'Speaking'}
                         </span>
@@ -1083,7 +1180,10 @@ export default function WorldlineRoundtableView() {
                   </article>
                 ))}
               {!replayPayload && sortedDrafts.map((draft) => (
-                <article key={draft.turnId} className="ending-chat-bubble ending-chat-bubble--draft">
+                <article
+                  key={draft.turnId}
+                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.turnId === activeSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                >
                   <header>
                     <strong>{participantsById.get(draft.participantId)?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>
                     <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
@@ -1102,7 +1202,7 @@ export default function WorldlineRoundtableView() {
                     onClick={() => setInteractionMode('archivist_route')}
                     disabled={!composerEnabled}
                   >
-                    {isZh ? '档案官路由' : 'Archivist route'}
+                    {getArchivistModeLabel(isZh)}
                   </button>
                   <button
                     type="button"
@@ -1110,11 +1210,12 @@ export default function WorldlineRoundtableView() {
                     onClick={() => setInteractionMode('hotseat')}
                     disabled={!composerEnabled || representatives.length === 0}
                   >
-                    {isZh ? '代表热座' : 'Representative hotseat'}
+                    {getRepresentativeHotseatLabel(isZh)}
                   </button>
                 </div>
                 <span className="ending-chat-scope-notice">{transcriptSubtitle}</span>
               </div>
+              <span className="ending-chat-mode-note">{interactionModeNote}</span>
 
               {interactionMode === 'hotseat' && representatives.length > 0 && (
                 <div className="ending-chat-hotseat-row">
@@ -1138,8 +1239,8 @@ export default function WorldlineRoundtableView() {
                   value={composerDraft}
                   placeholder={
                     isZh
-                      ? '围绕这桌代表的分歧继续追问，但仍然只允许读取本桌 scope。'
-                      : 'Keep probing the disagreement at this table while staying inside the current roundtable scope.'
+                      ? '继续追问这桌代表的分歧，答案仍然只会落在本桌范围内。'
+                      : 'Keep pressing this table’s disagreement; the answer will stay inside this table.'
                   }
                   onChange={(event) => setComposerDraft(event.target.value)}
                   disabled={!composerEnabled || sending}

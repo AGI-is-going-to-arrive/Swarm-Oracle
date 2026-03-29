@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     LLM_CIRCUIT_BREAKER_THRESHOLD: int = 6
     LLM_CIRCUIT_BREAKER_RESET_SECONDS: int = 30
     DEBATE_USE_LLM: bool = True
+    ORACLE_CHAMBERS_USE_LLM: bool = True
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # json | plain
 

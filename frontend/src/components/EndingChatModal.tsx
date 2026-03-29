@@ -64,7 +64,7 @@ function roleLabel(participant: EndingRoomParticipant, isZh: boolean): string {
 
 function threadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean): string {
   return thread.mode === 'room'
-    ? `${thread.title}${isZh ? ' · 主桌' : ' · Main Desk'}`
+    ? `${thread.title}${isZh ? ' · 主厅' : ' · Main Chamber'}`
     : thread.title;
 }
 
@@ -81,13 +81,49 @@ function scopeText(
 ): string {
   if (scopeNotice && thread && scopeNotice.threadId === thread.id) {
     return thread.mode === 'followup'
-      ? (isZh ? '当前只基于这条追问线程' : 'Scoped to this follow-up thread only')
-      : (isZh ? '当前只基于当前桌面 transcript' : 'Scoped to the current room desk only');
+      ? (isZh ? '当前只沿这条追问继续' : 'Following this follow-up thread only')
+      : (isZh ? '当前只看这间会客厅里已经摆开的线索' : 'Staying inside this chamber only');
   }
   if (thread?.mode === 'followup') {
-    return isZh ? '只基于当前追问线程' : 'Only using the current follow-up thread';
+    return isZh ? '只沿当前这条追问继续' : 'Using the active follow-up thread only';
   }
-  return isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk';
+  return isZh ? '只看当前世界线和这间会客厅' : 'Using this worldline and chamber only';
+}
+
+function getArchivistModeLabel(isZh: boolean): string {
+  return isZh ? '档案官主持' : 'Archivist lead';
+}
+
+function getHotseatModeLabel(isZh: boolean): string {
+  return isZh ? '点名角色' : 'Question one role';
+}
+
+function getAllPresentModeLabel(isZh: boolean): string {
+  return isZh ? '当前阵容回应' : 'Current lineup responds';
+}
+
+function getInteractionModeNote(
+  mode: EndingRoomInteractionMode,
+  isZh: boolean,
+  selectedName?: string | null,
+): string {
+  if (mode === 'hotseat') {
+    return selectedName
+      ? (isZh
+        ? `只追问 ${selectedName}，适合把关键转折问透。`
+        : `Push only ${selectedName}, so the hinge can be explained clearly.`)
+      : (isZh
+        ? '只追问一个角色，适合追责或逼问关键转折。'
+        : 'Question one role only when you want the exact hinge explained.');
+  }
+  if (mode === 'all_present') {
+    return isZh
+      ? '让当前阵容都接一句，更容易看见分工和分歧。'
+      : 'Let the current lineup each answer once to expose roles and disagreements.';
+  }
+  return isZh
+    ? '先让档案官接住问题，再把话题抛回最相关的人。'
+    : 'Let the Archivist frame the question first, then route it to the most relevant voice.';
 }
 
 export default function EndingChatModal({
@@ -429,6 +465,12 @@ export default function EndingChatModal({
     [pendingDrafts],
   );
   const visibleDrafts = readOnly ? [] : sortedDrafts;
+  const currentSpeakerTurnKey = (activeThread?.mode !== 'followup'
+    ? visibleDrafts.at(-1)?.turnId
+    : null) ?? currentTurns.at(-1)?.key ?? null;
+  const currentSpeakerParticipantId = visibleDrafts.at(-1)?.participantId
+    ?? currentTurns.at(-1)?.participantId
+    ?? null;
 
   const effectiveInteractionMode = readOnly
     ? (activeThread?.mode === 'followup' ? activeThread.interaction_mode : 'archivist_route')
@@ -526,6 +568,9 @@ export default function EndingChatModal({
     ? `${storyText.slice(0, 280)}…`
     : storyText;
   const composerEnabled = !readOnly && Boolean(effectiveResult) && Boolean(effectiveSnapshot?.id);
+  const selectedHotseatParticipant = targetableParticipants.find(
+    (participant) => participant.source_agent_id === selectedAgentId,
+  ) ?? null;
   const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
     ? [selectedAgentId]
     : interactionMode === 'all_present'
@@ -548,6 +593,9 @@ export default function EndingChatModal({
   const transcriptSubtitle = activeThread
     ? scopeText(activeThread, scopeNotice, isZh)
     : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
+  const interactionModeNote = readOnly
+    ? t('ending_room.replay_readonly')
+    : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
   const threadDisplayLabels = useMemo(() => {
     const seen = new Map<string, number>();
     const labels: Record<string, string> = {};
@@ -588,17 +636,27 @@ export default function EndingChatModal({
     }
     if (interactionMode === 'hotseat' && selectedAgentId && snapshot?.id) {
       const activeThreadAgentId = activeThread?.addressed_agent_ids_json?.[0] ?? null;
+      const existingHotseatThread = threads.find((thread) => (
+        thread.mode === 'followup'
+        && thread.interaction_mode === 'hotseat'
+        && thread.addressed_agent_ids_json?.includes(selectedAgentId)
+      ));
       const needsDedicatedThread = !activeThread
         || activeThread.mode !== 'followup'
         || activeThread.interaction_mode !== 'hotseat'
         || activeThreadAgentId !== selectedAgentId;
       if (needsDedicatedThread) {
-        const thread = await createThread(snapshot.id, {
-          title: participants.find((participant) => participant.source_agent_id === selectedAgentId)?.display_name ?? null,
-          addressedAgentIds,
-          interactionMode: 'hotseat',
-        });
-        await loadThread(thread.id);
+        if (existingHotseatThread) {
+          setActiveThread(existingHotseatThread.id);
+          await loadThread(existingHotseatThread.id);
+        } else {
+          const thread = await createThread(snapshot.id, {
+            title: participants.find((participant) => participant.source_agent_id === selectedAgentId)?.display_name ?? null,
+            addressedAgentIds,
+            interactionMode: 'hotseat',
+          });
+          await loadThread(thread.id);
+        }
       }
     }
     await appendUserTurn({
@@ -690,11 +748,13 @@ export default function EndingChatModal({
                   const metrics = participantMetrics(participant);
                   const isSelected = selectedAgentId === participant.source_agent_id;
                   const hotseatSelectable = interactionMode === 'hotseat' && participant.source_agent_id;
+                  const isCurrentSpeaker = currentSpeakerParticipantId === participant.id;
+                  const isHotseatFocus = effectiveInteractionMode === 'hotseat' && isSelected;
                   return (
                     <button
                       key={participant.id}
                       type="button"
-                      className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''}`}
+                      className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''} ${isCurrentSpeaker ? 'is-current-speaker' : ''} ${isHotseatFocus ? 'is-hotseat-focus' : ''}`}
                       onClick={() => {
                         if (!hotseatSelectable) return;
                         setSelectedAgentId(participant.source_agent_id ?? null);
@@ -708,7 +768,19 @@ export default function EndingChatModal({
                         aria-hidden="true"
                       />
                       <div className="ending-chat-participant-card__copy">
-                        <strong>{participant.display_name}</strong>
+                        <strong>
+                          {participant.display_name}
+                          {isCurrentSpeaker && (
+                            <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
+                              {isZh ? '正在发言' : 'Speaking'}
+                            </span>
+                          )}
+                          {!isCurrentSpeaker && isHotseatFocus && (
+                            <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
+                              {isZh ? '当前追问对象' : 'Current target'}
+                            </span>
+                          )}
+                        </strong>
                         <span>{metrics.role || roleLabel(participant, isZh)}</span>
                         {metrics.persona && <small>{metrics.persona}</small>}
                       </div>
@@ -720,7 +792,7 @@ export default function EndingChatModal({
                       </div>
                       {metrics.fallbackCast && (
                         <span className="ending-chat-participant-flag">
-                          Fallback cast
+                          {isZh ? '兜底阵容' : 'Fallback lineup'}
                         </span>
                       )}
                     </button>
@@ -828,7 +900,7 @@ export default function EndingChatModal({
               {currentTurns.map((message) => (
                 <article
                   key={message.key}
-                  className={`ending-chat-bubble ${message.participantId && currentTurns[currentTurns.length - 1]?.participantId === message.participantId ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''}`}
+                  className={`ending-chat-bubble ${message.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''}`}
                 >
                   <header>
                     {message.roleSlot === 'archivist' && <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />}
@@ -839,7 +911,10 @@ export default function EndingChatModal({
                 </article>
               ))}
               {(activeThread?.mode !== 'followup' ? visibleDrafts : []).map((draft) => (
-                <article key={draft.turnId} className="ending-chat-bubble ending-chat-bubble--draft">
+                <article
+                  key={draft.turnId}
+                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.turnId === currentSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                >
                   <header>
                     <strong>{participantsById.get(draft.participantId)?.display_name ?? t('ending_room.participant_unknown')}</strong>
                     <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
@@ -850,7 +925,12 @@ export default function EndingChatModal({
               ))}
             </div>
 
-            <div className="ending-chat-composer">
+            {readOnly ? (
+              <div className="ending-chat-composer ending-chat-composer--readonly">
+                <span className="ending-chat-scope-notice">{t('ending_room.replay_readonly')}</span>
+              </div>
+            ) : (
+              <div className="ending-chat-composer">
               <div className="ending-chat-composer__row">
                 <div className="ending-chat-mode-switch" role="group" aria-label={isZh ? '追问模式' : 'Follow-up mode'}>
                   <button
@@ -859,7 +939,7 @@ export default function EndingChatModal({
                     onClick={() => setInteractionMode('archivist_route')}
                     disabled={!composerEnabled}
                   >
-                    {isZh ? '档案官路由' : 'Archivist route'}
+                    {getArchivistModeLabel(isZh)}
                   </button>
                   <button
                     type="button"
@@ -867,7 +947,7 @@ export default function EndingChatModal({
                     onClick={() => setInteractionMode('hotseat')}
                     disabled={!composerEnabled}
                   >
-                    {isZh ? '角色热座' : 'Hotseat'}
+                    {getHotseatModeLabel(isZh)}
                   </button>
                   <button
                     type="button"
@@ -875,11 +955,12 @@ export default function EndingChatModal({
                     onClick={() => setInteractionMode('all_present')}
                     disabled={!composerEnabled || targetableParticipants.length === 0}
                   >
-                    {isZh ? '当前全员回应' : 'All present'}
+                    {getAllPresentModeLabel(isZh)}
                   </button>
                 </div>
                 <span className="ending-chat-scope-notice">{transcriptSubtitle}</span>
               </div>
+              <span className="ending-chat-mode-note">{interactionModeNote}</span>
 
               <div className="ending-chat-anchor-row">
                 {anchorSuggestions.map((anchor) => (
@@ -930,6 +1011,7 @@ export default function EndingChatModal({
                 </button>
               </div>
             </div>
+            )}
           </section>
         </div>
       </div>

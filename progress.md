@@ -75,6 +75,92 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `c4edd926-a2f9-43b2-9a4e-0304760fc9f5`
 - 这两个是本轮修复前创建的测试工件，不是当前逻辑下新产生的问题；若需要，我可以下一轮专门清理它们。
 
+## 2026-03-30 Oracle Chambers / Worldline Roundtable audit + polish
+
+- 已重新读取并对齐本轮 Oracle 相关真值：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 代码与测试口径核对结果：
+  - backend 当前不存在 `tests/test_ending_room_followup.py` / `tests/test_ending_room_memory_partition.py` 这类独立文件，说明实现计划里的 backend 测试合同已漂移；对应 coverage 主要并入 `backend/tests/test_ending_room_service.py`、`backend/tests/test_ending_room_api.py`、`backend/tests/test_ending_room_ws.py`。
+  - frontend Oracle 相关 vitest 初始失败不是业务回退，而是断言仍停留在旧文案/旧 request shape：`language` 已进入 room open payload，Roundtable/EndingChatModal 测试未同步。
+- 本轮已执行的高信号验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `222 passed in 52.40s`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/hooks/useEndingRoomWS.test.tsx`
+    - `19 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-ending-room-followup --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-cross-browser --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-roundtable-full-after-fixes --headless`
+    - 通过
+- 本轮已修复/收敛：
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 压缩 mobile live roundtable 顶部动作行，改成更稳的横向按钮带。
+    - 为 mobile live roundtable hero 增加顶部安全间距，避免 `lang-switch` 在 headless/real browser 下压住 hero topline。
+  - `frontend/src/index.css`
+    - roundtable 页面下移动端全局语言切换器进一步缩放并贴边，降低与 hero/composer 的碰撞风险。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 将 picker CTA 中文文案从“按这套代表开桌 / 按这套阵容重开”收为更自然的“按当前代表开桌 / 按当前阵容重开”。
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - `toRect()` 现在会忽略 `0x0` 隐藏节点，避免 mobile live 态把被 CSS 隐藏的 summary card 误判成“跑到 transcript 前面”。
+    - button 文案匹配已扩展到当前真实 UI 文案，避免 roundtable smoke 因文案微调而 false negative。
+  - `frontend/src/components/EndingChatModal.test.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 更新到当前 request shape / 文案口径，清理单测漂移。
+- 交互式 Playwright 视觉 QA 结论：
+  - ending-room live / readonly / import 链路已实机走通；`/result/replay?roomLocal=...` 下确实只读，`Import as Local Run` 能跳回新的本地 `/sim/:id`。
+  - roundtable mobile 仍然不是“一屏看完”，但现在已经从“语言切换压住顶区”的不稳定态，收敛为“可滚动可用 + 自动化几何检查通过”。
+  - 当前主要残余不再是功能缺失，而是体验层面的继续打磨：mobile 首屏信息密度仍偏高，headless 下顶部按钮文案在英文场景仍比较紧。
+
+## 2026-03-30 Oracle Chambers / Worldline Roundtable Audit Pass
+
+- 已读取 `llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/overview/backend.md`、`llmdoc/guides/development.md`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`.impeccable.md`。
+- 已按本轮目标聚焦 `ResultView.tsx`、`EndingChatModal.tsx`、`WorldlineRoundtableView.tsx`、`endingRoomStore.ts`、`useEndingRoomWS.ts`、相关 E2E 脚本与后端 `ending_room` 域实现。
+- 当前文档漂移：
+  - 计划中的 backend 回归命令引用了不存在的 `tests/test_ending_room_followup.py` / `tests/test_ending_room_memory_partition.py`。
+  - 计划里的 `e2e-ending-room-picker-suite.mjs` 当前仓库不存在；现有实现收敛为 `e2e-ending-room-suite.mjs` + `e2e-ending-room-followup-suite.mjs` + `e2e-worldline-roundtable-suite.mjs`。
+- 当前验证结果：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q` → `222 passed in 37.11s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/WorldlineRoundtableView.test.tsx` → 5 failures / 33 passed
+- 前端失败细分：
+  - `EndingChatModal.test.tsx` / `WorldlineRoundtableView.test.tsx` 有 4 个断言落后于实现，当前 `openRoom(...)` 已显式带 `language: "en"`。
+  - `ResultView.test.tsx` 有 1 个更值得追的失败：artifact 创建失败 + replay token 过大时，`copy permalink` 按钮没有如预期启用到 `/result/:id` fallback。
+- 当前下一步：用真实浏览器继续做桌面/移动端 Oracle Chambers / Roundtable E2E 与视觉 QA，确认上述 permalink 问题是否为真实回归，同时评估 mobile 一屏体验、文案质感、动效和命名可理解性。
+
+## 2026-03-30 Oracle Chambers / Worldline Roundtable Audit Pass — Round 2
+
+- 已确认当前工作树中 `EndingChatModal.tsx`、`WorldlineRoundtableView.tsx`、`ResultView.tsx`、对应 CSS 已存在一批未提交中的 Oracle UX 改动；本轮没有回滚这些改动，而是在其上继续验证与补齐。
+- 当前我新增/确认的高价值收口：
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`：默认代表选择不再机械取每条线第一名，而是优先高影响、同时尽量错开代表，减少“每条线都同一个人”的无聊局面。
+  - `frontend/src/lib/oracleReplay.ts`：保存/读取 Oracle 本地只读副本时，若 `localStorage` 不可用，会安全回退到内存缓存，不再直接抛异常打断 replay/import 链。
+  - `frontend/src/pages/ResultView.test.tsx`、`frontend/src/pages/WorldlineRoundtableView.test.tsx`：已把断言更新到当前 UI 文案口径。
+- 当前定向验证结果：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/WorldlineRoundtableView.test.tsx` → `39 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json` → passed
+  - `cd frontend && npm run build` → passed
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q` → `224 passed`
+- 当前源码版真实 E2E（基于 `http://127.0.0.1:18932`）：
+  - `e2e-ending-room-followup-suite.mjs full` 通过；当前 `ending_room` 已验证 live / hotseat / all_present / replay readonly / import local run。
+  - 当前产物：`frontend/output/e2e/20260330-audit-ending-room-full-current/`
+  - `e2e-worldline-roundtable-suite.mjs full` 本轮在 replay 保存按钮步骤超时退出，但已成功产出 `desktop-roundtable-ready / reseated / hotseat` 三段工件；看当前截图，代表席不再清一色同一人，热座线程也比旧版更清楚。
+  - 当前产物：`frontend/output/e2e/20260330-audit-roundtable-full-current/`
+- 视觉/交互观察：
+  - 当前源码版 desktop roundtable 的代表已经出现多样化（不再每条线都默认 `戴克里先`），可比较性明显更强。
+  - 当前源码版 hotseat 视图里，重点气泡只高亮当前 turn，不再整串历史气泡一起冒充“当前发言”。
+  - 当前源码版 mobile chamber 顶部动作区仍然略空、略碎，但比旧版更规整；属于可以继续 polish 的层级，不是阻断可玩的 bug。
+- 额外环境噪声：
+  - `release-signoff.mjs` 在 `corners` 阶段被一个既有 scenario `GET /api/scenario/<id>` 500 打断，且临时 preview 关闭时曾看到 proxy 到 backend 的 `ECONNREFUSED` 噪声；这更像环境/历史数据不稳定，不像 Oracle 当前改动本身的功能回归。
+
 ## 2026-03-15 Follow-up E2E + Repairs
 
 - 新增后端修复：
@@ -118,6 +204,137 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 已截到两类证据：
     - 结局场景背景图（革命主题）
     - 延时后的结局卡片层（标题 `✊ 革命之曙光`）
+
+## 2026-03-30 Oracle Chambers / Roundtable QA + Repair
+
+- 已重新读取 `llmdoc/index.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`.impeccable.md` 与当前 `progress.md`。
+- 代码/测试真值盘点：
+  - backend 真实 Oracle tests 为 `tests/test_ending_room_service.py`、`tests/test_ending_room_api.py`、`tests/test_ending_room_ws.py`；计划文档里的 `test_ending_room_followup.py` / `test_ending_room_memory_partition.py` 当前不存在，属于命令合同漂移。
+  - frontend 当前已有 `e2e-ending-room-followup-suite.mjs` 与 `e2e-worldline-roundtable-suite.mjs`，会客厅/圆桌不是“未落地”，而是残局集中在 replay/share/import、移动端一屏体验和文案质感。
+- 本轮先发现的问题：
+  - backend `append_room_user_turn` / `append_thread_user_turn` 只靠前端禁用发送，没有在服务层禁止 `room.status=live` 时追问；这意味着 auto recap 期间若绕过前端或发生竞态，follow-up 可能和 auto recap 并发抢 `EndingRoomTurn.sequence`，最坏把 room 打进 `error`。
+  - frontend `ResultView` 中文 picker 里 `fallbackCast` 标记直接显示英文 `Fallback cast`。
+  - frontend 单测断言落后于当前实现：`openRoom(..., { language })` 已成为真实调用，`WorldlineRoundtableView` 按钮文案也已经从旧文案演进到 `Open/Reopen this lineup`、`Read-only copy saved`。
+  - 实机截图显示：圆桌移动端首屏此前高度约 `2174px`，明显不符合计划里“mobile 一屏体验”；会客厅移动端标题与顶部动作区也过于挤压。
+  - 会客厅热座线程会不断新增，重复 E2E 后 thread rail 会膨胀到数十条，影响可玩性和重新进入的可读性。
+- 本轮已修复：
+  - `backend/app/services/ending_room_service.py`
+    - `_ensure_followup_write_allowed()` 现在要求 `room.status == done && room.result_json != null`，服务层正式禁止 auto recap 尚未完成时继续追问/建 thread。
+  - `backend/tests/test_ending_room_service.py`
+    - 新增 `test_followup_requires_completed_room_result()` 覆盖上述后端守卫。
+    - 旧的 invalid-addressed-agent 测试改为先跑完 auto recap，再验证目标 agent 校验。
+  - `backend/tests/test_ending_room_api.py`
+    - 新增 `test_room_user_turn_rejects_when_room_is_not_done()`，确认 API 层返回 `409 ENDING_ROOM_RESULT_NOT_READY`。
+  - `frontend/src/pages/ResultView.tsx`
+    - 中文 picker 的 `fallbackCast` 标签改为 `兜底阵容`。
+  - `frontend/src/components/EndingChatModal.tsx`
+    - 热座发送时会优先复用已存在的同目标 hotseat thread，而不是每次新建一条。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 圆桌热座发送同样优先复用已有同目标 hotseat thread，减少 thread rail 膨胀。
+  - `frontend/src/components/EndingChatModal.css`
+    - 移动端 header 改为纵向排布，close 按钮绝对定位，标题释放更多横向空间，减少生硬断行。
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - `is-live-room` 的移动端改为 `grid + overflow hidden`，并隐藏 sidebar，压缩 live 首屏高度。
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - replay import 选择器收紧到 modal header actions，避免和结果页同名“导入为本地运行”冲突。
+  - `frontend/src/components/EndingChatModal.test.tsx`、`frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 更新断言，跟随当前真实 `language` 参数与按钮文案。
+- 本轮验证结果：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py -q`
+    - `54 passed in 4.77s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `224 passed in 24.81s`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/ResultView.test.tsx`
+    - `32 passed in 4.35s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260330-codex-ending-room-followup-full-rerun2 --headless`
+    - 通过；关键指标：
+      - `multiDesktop.pickerA.modalState.thread_count = 1`
+      - `multiDesktop.hotseatState.thread_count = 2`
+      - `multiDesktop.allPresentState.thread_count = 2`
+      - 不再像旧签收工件那样一进房间就积累到 `30+` 线程
+      - replay readonly + import local run 走通
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260330-codex-roundtable-full --headless`
+    - 旧基线仍可通过；本轮 patch 后的 rerun 在脚本启动阶段卡住未产出工件，改用持久 Playwright 会话人工复验移动端。
+  - `js_repl + Playwright` 人工复验：
+    - 移动端圆桌 live 首屏现已从旧工件的 `rect.height ≈ 2174` 压到 `docScrollHeight = 1001`，截图 `frontend/output/e2e/20260330-codex-manual-roundtable-mobile-after.png`。
+    - 移动端会客厅标题与动作区截图见 `frontend/output/e2e/20260330-codex-ending-room-followup-full-rerun2/single-mobile-chamber.png`。
+- 当前残余判断：
+  - `ending-room replay/share/import` 功能链本身已能跑通，当前主要是自动化脚本和测试基线需要持续跟随文案/入口演进。
+  - `roundtable mobile` 比旧工件明显改善，但仍不是严格“无滚动一屏”形态；当前更接近“首屏可理解、轻滚动可用”。
+  - 文案质感仍有提升空间，尤其部分 auto recap / roundtable transcript 仍偏 deterministic summary，而不是更强角色化表达。
+
+## 2026-03-30 Oracle Chambers / Worldline Roundtable QA + Phase C Residual Pass
+
+- 已重新读取 `llmdoc/index.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`.impeccable.md`，按“代码/测试/文档三方对照”重建当前真值。
+- 文档漂移已确认：
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 里的 backend 发布命令仍引用 `tests/test_ending_room_followup.py`、`tests/test_ending_room_memory_partition.py`，当前仓库并不存在这两个文件。
+  - 前端单测里有多处旧断言未跟进当前 payload/按钮文案（例如 `language` 已并入 `openRoom()` payload，`WorldlineRoundtableView` 按钮文案已切到 `Open this lineup / Reopen with this lineup / Save read-only copy / Import local run`）。
+- 本轮 code review / 实测确认的主要问题：
+  - `WorldlineRoundtable` 移动端 `390x844` 下，旧版 sticky composer 会遮挡 transcript，下方交互层和线程 rail 首屏压迫感过强，不符合“移动端体验好”的签收要求。
+  - `EndingChatModal` 旧实现按“最后发言者 participantId”给所有历史同角色气泡加当前发言高亮，动态强调不够精确。
+  - Oracle 相关 UI 存在 i18n 漏洞：`Fallback cast` 在中文 UI 下会直接漏英文；`档案官路由` 文案偏技术，不够像面向用户的玩法按钮。
+- 已完成修复：
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 移动端 live roundtable 顶部操作按钮改为横向滚动而非高密度双列堆叠。
+    - mobile live room 取消 sticky composer，改回自然流布局，避免遮挡 transcript。
+    - 减少 live 顶部留白，压缩首屏高度。
+  - `frontend/src/components/EndingChatModal.tsx`
+    - 当前发言高亮改为只标记最后 committed bubble / 最后 draft bubble，不再让同一角色历史气泡全亮。
+    - 中文下 `Fallback cast` 改为 `兜底阵容`。
+    - `Archivist route` 文案改为 `档案官引导 / Archivist-guided`。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - `Archivist route` / `Representative hotseat` 文案同步收口为更自然的人话口径。
+  - `frontend/src/pages/ResultView.tsx`
+    - picker 中文 fallback 标签改为 `兜底阵容`。
+  - `frontend/src/types.ts`
+    - 补 `Scenario.language?: 'zh' | 'en'`，与页面实际消费字段对齐，收掉 `tsc` 漏报。
+  - `frontend/src/components/EndingChatModal.test.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 更新失效断言，跟进 `language` payload、只读副本按钮新文案、roundtable picker 新 CTA。
+- 本轮验证结果：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `222 passed in 37.12s`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/ResultView.test.tsx`
+    - `32 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-current-ending-room-followup --headless`
+    - 通过
+  - `cd frontend && node scripts/release-signoff.mjs --headless --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-root output/e2e/20260330-current-release-signoff`
+    - 通过
+    - `summary.json` 显示 `status=passed`，其中 `ending_room_followup / roundtable_full / debate_full / mobile / cross_browser` 全部 `passed`
+- 视觉复查：
+  - 旧版 `mobile-roundtable-ready.png` 里 composer 浮层覆盖 transcript；修后通过 Chrome DevTools 手动复查 `output/roundtable-mobile-manual-postfix.png`，composer 已回到自然流，不再遮挡正文，线程 rail 与 transcript 首屏可读性明显改善。
+- 残余说明：
+  - `node scripts/e2e-worldline-roundtable-suite.mjs mobile/full ...` 在单独重跑时偶发卡在 `Timed out waiting for roundtable ready`；但同一轮 `release-signoff` 里的 `roundtable_full` 稳定通过，更像脚本级 flake / backend 负载窗口问题，而不是页面恒定故障。
+  - `ending-room replay/share/import` 已有 live UI 与 ResultView 入口能力，但当前仍缺独立、细粒度的专项前端测试覆盖；后续可补 `ResultView` 针对 chamber replay header actions 的断言与 E2E。
+
+## 2026-03-30 Oracle Chambers / Worldline Roundtable Review + Continuation
+
+- 已按本轮要求读取 `llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/overview/backend.md`、`llmdoc/guides/development.md`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`.impeccable.md` 与相关 skill 文档。
+- 当前真实口径：
+  - 文档明确认为 Phase B/C 已有稳定落地部分，主要残余集中在 `ending-room replay/share/import`、`roundtable mobile 一屏体验`、`会客厅/圆桌文案质感`。
+  - 前端已存在 `scripts/e2e-ending-room-suite.mjs`、`scripts/e2e-ending-room-followup-suite.mjs`、`scripts/e2e-worldline-roundtable-suite.mjs`，与执行计划的“需新增”清单已有部分漂移。
+  - `frontend` 当前已内置 `render_game_to_text()` / `advanceTime()` 钩子，Oracle Chambers / Roundtable 页面都已接自动化导出。
+- 本轮 QA inventory 初稿：
+  - claims:
+    - Phase B/C 已完成部分没有显性/隐性 bug，且 scope/memory/i18n 不串线。
+    - `Ending Chamber / One Move Only / Worldline Roundtable` 命名与 CTA 易懂、符合 Oracle 语域且不晦涩。
+    - 当前 speaker、agent 头像/高亮/动效、draft->commit 流式过渡与会客厅/圆桌玩法一致。
+    - 中英文 UI 都自然、不混语，390px 及以上移动端可玩。
+  - controls:
+    - 结果页 CTA、participant picker、single/multi select、follow-up mode 切换、roundtable reseat、replay readonly。
+  - exploratory:
+    - 多结局交替进入不同 chamber、圆桌 verdict 后追问、刷新恢复、英文切换、移动端窄屏与 cross-browser。
+- 当前执行顺序：
+  1. 并行 code review（backend / frontend / 文档-测试差异盘点）
+  2. 跑 targeted tests / typecheck / build
+  3. 起 backend + frontend，跑 Oracle Chambers / Roundtable 专项 E2E
+  4. 仅在发现真实缺口后再补剩余 Phase C / UI / 文案 / 素材
 
 ## 2026-03-23 Silent-Agent Root Cause + Fix
 
@@ -13786,3 +14003,434 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 之前的 `debate_full` 移动端结果页阻断已被脚本修复并在总链内通过
   - `corners/share generation` 在稳定 backend 下也已通过
   - 因此当前工作区最新可复现结论是：**完整 release-signoff 全绿**
+
+## 2026-03-30 Oracle Chambers review + Phase C residual pass
+
+- 本轮先重新读取：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 本轮基线事实：
+  - backend 真实存在的 Oracle 相关套件命令改为：
+    - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `222 passed in 38.55s`
+  - frontend 定向 Vitest 初次复跑暴露测试漂移：
+    - `EndingChatModal.test.tsx`
+    - `WorldlineRoundtableView.test.tsx`
+    - 失败根因不是运行时逻辑坏掉，而是 `openRoom(...)` 新增 `language` 后，断言仍停留在旧 payload
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run build`：通过
+  - `node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/codex-ending-room-followup-full --headless`：通过
+  - `node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/codex-roundtable-full --headless`：通过
+- 本轮明确发现的问题：
+  1. 文档 / 合同漂移：
+     - `llmdoc/guides/development.md` 里的 `tests/test_ending_room_followup.py` 与 `tests/test_ending_room_memory_partition.py` 在真实仓库中不存在
+  2. 测试漂移：
+     - 前端 Oracle 定向测试未同步 `language` 字段
+  3. i18n 细节 bug：
+     - `ResultView` picker 与 `EndingChatModal` 里仍出现中文 UI 下的 `Fallback cast`
+  4. 文案质感问题：
+     - `档案官路由 / 代表热座 / 当前全员回应` 这类名字太偏内部机制，不够像面向用户的玩法按钮
+  5. roundtable mobile 体验问题：
+     - 自动化通过，但 `390x844` 下 live roundtable 首屏高度与信息层级仍偏拥挤，用户不够容易在第一屏理解“这桌是谁、现在是什么模式”
+- 本轮已实施的前端修正（待回归确认）：
+  - 会客厅/圆桌追问模式文案改为更面向用户的说法：
+    - `档案官主持 / Archivist lead`
+    - `点名角色 / Question one role`
+    - `点名代表 / Question one rep`
+    - `全员回应 / Everyone responds`
+  - 修复中文 UI 下 `Fallback cast` 未本地化的问题
+  - 压缩移动端 `EndingChatModal` header actions 与标题布局
+  - 调整 `WorldlineRoundtable` 窄屏 live-room 的 action 排布与信息顺序，优先让 roster 区块更早进入视口
+  - 更新 Oracle 定向 Vitest 断言以匹配真实 `openRoom(...language)` 合同
+  - 扩展 `frontend/scripts/e2e-ending-room-followup-suite.mjs`：
+    - 新增 ending-room `保存只读副本 -> replay readonly -> 导入本地运行` 链路覆盖
+- 下一步：
+  - 复跑前端 Vitest / typecheck / build / 两条 Oracle E2E
+  - 对比新旧移动端截图，确认 mobile 改动是否真的把“首屏理解成本”压下来了
+
+### 本轮复验结果（已完成）
+
+- 前端定向回归：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx`
+  - `44 passed`
+- 类型检查：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - 通过
+- 构建：
+  - `cd frontend && npm run build`
+  - 通过
+- ending-room 实机 E2E（新增 replay/import 覆盖）：
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/codex-ending-room-followup-full-rerun --headless`
+  - 通过
+  - 新覆盖点：
+    - `保存只读副本 -> read_only replay`
+    - `read_only replay -> 导入本地运行`
+  - 工件：
+    - `frontend/output/e2e/codex-ending-room-followup-full-rerun/multi-ending-room-replay-readonly.json`
+    - `frontend/output/e2e/codex-ending-room-followup-full-rerun/multi-ending-room-replay-readonly.png`
+- roundtable mobile 实机 E2E：
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/codex-roundtable-mobile-rerun --headless`
+  - 首次复跑暴露真实问题：
+    - `Mobile roundtable language switch overlaps the hero topline`
+  - 已通过 `WorldlineRoundtable.css` 继续压缩 live-room mobile hero 顶部并加大右上避让区修复
+  - 修复后复跑：
+    - 通过
+  - 关键 fit 结果：
+    - `languageSwitchOverlapsTopline = false`
+    - `languageSwitchOverlapsComposer = false`
+    - `composerOverlapsTranscript = false`
+  - 工件：
+    - `frontend/output/e2e/codex-roundtable-mobile-rerun/mobile-roundtable-ready.json`
+    - `frontend/output/e2e/codex-roundtable-mobile-rerun/mobile-roundtable-ready.png`
+
+### 本轮结论
+
+- Phase B/C 已完成部分目前没有发现后端 authority / 隔离 / memory partition 的显性回归；后端 Oracle 相关套件仍是绿的。
+- 前端原先最主要的问题不是“功能没做”，而是：
+  - 测试断言落后于真实实现
+  - 中文 i18n 有残余硬编码
+  - 部分命名过于内部化
+  - roundtable mobile live-room 有实际遮挡问题
+- 本轮已把这些点收口到“已通过回归”的状态。
+
+## 2026-03-30 Oracle Chambers / Roundtable follow-up pass
+
+- 继续按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 对真实缺陷做窄范围修正，而不是再扩范围重构。
+- 本轮先确认的真实问题：
+  - `ResultView` 中文 subtitle 实际渲染成 `多结局对比 — 6 结局s`，属于明确 i18n 泄漏。
+  - `ResultView` picker 与 `EndingChatModal` participant card 仍遗留中文 UI 下的 `Fallback cast` 英文文案。
+  - live `EndingChatModal` 头部会显示 `导入为本地运行 / Import as Local Run`，但 automation 合同里 `can_import_replay = false`；语义和 UI 不一致，且在移动端 header 中额外挤占了空间。
+  - `EndingChatModal` replay 只读态虽然逻辑禁发，但仍保留完整 composer 视觉，误导用户以为还能继续输入。
+  - `WorldlineRoundtable` 390px live 首屏里，sticky composer 会盖住 transcript 可视区域；自动化虽然通过，但可读性和“首屏理解成本”仍不够好。
+- 本轮已实施的修正：
+  - `frontend/src/pages/ResultView.tsx`
+    - 修复 `结局s` 混语 bug。
+    - live chamber 仍可复制/保存 replay，但 `Import as Local Run` 只在真正 replay chamber 下显示。
+    - picker fallback badge 改为 `兜底阵容 / Fallback cast`。
+  - `frontend/src/components/EndingChatModal.tsx`
+    - participant fallback badge 改为 `兜底阵容 / Fallback cast`。
+    - replay 只读态不再渲染完整 composer，改为只读提示 footer，降低误导性。
+  - `frontend/src/components/EndingChatModal.css`
+    - 新增只读 footer 样式。
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 390px live room 下撤掉 sticky composer 覆盖行为，避免首屏正文被底部输入区压住。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 修掉 `activeSpeakerTurnKey` 相关未绑定引用，恢复 typecheck/build。
+  - 测试口径同步：
+    - `frontend/src/components/EndingChatModal.test.tsx`
+    - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+- 本轮回归结果：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx`：通过
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx`：通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && npm run build`：通过
+- 正在复跑：
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+
+## 2026-03-30 Oracle Chambers / Roundtable review + replay handoff pass
+
+- 已重新读取 `llmdoc/index.md`、`llmdoc/overview/{project,frontend,backend}.md`、`llmdoc/guides/development.md`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`.impeccable.md` 与 `progress.md`，按真实代码/测试/文档三方对齐当前真值。
+- 已使用的技能/链路：
+  - `develop-web-game`：通过仓库现有 `.tmp-web-game-client-*.mjs` 变体跑标准 `render_game_to_text + screenshot` 回路，确认 roundtable 页面能被统一自动化客户端读取；官方 `.js` 客户端依然是 ESM 扩展名坑，直接 `node` 会报 `Cannot use import statement outside a module`。
+  - `playwright-interactive`：真实打开结果页/会客厅/圆桌，人工核对截图与自动化状态。
+  - `Playwright CLI Skill`：已确认 wrapper 可用，`snapshot/goto` 链路可工作。
+- 本轮 code review + 回归结论：
+  - backend 真实合同测试：`222 passed in 54.86s`
+    - 命令：`cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+  - backend lint：通过
+    - 命令：`cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py`
+  - frontend targeted tests / typecheck / build：通过
+    - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - `cd frontend && npm run build`
+  - cross-browser smoke：通过
+    - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-cross-browser --headless`
+- 本轮定位并修复的真实问题：
+  - `ResultView` 在 live `Ending Chamber` 内点击“保存本地只读副本”后，URL 会立即切到 `/result/replay?...`，但当前 modal 仍停留在 live 态；只有整页刷新后才变成 read-only。根因是只做了 `navigate()`，没有同步把内存态切到 replay。
+  - 修复方式：
+    - `frontend/src/pages/ResultView.tsx`
+      - `handleSaveEndingRoomReadonlyCopy()` 现在在 `navigate()` 前先 `applyEndingRoomReplay(...)`，让当前打开中的 modal 即时切到 replay 只读态。
+    - `frontend/src/pages/ResultView.test.tsx`
+      - 补了一条针对该问题的回归测试，并把 mock `EndingChatModal` / `useEndingRoomStore` 扩展到可观察 `readOnly` 状态与 header actions。
+    - `frontend/src/pages/WorldlineRoundtable.css`
+      - 给 `is-hotseat-target` 席位补了和当前发言卡同一语系的轻量 pulse，保持现有美术风格下的动态反馈一致性。
+- 修复后专项 E2E 复验：
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-ending-room-followup-rerun --headless true`
+    - 通过；summary 里已新增：
+      - `replayReadonly.read_only = true`
+      - `replayReadonly.can_send = false`
+      - `importedUrl = /sim/...`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-roundtable-rerun --headless`
+    - 通过；live / reseat / hotseat / replay readonly / mobile fit 全链路稳定。
+- 当前仍值得下一轮盯住但不构成阻塞的问题：
+  - roundtable mobile live-room 仍是“可用但信息密度偏高”，首屏不是严格一屏完整消费；当前 fit 已稳定，但若继续 polish，可进一步压缩 hero/actions 的垂直占用。
+  - `develop-web-game` 官方客户端仍是 `.js` ESM 文件，仓库里保留了多份 `.tmp-web-game-client-*.mjs` 临时变体；如果后续还长期使用这条技能，建议统一成单一可执行 `.mjs` 包装，避免继续漂移。
+
+## 2026-03-30 Oracle 23 wording / naming / text-playability pass
+
+- 本轮专门回答并收口了 23 方案里“玩法名称是否像人话、纯文字会不会太干、是否都真接后端 LLM、和 MiroFish 的边界到底在哪里”这几个问题。
+- 当前确认的事实：
+  - `进入会客厅 / 只改一步 / 发起圆桌` 这组主玩法名仍然成立，符合 SwarmOracle 结果页后的复盘层定位，不需要推翻重命名。
+  - 当前 Oracle 玩法并不是“全部走后端 LLM 实时生成”。`ending_room_service.py` 里的 auto recap、one-move、follow-up 回复目前仍有相当一部分是 deterministic evidence-based 文案拼接；这也是“能玩但有时不够像人话”的主因。
+  - 参考 `MiroFish` 的边界仍应保持：借“结局后继续问角色”的价值，不借“自由漫游式开放聊天”。SwarmOracle 应继续锚定 `结果卡 / 转折 / 代表 / 当前桌 scope`。
+- 本轮前端已实施的体验优化：
+  - `frontend/src/components/EndingChatModal.tsx`
+    - follow-up 模式文案收口为更直白的人话：
+      - `档案官主持 / Archivist lead`
+      - `点名角色 / Question one role`
+      - `当前阵容回应 / Current lineup responds`
+    - 新增模式说明文案块：不同玩法会明确解释“这个模式现在是在干什么”，减少用户把玩法理解成系统开关。
+    - participant card 现在会同时标出：
+      - `正在发言 / Speaking`
+      - `当前追问对象 / Current target`
+    - fallback badge 英文从 `Fallback cast` 收口为更不内部化的 `Fallback lineup`
+  - `frontend/src/components/EndingChatModal.css`
+    - 为模式说明块、participant 当前发言/追问态补样式，让体验不只靠大段文字。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - roundtable follow-up 文案收口：
+      - `点名代表 / Question one representative`
+      - 选人原因文案收口为 `你点的 / Your pick`、`高影响代表 / High impact`、`兜底阵容 / Fallback lineup`
+    - 新增 roundtable 模式说明文案块，明确“档案官主持”和“点名代表”的区别。
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 保留既有美术语言下，给 hotseat target 也补了轻量 pulse，和当前发言的视觉强调更一致。
+  - `frontend/src/pages/ResultView.tsx`
+    - 结果页 participant picker fallback badge 同步改成 `Fallback lineup`
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 自动化脚本已同步新按钮文案 `Current lineup responds`
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/ResultView.test.tsx`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+  - `cd frontend && npm run build`
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-text-pass-ending-room --headless true`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-text-pass-roundtable --headless`
+- 验证结果：
+  - 前端定向测试：通过
+  - `tsc` / `build`：通过
+  - ending-room / roundtable E2E：通过
+  - 说明这轮“文字和玩法表达优化”没有把 Oracle 主链打坏
+- 当前还没做、但下一轮如果要把“不是纯文字那么枯燥”继续推高，可以优先考虑：
+  - 把 deterministic 后端 reply 升级为“LLM 优先、模板兜底”的双轨
+  - 为 `one_move_only` / `hotseat` 再补更明确的非文本结构块，例如 `为何问他 / 这次会得到什么 / 风险提示`
+
+## 2026-03-30 Oracle step 1 + 2 delivery
+
+- 用户要求依次完成：
+  1. `Oracle` 相关 deterministic 文案升级成 `LLM 优先、模板兜底`
+  2. `roundtable mobile` 首屏继续压缩，并做测试/review
+
+### Step 1 — Oracle backend LLM-first + fallback
+
+- 已在 `backend/app/services/ending_room_service.py` 增加 Oracle 专用重写层：
+  - 保留 deterministic anchor copy
+  - 对高可感知文本链路做 `LLM 优先`：
+    - room `verdict`
+    - `one_move_only` 的 opening / verdict
+    - follow-up replies
+  - LLM 不可用时快速回退 anchor copy，而不是拖死玩法主链
+- 关键实现点：
+  - 新增 `settings.ORACLE_CHAMBERS_USE_LLM`（默认生产可开；测试环境在 `backend/tests/conftest.py` 默认关）
+  - Oracle LLM 重写统一经 `_maybe_rewrite_oracle_copy(...)`
+  - 统一加了短超时 `_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS = 6.0`
+  - follow-up 回复改为并发重写，避免多人回复时线性累加等待时间
+  - API 层 `backend/app/api/ending_rooms.py` 已改用 async append wrapper，避免在 route 里继续走旧同步路径
+- 新增后端测试：
+  - `test_run_ending_room_background_prefers_llm_verdict_copy_when_enabled`
+  - `test_run_ending_room_background_falls_back_when_llm_rewrite_fails`
+  - `test_followup_prefers_llm_copy_when_enabled`
+- 实际验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `63 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `227 passed`
+  - `ruff check`：通过
+- 这一步中途发现的真实环境问题：
+  - 当前本地 `POST /api/health` 返回 `llm.status=error`，原因是 provider `401`
+  - 若不做 fail-fast，roundtable/ending-room 背景任务会在模型不可用时慢失败，拖过 E2E 超时
+  - 已通过 Oracle 专用短超时 + fallback 收口
+
+### Step 2 — roundtable mobile 首屏压缩
+
+- 已在 `frontend/src/pages/WorldlineRoundtable.css` 做 live-room 窄屏压缩：
+  - 问题文案从 2 行收成 1 行
+  - 隐藏一枚重复 meta chip
+  - mobile live-room 直接去掉顶部长 summary stage，减少重复信息
+  - transcript 区高度从之前更早开始出现，给正文更多首屏空间
+  - live-room mobile 下隐藏 `mode note`，减少 composer 垂直占用
+  - 压缩 textarea / send button 高度
+- 同时保留：
+  - route / replay / reseat / hotseat 等功能不变
+  - transcript / composer 不重叠
+  - language switch 不遮挡
+- 实际验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx`
+    - `45 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-mobile-pass-roundtable --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-final-ending-room --headless true`
+    - 通过
+- 可量化变化（来自 roundtable mobile fit）：
+  - transcript header 起点从上一轮的 `y≈356` 压到本轮 `y≈251`
+  - `transcriptListRect.height ≈ 320.7`
+  - `composerOverlapsTranscript = false`
+  - `languageSwitchOverlapsTopline = false`
+
+### 当前状态总结
+
+- `1` 和 `2` 已完成，并都经过真实回归
+- Oracle 当前已从“纯 deterministic 文案 + 前端提示”升级为：
+  - 前端玩法表达更像人话
+  - 后端关键链路 `LLM 优先、模板兜底`
+  - 模型不可用时也不会把玩法主链拖死
+- 下一轮如果继续，还可以做：
+  - Oracle 后端 prompt 再细化（让不同角色口吻差异更强）
+  - mobile roundtable 再做更激进的一屏信息架构（目前已明显改善，但仍是 transcript-first）
+
+## 2026-03-30 Oracle 8317 live-LLM validation
+
+- 已按用户要求切换到 `8317` 做真实模型测试：
+  - `backend/.env` 当前已改成 `LLM_RESPONSES_URL=http://127.0.0.1:8317/v1/chat/completions`
+  - `LLM_API_KEY=sk-12345678`
+- 直接验证：
+  - 直连 `8317` 返回 `200 OK`
+  - `POST /api/health` 返回 `server=ok, llm=ok`
+- 在 `8317` 链路下实跑的 Oracle E2E：
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-8317-ending-room --headless true`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-mobile-pass-roundtable --headless`
+    - 通过
+- 真实链路抽样观察：
+  - `ending_room / one_move_only` 文案相较 deterministic 版本已经更像“角色/档案官在复盘”，比之前更自然
+  - `roundtable` 文案目前能看出 LLM 已接入，但仍有明显“反复解释 scope 与房间边界”的模板痕迹
+  - 也就是说：`LLM-first` 已生效，但 prompt 还需要下一轮继续去模板化，尤其是 roundtable archivist / representative 的差异化声线
+- 当前可用工件：
+  - `frontend/output/e2e/20260330-8317-ending-room/summary.json`
+  - `frontend/output/e2e/20260330-codex-mobile-pass-roundtable/summary.json`
+
+## 2026-03-30 Oracle prompt de-template pass
+
+- 在 `8317` 真模型链路下继续打磨了 Oracle prompt，目标是压掉 roundtable 里“反复解释 scope / 房间边界”的模板腔，并把代表/档案官的声线再拉开一轮。
+- 本轮核心改动都在：
+  - `backend/app/services/ending_room_service.py`
+- 具体做法：
+  - 新增 `Target voice` 约束：按 `room_type + role_slot + phase` 区分档案官、代表、one-move strategists 的目标口吻
+  - 新增一组显式禁止短语：
+    - 中文：`我只顺着... / 我只沿着... / 我会继续沿着... / 我先替你筛掉噪声`
+    - 英文：`I am staying... / I will stay... / I will route...`
+  - prompt 明确要求：
+    - scope 约束必须遵守，但默认保持隐式，不要把权限提示当正文内容反复说
+    - 代表要像在为自己的世界线辩护，而不是讲流程
+    - 档案官要像主持人/总控，而不是客服
+  - `roundtable opening` / `crossfire` 也纳入了 LLM 重写
+  - planned turn 的 LLM 重写已改成并发 gather，避免多代表 roundtable 再次被时延拖慢
+  - 对 LLM 输出再做一层轻量 scope-boilerplate 清洗，进一步压掉重复套话
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `63 passed`
+  - `ruff check`：通过
+  - 复用 `8317` 环境跑 fresh room 抽样：
+    - 新 roundtable room `7ac9b973-4bab-4144-84ad-f344b94235ac`
+    - 新 one-move room `260308e3-8ae8-4bdf-9a27-40309498a6e3`
+- fresh room 抽样结论：
+  - `one_move_only` 现在已经明显脱离模板句，摘要与 opening 都更短、更像策略建议
+  - `roundtable opening` 现在不再反复说 `scope / 当前桌 / 沿着这条线继续`，代表发言已经更像“替本世界线辩护”
+  - 仍然还能继续优化的点主要是：
+    - roundtable `verdict follow-up` 场景下，档案官与代表的差异还能再更锋利
+    - 个别 branch hook 仍会重复引用题眼，需要下一轮再压 prompt 中的 hook 重复
+
+## 2026-03-30 Oracle final voice + lock hardening
+
+- 本轮继续做了最后一层 Oracle 质量优化，范围严格收在 backend：
+  - `representative` opening anchor 再按 `imperial / field / civic` 细分句型，避免多位代表都从同一个节奏开口
+  - prompt 继续压掉 `我代表《...》发言 / 真正把这条线...` 这类开头模板
+  - roundtable follow-up 继续强化“档案官像主持人，代表像替本线辩护的人”
+  - 同时补了 SQLite lock 的最小修复：
+    - room 创建时预建稳定 `user participant`
+    - `user participant` 改成 room-stable id，不再在 follow-up 路径里提前 `flush`
+    - follow-up 写路径对 `OperationalError(database is locked)` 做短重试
+- 对应文件：
+  - `backend/app/services/ending_room_service.py`
+  - `backend/tests/test_ending_room_service.py`
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `66 passed`
+  - `ruff check`：通过
+- 实际效果判断：
+  - fresh roundtable opening 已经出现明显分化：
+    - 皇帝线更偏“秩序压不回去 / 失手后不认账”
+    - 前线线更偏“前线被掏空 / 河口与防线 / 夜战代价”
+    - 其他线不再一律同形句起手
+  - fresh roundtable follow-up 里，档案官会先定调再交权，代表会直接落到自己那条线最早失手的 hinge 与代价上
+  - `database is locked` 风险已做最小收口；当前至少不会再因为首次创建 `user participant` 而在 follow-up 路径上提前抢锁
+
+## 2026-03-30 Oracle Chambers / Roundtable audit + finish pass
+
+- 本轮先做了 llmdoc + plan + code/test reality 对齐：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/{project,frontend,backend}.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 代码 review + 测试后的结论：
+  - backend 真实 Oracle 相关回归以现存文件为准：
+    - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `222 passed in 49.74s`
+  - `llmdoc/guides/development.md` 的 Oracle backend 命令合同有漂移：
+    - `tests/test_ending_room_followup.py`
+    - `tests/test_ending_room_memory_partition.py`
+    - 当前仓库里并不存在
+  - frontend 初次定向回归暴露的主要是真实前端问题，不是后端断链：
+    1. `ResultView` / `WorldlineRoundtableView` 没有像 Debate 页面那样按场景语言主动同步 i18n
+    2. transcript 当前发言高亮按 `participantId` 判定，会把同一角色历史多条气泡一起点亮
+    3. `EndingChatModal` 窄屏 header actions 仍然挤压标题
+    4. `WorldlineRoundtable` 390px live room 虽然功能可用，但首屏层级和跟进输入区不够顺手
+    5. `develop-web-game` 官方客户端原始 `.js` 仍是 ESM，直接 `node` 会报错；本轮继续使用仓库里的 `.tmp-web-game-client-phasec-current.mjs` 兼容副本执行
+- 本轮已实施修正：
+  - `frontend/src/pages/ResultView.tsx`
+    - 按 `scenario.language` 回退到题面文本语言自动同步 i18n
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 同步按场景/题面语言选中 `zh|en`
+    - 开桌时不再盲用当前 UI 语言，而是用推断出的内容语言
+    - transcript 当前发言高亮改为按 `turn key` 而不是 `participantId`
+  - `frontend/src/components/EndingChatModal.tsx`
+    - transcript 当前发言高亮改为按 `turn key`
+  - `frontend/src/components/EndingChatModal.css`
+    - 给当前发言气泡增加更明显但克制的 pulse 动效
+    - 压缩移动端 header actions / 标题布局
+    - 缩短移动端 sidebar 首屏高度
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 给代表卡与 transcript 当前发言气泡增加 pulse 动效
+    - 提高 390px live roundtable transcript 可视高度
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - replay readonly -> import local run 链路限定点击最上层可见 modal header action，避免同名按钮 strict-mode 冲突
+  - 测试同步：
+    - `frontend/src/components/EndingChatModal.test.tsx`
+    - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - `frontend/src/pages/ResultView.test.tsx`
+- 本轮回归结果：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - `39 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-ending-room-followup-full-v3 --headless`
+    - 通过
+    - readonly replay/import 链路已重新打通
+  - `develop-web-game` smoke：
+    - `node .tmp-web-game-client-phasec-current.mjs --url http://127.0.0.1:18928/roundtable/65f9a20d-513d-4e82-82f0-cc575b7689de --actions-file \"$WEB_GAME_ACTIONS\" --click-selector \".worldline-roundtable-picker__actions .btn:last-child\" --iterations 1 --pause-ms 300 --capture-mode panel --screenshot-dir output/web-game/roundtable-v3`
+    - 新建 roundtable room `9d6769ec-9fa5-4e35-9938-b3870ea7e1e3` 的 `language=zh`，证明中文旧场景在 `scenario.language = null` 时也能自动起中文房间
+  - `playwright-interactive` 人工复核：
+    - `mobile-roundtable-after-fix.png` 已确认 `世界线圆桌 / 改选代表并重开 / 复制回放 / 保存只读副本 / 圆桌记录 / 只看本桌记录与异线摘要` 都按中文收口，不再出现“中文题面 + 英文控制文案”
+- 仍然保守保留的残余：
+  - roundtable 390px 首屏现在已经从“遮挡/串语/误导”降到“可读可用”，但还没到“极致紧凑”；如果下一轮继续优化，优先再压 hero 垂直高度，并判断是否要让 follow-up composer 在移动端更早进入首屏
+  - `Playwright CLI Skill` 的 headed smoke 一度抓到 `/api/scenario/*` 500 console error，但后续同路径 `curl http://127.0.0.1:18928/api/scenario/...` / `/story` / `/agents` 都返回 `200`，暂时判定为并发调试阶段的瞬时噪声，不作为已稳定复现的产品 bug

@@ -5,6 +5,7 @@
 export interface Scenario {
   id: string;
   question: string;
+  language?: 'zh' | 'en';
   status: 'parsing' | 'simulating' | 'narrating' | 'done' | 'error';
   created_at: string;
   total_rounds?: number;

@@ -278,6 +278,17 @@ function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
     : `R${parsed.round} committed to ${parsed.value}`;
 }
 
+function inferOracleLanguage(...candidates: Array<string | null | undefined>): 'zh' | 'en' | null {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (/[\u4e00-\u9fff]/.test(candidate)) {
+      return 'zh';
+    }
+    return 'en';
+  }
+  return null;
+}
+
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -377,6 +388,27 @@ export default function ResultView() {
     isZhRef.current = isZh;
     translationRef.current = t;
   }, [isZh, loadResultErrorMessage, replayInvalidMessage, t]);
+
+  useEffect(() => {
+    const targetLanguageSource = replayEndingRoomPayload?.roomSnapshot.language
+      ?? replayPayload?.scenario.language
+      ?? scenario?.language
+      ?? inferOracleLanguage(
+        replayPayload?.storyData.question,
+        storyData?.question,
+        scenario?.question,
+      );
+    if (!targetLanguageSource) return;
+    const targetLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
+    if (!i18n.language.startsWith(targetLanguage)) {
+      void i18n.changeLanguage(targetLanguage);
+    }
+  }, [
+    i18n,
+    replayEndingRoomPayload?.roomSnapshot.language,
+    replayPayload?.scenario.language,
+    scenario?.language,
+  ]);
 
   const applyScenarioReplay = useCallback((replay: ScenarioResultReplayPayload) => {
     const replayProfile = inferGameplayProfile(replay.scenario.question, replay.scenario.scene_theme);
@@ -1282,10 +1314,14 @@ export default function ResultView() {
   const handleSaveEndingRoomReadonlyCopy = useCallback(() => {
     if (!effectiveEndingRoomReplayPayload) return;
     const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
+    applyEndingRoomReplay({
+      ...effectiveEndingRoomReplayPayload,
+      selectedAgentIds: [...(effectiveEndingRoomReplayPayload.selectedAgentIds ?? [])],
+    });
     navigate(`/result/replay?roomLocal=${localId}`, { replace: true });
     setEndingRoomLocalCopySaved(true);
     window.setTimeout(() => setEndingRoomLocalCopySaved(false), 1800);
-  }, [effectiveEndingRoomReplayPayload, navigate]);
+  }, [applyEndingRoomReplay, effectiveEndingRoomReplayPayload, navigate]);
   const handleImportEndingRoomReplay = useCallback(async () => {
     const scenarioReplay = effectiveEndingRoomReplayPayload?.scenarioReplay;
     if (!scenarioReplay || importingEndingRoomReplay) return;
@@ -1324,7 +1360,7 @@ export default function ResultView() {
         >
           {endingRoomPermalinkCopied
             ? (isZh ? '回放已复制' : 'Replay copied')
-            : (isZh ? '复制会客厅回放' : 'Copy chamber replay')}
+            : (isZh ? '复制回放' : 'Copy replay')}
         </button>
         <button
           type="button"
@@ -1333,9 +1369,9 @@ export default function ResultView() {
         >
           {endingRoomLocalCopySaved
             ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
-            : (isZh ? '保存本地只读副本' : 'Save local read-only copy')}
+            : (isZh ? '保存只读副本' : 'Save read-only copy')}
         </button>
-        {effectiveEndingRoomReplayPayload?.scenarioReplay && (
+        {activeEndingRoomReplayPayload?.scenarioReplay && (
           <button
             type="button"
             className="ending-chat-inline-button"
@@ -1344,7 +1380,7 @@ export default function ResultView() {
           >
             {importingEndingRoomReplay
               ? (isZh ? '导入中…' : 'Importing…')
-              : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+              : (isZh ? '导入本地运行' : 'Import local run')}
           </button>
         )}
       </>
@@ -1559,8 +1595,11 @@ export default function ResultView() {
           <p className="result-question">{storyData.question}</p>
         )}
         <p className="result-subtitle">
-          {t('result.subtitle')} — {branches.length} {t('result.ending_card').toLowerCase()}
-          {branches.length !== 1 ? 's' : ''}
+          {t('result.subtitle')} — {branches.length} {isZh
+            ? '结局'
+            : branches.length === 1
+              ? 'ending'
+              : 'endings'}
         </p>
         <div className="result-archive__chips">
           <span className="archive-chip archive-chip--primary">
@@ -2179,7 +2218,7 @@ export default function ResultView() {
                         </em>
                         {candidate.fallbackCast && (
                           <em className="ending-room-picker__fallback">
-                            {isZh ? 'Fallback cast' : 'Fallback cast'}
+                            {isZh ? '兜底阵容' : 'Fallback lineup'}
                           </em>
                         )}
                       </div>

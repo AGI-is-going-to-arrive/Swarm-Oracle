@@ -12,6 +12,7 @@ import {
 const ORACLE_REPLAY_LOCAL_STORAGE_KEY = 'swarmoracle:oracle-replay:v1';
 const ORACLE_REPLAY_QUERY_KEY = 'roomReplay';
 const ORACLE_REPLAY_SHARE_QUERY_KEY = 'roomShare';
+const oracleReplayMemoryCache: Record<string, OracleReplayPayload> = {};
 
 export type OracleReplayKind = 'ending_room_v1' | 'worldline_roundtable_v1';
 
@@ -24,6 +25,18 @@ export interface OracleReplayPayload {
   branchId?: string | null;
   selectedAgentIds?: string[];
   activeThreadId?: string | null;
+}
+
+function getOracleReplayStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  try {
+    const storage = window.localStorage ?? globalThis.localStorage;
+    if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
+      return null;
+    }
+    return storage;
+  } catch {
+    return null;
+  }
 }
 
 function buildOracleReplayPath(payload: OracleReplayPayload, queryKey: string, queryValue: string): string {
@@ -105,10 +118,16 @@ export function normalizeOracleReplayPayload(
 
 export function saveOracleReplayLocalCopy(payload: OracleReplayPayload): string {
   const id = crypto.randomUUID();
-  const raw = window.localStorage.getItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY);
+  const storage = getOracleReplayStorage();
+  if (!storage) {
+    oracleReplayMemoryCache[id] = payload;
+    return id;
+  }
+
+  const raw = storage.getItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY);
   const parsed = raw ? JSON.parse(raw) as Record<string, OracleReplayPayload> : {};
   parsed[id] = payload;
-  window.localStorage.setItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY, JSON.stringify(parsed));
+  storage.setItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY, JSON.stringify(parsed));
   return id;
 }
 
@@ -116,8 +135,14 @@ export function loadOracleReplayLocalCopy(
   id: string,
   expectedKind?: OracleReplayKind,
 ): OracleReplayPayload | null {
+  const memoryValue = normalizeOracleReplayPayload(oracleReplayMemoryCache[id], expectedKind);
+  if (memoryValue) {
+    return memoryValue;
+  }
   try {
-    const raw = window.localStorage.getItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY);
+    const storage = getOracleReplayStorage();
+    if (!storage) return null;
+    const raw = storage.getItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return normalizeOracleReplayPayload(parsed[id], expectedKind);

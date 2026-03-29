@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-30
-> 状态更新（2026-03-30）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；当前残余主要集中在 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
+> 状态更新（2026-03-30）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；当前残余主要集中在 follow-up 与经典模式的流式一致性、ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
 
 ---
 
@@ -424,6 +424,72 @@ ending_room_turn_error:
   - `worldline_roundtable`：开启
   - `one_move_only`：可关闭，直接短回复
   - `crossline_gallery`：关闭，保持只读摘要
+
+### Follow-up 流式升级（新增，Mandatory）
+
+`follow-up` 不应长期停留在“后端整段生成完再一次性 commit”的口径。
+
+目标要升级成 **更接近经典模式 agent 发言的 live 体验**，但仍严格遵守 `ending_room` 域的 mixed-streaming contract：
+
+```text
+user_turn_commit
+-> followup_turn_start
+-> followup_turn_delta
+-> followup_turn_commit
+```
+
+强制要求：
+
+- `archivist_route / hotseat / all_present`
+  - 三种 follow-up 模式都必须支持 `turn_start -> turn_delta -> turn_commit`
+  - 不允许继续只有自动复盘在流式、追问仍整段跳出
+- follow-up 的 draft 体验应接近经典模式：
+  - 当前 responder 头像/卡片高亮
+  - draft 文本独立增长
+  - commit 后替换为正式 transcript
+  - 不允许同一条 follow-up 同时残留 `draft 卡片 + committed 卡片`
+- follow-up 流式对象仍然只认 committed turn：
+  - replay
+  - share
+  - import
+  - quote extraction
+  - supporting turns
+- follow-up 流式事件必须按 `thread_id` 入桶
+  - 不允许不同 follow-up thread 的 draft 混在同一个 live draft 池里
+- `all_present`
+  - 允许多位 responder 依次流式
+  - 不允许并发把多个 active draft 泡同时铺满正文区
+  - 必须让用户清楚知道“当前轮到谁在说”
+
+建议事件补齐为：
+
+```yaml
+ending_room_followup_turn_start:
+  room_id:
+  thread_id:
+  turn_id:
+  participant_id:
+  interaction_mode:
+  sequence:
+
+ending_room_followup_turn_delta:
+  room_id:
+  thread_id:
+  turn_id:
+  participant_id:
+  interaction_mode:
+  delta:
+  chunk_index:
+
+ending_room_followup_turn_commit:
+  room_id:
+  thread_id:
+  turn_id:
+  participant_id:
+  interaction_mode:
+  content:
+  sequence:
+```
 
 ### 权限与隔离要求
 
@@ -897,6 +963,10 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 - 新增 `append_user_turn(...)`
 - 新增 `build_room_followup_context(...)`
 - 新增 `resolve_followup_responders(...)`
+- follow-up 若后端 LLM 支持流式：
+  - 必须优先走 `llm_call_stream()` / 等价 streaming path
+  - 再按 mixed-streaming contract 收口成 committed turn
+  - 不允许在数据库事务持有期间长时间等待 LLM 返回
 - `user_turn` / `agent_followup_turn` / `archivist_followup_turn` 必须继续写入 `ending_room_turn`
 - 每条 follow-up turn 必须带：
   - `source = auto_recap | user_followup`
@@ -910,6 +980,11 @@ frontend/src/components/EndingRoomSpeakerBadge.css
   - `继续追问`
   - `点名追问`
   - `当前全员回应`
+- `follow-up` 若启用流式：
+  - 必须复用与经典模式接近的“当前说话中”视觉结构
+  - 当前 responder 的 participant card / avatar / ring 同步高亮
+  - thread 内 draft 与 committed transcript 显式区分
+  - `all_present` 逐位 responder 切换时，active highlight 必须同步切换
 - 必须支持从 `key_moment card` 直接发起追问：
   - `为什么这里转向了？`
   - `如果不这么做会怎样？`
@@ -1408,6 +1483,10 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
     - 当前 thread 的 scope 提示
     - 从 `key_moment / quote / verdict` 直接注入追问草稿
     - 从 `结局卡 / 关键转折卡 / quote` 直接起追问
+    - follow-up 模式下也走 mixed streaming：
+      - `followup_turn_start / followup_turn_delta / followup_turn_commit`
+      - 当前 responder 高亮
+      - thread 级 draft state 按 `thread_id` 隔离
 
 ### C3.5 追问线程组件（新增）
 
@@ -1441,6 +1520,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
     - commit 后进入正式阶段 transcript
   - verdict 后支持当前桌追问，但要继续显示 scope 提示：
     - `只基于当前入桌世界线摘要与当前桌历史`
+  - 圆桌 follow-up 若启用流式：
+    - 当前 responder 高亮与正文 draft 保持同步
+    - 不能只在自动复盘有流式，追问退回整段 commit
 
 ### D2. i18n
 
@@ -1519,6 +1601,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 圆桌 verdict 后立刻追问，不能把追问 turn 插进 `verdict` 阶段 transcript 中间
 - 同一 room 下连续打开两个不同 `followup_thread` 时，不得串 transcript
 - thread 比 WS 建连更快完成时，前端也必须补拉 snapshot/result
+- `followup_turn_start` 已到但 `followup_turn_delta` 迟到时，active speaker 不得卡死
+- `followup_turn_commit` 到达后，旧 draft 不得残留在 thread transcript 中
+- `all_present` 多 responder 场景下，draft 必须串行切换，不得同屏多个 active draft 泡
 
 ### 5.4 i18n
 
@@ -1594,6 +1679,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
        - `turn_start` 截图
        - `turn_delta` 中间态截图
        - `turn_commit` 结束态截图
+       - `followup_turn_start` 截图
+       - `followup_turn_delta` 中间态截图
+       - `followup_turn_commit` 结束态截图
 2. `playwright-interactive`
    - 用于桌面/移动端持续调试
    - 必须写 QA inventory，再做功能 QA + 视觉 QA
@@ -1601,6 +1689,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
      - 文本增长是否平滑
      - draft / commit 替换是否正确
      - 小屏滚动跟随是否稳定
+     - follow-up 是否也具备与经典模式一致的“当前说话中”视觉反馈
    - 对本条线新增专项：
       - participant card 是否与当前世界线 roster 对齐
       - speaker avatar / active ring / pulse 是否正确
@@ -1628,8 +1717,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ```text
 frontend/scripts/e2e-ending-room-suite.mjs
-frontend/scripts/e2e-ending-room-picker-suite.mjs
 frontend/scripts/e2e-ending-room-followup-suite.mjs
+frontend/scripts/e2e-worldline-roundtable-suite.mjs
 ```
 
 运行命令建议：
@@ -1639,9 +1728,8 @@ cd frontend
 node scripts/e2e-ending-room-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-desktop --headless
 node scripts/e2e-ending-room-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-mobile --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-full --headless
-node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-picker-full --headless
 node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-followup-full --headless
-node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/ending-room-multi-ending-full --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/worldline-roundtable-full --headless
 ```
 
 ## 6.3 QA Inventory 模板
@@ -1718,23 +1806,22 @@ exploratory:
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_ending_room_followup.py tests/test_ending_room_memory_partition.py tests/test_vector_store.py tests/test_api.py -q
-python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_ending_room_followup.py tests/test_ending_room_memory_partition.py
+python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
+python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/components/EndingRoomFollowupComposer.test.tsx src/components/EndingRoomThreadList.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/i18n/locales.test.ts
+npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-corners --headless
 node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-cross-browser --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room --headless
-node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-picker --headless
 node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-followup --headless
-node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/post-ending-room-multi-ending --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/post-ending-roundtable --headless
 ```
 
 流式专项建议：
@@ -1742,6 +1829,7 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixtu
 ```bash
 cd frontend
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-streaming --headless --require-streaming
+node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-followup-streaming --headless --require-streaming
 ```
 
 ---
@@ -2369,17 +2457,17 @@ ending_room_scope_notice
 ### Backend
 
 ```text
-backend/tests/test_ending_room_followup.py
-backend/tests/test_ending_room_memory_partition.py
-backend/tests/test_ending_room_thread_api.py
+backend/tests/test_ending_room_service.py        # 当前 follow-up / memory partition 已并入这里
+backend/tests/test_ending_room_api.py
+backend/tests/test_ending_room_ws.py
 ```
 
 ### Frontend
 
 ```text
-frontend/src/components/EndingRoomFollowupComposer.test.tsx
-frontend/src/components/EndingRoomThreadList.test.tsx
-frontend/src/stores/endingRoomStore.followup.test.ts
+frontend/src/components/EndingChatModal.test.tsx
+frontend/src/hooks/useEndingRoomWS.test.tsx
+frontend/src/stores/endingRoomStore.test.ts
 frontend/src/pages/WorldlineRoundtableView.test.tsx
 ```
 
@@ -2656,11 +2744,14 @@ GET  /api/ending-room/thread/{thread_id}
 
 ### Backend 建议新增测试文件
 
-新增：
+当前真实口径：
 
-- [test_ending_room_followup.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_followup.py)
-- [test_ending_room_memory_partition.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_memory_partition.py)
-- [test_ending_room_thread_api.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_thread_api.py)
+- `follow-up / memory partition / thread API` 相关覆盖当前主要并入：
+  - [test_ending_room_service.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_service.py)
+  - [test_ending_room_api.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_api.py)
+  - [test_ending_room_ws.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_ws.py)
+
+后续如果想继续拆文件，再新增独立测试文件，不要在文档里假定它们已经存在。
 
 ## 11.8.2 Frontend 现有文件
 

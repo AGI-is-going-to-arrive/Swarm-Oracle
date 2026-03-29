@@ -162,7 +162,8 @@ describe('EndingChatModal', () => {
     );
 
     expect(screen.getByText('Fallback transcript line.')).toBeInTheDocument();
-    expect(screen.getByText('Replay mode is read-only for ending chambers.')).toBeInTheDocument();
+    expect(screen.getAllByText('Replay mode is read-only for ending chambers.').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(storeState.openRoom).not.toHaveBeenCalled();
   });
 
@@ -295,6 +296,7 @@ describe('EndingChatModal', () => {
       roomType: 'one_move_only',
       anchorBranchId: 'branch-1',
       selectedBranchIds: ['branch-1'],
+      language: 'en',
     });
   });
 
@@ -536,10 +538,10 @@ describe('EndingChatModal', () => {
     await user.click(screen.getByRole('button', { name: 'New thread' }));
     expect(storeState.createThread).toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: 'Hotseat' }));
+    await user.click(screen.getByRole('button', { name: 'Question one role' }));
     expect(storeState.setInteractionMode).toHaveBeenCalledWith('hotseat');
 
-    await user.click(screen.getByRole('button', { name: 'All present' }));
+    await user.click(screen.getByRole('button', { name: 'Current lineup responds' }));
     expect(storeState.setInteractionMode).toHaveBeenCalledWith('all_present');
 
     await user.click(screen.getByRole('button', { name: 'Key moment' }));

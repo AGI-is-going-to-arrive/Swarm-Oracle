@@ -14,8 +14,8 @@ from app.api.ws import WSManager, run_websocket_session
 from app.models import EndingRoomInteractionMode, EndingRoomType
 from app.services.ending_room_service import (
     EndingRoomServiceError,
-    append_room_user_turn,
-    append_thread_user_turn,
+    append_room_user_turn_async,
+    append_thread_user_turn_async,
     create_ending_room,
     create_ending_room_thread,
     ending_room_exists,
@@ -248,7 +248,7 @@ async def get_ending_room_thread_endpoint(thread_id: str):
 @router.post("/ending-room/{room_id}/user-turn")
 async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRequest):
     try:
-        payload = append_room_user_turn(
+        payload = await append_room_user_turn_async(
             room_id,
             content=req.content,
             addressed_agent_ids=req.addressed_agent_ids,
@@ -264,7 +264,7 @@ async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRe
 @router.post("/ending-room/thread/{thread_id}/user-turn")
 async def create_thread_user_turn_endpoint(thread_id: str, req: EndingRoomUserTurnRequest):
     try:
-        payload = append_thread_user_turn(
+        payload = await append_thread_user_turn_async(
             thread_id,
             content=req.content,
             addressed_agent_ids=req.addressed_agent_ids,

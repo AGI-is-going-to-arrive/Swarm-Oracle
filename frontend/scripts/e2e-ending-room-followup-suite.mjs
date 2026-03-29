@@ -157,7 +157,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
   );
 
   const beforeHotseat = await getAutomationState(page);
-  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Hotseat|角色热座/i }).click();
+  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).click();
   await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
   await page.getByRole("button", { name: /Send|发送/i }).click();
   const hotseatState = await waitFor(
@@ -179,7 +179,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-hotseat.png"));
   fs.writeFileSync(path.join(outputDir, "multi-chamber-A-hotseat.json"), JSON.stringify(hotseatState, null, 2));
 
-  await page.locator(".ending-chat-mode-pill").filter({ hasText: /All present|当前全员回应/i }).click();
+  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i }).click();
   await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
   await page.getByRole("button", { name: /Send|发送/i }).click();
   const allPresentState = await waitFor(
@@ -210,6 +210,32 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
   fs.writeFileSync(path.join(outputDir, "multi-picker-B-one-move.json"), JSON.stringify(pickerB, null, 2));
   fs.writeFileSync(path.join(outputDir, "multi-one-move-B.json"), JSON.stringify(oneMoveState, null, 2));
 
+  await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+  await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
+  const replayReadonly = await waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (modalState?.read_only === true && modalState?.can_send === false) {
+        return current;
+      }
+      return null;
+    },
+    "ending-room replay readonly state",
+  );
+  await saveScreenshot(page, path.join(outputDir, "multi-ending-room-replay-readonly.png"));
+  fs.writeFileSync(
+    path.join(outputDir, "multi-ending-room-replay-readonly.json"),
+    JSON.stringify(replayReadonly, null, 2),
+  );
+
+  await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
+    hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+  }).last().click();
+  await page.waitForURL(/\/sim\//, { timeout: 15000 });
+  const importedUrl = page.url();
+
   return {
     resultUrl,
     pickerA,
@@ -217,6 +243,8 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
     allPresentState: allPresentState?.page?.controls?.modal_state ?? null,
     pickerB,
     oneMoveState: oneMoveState?.page?.controls?.modal_state ?? null,
+    replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
+    importedUrl,
   };
 }
 

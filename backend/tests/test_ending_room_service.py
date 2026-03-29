@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+import app.services.ending_room_service as ending_room_service_module
 from app.models import (
     Agent,
     AgentMessage,
@@ -30,6 +31,7 @@ from app.models.database import get_engine, init_db
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     _build_room_plan,
+    _build_roundtable_opening_content,
     _room_memory_partition,
     append_room_user_turn,
     append_thread_user_turn,
@@ -505,6 +507,54 @@ def test_worldline_roundtable_selected_representatives_hash_is_branch_scoped():
     assert first_snapshot["id"] == second_snapshot["id"]
 
 
+def test_roundtable_opening_anchor_varies_by_role_hint():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="戴克里先",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "罗马皇帝"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "调度失误",
+            "insight": "帝国在失手之后仍把体面压过边防。",
+            "key_moments": ["边防比体面更重要"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert opening.startswith("《调度失误》先失手的")
+    assert "我代表《调度失误》发言" not in opening
+
+
+def test_roundtable_opening_anchor_field_voice_is_more_frontline():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="卡劳修斯",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "不列颠海峡舰队指挥官"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "莱茵军权下放",
+            "insight": "真正稳住帝国边疆的，从来不是一时的愤怒。",
+            "key_moments": ["真正稳住帝国边疆"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert opening.startswith("《莱茵军权下放》是在")
+    assert "前线" in opening
+
+
 def test_branch_scope_context_keeps_foreign_fulltext_isolated():
     scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
 
@@ -597,11 +647,17 @@ def test_worldline_roundtable_background_keeps_summary_only_crossline_scope():
     ws_callback = AsyncMock(side_effect=_noop_broadcast)
     result_payload = asyncio.run(_run_room(snapshot["id"], ws_callback))
     turns_text = "\n".join(turn["content"] for turn in result_payload["turns"])
+    opening_turns = [turn["content"] for turn in result_payload["turns"] if turn["phase"] == "opening"]
 
     assert result_payload["status"] == "done"
-    assert "跨线全文记忆池" in result_payload["result"]["summary"]
+    assert "各自的结局里看" in result_payload["result"]["summary"]
+    assert "全文记忆池" not in result_payload["result"]["summary"]
     assert "秩序线全文：只允许会客厅读到这里。" not in turns_text
     assert "裂变线全文：不该泄露给另一条线。" not in turns_text
+    assert len(opening_turns) == 2
+    assert len(set(opening_turns)) == len(opening_turns)
+    assert any("秩序线摘要" in content or "秩序线" in content for content in opening_turns)
+    assert any("裂变线摘要" in content or "裂变线" in content for content in opening_turns)
 
 
 def test_roundtable_snapshot_keeps_representatives_in_scope_order():
@@ -628,7 +684,7 @@ def test_roundtable_snapshot_keeps_representatives_in_scope_order():
         if participant["role_slot"] == "representative"
     ]
 
-    assert ordered_roles[-1] == "archivist"
+    assert ordered_roles[-2:] == ["archivist", "user"]
     assert ordered_branch_ids == scope_branch_ids
 
 
@@ -653,6 +709,31 @@ def test_worldline_roundtable_rejects_all_present_followup():
         )
 
     assert exc_info.value.code == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
+
+
+def test_roundtable_followup_uses_branch_specific_hinges_instead_of_room_title():
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="哪条世界线最早失手？",
+        interaction_mode=EndingRoomInteractionMode.ARCHIVIST_ROUTE,
+    )
+
+    response_texts = [turn["content"] for turn in followup["turns"][1:]]
+    assert response_texts
+    assert all("世界线圆桌" not in text for text in response_texts)
+    assert any("秩序线" in text or "秩序线摘要" in text for text in response_texts)
+    assert any("裂变线" in text or "裂变线摘要" in text for text in response_texts)
 
 
 async def _noop_broadcast(_room_id: str, _payload: dict) -> None:
@@ -806,6 +887,8 @@ def test_all_present_followup_returns_multiple_current_worldline_responses():
         if participant["role_slot"] == "agent"
     }
     assert all("Let me add one more angle" not in turn["content"] for turn in followup["turns"][1:])
+    assert all("thread transcript" not in turn["content"] for turn in followup["turns"][1:])
+    assert all("room 级摘要" not in turn["content"] for turn in followup["turns"][1:])
 
 
 def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
@@ -833,6 +916,10 @@ def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
     assert followup["turns"][2]["content"].startswith("档案官：这轮热座先听")
     assert "I will answer the point you addressed first" not in followup["turns"][1]["content"]
     assert "I will answer the point you addressed first" not in followup["turns"][2]["content"]
+    assert "thread transcript" not in followup["turns"][1]["content"]
+    assert "room 级摘要" not in followup["turns"][1]["content"]
+    assert "thread transcript" not in followup["turns"][2]["content"]
+    assert "room 级摘要" not in followup["turns"][2]["content"]
 
 
 def test_archivist_route_followup_returns_distinct_grounded_responses():
@@ -859,6 +946,41 @@ def test_archivist_route_followup_returns_distinct_grounded_responses():
     assert len(set(response_texts)) == len(response_texts)
     assert "最相关的 1-2 位参与者" in response_texts[0]
     assert any("我在 R" in text for text in response_texts[1:])
+
+
+def test_followup_prefers_llm_copy_when_enabled(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    async def _fake_llm_call_json(prompt, *args, **kwargs):
+        if "speaker=name=档案官" in prompt:
+            return {"content": "档案官：先让他把这句掰开讲，我再补代价。"}
+        if "speaker=name=狄奥多西一世" in prompt:
+            return {"content": "狄奥多西一世：我就直说，真正误在那一拍没人复核。"}
+        return {"content": "斯提里科：我只补一句，问题出在命令链失速。"}
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="为什么这里会转向？",
+        addressed_agent_ids=[agent_ids[0]],
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+    )
+
+    response_texts = [turn["content"] for turn in followup["turns"][1:]]
+    assert any("我就直说" in text for text in response_texts)
+    assert any("先让他把这句掰开讲" in text for text in response_texts)
 
 
 def test_one_move_only_result_uses_action_reason_cost_contract():
@@ -900,6 +1022,55 @@ def test_run_ending_room_background_is_idempotent_after_done():
     second_payload = load_ending_room_result_payload(snapshot["id"])
 
     assert len(first_payload["turns"]) == len(second_payload["turns"])
+
+
+def test_run_ending_room_background_prefers_llm_verdict_copy_when_enabled(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    async def _fake_llm_call_json(prompt, *args, **kwargs):
+        assert "Oracle Chambers" in prompt
+        return {"content": "档案官结论：别再把这一步说成命运，它就是没人及时踩刹车。"}
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    payload = load_ending_room_result_payload(snapshot["id"])
+
+    assert "没人及时踩刹车" in payload["result"]["summary"]
+    assert payload["turns"][-1]["content"] == payload["result"]["summary"]
+
+
+def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _boom)
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    payload = load_ending_room_result_payload(snapshot["id"])
+
+    assert "别再把这一步说成命运" not in payload["result"]["summary"]
+    assert "档案官结论" in payload["result"]["summary"]
 
 
 def test_run_ending_room_background_recovers_from_partial_auto_recap_progress():
@@ -1239,9 +1410,31 @@ def test_append_room_user_turn_rejects_invalid_addressed_agent_ids():
     )
 
     assert created is True
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
     with pytest.raises(Exception, match="addressed_agent_ids must belong to current room participants"):
         append_room_user_turn(
             snapshot["id"],
             content="只回答我点名的人。",
             addressed_agent_ids=["missing-agent"],
         )
+
+
+def test_followup_requires_completed_room_result():
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+
+    assert created is True
+
+    with pytest.raises(EndingRoomServiceError) as exc_info:
+        append_room_user_turn(
+            snapshot["id"],
+            content="在自动复盘还没结束前先追问。",
+        )
+
+    assert exc_info.value.code == "ENDING_ROOM_RESULT_NOT_READY"

@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
+const backendTarget = process.env.SWARM_BACKEND_URL || 'http://127.0.0.1:18927'
+const websocketTarget = backendTarget.replace(/^http/i, 'ws')
+
 const phaserCustomEntry = fileURLToPath(
   new URL('./experiments/phaser-custom/entry.mjs', import.meta.url),
 )
@@ -56,11 +59,11 @@ export default defineConfig({
     port: 18928,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:18927',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:18927',
+        target: websocketTarget,
         ws: true,
       },
     },

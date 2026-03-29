@@ -13,8 +13,10 @@
   - frontend 结果页每张结局卡当前会先经过 participant picker，再进入 `进入会客厅 / 只改一步`
   - 单结局会客厅当前已支持 follow-up thread、`archivist_route / hotseat / all_present` 三种追问模式，并已完成桌面/移动端闭环签收
   - `WorldlineRoundtableView` 当前已落地 live roundtable、`改选代表并重开`、`archivist_route / hotseat` 追问与只读 replay，并已进入 `release:signoff` 总链
+  - Oracle 关键文案链路当前已升级为 `LLM-first + deterministic fallback`：`verdict`、`one_move_only` 与 follow-up 回复会优先尝试模型重写，失败时快速回退；同时 room 创建时会预建稳定 `user participant`，follow-up 写路径也已补上 SQLite `database is locked` 的短重试
+  - `follow-up` 当前仍不是经典模式同级的完整流式：自动复盘与圆桌主桌已有 `turn_start -> turn_delta -> turn_commit`，但追问回复目前仍以“后端算完后 committed turn 回来”为主
   - 最新稳定总链工件见 `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`，其中 `ending_room_followup / roundtable_full / debate_full` 均为 `passed`
-  - 当前仍未单独签收的残余主要是 ending-room `replay/share/import` 单链、roundtable mobile 一屏体验，以及会客厅文案戏剧感
+  - 当前仍未单独签收的残余主要是 follow-up 与经典模式的流式一致性、roundtable mobile 一屏体验，以及 roundtable 代表声线还可继续拉开
 - 首页当前已把主模式 runtime tuning 正式收成 `神谕档位 / Oracle Profile`。三档分别是 `守望 / 校准 / 裂界`（`Watchful / Calibrated / Riftbound`），只作用于主模式 worldline branching；首页还会按当前 `Agent 数量 × 推演轮数` 给出预计耗时，`3-5 分钟` 提示现在也明确只对应 Debate Arena。
 - 主模式 `SimulationView / ResultView` 当前都只保留一个 runtime preset 标签，不再展开 prompt / sensitivity / budget 细节 chip；`分享挑战` 链接会继续把当前 `preset` 一起带回首页预填。
 - 主模式结果页 `ShareModal` 当前已收掉上方 context chips，社交文案也不再自动在正文前拼题材/神谕/permalink 前缀；`导出 Markdown` 当前改成浏览器直连后端附件下载，目标是更稳定地拿到 `.md` 文件名，而不是继续依赖前端 `blob:` 下载。
@@ -51,7 +53,7 @@
 | Oracle Profile | 首页提供主模式 `神谕档位 / Oracle Profile` 三档，收口 `branchSensitivity / forkPromptVariant / forkDetectorActiveBranchLimit` |
 | Director Campaign | 导演目标、风险/资源轨道、worldline 承诺、成长与徽章 |
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
-| Oracle Chambers / Worldline Roundtable | 后端已实现 `ending_room` 域、REST/WS、`selected_agent_ids`、follow-up thread、room/thread memory partition、`worldline_echo_key` 和世界线隔离；前端结果页已接入 participant picker、`进入会客厅 / 只改一步`、follow-up thread 与 `archivist_route / hotseat / all_present`，`WorldlineRoundtableView` 也已支持 live roundtable、改选重开与只读 replay，并通过稳定 `release:signoff` 总链；当前未单独签收的残余主要是 ending-room replay/share/import、roundtable mobile 一屏体验与文案质感 |
+| Oracle Chambers / Worldline Roundtable | 后端已实现 `ending_room` 域、REST/WS、`selected_agent_ids`、follow-up thread、room/thread memory partition、`worldline_echo_key` 和世界线隔离；Oracle 关键文本链路当前已升级成 `LLM-first + deterministic fallback`，并补了 room-stable `user participant` 与 SQLite lock 短重试；前端结果页已接入 participant picker、`进入会客厅 / 只改一步`、follow-up thread 与 `archivist_route / hotseat / all_present`，`WorldlineRoundtableView` 也已支持 live roundtable、改选重开与只读 replay，并通过稳定 `release:signoff` 总链；当前未单独签收的残余主要是 follow-up 与经典模式的流式一致性、roundtable mobile 一屏体验，以及代表/档案官声线还可继续去模板化 |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
 | i18n | 中英文界面与输入语言联动输出；自动生成内容当前统一跟随输入语言，backend 语言检测已扩到 `Chinese / English / Japanese / Korean / French / German / Spanish / Portuguese / Italian` |
 | BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；`POST /api/health/test` 当前会返回 provider probe 摘要，本地 / 自托管 provider 还可按次关闭 user-level quota；同一 SQLite `DATABASE_URL` 下的多进程仍会共享 pending / quota 计数 |

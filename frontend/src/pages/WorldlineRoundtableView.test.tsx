@@ -199,7 +199,10 @@ vi.mock('react-i18next', () => ({
       'roundtable.role_archivist': 'Archivist',
       'common.loading': 'Loading',
     }[key] ?? key),
-    i18n: { language: 'en' },
+    i18n: {
+      language: 'en',
+      changeLanguage: vi.fn(async () => {}),
+    },
   }),
 }));
 
@@ -366,11 +369,12 @@ describe('WorldlineRoundtableView', () => {
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Open with selected representatives' }));
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
         { branchId: 'branch-b', agentId: 'agent-b' },
@@ -565,14 +569,15 @@ describe('WorldlineRoundtableView', () => {
 
     expect((await screen.findAllByRole('button', { name: 'Reseat and reopen' })).length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole('button', { name: 'Reseat and reopen' })[0]);
-    expect(await screen.findByText('Rebuild the roundtable with this seating')).toBeInTheDocument();
+    expect(await screen.findByText('Reopen this lineup')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /Representative C/ }));
-    await user.click(screen.getAllByRole('button', { name: 'Rebuild the roundtable with this seating' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Reopen this lineup' })[0]);
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-c' },
         { branchId: 'branch-b', agentId: 'agent-b' },
@@ -728,10 +733,10 @@ describe('WorldlineRoundtableView', () => {
     expect(screen.getByText('The first hinge was delayed too long.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
 
-    await user.click(screen.getByRole('button', { name: 'Save local read-only copy' }));
-    expect(screen.getByText('Saved local read-only copy')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
+    expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+    await user.click(screen.getByRole('button', { name: 'Import local run' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
@@ -919,11 +924,12 @@ describe('WorldlineRoundtableView', () => {
     await user.click(screen.getAllByRole('button', { name: 'Reseat and reopen' })[0]);
     expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
 
-    await user.click(screen.getAllByRole('button', { name: 'Rebuild the roundtable with this seating' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Reopen this lineup' })[0]);
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
         { branchId: 'branch-b', agentId: 'agent-b' },

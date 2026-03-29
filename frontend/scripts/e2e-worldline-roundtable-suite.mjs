@@ -117,25 +117,19 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
 async function openRoundtable(page, baseUrl, scenarioId) {
   await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: /Start Roundtable|发起圆桌/i }).click();
-  const launchButton = page.getByRole("button", { name: /Open with selected representatives|以当前代表开桌/i }).first();
+  const launchButton = page.getByRole("button", { name: /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i }).first();
   const start = Date.now();
-  while (Date.now() - start < 15000) {
+  while (Date.now() - start < 45000) {
     const automation = await readAutomation(page);
     if (automation?.page?.kind === "worldline_roundtable" && automation?.page?.controls?.has_result === true) {
       return automation;
     }
     if (await launchButton.isVisible().catch(() => false)) {
-      await launchButton.click();
-      break;
+      await launchButton.click().catch(() => {});
     }
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(500);
   }
-  return waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "worldline_roundtable" && payload.page?.controls?.has_result === true,
-    30000,
-    "roundtable ready",
-  );
+  throw new Error("Timed out waiting for roundtable ready");
 }
 
 async function sendComposer(page, prompt, modeText) {
@@ -171,7 +165,7 @@ async function reseatRoundtable(page) {
     .first();
   const nextRepresentative = (await firstAlternative.locator("strong").innerText()).trim();
   await firstAlternative.click();
-  await page.getByRole("button", { name: /Rebuild the roundtable with this seating|按当前改选重建圆桌/i }).click();
+  await page.getByRole("button", { name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup/i }).click();
 
   const reseated = await waitForAutomation(
     page,
@@ -205,12 +199,12 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   const archivist = await sendComposer(
     page,
     "请只用本桌 scope 总结：哪条世界线的第一处失误最致命？",
-    /Archivist route|档案官路由/i,
+    /Archivist lead|Archivist-guided|Archivist route|档案官主持|档案官引导|档案官路由/i,
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-archivist.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-archivist.json"), archivist);
 
-  await page.getByRole("button", { name: /Representative hotseat|代表热座/i }).click();
+  await page.getByRole("button", { name: /Question one rep|Representative hotseat|点名代表|代表热座/i }).click();
   const hotseatTargets = await page.locator(".ending-chat-hotseat-pill").count();
   if (hotseatTargets > 0) {
     await page.locator(".ending-chat-hotseat-pill").first().click();
@@ -218,12 +212,12 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   const hotseat = await sendComposer(
     page,
     "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？",
-    /Representative hotseat|代表热座/i,
+    /Question one rep|Representative hotseat|点名代表|代表热座/i,
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseat);
 
-  await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本/i }).click();
+  await page.getByRole("button", { name: /Save(?:d)? (local )?read-only copy|Read-only copy saved|保存本地只读副本|已保存本地只读副本|保存只读副本|只读副本已保存/i }).click();
   await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitForAutomation(
     page,
@@ -260,10 +254,16 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir) {
     const rect = shell instanceof HTMLElement ? shell.getBoundingClientRect() : null;
     const languageSwitch = document.querySelector(".lang-switch--global");
     const topline = document.querySelector(".worldline-roundtable-hero__topline");
+    const summaryCard = document.querySelector(".worldline-roundtable-card--summary");
+    const transcriptHeader = document.querySelector(".worldline-roundtable-transcript-header");
+    const transcriptList = document.querySelector(".worldline-roundtable-transcript-list");
     const composer = document.querySelector(".ending-chat-composer");
     const toRect = (node) => {
       if (!(node instanceof HTMLElement)) return null;
       const value = node.getBoundingClientRect();
+      if (value.width <= 0 || value.height <= 0) {
+        return null;
+      }
       return { x: value.x, y: value.y, width: value.width, height: value.height };
     };
     const overlaps = (left, right) => {
@@ -281,9 +281,19 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir) {
       canScrollY: document.documentElement.scrollHeight > window.innerHeight,
       languageSwitchRect: toRect(languageSwitch),
       heroToplineRect: toRect(topline),
+      summaryCardRect: toRect(summaryCard),
+      transcriptHeaderRect: toRect(transcriptHeader),
+      transcriptListRect: toRect(transcriptList),
       composerRect: toRect(composer),
       languageSwitchOverlapsTopline: overlaps(toRect(languageSwitch), toRect(topline)),
       languageSwitchOverlapsComposer: overlaps(toRect(languageSwitch), toRect(composer)),
+      summaryBeforeTranscript: (() => {
+        const summaryRect = toRect(summaryCard);
+        const transcriptRect = toRect(transcriptHeader);
+        if (!summaryRect || !transcriptRect) return false;
+        return summaryRect.y < transcriptRect.y;
+      })(),
+      composerOverlapsTranscript: overlaps(toRect(composer), toRect(transcriptList)),
     };
   });
   if (fit.languageSwitchOverlapsTopline) {
@@ -291,6 +301,12 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir) {
   }
   if (fit.languageSwitchOverlapsComposer) {
     throw new Error("Mobile roundtable language switch overlaps the composer");
+  }
+  if (fit.summaryBeforeTranscript) {
+    throw new Error("Mobile roundtable summary card appears before the transcript");
+  }
+  if (fit.composerOverlapsTranscript) {
+    throw new Error("Mobile roundtable composer overlaps the transcript list");
   }
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit });
