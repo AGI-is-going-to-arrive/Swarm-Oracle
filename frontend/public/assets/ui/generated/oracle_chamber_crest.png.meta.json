@@ -1,0 +1,10 @@
+{
+  "preset": "oracle_chamber_crest",
+  "model": "gemini-3-pro-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-29T10:10:25.871Z",
+  "output": "public/assets/ui/generated/oracle_chamber_crest.png",
+  "prompt": "Pixel-art oracle chamber crest for a retro strategy archive UI, wax-seal inspired plum and brass emblem, concentric archive eye, time-ring and braided thread motifs, compact icon, transparent-friendly, no text, no photorealism."
+}

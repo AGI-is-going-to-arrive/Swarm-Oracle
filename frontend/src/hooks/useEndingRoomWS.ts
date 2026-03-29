@@ -189,6 +189,15 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
           case 'ending_room_result_ready':
             store.setResult(payload.data.result);
             break;
+          case 'ending_room_thread_created':
+            store.hydrateThread(payload.data);
+            break;
+          case 'ending_room_scope_notice':
+            store.setScopeNotice({
+              threadId: payload.data.thread_id,
+              memoryPartitionId: payload.data.memory_partition_id,
+            });
+            break;
           case 'ending_room_turn_error':
             store.setError(payload.data.message);
             break;

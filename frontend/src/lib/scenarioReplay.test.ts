@@ -14,6 +14,7 @@ import {
   compactScenarioMetaForReplay,
   decodeScenarioReplayToken,
   encodeScenarioReplayToken,
+  normalizeScenarioResultReplayPayload,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
 import { encodeReplayEnvelope, ReplayTokenTooLargeError } from './replayCodec';
@@ -265,5 +266,30 @@ describe('scenarioReplay helpers', () => {
     });
 
     await expect(decodeScenarioReplayToken(token)).resolves.toBeNull();
+  });
+
+  it('normalizes replay artifacts whose embedded scenario branches miss result-only fields', () => {
+    const normalized = normalizeScenarioResultReplayPayload({
+      ...replayPayload,
+      scenario: {
+        ...replayPayload.scenario,
+        branches: [{
+          id: 'branch-1',
+          parent_branch_id: null,
+          fork_round: 0,
+          fork_reason: '',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+        }],
+      },
+    });
+
+    expect(normalized?.scenario.branches[0]).toMatchObject({
+      summary: 'A durable insight.',
+      story: 'A complete branch story.',
+      insight: 'A durable insight.',
+      key_moments: ['Moment 1'],
+    });
   });
 });

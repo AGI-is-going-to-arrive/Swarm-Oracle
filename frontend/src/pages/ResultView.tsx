@@ -70,6 +70,7 @@ import {
   getGameplaySignatureArcState,
   inferGameplayProfile,
 } from '../components/gameplayCards';
+import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import {
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
@@ -128,6 +129,19 @@ function writeCachedCampaignFinalizeResult(
   }
 }
 
+function getEndingRoomCandidateVariantRank(candidate: Pick<AgentInfo, 'name' | 'role'>): number {
+  const normalizedName = candidate.name.trim().toLowerCase().replace(/\s+/g, '');
+  const normalizedRole = candidate.role.trim().toLowerCase().replace(/\s+/g, '');
+  if (!normalizedName || !normalizedRole) return 0;
+
+  const withoutNumericSuffix = normalizedName.replace(/\d+$/, '');
+  if (normalizedName === normalizedRole || withoutNumericSuffix === normalizedRole) {
+    return 1;
+  }
+
+  return 0;
+}
+
 function getBetOutcomeLabel(
   outcome: StructuredBetOutcome,
   t: (key: string, options?: Record<string, unknown>) => string,
@@ -139,6 +153,23 @@ function getBetOutcomeLabel(
 
 function getBetOutcomeClass(outcome: StructuredBetOutcome) {
   return `bet-outcome-chip bet-outcome-chip--${outcome}`;
+}
+
+interface EndingRoomCandidate {
+  id: string;
+  name: string;
+  role: string;
+  persona?: string;
+  contributionCount: number;
+  keyMomentHits: number;
+  lastRound: number;
+  impactScore: number;
+  fallbackCast: boolean;
+  tier?: AgentInfo['tier'];
+}
+
+function getEndingRoomCandidateAvatar(role: string, name: string): string {
+  return `/assets/characters/${mapRoleToSpriteId(role, name)}.png`;
 }
 
 function getCampaignBadgeCopy(badgeId: string, isZh: boolean) {
@@ -256,6 +287,13 @@ export default function ResultView() {
   const [showShare, setShowShare] = useState(false);
   const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
   const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only'>('ending_chamber');
+  const [activeEndingRoomSelectedAgentIds, setActiveEndingRoomSelectedAgentIds] = useState<string[]>([]);
+  const [pendingEndingRoomPicker, setPendingEndingRoomPicker] = useState<{
+    branchId: string;
+    roomType: 'ending_chamber' | 'one_move_only';
+    selectedAgentIds: string[];
+    maxSelectable: number;
+  } | null>(null);
   const [endingRoomAutomation, setEndingRoomAutomation] = useState<Record<string, unknown> | null>(null);
   const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
@@ -683,17 +721,137 @@ export default function ResultView() {
     }
   };
 
+  const branchEndingRoomCandidates = useMemo(() => {
+    const candidatesByBranchId: Record<string, EndingRoomCandidate[]> = {};
+    const messageStats = new Map<string, Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>>();
+    const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+    for (const message of scenario?.messages ?? []) {
+      if (!message.branch || !message.agent_id) continue;
+      const branchStats = messageStats.get(message.branch) ?? new Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>();
+      const current = branchStats.get(message.agent_id) ?? {
+        count: 0,
+        lastRound: 0,
+        keyMomentHits: 0,
+        name: agentById.get(message.agent_id)?.name ?? message.agent,
+      };
+      const branchKeyMoments = (storyData?.branches ?? [])
+        .find((branch) => branch.id === message.branch)?.key_moments ?? [];
+      branchStats.set(message.agent_id, {
+        count: current.count + 1,
+        lastRound: Math.max(current.lastRound, message.round ?? 0),
+        keyMomentHits: current.keyMomentHits + (
+          branchKeyMoments.some((moment) => message.message.toLowerCase().includes(moment.toLowerCase())) ? 1 : 0
+        ),
+        name: current.name,
+      });
+      messageStats.set(message.branch, branchStats);
+    }
+
+    const tierRank: Record<AgentInfo['tier'], number> = {
+      CORE: 0,
+      IMPORTANT: 1,
+      CROWD: 2,
+    };
+
+    for (const branch of storyData?.branches ?? []) {
+      const branchStats = messageStats.get(branch.id) ?? new Map<string, { count: number; lastRound: number; keyMomentHits: number; name: string }>();
+      const sourceAgents = branchStats.size > 0
+        ? [...branchStats.entries()].map(([agentId, stats]) => {
+            const agent = agentById.get(agentId);
+            return {
+              id: agentId,
+              name: agent?.name ?? stats.name,
+              role: agent?.role ?? (isZh ? '当前世界线参与者' : 'Current worldline participant'),
+              persona: agent?.persona ?? '',
+              contributionCount: stats.count,
+              keyMomentHits: stats.keyMomentHits,
+              lastRound: stats.lastRound,
+              tier: agent?.tier ?? 'CROWD',
+              fallbackCast: !agent,
+            } satisfies Omit<EndingRoomCandidate, 'impactScore'>;
+          })
+        : agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            persona: agent.persona,
+            contributionCount: 0,
+            keyMomentHits: 0,
+            lastRound: 0,
+            tier: agent.tier,
+            fallbackCast: true,
+          }));
+      const maxImpactRaw = Math.max(
+        1,
+        ...sourceAgents.map((candidate) => (
+          candidate.contributionCount * 1.1
+          + candidate.keyMomentHits * 1.6
+          + candidate.lastRound * 0.35
+          + (candidate.tier ? (3 - tierRank[candidate.tier]) : 1) * 0.8
+        )),
+      );
+      const branchCandidates = sourceAgents
+        .map((candidate) => ({
+          ...candidate,
+          impactScore: Number(Math.min(
+            0.99,
+            (
+              candidate.contributionCount * 1.1
+              + candidate.keyMomentHits * 1.6
+              + candidate.lastRound * 0.35
+              + (candidate.tier ? (3 - tierRank[candidate.tier]) : 1) * 0.8
+            ) / maxImpactRaw,
+          ).toFixed(2)),
+        }))
+        .sort((left, right) => (
+          right.impactScore - left.impactScore
+          || right.keyMomentHits - left.keyMomentHits
+          || right.contributionCount - left.contributionCount
+          || right.lastRound - left.lastRound
+          || getEndingRoomCandidateVariantRank(left) - getEndingRoomCandidateVariantRank(right)
+          || tierRank[left.tier ?? 'CROWD'] - tierRank[right.tier ?? 'CROWD']
+          || left.name.localeCompare(right.name, isZh ? 'zh-Hans' : 'en')
+        ));
+      candidatesByBranchId[branch.id] = branchCandidates;
+    }
+
+    return candidatesByBranchId;
+  }, [agents, isZh, scenario?.messages, storyData?.branches]);
+
+  const openEndingRoomDirect = useCallback((
+    branchId: string,
+    roomType: 'ending_chamber' | 'one_move_only',
+    selectedAgentIds: string[] = [],
+  ) => {
+    setActiveEndingRoomBranchId(branchId);
+    setActiveEndingRoomMode(roomType);
+    setActiveEndingRoomSelectedAgentIds(selectedAgentIds);
+    setPendingEndingRoomPicker(null);
+    setEndingRoomAutomation(null);
+  }, []);
+
   const handleOpenEndingRoom = useCallback((
     branchId: string,
     roomType: 'ending_chamber' | 'one_move_only',
   ) => {
-    setActiveEndingRoomBranchId(branchId);
-    setActiveEndingRoomMode(roomType);
-    setEndingRoomAutomation(null);
-  }, []);
+    const candidates = branchEndingRoomCandidates[branchId] ?? [];
+    if (isReplayMode || candidates.length === 0) {
+      openEndingRoomDirect(branchId, roomType, []);
+      return;
+    }
+    const maxSelectable = roomType === 'one_move_only' ? 1 : Math.min(3, candidates.length);
+    const defaultCount = roomType === 'one_move_only' ? 1 : Math.min(2, candidates.length);
+    setPendingEndingRoomPicker({
+      branchId,
+      roomType,
+      selectedAgentIds: candidates.slice(0, defaultCount).map((candidate) => candidate.id),
+      maxSelectable,
+    });
+  }, [branchEndingRoomCandidates, isReplayMode, openEndingRoomDirect]);
 
   const handleCloseEndingRoom = useCallback(() => {
     setActiveEndingRoomBranchId(null);
+    setActiveEndingRoomSelectedAgentIds([]);
     setEndingRoomAutomation(null);
   }, []);
 
@@ -923,6 +1081,10 @@ export default function ResultView() {
         setReplayUrl(null);
         return;
       }
+      const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`;
+      if (!cancelled) {
+        setReplayUrl(fallbackUrl);
+      }
       const {
         buildScenarioReplayUrl,
         compactScenarioMetaForReplay,
@@ -940,10 +1102,6 @@ export default function ResultView() {
           compactReplaySnapshot as unknown as Record<string, unknown>,
         ))
         .catch(() => null);
-      const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`;
-      if (!cancelled) {
-        setReplayUrl(fallbackUrl);
-      }
       try {
         const url = artifact
           ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
@@ -1000,6 +1158,13 @@ export default function ResultView() {
     () => branches.find((branch) => branch.id === activeEndingRoomBranchId) ?? null,
     [activeEndingRoomBranchId, branches],
   );
+  const pendingEndingRoomBranch = useMemo<StoryData['branches'][number] | null>(
+    () => branches.find((branch) => branch.id === pendingEndingRoomPicker?.branchId) ?? null,
+    [branches, pendingEndingRoomPicker?.branchId],
+  );
+  const pendingEndingRoomCandidates = pendingEndingRoomPicker
+    ? (branchEndingRoomCandidates[pendingEndingRoomPicker.branchId] ?? [])
+    : [];
   const betOutcomeContext = useMemo(() => ({
     dominantBranchId: dominantBranchFromStory?.id ?? null,
     dominantBranchTitle: displayArchive?.dominantBranchTitle ?? null,
@@ -1709,12 +1874,152 @@ export default function ResultView() {
           onClose={() => setShowShare(false)}
         />
       )}
+      {pendingEndingRoomPicker && pendingEndingRoomBranch && (
+        <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
+          <div
+            className="ending-room-picker"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ending-room-picker-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="ending-room-picker__header">
+              <div>
+                <p className="ending-room-picker__kicker">
+                  {pendingEndingRoomPicker.roomType === 'one_move_only'
+                    ? t('ending_room.one_move_cta')
+                    : t('ending_room.entry_cta')}
+                </p>
+                <h3 id="ending-room-picker-title">
+                  {isZh ? '选择进入会客厅的当前世界线参与者' : 'Pick visible participants for this worldline'}
+                </h3>
+                <p>
+                  {pendingEndingRoomBranch.title}
+                  {' · '}
+                  {isZh
+                    ? `最多选择 ${pendingEndingRoomPicker.maxSelectable} 位`
+                    : `Select up to ${pendingEndingRoomPicker.maxSelectable}`}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ending-room-picker__close"
+                onClick={() => setPendingEndingRoomPicker(null)}
+                aria-label={t('common.close')}
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="ending-room-picker__body">
+              {pendingEndingRoomCandidates.length === 0 ? (
+                <p className="ending-room-picker__empty">
+                  {isZh
+                    ? '当前结果页没有可用于手动选人的世界线发言记录，将按默认房间规则继续。'
+                    : 'No visible worldline roster is available here yet. The chamber will fall back to the default room selection.'}
+                </p>
+              ) : (
+                pendingEndingRoomCandidates.map((candidate) => {
+                  const selected = pendingEndingRoomPicker.selectedAgentIds.includes(candidate.id);
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
+                      onClick={() => {
+                        setPendingEndingRoomPicker((current) => {
+                          if (!current || current.branchId !== pendingEndingRoomBranch.id) {
+                            return current;
+                          }
+                          const alreadySelected = current.selectedAgentIds.includes(candidate.id);
+                          if (alreadySelected) {
+                            return {
+                              ...current,
+                              selectedAgentIds: current.selectedAgentIds.filter((item) => item !== candidate.id),
+                            };
+                          }
+                          if (current.maxSelectable === 1) {
+                            return { ...current, selectedAgentIds: [candidate.id] };
+                          }
+                          if (current.selectedAgentIds.length >= current.maxSelectable) {
+                            return current;
+                          }
+                          return {
+                            ...current,
+                            selectedAgentIds: [...current.selectedAgentIds, candidate.id],
+                          };
+                        });
+                      }}
+                    >
+                      <img
+                        className="ending-room-picker__avatar"
+                        src={getEndingRoomCandidateAvatar(candidate.role, candidate.name)}
+                        alt=""
+                        aria-hidden="true"
+                      />
+                      <div className="ending-room-picker__card-copy">
+                        <strong>{candidate.name}</strong>
+                        <span>{candidate.role}</span>
+                        {candidate.persona && <small>{candidate.persona}</small>}
+                        <em>
+                          {candidate.contributionCount > 0
+                            ? (
+                              isZh
+                                ? `影响 ${Math.round(candidate.impactScore * 100)} · 发言 ${candidate.contributionCount} 次 · 转折命中 ${candidate.keyMomentHits} · 最近 R${candidate.lastRound}`
+                                : `Impact ${Math.round(candidate.impactScore * 100)} · ${candidate.contributionCount} turns · ${candidate.keyMomentHits} hinge hits · latest R${candidate.lastRound}`
+                            )
+                            : (
+                              isZh
+                                ? '当前世界线缺少逐条发言记录，按当前可见 roster 兜底'
+                                : 'No branch transcript roster yet, using the visible fallback cast'
+                            )}
+                        </em>
+                        {candidate.fallbackCast && (
+                          <em className="ending-room-picker__fallback">
+                            {isZh ? 'Fallback cast' : 'Fallback cast'}
+                          </em>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <footer className="ending-room-picker__footer">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setPendingEndingRoomPicker(null)}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => openEndingRoomDirect(
+                  pendingEndingRoomPicker.branchId,
+                  pendingEndingRoomPicker.roomType,
+                  pendingEndingRoomPicker.selectedAgentIds,
+                )}
+                disabled={
+                  pendingEndingRoomCandidates.length > 0
+                  && pendingEndingRoomPicker.selectedAgentIds.length === 0
+                }
+              >
+                {isZh ? '进入会客厅' : 'Enter chamber'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
       {activeEndingRoomBranch && scenario && (
         <EndingChatModal
           open={Boolean(activeEndingRoomBranch)}
           scenarioId={scenario.id}
           branch={activeEndingRoomBranch}
           roomType={activeEndingRoomMode}
+          selectedAgentIds={activeEndingRoomSelectedAgentIds}
           language={isZh ? 'zh' : 'en'}
           readOnly={isReplayMode}
           fallbackMessages={

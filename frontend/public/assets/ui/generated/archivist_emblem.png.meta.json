@@ -1,0 +1,10 @@
+{
+  "preset": "archivist_emblem",
+  "model": "gemini-3-pro-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-29T10:29:29.279Z",
+  "output": "public/assets/ui/generated/archivist_emblem.png",
+  "prompt": "Pixel-art archivist emblem for SwarmOracle archive UI, wax seal and brass medallion hybrid, archive eye, hourglass, braided thread and dossier motifs, compact transparent-friendly emblem, no text, no photorealism."
+}

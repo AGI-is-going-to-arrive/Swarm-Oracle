@@ -1,15 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { EndingRoomThreadSnapshot } from '../types';
 import { useEndingRoomStore } from './endingRoomStore';
 
+const appendEndingRoomThreadUserTurnMock = vi.fn();
+const appendEndingRoomUserTurnMock = vi.fn();
 const createEndingRoomMock = vi.fn();
+const createEndingRoomThreadMock = vi.fn();
 const getEndingRoomMock = vi.fn();
 const getEndingRoomResultMock = vi.fn();
+const getEndingRoomThreadMock = vi.fn();
 
 vi.mock('../api/client', () => ({
+  appendEndingRoomThreadUserTurn: (...args: unknown[]) => appendEndingRoomThreadUserTurnMock(...args),
+  appendEndingRoomUserTurn: (...args: unknown[]) => appendEndingRoomUserTurnMock(...args),
   createEndingRoom: (...args: unknown[]) => createEndingRoomMock(...args),
+  createEndingRoomThread: (...args: unknown[]) => createEndingRoomThreadMock(...args),
   getEndingRoom: (...args: unknown[]) => getEndingRoomMock(...args),
   getEndingRoomResult: (...args: unknown[]) => getEndingRoomResultMock(...args),
+  getEndingRoomThread: (...args: unknown[]) => getEndingRoomThreadMock(...args),
   ApiError: class ApiError extends Error {
     status: number;
     code: string;
@@ -28,15 +37,38 @@ vi.mock('../i18n/config', () => ({
   },
 }));
 
+function roomThread(id: string, mode: 'room' | 'followup' = 'room'): EndingRoomThreadSnapshot {
+  return {
+    id,
+    room_id: 'room-1',
+    title: mode === 'room' ? 'Ending Chamber' : 'Follow-up Thread',
+    mode,
+    interaction_mode: mode === 'room' ? 'auto_recap' : 'thread_followup',
+    participant_set_hash: `${id}-hash`,
+    memory_partition_id: `${id}-partition`,
+    created_at: '2026-03-29T00:00:00Z',
+    updated_at: '2026-03-29T00:00:01Z',
+    turns: [],
+    room_type: 'ending_chamber' as const,
+    room_title: 'Ending Chamber',
+    room_status: 'done' as const,
+    language: 'en' as const,
+  };
+}
+
 describe('endingRoomStore', () => {
   beforeEach(() => {
+    appendEndingRoomThreadUserTurnMock.mockReset();
+    appendEndingRoomUserTurnMock.mockReset();
     createEndingRoomMock.mockReset();
+    createEndingRoomThreadMock.mockReset();
     getEndingRoomMock.mockReset();
     getEndingRoomResultMock.mockReset();
+    getEndingRoomThreadMock.mockReset();
     useEndingRoomStore.getState().reset();
   });
 
-  it('opens a room and hydrates a ready result payload', async () => {
+  it('opens a room, hydrates threads, and resolves the default active thread', async () => {
     createEndingRoomMock.mockResolvedValue({
       id: 'room-1',
       scenario_id: 'scenario-1',
@@ -49,6 +81,7 @@ describe('endingRoomStore', () => {
       created_at: '2026-03-29T00:00:00Z',
       updated_at: '2026-03-29T00:00:01Z',
       participants: [],
+      threads: [roomThread('thread-room', 'room')],
       turns: [],
       result_ready: true,
     });
@@ -64,6 +97,7 @@ describe('endingRoomStore', () => {
       created_at: '2026-03-29T00:00:00Z',
       updated_at: '2026-03-29T00:00:01Z',
       participants: [],
+      threads: [roomThread('thread-room', 'room')],
       turns: [],
       result_ready: true,
     });
@@ -79,6 +113,7 @@ describe('endingRoomStore', () => {
       created_at: '2026-03-29T00:00:00Z',
       updated_at: '2026-03-29T00:00:01Z',
       participants: [],
+      threads: [roomThread('thread-room', 'room')],
       turns: [],
       result_ready: true,
       result: {
@@ -96,77 +131,318 @@ describe('endingRoomStore', () => {
 
     expect(roomId).toBe('room-1');
     expect(useEndingRoomStore.getState().status).toBe('done');
-    expect(useEndingRoomStore.getState().result?.summary).toBe('Summary');
+    expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-room');
+    expect(useEndingRoomStore.getState().threadOrder).toEqual(['thread-room']);
   });
 
-  it('commits a turn and clears the matching pending draft', () => {
+  it('hydrates a follow-up thread and appends follow-up turns into that thread bucket', async () => {
     useEndingRoomStore.getState().hydrateSnapshot({
-      id: 'room-2',
+      id: 'room-1',
       scenario_id: 'scenario-1',
       anchor_branch_id: 'branch-1',
       room_type: 'ending_chamber',
       title: 'Ending Chamber',
-      language: 'zh',
-      status: 'live',
-      current_phase: 'opening',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
       created_at: '2026-03-29T00:00:00Z',
       updated_at: '2026-03-29T00:00:01Z',
       participants: [],
+      threads: [roomThread('thread-room', 'room')],
       turns: [],
-      result_ready: false,
+      result_ready: true,
     });
-    useEndingRoomStore.getState().startDraft({
-      room_id: 'room-2',
-      turn_id: 'turn-1',
-      participant_id: 'p-1',
-      phase: 'opening',
-      sequence: 1,
+    useEndingRoomStore.getState().hydrateThread({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Investigate the hinge',
     });
-    useEndingRoomStore.getState().appendDraft({
-      room_id: 'room-2',
-      turn_id: 'turn-1',
-      participant_id: 'p-1',
-      delta: '你好',
-      chunk_index: 1,
-    });
+    useEndingRoomStore.getState().setActiveThread('thread-followup');
 
     useEndingRoomStore.getState().commitTurn({
       id: 'turn-1',
-      room_id: 'room-2',
-      sequence: 1,
-      phase: 'opening',
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      sequence: 4,
+      phase: 'verdict',
       participant_id: 'p-1',
-      content: '你好，世界',
+      content: 'Thread-local answer.',
       emotion: 'focused',
       created_at: '2026-03-29T00:00:02Z',
     });
 
-    expect(useEndingRoomStore.getState().pendingDrafts['turn-1']).toBeUndefined();
-    expect(useEndingRoomStore.getState().snapshot?.turns).toHaveLength(1);
-    expect(useEndingRoomStore.getState().snapshot?.turns[0]?.content).toBe('你好，世界');
+    expect(useEndingRoomStore.getState().threadsById['thread-followup']?.turns[0]?.content).toBe('Thread-local answer.');
   });
 
-  it('loads a room and fetches the result only when ready', async () => {
-    getEndingRoomMock.mockResolvedValue({
-      id: 'room-3',
+  it('hydrates room-level snapshot turns into the default room thread bucket', () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
       scenario_id: 'scenario-1',
       anchor_branch_id: 'branch-1',
-      room_type: 'one_move_only',
-      title: 'One Move Only',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
       language: 'en',
-      status: 'live',
-      current_phase: 'rebuttal',
+      status: 'done',
+      current_phase: 'verdict',
       created_at: '2026-03-29T00:00:00Z',
       updated_at: '2026-03-29T00:00:01Z',
       participants: [],
-      turns: [],
-      result_ready: false,
+      threads: [roomThread('thread-room', 'room')],
+      turns: [
+        {
+          id: 'turn-room-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'opening',
+          participant_id: 'p-1',
+          content: 'Room transcript is present.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:02Z',
+        },
+      ],
+      result_ready: true,
     });
 
-    await useEndingRoomStore.getState().loadRoom('room-3');
+    expect(useEndingRoomStore.getState().threadsById['thread-room']?.turns[0]?.content).toBe('Room transcript is present.');
+  });
 
-    expect(getEndingRoomResultMock).not.toHaveBeenCalled();
-    expect(useEndingRoomStore.getState().status).toBe('live');
-    expect(useEndingRoomStore.getState().snapshot?.room_type).toBe('one_move_only');
+  it('creates a follow-up thread and switches the active thread', async () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    createEndingRoomThreadMock.mockResolvedValue({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Archivist follow-up',
+    });
+
+    await useEndingRoomStore.getState().createThread('room-1', {
+      title: 'Archivist follow-up',
+      interactionMode: 'thread_followup',
+    });
+
+    expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-followup');
+    expect(useEndingRoomStore.getState().threadOrder).toContain('thread-followup');
+  });
+
+  it('routes composer sends to the thread endpoint when a follow-up thread is active', async () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    useEndingRoomStore.getState().hydrateThread({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Follow-up Thread',
+    });
+    useEndingRoomStore.getState().setActiveThread('thread-followup');
+    appendEndingRoomThreadUserTurnMock.mockResolvedValue({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      memory_partition_id: 'thread-followup-partition',
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-followup',
+          sequence: 5,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Narrow answer.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+    });
+    getEndingRoomThreadMock.mockResolvedValue({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Follow-up Thread',
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-followup',
+          sequence: 5,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Narrow answer.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+    });
+
+    await useEndingRoomStore.getState().appendUserTurn({
+      content: 'Stay inside this thread.',
+      interactionMode: 'thread_followup',
+    });
+
+    expect(appendEndingRoomThreadUserTurnMock).toHaveBeenCalledWith('thread-followup', expect.objectContaining({
+      content: 'Stay inside this thread.',
+    }));
+    expect(useEndingRoomStore.getState().composerDraft).toBe('');
+  });
+
+  it('reloads the room after appending turns so late-created user participants hydrate into the snapshot', async () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    useEndingRoomStore.getState().hydrateResult({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+      result: {
+        summary: 'Summary',
+      },
+    });
+    appendEndingRoomUserTurnMock.mockResolvedValue({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      memory_partition_id: 'room-partition',
+      turns: [
+        {
+          id: 'turn-user',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 4,
+          phase: 'verdict',
+          participant_id: 'participant-user',
+          content: 'User follow-up',
+          emotion: 'curious',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+    });
+    getEndingRoomMock.mockResolvedValue({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:04Z',
+      participants: [
+        {
+          id: 'participant-user',
+          room_id: 'room-1',
+          role_slot: 'user',
+          display_name: 'You',
+        },
+      ],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [
+        {
+          id: 'turn-user',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 4,
+          phase: 'verdict',
+          participant_id: 'participant-user',
+          content: 'User follow-up',
+          emotion: 'curious',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+      result_ready: true,
+    });
+    getEndingRoomResultMock.mockResolvedValue({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:04Z',
+      participants: [
+        {
+          id: 'participant-user',
+          room_id: 'room-1',
+          role_slot: 'user',
+          display_name: 'You',
+        },
+      ],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [
+        {
+          id: 'turn-user',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 4,
+          phase: 'verdict',
+          participant_id: 'participant-user',
+          content: 'User follow-up',
+          emotion: 'curious',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+      result_ready: true,
+      result: {
+        summary: 'Summary',
+      },
+    });
+
+    await useEndingRoomStore.getState().appendUserTurn({
+      content: 'User follow-up',
+      interactionMode: 'archivist_route',
+    });
+
+    expect(appendEndingRoomUserTurnMock).toHaveBeenCalledWith('room-1', expect.objectContaining({
+      content: 'User follow-up',
+    }));
+    expect(getEndingRoomMock).toHaveBeenCalledWith('room-1');
+    expect(useEndingRoomStore.getState().snapshot?.participants[0]?.display_name).toBe('You');
   });
 });

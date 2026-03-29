@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-29（本轮已补 `Oracle Chambers Phase B+` 后端真值：ending-room thread / user-turn / room-thread memory partition / worldline echo / delete cleanup，并同步收口 `Phase C` 当前仍主要停在单结局 MVP 的口径）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-29（本轮已补 `Oracle Chambers` 单结局 `Phase C2/C3` 真值：participant picker、`selected_agent_ids`、follow-up thread、`archivist_route / hotseat / all_present`、Oracle 专属 UI 资产；`世界线圆桌` 页面与 ending-room replay/share/import 仍未签收）
 
 ## 阅读顺序
 

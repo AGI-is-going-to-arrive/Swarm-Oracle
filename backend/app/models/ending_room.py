@@ -58,6 +58,7 @@ class EndingRoomInteractionMode(str, enum.Enum):
     AUTO_RECAP = "auto_recap"
     ARCHIVIST_ROUTE = "archivist_route"
     HOTSEAT = "hotseat"
+    ALL_PRESENT = "all_present"
     THREAD_FOLLOWUP = "thread_followup"
 
 

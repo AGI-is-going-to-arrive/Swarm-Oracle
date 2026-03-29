@@ -8,11 +8,11 @@
 - `跨平台` 指桌面/移动浏览器响应式与视口 E2E，不包含原生 Windows/macOS/Linux/iOS/Android 客户端壳。
 - 当前默认前端构建 / 测试入口已切到本地精简 Phaser 入口：`frontend/experiments/phaser-custom/entry.mjs`，由根 `vite.config.ts` / `vitest.config.ts` 通过 alias 接入。
 - 当前默认前端构建里的 `phaser` chunk 已从约 `1202.19 kB` 降到 `718.94 kB`，gzip 从 `328.41 kB` 降到 `203.76 kB`。
-- `Oracle Chambers / 世界线圆桌` 当前已进入 `Phase C` 单结局 MVP：
-  - backend 已有独立 `ending_room` 域、REST/WS 接口和 branch-scoped transcript isolation
-  - backend 本 session 又补上了 follow-up thread、room/thread memory partition、`worldline_echo_key` 与 `user-turn` API
-  - frontend 结果页每张结局卡当前已有 `进入会客厅 / 只改一步`，单结局结果页的 chamber 闭环已接通
-  - 但 `世界线圆桌` 页面、手动选人、多结局单独签收、thread UI，以及 ending-room 的 replay/share/import 仍未完成，所以这条线还不能按完整玩法签收
+- `Oracle Chambers / 世界线圆桌` 当前已进入 `Phase C` 单结局可玩版：
+  - backend 已有独立 `ending_room` 域、REST/WS、`selected_agent_ids`、follow-up thread、room/thread memory partition、`worldline_echo_key` 与 `user-turn` API
+  - frontend 结果页每张结局卡当前会先经过 participant picker，再进入 `进入会客厅 / 只改一步`
+  - 单结局会客厅当前已支持 follow-up thread、`archivist_route / hotseat / all_present` 三种追问模式，以及桌面/移动端闭环
+  - 但 `世界线圆桌` 页面、多结局完整独立签收，以及 ending-room 的 replay/share/import 仍未完成，所以这条线还不能按完整玩法签收
 - 首页当前已把主模式 runtime tuning 正式收成 `神谕档位 / Oracle Profile`。三档分别是 `守望 / 校准 / 裂界`（`Watchful / Calibrated / Riftbound`），只作用于主模式 worldline branching；首页还会按当前 `Agent 数量 × 推演轮数` 给出预计耗时，`3-5 分钟` 提示现在也明确只对应 Debate Arena。
 - 主模式 `SimulationView / ResultView` 当前都只保留一个 runtime preset 标签，不再展开 prompt / sensitivity / budget 细节 chip；`分享挑战` 链接会继续把当前 `preset` 一起带回首页预填。
 - 主模式结果页 `ShareModal` 当前已收掉上方 context chips，社交文案也不再自动在正文前拼题材/神谕/permalink 前缀；`导出 Markdown` 当前改成浏览器直连后端附件下载，目标是更稳定地拿到 `.md` 文件名，而不是继续依赖前端 `blob:` 下载。
@@ -49,7 +49,7 @@
 | Oracle Profile | 首页提供主模式 `神谕档位 / Oracle Profile` 三档，收口 `branchSensitivity / forkPromptVariant / forkDetectorActiveBranchLimit` |
 | Director Campaign | 导演目标、风险/资源轨道、worldline 承诺、成长与徽章 |
 | Debate Arena | 独立 Debate domain，含 live/result/replay、结构化押注、judge rationale、supporting turns |
-| Oracle Chambers (Phase C MVP) | 后端已实现 `ending_room` 域、REST/WS、follow-up thread、room/thread memory partition 和世界线隔离；前端结果页单结局 `进入会客厅 / 只改一步` 已接入，但 `世界线圆桌`、手动选人、多结局独立签收、thread UI 与 ending-room replay/share/import 仍未完成 |
+| Oracle Chambers (Phase C) | 后端已实现 `ending_room` 域、REST/WS、`selected_agent_ids`、follow-up thread、room/thread memory partition、`worldline_echo_key` 和世界线隔离；前端结果页单结局当前已接入 participant picker、`进入会客厅 / 只改一步`、follow-up thread 与 `archivist_route / hotseat / all_present`，但 `世界线圆桌`、多结局完整签收与 ending-room replay/share/import 仍未完成 |
 | Replay & Import | 主模式和 Debate 均支持 replay 分享页，并可导入为本地运行 |
 | i18n | 中英文界面与输入语言联动输出；自动生成内容当前统一跟随输入语言，backend 语言检测已扩到 `Chinese / English / Japanese / Korean / French / German / Spanish / Portuguese / Italian` |
 | BYOK & Provider Policy | 支持自带 OpenAI 兼容 API，并带全局并发、pending 配额和熔断；`POST /api/health/test` 当前会返回 provider probe 摘要，本地 / 自托管 provider 还可按次关闭 user-level quota；同一 SQLite `DATABASE_URL` 下的多进程仍会共享 pending / quota 计数 |

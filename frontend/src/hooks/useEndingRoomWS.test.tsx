@@ -8,12 +8,14 @@ const getEndingRoomResultMock = vi.fn();
 const storeState = {
   hydrateSnapshot: vi.fn(),
   hydrateResult: vi.fn(),
+  hydrateThread: vi.fn(),
   setPhase: vi.fn(),
   setStatus: vi.fn(),
   startDraft: vi.fn(),
   appendDraft: vi.fn(),
   commitTurn: vi.fn(),
   setResult: vi.fn(),
+  setScopeNotice: vi.fn(),
   setError: vi.fn(),
 };
 
@@ -294,5 +296,57 @@ describe('useEndingRoomWS', () => {
     });
 
     expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('hydrates thread creation and scope notices', () => {
+    render(<Harness roomId="room-thread-events" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_thread_created',
+          data: {
+            id: 'thread-1',
+            room_id: 'room-thread-events',
+            title: 'Follow-up Thread',
+            mode: 'followup',
+            interaction_mode: 'thread_followup',
+            participant_set_hash: 'hash',
+            memory_partition_id: 'partition',
+            room_type: 'ending_chamber',
+            room_title: 'Ending Chamber',
+            room_status: 'done',
+            language: 'en',
+            turns: [],
+            created_at: '2026-03-29T00:00:00Z',
+            updated_at: '2026-03-29T00:00:01Z',
+          },
+          meta: { stream_id: 'room-thread-events', sequence: 1, event_id: 'room-thread-events:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_scope_notice',
+          data: {
+            thread_id: 'thread-1',
+            memory_partition_id: 'partition',
+          },
+          meta: { stream_id: 'room-thread-events', sequence: 2, event_id: 'room-thread-events:2' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.hydrateThread).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'thread-1',
+      mode: 'followup',
+    }));
+    expect(storeState.setScopeNotice).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      memoryPartitionId: 'partition',
+    });
   });
 });

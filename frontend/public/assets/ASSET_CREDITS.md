@@ -112,6 +112,21 @@ They are original works and may be freely used under the project license.
 | `generated/archive_panel.png` | Archive decorative panel |
 | `generated/gameplay_panel.png` | Gameplay tactics decorative panel |
 | `generated/archive_seal.png` | Archive seal illustration |
+| `generated/oracle_chamber_panel.png` | Oracle Chambers decorative panel |
+| `generated/oracle_chamber_crest.png` | Oracle Chambers crest / wax seal |
+| `generated/oracle_quote_frame.png` | Oracle Chambers quote frame |
+| `generated/badge_ending_chamber.png` | Ending Chamber mode badge |
+| `generated/badge_worldline_roundtable.png` | Worldline Roundtable mode badge |
+| `generated/badge_crossline_gallery.png` | Crossline Gallery mode badge |
+| `generated/ending_room_participant_frame.png` | Oracle Chambers participant card frame |
+| `generated/ending_room_influence_badge.png` | Oracle Chambers influence badge |
+| `generated/ending_room_speaker_glow.png` | Oracle Chambers active speaker glow |
+| `generated/archivist_emblem.png` | Archivist emblem |
+| `generated/timeline_marker_chamber.png` | Oracle Chamber timeline marker |
+| `generated/timeline_marker_roundtable.png` | Worldline Roundtable timeline marker |
+| `generated/worldline_dossier_divider.png` | Worldline dossier divider ornament |
+| `generated/worldline_roundtable_panel.png` | Worldline Roundtable decorative panel |
+| `generated/worldline_roundtable_banner.png` | Worldline Roundtable banner |
 | `generated/daily_challenge_badge.png` | Legacy daily challenge badge |
 | `generated/debate_stage_banner.png` | Debate stage ceremonial banner |
 | `generated/debate_verdict_panel.png` | Debate verdict decorative panel |

@@ -294,6 +294,311 @@
   flex: 1 1 180px;
 }
 
+.ending-room-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1180;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top, oklch(76% 0.08 55 / 0.1), transparent 44%),
+    color-mix(in oklab, var(--bg-overlay) 80%, black);
+  backdrop-filter: blur(14px);
+}
+
+.ending-room-picker {
+  position: relative;
+  width: min(860px, 100%);
+  max-height: min(88vh, 820px);
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid color-mix(in oklab, var(--border-default) 72%, var(--color-primary));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 94%, white 6%), var(--bg-surface)),
+    url('/assets/ui/generated/oracle_chamber_panel.png'),
+    var(--bg-surface);
+  background-size: auto, cover, auto;
+  background-position: center, center top, center;
+  box-shadow:
+    0 28px 80px oklch(0% 0 0 / 0.28),
+    inset 0 1px 0 oklch(100% 0 0 / 0.12);
+}
+
+.ending-room-picker__header,
+.ending-room-picker__footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 28px;
+}
+
+.ending-room-picker__header {
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ending-room-picker__header::after {
+  content: '';
+  position: absolute;
+  right: 74px;
+  top: 18px;
+  width: 62px;
+  height: 62px;
+  background: url('/assets/ui/generated/oracle_chamber_crest.png') center / contain no-repeat;
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.ending-room-picker__header h3 {
+  margin: 6px 0;
+  font-family: var(--font-heading);
+  font-size: clamp(1.4rem, 2vw, 2rem);
+  line-height: 1.1;
+}
+
+.ending-room-picker__header p,
+.ending-room-picker__empty {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.ending-room-picker__kicker {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
+
+.ending-room-picker__close {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ending-room-picker__body {
+  display: grid;
+  gap: 12px;
+  padding: 20px 28px 0;
+  max-height: min(52vh, 460px);
+  overflow: auto;
+}
+
+.ending-room-picker__card {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, oklch(100% 0 0 / 0.04), transparent 26%),
+    color-mix(in oklab, var(--bg-surface-elevated) 92%, transparent);
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ending-room-picker__card:hover {
+  transform: translateY(-1px);
+}
+
+.ending-room-picker__card.is-selected {
+  border-color: color-mix(in oklab, var(--color-primary) 46%, var(--border-default));
+  background: color-mix(in oklab, var(--color-primary) 8%, var(--bg-surface-elevated));
+}
+
+.ending-room-picker__avatar {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 6px 12px oklch(0% 0 0 / 0.18));
+}
+
+.ending-room-picker__card-copy {
+  min-width: 0;
+}
+
+.ending-room-picker__card-copy strong,
+.ending-room-picker__card-copy span,
+.ending-room-picker__card-copy small,
+.ending-room-picker__card-copy em {
+  display: block;
+}
+
+.ending-room-picker__card-copy strong {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.ending-room-picker__card-copy span,
+.ending-room-picker__card-copy small,
+.ending-room-picker__card-copy em {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.ending-room-picker__card-copy em {
+  font-style: normal;
+  color: var(--text-muted);
+}
+
+.ending-room-picker__card-copy em:first-of-type {
+  padding-left: 22px;
+  background-image: url('/assets/ui/generated/ending_room_influence_badge.png');
+  background-repeat: no-repeat;
+  background-size: 13px 13px;
+  background-position: 0 3px;
+}
+
+.ending-room-picker__footer {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ending-room-picker__footer .btn {
+  min-width: 160px;
+}
+
+.ending-room-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in oklab, var(--bg-overlay) 84%, black);
+  backdrop-filter: blur(14px);
+}
+
+.ending-room-picker {
+  width: min(760px, 100%);
+  max-height: min(88vh, 760px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 28px;
+  border: 1px solid color-mix(in oklab, var(--border-default) 74%, var(--color-primary));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 96%, white 4%), var(--bg-surface));
+  box-shadow: 0 28px 80px oklch(0% 0 0 / 0.28);
+}
+
+.ending-room-picker__header,
+.ending-room-picker__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px;
+}
+
+.ending-room-picker__header {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ending-room-picker__header h3 {
+  margin: 4px 0 0;
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  color: var(--text-primary);
+}
+
+.ending-room-picker__header p,
+.ending-room-picker__kicker,
+.ending-room-picker__empty,
+.ending-room-picker__card span,
+.ending-room-picker__card small,
+.ending-room-picker__card em {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.ending-room-picker__kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
+
+.ending-room-picker__close {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ending-room-picker__body {
+  display: grid;
+  gap: 12px;
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+.ending-room-picker__card {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--bg-surface-elevated) 94%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ending-room-picker__card strong {
+  font-size: var(--text-md);
+}
+
+.ending-room-picker__card.is-selected {
+  border-color: color-mix(in oklab, var(--color-primary) 44%, var(--border-default));
+  background: color-mix(in oklab, var(--color-primary) 10%, transparent);
+}
+
+.ending-room-picker__footer {
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 720px) {
+  .ending-room-picker-overlay {
+    padding: 12px;
+  }
+
+  .ending-room-picker {
+    max-height: calc(100dvh - 24px);
+  }
+
+  .ending-room-picker__header,
+  .ending-room-picker__footer,
+  .ending-room-picker__body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .ending-room-picker__footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
+
 /* ── Agent Roster ────────────────────────────────────── */
 
 .result-agents {
@@ -754,5 +1059,30 @@
     justify-content: center;
     white-space: normal;
     line-height: 1.35;
+  }
+
+  .ending-room-picker-overlay {
+    padding: 12px;
+  }
+
+  .ending-room-picker {
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .ending-room-picker__header,
+  .ending-room-picker__body,
+  .ending-room-picker__footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .ending-room-picker__footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .ending-room-picker__footer .btn {
+    width: 100%;
   }
 }

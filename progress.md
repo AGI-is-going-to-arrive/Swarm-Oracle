@@ -219,6 +219,126 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `frontend/src/hooks/useInputViewState.ts`
     - 新增 `probeResult / hasFreshProbe / disableUserQuota` 状态。
 
+## 2026-03-29 Phase B Review + Phase C Runtime Verification
+
+- 已读取并核对：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/{project,frontend,backend}.md`
+  - `llmdoc/reference/api.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `progress.md`
+- 后端 Phase B / B+ 定向验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed`
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_vector_store.py -q`
+    - `40 passed`
+- 前端定向验证：
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `24 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `src/components/EndingChatModal.test.tsx + src/hooks/useEndingRoomWS.test.tsx`
+    - 单测执行阶段可见通过，但 vitest 退出阶段存在挂住噪声；后续若继续追查，建议单独看测试 runner 退出钩子，不属于本次 Phase C 功能回归
+- 真实运行态核对结论：
+  - 旧的 `18928` 前端实例不是当前源码真值；重新以 `npm run dev -- --host 127.0.0.1 --port 18929` 拉起后，实际可用地址为 `http://127.0.0.1:18932/`
+  - 当前源码实例上，结果页已经真实存在：
+    - 进入会客厅前的 participant picker
+    - `selected_agent_ids` 贯通到 EndingChatModal
+    - room/thread follow-up、hotseat、anchor chip、composer
+  - 用当前源码实例重新跑：
+    - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18932 --output-dir output/e2e/20260329-phasebc-corners-current --headless`
+      - 通过
+      - 先前 `capture-ready Theater scene timeout` 是旧 dev server 误判，不是当前源码事实
+- 这轮额外做的 Phase C 质量补丁：
+  - `frontend/src/pages/ResultView.tsx`
+    - 调整 ending-room participant picker 排序，优先真实命名角色，压后“角色名=职责名 / 带数字后缀的克隆候选”，默认选人更像真实 roster
+  - `frontend/src/components/EndingChatModal.css`
+    - 收紧 `<=560px` 下的会客厅布局：modal 高度、transcript 区、composer 区与 chip/pill 换行更稳，减少追问态挤压
+- 这轮真实 E2E 发现：
+  - 桌面端 `1600x900`
+    - `进入会客厅 -> 选人 -> 进入会客厅 -> 角色热座 -> anchor chip -> 发送追问` 闭环能走通
+  - 移动端 `390x844`
+    - participant picker 当前首屏可用，底部 CTA 可见
+    - 会客厅主界面可打开，但小屏仍然比较拥挤；如果继续打磨，优先继续压缩 transcript/composer 垂直空间，必要时给 composer 做更强的 sticky/footer 处理
+- 当前仍需下一轮继续的点：
+  - 结果页访问已有 scenario 时，控制台仍会出现 `campaign finalize 409` 噪声；当前不阻塞玩法，但影响签收纯净度
+  - 会客厅内容虽然已具备玩法链路，但后端自动复盘文案仍偏模板化，离“强角色感”还有空间
+  - 当前没有把 multi-ending `worldline_roundtable` 页面正式接出来；这条线仍在后续阶段
+
+## 2026-03-29 Oracle Chambers Phase B Review + Phase C3 MVP
+
+- 已读取并核对：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/reference/api.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+- Phase B 当前结论：
+  - backend `ending_room / thread / user-turn / memory partition / worldline echo` 相关定向测试实跑通过：
+    - `cd backend && ../.venv/bin/python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 3.26s`
+  - 当前 `release:signoff` 也已完整通过：
+    - `frontend/output/e2e/2026-03-29T09-03-22-848Z-release-signoff/summary.json`
+  - 真实代码状态不是“Phase C 未开始”，而是：
+    - 结果页 CTA 已先进入 `participant picker`
+    - 单结局 room modal 已能打开并完成 auto recap
+    - 但 thread follow-up UI、thread rail、composer、scope notice 之前缺失
+- 本轮前端实现（Phase C3 最小闭环）：
+  - 扩展 `frontend/src/types.ts`
+    - 补 `EndingRoomThread / EndingRoomThreadSnapshot / AppendEndingRoomUserTurnRequest / CreateEndingRoomThreadRequest`
+    - 补 `thread_id / source / interaction_mode / memory_partition_id / worldline_echo_key`
+  - 扩展 `frontend/src/api/client.ts`
+    - 新增 `createEndingRoomThread`
+    - 新增 `getEndingRoomThread`
+    - 新增 `appendEndingRoomUserTurn`
+    - 新增 `appendEndingRoomThreadUserTurn`
+  - 重写 `frontend/src/stores/endingRoomStore.ts`
+    - 新增 `threadsById / threadOrder / activeThreadId / interactionMode / composerDraft / scopeNotice / sending`
+    - 支持 room transcript 与 follow-up thread transcript 分桶
+    - 支持 thread hydrate / create / append user turn
+  - 扩展 `frontend/src/hooks/useEndingRoomWS.ts`
+    - 接入 `ending_room_thread_created`
+    - 接入 `ending_room_scope_notice`
+  - 重写 `frontend/src/components/EndingChatModal.tsx`
+    - 新增 thread rail
+    - 新增 follow-up composer
+    - 新增 `archivist_route / hotseat`
+    - 新增 anchor quick actions
+    - 新增 participant strip
+    - 新增 scope notice
+  - 调整 `frontend/src/components/EndingChatModal.css`
+    - 补 thread/composer/participant UI
+    - 补移动端 modal 滚动与 390x844 适配
+- 本轮前端定向验证：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/stores/endingRoomStore.test.ts src/hooks/useEndingRoomWS.test.tsx`
+    - `14 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `18 passed`
+  - `cd frontend && npm exec tsc --noEmit`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+- Playwright / 真实浏览器复验：
+  - `playwright-interactive`
+    - 桌面端结果页 -> participant picker -> 进入会客厅 -> auto recap `turn_count=3`
+    - 档案官路由追问后 `turn_count=5`
+    - 热座模式 -> 新建线程 -> 线程追问后 `thread_count=2`, active thread follow-up `turn_count=2`
+  - `Playwright CLI`
+    - 已跑 `open + snapshot`
+    - 发现结果页仍会打到 `finalize` 的既有 `409 Conflict` console 噪声
+  - `develop-web-game`
+    - 已用临时 `.mjs` 包装脚本跑 debate result 页面
+    - 产物：
+      - `frontend/output/web-game-phasec/shot-0.png`
+      - `frontend/output/web-game-phasec/state-0.json`
+    - 说明当前自动化钩子在 Debate 页面仍正常
+- 当前剩余缺口：
+  - `Worldline Roundtable` 页面/路由/store 仍未实现
+  - `Ending room replay/share/import` 仍未实现
+  - 当前 room / thread follow-up 仍是 backend 模板回复，离“发言不再是套话模板”还有距离
+  - mobile 虽然已经能完整进入和发送，但视觉密度偏高，仍值得继续压缩与重排
+
 ## 2026-03-29 Phase B — Oracle Chambers backend domain
 
 - 已按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 进入 Phase B，并完成后端独立域落地：
@@ -11869,3 +11989,183 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 不把 backend `Phase B+` 夸成完整玩法签收
   - 明确 thread / user-turn / room-thread memory partition 已落地
   - 明确 frontend 目前仍主要停在单结局 `Phase C` MVP
+
+## 2026-03-29 Phase B Recheck + Phase C Gap Baseline
+
+- 本轮重新核对 `llmdoc/*`、`implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`、`progress.md` 与真实代码后，确认：
+  - `Phase B / Phase B+` 后端域已真实落地，不是只存在于文档
+  - frontend 当前仍只有结果页单结局 modal MVP，`Phase C2 / C3` 的关键玩法层尚未实现
+- 本轮真实验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 3.60s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -k 'ending_room or delete_' -q`
+    - `55 passed, 152 deselected in 3.64s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/models/ending_room.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `29 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - `通过`
+- 本轮新增真实浏览器/E2E 观察：
+  - `frontend/scripts/e2e-suite.mjs corners` 当前在现有代码上失败，报错 `Timed out waiting for capture-ready Theater scene`；这是现存 Theater capture 回归，不是 ending-room 专项逻辑
+  - 使用 `playwright-interactive` 打开多结局结果页 `5d1836bb-2cf1-429a-83e9-8e18e97ac38f` 后确认：
+    - 每张结局卡都能打开单结局 chamber modal
+    - 但当前 modal 没有 participant picker、没有真实参与者条带、没有 follow-up composer、没有 thread UI
+    - 当前视觉上仍是“story + transcript”双栏信息框，不满足 `Phase C2` 的可玩性门槛
+  - 使用 `develop-web-game` 脚本（复制为临时 `.mjs` 后执行）对该结果页 chamber 做自动截图，产物位于：
+    - `frontend/output/web-game/phasec-baseline/`
+- 当前结论：
+  - `Phase B` 可以签为稳定基座
+  - 继续执行 `Phase C` 的重点应放在：
+    - participant picker / manual selection
+    - 真实参与者 stats + persona + 像素头像
+    - follow-up composer / hotseat / all-present
+    - 多结局 A/B 切换不串房
+
+## 2026-03-29 Phase C2/C3 Playability Pass
+
+- 本轮按真实代码继续推进 `implement/23` 的 `Phase C2/C3`：
+  - backend:
+    - `EndingRoomInteractionMode` 补 `all_present`
+    - branch visible roster 改成带 `impact_score / turn_count / key_moment_hits / last_round_spoken / fallback_cast / selection_reason`
+    - follow-up 响应从单人改为支持 `archivist_route / hotseat / all_present` 多响应
+    - `ending_chamber` 手动选人上限收口到 `<= 3`
+    - auto recap 文案改成更贴近当前 branch 证据钩子，不再只是一套泛模板
+  - frontend:
+    - 结果页 participant picker 会优先用当前 branch transcript 里的真实命名角色；当 agent roster 缺失时，才回退到 `fallback cast`
+    - picker 卡面补上 `impact / 发言次数 / 转折命中 / 最近轮次`
+    - `EndingChatModal` 补强参与者卡：像素头像、role/persona、impact 指标、fallback 标记
+    - follow-up 模式增加 `当前全员回应`
+    - `hotseat` / `all_present` 都在单结局 chamber 实机走通
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `48 passed in 4.90s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - `通过`
+  - `cd frontend && npm run build`
+    - `通过`
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `24 passed`
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18931 --output-dir output/e2e/20260329-phasec-current-corners-rerun --headless`
+    - `通过`
+- 浏览器实机（`playwright-interactive`，当前源码 dev server：`http://127.0.0.1:18931`）：
+  - 多结局 fixture `5d1836bb-2cf1-429a-83e9-8e18e97ac38f`
+    - `A/B` 结局卡都能先经过 picker 再进 chamber
+    - 由于该 fixture 没有稳定 agent roster，picker 正确退回 `fallback cast`
+  - 单结局 rich scenario `15340d70-792a-48b1-b9b8-5beef0ccadcd`
+    - picker 展示 `20` 位真实参与者，默认预选 top 2
+    - chamber 内参与者卡可见像素头像、role、persona、impact、turn count
+    - `角色热座` 能新建 follow-up thread 并继续追问
+    - `当前全员回应` 能在主桌继续追加多人回应
+  - 移动端 `390x844`
+    - picker 可完整进入并点击确认
+    - chamber modal 本体 `fitsHorizontally=true`；纵向仍依赖 modal 内部滚动，但主交互可达
+- Playwright CLI 复验：
+  - 当前源码实例 `18931` 打开结果页时仍能看到既有控制台噪声：
+    - `POST /api/campaign/scenario/<id>/finalize -> 409`
+    - 这轮未顺手修
+- `develop-web-game` 复验：
+  - 会客厅自动截图基线仍保存在 `frontend/output/web-game/phasec-baseline/`
+  - 这轮不再沿用旧 `18928` runtime 结果，实际签收以 `18931` 当前源码实例为准
+- 剩余问题 / 下一步：
+  - `Worldline Roundtable` 仍未做完，不能签 `Phase D`
+  - ending-room `replay / share / import` 仍未完成
+  - `EndingChatModal.test.tsx` 单独运行时存在 vitest worker 不退出的 open-handle 噪声；目前没有新的断言失败，但进程会挂住，需要后续清理测试句柄
+
+## 2026-03-29 Oracle Art Asset Generation
+
+- 用户要求：若要补 `Oracle Chambers / Roundtable` 专属美术，优先使用 Google Gemini 图片模型。
+- 本轮处理方式：
+  - 复用现有 `frontend/scripts/generate-ui-assets.mjs`
+  - 新增 3 个 preset：
+    - `oracle_chamber_panel`
+    - `oracle_chamber_crest`
+    - `worldline_roundtable_panel`
+  - 生成模型：
+    - `gemini-3-pro-image-preview`
+- 认证与通道事实：
+  - 直接按 `aiplatform` 调用时，当前这串凭证无法以 Vertex `generateContent` 通过认证
+  - 仓库脚本本身会先试 `aiplatform`，失败后自动回退 `generativelanguage`
+  - 本轮三张图实际都通过 `generativelanguage` 成功返回，但 sidecar `source_url` 仍保留用户指定的 Google AI Platform 根地址，便于后续统一收口
+- 实际生成文件：
+  - `frontend/public/assets/ui/generated/oracle_chamber_panel.png`
+  - `frontend/public/assets/ui/generated/oracle_chamber_crest.png`
+  - `frontend/public/assets/ui/generated/worldline_roundtable_panel.png`
+  - 对应 `.meta.json` 均已落盘
+- 随后继续补齐完整 Oracle / Roundtable UI 资产集，当前已全部存在：
+  - `oracle_chamber_panel.png`
+  - `oracle_chamber_crest.png`
+  - `oracle_quote_frame.png`
+  - `worldline_roundtable_panel.png`
+  - `worldline_roundtable_banner.png`
+  - `badge_ending_chamber.png`
+  - `badge_worldline_roundtable.png`
+  - `badge_crossline_gallery.png`
+  - `ending_room_participant_frame.png`
+  - `ending_room_influence_badge.png`
+  - `timeline_marker_chamber.png`
+  - `timeline_marker_roundtable.png`
+  - `ending_room_speaker_glow.png`
+  - `archivist_emblem.png`
+  - `worldline_dossier_divider.png`
+- 实际接入：
+  - `oracle_chamber_panel` 已接到：
+    - `frontend/src/components/EndingChatModal.css`
+    - `frontend/src/pages/ResultView.css`
+  - `oracle_chamber_crest` 已接到：
+    - chamber header watermark
+    - picker header watermark
+  - `ending_room_participant_frame / ending_room_influence_badge / ending_room_speaker_glow`
+    - 已接到 chamber / picker 现有卡片与当前 speaker 高亮
+  - `oracle_quote_frame / archivist_emblem / worldline_dossier_divider`
+    - 已接到 chamber transcript bubble / archivist thread-badge / thread rail 分隔
+  - `worldline_roundtable_panel` 当前先入库并挂到 `themeRegistry` 常量，等 roundtable 页面落地时直接复用
+- 验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - `通过`
+  - `cd frontend && npm run assets:provenance:check`
+    - `{"status":"ok"}`
+  - `playwright-interactive` 实机复看：
+    - `18931` 当前源码实例下，picker / chamber 已能看见新 panel 与 crest 叠加
+
+## 2026-03-29 Phase C Reality Check + Replay/Follow-up Repairs
+
+- 本轮重新核对真实前端代码后确认：
+  - `ResultView` 已经有 `pendingEndingRoomPicker / activeEndingRoomSelectedAgentIds`
+  - `EndingChatModal` 已经有 participant strip、thread rail、follow-up composer、`archivist_route / hotseat`
+  - `endingRoomStore / useEndingRoomWS / client.ts / types.ts` 也已接入 thread + user-turn
+  - 也就是说，真实代码已经明显前进到“比 `llmdoc` 口径更靠后”的状态，不能再按旧文档把 frontend 误判成只有最早 modal MVP
+- 本轮代码修复：
+  - `frontend/src/stores/endingRoomStore.ts`
+    - `appendUserTurn()` 在提交 room/thread follow-up 后，统一回读 `loadRoom(roomId)`，确保 backend 新建的 `user participant` 与最新 thread/snapshot 被 hydrate 到前端
+    - 直接修复真实浏览器里用户追问气泡显示成 `Unknown` 的问题
+  - `frontend/src/lib/scenarioReplay.ts`
+    - `normalizeScenarioResultReplayPayload()` 现在会用 `storyData.branches` 回填 legacy / partial replay artifact 里 `scenario.branches` 缺失的 `summary / story / insight / key_moments`
+  - `frontend/src/lib/simulationReplay.ts`
+    - 同步补一个更底层的 legacy replay branch backfill 容错，避免同类不完整 branch 结构在 simulation replay 侧直接被判 invalid
+  - `frontend/src/components/EndingChatModal.test.tsx`
+    - 补 `VizSynthesizer` mock，避免组件测试把 sprite 映射链路一起带进来
+- 本轮定向验证：
+  - `cd backend && ../.venv/bin/python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `43 passed in 3.71s`
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/lib/scenarioReplay.test.ts src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx`
+    - `37 passed`
+  - `cd frontend && npx tsc --noEmit`
+    - `通过`
+  - `cd frontend && npm run build`
+    - `通过`
+  - `develop-web-game` 客户端（按 skill 要求复制成临时 `.mjs`）：
+    - `cd frontend && node .tmp-web-game-client-fix.mjs --url http://127.0.0.1:18928/result/db947dbd-be5c-4646-a90e-c642986f8fa4 --actions-file output/e2e/ending-room-noop-actions.json --iterations 1 --pause-ms 200 --capture-mode panel --screenshot-dir output/e2e/ending-room-web-game-baseline`
+    - 成功产出 `shot-0.png / state-0.json / errors-0.json`
+- 本轮真实浏览器验收：
+  - 冷启动结果页 `db947dbd-be5c-4646-a90e-c642986f8fa4`
+    - participant picker 可见，支持默认选人进入 chamber
+    - chamber auto recap 可完成，participant strip / thread rail / composer 可见
+    - `New thread` 可创建 follow-up thread，并在 thread scope 下追加追问
+  - replay permalink 旧问题已复测：
+    - 修复前：`result/replay?share=...` 直接落入 “This replay link is invalid or incomplete.”
+    - 修复后：旧的 share id `37c36897-84d0-48f7-b717-f196a3bdeb7a` 已能正常打开 replay result 页
+- 当前仍然存在的边界 / TODO：
+  - `EndingChatModal.test.tsx` 单独跑仍出现不稳定悬挂，怀疑是组件测试环境与 modal 异步副作用的组合问题；当前先靠 `store/ws/result` 定向回归 + 真实浏览器验收兜底
+  - `develop-web-game` baseline 抓到一条浏览器 console error：`Failed to load resource: the server responded with a status of 409 (Conflict)`；需要继续确认是不是结果页 campaign/finalize 边界提示被当成 console error 暴露
+  - `Phase D / 世界线圆桌` 页面、完整多结局 roundtable 流程、以及 replay/share/import 的更广义回归还没做完，当前不能把整条 Oracle Chambers / Roundtable 线宣称为 fully signed off

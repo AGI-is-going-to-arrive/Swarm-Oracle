@@ -188,6 +188,22 @@ alembic/ ──► Alembic 数据库迁移框架
   - room 后台运行失败时，当前会显式落 `status=error`，并广播 `ending_room_turn_error + status=error`
   - 并发创建同 scope room 时，唯一键冲突当前会在服务层回收并复用既有 room，不再把 `IntegrityError` 直接暴露给调用方
 
+#### 本轮补充口径（2026-03-29）
+
+- `create_ending_room(...)` 当前已正式吃进 `selected_agent_ids`
+  - `one_move_only` 最多 `1` 人
+  - `ending_chamber` 最多 `3` 人
+  - 超界时会返回 `ENDING_ROOM_AGENT_SELECTION_INVALID`
+- branch visible roster 当前不再只返回“有没有这个 agent”：
+  - participant `persona_snapshot_json` 里会带 `bio_short / impact_score / turn_count / key_moment_hits / last_round_spoken / selection_reason / fallback_cast`
+  - 也就是说，前端 picker / participant card 现在能直接读到“谁更关键、最近说到哪一轮、是不是 fallback cast”
+- follow-up 这轮又前进了一步：
+  - `EndingRoomInteractionMode` 已补 `all_present`
+  - room/thread follow-up 不再只会回 1 个 responder；`archivist_route / hotseat / all_present` 都会按当前 room scope 追加多条 committed turn
+- `_build_room_plan()` 的单结局 auto recap 这轮也不再只是一套纯模板句：
+  - 当前会显式把 `key_moment / insight / branch title / role/persona hint` 编进 opening / verdict
+  - 仍然是 deterministic 文案，但已经比之前更贴近当前 branch 的证据钩子
+
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
 - **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease
 - **关键API**:

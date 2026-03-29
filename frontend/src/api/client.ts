@@ -8,7 +8,7 @@ import type {
   RetrospectiveInterventionResponse, BatchInterventionPayload, BatchInterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
-  CreateEndingRoomRequest, EndingRoomResultPayload, EndingRoomSnapshot,
+  AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot,
   CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
@@ -338,6 +338,7 @@ export async function createEndingRoom(
       room_type: payload.roomType,
       ...(payload.anchorBranchId ? { anchor_branch_id: payload.anchorBranchId } : {}),
       selected_branch_ids: payload.selectedBranchIds,
+      ...(payload.selectedAgentIds?.length ? { selected_agent_ids: payload.selectedAgentIds } : {}),
       ...(payload.language ? { language: payload.language } : {}),
     }),
   });
@@ -351,6 +352,58 @@ export async function getEndingRoom(roomId: string): Promise<EndingRoomSnapshot>
 /** GET /api/ending-room/:id/result — get finalized ending room payload */
 export async function getEndingRoomResult(roomId: string): Promise<EndingRoomResultPayload> {
   return safeGet(`/ending-room/${roomId}/result`);
+}
+
+/** POST /api/ending-room/:id/thread — create a follow-up thread inside an ending room */
+export async function createEndingRoomThread(
+  roomId: string,
+  payload: CreateEndingRoomThreadRequest,
+): Promise<EndingRoomThreadSnapshot> {
+  return request(`/ending-room/${roomId}/thread`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(payload.title ? { title: payload.title } : {}),
+      ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
+      ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
+    }),
+  });
+}
+
+/** GET /api/ending-room/thread/:id — fetch a single follow-up thread snapshot */
+export async function getEndingRoomThread(threadId: string): Promise<EndingRoomThreadSnapshot> {
+  return safeGet(`/ending-room/thread/${threadId}`);
+}
+
+/** POST /api/ending-room/:id/user-turn — append a follow-up turn on the room transcript */
+export async function appendEndingRoomUserTurn(
+  roomId: string,
+  payload: AppendEndingRoomUserTurnRequest,
+): Promise<{ room_id: string; thread_id: string; memory_partition_id: string; turns: EndingRoomSnapshot['turns'] }> {
+  return request(`/ending-room/${roomId}/user-turn`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content: payload.content,
+      ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
+      ...(payload.questionAnchorIds?.length ? { question_anchor_ids: payload.questionAnchorIds } : {}),
+      ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
+    }),
+  });
+}
+
+/** POST /api/ending-room/thread/:id/user-turn — append a follow-up turn inside a thread */
+export async function appendEndingRoomThreadUserTurn(
+  threadId: string,
+  payload: AppendEndingRoomUserTurnRequest,
+): Promise<{ room_id: string; thread_id: string; memory_partition_id: string; turns: EndingRoomSnapshot['turns'] }> {
+  return request(`/ending-room/thread/${threadId}/user-turn`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content: payload.content,
+      ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
+      ...(payload.questionAnchorIds?.length ? { question_anchor_ids: payload.questionAnchorIds } : {}),
+      ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
+    }),
+  });
 }
 
 /** POST /api/debate/import-replay — persist a replay snapshot as a local debate run */

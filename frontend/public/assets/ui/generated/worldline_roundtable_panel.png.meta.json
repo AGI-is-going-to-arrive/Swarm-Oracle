@@ -1,0 +1,10 @@
+{
+  "preset": "worldline_roundtable_panel",
+  "model": "gemini-3-pro-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-29T10:10:48.999Z",
+  "output": "public/assets/ui/generated/worldline_roundtable_panel.png",
+  "prompt": "Pixel-art worldline roundtable decorative panel for a retro strategy multiverse review UI, same visual language as SwarmOracle, parchment and ivory surface, brass ring table motif, restrained plum-violet archive symbols, suspended worldline threads and probability markers around an empty center, ceremonial but readable, no text, no photorealism, no sci-fi neon dashboard."
+}

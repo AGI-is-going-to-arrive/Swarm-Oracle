@@ -73,6 +73,24 @@ export const DEBATE_UI_ASSETS = {
   quoteFrame: '/assets/ui/generated/debate_quote_frame.png',
 } as const;
 
+export const ORACLE_UI_ASSETS = {
+  chamberPanel: '/assets/ui/generated/oracle_chamber_panel.png',
+  chamberCrest: '/assets/ui/generated/oracle_chamber_crest.png',
+  roundtablePanel: '/assets/ui/generated/worldline_roundtable_panel.png',
+  roundtableBanner: '/assets/ui/generated/worldline_roundtable_banner.png',
+  quoteFrame: '/assets/ui/generated/oracle_quote_frame.png',
+  badgeEndingChamber: '/assets/ui/generated/badge_ending_chamber.png',
+  badgeWorldlineRoundtable: '/assets/ui/generated/badge_worldline_roundtable.png',
+  badgeCrosslineGallery: '/assets/ui/generated/badge_crossline_gallery.png',
+  participantFrame: '/assets/ui/generated/ending_room_participant_frame.png',
+  influenceBadge: '/assets/ui/generated/ending_room_influence_badge.png',
+  timelineMarkerChamber: '/assets/ui/generated/timeline_marker_chamber.png',
+  timelineMarkerRoundtable: '/assets/ui/generated/timeline_marker_roundtable.png',
+  speakerGlow: '/assets/ui/generated/ending_room_speaker_glow.png',
+  archivistEmblem: '/assets/ui/generated/archivist_emblem.png',
+  dossierDivider: '/assets/ui/generated/worldline_dossier_divider.png',
+} as const;
+
 export const ASSET_MANIFEST = {
   runtime: {
     characters: CHARACTER_SPRITE_KEYS,
@@ -194,6 +212,21 @@ export const ASSET_MANIFEST = {
         'debate_score_meter',
         'debate_stage_banner',
         'debate_verdict_panel',
+        'oracle_chamber_crest',
+        'oracle_chamber_panel',
+        'oracle_quote_frame',
+        'badge_ending_chamber',
+        'badge_worldline_roundtable',
+        'badge_crossline_gallery',
+        'ending_room_participant_frame',
+        'ending_room_influence_badge',
+        'ending_room_speaker_glow',
+        'archivist_emblem',
+        'timeline_marker_chamber',
+        'timeline_marker_roundtable',
+        'worldline_dossier_divider',
+        'worldline_roundtable_panel',
+        'worldline_roundtable_banner',
         'gameplay_card_frame_ecology',
         'gameplay_card_frame_empire',
         'gameplay_card_frame_faith',

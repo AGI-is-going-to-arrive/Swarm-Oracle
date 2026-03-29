@@ -35,7 +35,7 @@
 | 20 | [Track D 辩论竞技场设计与执行方案](20_track_d_debate_arena_design_execution_plan.md) | active archive | Debate Arena 设计基线与实现状态同步；不再按待开发清单阅读 | 当前会话 |
 | 21 | [Track D 辩论竞技场 MVP 蓝图](21_track_d_debate_arena_mvp_blueprint.md) | active archive | Debate Arena 蓝图与验收参考；phase 拆解按历史设计基线阅读 | 当前会话 |
 | 22 | [跨设备状态收口执行文档](22_cross_device_state_closure_plan.md) | active archive | 跨设备状态 authority 收口报告 | 当前会话 |
-| 23 | [神谕会客厅 / 世界线圆桌 详细设计与实施任务单](23_oracle_chambers_worldline_roundtable_execution_plan.md) | active archive | 结局会客厅、世界线圆桌、轻玩法扩展的执行手册；现已额外纳入 `Phase C2` 强制 gate：真实参与者选人、去模板化文案、像素头像/动效、多结局单独签收、replay 稳定性与素材策略 | 当前会话 |
+| 23 | [神谕会客厅 / 世界线圆桌 详细设计与实施任务单](23_oracle_chambers_worldline_roundtable_execution_plan.md) | active archive | 结局会客厅、世界线圆桌、轻玩法扩展的执行手册；当前已同步到“单结局可玩版”口径：participant picker、`selected_agent_ids`、follow-up thread、`archivist_route / hotseat / all_present` 与 Oracle 专属资产已落地，但 `Worldline Roundtable`、多结局完整签收、ending-room replay/share/import 仍未完成 | 当前会话 |
 
 ---
 

@@ -36,6 +36,7 @@ class CreateEndingRoomRequest(BaseModel):
     room_type: EndingRoomType
     anchor_branch_id: str | None = None
     selected_branch_ids: list[str]
+    selected_agent_ids: list[str] = Field(default_factory=list)
     language: str | None = None
 
     @field_validator("anchor_branch_id", "language")
@@ -46,13 +47,20 @@ class CreateEndingRoomRequest(BaseModel):
         cleaned = value.strip()
         return cleaned or None
 
+    @field_validator("selected_branch_ids", "selected_agent_ids")
+    @classmethod
+    def validate_selected_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if item and item.strip()]
+        if normalized and len(normalized) != len(set(normalized)):
+            raise ValueError("selected ids must be unique")
+        return normalized
+
     @field_validator("selected_branch_ids")
     @classmethod
-    def validate_selected_branch_ids(cls, value: list[str]) -> list[str]:
-        normalized = [branch_id.strip() for branch_id in value if branch_id and branch_id.strip()]
-        if not normalized:
+    def ensure_selected_branch_ids_not_empty(cls, value: list[str]) -> list[str]:
+        if not value:
             raise ValueError("selected_branch_ids must not be empty")
-        return normalized
+        return value
 
     @model_validator(mode="after")
     def validate_shape(self) -> "CreateEndingRoomRequest":
@@ -126,6 +134,7 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
             room_type=req.room_type,
             anchor_branch_id=req.anchor_branch_id,
             selected_branch_ids=req.selected_branch_ids,
+            selected_agent_ids=req.selected_agent_ids,
             language=req.language,
         )
     except EndingRoomServiceError as exc:

@@ -588,7 +588,15 @@ export type EndingRoomType =
 
 export type EndingRoomStatus = 'draft' | 'live' | 'done' | 'error';
 export type EndingRoomPhase = 'opening' | 'crossfire' | 'rebuttal' | 'closing' | 'verdict';
-export type EndingRoomRoleSlot = 'agent' | 'representative' | 'archivist' | 'critic' | 'observer';
+export type EndingRoomRoleSlot = 'agent' | 'representative' | 'archivist' | 'critic' | 'observer' | 'user';
+export type EndingRoomThreadMode = 'room' | 'followup';
+export type EndingRoomInteractionMode =
+  | 'auto_recap'
+  | 'archivist_route'
+  | 'hotseat'
+  | 'all_present'
+  | 'thread_followup';
+export type EndingRoomTurnSource = 'auto_recap' | 'user_turn' | 'assistant_followup';
 
 export interface EndingRoomScope {
   scenario_id: string;
@@ -605,6 +613,7 @@ export interface EndingRoomParticipant {
   source_agent_id?: string | null;
   role_slot: EndingRoomRoleSlot;
   display_name: string;
+  worldline_echo_key?: string | null;
   persona_snapshot_json?: Record<string, unknown> | null;
   visibility_scope_json?: Record<string, unknown> | null;
 }
@@ -612,14 +621,41 @@ export interface EndingRoomParticipant {
 export interface EndingRoomTurn {
   id: string;
   room_id: string;
+  thread_id?: string | null;
   sequence: number;
   phase: EndingRoomPhase;
   participant_id: string;
   content: string;
   emotion: string;
+  source?: EndingRoomTurnSource;
+  interaction_mode?: EndingRoomInteractionMode;
+  memory_partition_id?: string | null;
+  addressed_agent_ids_json?: string[] | null;
+  question_anchor_ids_json?: string[] | null;
   cited_branch_id?: string | null;
   cited_refs_json?: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface EndingRoomThread {
+  id: string;
+  room_id: string;
+  title: string;
+  mode: EndingRoomThreadMode;
+  interaction_mode: EndingRoomInteractionMode;
+  participant_set_hash: string;
+  memory_partition_id: string;
+  addressed_agent_ids_json?: string[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EndingRoomThreadSnapshot extends EndingRoomThread {
+  room_type: EndingRoomType;
+  room_title: string;
+  room_status: EndingRoomStatus;
+  language: 'zh' | 'en';
+  turns: EndingRoomTurn[];
 }
 
 export interface EndingRoomPhaseInsight {
@@ -658,7 +694,10 @@ export interface EndingRoomSnapshot {
   current_phase: EndingRoomPhase;
   created_at: string;
   updated_at: string;
+  memory_partition_version?: number;
+  memory_partition_id?: string | null;
   participants: EndingRoomParticipant[];
+  threads: EndingRoomThread[];
   turns: EndingRoomTurn[];
   result_ready: boolean;
 }
@@ -671,7 +710,21 @@ export interface CreateEndingRoomRequest {
   roomType: EndingRoomType;
   anchorBranchId?: string | null;
   selectedBranchIds: string[];
+  selectedAgentIds?: string[];
   language?: 'zh' | 'en';
+}
+
+export interface CreateEndingRoomThreadRequest {
+  title?: string | null;
+  addressedAgentIds?: string[];
+  interactionMode?: EndingRoomInteractionMode;
+}
+
+export interface AppendEndingRoomUserTurnRequest {
+  content: string;
+  addressedAgentIds?: string[];
+  questionAnchorIds?: string[];
+  interactionMode?: EndingRoomInteractionMode | null;
 }
 
 export interface StructuredWsError {
@@ -714,6 +767,8 @@ export type EndingRoomWSEvent =
     | { type: 'ending_room_turn_error'; data: { room_id: string; turn_id: string; participant_id: string; message: string } }
     | { type: 'ending_room_phase_change'; data: { phase: EndingRoomPhase } }
     | { type: 'ending_room_result_ready'; data: { result: EndingRoomResult } }
+    | { type: 'ending_room_thread_created'; data: EndingRoomThreadSnapshot }
+    | { type: 'ending_room_scope_notice'; data: { thread_id: string; memory_partition_id: string } }
   ) & { meta?: WsEventMeta };
 
 // ── WebSocket Events ─────────────────────────────────────

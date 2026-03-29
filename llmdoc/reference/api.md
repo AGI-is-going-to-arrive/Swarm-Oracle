@@ -499,19 +499,19 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > 当前状态：
 > - backend 已实现这条线的 `ending_room` 独立数据域、REST 接口与 WebSocket
-> - backend 本 session 又补齐了 `follow-up thread / user-turn / room-thread memory partition / worldline echo`
-> - frontend 当前已把 room 级接口接进结果页单结局 `进入会客厅 / 只改一步` modal，但 thread UI 还没接
-> - 这轮只实测签收了单结局桌面/移动端闭环；多结局结果页、手动选人、thread UI，以及 ending-room replay/share/import 仍未签收
+> - backend 本 session 又补齐了 `selected_agent_ids / follow-up thread / user-turn / room-thread memory partition / worldline echo / all_present`
+> - frontend 当前已把 participant picker、thread UI、follow-up composer 和 `archivist_route / hotseat / all_present` 接进单结局结果页
+> - 这轮真实签收仍只覆盖单结局桌面/移动端闭环；多结局完整独立签收、`Worldline Roundtable` 页面，以及 ending-room replay/share/import 仍未签收
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
+| `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "selected_agent_ids?": ["agent-a", "agent-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}` | GET | 获取房间 live snapshot | — | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}/result` | GET | 获取房间完成态结果 | — | EndingRoomResultPayload |
-| `POST /api/ending-room/{room_id}/thread` | POST | 在现有 room 下创建 follow-up thread | `{"title?": "热座追问", "addressed_agent_ids": ["agent-id"], "interaction_mode": "thread_followup|hotseat"}` | EndingRoomThreadSnapshot |
+| `POST /api/ending-room/{room_id}/thread` | POST | 在现有 room 下创建 follow-up thread | `{"title?": "热座追问", "addressed_agent_ids": ["agent-id"], "interaction_mode": "thread_followup|hotseat|all_present"}` | EndingRoomThreadSnapshot |
 | `GET /api/ending-room/thread/{thread_id}` | GET | 获取单条 follow-up thread snapshot | — | EndingRoomThreadSnapshot |
-| `POST /api/ending-room/{room_id}/user-turn` | POST | 追加 room 级追问，沿用 default room thread | `{"content": "...", "addressed_agent_ids": ["agent-id"], "question_anchor_ids": ["anchor-id"], "interaction_mode?": "archivist_route|hotseat"}` | `{room_id, thread_id, memory_partition_id, turns[]}` |
-| `POST /api/ending-room/thread/{thread_id}/user-turn` | POST | 追加指定 thread 的追问 | `{"content": "...", "addressed_agent_ids": ["agent-id"], "question_anchor_ids": ["anchor-id"], "interaction_mode?": "thread_followup|hotseat"}` | `{room_id, thread_id, memory_partition_id, turns[]}` |
+| `POST /api/ending-room/{room_id}/user-turn` | POST | 追加 room 级追问，沿用 default room thread | `{"content": "...", "addressed_agent_ids": ["agent-id"], "question_anchor_ids": ["anchor-id"], "interaction_mode?": "archivist_route|hotseat|all_present"}` | `{room_id, thread_id, memory_partition_id, turns[]}` |
+| `POST /api/ending-room/thread/{thread_id}/user-turn` | POST | 追加指定 thread 的追问 | `{"content": "...", "addressed_agent_ids": ["agent-id"], "question_anchor_ids": ["anchor-id"], "interaction_mode?": "thread_followup|hotseat|all_present"}` | `{room_id, thread_id, memory_partition_id, turns[]}` |
 
 > 当前 ending-room WebSocket 可用路径：
 > - 主路径：`/api/ws/ending-room/{room_id}`
@@ -574,6 +574,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >     - `anchor_branch_id` 必填
 >     - `anchor_branch_id` 必须属于 `selected_branch_ids`
 >     - 所选 branch 都必须是 `COMPLETED`
+>   - `selected_agent_ids` 当前已启用：
+>     - `one_move_only` 最多 `1` 人
+>     - `ending_chamber` 最多 `3` 人
+>     - 若不在当前 worldline roster 内，会返回 `422 ENDING_ROOM_AGENT_NOT_VISIBLE`
 >   - scenario 自身若还未进入 `DONE`，当前会返回 `409 ENDING_ROOM_SCENARIO_NOT_READY`
 >   - 若同 scope room 已存在但上次跑成 `status=error`，当前会先 reset 后再重排后台任务
 >   - `crossline_gallery` 会直接返回 `status=done`，不会再调度后台任务
@@ -591,6 +595,10 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `POST /api/ending-room/{room_id}/user-turn`
 >   - 会先复用或创建 default room thread
 >   - 追加的 user turn / assistant follow-up turn 会继续写进 room 级 `memory_partition_id`
+>   - 当前已支持：
+>     - `archivist_route`
+>     - `hotseat`
+>     - `all_present`
 >   - `addressed_agent_ids` 不属于当前 room participant set：返回 `422 ENDING_ROOM_AGENT_NOT_VISIBLE`
 > - `POST /api/ending-room/thread/{thread_id}/user-turn`
 >   - 只会写当前 thread 的 `memory_partition_id`
@@ -598,7 +606,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - 当前单结局结果页前端只会用：
 >   - `selected_branch_ids = [anchor_branch_id]`
 >   - `room_type = ending_chamber | one_move_only`
->   - 还没有 `selected_agent_ids`
+>   - 当前会通过 participant picker 传 `selected_agent_ids`
 >
 > backend 当前会下发的 ending-room WebSocket 事件：
 > - `status`

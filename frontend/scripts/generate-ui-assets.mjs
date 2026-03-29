@@ -62,6 +62,66 @@ const PRESETS = {
     output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/debate_quote_frame.png"),
     prompt: "Pixel-art quote frame for a retro strategy debate result UI, same visual language as SwarmOracle theater, layered parchment inset, brass corner brackets, subtle berry-violet civic flourish, empty center for text overlay, no text, no photorealism.",
   },
+  oracle_chamber_panel: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/oracle_chamber_panel.png"),
+    prompt: "Pixel-art oracle chamber decorative panel for a retro strategy archive debrief UI, same visual language as SwarmOracle, warm parchment and ivory paper layers, brass trim, restrained plum-violet sigils, circular archive-eye motif, subtle worldline thread glyphs, elegant empty center and soft edge ornament for UI overlays, no text, no photorealism, no neon, no modern glassmorphism.",
+  },
+  oracle_chamber_crest: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/oracle_chamber_crest.png"),
+    prompt: "Pixel-art oracle chamber crest for a retro strategy archive UI, wax-seal inspired plum and brass emblem, concentric archive eye, time-ring and braided thread motifs, compact icon, transparent-friendly, no text, no photorealism.",
+  },
+  worldline_roundtable_panel: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/worldline_roundtable_panel.png"),
+    prompt: "Pixel-art worldline roundtable decorative panel for a retro strategy multiverse review UI, same visual language as SwarmOracle, parchment and ivory surface, brass ring table motif, restrained plum-violet archive symbols, suspended worldline threads and probability markers around an empty center, ceremonial but readable, no text, no photorealism, no sci-fi neon dashboard.",
+  },
+  worldline_roundtable_banner: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/worldline_roundtable_banner.png"),
+    prompt: "Pixel-art ceremonial banner for a worldline roundtable UI, same visual language as SwarmOracle archive theater, warm parchment cloth, brass trims, plum-violet worldline knots, mirrored seat ornaments, elegant central plaque area for title text, transparent-friendly, no words, no photorealism.",
+  },
+  oracle_quote_frame: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/oracle_quote_frame.png"),
+    prompt: "Pixel-art quote frame for Oracle Chambers follow-up transcript UI, same visual language as SwarmOracle, layered ivory paper inset, brass corner clamps, subtle oracle-eye and thread motifs in plum-violet, empty center for quote text, transparent-friendly, no words, no photorealism.",
+  },
+  badge_ending_chamber: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/badge_ending_chamber.png"),
+    prompt: "Pixel-art compact badge for Ending Chamber mode, same visual language as SwarmOracle archive theater, brass and parchment medallion, archive-eye doorway motif, transparent-friendly, no text, no photorealism.",
+  },
+  badge_worldline_roundtable: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/badge_worldline_roundtable.png"),
+    prompt: "Pixel-art compact badge for Worldline Roundtable mode, same visual language as SwarmOracle archive theater, brass and parchment medallion, circular table with branching thread motif, transparent-friendly, no text, no photorealism.",
+  },
+  badge_crossline_gallery: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/badge_crossline_gallery.png"),
+    prompt: "Pixel-art compact badge for Crossline Gallery mode, same visual language as SwarmOracle archive theater, brass and parchment medallion, balcony gallery motif overlooking distant thread cards, transparent-friendly, no text, no photorealism.",
+  },
+  ending_room_participant_frame: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/ending_room_participant_frame.png"),
+    prompt: "Pixel-art participant card frame for Oracle Chambers UI, same visual language as SwarmOracle, narrow vertical-friendly parchment card with brass trim, plum-violet accent tabs, subtle archive thread embossing, readable empty center for avatar and stats, no text, no photorealism.",
+  },
+  ending_room_influence_badge: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/ending_room_influence_badge.png"),
+    prompt: "Pixel-art tiny influence badge for Oracle Chambers participant cards, same visual language as SwarmOracle archive theater, brass lozenge with plum-violet star and radiating lines, transparent-friendly, no text, no photorealism.",
+  },
+  timeline_marker_chamber: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/timeline_marker_chamber.png"),
+    prompt: "Pixel-art small timeline marker icon for Oracle Chamber events, same visual language as SwarmOracle, brass timeline pin with archive-eye doorway motif, transparent-friendly, no text, no photorealism.",
+  },
+  timeline_marker_roundtable: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/timeline_marker_roundtable.png"),
+    prompt: "Pixel-art small timeline marker icon for Worldline Roundtable events, same visual language as SwarmOracle, brass timeline pin with circular table and branching worldline motif, transparent-friendly, no text, no photorealism.",
+  },
+  ending_room_speaker_glow: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/ending_room_speaker_glow.png"),
+    prompt: "Pixel-art speaker focus glow ornament for Oracle Chambers UI, same visual language as SwarmOracle archive theater, soft brass and plum-violet ring aura, transparent-friendly, designed to sit behind an active speaker portrait or badge, no text, no photorealism.",
+  },
+  archivist_emblem: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/archivist_emblem.png"),
+    prompt: "Pixel-art archivist emblem for SwarmOracle archive UI, wax seal and brass medallion hybrid, archive eye, hourglass, braided thread and dossier motifs, compact transparent-friendly emblem, no text, no photorealism.",
+  },
+  worldline_dossier_divider: {
+    output: path.join(FRONTEND_ROOT, "public/assets/ui/generated/worldline_dossier_divider.png"),
+    prompt: "Pixel-art dossier divider ornament for worldline archive UI, same visual language as SwarmOracle, long horizontal parchment divider with brass knots, plum-violet thread motifs and subtle archive marks, transparent-friendly, no text, no photorealism.",
+  },
 };
 
 function parseArgs(argv) {

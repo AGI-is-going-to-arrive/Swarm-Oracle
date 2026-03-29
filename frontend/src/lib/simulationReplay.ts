@@ -321,6 +321,68 @@ function isScenarioGameplayState(value: unknown): boolean {
     && archive.branch_snapshots.every(isArchiveBranchSnapshot);
 }
 
+function normalizeReplayBranch(
+  branchValue: unknown,
+  storyBranchValue: unknown,
+): unknown {
+  if (!isRecord(branchValue)) return branchValue;
+  const storyBranch = isRecord(storyBranchValue) ? storyBranchValue : null;
+  const branch = branchValue as JsonRecord;
+  return {
+    ...branch,
+    description: typeof branch.description === 'string' ? branch.description : '',
+    summary: typeof branch.summary === 'string'
+      ? branch.summary
+      : (typeof storyBranch?.insight === 'string' ? storyBranch.insight : ''),
+    story: typeof branch.story === 'string'
+      ? branch.story
+      : (typeof storyBranch?.story === 'string' ? storyBranch.story : ''),
+    insight: typeof branch.insight === 'string'
+      ? branch.insight
+      : (typeof storyBranch?.insight === 'string' ? storyBranch.insight : ''),
+    key_moments: isStringArray(branch.key_moments)
+      ? branch.key_moments
+      : (isRecord(storyBranch) && isStringArray(storyBranch.key_moments) ? storyBranch.key_moments : []),
+  };
+}
+
+function backfillLegacyReplayPayload(payload: unknown): unknown {
+  if (!isRecord(payload) || !isRecord(payload.scenario)) {
+    return payload;
+  }
+
+  const scenario = payload.scenario as JsonRecord;
+  const storyBranches = (
+    isRecord(payload.storyData) && Array.isArray(payload.storyData.branches)
+      ? payload.storyData.branches
+      : []
+  );
+  const storyBranchesById = new Map<string, unknown>();
+  for (const storyBranch of storyBranches) {
+    if (isRecord(storyBranch) && typeof storyBranch.id === 'string') {
+      storyBranchesById.set(storyBranch.id, storyBranch);
+    }
+  }
+
+  const branches = Array.isArray(scenario.branches)
+    ? scenario.branches.map((branch) => {
+        const branchId = isRecord(branch) && typeof branch.id === 'string' ? branch.id : null;
+        return normalizeReplayBranch(
+          branch,
+          branchId ? storyBranchesById.get(branchId) : null,
+        );
+      })
+    : scenario.branches;
+
+  return {
+    ...payload,
+    scenario: {
+      ...scenario,
+      branches,
+    },
+  };
+}
+
 function isSimulationReplayUiState(value: unknown): value is SimulationReplayUiState {
   return isRecord(value)
     && (
@@ -387,7 +449,9 @@ export function normalizeSimulationReplayPayload(
 
 export function coerceSimulationReplayPayload(payload: unknown): SimulationReplayPayload | null {
   try {
-    return normalizeSimulationReplayPayload(payload as SimulationReplayPayload);
+    return normalizeSimulationReplayPayload(
+      backfillLegacyReplayPayload(payload) as SimulationReplayPayload,
+    );
   } catch {
     return null;
   }

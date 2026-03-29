@@ -134,6 +134,27 @@ cp .env.example backend/.env
     - 单结局结果页 `1600x900`：`进入会客厅 -> done(turn_count=3)`、`只改一步 -> done(turn_count=2)`
     - 单结局结果页 `390x844`：modal `fitsVertically=true`、`fitsHorizontally=true`
     - 多结局结果页下两种模式当前还没有单独签收；下次执行需按 `implement/23...` 的 `Phase C2` 和多结局 QA 合同补齐
+- 本 session 这轮 `Oracle Chambers Phase C2/C3 + Oracle UI asset` 改动，当前又实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `48 passed in 4.90s`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -k 'ending_room or delete_' -q`
+    - `55 passed, 152 deselected in 3.64s`
+  - `cd backend && source .venv/bin/activate && python -m ruff check --ignore E501 app/api/ending_rooms.py app/models/ending_room.py app/services/ending_room_service.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py`
+    - `All checks passed!`
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/pages/ResultView.test.tsx`
+    - `24 passed`
+  - `cd frontend && npm run assets:provenance:check`
+    - `{"status":"ok"}`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18931 --output-dir output/e2e/20260329-phasec-current-corners-rerun --headless`
+    - 通过
+  - 当前源码实机验收（基于 `http://127.0.0.1:18931`）：
+    - 单结局结果页：participant picker -> chamber -> hotseat -> all-present 走通
+    - 多结局结果页：已验证按各自 ending 打开 picker / chamber，不再只剩“点按钮直接进房间”的旧口径
+    - Oracle 专属 panel / crest / quote frame / influence badge / speaker glow / dossier divider 已上屏
 
 ## 当前推荐定向回归
 

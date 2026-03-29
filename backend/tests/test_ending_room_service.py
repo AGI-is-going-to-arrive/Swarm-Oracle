@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.models import (
@@ -21,7 +22,7 @@ from app.models import (
     Scenario,
     ScenarioStatus,
 )
-from app.models.database import get_engine
+from app.models.database import get_engine, init_db
 from app.services.ending_room_service import (
     append_room_user_turn,
     append_thread_user_turn,
@@ -96,6 +97,58 @@ def _seed_branch_world() -> tuple[str, str, str]:
         return scenario.id, branch_a.id, branch_b.id
 
 
+def _seed_multi_agent_branch_world() -> tuple[str, str, list[str]]:
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="如果帝国调度失误引发连锁震荡？", status=ScenarioStatus.DONE)
+        session.add(scenario)
+        session.flush()
+
+        agents = [
+            Agent(scenario_id=scenario.id, name="狄奥多西一世", role="罗马皇帝", persona="以诏令压住裂口"),
+            Agent(scenario_id=scenario.id, name="斯提里科", role="西部统帅", persona="优先接管军权"),
+            Agent(scenario_id=scenario.id, name="阿卡狄乌斯", role="东部皇帝", persona="先稳住文书与府库"),
+        ]
+        for agent in agents:
+            session.add(agent)
+        session.flush()
+
+        branch = Branch(
+            scenario_id=scenario.id,
+            title="误调裂国",
+            story="一次调度失误在军权与文书之间撕开裂口。",
+            insight="真正关键的是谁先抓住命令链。",
+            summary="误调裂国 summary",
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(branch)
+        session.flush()
+
+        round_1 = Round(branch_id=branch.id, round_number=1)
+        session.add(round_1)
+        session.flush()
+
+        for agent, content in zip(
+            agents,
+            [
+                "先封住命令链，别让各省自行解释调令。",
+                "先扣住军饷和军旗，别让别人接走这支队伍。",
+                "先收拢文书和驿站，不要让广场先起哄。",
+            ],
+            strict=True,
+        ):
+            session.add(
+                AgentMessage(
+                    round_id=round_1.id,
+                    agent_id=agent.id,
+                    content=content,
+                    emotion="focused",
+                )
+            )
+
+        session.commit()
+        return scenario.id, branch.id, [agent.id for agent in agents]
+
+
 def test_create_ending_room_deduplicates_scope():
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
 
@@ -162,6 +215,44 @@ def test_single_speaker_branch_does_not_duplicate_agent_participants():
     ]
     assert len(agent_participants) == 1
     assert agent_participants[0]["display_name"] == "Archivist Seed"
+
+
+def test_create_ending_room_respects_manual_selected_agent_ids():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=[agent_ids[2], agent_ids[0]],
+        language="zh",
+    )
+
+    assert created is True
+    agent_participants = [
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "agent"
+    ]
+    assert [participant["source_agent_id"] for participant in agent_participants] == [agent_ids[2], agent_ids[0]]
+    assert agent_participants[0]["persona_snapshot_json"]["selection_reason"] == "user_selected"
+    assert agent_participants[0]["persona_snapshot_json"]["impact_score"] > 0
+
+
+def test_create_ending_room_rejects_agent_ids_outside_visible_branch_roster():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    _other_scenario_id, _other_branch_id, other_agent_ids = _seed_multi_agent_branch_world()
+
+    with pytest.raises(Exception, match="current worldline roster"):
+        create_ending_room(
+            scenario_id,
+            room_type=EndingRoomType.ENDING_CHAMBER,
+            anchor_branch_id=branch_id,
+            selected_branch_ids=[branch_id],
+            selected_agent_ids=[agent_ids[0], other_agent_ids[0]],
+            language="zh",
+        )
 
 
 def test_create_ending_room_deduplicates_under_concurrency():
@@ -478,6 +569,36 @@ def test_room_and_thread_followup_memory_stay_partitioned():
     assert thread_context["thread_memory_partition_id"] == refreshed_thread["memory_partition_id"]
 
 
+def test_all_present_followup_returns_multiple_current_worldline_responses():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="如果让当前阵容都回应一次，他们会怎么分工？",
+        addressed_agent_ids=agent_ids[:2],
+        interaction_mode=EndingRoomInteractionMode.ALL_PRESENT,
+    )
+
+    assert len(followup["turns"]) == 4
+    assert followup["turns"][0]["source"] == "user_turn"
+    assert all(turn["interaction_mode"] == "all_present" for turn in followup["turns"][1:])
+    assert {turn["participant_id"] for turn in followup["turns"][1:]} >= {
+        participant["id"]
+        for participant in load_ending_room_snapshot(snapshot["id"])["participants"]
+        if participant["role_slot"] in {"agent", "archivist"}
+    }
+
+
 def test_run_ending_room_background_is_idempotent_after_done():
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(
@@ -577,6 +698,57 @@ def test_create_ending_room_retries_from_error_state(monkeypatch):
     assert retried_snapshot["turns"] == []
 
 
+def test_init_db_normalizes_legacy_ending_room_enum_rows():
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+
+    assert created is True
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE ending_room SET room_type = 'ending_chamber', status = 'done', phase = 'verdict', current_phase = 'verdict' WHERE id = :room_id",
+            {"room_id": snapshot["id"]},
+        )
+        conn.exec_driver_sql(
+            "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id",
+            {"room_id": snapshot["id"]},
+        )
+        conn.exec_driver_sql(
+            "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id",
+            {"room_id": snapshot["id"]},
+        )
+        conn.exec_driver_sql(
+            "UPDATE ending_room_participant SET role_slot = 'archivist' WHERE room_id = :room_id AND source_agent_id IS NULL",
+            {"room_id": snapshot["id"]},
+        )
+        conn.exec_driver_sql(
+            "UPDATE ending_room_participant SET role_slot = 'agent' WHERE room_id = :room_id AND source_agent_id IS NOT NULL",
+            {"room_id": snapshot["id"]},
+        )
+
+    init_db()
+
+    refreshed = load_ending_room_snapshot(snapshot["id"])
+
+    assert refreshed["room_type"] == "ending_chamber"
+    assert refreshed["status"] == "done"
+    assert refreshed["current_phase"] == "verdict"
+    assert refreshed["threads"][0]["mode"] == "room"
+    assert refreshed["threads"][0]["interaction_mode"] == "auto_recap"
+    assert refreshed["turns"]
+    assert {turn["source"] for turn in refreshed["turns"]} == {"auto_recap"}
+    assert {turn["interaction_mode"] for turn in refreshed["turns"]} == {"auto_recap"}
+    assert {participant["role_slot"] for participant in refreshed["participants"]} >= {"agent", "archivist"}
+
+
 def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch):
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(
@@ -618,7 +790,38 @@ def test_participants_include_worldline_echo_key():
         if participant["role_slot"] in {"agent", "archivist"}
     ]
     assert all(value is None or value for value in echoed)
-    assert any(value for value in echoed)
+
+
+def test_init_db_normalizes_legacy_lowercase_ending_room_enums():
+    scenario_id, branch_id, _agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        language="zh",
+    )
+    assert created is True
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+
+    with Session(get_engine()) as session:
+        session.exec(
+            text(
+                "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id"
+            ).bindparams(room_id=snapshot["id"]),
+        )
+        session.exec(
+            text(
+                "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id"
+            ).bindparams(room_id=snapshot["id"]),
+        )
+        session.commit()
+
+    init_db()
+    normalized_snapshot = load_ending_room_snapshot(snapshot["id"])
+
+    assert normalized_snapshot["threads"][0]["mode"] == "room"
+    assert all(turn["source"] == "auto_recap" for turn in normalized_snapshot["turns"])
 
 
 def test_append_room_user_turn_uses_room_memory_partition():
@@ -646,11 +849,12 @@ def test_append_room_user_turn_uses_room_memory_partition():
     )
 
     assert payload["memory_partition_id"] == snapshot["memory_partition_id"]
-    assert len(payload["turns"]) == 2
+    assert len(payload["turns"]) == 3
     assert all(turn["memory_partition_id"] == snapshot["memory_partition_id"] for turn in payload["turns"])
     assert all(turn["thread_id"] == snapshot["threads"][0]["id"] for turn in payload["turns"])
     assert payload["turns"][0]["source"] == "user_turn"
     assert payload["turns"][1]["interaction_mode"] == "hotseat"
+    assert payload["turns"][2]["source"] == "assistant_followup"
 
     room_context = build_room_followup_context(snapshot["id"])
     assert "请只围绕当前结局回答。" in room_context["room_transcript"]

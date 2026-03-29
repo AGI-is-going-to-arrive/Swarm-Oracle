@@ -313,7 +313,7 @@ beforeEach(() => {
 });
 
 describe('ResultView campaign summary', () => {
-  it('renders ending-room CTAs and opens the modal with the selected mode', async () => {
+  it('renders ending-room CTAs, opens the picker, and confirms into the modal with the selected mode', async () => {
     const user = userEvent.setup();
 
     render(
@@ -328,6 +328,8 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByRole('button', { name: 'ending_room.one_move_cta' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'ending_room.one_move_cta' }));
+    expect(await screen.findByRole('heading', { name: 'Pick visible participants for this worldline' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Enter chamber' }));
 
     expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
   });

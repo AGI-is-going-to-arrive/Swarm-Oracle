@@ -1,0 +1,10 @@
+{
+  "preset": "worldline_dossier_divider",
+  "model": "gemini-3-pro-image-preview",
+  "provider": "generativelanguage",
+  "source": "Google Gemini image preview API",
+  "source_url": "https://aiplatform.googleapis.com/v1/publishers/google",
+  "generated_at": "2026-03-29T10:29:55.625Z",
+  "output": "public/assets/ui/generated/worldline_dossier_divider.png",
+  "prompt": "Pixel-art dossier divider ornament for worldline archive UI, same visual language as SwarmOracle, long horizontal parchment divider with brass knots, plum-violet thread motifs and subtle archive marks, transparent-friendly, no text, no photorealism."
+}

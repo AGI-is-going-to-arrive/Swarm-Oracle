@@ -479,6 +479,14 @@ POST /api/ending-room/{room_id}/replay-artifact     # 第二阶段可补
 
 ## 3.3 Phase C — 结果页单结局会客厅 MVP
 
+> 状态更新（2026-03-29，晚）：
+> - 这条线已经不再停在“只能开 modal 看 auto recap”的最早口径
+> - 当前真实代码里，结果页 CTA 会先进入 participant picker，再把 `selected_agent_ids` 带进 room scope
+> - 单结局 `EndingChatModal` 当前已接上 thread rail、follow-up composer、`archivist_route / hotseat / all_present`
+> - 单结局桌面 `1600x900` 与移动端 `390x844` 的 picker / chamber / hotseat / all-present 当前已做真实浏览器验收
+> - 多结局结果页当前至少已验证过按各自 ending 打开 picker / chamber，但尚未做完整独立签收
+> - `Worldline Roundtable` 页面、ending-room replay/share/import 仍未完成
+
 ### 目标
 
 让用户在结果页每个结局卡内直接进入当前世界线的后结局复盘。
@@ -966,7 +974,11 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 > - backend 侧 `follow-up thread / user-turn / memory partition` 已先按 `Phase B+` 最小口径落地
 > - 当前已能创建 thread、读取 thread snapshot、写 room/thread follow-up turn，并显式区分 room memory 与 thread memory
 > - `delete_scenario` 也已把 `ending_room_thread` 纳入清理
-> - 但前端 thread UI / thread store / thread WS 还没做，这一节仍不能签收
+> - frontend 当前已接上 thread UI / thread store / thread WS、scope notice、room/thread transcript 切换，以及 `archivist_route / hotseat / all_present`
+> - 当前真实签收口径已经从“thread UI 还没做”推进到“单结局 follow-up 可玩”，但这节仍不能整体签收：
+>   - 多结局 follow-up 还没做完整独立验收
+>   - replay/read-only thread 只读链路还没补齐
+>   - `Worldline Roundtable` 自己的 follow-up 还没开工
 
 ### 目标
 
@@ -1805,6 +1817,23 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 ---
 
 ## 8. 美术与素材计划
+
+> 状态更新（2026-03-29，晚）：
+> - 这轮已按现有画风补齐一整套 Oracle / Roundtable 专属 UI 资产：
+>   - `oracle_chamber_panel / oracle_chamber_crest / oracle_quote_frame`
+>   - `worldline_roundtable_panel / worldline_roundtable_banner`
+>   - `badge_ending_chamber / badge_worldline_roundtable / badge_crossline_gallery`
+>   - `ending_room_participant_frame / ending_room_influence_badge / ending_room_speaker_glow`
+>   - `timeline_marker_chamber / timeline_marker_roundtable`
+>   - `archivist_emblem / worldline_dossier_divider`
+> - 这些资产当前都已写同名 `.meta.json` provenance sidecar
+> - 当前已实际接到 UI 的部分：
+>   - picker / chamber 的 `panel + crest`
+>   - transcript bubble 的 `quote frame`
+>   - participant / picker card 的 `influence badge`
+>   - active speaker 的 `speaker glow`
+>   - thread rail 的 `dossier divider`
+> - `worldline_roundtable_panel / banner / badge` 当前已入库和 registry，但仍等真正的 Roundtable 页面接线
 
 ## 8.1 视觉原则
 

@@ -31,7 +31,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `BranchNode` | 分支树节点（概率、状态、标题） |
 | `BranchEdge` | 分支树边（自定义样式）；当前额外补了一层稳定底边，即使 GSAP reveal 抖动，分支连线也不会先透明消失 |
 | `BranchDetailModal` | 分支详情弹窗（故事、洞察、关键时刻）；当前已拆成摘要区与消息区双滚动，不再出现长 story 把实时消息区挤成 0 高 |
-| `EndingChatModal` | Oracle Chambers 单结局会客厅 modal；当前支持 `进入会客厅 / 只改一步` 两种模式、draft/commit transcript 收口、只读 replay 提示，以及 automation 输出 `ending_room_modal` 状态摘要；这轮已实测通过单结局桌面/移动端闭环，但多结局结果页尚未做单独签收 |
+| `EndingChatModal` | Oracle Chambers 单结局会客厅 modal；当前支持 `进入会客厅 / 只改一步` 两种模式、draft/commit transcript 收口、thread rail、`New thread`、只读 replay 提示，以及 automation 输出 `ending_room_modal` 状态摘要；当前 follow-up 已支持 `archivist_route / hotseat / all_present` 三种模式，会按 room/thread scope 展示 committed transcript；这轮已实测通过单结局桌面/移动端闭环，但多结局结果页尚未做完整独立签收 |
 | `InterventionModal` | 蝴蝶效应干预弹窗；当前已支持 `即时 / 回溯 / 批量` 三模式，批量模式只面向活跃分支，回溯模式仅在该分支已有历史轮次时可用；标准干预成功后，弹窗当前还会显示队列反馈：没有积压时提示预计下一轮生效，有积压时提示前方还有多少条待处理干预 |
 | `GameplayCardsModal` | 玩法卡弹窗：当前共有 14 张玩法卡，按题目画像动态推荐，支持目标分支/角色/来源分支选择、导演点数与冷却提示；除原有导演卡外，本轮新增 `审计清算 / 情报反噬 / 民意回摆 / 停火委员会` 4 张反制卡；题材包已扩到 12 类，modal 会显示题材 hooks、题材导向文案、三段式题材连锁事件、当前承诺 worldline，以及 `风险 / 资源 / 压强` 三项摘要；本轮又补了 profile 战术层：modal 会显示当前题材的打法说明，并把这条说明一起带进玩法卡 prompt；顶部当前还会把导演状态、signature arc、当前选中卡牌摘要、目标世界线 / 角色 / 来源分支 / directive mode 一起收口展示；generic 题材现使用独立 `gameplay_card_frame_generic` 卡框，不再复用 `gameplay_panel` 做装饰框；生成的 prompt 现显式标注为“导演级 override”，要求 LLM 把玩法卡当成已经发生且持续生效的世界线事件；当前 `target/source branch`、`agent` 与 `directive` 的联动已收成 `override + derived value`，不再靠多条同步 `useEffect` 级联回写；正式玩法卡提交时，前端现在会把 `card_id / profile_id / directive` 一起交给后端校验，并优先用后端返回的 `gameplay_state` 刷新导演点数、冷却和 queue feedback，而不是只靠本地 usage 推导 |
 | `TimelineBar` | 时间线进度条（轮次追踪）；完成态 replay 会接入 round marker 图标（`fork/card/bet/result`）并支持直接跳轮次回放；hover tooltip 会显示本轮分支标题、玩法卡、下注与结局摘要；compact 版会直接嵌入完成态 Theater 面板内 |
@@ -43,6 +43,25 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
 | `DebateShareModal` | Debate 结果页专用分享弹窗，复用现有 share copy 口径但不走旧 scenario social API；现会输出平台、copy length、复制状态等 automation state，平台按钮与文案首行也会带对应 emoji 图标；当前 share copy 会带 `counterplay` 摘要和命中/未中结果，以及 replay permalink |
 | `ShareModal` | 社交媒体文案生成弹窗 (P6) — 支持小红书/微博/知乎/Reddit/X 一键生成；当前结果区不再显示题材 / 神谕 / hooks 的额外 chips，也不再给主模式社交文案自动追加题材档案前缀，只保留平台正文；弹窗现在会明确区分 `idle / loading / success / error`，生成中会显示等待提示，生成完成后会给出“文案已生成 / 可直接复制或切平台”的结果提示，automation state 里也会带 `status` 字段；当前社交文案请求已走更长的前端超时窗口，避免正常 LLM 延迟下前端先于后端中断；当前所有平台文案都跟随场景语言输出，`reddit / x` 不再单独强制英文；复制失败时不会再走废弃的 `execCommand('copy')` fallback，而是直接提示用户手动复制 |
 | `LanguageSwitcher` | 全局语言切换器（EN/ZH）；桌面端固定右下角，移动端普通页面移到右上安全区，Theater 页继续贴右下安全区 |
+
+### Oracle Chambers 状态更新（2026-03-29）
+
+- 结果页当前不是“点按钮直接进房间”的旧口径了：
+  - 每张结局卡会先打开 participant picker
+  - picker 会把 `selected_agent_ids` 带进 `EndingChatModal`
+- 单结局会客厅当前已支持：
+  - `archivist_route / hotseat / all_present`
+  - follow-up thread
+  - thread rail
+  - room/thread scope notice
+  - Oracle 专属 panel / crest / quote frame / participant frame / influence badge / speaker glow
+- `/result/replay` 这轮还补了一层 legacy 容错：
+  - 若旧 replay payload 里的 `scenario.branches` 不完整，前端会从 `storyData.branches` 回填 `summary / story / insight / key_moments`
+  - 目标是避免老 replay 直接落入 invalid
+- 当前真实签收边界：
+  - 单结局桌面 / 移动端闭环：通过
+  - 多结局结果页按各自 ending 打开 picker / chamber：已做基础验证
+  - 多结局完整独立签收、`Worldline Roundtable` 页面、ending-room `replay/share/import`：仍未完成
 
 ### `App.tsx` / `AppErrorBoundary.tsx`
 - 路由入口当前统一挂在 `App.tsx`
@@ -158,6 +177,7 @@ React 19 + TypeScript 5.9 + Vite 7 + Zustand + @xyflow/react + GSAP + i18next + 
   - 运行时预载的角色 / 结局 / UI 资源 key；本轮又把 `sprite_alchemist / sprite_assassin / sprite_bard / sprite_knight / sprite_monk / sprite_thief / sprite_witch` 7 张原库存精灵接入 runtime
   - 玩法卡 frame / badge / panel 素材路径；generic 卡框已改为独立 `gameplay_card_frame_generic`，不再借用 `gameplay_panel`
   - `DEBATE_UI_ASSETS`：`debate_stage_banner / debate_verdict_panel / debate_score_meter / debate_badge_* / debate_quote_frame`
+  - `ORACLE_UI_ASSETS`：`panel / crest / quote frame / badge / participant frame / influence badge / speaker glow / dossier divider / timeline marker / roundtable banner`
 - `BootScene.ts`、`VizSynthesizer.ts` 与 `gameplayCards.ts` 已共用这份 registry，避免扩新主题时多处手工同步；当前 `BootScene` 只预载首屏初始 theme 与 `sprite_default + 初始角色 sprite`，其余缺失 sprite 改由 `WorldScene` 在 agent 真到场时按需补载；后续 `scene_change` 背景与 `EndingScene` 大图继续按需补载，`bet_panel / leaderboard / title_screen / minimap_frame` 也不再是 Theater 首次进入硬依赖
 
 ### `debateLabels.ts` / `debateShare.ts`

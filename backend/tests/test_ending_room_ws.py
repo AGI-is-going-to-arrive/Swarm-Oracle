@@ -202,4 +202,8 @@ def test_room_user_turn_reuses_existing_ws_manager_broadcast(client, monkeypatch
 
     assert resp.status_code == 200
     event_types = [call.args[1]["type"] for call in broadcast.await_args_list]
-    assert event_types == ["ending_room_turn_commit", "ending_room_turn_commit"]
+    assert event_types == [
+        "ending_room_turn_commit",
+        "ending_room_turn_commit",
+        "ending_room_turn_commit",
+    ]
