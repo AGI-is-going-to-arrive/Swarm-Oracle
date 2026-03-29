@@ -13,11 +13,11 @@
 
 最小正确闭环是：
 
-`推演结束 -> 结果页每个结局卡进入“结局会客厅” -> 只读取当前世界线全文 -> 可继续围绕该结局复盘`
+`推演结束 -> 结果页每个结局卡进入“结局会客厅” -> 只读取当前世界线全文 -> 自动复盘 -> 用户可继续围绕该结局追问当前世界线参与者`
 
 第二阶段再做：
 
-`多结局完成 -> 发起“世界线圆桌” -> 每条结局只派代表发言 -> 档案官总结`
+`多结局完成 -> 发起“世界线圆桌” -> 每条结局只派代表发言或专家证人 -> 档案官主持并总结`
 
 绝不允许把这条线做成：
 
@@ -39,6 +39,8 @@
 | 功能总名 | 神谕会客厅 | Oracle Chambers | `oracle_chambers` | 总玩法名 |
 | 单结局房间 | 结局会客厅 | Ending Chamber | `ending_chamber` | 结果页单条结局入口 |
 | 多结局复盘 | 世界线圆桌 | Worldline Roundtable | `worldline_roundtable` | 多结局代表同台 |
+| 房内角色实例 | 世界线回声 | Worldline Echo | `worldline_echo` | 同一 agent 在不同世界线/房间里的隔离人格快照 |
+| 结局后追问 | 追问线程 | Follow-up Thread | `followup_thread` | 围绕当前结局、事件、角色的二级讨论 |
 | 轻玩法 1 | 只改一步 | One Move Only | `one_move_only` | 只给单步修正建议 |
 | 轻玩法 2 | 异线旁听席 | Crossline Gallery | `crossline_gallery` | 只看异线摘要 |
 | 主持角色 | 档案官 | Archivist | `archivist` | 统一主持/总结角色 |
@@ -96,6 +98,17 @@ crossline_gallery:
 6. 中英双语必须同时成立，不能做成“中文 UI + 英文生成”或反过来。
 7. 新玩法必须沿用当前视觉语言，不单独长出第二套品牌。
 8. 若启用流式输出，必须使用“混合流式”，禁止把裸 token 流直接作为正式 transcript。
+9. 结局后用户追问必须写入当前 `ending_room` 新域，不得回写主 simulation transcript。
+10. 参与会客厅/圆桌的 agent 只允许读取：
+    - 当前 room transcript
+    - 当前 worldline 全文或当前可见摘要
+    - 当前 room 选中的参与者 persona snapshot
+11. 即使属于同一 `scenario_id`，也禁止让 agent 读取其他 room 的历史对话，避免“同题不同线”互相污染。
+12. 若用户在 A 结局里追问“B 结局里某角色当时怎么说”，系统只能引导用户去打开 B 结局对应 room，不能在 A 房间越权代答。
+13. 所有“后续发展”“热座追问”“全员会谈”都属于 post-ending 复盘层，不能重新进入主 simulation 引擎继续滚动世界状态。
+14. 同一 `source_agent_id` 在不同 `branch_id`、不同 room 中必须被视为不同 `worldline_echo`，不共享结局后对话记忆。
+15. 结局后追问只能读取：当前世界线材料 + 当前 room 历史 + 当前 thread 历史，不得回读其他 room / 其他世界线历史。
+16. “和每个 agent 聊”只允许发生在当前世界线 roster 内，不允许把整局所有 agent 自动拉进同一个全局聊天室。
 
 ### 2.2 技术边界
 
@@ -106,8 +119,10 @@ crossline_gallery:
   "scenario_id": "scn_xxx",
   "anchor_branch_id": "br_xxx",
   "room_type": "ending_chamber | worldline_roundtable | one_move_only | crossline_gallery",
+  "discussion_mode": "auto_recap | archivist_route | hotseat | all_present | representative | expert_witness | trait_mix",
   "participant_set_hash": "sha256(sorted participants + role slots + branch scope)",
-  "language": "zh | en"
+  "language": "zh | en",
+  "memory_partition_version": "v1"
 }
 ```
 
@@ -126,12 +141,41 @@ crossline_gallery:
   - `selection_mode = auto | manual`
   - `selected_agent_ids_hash = sha256(sorted selected_agent_ids) | auto`
 - `participant_set_hash` 不得只由 `branch scope` 计算；手动选人必须参与 dedupe。
+- `discussion_mode` 变更时必须形成独立 room scope；不能把 `auto_recap` 和 `hotseat` 命中同一个 room。
 - 同一 worldline 下：
   - `auto(top-2)`
   - `manual([A])`
   - `manual([A,B])`
   - `manual([B,A])`
   必须被稳定区分或稳定去重，不能出现“顺序不同 -> room 重复创建”或“选人不同 -> 命中同一个 room”的错误。
+
+结局后追问线程需要额外二级 key：
+
+```json
+{
+  "room_id": "er_xxx",
+  "thread_id": "ert_xxx",
+  "anchor_branch_id": "br_xxx",
+  "thread_mode": "solo | panel | all_hands",
+  "participant_set_hash": "sha256(sorted participants in thread)",
+  "language": "zh | en"
+}
+```
+
+并固定三层记忆边界：
+
+1. `worldline source memory`
+   - 当前 `anchor_branch_id` 的 transcript / story / insight / key_moments
+2. `room memory`
+   - 当前 `ending_room_turn` committed transcript
+3. `thread memory`
+   - 当前 `followup_thread` committed transcript
+
+明确禁止：
+
+- 读取其他 room 的追问记录
+- 读取同一 `source_agent_id` 在其他 worldline 的历史对话
+- 把 scenario 级全局对话缓存当成结局后对话上下文
 
 ### 2.3 与现有域的关系
 
@@ -148,6 +192,50 @@ crossline_gallery:
   - `proposition / opposition / judge`
   - `winner / verdict_tone`
   - `prediction / counterplay`
+
+### 2.4 差异化原则（避免同质化）
+
+可以借鉴但不能照搬的点：
+
+- 借鉴 `MiroFish` 的点：
+  - 推演结束后，允许继续向角色追问“为什么会这样”
+  - 把“报告层”之外再加一层可互动解释层
+- 借鉴 `Roundtable MCP / LobeHub` 的点：
+  - 主持者 / 主管调度发言顺序
+  - 支持轮流、并行、总结三类会议节奏
+  - 支持显式指定参与者
+
+必须明确不做的点：
+
+- 不做常驻开放式群聊空间
+- 不做脱离结局卡/事件卡的空白聊天框
+- 不做跨世界线共享角色记忆池
+- 不做配置先行、玩法感不足的“多 agent 编排器 UI”
+
+SwarmOracle 自己要成立的独特点：
+
+- 交互入口始终从 `结局卡 / 关键转折卡 / 角色卡` 发起，而不是空白输入框
+- 用户对话的对象不是“全局 agent”，而是该世界线的 `worldline_echo`
+- 每次追问都围绕 `这个结局 / 这个事件 / 这个后续`，而不是泛泛聊天
+- 圆桌之后可以对某条 quote / 某个结论继续追问，形成“复盘 -> 追问 -> 再复盘”的链路
+
+### 2.5 外部灵感取舍
+
+这条线可以明确借鉴三类外部思路，但必须经过项目化改造：
+
+- 参考 `MiroFish`
+  - 借的是“结局后仍可继续追问角色”的价值，不借“开放式漫游整个模拟世界”的产品边界
+- 参考 `Lobe 群组 / Roundtable`
+  - 借的是 `Supervisor / 主持人` 的编排方式、轮转节奏、自动化多角色协作，不借“通用群聊工作台”的产品定位
+- 参考 `xAI multi-agent`
+  - 借的是 `leader + hidden sub-agents + only committed output visible` 的执行结构，不借“把隐藏推理或中间 planning 全量暴露给用户”
+
+SwarmOracle 自己的独特点必须保持：
+
+- 所有讨论都从“结果页上的某个结局卡”进入，而不是从空白 chat 入口进入
+- 所有追问都锚定当前世界线的 `story / insight / key_moments / transcript`
+- 所有跨线比较都经由摘要卡、引文卡、关键转折卡进行，而不是把别的世界线全文搬进来
+- `Archivist` 不是普通群聊管理员，而是“档案官 + 证据路由器 + 主持人”
 
 ---
 
@@ -373,6 +461,7 @@ retrieve(
 POST /api/scenario/{id}/ending-room
 GET  /api/ending-room/{room_id}
 GET  /api/ending-room/{room_id}/result
+POST /api/ending-room/{room_id}/user-turn          # 结局后用户追问 / 热座问答 / 圆桌追问
 WS   /api/ws/ending-room/{room_id}
 POST /api/ending-room/{room_id}/replay-artifact     # 第二阶段可补
 ```
@@ -582,6 +671,35 @@ frontend/src/i18n/*                 # 中文/英文词条
 - 切换不同 ending card 后，participant picker、推荐阵容、story 摘要、transcript、impact score 都跟着变
 - 在多结局结果页里关闭并重开不同 ending 的 modal，不会复用错 room 或显示错 transcript
 
+#### F. 缺少“结局后继续追问”
+
+当前 chamber 更像一次性生成的结果页附属 transcript，还不是一个真正可继续追问的复盘空间。
+
+下一轮必须补上：
+
+- 自动复盘结束后，用户可继续围绕当前结局发问
+- 用户可：
+  - 让 `Archivist` 自行路由给最相关的 `1-2` 名当前世界线参与者
+  - 点名当前世界线里的某个 agent 进入 `hotseat`
+  - 让当前已选参与者做一次 `all_present` 短轮回应
+- 每个追问线程都只属于当前结局卡对应 room，不得被别的结局卡复用
+
+#### G. 上下文隔离必须从“branch scope”升级到“room scope”
+
+当前 branch 隔离是必要条件，但对“结局后追问”还不够。
+
+必须新增硬合同：
+
+- agent 回答用户追问时，默认只读：
+  - 当前 room committed transcript
+  - 当前 `anchor_branch_id` 全文
+  - 当前 room 的 participant persona snapshot
+- 不读取：
+  - 同一 `scenario_id` 下其他 ending-room transcript
+  - 其他 `worldline_roundtable` transcript
+  - 历史上同 branch 但不同选人配置的旧 room transcript
+- 若用户显式提到其他世界线，系统只允许返回摘要卡或提示跳转，不允许直接把他线全文混进回答
+
 ### 后端合同
 
 #### 新增服务层 helper
@@ -723,6 +841,106 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 - 避免连续两条 turn 用同一种开头
 - `Archivist` 负责收束，不抢戏
 
+### 结局后追问合同（新增，Mandatory）
+
+#### 玩法定位
+
+这不是把会客厅改造成通用群聊，而是给每个结局卡增加一个“可继续追问的证据化复盘层”。
+
+与 `MiroFish` 的关键差异必须明确：
+
+- `MiroFish` 更像“进入模拟世界后继续和角色自由对话”
+- `SwarmOracle` 必须是“从某个结局卡进入，只围绕这个结局继续追问”
+
+#### 追问模式
+
+在 `ending_chamber` 内新增：
+
+1. `archivist_route`
+   - 用户提问后，由 `Archivist` 决定点名 `1-2` 位最相关参与者回应
+2. `hotseat`
+   - 用户显式点名一个当前世界线参与者作答
+   - 允许 `Archivist` 在结尾补一条整理意见
+3. `all_present`
+   - 仅限当前世界线
+   - 所有已选参与者各回 `1` 次短回应
+   - 若真实参与者过多，必须降级成：
+     - 前台 `3-4` 位 active speakers
+     - 其余人折叠为 `chorus strip / 旁席意见条`
+
+#### 新增请求字段
+
+```json
+{
+  "interaction_mode": "auto_recap | archivist_route | hotseat | all_present",
+  "question_text": "如果你当时再多等一轮，会不会避免失控？",
+  "addressed_agent_ids": ["ag_xxx"],
+  "question_anchor_ids": ["km_1", "km_4"],
+  "selection_recipe": "manual | impact_top | responsibility_mix | disagreement_pair | trait_mix"
+}
+```
+
+#### 后端合同
+
+- 新增 `append_user_turn(...)`
+- 新增 `build_room_followup_context(...)`
+- 新增 `resolve_followup_responders(...)`
+- `user_turn` / `agent_followup_turn` / `archivist_followup_turn` 必须继续写入 `ending_room_turn`
+- 每条 follow-up turn 必须带：
+  - `source = auto_recap | user_followup`
+  - `memory_partition_id`
+  - `interaction_mode`
+  - `addressed_agent_ids`
+
+#### 前端合同
+
+- `EndingChatModal` 在自动复盘完成后，底部出现：
+  - `继续追问`
+  - `点名追问`
+  - `当前全员回应`
+- 必须支持从 `key_moment card` 直接发起追问：
+  - `为什么这里转向了？`
+  - `如果不这么做会怎样？`
+  - `谁最该为这里负责？`
+- `hotseat` 模式要显式展示当前被点名的角色
+- `all_present` 模式要避免 UI 被十几个头像撑爆：
+  - 只把 active speakers 放正文区
+  - 旁席意见折叠为 summary chip / side strip
+
+#### 选人策略合同
+
+除了手动点名，还必须支持“按属性快速成局”，这样这条线才会更像玩法，而不是纯配置面板：
+
+1. `impact_top`
+   - 默认推荐
+   - 选择当前世界线影响度最高的 `1-3` 人
+2. `responsibility_mix`
+   - 优先拉入：
+     - 关键行动发起者
+     - 关键后果承受者
+     - `Archivist`
+3. `disagreement_pair`
+   - 优先选择在关键转折上立场最冲突的两人
+4. `trait_mix`
+   - 按 persona 标签自动混编：
+     - `冒进 / 保守`
+     - `理想 / 现实`
+     - `秩序 / 裂变`
+
+约束：
+
+- `selection_recipe` 只能在当前 worldline roster 内选人
+- recipe 产出的真实 `selected_agent_ids` 必须写回 room snapshot，便于 replay / debug
+- recipe 若与 manual 产出同一组人，可以命中同一 room；若产出不同组人，必须形成不同 room scope
+
+#### 隔离验收
+
+1. ending A 的追问历史不会出现在 ending B
+2. 同一 ending 下，`auto(top-2)` 与 `manual([A,B,C])` 的追问历史不能混线
+3. 点名不存在于当前 worldline 的 agent 必须 `422`
+4. replay 打开后只能重播既有追问，不能继续 live 发问
+5. 用户在 A 结局中追问 B 结局细节时，系统只能提示“去 B 结局会客厅查看”
+
 ### Phase C2 验收
 
 只有以下全部成立，才能把 Phase C 从“功能打通”升级成“真的可玩”：
@@ -737,6 +955,95 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 8. 中英双语都自然
 9. replay 只读且稳定
 10. 才允许进入 `Phase D`
+
+---
+
+## 3.3.2 Phase C3 — 同线听证 / 热座追问（Strongly Recommended Before Phase D Signoff）
+
+### 目标
+
+把“结局后继续问 agent”做成 SwarmOracle 自己的玩法，而不是 MiroFish 式的自由漫游复制品。
+
+### 一句话定义
+
+`结局自动复盘结束 -> 用户围绕当前结局继续追问 -> 档案官路由/主持 -> 当前世界线参与者给出带证据的后续回应`
+
+补充定义：
+
+- 用户实际在对话的对象不是“全局 agent”，而是当前 worldline 内的 `worldline_echo`
+- 每条追问都必须带锚点：
+  - `结局卡`
+  - `关键转折卡`
+  - `角色卡`
+  - `圆桌 quote / verdict`
+- 追问历史应被建模为 `followup_thread`，而不是无限追加到一个无边界 room transcript
+
+### 推荐首版三种桌型
+
+1. `档案官路由`
+   - 用户只提问题
+   - `Archivist` 负责选人和控节奏
+2. `角色热座`
+   - 用户点名一个 agent
+   - 其他已选角色只做短追问或旁批
+3. `同线听证`
+   - 当前世界线参与者做一轮短会谈
+   - 仅限单 worldline，不用于跨线
+
+### 参与者成局方式
+
+`Phase C3` 首版不要只支持“手动多选”，而要同时提供三种快速入口：
+
+1. `推荐阵容`
+   - 当前世界线影响度最高的 `1-3` 人
+2. `点名热座`
+   - 用户手动指定 `1` 人
+3. `属性混编`
+   - 系统自动选出更有戏剧张力的一组人
+
+其中 `属性混编` 建议首版固定三种 recipe：
+
+- `责任链`
+  - 发起者 + 承担者 + 记录者
+- `分歧链`
+  - 最支持该结局的人 + 最质疑该结局的人
+- `气质链`
+  - 冒进者 + 稳定派 + 理想主义者
+
+### 必须坚持的独特性
+
+- 追问必须带“结局锚点”：
+  - `story`
+  - `insight`
+  - `key_moments`
+  - `supporting_turns`
+- 用户不是在“和虚拟角色闲聊”，而是在“追问这个结局为什么成立、还能怎么发展”
+- 若要谈“后续发展”，只能做：
+  - `three-turn epilogue / 后续三回合`
+  - 不能变成重启整局 simulation
+- 同一 `source_agent_id` 在 ending A / ending B 中必须生成两个彼此隔离的 `worldline_echo`
+
+### 追问线程结构建议
+
+建议把自动复盘和追问分成两层：
+
+1. `room transcript`
+   - 用于自动复盘、圆桌阶段 transcript、结论沉淀
+2. `followup_thread`
+   - 用于围绕某个角色/某个转折/某句结论继续问
+
+这样可以避免：
+
+- 一个 room 聊得越来越散
+- 用户第二次追问时找不到“我是围绕哪个点在问”
+- 同一个 room 内多个追问主题互相污染
+
+### 验收
+
+- `hotseat` 能稳定点名当前 worldline agent
+- `同线听证 / all_present` 在高 agent 数时能优雅降级
+- 每次追问都能看出引用的是当前结局证据，而不是空泛角色扮演
+- 追问线程与主 simulation transcript 严格分离
 
 ---
 
@@ -758,6 +1065,68 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 
 - 默认选概率最高两条
 - 其余进入 `异线旁听席`
+
+### 主持与轮转机制
+
+圆桌必须采用 `Archivist / Supervisor` 式编排，而不是自由抢话：
+
+1. `Archivist` 先定义本阶段问题
+2. 代表席按阶段规则并行或串行发言
+3. 若需要 hidden planning，可在后台启用临时 sub-agents 做证据整理
+4. 只有 committed 发言进入正式 transcript
+5. hidden planning 不落库，不进入 replay，不对用户裸露
+
+这一点可以参考：
+
+- `Lobe 群组` 的 `Supervisor + 群组成员` 协作
+- `xAI multi-agent` 的 `leader-only visible output`
+
+但在本项目里必须进一步收紧：
+
+- `Archivist` 只能调用当前可见范围内的证据
+- 后台 sub-agents 只负责“找证据/整理冲突”，不能偷偷扩大上下文读取范围
+
+### 可选桌型（新增）
+
+`世界线圆桌` 不应只有一种固定桌型。首版建议支持以下模式：
+
+1. `representative`
+   - 默认模式
+   - 每条结局 `1` 名代表 + `Archivist`
+2. `manual_shortlist`
+   - 用户手动指定 `2-4` 个席位
+   - 适合“我只想看这几位怎么吵”
+3. `trait_mix`
+   - 系统按 persona / 角色标签自动推荐冲突更强的组合
+   - 例如：`冒进者 vs 稳定派 vs 理想主义者`
+4. `expert_witness`
+   - 每条结局保留 `1` 名代表
+   - 某个阶段允许额外请入 `1` 名当前 worldline 的专家证人，发 `1` 轮短证词
+
+### 席位编排策略（新增）
+
+支持桌型还不够，圆桌必须允许不同“选人逻辑”，否则最后还是固定模板：
+
+1. `probability_top`
+   - 默认模式
+   - 概率最高的 `2` 条世界线入桌
+2. `fault_line_first`
+   - 优先选择分歧最大的两条世界线
+3. `manual_shortlist`
+   - 用户手动指定 `2-4` 个席位
+4. `witness_augmented`
+   - 代表席固定，再额外请入 `1` 个证人席位
+
+实现边界：
+
+- 任何策略都不能扩大摘要/全文权限边界
+- 策略只决定“谁入桌”，不决定“能读取什么”
+- 同一策略若最终选出相同 `selected_branch_ids + selected_agent_ids`，可以命中同一个 room
+
+边界必须写死：
+
+- `all_present` 只允许发生在单 worldline 的 `ending_chamber`
+- 多 worldline 圆桌不允许把每条线所有 agent 全拉上桌，否则既乱又容易串上下文
 
 ### 阶段设计
 
@@ -800,9 +1169,26 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - `supporting_turns`
 - `result payload` 形状
 
+### 圆桌后的用户追问（新增）
+
+圆桌 verdict 结束后，允许用户继续在“当前桌面”提问，但仍然遵守本桌 scope：
+
+- 可问：
+  - `如果把最关键的一步换成另一种选择，会怎样？`
+  - `哪条世界线最脆弱？`
+  - `谁的判断最值得信任？`
+- 不可问：
+  - `把未入桌世界线的完整 transcript 贴出来`
+  - `读取另一桌历史讨论`
+
+推荐复用同一个接口：
+
+`POST /api/ending-room/{room_id}/user-turn`
+
 ### 验收
 
 - 只读他线摘要，不读他线全文
+- 圆桌后的追问仍只停留在当前桌 scope
 - 3 席布局在桌面/移动端都成立
 - 阶段推进、结果摘要、引文提取都稳定
 
@@ -849,6 +1235,16 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
    - 只允许给一个最小修正建议
 3. `异线旁听席`
    - 只读别线摘要和引文
+4. `关键转折追问`
+   - 点某张 `key moment` 卡，直接发起一轮 `为什么在这里转向` 的追问
+5. `角色热座`
+   - 点名当前结局里最值得追责或最有洞见的人
+6. `后续三回合`
+   - 只允许做超短后续发展推演
+   - 不重开 simulation
+7. `证据投牌`
+   - 用户把另一条世界线的一张摘要卡拖进当前房间，要求 `Archivist` 解释两线差异
+   - 仍然只能引用摘要，不得拉全文
 
 ### 设计原则
 
@@ -856,6 +1252,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 反馈快
 - 不重跑整局
 - 不制造复杂状态机
+- 所有玩法都必须锚定某张结局卡或某个关键转折卡
 
 ---
 
@@ -866,12 +1263,21 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 ### B1. 数据模型
 
 - 新建 `ending_room*` 表
+- `ending_room_turn` 至少补：
+  - `thread_id`
+  - `source`
+  - `interaction_mode`
+  - `memory_partition_id`
 - 建索引：
   - `scenario_id`
   - `anchor_branch_id`
   - `room_type`
   - `participant_set_hash`
 - 为 `(scenario_id, anchor_branch_id, room_type, participant_set_hash)` 增加去重能力
+- 新增：
+  - `ending_room_thread`
+  - `ending_room_thread.participant_set_hash`
+  - `ending_room_participant.worldline_echo_key`
 
 ### B2. API
 
@@ -880,6 +1286,14 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
   - `anchor_branch_id` 必须属于 `scenario_id`
   - `selected_branch_ids` 不得为空
   - 不允许非结局 branch 创建 `ending_chamber`
+- 新增 `POST /api/ending-room/{room_id}/user-turn`
+  - 校验 `interaction_mode`
+  - 校验 `addressed_agent_ids` 必须属于当前 room candidate set
+  - 校验 replay / read-only 模式不可继续 live 追问
+- 若引入 thread 化，新增：
+  - `POST /api/ending-room/{room_id}/thread`
+  - `GET /api/ending-room/thread/{thread_id}`
+  - `POST /api/ending-room/thread/{thread_id}/user-turn`
 
 ### B3. WS
 
@@ -900,6 +1314,15 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 修 `vector_store.retrieve()`
 - 新增 scope builder
 - 为会客厅/圆桌构建单独 context builder
+- follow-up context 只允许拼：
+  - 当前 room transcript
+  - 当前 branch transcript / summary
+  - 当前 room participant snapshots
+- 不允许把“同 branch 旧房间 transcript”作为记忆补充
+- 若启用 `followup_thread`：
+  - thread context 只允许在 room context 上再追加当前 thread transcript
+  - 不允许读取其他 thread transcript
+  - `worldline_echo_key` 必须纳入 cache / retrieval partition
 
 ### B5. 删除与一致性
 
@@ -957,6 +1380,30 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
     - story 摘要折叠 / 展开
     - 当前 speaker 高亮
     - 重新选人后重建 room
+    - 自动复盘结束后继续追问
+    - `hotseat / archivist_route / all_present` 三种 follow-up 模式切换
+    - thread 切换或 thread 恢复
+    - 当前 thread 的 scope 提示
+    - 从 `key_moment / quote / verdict` 直接注入追问草稿
+    - 从 `结局卡 / 关键转折卡 / quote` 直接起追问
+
+### C3.5 追问线程组件（新增）
+
+- `EndingRoomThreadPanel.tsx`
+  - thread transcript
+  - source anchor badge
+  - thread participant strip
+  - close back to room
+- `WorldlineEchoCard.tsx`
+  - 头像
+  - role / persona / impact
+  - why here
+  - `问这个人`
+  - `加入圆桌`
+- `EndingRoomFollowupComposer.tsx`
+  - quick chips
+  - 当前锚点说明
+  - 当前 scope 提示
 
 ### D1. 世界线圆桌页面
 
@@ -970,6 +1417,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
     - 当前发言席位高亮
     - draft 文本独立展示
     - commit 后进入正式阶段 transcript
+  - verdict 后支持当前桌追问，但要继续显示 scope 提示：
+    - `只基于当前入桌世界线摘要与当前桌历史`
 
 ### D2. i18n
 
@@ -1009,6 +1458,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 多结局结果页中，从 ending A 打开 chamber 后立刻关闭，再打开 ending B，是否仍正确命中 B 的 branch
 - 多结局结果页中，两张 ending card 的默认推荐阵容是否各自独立
 - 多结局结果页中，A/B 两个 ending 的 story / insight / key_moments / participant roster 是否串线
+- 同一 ending 下，`archivist_route` 与 `hotseat` 是否正确形成不同 thread
+- `trait_mix` 若选不出足够角色，是否能稳定降级到 `impact_top`
+- 圆桌 `expert_witness` 被移除后，旧 quote / witness badge 是否正确失效
 
 ### 5.2 隔离与权限
 
@@ -1021,6 +1473,11 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - `selected_agent_ids` 只影响 participant roster，不得影响 branch scope
 - 角色 bio / 影响力说明不得泄露其他 branch 才知道的信息
 - 多结局结果页下，从 ending A 进入 `one_move_only` 时，不得读取 ending B 的全文或 key moments
+- `hotseat` 不得读取该 agent 在其他 room / 其他 worldline 的结局后对话
+- 圆桌 verdict 后的追问不得读取未入桌世界线全文
+- `memory_partition_id` 变化后，旧 thread 不得被新 thread 复用
+- 同一 `source_agent_id` 在 ending A / ending B 下的 `worldline_echo` 不得共享追问历史
+- 从某条 `quote / verdict` 发起的追问线程，不得读取其他 quote thread 的历史
 
 ### 5.3 WS 与并发
 
@@ -1036,6 +1493,10 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 同一 branch 但不同 `selected_agent_ids` 不得被 dedupe 成同一 room
 - 多结局结果页下，同时打开 ending A / ending B 的两个标签页时，不得串 `room_id`
 - 多结局结果页下，先后快速点击两张卡的 CTA，不得把后到事件写进先开的 modal
+- 自动复盘刚结束时立刻发送追问，不能把 `auto_recap` draft 写进 follow-up thread
+- 圆桌 verdict 后立刻追问，不能把追问 turn 插进 `verdict` 阶段 transcript 中间
+- 同一 room 下连续打开两个不同 `followup_thread` 时，不得串 transcript
+- thread 比 WS 建连更快完成时，前端也必须补拉 snapshot/result
 
 ### 5.4 i18n
 
@@ -1069,6 +1530,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - share 后打开结果一致
 - share permalink 不得出现“artifact 能创建但 fresh context 打不开”的不稳定状态
 - replay 下点击 `进入会客厅 / 只改一步` 只能读取既有 payload，不得重新发 POST
+- replay 下点击 `继续追问 / 点名追问 / 当前全员回应` 必须禁用
 
 ### 5.7 可玩性与观感
 
@@ -1081,6 +1543,11 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 当前发言者是否有足够明显但不刺眼的动态反馈
 - 像素头像是否与角色/题材匹配，而不是随机感过强
 - 文案是否像“角色说话”，而不是“系统解释”
+- 用户能否一眼看懂当前是：
+  - 自动复盘
+  - 热座追问
+  - 同线听证
+  - 跨线圆桌
 
 ---
 
@@ -1140,6 +1607,7 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 ```text
 frontend/scripts/e2e-ending-room-suite.mjs
 frontend/scripts/e2e-ending-room-picker-suite.mjs
+frontend/scripts/e2e-ending-room-followup-suite.mjs
 ```
 
 运行命令建议：
@@ -1150,6 +1618,7 @@ node scripts/e2e-ending-room-suite.mjs desktop --url http://127.0.0.1:18928 --ou
 node scripts/e2e-ending-room-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-mobile --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-full --headless
 node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-picker-full --headless
+node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/ending-room-followup-full --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/ending-room-multi-ending-full --headless
 ```
 
@@ -1164,6 +1633,7 @@ claims:
   - 用户可手动选择进入会客厅/只改一步的 agent
   - 会客厅只读取当前世界线全文
   - 多结局结果页里，每张结局卡分别进入时也只读取自己的世界线
+  - 用户可以围绕当前结局/当前转折/当前角色继续追问
   - 世界线圆桌只读取他线摘要
   - 中文/英文都自然、无溢出
   - 390px 移动端可用
@@ -1178,6 +1648,9 @@ controls:
   - 单选 agent
   - 多选 agent
   - reset 推荐阵容
+  - 打开角色追问线程
+  - 打开转折追问线程
+  - 发送 `all_present` 追问
   - 关闭会客厅
   - 发起圆桌
   - 切换阶段
@@ -1192,7 +1665,11 @@ state_checks:
   - multi ending -> chamber on ending B
   - multi ending -> one_move_only on ending A
   - multi ending -> one_move_only on ending B
+  - chamber done -> hotseat followup
+  - chamber done -> archivist_route followup
+  - chamber done -> all_present followup
   - multi ending -> roundtable
+  - roundtable verdict -> followup
   - replay -> read only
   - zh -> en locale
   - turn_start -> turn_delta -> turn_commit
@@ -1208,6 +1685,8 @@ exploratory:
   - 手动改选一个冷门 agent，观察文案是否仍具体
   - 连续切 `复盘 <-> 只改一步`，确认不会串状态
   - 在多结局结果页里交替点两张 ending card 的 CTA，观察是否串 ending
+  - 在同一结局里连续打开两个不同追问主题，观察 thread 是否隔离
+  - 在 A 结局和 B 结局分别追问同名角色，观察 `worldline_echo` 是否隔离
 ```
 
 ## 6.4 发布前命令合同
@@ -1217,21 +1696,22 @@ exploratory:
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
-python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py
+python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_ending_room_followup.py tests/test_ending_room_memory_partition.py tests/test_vector_store.py tests/test_api.py -q
+python -m ruff check --ignore E501 app/api/ending_rooms.py app/services/ending_room_service.py app/services/vector_store.py tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_ending_room_followup.py tests/test_ending_room_memory_partition.py
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/i18n/locales.test.ts
+npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/components/EndingRoomFollowupComposer.test.tsx src/components/EndingRoomThreadList.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-corners --headless
 node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-cross-browser --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room --headless
 node scripts/e2e-ending-room-picker-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-picker --headless
+node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/post-ending-room-followup --headless
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --fixture multi-ending --output-dir output/e2e/post-ending-room-multi-ending --headless
 ```
 
@@ -1252,6 +1732,7 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 是否所有读取路径显式带 scope key
 - 是否 replay/import 仍保持相同权限边界
 - 是否没有把新玩法写回原始 simulation transcript
+- 是否 follow-up thread 采用 room-scope memory membrane，而不是 scenario-scope history
 
 ## 7.2 实现 Review
 
@@ -1262,6 +1743,8 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 是否所有中英 copy 都有对应 key
 - 是否会客厅 participant roster 与当前 worldline 实际参与者一致
 - 是否支持手动选人，且选人结果真正影响 room
+- 是否支持围绕当前锚点继续追问，且 thread scope 正确
+- 是否支持 `archivist_route / hotseat / all_present`，且三者对用户可区分
 - 是否存在“选了 A，结果发言的是 B”的错位
 - 是否发言卡上有头像 / role / persona / impact，而不是只有名字
 - 是否存在大段信息墙压垮可读性的情况
@@ -1281,6 +1764,10 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
   - manual selection 态截图
   - chamber done 态截图
   - mobile `390x844` 截图
+- 对 follow-up thread，必须同时保留：
+  - 角色热座初始态截图
+  - 转折追问态截图
+  - thread done 态截图
 - 对多结局结果页，必须额外保留：
   - ending A -> chamber done 截图
   - ending B -> chamber done 截图
@@ -1304,6 +1791,8 @@ node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --outpu
 - 角色卡没有头像/角色/背景说明
 - replay permalink 在 fresh context 下不稳定
 - 多结局结果页里，不同结局卡进入 chamber 时发生串线
+- A/B 两个结局下同名角色的 `worldline_echo` 发生记忆串线
+- replay / read-only 模式下仍能继续 live 追问
 
 ---
 
@@ -1428,13 +1917,16 @@ npm run assets:provenance:check
    - 对该结局影响有多大
 6. 世界线圆桌的代表逻辑可理解、结果可复盘
 7. `只改一步` 在 30 秒内给出具体、像人话的建议
-8. `异线旁听席` 轻量、清楚、不泄露他线全文
-9. 中英双语都自然
-10. 桌面/移动主流浏览器中 UI 不裁切、不失真
-11. 无新增显性或隐性跨世界线污染
-12. 若开启流式，用户能感知到“正在发言”，但最终 transcript、replay、share 只依赖 committed turn
-13. 头像、动态效果、排版与题材语义一致，不像另一款产品
-14. 单结局与多结局结果页都分别签收过 `进入会客厅 / 只改一步`
+8. 用户能围绕当前结局、当前转折、当前角色继续追问
+9. 用户能区分 `archivist_route / hotseat / all_present` 三种追问模式
+10. `异线旁听席` 轻量、清楚、不泄露他线全文
+11. 中英双语都自然
+12. 桌面/移动主流浏览器中 UI 不裁切、不失真
+13. 无新增显性或隐性跨世界线污染
+14. 若开启流式，用户能感知到“正在发言”，但最终 transcript、replay、share 只依赖 committed turn
+15. 头像、动态效果、排版与题材语义一致，不像另一款产品
+16. 单结局与多结局结果页都分别签收过 `进入会客厅 / 只改一步 / 追问线程`
+17. 圆桌 verdict 后继续追问时，用户能清楚知道当前仍被限制在“本桌 scope”内
 
 ---
 
@@ -1446,13 +1938,14 @@ npm run assets:provenance:check
 2. Phase B：后端新域 + L2 隔离修复
 3. Phase C：结果页单结局会客厅 MVP
 4. Phase C2：参与者驱动与可玩性修复
-5. Phase C2 回归测试 + cross-browser + mobile + visual QA
-6. Phase D：世界线圆桌
-7. Phase D 回归测试 + visual QA
-8. Phase E：replay/share/import
-9. Phase F：轻玩法扩展
-10. 资产补齐与 provenance 收口
-11. 最终 `release:signoff`
+5. Phase C3：同线听证 / 热座追问 / thread 隔离
+6. Phase C2/C3 回归测试 + cross-browser + mobile + visual QA
+7. Phase D：世界线圆桌
+8. Phase D 回归测试 + visual QA
+9. Phase E：replay/share/import
+10. Phase F：轻玩法扩展
+11. 资产补齐与 provenance 收口
+12. 最终 `release:signoff`
 
 如果资源有限，首个可交付里只做：
 
@@ -1460,7 +1953,1000 @@ npm run assets:provenance:check
 - `只改一步`
 - `真实参与者选人`
 - `像素头像 + 人物卡 + 影响度`
+- `archivist_route + hotseat`
+- `角色/转折/结论 -> 追问线程`
 - 必要 i18n
 - 桌面 + 移动 E2E
 
-把 `世界线圆桌` 放到第二个迭代里，会更稳；但 **不允许** 在缺少选人、人物卡和去模板化发言的情况下就直接跳进 `Phase D`。
+把 `世界线圆桌` 放到第二个迭代里，会更稳；但 **不允许** 在缺少选人、人物卡、追问线程和去模板化发言的情况下就直接跳进 `Phase D`。
+
+---
+
+## 11. 落地蓝图
+
+这一节不是概念补充，而是“按实现顺序拆开的工程任务单”。目标是让下一次真正进入编码时，可以直接按本节开工。
+
+## 11.1 PR 拆分建议
+
+推荐按 `5` 个 PR 推进，不要一个超大 PR 全包：
+
+1. `PR-1: room-scope memory membrane`
+   - 收口后端数据模型
+   - 明确 `worldline_echo / followup_thread / memory_partition_id`
+   - 补基础 API 校验与测试
+2. `PR-2: picker + roster + recipe`
+   - 结果页选人面板
+   - `impact_top / responsibility_mix / disagreement_pair / trait_mix`
+   - roster 对齐与 room dedupe
+3. `PR-3: ending followup threads`
+   - `archivist_route / hotseat / all_present`
+   - thread UI、thread store、thread WS、thread replay 只读
+4. `PR-4: worldline roundtable`
+   - `representative / manual_shortlist / expert_witness / witness_augmented`
+   - `Archivist` 主持编排
+   - verdict 后当前桌追问
+5. `PR-5: replay/share/import + signoff`
+   - replay artifact
+   - permalink
+   - share modal
+   - import/read-only
+
+每个 PR 都必须独立通过最小验证，不允许把“线程隔离”或“读权限限制”压到最后一起补。
+
+## 11.2 后端详细拆解
+
+### 11.2.1 数据模型
+
+建议优先沿现有文件扩展：
+
+- `backend/app/models/ending_room.py`
+- `backend/app/models/database.py`
+
+建议最少补齐以下字段：
+
+```text
+ending_room
+  discussion_mode
+  memory_partition_version
+  selection_mode
+  selected_agent_ids_hash nullable
+
+ending_room_participant
+  worldline_echo_key
+  selection_reason
+  impact_score
+  key_moment_hits
+  last_round_spoken
+
+ending_room_thread
+  id
+  room_id
+  thread_mode
+  interaction_mode
+  participant_set_hash
+  anchor_kind        # key_moment | quote | verdict | role | freeform
+  anchor_id nullable
+  title
+  created_at
+  updated_at
+
+ending_room_turn
+  thread_id nullable
+  source             # auto_recap | user_followup
+  interaction_mode nullable
+  memory_partition_id
+  addressed_agent_ids_json nullable
+  question_anchor_ids_json nullable
+```
+
+索引最低要求：
+
+- `ending_room(scenario_id, anchor_branch_id, room_type, participant_set_hash)`
+- `ending_room_thread(room_id, participant_set_hash, interaction_mode)`
+- `ending_room_turn(room_id, sequence)`
+- `ending_room_turn(thread_id, sequence)`
+- `ending_room_participant(room_id, source_agent_id)`
+
+### 11.2.2 服务层职责
+
+建议在 `backend/app/services/ending_room_service.py` 中显式拆出以下 helper：
+
+```text
+collect_branch_participant_candidates(...)
+rank_branch_participant_candidates(...)
+apply_selection_recipe(...)
+create_followup_thread(...)
+append_user_turn(...)
+resolve_followup_responders(...)
+build_room_followup_context(...)
+build_thread_followup_context(...)
+run_followup_thread_background(...)
+build_roundtable_seating(...)
+run_roundtable_hidden_planning(...)
+```
+
+执行顺序建议：
+
+1. `create_ending_room(...)`
+   - 校验 `scenario / branch / room_type`
+   - 标准化 `selected_branch_ids`
+   - 计算 `participant_set_hash`
+   - 生成或复用 room
+2. `collect_branch_participant_candidates(...)`
+   - 只从当前 branch 的真实发言者里取候选
+   - 若为空再 fallback 到 scenario roster
+3. `apply_selection_recipe(...)`
+   - 将 recipe 转成稳定的 `selected_agent_ids`
+4. `run_ending_room_background(...)`
+   - 自动复盘
+   - committed turn 落库
+   - result 收口
+5. `create_followup_thread(...)`
+   - 基于 `room_id + interaction_mode + participant_set_hash + anchor`
+   - 生成 thread
+6. `append_user_turn(...)`
+   - 落用户追问
+   - 触发 follow-up background
+7. `run_followup_thread_background(...)`
+   - 路由 responder
+   - 可选 hidden planning
+   - committed follow-up turn 落库
+
+### 11.2.3 Room-Scope Memory Membrane
+
+这部分必须写成单独 helper，不能散落在 prompt 拼接代码里。
+
+建议明确三层上下文拼装函数：
+
+```text
+build_worldline_source_memory(anchor_branch_id)
+build_room_memory(room_id)
+build_thread_memory(thread_id)
+```
+
+拼装规则固定为：
+
+1. `ending_chamber auto_recap`
+   - `worldline source memory`
+2. `ending_chamber followup`
+   - `worldline source memory`
+   - `room memory`
+   - `thread memory`
+3. `worldline_roundtable`
+   - 当前席位自己的全文
+   - 他席摘要
+   - 当前桌 committed transcript
+4. `roundtable followup`
+   - 当前桌 committed transcript
+   - 当前桌可见摘要
+   - 当前 followup thread transcript
+
+严禁出现：
+
+- 从 `scenario_id` 反查整局历史对话
+- 从 `source_agent_id` 反查其他 worldline 的 post-ending 对话
+- 读取“同 branch 但旧 room”的 transcript 作为补充记忆
+
+### 11.2.4 Follow-up 路由逻辑
+
+`archivist_route` 不该是随机挑人，至少应按以下信号排序：
+
+1. `question_anchor_ids` 命中
+2. `key_moment_hits`
+3. `impact_score`
+4. 最近是否在该 room 发过言
+5. 是否与当前问题语义最接近
+
+`hotseat` 的规则更简单：
+
+- 第一响应人必须是被点名者
+- `Archivist` 可追加 `1` 条收束
+- 其他参与者默认不上麦
+
+`all_present` 的规则：
+
+- 首版正文区只展示 `3-4` 名 active speakers
+- 其余人写入折叠摘要，不在正文区刷屏
+
+### 11.2.5 Hidden Planning
+
+可以用 sub-agents，但必须只在后台做“证据整理”和“冲突提炼”。
+
+允许：
+
+- 从当前可见上下文中提取证据片段
+- 生成候选回应大纲
+- 对多个 responder 的候选观点做去重和排序
+
+禁止：
+
+- 让 hidden agent 自己生成正式 transcript
+- 让 hidden agent 读取更大范围的数据
+- 把 hidden planning 结果直接暴露给前台
+
+正式 transcript 只能来自：
+
+- `Archivist`
+- 当前 room / 当前桌明确入席的参与者
+
+## 11.3 API 合同细化
+
+建议在 `backend/app/api/ending_rooms.py` 追加以下请求模型：
+
+```text
+CreateEndingRoomThreadRequest
+AppendEndingRoomUserTurnRequest
+```
+
+推荐最小请求体：
+
+```json
+POST /api/ending-room/{room_id}/thread
+{
+  "interaction_mode": "archivist_route | hotseat | all_present",
+  "anchor_kind": "key_moment | quote | verdict | role | freeform",
+  "anchor_id": "km_2",
+  "addressed_agent_ids": ["ag_xxx"],
+  "selection_recipe": "manual | impact_top | responsibility_mix | disagreement_pair | trait_mix"
+}
+```
+
+```json
+POST /api/ending-room/{room_id}/user-turn
+{
+  "thread_id": "ert_xxx",
+  "question_text": "如果当时不是你主导，会不会变成另一种结局？",
+  "interaction_mode": "hotseat",
+  "addressed_agent_ids": ["ag_xxx"],
+  "question_anchor_ids": ["km_2"]
+}
+```
+
+错误码至少显式化：
+
+```text
+ENDING_ROOM_NOT_FOUND
+ENDING_ROOM_READ_ONLY
+ENDING_ROOM_THREAD_NOT_FOUND
+ENDING_ROOM_THREAD_SCOPE_MISMATCH
+ENDING_ROOM_AGENT_NOT_VISIBLE
+ENDING_ROOM_INTERACTION_MODE_INVALID
+ENDING_ROOM_CROSSLINE_ACCESS_DENIED
+```
+
+## 11.4 Prompt 链路建议
+
+建议把 prompt 分成四层，而不是一个超大 prompt：
+
+1. `candidate extraction prompt`
+   - 只做证据片段提取
+2. `archivist routing prompt`
+   - 决定谁回答、为什么
+3. `speaker response prompt`
+   - 角色化短回应
+4. `archivist wrap-up prompt`
+   - 收束、指出分歧或限制
+
+每层都必须显式写进 prompt 的限制：
+
+- 只基于当前可见 worldline / room / thread
+- 不得杜撰未在当前上下文出现的另一条世界线细节
+- 句子短
+- 角色说话像人在复盘，不像系统报告
+
+建议固定输出 schema，避免前端靠字符串猜：
+
+```json
+{
+  "speaker_id": "erp_xxx",
+  "cited_evidence": ["km_2", "turn_14"],
+  "stance": "defend | regret | accuse | reframe",
+  "content": "..."
+}
+```
+
+## 11.5 前端详细拆解
+
+### 11.5.1 ResultView
+
+建议在 [ResultView.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/pages/ResultView.tsx) 做四步流：
+
+1. 点击结局卡 CTA
+2. 打开 `participant picker`
+3. 选择 `selection_recipe` 或手动选人
+4. 确认后进入 `EndingChatModal`
+
+CTA 层不应该直接发 room 请求，也不应该直接进入 modal。
+
+### 11.5.2 EndingChatModal
+
+建议把 [EndingChatModal.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingChatModal.tsx) 拆成：
+
+```text
+EndingChatModal
+  EndingRoomSidebar
+  EndingRoomTranscript
+  EndingRoomParticipantStrip
+  EndingRoomFollowupComposer
+  EndingRoomThreadList
+```
+
+底部 composer 建议固定三段：
+
+1. `interaction_mode switch`
+2. `anchor quick actions`
+3. `question input + send`
+
+必须有可见 scope 提示：
+
+- `只基于当前世界线`
+- `只基于当前桌面`
+- `只基于当前追问线程`
+
+### 11.5.3 Store
+
+建议扩展 [endingRoomStore.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/stores/endingRoomStore.ts)：
+
+```text
+threadsById
+activeThreadId
+threadOrder
+pendingDraftsByThreadId
+interactionMode
+selectionRecipe
+composerDraft
+scopeNotice
+```
+
+关键点：
+
+- `room transcript` 和 `thread transcript` 不能混成一个数组
+- draft 也不能只按 `turn_id` 存，最好包含 `thread_id`
+- thread 切换时不能把另一个 thread 的 draft 泄露过来
+
+### 11.5.4 WS 事件
+
+建议在 [useEndingRoomWS.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/hooks/useEndingRoomWS.ts) 补事件：
+
+```text
+ending_room_thread_created
+ending_room_user_turn_commit
+ending_room_followup_turn_start
+ending_room_followup_turn_delta
+ending_room_followup_turn_commit
+ending_room_scope_notice
+```
+
+处理原则：
+
+- `room_*` 事件更新 room transcript
+- `followup_*` 事件更新 thread transcript
+- 两类事件的 sequence 可以共用，但前端必须按 `thread_id` 再分桶
+
+## 11.6 测试文件建议
+
+建议新增或扩展：
+
+### Backend
+
+```text
+backend/tests/test_ending_room_followup.py
+backend/tests/test_ending_room_memory_partition.py
+backend/tests/test_ending_room_thread_api.py
+```
+
+### Frontend
+
+```text
+frontend/src/components/EndingRoomFollowupComposer.test.tsx
+frontend/src/components/EndingRoomThreadList.test.tsx
+frontend/src/stores/endingRoomStore.followup.test.ts
+frontend/src/pages/WorldlineRoundtableView.test.tsx
+```
+
+### E2E
+
+```text
+frontend/scripts/e2e-ending-room-followup-suite.mjs
+frontend/scripts/e2e-worldline-roundtable-suite.mjs
+```
+
+建议最少覆盖这些 fixture：
+
+1. `single-ending-basic`
+2. `single-ending-many-speakers`
+3. `multi-ending-a-b`
+4. `multi-ending-witness`
+5. `replay-readonly`
+
+## 11.7 首轮编码优先级
+
+如果你下一步就准备真正开写代码，建议只先做这 `8` 项：
+
+1. `ending_room_thread` 数据模型
+2. `POST /api/ending-room/{room_id}/user-turn`
+3. room-scope memory membrane
+4. `archivist_route`
+5. `hotseat`
+6. `EndingRoomFollowupComposer`
+7. follow-up thread store + WS
+8. E2E followup suite
+
+先不要做：
+
+- `all_present` 的复杂大人数降级
+- `trait_mix` 的高级选人算法
+- `expert_witness`
+- 圆桌后的多轮追问
+
+首轮只要把 `archivist_route + hotseat + thread 隔离 + replay 只读禁写` 做扎实，这条线就已经有明显区分度了。
+
+## 11.8 逐文件实现清单
+
+这一节只讨论“当前仓库中真实存在的文件”以及“建议新增的文件”。目标是下一步编码时，可以直接按文件推进，而不是从功能描述反推目录。
+
+## 11.8.1 Backend 现有文件
+
+### [ending_room.py](/Users/yangjunjie/Desktop/upgrade-test/backend/app/models/ending_room.py)
+
+当前已有：
+
+- `EndingRoom`
+- `EndingRoomParticipant`
+- `EndingRoomTurn`
+- `EndingRoomType / Status / Phase / RoleSlot`
+
+建议新增或调整：
+
+1. `enum`
+   - `EndingRoomDiscussionMode`
+     - `auto_recap`
+     - `archivist_route`
+     - `hotseat`
+     - `all_present`
+     - `representative`
+     - `manual_shortlist`
+     - `trait_mix`
+     - `expert_witness`
+   - `EndingRoomTurnSource`
+     - `auto_recap`
+     - `user_followup`
+   - `EndingRoomThreadMode`
+     - `solo`
+     - `panel`
+     - `all_hands`
+2. `EndingRoom`
+   - 增加：
+     - `discussion_mode`
+     - `selection_mode`
+     - `selected_agent_ids_hash`
+     - `memory_partition_version`
+3. `EndingRoomParticipant`
+   - 增加：
+     - `worldline_echo_key`
+     - `selection_reason`
+     - `impact_score`
+     - `key_moment_hits`
+     - `last_round_spoken`
+4. 新增 `EndingRoomThread`
+   - 字段见 `11.2.1`
+5. `EndingRoomTurn`
+   - 增加：
+     - `thread_id`
+     - `source`
+     - `interaction_mode`
+     - `memory_partition_id`
+     - `addressed_agent_ids_json`
+     - `question_anchor_ids_json`
+
+实现注意：
+
+- 不要新建第二套“followup_turn”表；首版更稳的是继续复用 `ending_room_turn`，用 `thread_id + source + interaction_mode` 分层。
+- `worldline_echo_key` 建议由：
+  - `scenario_id`
+  - `anchor_branch_id`
+  - `room_id`
+  - `source_agent_id`
+  组合后稳定生成。
+
+### [database.py](/Users/yangjunjie/Desktop/upgrade-test/backend/app/models/database.py)
+
+当前已有：
+
+- `SQLModel.metadata.create_all(engine)`
+- SQLite best-effort migration
+- 已补 `ending_room.scope_fingerprint / current_phase`
+
+建议新增：
+
+1. 确认 `EndingRoomThread` 被 import 到 metadata 装载链路
+2. 为新增字段补 lightweight migration：
+   - `ending_room.discussion_mode`
+   - `ending_room.selection_mode`
+   - `ending_room.selected_agent_ids_hash`
+   - `ending_room.memory_partition_version`
+   - `ending_room_participant.worldline_echo_key`
+   - `ending_room_turn.thread_id`
+   - `ending_room_turn.source`
+   - `ending_room_turn.interaction_mode`
+   - `ending_room_turn.memory_partition_id`
+3. 新表 migration：
+   - `ending_room_thread`
+
+实现注意：
+
+- 这轮是 SQLite 项目，优先保持“best-effort migration + tests”一致，不要为了一个功能把 schema 管理大改。
+
+### [ending_room_service.py](/Users/yangjunjie/Desktop/upgrade-test/backend/app/services/ending_room_service.py)
+
+当前已有：
+
+- `create_ending_room(...)`
+- `build_branch_scope_context(...)`
+- `build_roundtable_scope_context(...)`
+- `run_ending_room_background(...)`
+- `_participant_defs(...)`
+- `_pick_branch_speaker(...)`
+
+建议按四批修改：
+
+1. `participant/ranking`
+   - 新增：
+     - `collect_branch_participant_candidates(...)`
+     - `rank_branch_participant_candidates(...)`
+     - `apply_selection_recipe(...)`
+   - 让 `_participant_defs(...)` 不再直接拍脑袋选 top2，而是走显式 ranking + recipe。
+2. `followup thread`
+   - 新增：
+     - `create_followup_thread(...)`
+     - `append_user_turn(...)`
+     - `resolve_followup_responders(...)`
+     - `run_followup_thread_background(...)`
+3. `memory membrane`
+   - 新增：
+     - `build_worldline_source_memory(...)`
+     - `build_room_memory(...)`
+     - `build_thread_memory(...)`
+     - `build_room_followup_context(...)`
+     - `build_thread_followup_context(...)`
+4. `roundtable seating`
+   - 新增：
+     - `build_roundtable_seating(...)`
+     - `run_roundtable_hidden_planning(...)`
+
+建议重构点：
+
+- `_serialize_turn(...)`
+  - 要扩成能返回 `thread_id / source / interaction_mode / memory_partition_id`
+- `_serialize_participant(...)`
+  - 要扩成能返回 `worldline_echo_key / selection_reason / impact_score`
+- `load_ending_room_snapshot(...)`
+  - 要返回 `threads[]` 或至少 `active_thread_id`
+- `load_ending_room_result_payload(...)`
+  - 要在 replay-safe 前提下返回 follow-up thread 摘要，但不带越权上下文
+
+### [ending_rooms.py](/Users/yangjunjie/Desktop/upgrade-test/backend/app/api/ending_rooms.py)
+
+当前已有：
+
+- `CreateEndingRoomRequest`
+- `POST /api/scenario/{scenario_id}/ending-room`
+- `GET /api/ending-room/{room_id}`
+- `GET /api/ending-room/{room_id}/result`
+- ending-room WS
+
+建议新增请求模型：
+
+```text
+CreateEndingRoomThreadRequest
+AppendEndingRoomUserTurnRequest
+```
+
+建议新增 endpoint：
+
+```text
+POST /api/ending-room/{room_id}/thread
+POST /api/ending-room/{room_id}/user-turn
+GET  /api/ending-room/thread/{thread_id}
+```
+
+每个 endpoint 的职责：
+
+1. `POST /thread`
+   - 建 thread
+   - 校验 `interaction_mode`
+   - 校验 `anchor_kind / anchor_id`
+2. `POST /user-turn`
+   - 落用户问题
+   - 校验 `addressed_agent_ids`
+   - 启动 follow-up background
+3. `GET /thread/{thread_id}`
+   - 只读 thread snapshot
+   - 给前端刷新/重连补拉用
+
+输入校验必须显式化：
+
+- 当前 room 是 `done/live` 才能追问
+- `read-only/replay` 一律拒绝 live 追问
+- `addressed_agent_ids` 必须属于当前 room 可见 roster
+- `hotseat` 必须只允许 `1` 个 addressed agent
+- `all_present` 不允许用于 `worldline_roundtable`
+
+### [test_ending_room_service.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_service.py)
+
+当前已有：
+
+- room dedupe
+- branch/fulltext isolation
+- basic roundtable scope
+
+建议扩展案例：
+
+1. `selection_recipe`
+   - `manual` 与 `impact_top` 命中同一组人时能 dedupe
+   - `manual` 与 `trait_mix` 选人不同步时不能 dedupe
+2. `worldline_echo`
+   - 同一 `source_agent_id` 在 A/B ending 下形成不同 echo key
+3. `followup thread`
+   - A 结局 thread 不读 B 结局 room 历史
+   - 同一 room 的 thread1 不读 thread2 历史
+4. `roundtable followup`
+   - verdict 后追问只读当前桌摘要
+
+### [test_ending_room_api.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_api.py)
+
+建议新增：
+
+- `POST /thread` happy path
+- `POST /user-turn` happy path
+- `ENDING_ROOM_READ_ONLY`
+- `ENDING_ROOM_AGENT_NOT_VISIBLE`
+- `ENDING_ROOM_CROSSLINE_ACCESS_DENIED`
+- `ENDING_ROOM_THREAD_SCOPE_MISMATCH`
+
+### [test_ending_room_ws.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_ws.py)
+
+建议新增事件断言：
+
+- `ending_room_thread_created`
+- `ending_room_user_turn_commit`
+- `ending_room_followup_turn_start`
+- `ending_room_followup_turn_delta`
+- `ending_room_followup_turn_commit`
+- `ending_room_scope_notice`
+
+### Backend 建议新增测试文件
+
+新增：
+
+- [test_ending_room_followup.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_followup.py)
+- [test_ending_room_memory_partition.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_memory_partition.py)
+- [test_ending_room_thread_api.py](/Users/yangjunjie/Desktop/upgrade-test/backend/tests/test_ending_room_thread_api.py)
+
+## 11.8.2 Frontend 现有文件
+
+### [types.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/types.ts)
+
+当前已有：
+
+- `EndingRoomType`
+- `EndingRoomSnapshot`
+- `EndingRoomTurn`
+- `CreateEndingRoomRequest`
+- `EndingRoomWSEvent`
+
+建议扩展：
+
+1. type
+   - `EndingRoomDiscussionMode`
+   - `EndingRoomThreadMode`
+   - `EndingRoomTurnSource`
+   - `EndingRoomSelectionRecipe`
+2. interface
+   - `EndingRoomThread`
+   - `CreateEndingRoomThreadRequest`
+   - `AppendEndingRoomUserTurnRequest`
+3. `EndingRoomScope`
+   - 增加：
+     - `discussion_mode`
+     - `memory_partition_version`
+4. `EndingRoomParticipant`
+   - 增加：
+     - `worldline_echo_key`
+     - `selection_reason`
+     - `impact_score`
+     - `key_moment_hits`
+     - `last_round_spoken`
+5. `EndingRoomTurn`
+   - 增加：
+     - `thread_id`
+     - `source`
+     - `interaction_mode`
+     - `memory_partition_id`
+6. `EndingRoomSnapshot`
+   - 增加：
+     - `threads`
+     - `active_thread_id`
+7. `EndingRoomWSEvent`
+   - 增加 follow-up 事件类型
+
+### [client.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/api/client.ts)
+
+当前已有：
+
+- `createEndingRoom`
+- `getEndingRoom`
+- `getEndingRoomResult`
+
+建议新增：
+
+```text
+createEndingRoomThread(roomId, payload)
+getEndingRoomThread(threadId)
+appendEndingRoomUserTurn(roomId, payload)
+```
+
+并补请求/响应注释，避免后续同事只能读调用方猜合同。
+
+### [endingRoomStore.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/stores/endingRoomStore.ts)
+
+当前现状：
+
+- `snapshot`
+- `result`
+- `pendingDrafts`
+- 只有单 transcript 视角
+
+这是当前最需要扩的地方。
+
+建议新增 state：
+
+```text
+threadsById
+threadOrder
+activeThreadId
+pendingDraftsByThreadId
+interactionMode
+selectionRecipe
+composerDraft
+scopeNotice
+```
+
+建议新增 action：
+
+```text
+hydrateThread(...)
+setActiveThread(...)
+createThread(...)
+appendUserTurn(...)
+startThreadDraft(...)
+appendThreadDraft(...)
+commitThreadTurn(...)
+setScopeNotice(...)
+```
+
+实现注意：
+
+- 现有 `pendingDrafts` 只能按 `turn_id` 存，后续必须升级到至少能区分 `thread_id`
+- `commitTurn(...)` 需要拆成：
+  - `commitRoomTurn(...)`
+  - `commitThreadTurn(...)`
+- `reset()` 不能误清当前 replay snapshot
+
+### [useEndingRoomWS.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/hooks/useEndingRoomWS.ts)
+
+当前已有：
+
+- room 级 resync
+- sequence/event_id 去重
+- turn start/delta/commit
+
+建议新增事件处理：
+
+```text
+ending_room_thread_created
+ending_room_user_turn_commit
+ending_room_followup_turn_start
+ending_room_followup_turn_delta
+ending_room_followup_turn_commit
+ending_room_scope_notice
+```
+
+建议新增逻辑：
+
+1. 收到 `thread_created`
+   - 自动 hydrate thread
+2. 收到 `followup_turn_*`
+   - 只更新当前 thread transcript
+3. 收到 `scope_notice`
+   - 在 composer 上方显示当前约束
+4. resync
+   - 若 thread 事件 sequence gap，优先补拉 thread snapshot
+
+### [EndingChatModal.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingChatModal.tsx)
+
+当前已有：
+
+- sidebar
+- transcript
+- mode tabs
+- basic room opening
+
+建议拆成子组件，但首轮可以先在本文件内完成结构改造：
+
+1. 新增区域
+   - `participant recipe bar`
+   - `thread rail`
+   - `followup composer`
+2. 新增行为
+   - 自动复盘完成后展示 `继续追问`
+   - 支持 `archivist_route / hotseat / all_present`
+   - 支持从 `key_moment / quote / verdict` 发起 thread
+3. 新增文案提示
+   - `只基于当前世界线`
+   - `只基于当前桌面`
+   - `只基于当前追问线程`
+
+建议状态边界：
+
+- `readOnly`
+  - 禁用 send
+  - 禁用 create thread
+  - 只允许切换查看
+- `loading`
+  - 允许看 sidebar
+  - 不允许开 follow-up composer
+
+### [EndingChatModal.css](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingChatModal.css)
+
+建议补三块样式：
+
+1. `thread rail`
+   - 左侧或顶部可切换 thread 列表
+2. `composer`
+   - 模式切换、anchor chip、输入框、send 按钮
+3. `scope notice`
+   - 小而明确，不抢主视觉
+
+### [ResultView.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/pages/ResultView.tsx)
+
+当前已有：
+
+- 结局卡 CTA
+- modal 打开态
+- `activeEndingRoomBranchId`
+- `activeEndingRoomMode`
+
+建议新增 state：
+
+```text
+participantPickerOpen
+participantPickerBranchId
+participantSelectionRecipe
+participantManualSelection
+endingRoomThreadAnchor
+```
+
+建议新增交互：
+
+1. CTA 先开 picker
+2. picker 确认后再开 room
+3. 从：
+   - 结局卡
+   - 关键转折卡
+   - quote / verdict
+   发起 thread 预填
+
+### [ResultView.test.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/pages/ResultView.test.tsx)
+
+建议新增断言：
+
+- CTA 不直接开 room，而是先开 picker
+- picker 选人后 room payload 正确
+- 从 key moment 发起追问时，composer 被正确预填
+- replay 态下 follow-up 按钮禁用
+
+### [EndingChatModal.test.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingChatModal.test.tsx)
+
+建议新增断言：
+
+- `archivist_route / hotseat / all_present` 三种模式切换
+- hotseat 只允许一个目标
+- thread 切换不串 transcript
+- scope notice 正确显示
+- read-only 下 composer disabled
+
+### [useEndingRoomWS.test.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/hooks/useEndingRoomWS.test.tsx)
+
+建议新增断言：
+
+- follow-up 事件按 `thread_id` 入桶
+- sequence gap 时触发 thread resync
+- duplicate event_id 不重复渲染
+- room turn 与 thread turn 不互相污染
+
+### [endingRoomStore.test.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/stores/endingRoomStore.test.ts)
+
+建议新增断言：
+
+- `hydrateThread`
+- `setActiveThread`
+- `commitThreadTurn`
+- `pendingDraftsByThreadId`
+- `reset` 不误清 read-only snapshot
+
+## 11.8.3 Frontend 建议新增文件
+
+建议新增：
+
+- [EndingRoomParticipantPicker.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomParticipantPicker.tsx)
+- [EndingRoomParticipantPicker.css](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomParticipantPicker.css)
+- [EndingRoomFollowupComposer.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomFollowupComposer.tsx)
+- [EndingRoomFollowupComposer.css](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomFollowupComposer.css)
+- [EndingRoomThreadList.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomThreadList.tsx)
+- [EndingRoomThreadList.css](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/components/EndingRoomThreadList.css)
+- [WorldlineRoundtableView.tsx](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/pages/WorldlineRoundtableView.tsx)
+- [WorldlineRoundtable.css](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/pages/WorldlineRoundtable.css)
+- [worldlineRoundtableStore.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/stores/worldlineRoundtableStore.ts)
+- [useWorldlineRoundtableWS.ts](/Users/yangjunjie/Desktop/upgrade-test/frontend/src/hooks/useWorldlineRoundtableWS.ts)
+
+其中首轮真正必须建的只有：
+
+- `EndingRoomParticipantPicker.tsx`
+- `EndingRoomFollowupComposer.tsx`
+- `EndingRoomThreadList.tsx`
+
+圆桌页面可以等 `Phase D` 再开。
+
+## 11.8.4 脚本与 E2E
+
+### 建议新增脚本
+
+- [e2e-ending-room-followup-suite.mjs](/Users/yangjunjie/Desktop/upgrade-test/frontend/scripts/e2e-ending-room-followup-suite.mjs)
+- [e2e-worldline-roundtable-suite.mjs](/Users/yangjunjie/Desktop/upgrade-test/frontend/scripts/e2e-worldline-roundtable-suite.mjs)
+
+### followup suite 最少流程
+
+1. 打开结果页
+2. 进入结局卡 picker
+3. 选人确认
+4. 等自动复盘 done
+5. 发起 `hotseat`
+6. 发起 `archivist_route`
+7. 检查 thread rail
+8. 检查 read-only replay 禁写
+
+## 11.8.5 首轮逐文件优先级
+
+如果要按文件顺序落地，建议严格按下面顺序：
+
+1. `backend/app/models/ending_room.py`
+2. `backend/app/models/database.py`
+3. `backend/app/services/ending_room_service.py`
+4. `backend/app/api/ending_rooms.py`
+5. `backend/tests/test_ending_room_service.py`
+6. `backend/tests/test_ending_room_api.py`
+7. `backend/tests/test_ending_room_ws.py`
+8. `frontend/src/types.ts`
+9. `frontend/src/api/client.ts`
+10. `frontend/src/stores/endingRoomStore.ts`
+11. `frontend/src/hooks/useEndingRoomWS.ts`
+12. `frontend/src/components/EndingRoomParticipantPicker.tsx`
+13. `frontend/src/components/EndingRoomFollowupComposer.tsx`
+14. `frontend/src/components/EndingRoomThreadList.tsx`
+15. `frontend/src/components/EndingChatModal.tsx`
+16. `frontend/src/pages/ResultView.tsx`
+17. `frontend/src/components/EndingChatModal.test.tsx`
+18. `frontend/src/pages/ResultView.test.tsx`
+19. `frontend/src/hooks/useEndingRoomWS.test.tsx`
+20. `frontend/src/stores/endingRoomStore.test.ts`
+21. `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+
+这样推进的原因很简单：
+
+- 先锁数据合同
+- 再锁 API
+- 再锁前端状态
+- 最后才做 UI 和 E2E
+
+不要倒过来先画 UI，再回来补 `thread_id / memory_partition_id / worldline_echo_key`，那样一定返工。
