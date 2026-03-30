@@ -34,6 +34,8 @@ React + TypeScript frontend for SwarmOracle.
   single source of truth for Theater / Debate themes and UI asset paths
 - `scenarioReplay.ts / simulationReplay.ts / debateReplay.ts`
   replay URL building, token encoding/decoding, import helpers
+- `oracleReplay.ts / replayCodec.ts`
+  Oracle replay share now falls back to a local read-only link when artifact storage is unavailable and URL-token sharing is too large to ship
 - `scenarioMeta`
   compatibility/cache layer, not cross-device authority
   authority-backed replay snapshots now strip redundant `cards / bets / branchSnapshots`
@@ -92,6 +94,12 @@ npm run build:spike:phaser-custom
 - Current custom Phaser runtime subset:
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `npm run test:spike:phaser-custom`: `30 passed`
+- Latest targeted Oracle signoff artifacts:
+  - `output/e2e/20260331-oracle-signoff-ending-room/summary.json`
+  - `output/e2e/20260331-oracle-signoff-roundtable/summary.json`
+- Current Oracle mobile targeted coverage now includes:
+  - ending-room `hotseat / all_present / crossline gallery / artifact readonly / local readonly / local reload restore / import`
+  - roundtable `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
 - Current default build shrinks the `phaser` chunk from about `1202.19 kB` to `718.11 kB` (`328.41 kB` → `202.34 kB` gzip).
 - Default signoff contract:
   - targeted backend checks

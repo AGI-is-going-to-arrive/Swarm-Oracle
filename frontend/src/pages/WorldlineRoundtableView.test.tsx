@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,8 @@ const {
   setMockLanguage,
   changeLanguageMock,
   appendUserTurnMock,
+  buildOracleReplayShareUrlMock,
+  buildOracleReplayUrlMock,
   copyTextMock,
   createReplayArtifactMock,
   createThreadMock,
@@ -39,6 +41,10 @@ const {
   const openRoom = vi.fn(async () => 'room-1');
   const loadRoom = vi.fn(async () => {});
   const loadThread = vi.fn(async () => {});
+  const setActiveThread = vi.fn();
+  const setInteractionMode = vi.fn();
+  const setComposerDraft = vi.fn();
+  const reset = vi.fn();
   const createThread = vi.fn(async () => ({
     id: 'thread-hotseat',
     room_id: 'room-1',
@@ -64,6 +70,8 @@ const {
       currentLanguage = language;
     }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
+    buildOracleReplayShareUrlMock: vi.fn((_origin: string, _payload: unknown, artifactId: string) => `https://example.com/roundtable/replay?roomShare=${artifactId}`),
+    buildOracleReplayUrlMock: vi.fn(async (_origin: string, _payload: unknown) => 'https://example.com/roundtable/replay?roomReplay=token'),
     getAgentsMock: vi.fn(),
     getReplayArtifactMock: vi.fn(),
     getScenarioMock: vi.fn(),
@@ -75,10 +83,10 @@ const {
     loadThreadMock: loadThread,
     createThreadMock: createThread,
     appendUserTurnMock: vi.fn(async () => {}),
-    setActiveThreadMock: vi.fn(),
-    setInteractionModeMock: vi.fn(),
-    setComposerDraftMock: vi.fn(),
-    resetMock: vi.fn(),
+    setActiveThreadMock: setActiveThread,
+    setInteractionModeMock: setInteractionMode,
+    setComposerDraftMock: setComposerDraft,
+    resetMock: reset,
     saveOracleReplayLocalCopyMock: vi.fn((_payload: unknown) => 'local-roundtable'),
     copyTextMock: vi.fn(async (_value: string) => {}),
     wsMock: vi.fn(),
@@ -197,10 +205,10 @@ const {
       loadThread,
       createThread,
       appendUserTurn: vi.fn(async () => {}),
-      setActiveThread: vi.fn(),
-      setInteractionMode: vi.fn(),
-      setComposerDraft: vi.fn(),
-      reset: vi.fn(),
+      setActiveThread,
+      setInteractionMode,
+      setComposerDraft,
+      reset,
     },
   };
 });
@@ -275,8 +283,12 @@ vi.mock('../lib/copyText', () => ({
 }));
 
 vi.mock('../lib/oracleReplay', () => ({
+  buildOracleReplayLocalUrl: (origin: string, _payload: unknown, localId: string) => `${origin}/roundtable/replay?roomLocal=${localId}`,
+  buildOracleReplayShareUrl: (origin: string, payload: unknown, artifactId: string) => buildOracleReplayShareUrlMock(origin, payload, artifactId),
+  buildOracleReplayUrl: (origin: string, payload: unknown) => buildOracleReplayUrlMock(origin, payload),
   loadOracleReplayLocalCopy: (id: string, expectedKind?: string) => loadOracleReplayLocalCopyMock(id, expectedKind),
   normalizeOracleReplayPayload: vi.fn(),
+  readOracleReplayPayload: vi.fn(),
   saveOracleReplayLocalCopy: (payload: unknown) => saveOracleReplayLocalCopyMock(payload),
 }));
 
@@ -286,6 +298,8 @@ vi.mock('../game/managers/VizSynthesizer', () => ({
 
   beforeEach(() => {
   createReplayArtifactMock.mockClear();
+  buildOracleReplayShareUrlMock.mockClear();
+  buildOracleReplayUrlMock.mockClear();
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
   getScenarioMock.mockReset();
@@ -996,7 +1010,7 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('renders a read-only replay from local storage and disables sending', async () => {
-    const replaySnapshot = {
+    const replaySnapshot: any = {
       id: 'room-1',
       scenario_id: 'scenario-1',
       anchor_branch_id: null,
@@ -1123,8 +1137,31 @@ describe('WorldlineRoundtableView', () => {
       },
       roomSnapshot: replaySnapshot,
       roomResult: replayResult,
-      activeThreadId: 'thread-room',
+      activeThreadId: 'thread-hotseat',
       selectedAgentIds: ['agent-a'],
+    });
+    replaySnapshot.threads.push({
+      id: 'thread-hotseat',
+      room_id: 'room-1',
+      title: 'Representative A',
+      mode: 'followup',
+      interaction_mode: 'hotseat',
+      participant_set_hash: 'hash-hotseat',
+      memory_partition_id: 'thread-hotseat-partition',
+      addressed_agent_ids_json: ['agent-a'],
+      created_at: '2026-03-29T00:00:02Z',
+      updated_at: '2026-03-29T00:00:03Z',
+    });
+    replaySnapshot.turns.push({
+      id: 'turn-hotseat',
+      room_id: 'room-1',
+      thread_id: 'thread-hotseat',
+      sequence: 2,
+      phase: 'verdict',
+      participant_id: 'rep-a',
+      content: 'This stays inside Representative A.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:02Z',
     });
 
     const user = userEvent.setup();
@@ -1139,8 +1176,10 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Read-only replay')).toBeInTheDocument();
-    expect(screen.getByText('The first hinge was delayed too long.')).toBeInTheDocument();
+    expect(screen.getByText('This stays inside Representative A.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
+    expect(screen.getAllByText('Using the active roundtable thread only').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
     expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();
@@ -1148,6 +1187,86 @@ describe('WorldlineRoundtableView', () => {
     await user.click(screen.getByRole('button', { name: 'Import local run' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
+  });
+
+  it('falls back to a local replay link when artifact and token replay links are both unavailable', async () => {
+    const user = userEvent.setup();
+    createReplayArtifactMock.mockRejectedValueOnce(new Error('artifact offline'));
+    buildOracleReplayUrlMock.mockRejectedValueOnce(new Error('token too large'));
+    saveOracleReplayLocalCopyMock.mockReturnValueOnce('local-roundtable-copy');
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Archive A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Story A',
+          insight: 'Insight A',
+          key_moments: ['A'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'Archive B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Story B',
+          insight: 'Insight B',
+          key_moments: ['B'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      {
+        id: 'agent-a',
+        name: 'Representative A',
+        role: 'Marshal',
+        persona: 'Keeps the garrison together.',
+        tier: 'CORE',
+        emotion: 'focused',
+      },
+      {
+        id: 'agent-b',
+        name: 'Representative B',
+        role: 'Steward',
+        persona: 'Keeps the granaries open.',
+        tier: 'IMPORTANT',
+        emotion: 'focused',
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Copy replay' }));
+
+    await waitFor(() => {
+      expect(saveOracleReplayLocalCopyMock).toHaveBeenCalledTimes(1);
+      expect(copyTextMock).toHaveBeenCalledWith('http://localhost:3000/roundtable/replay?roomLocal=local-roundtable-copy');
+    });
+    expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();
   });
 
   it('lets a live table reopen the representative picker and rebuild from the current seating', async () => {

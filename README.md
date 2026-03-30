@@ -13,6 +13,9 @@
   - replay 分享与导入
   - director campaign、玩法卡、结构化押注
 - 最近一次稳定全链签收工件位于 `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`。
+- 最近一次 Oracle 专项签收工件位于：
+  - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
+  - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
 - 当前仍在持续收口的增量主要是：
   - follow-up 与经典模式的流式一致性
   - `pretext` 是否继续推进到运行时 transcript 稳定化（`P2+`）
@@ -48,7 +51,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
-| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` |
+| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；readonly replay 已重新签收到移动端 hotseat thread / local restore / import 主链 |
 | Replay & Import | 主模式与 Debate 均支持 |
 | i18n | UI 与自动生成内容按输入语言联动输出 |
 
@@ -73,7 +76,7 @@ backend/   FastAPI + SQLModel + SQLite + ChromaDB
 - `Scenario.director_state_json` 与 `gameplay_state_json` 是主模式 authority。
 - `scenarioMeta` 仍存在，但只承担缓存、兼容和 replay 输入职责，不再是跨设备真值。
 - `ending_room` 是独立域，room/thread transcript 与 memory partition 隔离。
-- replay 分享优先走后端 `ReplayArtifact`，失败时才回退本地 token。
+- replay 分享优先走后端 `ReplayArtifact`，失败且 URL token 也不可用时，会回退为本地只读副本链接。
 
 ## 快速开始
 

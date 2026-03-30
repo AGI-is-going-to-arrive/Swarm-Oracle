@@ -69,11 +69,18 @@ async function getScenario(backendUrl, scenarioId) {
 
 async function findMultiEndingScenarioId(backendUrl) {
   const payload = await fetchJson(`${backendUrl}/api/scenarios?status=done&limit=120&offset=0`);
+  let bestScenarioId = null;
+  let bestBranchCount = 0;
   for (const item of payload.scenarios ?? []) {
     const scenario = await getScenario(backendUrl, item.id);
-    if ((scenario.branches?.length ?? 0) >= 2) {
-      return scenario.id;
+    const branchCount = scenario.branches?.length ?? 0;
+    if (branchCount >= 2 && branchCount > bestBranchCount) {
+      bestScenarioId = scenario.id;
+      bestBranchCount = branchCount;
     }
+  }
+  if (bestScenarioId) {
+    return bestScenarioId;
   }
   throw new Error("No multi-ending DONE scenario is available for roundtable E2E");
 }
@@ -120,7 +127,7 @@ async function waitForCapturedClipboardUrl(page, label, timeout = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const url = await readCapturedClipboard(page);
-    if (typeof url === "string" && url.includes("roomShare=")) {
+    if (typeof url === "string" && (url.includes("roomShare=") || url.includes("roomLocal="))) {
       return url;
     }
     await page.waitForTimeout(250);
@@ -164,7 +171,11 @@ async function openRoundtable(page, baseUrl, scenarioId) {
   throw new Error("Timed out waiting for roundtable ready");
 }
 
-async function sendComposer(page, prompt, modeText) {
+async function sendComposer(page, prompt, modeText, options = {}) {
+  const {
+    expectThreadSwitch = false,
+    expectedInteractionMode = null,
+  } = options;
   await page.getByRole("button", { name: modeText }).click();
   const before = await readAutomation(page);
   const beforeTurns = before?.simulation?.messageCount ?? 0;
@@ -174,14 +185,108 @@ async function sendComposer(page, prompt, modeText) {
   await page.locator(".ending-chat-send").click();
   return waitForAutomation(
     page,
-    (payload) => (
-      (payload.simulation?.messageCount ?? 0) > beforeTurns
-      || (payload.page?.controls?.thread_count ?? 0) > beforeThreadCount
-      || (payload.page?.controls?.active_thread_id ?? null) !== beforeActiveThreadId
-    ),
+    (payload) => {
+      const controls = payload.page?.controls;
+      if (!controls) return false;
+      if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) {
+        return false;
+      }
+      if (expectThreadSwitch) {
+        return (
+          (controls.thread_count ?? 0) > beforeThreadCount
+          || (controls.active_thread_id ?? null) !== beforeActiveThreadId
+        );
+      }
+      return (
+        (payload.simulation?.messageCount ?? 0) > beforeTurns
+        || (controls.thread_count ?? 0) > beforeThreadCount
+        || (controls.active_thread_id ?? null) !== beforeActiveThreadId
+      );
+    },
     15000,
     `composer send ${modeText}`,
   );
+}
+
+async function captureMobileFit(page) {
+  const fit = await page.evaluate(() => {
+    const shell = document.querySelector(".worldline-roundtable-shell");
+    const rect = shell instanceof HTMLElement ? shell.getBoundingClientRect() : null;
+    const languageSwitch = document.querySelector(".lang-switch--global");
+    const topline = document.querySelector(".worldline-roundtable-hero__topline");
+    const summaryCard = document.querySelector(".worldline-roundtable-card--summary");
+    const transcriptHeader = document.querySelector(".worldline-roundtable-transcript-header");
+    const transcriptList = document.querySelector(".worldline-roundtable-transcript-list");
+    const composer = document.querySelector(".ending-chat-composer");
+    const toRect = (node) => {
+      if (!(node instanceof HTMLElement)) return null;
+      const value = node.getBoundingClientRect();
+      if (value.width <= 0 || value.height <= 0) {
+        return null;
+      }
+      return { x: value.x, y: value.y, width: value.width, height: value.height };
+    };
+    const overlaps = (left, right) => {
+      if (!left || !right) return null;
+      return !(
+        left.x + left.width <= right.x
+        || right.x + right.width <= left.x
+        || left.y + left.height <= right.y
+        || right.y + right.height <= left.y
+      );
+    };
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      canScrollY: document.documentElement.scrollHeight > window.innerHeight,
+      languageSwitchRect: toRect(languageSwitch),
+      heroToplineRect: toRect(topline),
+      summaryCardRect: toRect(summaryCard),
+      transcriptHeaderRect: toRect(transcriptHeader),
+      transcriptListRect: toRect(transcriptList),
+      composerRect: toRect(composer),
+      languageSwitchOverlapsTopline: overlaps(toRect(languageSwitch), toRect(topline)),
+      languageSwitchOverlapsComposer: overlaps(toRect(languageSwitch), toRect(composer)),
+      summaryBeforeTranscript: (() => {
+        const summaryRect = toRect(summaryCard);
+        const transcriptRect = toRect(transcriptHeader);
+        if (!summaryRect || !transcriptRect) return false;
+        return summaryRect.y < transcriptRect.y;
+      })(),
+      composerOverlapsTranscript: overlaps(toRect(composer), toRect(transcriptList)),
+    };
+  });
+  if (fit.languageSwitchOverlapsTopline) {
+    throw new Error("Mobile roundtable language switch overlaps the hero topline");
+  }
+  if (fit.languageSwitchOverlapsComposer) {
+    throw new Error("Mobile roundtable language switch overlaps the composer");
+  }
+  if (fit.summaryBeforeTranscript) {
+    throw new Error("Mobile roundtable summary card appears before the transcript");
+  }
+  if (fit.composerOverlapsTranscript) {
+    throw new Error("Mobile roundtable composer overlaps the transcript list");
+  }
+  return fit;
+}
+
+async function focusHotseatThread(page, expectedThreadId) {
+  const hotseatChip = page.locator(".ending-chat-thread-chip.is-hotseat-thread").first();
+  if (await hotseatChip.isVisible().catch(() => false)) {
+    await hotseatChip.click();
+  }
+  if (!expectedThreadId) {
+    await page.waitForTimeout(500);
+    return;
+  }
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.controls?.active_thread_id === expectedThreadId,
+    10000,
+    "hotseat thread focus",
+  );
+  await page.waitForTimeout(500);
 }
 
 async function reseatRoundtable(page) {
@@ -302,9 +407,8 @@ async function reopenWithSelectionMode(page, {
   };
 }
 
-async function runDesktop(context, baseUrl, backendUrl, outputDir) {
+async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   const page = await context.newPage();
-  const scenarioId = await findMultiEndingScenarioId(backendUrl);
   const ready = await openRoundtable(page, baseUrl, scenarioId);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), ready);
@@ -359,7 +463,12 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
     page,
     "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？",
     /Question one rep|Representative hotseat|点名代表|代表热座/i,
+    {
+      expectThreadSwitch: true,
+      expectedInteractionMode: "hotseat",
+    },
   );
+  await focusHotseatThread(page, hotseat?.page?.controls?.active_thread_id ?? null);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseat);
 
@@ -411,8 +520,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   };
 }
 
-async function runMobile(browser, baseUrl, backendUrl, outputDir) {
-  const scenarioId = await findMultiEndingScenarioId(backendUrl);
+async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     isMobile: true,
@@ -420,69 +528,141 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir) {
   });
   const page = await context.newPage();
   const ready = await openRoundtable(page, baseUrl, scenarioId);
-  const fit = await page.evaluate(() => {
-    const shell = document.querySelector(".worldline-roundtable-shell");
-    const rect = shell instanceof HTMLElement ? shell.getBoundingClientRect() : null;
-    const languageSwitch = document.querySelector(".lang-switch--global");
-    const topline = document.querySelector(".worldline-roundtable-hero__topline");
-    const summaryCard = document.querySelector(".worldline-roundtable-card--summary");
-    const transcriptHeader = document.querySelector(".worldline-roundtable-transcript-header");
-    const transcriptList = document.querySelector(".worldline-roundtable-transcript-list");
-    const composer = document.querySelector(".ending-chat-composer");
-    const toRect = (node) => {
-      if (!(node instanceof HTMLElement)) return null;
-      const value = node.getBoundingClientRect();
-      if (value.width <= 0 || value.height <= 0) {
-        return null;
-      }
-      return { x: value.x, y: value.y, width: value.width, height: value.height };
-    };
-    const overlaps = (left, right) => {
-      if (!left || !right) return null;
-      return !(
-        left.x + left.width <= right.x
-        || right.x + right.width <= left.x
-        || left.y + left.height <= right.y
-        || right.y + right.height <= left.y
-      );
-    };
-    return {
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      rect: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
-      canScrollY: document.documentElement.scrollHeight > window.innerHeight,
-      languageSwitchRect: toRect(languageSwitch),
-      heroToplineRect: toRect(topline),
-      summaryCardRect: toRect(summaryCard),
-      transcriptHeaderRect: toRect(transcriptHeader),
-      transcriptListRect: toRect(transcriptList),
-      composerRect: toRect(composer),
-      languageSwitchOverlapsTopline: overlaps(toRect(languageSwitch), toRect(topline)),
-      languageSwitchOverlapsComposer: overlaps(toRect(languageSwitch), toRect(composer)),
-      summaryBeforeTranscript: (() => {
-        const summaryRect = toRect(summaryCard);
-        const transcriptRect = toRect(transcriptHeader);
-        if (!summaryRect || !transcriptRect) return false;
-        return summaryRect.y < transcriptRect.y;
-      })(),
-      composerOverlapsTranscript: overlaps(toRect(composer), toRect(transcriptList)),
-    };
-  });
-  if (fit.languageSwitchOverlapsTopline) {
-    throw new Error("Mobile roundtable language switch overlaps the hero topline");
-  }
-  if (fit.languageSwitchOverlapsComposer) {
-    throw new Error("Mobile roundtable language switch overlaps the composer");
-  }
-  if (fit.summaryBeforeTranscript) {
-    throw new Error("Mobile roundtable summary card appears before the transcript");
-  }
-  if (fit.composerOverlapsTranscript) {
-    throw new Error("Mobile roundtable composer overlaps the transcript list");
-  }
+  const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit });
+
+  const traitMix = await reopenWithSelectionMode(page, {
+    modeButton: /Trait mix|冲突人设混编/i,
+    expectedMode: "trait_mix",
+    label: "mobile trait mix roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-trait-mix.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-trait-mix.json"), traitMix);
+
+  const faultLineFirst = await reopenWithSelectionMode(page, {
+    modeButton: /Fault line first|先看最大分歧/i,
+    expectedMode: "fault_line_first",
+    label: "mobile fault line first roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-fault-line-first.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-fault-line-first.json"), faultLineFirst);
+
+  const witnessAugmented = await reopenWithSelectionMode(page, {
+    modeButton: /Witness augmented|自动增补证人/i,
+    expectedMode: "witness_augmented",
+    expectWitness: true,
+    label: "mobile witness augmented roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-witness-augmented.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-witness-augmented.json"), witnessAugmented);
+
+  await page.getByRole("button", { name: /Question one rep|Representative hotseat|点名代表|代表热座/i }).click();
+  const hotseatTargets = await page.locator(".ending-chat-hotseat-pill").count();
+  if (hotseatTargets > 0) {
+    await page.locator(".ending-chat-hotseat-pill").first().click();
+  }
+  const hotseat = await sendComposer(
+    page,
+    "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？",
+    /Question one rep|Representative hotseat|点名代表|代表热座/i,
+    {
+      expectThreadSwitch: true,
+      expectedInteractionMode: "hotseat",
+    },
+  );
+  const hotseatThreadId = hotseat?.page?.controls?.active_thread_id ?? null;
+  await focusHotseatThread(page, hotseatThreadId);
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-hotseat.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), hotseat);
+
+  await armClipboardCapture(page);
+  let artifactReadonly = null;
+  let artifactReloaded = null;
+  let artifactImportedUrl = null;
+  let replayReadonly = null;
+  let replayReloaded = null;
+  let replayCoverageError = null;
+  try {
+    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    const shareReplayUrl = await waitForCapturedClipboardUrl(page, "mobile roundtable copied share permalink");
+    const sharePage = await context.newPage();
+    await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
+    artifactReadonly = await waitForAutomation(
+      sharePage,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.page?.controls?.is_read_only === true
+        && payload.page?.controls?.can_send === false
+        && payload.page?.controls?.interaction_mode === "hotseat"
+        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+      20000,
+      "mobile roundtable artifact replay readonly state",
+    );
+    await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact.png"));
+    writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact.json"), artifactReadonly);
+    await sharePage.reload({ waitUntil: "domcontentloaded" });
+    artifactReloaded = await waitForAutomation(
+      sharePage,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.page?.controls?.is_read_only === true
+        && payload.page?.controls?.interaction_mode === "hotseat"
+        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+      20000,
+      "mobile roundtable artifact readonly restore",
+    );
+    await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.png"));
+    writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
+    await sharePage.getByRole("button", { name: /Import local run|导入本地运行/i }).click();
+    await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
+    artifactImportedUrl = sharePage.url();
+
+    await page.getByRole("button", { name: /Save(?:d)? (local )?read-only copy|Read-only copy saved|保存本地只读副本|已保存本地只读副本|保存只读副本|只读副本已保存/i }).click();
+    await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
+    replayReadonly = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.page?.controls?.is_read_only === true
+        && payload.page?.controls?.can_send === false
+        && payload.page?.controls?.interaction_mode === "hotseat"
+        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+      20000,
+      "mobile roundtable replay readonly state",
+    );
+    await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly.png"));
+    writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly.json"), replayReadonly);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    replayReloaded = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.page?.controls?.is_read_only === true
+        && payload.page?.controls?.interaction_mode === "hotseat"
+        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+      20000,
+      "mobile roundtable readonly restore",
+    );
+    await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.png"));
+    writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.json"), replayReloaded);
+  } catch (error) {
+    replayCoverageError = String(error);
+    writeJson(path.join(outputDir, "mobile-roundtable-replay-coverage-error.json"), { error: replayCoverageError });
+  }
+
   await context.close();
-  return { scenarioId, ready, fit };
+  return {
+    scenarioId,
+    ready,
+    fit,
+    traitMix,
+    faultLineFirst,
+    witnessAugmented,
+    hotseat,
+    artifactReadonly,
+    artifactReloaded,
+    artifactImportedUrl,
+    replayReadonly,
+    replayReloaded,
+    replayCoverageError,
+  };
 }
 
 async function main() {
@@ -492,14 +672,15 @@ async function main() {
 
   const browser = await launchBrowser(args.headless);
   try {
+    const scenarioId = await findMultiEndingScenarioId(args.backendUrl);
     const summary = {};
     if (args.mode === "desktop" || args.mode === "full") {
       const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
-      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir);
+      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, scenarioId);
       await context.close();
     }
     if (args.mode === "mobile" || args.mode === "full") {
-      summary.mobile = await runMobile(browser, args.baseUrl, args.backendUrl, outputDir);
+      summary.mobile = await runMobile(browser, args.baseUrl, args.backendUrl, outputDir, scenarioId);
     }
     writeJson(path.join(outputDir, "summary.json"), summary);
     console.log(JSON.stringify(summary, null, 2));

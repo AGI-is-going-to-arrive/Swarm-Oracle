@@ -12,6 +12,7 @@ import {
 const ORACLE_REPLAY_LOCAL_STORAGE_KEY = 'swarmoracle:oracle-replay:v1';
 const ORACLE_REPLAY_QUERY_KEY = 'roomReplay';
 const ORACLE_REPLAY_SHARE_QUERY_KEY = 'roomShare';
+const ORACLE_REPLAY_LOCAL_QUERY_KEY = 'roomLocal';
 const oracleReplayMemoryCache: Record<string, OracleReplayPayload> = {};
 
 export type OracleReplayKind = 'ending_room_v1' | 'worldline_roundtable_v1';
@@ -165,6 +166,14 @@ export function buildOracleReplayShareUrl(
   shareId: string,
 ): string {
   return `${normalizeReplayOrigin(origin)}${buildOracleReplayPath(payload, ORACLE_REPLAY_SHARE_QUERY_KEY, shareId)}`;
+}
+
+export function buildOracleReplayLocalUrl(
+  origin: string,
+  payload: OracleReplayPayload,
+  localId: string,
+): string {
+  return `${normalizeReplayOrigin(origin)}${buildOracleReplayPath(payload, ORACLE_REPLAY_LOCAL_QUERY_KEY, localId)}`;
 }
 
 export async function readOracleReplayPayload(

@@ -3,11 +3,21 @@ export function normalizeReplayOrigin(origin: string): string {
 }
 
 export const MAX_REPLAY_TOKEN_CHARS = 1800;
+const LIKELY_OVERSIZED_REPLAY_JSON_CHARS = MAX_REPLAY_TOKEN_CHARS * 8;
 
 export class ReplayTokenTooLargeError extends Error {
   constructor(length: number) {
     super(`Replay token too large for URL sharing (${length} chars)`);
     this.name = 'ReplayTokenTooLargeError';
+  }
+}
+
+export function isReplayEnvelopeLikelyTooLarge(kind: string, payload: unknown): boolean {
+  try {
+    const json = JSON.stringify({ kind, payload });
+    return json.length > LIKELY_OVERSIZED_REPLAY_JSON_CHARS;
+  } catch {
+    return false;
   }
 }
 

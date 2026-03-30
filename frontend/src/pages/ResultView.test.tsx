@@ -1538,13 +1538,13 @@ describe('ResultView campaign summary', () => {
       scenario_id: 'scenario-1',
       question: 'What if the archive had to sync?',
       status: 'done',
-      branches: Array.from({ length: 260 }, (_, index) => ({
+      branches: Array.from({ length: 64 }, (_, index) => ({
         id: `branch-${index}`,
         title: `Archive Branch ${index}`,
         probability: 1,
         status: 'COMPLETED',
-        story: `A very long branch story ${index} ${'abcdefghij'.repeat(10)}`,
-        insight: `A durable insight ${'klmnopqrst'.repeat(6)}`,
+        story: `A very long branch story ${index} ${'abcdefghij'.repeat(20)}`,
+        insight: `A durable insight ${'klmnopqrst'.repeat(12)}`,
         key_moments: [`Moment ${index}`],
         parent_branch_id: null,
         fork_reason: '',

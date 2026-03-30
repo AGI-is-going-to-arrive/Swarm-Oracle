@@ -119,6 +119,40 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 交互式 Playwright 视觉 QA 结论：
   - ending-room live / readonly / import 链路已实机走通；`/result/replay?roomLocal=...` 下确实只读，`Import as Local Run` 能跳回新的本地 `/sim/:id`。
 
+## 2026-03-30 Phase D / Phase G review sweep
+
+- 已重新按真值入口复核：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/guides/development.md`
+- 本轮只做 review / QA，不开新功能，不推进 `pretext` 到 `P2`。
+- 本轮代码审查重点：
+  - replay / share / import
+  - selection_recipe / room dedupe
+  - artifact replay / readonly replay
+  - mobile state restore
+  - follow-up 流式一致性
+  - hotseat thread switching
+- 本轮真实验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `81 passed in 26.24s`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-phaseDG-ending-room-review --headless true`
+    - 通过，覆盖 live / hotseat / all_present / crossline gallery / artifact readonly / local readonly / import / mobile fit
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-phaseDG-roundtable-review --headless`
+    - 通过，覆盖 representative / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat / artifact readonly / local readonly / mobile fit
+  - `playwright-interactive`
+    - 已额外做真实桌面/移动页面抽查，并核对截图
+- 本轮新增风险记录：
+  - `readonly replay` 目前主要靠前端禁用；artifact payload 暴露真实 `room_id`，而 backend `user-turn` 端点只校验 room 状态，不区分“来自只读 replay 的请求”，因此 share recipient 若手工构造 API 调用，仍可能写回原始 live room。
+  - `create_ending_room_thread(...)` 当前无后端级 dedupe / 唯一约束；同一 room 下相同 hotseat 目标并发建线程时，可能生成重复 follow-up thread，前端只在单 tab 流程里尽量复用已有 thread。
+  - `frontend/src/pages/ResultView.test.tsx` 里 “artifact storage fails + replay token too large” 用例当前稳定超时；更像测试/异步收口问题，不是已复现的线上功能回退。
+  - `EndingChatModal.test.tsx` / Oracle 相关 Vitest 仍可能遇到老的 worker 退出慢现象；这轮继续按“非断言失败、真实 E2E 已覆盖”处理。
+
 ## 2026-03-30 Oracle gameplay polish follow-up
 
 - 复核范围：
@@ -15445,3 +15479,55 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     1. `trait_mix`
     2. `fault_line_first`
     3. `witness_augmented`
+
+## 2026-03-31 Oracle replay/mobile signoff + docs sync
+
+- 已重新读取 `llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/guides/development.md`、`README.md`、`frontend/README.md` 与 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`，按“代码 + 工件 + 当前真值文档”三方对齐来更新文档。
+- 本轮真实代码改动：
+  - `frontend/src/lib/replayCodec.ts`
+    - 新增“明显超大 replay envelope”预判，避免 artifact 离线时继续构造大概率失败的 URL token。
+  - `frontend/src/lib/oracleReplay.ts`
+    - 新增 Oracle 本地只读副本 URL 构造。
+  - `frontend/src/pages/ResultView.tsx`
+    - Oracle replay `Copy replay` 在 `ReplayArtifact` 失败且 token 也不可用时，会回退为本地只读副本链接。
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 脚本现在支持显式 `desktop|mobile|full` 模式。
+    - mobile 已覆盖 `hotseat / all_present / crossline_gallery / artifact readonly / local readonly / reload restore / import`。
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - `full` 现在固定复用同一个 `scenarioId` 跑桌面 + mobile，不再被中途 import 产生的新 scenario 干扰。
+    - mobile 已覆盖 `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`。
+  - `frontend/package.json`
+    - `e2e:ending-room:followup` 已对齐到新的 `full` 调用方式，避免文档/脚本 alias 失配。
+- 本轮真实验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `246 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx -t "falls back to the scenario result URL when artifact storage fails and the replay token is too large"`
+    - 通过
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx -t "renders a read-only replay from local storage and disables sending|falls back to a local replay link when artifact and token replay links are both unavailable"`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260331-oracle-signoff-ending-room --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260331-oracle-signoff-roundtable --headless`
+    - 通过
+- 本轮关键签收工件：
+  - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
+    - desktop + mobile ending-room 都已覆盖 `hotseat / all_present / crossline_gallery / readonly replay / reload restore / import`
+  - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
+    - desktop + mobile roundtable 都已覆盖 `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / readonly replay / reload restore / import`
+    - mobile readonly replay 现在稳定保持 `interaction_mode = hotseat`
+- 本轮文档同步：
+  - `README.md`
+  - `frontend/README.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+- 当前判断更新：
+  - Oracle 主链不是“还在补 replay/mobile 基础能力”，而是这轮已经把 replay fallback、readonly hotseat 语义和 mobile signoff 工件重新收到了同一口径。
+  - 下次如果继续做，不该再重复补这些基础链路；优先级应回到更深的 follow-up 流式一致性和 corner-case / regression hardening。

@@ -31,6 +31,7 @@ import { copyText } from '../lib/copyText';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
+  buildOracleReplayLocalUrl,
   buildOracleReplayShareUrl,
   buildOracleReplayUrl,
   loadOracleReplayLocalCopy,
@@ -39,6 +40,7 @@ import {
   saveOracleReplayLocalCopy,
   type OracleReplayPayload,
 } from '../lib/oracleReplay';
+import { isReplayEnvelopeLikelyTooLarge } from '../lib/replayCodec';
 import {
   findChallengeProgressByScenarioId,
   markChallengeCompleted,
@@ -1179,6 +1181,9 @@ export default function ResultView() {
           compactReplaySnapshot as unknown as Record<string, unknown>,
         ))
         .catch(() => null);
+      if (!artifact && isReplayEnvelopeLikelyTooLarge('scenario_result_v1', compactReplaySnapshot)) {
+        return;
+      }
       try {
         const url = artifact
           ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
@@ -1281,16 +1286,43 @@ export default function ResultView() {
   }, [branches.length, isReplayMode, navigate, scenario?.id]);
   const handleCopyEndingRoomReplayLink = useCallback(async () => {
     if (!effectiveEndingRoomReplayPayload) return;
-    const artifact = await createReplayArtifact(
-      effectiveEndingRoomReplayPayload.kind,
-      effectiveEndingRoomReplayPayload as unknown as Record<string, unknown>,
-    ).catch(() => null);
-    const url = artifact
-      ? buildOracleReplayShareUrl(window.location.origin, effectiveEndingRoomReplayPayload, artifact.id)
-      : await buildOracleReplayUrl(window.location.origin, effectiveEndingRoomReplayPayload);
-    await copyText(url);
-    setEndingRoomPermalinkCopied(true);
-    window.setTimeout(() => setEndingRoomPermalinkCopied(false), 1800);
+    const copyWindowMs = 1800;
+    const finalizeCopyState = (usedLocalFallback: boolean) => {
+      setEndingRoomPermalinkCopied(true);
+      window.setTimeout(() => setEndingRoomPermalinkCopied(false), copyWindowMs);
+      if (usedLocalFallback) {
+        setEndingRoomLocalCopySaved(true);
+        window.setTimeout(() => setEndingRoomLocalCopySaved(false), copyWindowMs);
+      }
+    };
+
+    try {
+      const artifact = await createReplayArtifact(
+        effectiveEndingRoomReplayPayload.kind,
+        effectiveEndingRoomReplayPayload as unknown as Record<string, unknown>,
+      ).catch(() => null);
+      let url: string;
+      let usedLocalFallback = false;
+      if (artifact) {
+        url = buildOracleReplayShareUrl(window.location.origin, effectiveEndingRoomReplayPayload, artifact.id);
+      } else if (isReplayEnvelopeLikelyTooLarge(
+        effectiveEndingRoomReplayPayload.kind,
+        effectiveEndingRoomReplayPayload,
+      )) {
+        const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
+        url = buildOracleReplayLocalUrl(window.location.origin, effectiveEndingRoomReplayPayload, localId);
+        usedLocalFallback = true;
+      } else {
+        url = await buildOracleReplayUrl(window.location.origin, effectiveEndingRoomReplayPayload);
+      }
+      await copyText(url);
+      finalizeCopyState(usedLocalFallback);
+    } catch (error) {
+      console.warn('[ResultView] Falling back to local ending-room replay copy', error);
+      const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
+      await copyText(buildOracleReplayLocalUrl(window.location.origin, effectiveEndingRoomReplayPayload, localId));
+      finalizeCopyState(true);
+    }
   }, [effectiveEndingRoomReplayPayload]);
   const handleSaveEndingRoomReadonlyCopy = useCallback(() => {
     if (!effectiveEndingRoomReplayPayload) return;

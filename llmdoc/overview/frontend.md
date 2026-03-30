@@ -55,6 +55,8 @@
   - `simulationReplay.ts`
 - Debate replay helper：
   - `debateReplay.ts`
+- Oracle replay helper：
+  - `oracleReplay.ts`
 - 编解码共享：
   - `replayCodec.ts`
 
@@ -93,6 +95,8 @@
 
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
+- Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
+- `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
@@ -103,6 +107,9 @@
 - roundtable mobile 当前以 `live room` 为优先目标：
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
+- 当前 Oracle mobile 专项脚本已覆盖：
+  - ending-room：`hotseat / all_present / crossline_gallery / artifact readonly / local readonly / reload restore / import`
+  - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
 - `pretext` 已以只读 helper / contract 形式落地在 `frontend/src/lib/textLayout/*` 与相关页面测试中；当前还没有接入运行时 transcript 布局内核。
 
 ## 查找路径

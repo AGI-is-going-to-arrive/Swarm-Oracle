@@ -16,6 +16,7 @@ import {
   type EndingRoomCandidate,
 } from '../lib/endingRoomCandidates';
 import {
+  buildOracleReplayLocalUrl,
   buildOracleReplayShareUrl,
   buildOracleReplayUrl,
   loadOracleReplayLocalCopy,
@@ -24,6 +25,7 @@ import {
   saveOracleReplayLocalCopy,
   type OracleReplayPayload,
 } from '../lib/oracleReplay';
+import { isReplayEnvelopeLikelyTooLarge } from '../lib/replayCodec';
 import { loadScenarioMeta } from '../lib/scenarioMeta';
 import {
   getEndingRoomPhaseLabel,
@@ -608,6 +610,17 @@ export default function WorldlineRoundtableView() {
     () => participants.filter((participant) => isRoundtableParticipant(participant)),
     [participants],
   );
+  const resolveThreadRepresentativeId = useCallback((thread: EndingRoomThreadSnapshot | null | undefined) => {
+    const targetRef = thread?.addressed_agent_ids_json?.[0] ?? null;
+    if (!targetRef) {
+      return representatives[0]?.id ?? null;
+    }
+    return representatives.find((participant) => (
+      participant.id === targetRef
+      || participant.worldline_echo_key === targetRef
+      || participant.source_agent_id === targetRef
+    ))?.id ?? null;
+  }, [representatives]);
   const participantsById = useMemo(
     () => new Map(participants.map((participant) => [participant.id, participant])),
     [participants],
@@ -710,11 +723,34 @@ export default function WorldlineRoundtableView() {
     setSelectionMode(
       hasWitness
         ? 'expert_witness'
-        : (replayRepresentativeBranches.length > 0 && replayRepresentativeBranches.length < branchOrder.length
+      : (replayRepresentativeBranches.length > 0 && replayRepresentativeBranches.length < branchOrder.length
           ? 'manual_shortlist'
           : 'representative'),
     );
   }, [branchOrder, replayPayload]);
+
+  useEffect(() => {
+    if (!replayPayload) {
+      return;
+    }
+    const nextMode = activeThread?.mode === 'followup'
+      ? activeThread.interaction_mode
+      : 'archivist_route';
+    if (interactionMode !== nextMode) {
+      setInteractionMode(nextMode);
+    }
+    const nextRepresentativeId = resolveThreadRepresentativeId(activeThread);
+    if (selectedRepresentativeId !== nextRepresentativeId) {
+      setSelectedRepresentativeId(nextRepresentativeId);
+    }
+  }, [
+    activeThread,
+    interactionMode,
+    replayPayload,
+    resolveThreadRepresentativeId,
+    selectedRepresentativeId,
+    setInteractionMode,
+  ]);
 
   const currentTurns = useMemo(() => {
     const roomTurns = effectiveSnapshot?.turns ?? [];
@@ -903,24 +939,44 @@ export default function WorldlineRoundtableView() {
     ],
   );
 
-  const createPermalink = useCallback(async () => {
-    if (!effectiveReplayPayload) return null;
-    const artifact = await createReplayArtifact(
-      'worldline_roundtable_v1',
-      effectiveReplayPayload as unknown as Record<string, unknown>,
-    ).catch(() => null);
-    return artifact
-      ? buildOracleReplayShareUrl(window.location.origin, effectiveReplayPayload, artifact.id)
-      : buildOracleReplayUrl(window.location.origin, effectiveReplayPayload);
-  }, [effectiveReplayPayload]);
-
   const handleCopyPermalink = useCallback(async () => {
-    const permalink = await createPermalink();
-    if (!permalink) return;
-    await copyText(permalink);
-    setPermalinkCopied(true);
-    window.setTimeout(() => setPermalinkCopied(false), 1800);
-  }, [createPermalink]);
+    const copyWindowMs = 1800;
+    const finalizeCopyState = (usedLocalFallback: boolean) => {
+      setPermalinkCopied(true);
+      window.setTimeout(() => setPermalinkCopied(false), copyWindowMs);
+      if (usedLocalFallback) {
+        setLocalCopySaved(true);
+        window.setTimeout(() => setLocalCopySaved(false), copyWindowMs);
+      }
+    };
+
+    try {
+      if (!effectiveReplayPayload) return;
+      const artifact = await createReplayArtifact(
+        'worldline_roundtable_v1',
+        effectiveReplayPayload as unknown as Record<string, unknown>,
+      ).catch(() => null);
+      let permalink: string;
+      let usedLocalFallback = false;
+      if (artifact) {
+        permalink = buildOracleReplayShareUrl(window.location.origin, effectiveReplayPayload, artifact.id);
+      } else if (isReplayEnvelopeLikelyTooLarge('worldline_roundtable_v1', effectiveReplayPayload)) {
+        const localId = saveOracleReplayLocalCopy(effectiveReplayPayload);
+        permalink = buildOracleReplayLocalUrl(window.location.origin, effectiveReplayPayload, localId);
+        usedLocalFallback = true;
+      } else {
+        permalink = await buildOracleReplayUrl(window.location.origin, effectiveReplayPayload);
+      }
+      await copyText(permalink);
+      finalizeCopyState(usedLocalFallback);
+    } catch (error) {
+      if (!effectiveReplayPayload) return;
+      console.warn('[WorldlineRoundtableView] Falling back to local roundtable replay copy', error);
+      const localId = saveOracleReplayLocalCopy(effectiveReplayPayload);
+      await copyText(buildOracleReplayLocalUrl(window.location.origin, effectiveReplayPayload, localId));
+      finalizeCopyState(true);
+    }
+  }, [effectiveReplayPayload]);
 
   const handleSaveLocalCopy = useCallback(() => {
     if (!effectiveReplayPayload) return;
@@ -1725,19 +1781,14 @@ export default function WorldlineRoundtableView() {
                     type="button"
                     className={`ending-chat-thread-chip ${(activeThread?.id ?? defaultThreadId) === thread.id ? 'is-active' : ''} ${thread.mode === 'room' ? 'is-room-thread' : ''} ${thread.interaction_mode === 'hotseat' ? 'is-hotseat-thread' : ''}`}
                     onClick={() => {
+                      const nextMode = thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route';
                       if (replayPayload) {
                         setReplayActiveThreadId(thread.id);
                       } else {
                         setActiveThread(thread.id);
-                        setInteractionMode(thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route');
                       }
-                      const targetRef = thread.addressed_agent_ids_json?.[0] ?? null;
-                      const resolvedTargetId = representatives.find((participant) => (
-                        participant.id === targetRef
-                        || participant.worldline_echo_key === targetRef
-                        || participant.source_agent_id === targetRef
-                      ))?.id ?? targetRef;
-                      setSelectedRepresentativeId(resolvedTargetId);
+                      setInteractionMode(nextMode);
+                      setSelectedRepresentativeId(resolveThreadRepresentativeId(thread));
                       if (!replayPayload && thread.mode === 'followup') {
                         void loadThread(thread.id);
                       }
