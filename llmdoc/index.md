@@ -1,6 +1,6 @@
 # SwarmOracle — llmdoc Index
 
-> 项目 AI 上下文文档入口。最近同步: 2026-03-30（本轮已对齐 `Oracle Chambers / 世界线圆桌` 真值：single-ending chamber、roundtable live/reseat/replay readonly 已进入稳定 `release:signoff` 总链；当前残余集中在 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感）
+> 项目 AI 上下文文档入口。最近同步: 2026-03-30（本轮已对齐 `Oracle Chambers / 世界线圆桌` 真值：single-ending chamber、`crossline_gallery`、roundtable live/reseat/replay readonly、`manual_shortlist`、`expert_witness` 已进入当前可玩基线；当前残余集中在 ending-room replay/share/import 单链、roundtable mobile 一屏体验，以及 `trait_mix / fault_line_first / witness_augmented`）
 
 ## 阅读顺序
 

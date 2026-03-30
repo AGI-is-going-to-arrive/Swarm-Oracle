@@ -499,13 +499,17 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 > 当前状态：
 > - backend 已实现这条线的 `ending_room` 独立数据域、REST 接口与 WebSocket
-> - backend 本 session 又补齐了 `selected_agent_ids / follow-up thread / user-turn / room-thread memory partition / worldline echo / all_present`
-> - frontend 当前已把 participant picker、thread UI、follow-up composer 和 `archivist_route / hotseat / all_present` 接进单结局结果页
-> - 这轮真实签收仍只覆盖单结局桌面/移动端闭环；多结局完整独立签收、`Worldline Roundtable` 页面，以及 ending-room replay/share/import 仍未签收
+> - backend 本 session 又补齐了 `selected_agent_ids / selected_representatives / selected_witness / follow-up thread / user-turn / room-thread memory partition / worldline echo / all_present`
+> - frontend 当前已把 participant picker、thread UI、follow-up composer 和 `archivist_route / hotseat / all_present` 接进单结局结果页，并补上了 `crossline_gallery`
+> - `Worldline Roundtable` 当前已正式接出，并支持：
+>   - `representative`
+>   - `manual_shortlist`
+>   - `expert_witness`
+> - 当前未单独签收的残余主要是 replay/share/import 最终专项，以及 `trait_mix / fault_line_first / witness_augmented`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "selected_agent_ids?": ["agent-a", "agent-b"], "language?": "zh|en"}` | EndingRoomSnapshot |
+| `POST /api/scenario/{id}/ending-room` | POST | 创建结局会客厅或世界线圆桌房间 | `{"room_type": "ending_chamber|worldline_roundtable|one_move_only|crossline_gallery", "anchor_branch_id?": "branch-id", "selected_branch_ids": ["branch-a", "branch-b"], "selected_agent_ids?": ["agent-a", "agent-b"], "selected_representatives?": [{"branch_id": "branch-a", "agent_id": "agent-a"}], "selected_witness?": {"branch_id": "branch-a", "agent_id": "agent-c"}, "language?": "zh|en"}` | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}` | GET | 获取房间 live snapshot | — | EndingRoomSnapshot |
 | `GET /api/ending-room/{room_id}/result` | GET | 获取房间完成态结果 | — | EndingRoomResultPayload |
 | `POST /api/ending-room/{room_id}/thread` | POST | 在现有 room 下创建 follow-up thread | `{"title?": "热座追问", "addressed_agent_ids": ["agent-id"], "interaction_mode": "thread_followup|hotseat|all_present"}` | EndingRoomThreadSnapshot |
@@ -578,6 +582,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 >     - `one_move_only` 最多 `1` 人
 >     - `ending_chamber` 最多 `3` 人
 >     - 若不在当前 worldline roster 内，会返回 `422 ENDING_ROOM_AGENT_NOT_VISIBLE`
+>   - `selected_representatives` 当前已启用：
+>     - 只允许用于 `worldline_roundtable`
+>     - 必须按 branch 维度提交 `{branch_id, agent_id}`
+>     - 所选 agent 必须属于对应 worldline roster
+>   - `selected_witness` 当前已启用：
+>     - 只允许用于 `worldline_roundtable`
+>     - 必须属于当前已选 worldline roster
+>     - 不允许和同枝代表是同一个 agent；否则返回 `422 ENDING_ROOM_WITNESS_SELECTION_INVALID`
 >   - scenario 自身若还未进入 `DONE`，当前会返回 `409 ENDING_ROOM_SCENARIO_NOT_READY`
 >   - 若同 scope room 已存在但上次跑成 `status=error`，当前会先 reset 后再重排后台任务
 >   - `crossline_gallery` 会直接返回 `status=done`，不会再调度后台任务

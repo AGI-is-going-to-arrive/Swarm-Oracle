@@ -23,9 +23,13 @@ export function getEndingRoomStatusLabel(
 }
 
 export function getEndingRoomModeLabel(roomType: EndingRoomType, t: Translator): string {
-  return roomType === 'one_move_only'
-    ? t('ending_room.mode_one_move_only')
-    : t('ending_room.mode_debrief');
+  if (roomType === 'one_move_only') {
+    return t('ending_room.mode_one_move_only');
+  }
+  if (roomType === 'crossline_gallery') {
+    return t('roundtable.gallery_title');
+  }
+  return t('ending_room.mode_debrief');
 }
 
 export function getEndingRoomPhaseLabel(phase: EndingRoomPhase, t: Translator): string {

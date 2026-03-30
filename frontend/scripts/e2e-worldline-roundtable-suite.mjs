@@ -158,13 +158,21 @@ async function reseatRoundtable(page) {
   await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
+  const manualShortlistButton = page.getByRole("button", { name: /Manual shortlist|手动短名单/i }).first();
+  if (await manualShortlistButton.isVisible().catch(() => false)) {
+    await manualShortlistButton.click();
+  }
+
   const firstAlternative = page
-    .locator(".worldline-roundtable-picker-branch")
+    .locator(".worldline-roundtable-picker-branch.is-active")
     .first()
     .locator(".worldline-roundtable-picker-card:not(.is-selected)")
     .first();
-  const nextRepresentative = (await firstAlternative.locator("strong").innerText()).trim();
-  await firstAlternative.click();
+  let nextRepresentative = null;
+  if (await firstAlternative.isVisible().catch(() => false)) {
+    nextRepresentative = (await firstAlternative.locator("strong").innerText()).trim();
+    await firstAlternative.click();
+  }
   await page.getByRole("button", { name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup/i }).click();
 
   const reseated = await waitForAutomation(
@@ -182,6 +190,49 @@ async function reseatRoundtable(page) {
     previousRoomId,
     nextRoomId: reseated?.scene?.room_id ?? null,
     nextRepresentative,
+    selectionMode: reseated?.page?.controls?.selection_mode ?? null,
+    selectedBranchCount: reseated?.page?.controls?.selected_branch_count ?? null,
+  };
+}
+
+async function addExpertWitness(page) {
+  const before = await readAutomation(page);
+  const previousRoomId = before?.scene?.room_id ?? null;
+  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+
+  const expertWitnessButton = page.getByRole("button", { name: /Expert witness|专家证人/i }).first();
+  if (await expertWitnessButton.isVisible().catch(() => false)) {
+    await expertWitnessButton.click();
+  }
+
+  const witnessCard = page.locator(".worldline-roundtable-picker-witness .worldline-roundtable-picker-card").first();
+  let witnessName = null;
+  if (await witnessCard.isVisible().catch(() => false)) {
+    witnessName = (await witnessCard.locator("strong").innerText()).trim();
+    await witnessCard.click();
+  }
+
+  await page.getByRole("button", { name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i }).first().click();
+
+  const witnessState = await waitForAutomation(
+    page,
+    (payload) => payload.page?.kind === "worldline_roundtable"
+      && payload.page?.controls?.selection_mode === "expert_witness"
+      && payload.page?.controls?.has_result === true
+      && payload.page?.controls?.has_witness === true
+      && payload.scene?.room_id
+      && payload.scene.room_id !== previousRoomId,
+    20000,
+    "expert witness roundtable",
+  );
+
+  return {
+    previousRoomId,
+    nextRoomId: witnessState?.scene?.room_id ?? null,
+    witnessName,
+    selectionMode: witnessState?.page?.controls?.selection_mode ?? null,
+    hasWitness: witnessState?.page?.controls?.has_witness ?? false,
   };
 }
 
@@ -195,6 +246,10 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   const reseated = await reseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-reseated.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-reseated.json"), reseated);
+
+  const expertWitness = await addExpertWitness(page);
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-expert-witness.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-expert-witness.json"), expertWitness);
 
   const archivist = await sendComposer(
     page,
@@ -234,6 +289,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
     scenarioId,
     ready,
     reseated,
+    expertWitness,
     archivist,
     hotseat,
     replayReadonly,

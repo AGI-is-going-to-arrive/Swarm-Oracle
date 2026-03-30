@@ -712,12 +712,18 @@ export interface RoundtableRepresentativeSelection {
   agentId: string;
 }
 
+export interface RoundtableWitnessSelection {
+  branchId: string;
+  agentId: string;
+}
+
 export interface CreateEndingRoomRequest {
   roomType: EndingRoomType;
   anchorBranchId?: string | null;
   selectedBranchIds: string[];
   selectedAgentIds?: string[];
   selectedRepresentatives?: RoundtableRepresentativeSelection[];
+  selectedWitness?: RoundtableWitnessSelection | null;
   language?: 'zh' | 'en';
 }
 
@@ -768,8 +774,8 @@ export type EndingRoomWSEvent =
   (
     | { type: 'heartbeat'; data: { ts: string } }
     | { type: 'status'; data: { status: EndingRoomStatus; error?: string | StructuredWsError } }
-    | { type: 'ending_room_turn_start'; data: { room_id: string; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
-    | { type: 'ending_room_turn_delta'; data: { room_id: string; turn_id: string; participant_id: string; delta: string; chunk_index: number } }
+    | { type: 'ending_room_turn_start'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
+    | { type: 'ending_room_turn_delta'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; delta: string; chunk_index: number } }
     | { type: 'ending_room_turn_commit'; data: EndingRoomTurn }
     | { type: 'ending_room_turn_error'; data: { room_id: string; turn_id: string; participant_id: string; message: string } }
     | { type: 'ending_room_phase_change'; data: { phase: EndingRoomPhase } }

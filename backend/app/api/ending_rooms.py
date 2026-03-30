@@ -51,6 +51,7 @@ class CreateEndingRoomRequest(BaseModel):
     selected_branch_ids: list[str]
     selected_agent_ids: list[str] = Field(default_factory=list)
     selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list)
+    selected_witness: SelectedRepresentativeRequest | None = None
     language: str | None = None
 
     @field_validator("anchor_branch_id", "language")
@@ -97,6 +98,8 @@ class CreateEndingRoomRequest(BaseModel):
             raise ValueError("worldline_roundtable must use selected_representatives instead of selected_agent_ids")
         if self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_representatives:
             raise ValueError("selected_representatives is only supported for worldline_roundtable")
+        if self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_witness is not None:
+            raise ValueError("selected_witness is only supported for worldline_roundtable")
         return self
 
 
@@ -168,6 +171,7 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
                 item.model_dump(mode="python")
                 for item in req.selected_representatives
             ],
+            selected_witness=req.selected_witness.model_dump(mode="python") if req.selected_witness is not None else None,
             language=req.language,
         )
     except EndingRoomServiceError as exc:
@@ -254,10 +258,10 @@ async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRe
             addressed_agent_ids=req.addressed_agent_ids,
             question_anchor_ids=req.question_anchor_ids,
             interaction_mode=req.interaction_mode,
+            ws_callback=ending_room_ws_manager.broadcast,
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
-    await _broadcast_followup_turns(room_id, payload["turns"])
     return payload
 
 
@@ -270,6 +274,7 @@ async def create_thread_user_turn_endpoint(thread_id: str, req: EndingRoomUserTu
             addressed_agent_ids=req.addressed_agent_ids,
             question_anchor_ids=req.question_anchor_ids,
             interaction_mode=req.interaction_mode,
+            ws_callback=ending_room_ws_manager.broadcast,
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
@@ -283,7 +288,6 @@ async def create_thread_user_turn_endpoint(thread_id: str, req: EndingRoomUserTu
             },
         },
     )
-    await _broadcast_followup_turns(payload["room_id"], payload["turns"])
     return payload
 
 

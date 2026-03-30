@@ -73,7 +73,10 @@ vi.mock('react-i18next', () => ({
       'roundtable.phase_opening': 'Ending Recall',
       'roundtable.phase_crossfire': 'Fault Line',
       'roundtable.phase_rebuttal': 'If Replayed',
+      'roundtable.gallery_title': 'Crossline Gallery',
+      'roundtable.gallery_hint': 'This view exposes summaries and key quotes from other worldlines, not the full transcript.',
       'common.loading': 'Loading',
+      'ending_room.foreign_summary_badge': 'Crossline summary',
     }[key] ?? key),
     i18n: {
       language: 'en',
@@ -165,6 +168,71 @@ describe('EndingChatModal', () => {
     expect(screen.getAllByText('Replay mode is read-only for ending chambers.').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(storeState.openRoom).not.toHaveBeenCalled();
+  });
+
+  it('renders crossline gallery as a summary-only view', () => {
+    storeState.snapshot = {
+      id: 'room-gallery',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'crossline_gallery',
+      title: 'Crossline Gallery',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      result_ready: true,
+      participants: [{
+        id: 'p-archivist',
+        room_id: 'room-gallery',
+        role_slot: 'archivist',
+        display_name: 'The Archivist',
+      }],
+      threads: [],
+      turns: [],
+    };
+    storeState.result = {
+      summary: 'Summaries only.',
+      archivist_note: 'No foreign full transcripts.',
+      supporting_turns: [],
+      next_move: null,
+      by_phase: [],
+      quotes: [],
+    };
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="crossline_gallery"
+        selectedBranchIds={['branch-2']}
+        galleryBranches={[
+          branch,
+          {
+            ...branch,
+            id: 'branch-2',
+            title: 'Second Branch',
+            summary: 'A distant branch summary.',
+            insight: 'Another line bent differently.',
+            key_moments: ['Moment 2'],
+            probability: 0.36,
+          },
+        ]}
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+        onAutomationStateChange={onAutomationStateChangeMock}
+      />,
+    );
+
+    expect(screen.getByText('Crossline Gallery')).toBeInTheDocument();
+    expect(screen.getByText('Second Branch')).toBeInTheDocument();
+    expect(screen.getByText('A distant branch summary.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('This view exposes summaries and key quotes from other worldlines, not the full transcript.').length).toBeGreaterThan(0);
   });
 
   it('renders thread rail, participant strip, and composer from the store', () => {
@@ -739,5 +807,115 @@ describe('EndingChatModal', () => {
 
     expect(screen.getByText('You')).toBeInTheDocument();
     expect(screen.getByText('Why did this ending lock in?')).toBeInTheDocument();
+  });
+
+  it('shows draft bubbles inside the active follow-up thread instead of hiding them', () => {
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      result_ready: true,
+      participants: [
+        {
+          id: 'p-archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'The Archivist',
+        },
+        {
+          id: 'p-strategist',
+          room_id: 'room-1',
+          role_slot: 'agent',
+          source_agent_id: 'agent-1',
+          display_name: 'Strategist',
+          persona_snapshot_json: {
+            agent_role: 'Strategist',
+          },
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+        {
+          id: 'thread-followup',
+          room_id: 'room-1',
+          title: 'Follow-up Thread',
+          mode: 'followup',
+          interaction_mode: 'hotseat',
+          participant_set_hash: 'hash-followup',
+          memory_partition_id: 'thread-partition',
+          addressed_agent_ids_json: ['agent-1'],
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+    };
+    storeState.threadsById = {
+      'thread-room': {
+        ...storeState.snapshot.threads[0],
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'live',
+        language: 'en',
+        turns: [],
+      },
+      'thread-followup': {
+        ...storeState.snapshot.threads[1],
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'live',
+        language: 'en',
+        turns: [],
+      },
+    };
+    storeState.threadOrder = ['thread-room', 'thread-followup'];
+    storeState.activeThreadId = 'thread-followup';
+    storeState.interactionMode = 'hotseat';
+    storeState.result = { summary: 'Final summary.' };
+    storeState.status = 'live';
+    storeState.pendingDrafts = {
+      'draft-followup': {
+        turnId: 'draft-followup',
+        threadId: 'thread-followup',
+        participantId: 'p-strategist',
+        phase: 'verdict',
+        sequence: 1,
+        content: 'The hinge is still unfolding...',
+      },
+    };
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        selectedAgentIds={['agent-1']}
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText('Strategist').length).toBeGreaterThan(0);
+    expect(screen.getByText('The hinge is still unfolding...')).toBeInTheDocument();
   });
 });

@@ -1,3 +1,46 @@
+.oracle-skin {
+  --oracle-accent: oklch(68% 0.16 350);
+  --oracle-accent-soft: oklch(94% 0.03 350 / 0.72);
+  --oracle-aura: oklch(72% 0.12 350 / 0.16);
+}
+
+.oracle-skin--law {
+  --oracle-accent: oklch(62% 0.14 250);
+  --oracle-accent-soft: oklch(95% 0.03 250 / 0.74);
+  --oracle-aura: oklch(70% 0.1 250 / 0.16);
+}
+
+.oracle-skin--faith {
+  --oracle-accent: oklch(72% 0.16 85);
+  --oracle-accent-soft: oklch(96% 0.03 85 / 0.74);
+  --oracle-aura: oklch(76% 0.12 85 / 0.18);
+}
+
+.oracle-skin--empire {
+  --oracle-accent: oklch(66% 0.18 35);
+  --oracle-accent-soft: oklch(95% 0.03 35 / 0.74);
+  --oracle-aura: oklch(72% 0.14 35 / 0.16);
+}
+
+.oracle-skin--frontier,
+.oracle-skin--trade {
+  --oracle-accent: oklch(68% 0.14 150);
+  --oracle-accent-soft: oklch(95% 0.03 150 / 0.72);
+  --oracle-aura: oklch(74% 0.1 150 / 0.16);
+}
+
+.oracle-skin--war {
+  --oracle-accent: oklch(64% 0.18 20);
+  --oracle-accent-soft: oklch(95% 0.03 20 / 0.72);
+  --oracle-aura: oklch(72% 0.14 20 / 0.18);
+}
+
+.oracle-skin--ecology {
+  --oracle-accent: oklch(66% 0.16 145);
+  --oracle-accent-soft: oklch(95% 0.03 145 / 0.72);
+  --oracle-aura: oklch(72% 0.12 145 / 0.16);
+}
+
 .ending-chat-overlay {
   position: fixed;
   inset: 0;
@@ -22,11 +65,13 @@
   border-radius: 28px;
   border: 1px solid color-mix(in oklab, var(--border-default) 74%, var(--color-primary));
   background:
+    radial-gradient(circle at top left, var(--oracle-aura), transparent 34%),
     linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 94%, white 6%), var(--bg-surface)),
+    var(--oracle-profile-frame),
     url('/assets/ui/generated/oracle_chamber_panel.png'),
     var(--bg-surface);
-  background-size: auto, cover, auto;
-  background-position: center, center top, center;
+  background-size: auto, 100% 100%, cover, auto;
+  background-position: center, center, center top, center;
   box-shadow:
     0 28px 80px oklch(0% 0 0 / 0.28),
     inset 0 1px 0 oklch(100% 0 0 / 0.12);
@@ -58,7 +103,7 @@
   width: 68px;
   height: 68px;
   background: url('/assets/ui/generated/oracle_chamber_crest.png') center / contain no-repeat;
-  opacity: 0.12;
+  opacity: 0.14;
   pointer-events: none;
 }
 
@@ -68,7 +113,7 @@
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--color-primary);
+  color: var(--oracle-accent);
 }
 
 .ending-chat-title {
@@ -100,8 +145,42 @@
 }
 
 .ending-chat-badge--primary {
-  border-color: color-mix(in oklab, var(--color-primary) 40%, var(--border-default));
-  color: var(--color-primary);
+  border-color: color-mix(in oklab, var(--oracle-accent) 44%, var(--border-default));
+  color: var(--oracle-accent);
+}
+
+.ending-chat-badge--profile {
+  border-color: color-mix(in oklab, var(--oracle-accent) 36%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent-soft) 74%, transparent);
+  color: color-mix(in oklab, var(--oracle-accent) 80%, var(--text-primary));
+}
+
+.ending-chat-theme-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ending-chat-theme-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--oracle-accent) 26%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent-soft) 82%, transparent);
+  color: color-mix(in oklab, var(--oracle-accent) 82%, var(--text-primary));
+  font-size: 12px;
+  line-height: 1.2;
+  animation: oracle-chip-float 5.6s ease-in-out infinite;
+}
+
+.ending-chat-theme-chip:nth-child(2) {
+  animation-delay: 0.8s;
+}
+
+.ending-chat-theme-chip:nth-child(3) {
+  animation-delay: 1.4s;
 }
 
 .ending-chat-close {
@@ -265,6 +344,9 @@
 }
 
 .ending-chat-participant-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   display: grid;
   gap: 10px;
   text-align: left;
@@ -276,11 +358,34 @@
     linear-gradient(180deg, oklch(100% 0 0 / 0.08), transparent 26%),
     color-mix(in oklab, var(--bg-surface) 90%, transparent);
   color: var(--text-primary);
+  transition: border-color 160ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ending-chat-participant-card::after {
+  content: '';
+  position: absolute;
+  inset: -10px auto auto -8px;
+  width: 92px;
+  height: 92px;
+  background: url('/assets/ui/generated/ending_room_speaker_glow.png') center / contain no-repeat;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  z-index: 0;
 }
 
 .ending-chat-participant-card.is-current-speaker {
   border-color: color-mix(in oklab, var(--color-primary) 42%, var(--border-default));
-  box-shadow: 0 16px 28px oklch(0% 0 0 / 0.08);
+  box-shadow: 0 18px 34px oklch(0% 0 0 / 0.1);
+  transform: translateY(-1px);
+}
+
+.ending-chat-participant-card.is-current-speaker::after {
+  opacity: 0.72;
+}
+
+.ending-chat-participant-card.is-current-speaker .ending-chat-participant-card__avatar {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-primary) 32%, transparent);
 }
 
 .ending-chat-participant-card.is-hotseat-focus:not(.is-current-speaker) {
@@ -450,6 +555,67 @@
   padding: 18px 20px 22px;
 }
 
+.ending-chat-gallery-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ending-chat-gallery-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--oracle-accent-soft) 36%, transparent), transparent 28%),
+    color-mix(in oklab, var(--bg-hover) 70%, transparent);
+  padding: 16px;
+}
+
+.ending-chat-gallery-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ending-chat-gallery-card__header div {
+  display: grid;
+  gap: 4px;
+}
+
+.ending-chat-gallery-card__header strong {
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.ending-chat-gallery-card__header span,
+.ending-chat-gallery-card__header em {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-style: normal;
+}
+
+.ending-chat-gallery-card blockquote {
+  margin: 10px 0 0;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in oklab, var(--oracle-accent) 48%, var(--border-default));
+  font-family: var(--font-heading);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.ending-chat-gallery-card__moments {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+}
+
+.ending-chat-gallery-card__moments li + li {
+  margin-top: 4px;
+}
+
 .ending-chat-bubble {
   position: relative;
   border-radius: 18px;
@@ -470,6 +636,16 @@
   }
 }
 
+@keyframes oracle-chip-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
 .ending-chat-bubble.is-current-speaker {
   border-color: color-mix(in oklab, var(--color-primary) 38%, var(--border-default));
   background:
@@ -487,6 +663,10 @@
   border-style: dashed;
   border-color: color-mix(in oklab, var(--color-primary) 42%, var(--border-default));
   background: color-mix(in oklab, var(--color-primary) 9%, transparent);
+}
+
+.ending-chat-bubble--placeholder {
+  opacity: 0.94;
 }
 
 .ending-chat-bubble header {
@@ -922,5 +1102,9 @@
 @media (prefers-reduced-motion: reduce) {
   .ending-chat-bubble.is-current-speaker {
     animation: none;
+  }
+
+  .ending-chat-participant-card.is-current-speaker {
+    transform: none;
   }
 }

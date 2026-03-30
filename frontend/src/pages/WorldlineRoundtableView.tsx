@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -28,6 +28,12 @@ import {
   getEndingRoomPhaseLabel,
   getEndingRoomStatusLabel,
 } from '../lib/endingRoomLabels';
+import {
+  getGameplayProfileFrameSrc,
+  getGameplayProfileLabel,
+  getGameplayProfileSignatureHooks,
+  inferGameplayProfile,
+} from '../components/gameplayCards';
 import { ORACLE_UI_ASSETS } from '../lib/themeRegistry';
 import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
@@ -37,6 +43,7 @@ import type {
   AgentInfo,
   EndingRoomParticipant,
   RoundtableRepresentativeSelection,
+  RoundtableWitnessSelection,
   EndingRoomThreadSnapshot,
   Scenario,
   StoryData,
@@ -106,6 +113,21 @@ function getRoundtableModeNote(
     : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
 }
 
+type RoundtableSelectionMode = 'representative' | 'manual_shortlist' | 'expert_witness';
+
+const MANUAL_SHORTLIST_MIN = 2;
+const MANUAL_SHORTLIST_MAX = 4;
+
+interface WitnessCandidate {
+  branchId: string;
+  branchTitle: string;
+  agentId: string;
+  name: string;
+  role: string;
+  persona?: string;
+  impactScore: number;
+}
+
 function chooseRepresentativeDefaults(
   branchOrder: string[],
   branchCandidates: Record<string, ReturnType<typeof buildBranchEndingRoomCandidates>[string]>,
@@ -139,6 +161,15 @@ function chooseRepresentativeDefaults(
   }
 
   return { next, changed };
+}
+
+function normalizeManualShortlist(branchOrder: string[], selectedBranchIds: string[]): string[] {
+  const selected = new Set(selectedBranchIds.filter((branchId) => branchOrder.includes(branchId)));
+  return branchOrder.filter((branchId) => selected.has(branchId));
+}
+
+function buildDefaultManualShortlist(branchOrder: string[]): string[] {
+  return branchOrder.slice(0, Math.min(MANUAL_SHORTLIST_MIN, branchOrder.length));
 }
 
 function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
@@ -193,7 +224,10 @@ export default function WorldlineRoundtableView() {
   const [localCopySaved, setLocalCopySaved] = useState(false);
   const [selectedRepresentativeId, setSelectedRepresentativeId] = useState<string | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState<RoundtableSelectionMode>('representative');
   const [selectedRepresentatives, setSelectedRepresentatives] = useState<Record<string, string>>({});
+  const [manualShortlistBranchIds, setManualShortlistBranchIds] = useState<string[]>([]);
+  const [selectedWitness, setSelectedWitness] = useState<RoundtableWitnessSelection | null>(null);
   const [editingRepresentatives, setEditingRepresentatives] = useState(false);
   const [launchingRoom, setLaunchingRoom] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
@@ -244,6 +278,21 @@ export default function WorldlineRoundtableView() {
       scenario?.question,
     );
   const preferredLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
+  const oracleProfile = useMemo(
+    () => inferGameplayProfile(
+      replayPayload?.scenarioReplay?.scenario.question
+        ?? scenario?.question
+        ?? storyData?.question
+        ?? '',
+      replayPayload?.scenarioReplay?.scenario.scene_theme
+        ?? scenario?.scene_theme
+        ?? null,
+    ),
+    [replayPayload?.scenarioReplay?.scenario.question, replayPayload?.scenarioReplay?.scenario.scene_theme, scenario?.question, scenario?.scene_theme, storyData?.question],
+  );
+  const oracleProfileLabel = getGameplayProfileLabel(oracleProfile.id, isZh);
+  const oracleProfileHooks = getGameplayProfileSignatureHooks(oracleProfile.id, isZh);
+  const oracleProfileFrameSrc = getGameplayProfileFrameSrc(oracleProfile.id);
   const defaultThreadId = useMemo(
     () => effectiveSnapshot?.threads.find((thread) => thread.mode === 'room')?.id
       ?? effectiveSnapshot?.threads[0]?.id
@@ -387,6 +436,8 @@ export default function WorldlineRoundtableView() {
     () => (storyData?.branches ?? []).map((branch) => branch.id),
     [storyData?.branches],
   );
+  const manualShortlistMax = Math.min(MANUAL_SHORTLIST_MAX, branchOrder.length);
+  const manualShortlistMin = Math.min(MANUAL_SHORTLIST_MIN, manualShortlistMax);
 
   useEffect(() => {
     if (replayPayload || branchOrder.length === 0) {
@@ -400,6 +451,19 @@ export default function WorldlineRoundtableView() {
       return next;
     });
   }, [branchCandidates, branchOrder, replayPayload]);
+
+  useEffect(() => {
+    if (replayPayload || branchOrder.length === 0) {
+      return;
+    }
+    setManualShortlistBranchIds((current) => {
+      const normalized = normalizeManualShortlist(branchOrder, current);
+      if (normalized.length > 0) {
+        return normalized;
+      }
+      return buildDefaultManualShortlist(branchOrder);
+    });
+  }, [branchOrder, replayPayload]);
 
   const participants = useMemo(
     () => effectiveSnapshot?.participants ?? [],
@@ -447,6 +511,38 @@ export default function WorldlineRoundtableView() {
   }, [effectiveSnapshot?.id, replayPayload, representatives]);
 
   useEffect(() => {
+    if (replayPayload || branchOrder.length === 0 || representatives.length === 0) {
+      return;
+    }
+    const liveBranchIds = normalizeManualShortlist(
+      branchOrder,
+      representatives
+        .map((participant) => participant.source_branch_id)
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (liveBranchIds.length === 0) {
+      return;
+    }
+    setManualShortlistBranchIds(liveBranchIds);
+    setSelectionMode(liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative');
+  }, [branchOrder, replayPayload, representatives]);
+
+  useEffect(() => {
+    if (replayPayload || !effectiveSnapshot) {
+      return;
+    }
+    const witness = participants.find((participant) => participant.role_slot === 'critic');
+    if (!witness?.source_branch_id || !witness.source_agent_id) {
+      return;
+    }
+    setSelectionMode('expert_witness');
+    setSelectedWitness({
+      branchId: witness.source_branch_id,
+      agentId: witness.source_agent_id,
+    });
+  }, [effectiveSnapshot?.id, participants, replayPayload]);
+
+  useEffect(() => {
     setReplayActiveThreadId(replayPayload?.activeThreadId ?? null);
   }, [replayPayload?.activeThreadId, replayPayload?.roomSnapshot?.id]);
 
@@ -479,8 +575,78 @@ export default function WorldlineRoundtableView() {
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
     [pendingDrafts],
   );
-  const activeSpeakerTurnKey = sortedDrafts.at(-1)?.turnId ?? currentTurns.at(-1)?.key ?? null;
-  const currentSpeakerParticipantId = sortedDrafts.at(-1)?.participantId
+  const visibleDrafts = useMemo(
+    () => {
+      const targetThreadId = activeThread?.id ?? defaultThreadId;
+      if (!targetThreadId) return sortedDrafts;
+      if (activeThread?.mode === 'followup') {
+        return sortedDrafts.filter((draft) => draft.threadId === activeThread.id);
+      }
+      return sortedDrafts.filter((draft) => draft.threadId === targetThreadId);
+    },
+    [activeThread?.id, activeThread?.mode, defaultThreadId, sortedDrafts],
+  );
+
+  const composerEnabled = !replayPayload && Boolean(effectiveResult) && Boolean(snapshot?.id);
+  const selectedRepresentative = representatives.find(
+    (participant) => participant.id === selectedRepresentativeId,
+  ) ?? null;
+  const displayedDrafts = useMemo(
+    () => {
+      if (visibleDrafts.length > 0) {
+        return visibleDrafts.map((draft) => ({
+          key: draft.turnId,
+          participantId: draft.participantId,
+          phase: draft.phase,
+          content: draft.content.trim()
+            ? draft.content
+            : (
+              interactionMode === 'hotseat'
+                ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
+                : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…')
+            ),
+          variant: draft.content.trim() ? ('stream' as const) : ('placeholder' as const),
+        }));
+      }
+      if (replayPayload || !sending || !composerEnabled) {
+        return [];
+      }
+      const placeholderParticipantId = interactionMode === 'hotseat'
+        ? (selectedRepresentativeId ?? null)
+        : participants.find((participant) => participant.role_slot === 'archivist')?.id
+          ?? representatives[0]?.id
+          ?? null;
+      const placeholderContent = interactionMode === 'hotseat'
+        ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
+        : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…');
+      return [
+        {
+          key: '__local-pending__',
+          participantId: placeholderParticipantId,
+          phase: activeThread?.turns.at(-1)?.phase
+            ?? effectiveSnapshot?.current_phase
+            ?? 'verdict',
+          content: placeholderContent,
+          variant: 'placeholder' as const,
+        },
+      ];
+    },
+    [
+      activeThread?.turns,
+      composerEnabled,
+      effectiveSnapshot?.current_phase,
+      interactionMode,
+      isZh,
+      participants,
+      replayPayload,
+      representatives,
+      selectedRepresentativeId,
+      sending,
+      visibleDrafts,
+    ],
+  );
+  const activeSpeakerTurnKey = displayedDrafts.at(-1)?.key ?? currentTurns.at(-1)?.key ?? null;
+  const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
   const hotseatParticipantId = interactionMode === 'hotseat' ? selectedRepresentativeId : null;
@@ -490,15 +656,10 @@ export default function WorldlineRoundtableView() {
     if (!transcriptList) return;
     if (!transcriptAutoStickRef.current) return;
     transcriptList.scrollTop = transcriptList.scrollHeight;
-    if (sortedDrafts.length === 0) {
+    if (displayedDrafts.length === 0) {
       transcriptAutoStickRef.current = false;
     }
-  }, [currentTurns.length, sortedDrafts.length]);
-
-  const composerEnabled = !replayPayload && Boolean(effectiveResult) && Boolean(snapshot?.id);
-  const selectedRepresentative = representatives.find(
-    (participant) => participant.id === selectedRepresentativeId,
-  ) ?? null;
+  }, [currentTurns.length, displayedDrafts.length]);
   const addressedAgentIds = interactionMode === 'hotseat' && selectedRepresentativeId
     ? [selectedRepresentativeId]
     : [];
@@ -617,16 +778,100 @@ export default function WorldlineRoundtableView() {
     }
   }, [importingReplay, isZh, navigate, replayPayload]);
 
+  const selectedBranchIdsForLaunch = useMemo(
+    () => (
+      selectionMode === 'manual_shortlist'
+        ? normalizeManualShortlist(branchOrder, manualShortlistBranchIds)
+        : branchOrder
+    ),
+    [branchOrder, manualShortlistBranchIds, selectionMode],
+  );
+  const witnessCandidates = useMemo<WitnessCandidate[]>(
+    () => selectedBranchIdsForLaunch.flatMap((branchId) => {
+      const branch = branchesById.get(branchId);
+      const representativeAgentId = selectedRepresentatives[branchId];
+      return (branchCandidates[branchId] ?? [])
+        .filter((candidate) => candidate.id !== representativeAgentId)
+        .map((candidate) => ({
+          branchId,
+          branchTitle: branch?.title ?? branchId,
+          agentId: candidate.id,
+          name: candidate.name,
+          role: candidate.role,
+          persona: candidate.persona,
+          impactScore: candidate.impactScore,
+        }));
+    }),
+    [branchCandidates, branchesById, selectedBranchIdsForLaunch, selectedRepresentatives],
+  );
+
+  useEffect(() => {
+    if (replayPayload || witnessCandidates.length === 0) {
+      return;
+    }
+    setSelectedWitness((current) => {
+      if (selectionMode !== 'expert_witness') {
+        return current;
+      }
+      if (current && witnessCandidates.some((candidate) => (
+        candidate.branchId === current.branchId && candidate.agentId === current.agentId
+      ))) {
+        return current;
+      }
+      return {
+        branchId: witnessCandidates[0].branchId,
+        agentId: witnessCandidates[0].agentId,
+      };
+    });
+  }, [replayPayload, selectionMode, witnessCandidates]);
+
+  const toggleManualShortlistBranch = useCallback((branchId: string) => {
+    if (!branchOrder.includes(branchId)) {
+      return;
+    }
+    setManualShortlistBranchIds((current) => {
+      const normalized = normalizeManualShortlist(branchOrder, current);
+      if (normalized.includes(branchId)) {
+        if (normalized.length <= manualShortlistMin) {
+          return normalized;
+        }
+        return normalized.filter((item) => item !== branchId);
+      }
+      if (normalized.length >= manualShortlistMax) {
+        return normalized;
+      }
+      return normalizeManualShortlist(branchOrder, [...normalized, branchId]);
+    });
+  }, [branchOrder, manualShortlistMax, manualShortlistMin]);
+
+  const handleSelectionModeChange = useCallback((nextMode: RoundtableSelectionMode) => {
+    setSelectionMode(nextMode);
+    if (nextMode === 'manual_shortlist') {
+      setManualShortlistBranchIds((current) => {
+        const normalized = normalizeManualShortlist(branchOrder, current);
+        if (normalized.length >= manualShortlistMin && normalized.length <= manualShortlistMax) {
+          return normalized;
+        }
+        return buildDefaultManualShortlist(branchOrder);
+      });
+    }
+    if (nextMode === 'expert_witness') {
+      setSelectedWitness((current) => current ?? (witnessCandidates[0]
+        ? { branchId: witnessCandidates[0].branchId, agentId: witnessCandidates[0].agentId }
+        : null));
+    }
+  }, [branchOrder, manualShortlistMax, manualShortlistMin, witnessCandidates]);
+
   const handleLaunchRoundtable = useCallback(async () => {
-    if (!scenario?.id || launchingRoom || branchOrder.length === 0) return;
+    if (!scenario?.id || launchingRoom || selectedBranchIdsForLaunch.length === 0) return;
     setLaunchingRoom(true);
     setError('');
     try {
       reset();
       const roomId = await openRoom(scenario.id, {
         roomType: 'worldline_roundtable',
-        selectedBranchIds: branchOrder,
-        selectedRepresentatives: branchOrder
+        selectedBranchIds: selectedBranchIdsForLaunch,
+        selectedRepresentatives: selectedBranchIdsForLaunch
           .map((branchId) => {
             const agentId = selectedRepresentatives[branchId];
             return agentId
@@ -634,6 +879,14 @@ export default function WorldlineRoundtableView() {
               : null;
           })
           .filter((value): value is RoundtableRepresentativeSelection => Boolean(value)),
+        selectedWitness: selectionMode === 'expert_witness'
+          ? (
+            selectedWitness
+            ?? (witnessCandidates[0]
+              ? { branchId: witnessCandidates[0].branchId, agentId: witnessCandidates[0].agentId }
+              : null)
+          )
+          : null,
         language: preferredLanguage,
       });
       await loadRoom(roomId);
@@ -643,7 +896,7 @@ export default function WorldlineRoundtableView() {
     } finally {
       setLaunchingRoom(false);
     }
-  }, [branchOrder, launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedRepresentatives]);
+  }, [launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, witnessCandidates]);
 
   const handleEditRepresentatives = useCallback(() => {
     setEditingRepresentatives(true);
@@ -729,7 +982,7 @@ export default function WorldlineRoundtableView() {
         viewMode: 'classic',
         visualizationEnabled: true,
         isSimulationComplete: Boolean(effectiveResult),
-        messageCount: currentTurns.length,
+        messageCount: currentTurns.length + displayedDrafts.length,
         agentCount: participants.length,
         branchCount: storyData?.branches.length ?? 0,
       },
@@ -737,7 +990,7 @@ export default function WorldlineRoundtableView() {
         scene: 'WorldlineRoundtable',
         phase: effectiveSnapshot.current_phase,
         room_id: effectiveSnapshot.id,
-        visible_turn_count: currentTurns.length,
+        visible_turn_count: currentTurns.length + displayedDrafts.length,
       } : null,
       {
         route: window.location.pathname,
@@ -747,6 +1000,9 @@ export default function WorldlineRoundtableView() {
           can_send: composerEnabled,
           is_read_only: Boolean(replayPayload),
           showing_picker: showRepresentativePicker,
+          selection_mode: selectionMode,
+          selected_branch_count: selectedBranchIdsForLaunch.length,
+          has_witness: participants.some((participant) => participant.role_slot === 'critic'),
           active_thread_id: activeThread?.id ?? null,
           thread_count: threadList.length,
           interaction_mode: interactionMode,
@@ -778,9 +1034,12 @@ export default function WorldlineRoundtableView() {
     error,
     interactionMode,
     loading,
+    displayedDrafts.length,
     participants.length,
     replayPayload,
     representatives.length,
+    selectedBranchIdsForLaunch.length,
+    selectionMode,
     showRepresentativePicker,
     storyData?.branches.length,
     storyData?.question,
@@ -797,7 +1056,9 @@ export default function WorldlineRoundtableView() {
 
   return (
     <div
-      className={`worldline-roundtable-view ${effectiveSnapshot && !replayPayload ? 'is-live-room' : ''} ${showRepresentativePicker ? 'is-picker-open' : ''}`}
+      className={`worldline-roundtable-view oracle-skin oracle-skin--${oracleProfile.id} ${effectiveSnapshot && !replayPayload ? 'is-live-room' : ''} ${showRepresentativePicker ? 'is-picker-open' : ''}`}
+      data-profile={oracleProfile.id}
+      style={{ '--oracle-profile-frame': `url(${oracleProfileFrameSrc})` } as CSSProperties}
     >
       <header className="worldline-roundtable-hero">
         <div className="worldline-roundtable-hero__topline">
@@ -877,6 +1138,12 @@ export default function WorldlineRoundtableView() {
               {replayPayload && (
                 <span className="archive-chip">{isZh ? '只读回放' : 'Read-only replay'}</span>
               )}
+              <span className="archive-chip archive-chip--profile">{oracleProfileLabel}</span>
+            </div>
+            <div className="worldline-roundtable-theme-strip" aria-label={isZh ? '题材提示' : 'Theme cues'}>
+              {oracleProfileHooks.slice(0, 3).map((hook) => (
+                <span key={hook} className="worldline-roundtable-theme-chip">{hook}</span>
+              ))}
             </div>
           </div>
           <div
@@ -922,14 +1189,48 @@ export default function WorldlineRoundtableView() {
             <div>
               <h3>{isZh ? '改选每条世界线的代表' : 'Reseat each worldline representative'}</h3>
               <p className="worldline-roundtable-picker__hint">
-                {isZh
-                  ? (effectiveSnapshot
-                    ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
-                    : '每条结局只派一位代表入席。系统会优先按影响度预选，并尽量错开代表，让这桌更有比较价值。')
-                  : (effectiveSnapshot
-                    ? 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.'
-                    : 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.')}
+                {selectionMode === 'manual_shortlist'
+                  ? t('roundtable.shortlist_hint')
+                  : (isZh
+                    ? (effectiveSnapshot
+                      ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
+                      : '每条结局只派一位代表入席。系统会优先按影响度预选，并尽量错开代表，让这桌更有比较价值。')
+                    : (effectiveSnapshot
+                      ? 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.'
+                      : 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.'))}
               </p>
+              <div className="worldline-roundtable-picker__mode-switch" role="group" aria-label={isZh ? '圆桌桌型' : 'Roundtable seating mode'}>
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'representative' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('representative')}
+                >
+                  {t('roundtable.selection_mode_representative')}
+                </button>
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'manual_shortlist' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('manual_shortlist')}
+                >
+                  {t('roundtable.selection_mode_manual_shortlist')}
+                </button>
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'expert_witness' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('expert_witness')}
+                  disabled={witnessCandidates.length === 0}
+                >
+                  {t('roundtable.selection_mode_expert_witness')}
+                </button>
+                {selectionMode === 'manual_shortlist' && (
+                  <span className="worldline-roundtable-picker__count">
+                    {t('roundtable.shortlist_count', {
+                      count: selectedBranchIdsForLaunch.length,
+                      max: manualShortlistMax,
+                    })}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="worldline-roundtable-picker__actions">
               {effectiveSnapshot && (
@@ -946,7 +1247,11 @@ export default function WorldlineRoundtableView() {
                 type="button"
                 className="btn"
                 onClick={() => void handleLaunchRoundtable()}
-                disabled={launchingRoom || branchOrder.some((branchId) => !selectedRepresentatives[branchId])}
+                disabled={
+                  launchingRoom
+                  || selectedBranchIdsForLaunch.length === 0
+                  || selectedBranchIdsForLaunch.some((branchId) => !selectedRepresentatives[branchId])
+                }
               >
                 {launchingRoom
                   ? (isZh ? '正在开桌…' : 'Launching…')
@@ -959,13 +1264,30 @@ export default function WorldlineRoundtableView() {
           <div className="worldline-roundtable-picker-grid">
             {(storyData?.branches ?? []).map((branch) => {
               const candidates = branchCandidates[branch.id] ?? [];
+              const branchSelected = selectionMode !== 'manual_shortlist' || selectedBranchIdsForLaunch.includes(branch.id);
+              const branchToggleDisabled = selectionMode !== 'manual_shortlist'
+                || (
+                  branchSelected
+                    ? selectedBranchIdsForLaunch.length <= manualShortlistMin
+                    : selectedBranchIdsForLaunch.length >= manualShortlistMax
+                );
               return (
-                <article key={branch.id} className="worldline-roundtable-picker-branch">
+                <article key={branch.id} className={`worldline-roundtable-picker-branch ${branchSelected ? 'is-active' : 'is-muted'}`}>
                   <header className="worldline-roundtable-picker-branch__header">
                     <div>
                       <strong>{branch.title}</strong>
                       <span>{Math.round((branch.probability ?? 0) * 100)}%</span>
                     </div>
+                {selectionMode === 'manual_shortlist' && branchOrder.length > MANUAL_SHORTLIST_MIN && (
+                      <button
+                        type="button"
+                        className={`worldline-roundtable-picker-branch__toggle ${branchSelected ? 'is-active' : ''}`}
+                        onClick={() => toggleManualShortlistBranch(branch.id)}
+                        disabled={branchToggleDisabled}
+                      >
+                        {branchSelected ? t('roundtable.shortlist_toggle_off') : t('roundtable.shortlist_toggle_on')}
+                      </button>
+                    )}
                     <p>{branch.insight}</p>
                   </header>
                   <div className="worldline-roundtable-picker-branch__options">
@@ -976,6 +1298,7 @@ export default function WorldlineRoundtableView() {
                           key={`${branch.id}-${candidate.id}`}
                           type="button"
                           className={`worldline-roundtable-picker-card ${selected ? 'is-selected' : ''}`}
+                          disabled={!branchSelected}
                           onClick={() => setSelectedRepresentatives((current) => ({
                             ...current,
                             [branch.id]: candidate.id,
@@ -1000,6 +1323,41 @@ export default function WorldlineRoundtableView() {
               );
             })}
           </div>
+          {selectionMode === 'expert_witness' && (
+            <section className="worldline-roundtable-picker-witness">
+              <div className="worldline-roundtable-card__heading">
+                <h3>{t('roundtable.witness_section')}</h3>
+                {selectedWitness && (
+                  <span className="worldline-roundtable-picker__count">
+                    {t('roundtable.witness_selected')}
+                  </span>
+                )}
+              </div>
+              <p className="worldline-roundtable-picker__hint">{t('roundtable.witness_hint')}</p>
+              <div className="worldline-roundtable-picker-witness__options">
+                {witnessCandidates.map((candidate) => {
+                  const selected = selectedWitness?.branchId === candidate.branchId && selectedWitness?.agentId === candidate.agentId;
+                  return (
+                    <button
+                      key={`${candidate.branchId}-${candidate.agentId}`}
+                      type="button"
+                      className={`worldline-roundtable-picker-card ${selected ? 'is-selected' : ''}`}
+                      onClick={() => setSelectedWitness({ branchId: candidate.branchId, agentId: candidate.agentId })}
+                    >
+                      <div className="worldline-roundtable-picker-card__title">
+                        <strong>{candidate.name}</strong>
+                        {selected && <span>{t('roundtable.witness_badge')}</span>}
+                      </div>
+                      <span>{candidate.branchTitle}</span>
+                      <small>{candidate.role}</small>
+                      {candidate.persona && <small>{candidate.persona}</small>}
+                      <em>{isZh ? `影响 ${Math.round(candidate.impactScore * 100)}` : `Impact ${Math.round(candidate.impactScore * 100)}`}</em>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </section>
       )}
 
@@ -1071,6 +1429,8 @@ export default function WorldlineRoundtableView() {
                         <span>
                           {participant.role_slot === 'archivist'
                             ? t('roundtable.role_archivist')
+                            : participant.role_slot === 'critic'
+                              ? t('roundtable.role_witness')
                             : (branch?.title ?? t('roundtable.role_representative'))}
                         </span>
                         {branch && (
@@ -1179,13 +1539,14 @@ export default function WorldlineRoundtableView() {
                     <p>{turn.content}</p>
                   </article>
                 ))}
-              {!replayPayload && sortedDrafts.map((draft) => (
+              {!replayPayload && displayedDrafts.map((draft) => (
                 <article
-                  key={draft.turnId}
-                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.turnId === activeSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                  key={draft.key}
+                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.variant === 'placeholder' ? 'ending-chat-bubble--placeholder' : ''} ${draft.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                  aria-busy={draft.variant === 'placeholder'}
                 >
                   <header>
-                    <strong>{participantsById.get(draft.participantId)?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>
+                    <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>
                     <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
                   </header>
                   <p>{draft.content}</p>

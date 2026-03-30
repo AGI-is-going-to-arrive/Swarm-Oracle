@@ -347,6 +347,14 @@ export async function createEndingRoom(
             })),
           }
         : {}),
+      ...(payload.selectedWitness
+        ? {
+            selected_witness: {
+              branch_id: payload.selectedWitness.branchId,
+              agent_id: payload.selectedWitness.agentId,
+            },
+          }
+        : {}),
       ...(payload.language ? { language: payload.language } : {}),
     }),
   });

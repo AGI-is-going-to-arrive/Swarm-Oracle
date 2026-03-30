@@ -313,7 +313,7 @@ export default function ResultView() {
   const [exportError, setExportError] = useState('');
   const [showShare, setShowShare] = useState(false);
   const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
-  const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only'>('ending_chamber');
+  const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only' | 'crossline_gallery'>('ending_chamber');
   const [activeEndingRoomSelectedAgentIds, setActiveEndingRoomSelectedAgentIds] = useState<string[]>([]);
   const [pendingEndingRoomPicker, setPendingEndingRoomPicker] = useState<{
     branchId: string;
@@ -448,7 +448,11 @@ export default function ResultView() {
     if (payload.branchId) {
       setActiveEndingRoomBranchId(payload.branchId);
     }
-    if (payload.roomSnapshot.room_type === 'one_move_only' || payload.roomSnapshot.room_type === 'ending_chamber') {
+    if (
+      payload.roomSnapshot.room_type === 'one_move_only'
+      || payload.roomSnapshot.room_type === 'ending_chamber'
+      || payload.roomSnapshot.room_type === 'crossline_gallery'
+    ) {
       setActiveEndingRoomMode(payload.roomSnapshot.room_type);
     }
     setActiveEndingRoomSelectedAgentIds(payload.selectedAgentIds ?? []);
@@ -877,7 +881,7 @@ export default function ResultView() {
 
   const openEndingRoomDirect = useCallback((
     branchId: string,
-    roomType: 'ending_chamber' | 'one_move_only',
+    roomType: 'ending_chamber' | 'one_move_only' | 'crossline_gallery',
     selectedAgentIds: string[] = [],
   ) => {
     setActiveEndingRoomBranchId(branchId);
@@ -915,8 +919,12 @@ export default function ResultView() {
 
   const handleOpenEndingRoom = useCallback((
     branchId: string,
-    roomType: 'ending_chamber' | 'one_move_only',
+    roomType: 'ending_chamber' | 'one_move_only' | 'crossline_gallery',
   ) => {
+    if (roomType === 'crossline_gallery') {
+      openEndingRoomDirect(branchId, roomType, []);
+      return;
+    }
     const candidates = branchEndingRoomCandidates[branchId] ?? [];
     if (isReplayMode || candidates.length === 0) {
       openEndingRoomDirect(branchId, roomType, []);
@@ -1349,6 +1357,18 @@ export default function ResultView() {
   const pendingEndingRoomCandidates = pendingEndingRoomPicker
     ? (branchEndingRoomCandidates[pendingEndingRoomPicker.branchId] ?? [])
     : [];
+  const activeEndingRoomSelectedBranchIds = useMemo(
+    () => {
+      if (!activeEndingRoomBranch) return [];
+      if (activeEndingRoomMode === 'crossline_gallery') {
+        return branches
+          .filter((candidate) => candidate.id !== activeEndingRoomBranch.id)
+          .map((candidate) => candidate.id);
+      }
+      return [activeEndingRoomBranch.id];
+    },
+    [activeEndingRoomBranch, activeEndingRoomMode, branches],
+  );
   const endingRoomHeaderActions = useMemo(() => {
     if (!effectiveEndingRoomReplayPayload) return null;
     return (
@@ -1769,6 +1789,16 @@ export default function ResultView() {
                 >
                   {t('ending_room.one_move_cta')}
                 </button>
+                {branches.length > 1 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void handleOpenEndingRoom(branch.id, 'crossline_gallery')}
+                    disabled={!isReplayMode && scenario?.status !== 'done'}
+                  >
+                    {t('roundtable.gallery_title')}
+                  </button>
+                )}
               </div>
             </article>
           ))}
@@ -2261,7 +2291,12 @@ export default function ResultView() {
           scenarioId={scenario.id}
           branch={activeEndingRoomBranch}
           roomType={activeEndingRoomMode}
+          selectedBranchIds={activeEndingRoomSelectedBranchIds}
+          profileId={resolvedProfileId}
+          profileLabel={gameplayProfileLabel}
+          profileHooks={gameplayProfileHooks}
           selectedAgentIds={activeEndingRoomSelectedAgentIds}
+          galleryBranches={branches}
           language={isZh ? 'zh' : 'en'}
           readOnly={isReplayMode || Boolean(activeEndingRoomReplayPayload)}
           fallbackMessages={

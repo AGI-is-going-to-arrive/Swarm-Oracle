@@ -669,3 +669,50 @@ class TestHealthCheck:
         result = await health_check()
         assert result["status"] == "error"
         monkeypatch.setattr(config.settings, "LLM_RESPONSES_URL", original_url)
+
+
+class TestStreamingSupportProbe:
+    @pytest.mark.asyncio
+    async def test_probe_streaming_support_caches_positive_result(self, monkeypatch):
+        call_count = {"value": 0}
+
+        async def _fake_stream(*args, **kwargs):
+            call_count["value"] += 1
+            yield "OK"
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _fake_stream)
+        llm_client._stream_support_cache.clear()
+
+        first = await llm_client.probe_streaming_support(
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+            force_refresh=True,
+        )
+        second = await llm_client.probe_streaming_support(
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+        )
+
+        assert first["supported"] is True
+        assert first["cached"] is False
+        assert second["supported"] is True
+        assert second["cached"] is True
+        assert call_count["value"] == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_streaming_support_reports_fallback_reason(self, monkeypatch):
+        async def _broken_stream(*args, **kwargs):
+            raise llm_client.LLMError("stream unsupported")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _broken_stream)
+        llm_client._stream_support_cache.clear()
+
+        result = await llm_client.probe_streaming_support(
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+            force_refresh=True,
+        )
+
+        assert result["supported"] is False
+        assert "unsupported" in (result["reason"] or "")

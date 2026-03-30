@@ -91,6 +91,19 @@ cp .env.example backend/.env
   - 当前已确认的真实口径：
     - Oracle 关键文案链路已是 `LLM-first + deterministic fallback`
     - follow-up 当前仍不是经典模式同级的完整流式，仍以 committed turn 返回为主
+- 本轮 Oracle 扩展桌型 / 旁听席补充验证（2026-03-30）：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/ResultView.test.tsx`
+    - 通过；覆盖 `crossline_gallery` 入口与 summary-only modal
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-crossline-gallery-phase --headless true`
+    - 通过；`galleryState.room_type = crossline_gallery`、`can_send = false`、readonly replay/import 成立
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx`
+    - 通过；覆盖 `manual_shortlist / expert_witness`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py -k 'witness' -q`
+    - `4 passed`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-manual-shortlist-phase --headless`
+    - 通过；`selection_mode = manual_shortlist`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-expert-witness-phase --headless`
+    - 通过；`selection_mode = expert_witness`、`has_witness = true`
 - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
   - `38 passed`
 - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/20260330-debate-full-rerun --headless`

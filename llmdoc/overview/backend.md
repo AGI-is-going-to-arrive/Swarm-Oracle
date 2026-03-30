@@ -174,7 +174,7 @@ alembic/ ──► Alembic 数据库迁移框架
 - **当前口径**:
   - `ending_chamber / one_move_only` 必须带 `anchor_branch_id`
   - 所选 branch 当前都必须是 `COMPLETED`
-  - `crossline_gallery` 当前会直接返回 `status=done`，不再起后台任务
+  - `crossline_gallery` 当前会直接返回 `status=done`，不再起后台任务；这条线现在不只是后端枚举，而是已被结果页接成只读摘要旁听视图
   - scenario 本身若还没到 `DONE`，当前会直接拒绝创建 ending-room room，不再让结果页过早接入这条线
   - room 若上次跑成 `status=error`，当前重进会先 reset 成 `draft` 再重排后台任务
   - 单结局房间当前会去重同一个 `source_agent_id`，避免同一 agent 被重复塞成两席
@@ -201,6 +201,17 @@ alembic/ ──► Alembic 数据库迁移框架
   - `one_move_only` 最多 `1` 人
   - `ending_chamber` 最多 `3` 人
   - 超界时会返回 `ENDING_ROOM_AGENT_SELECTION_INVALID`
+- `create_ending_room(...)` 当前也已吃进：
+  - `selected_representatives`
+  - `selected_witness`
+  - 也就是说，`worldline_roundtable` 现已支持：
+    - 默认 `representative`
+    - `manual_shortlist`
+    - `expert_witness`
+- `selected_witness` 当前约束：
+  - 只允许用于 `worldline_roundtable`
+  - 必须属于当前已选 worldline roster
+  - 不允许和同枝代表是同一个 agent
 - branch visible roster 当前不再只返回“有没有这个 agent”：
   - participant `persona_snapshot_json` 里会带 `bio_short / impact_score / turn_count / key_moment_hits / last_round_spoken / selection_reason / fallback_cast`
   - 也就是说，前端 picker / participant card 现在能直接读到“谁更关键、最近说到哪一轮、是不是 fallback cast”
@@ -211,6 +222,9 @@ alembic/ ──► Alembic 数据库迁移框架
 - `_build_room_plan()` 的单结局 auto recap 这轮也不再只是一套纯模板句：
   - 当前会显式把 `key_moment / insight / branch title / role/persona hint` 编进 opening / verdict
   - 当前又补了 LLM-first 重写层，fresh room 下 `one_move_only` 与 roundtable opening/follow-up 都比旧 deterministic 文案更像人在复盘
+  - `worldline_roundtable` 当前又补上了：
+    - `manual_shortlist`：只让 `2-4` 条 worldline 入桌
+    - `expert_witness`：在当前代表席之外追加 `1` 位证人，并在 auto recap 里插入一轮 `crossfire` 证词
 
 ### `runtime_lock.py` (≈150行) — SQLite 共享运行锁 (**NEW**)
 - **职责**: 为 simulation / debate 后台任务提供 crash-safe、跨 worker 的共享 lease

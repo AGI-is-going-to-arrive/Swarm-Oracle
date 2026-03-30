@@ -428,6 +428,53 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
   });
 
+  it('opens crossline gallery directly when multiple endings are available', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.64,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          summary: 'Archive branch summary.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-2',
+          title: 'Counter Branch',
+          probability: 0.36,
+          status: 'COMPLETED',
+          story: 'A counter branch story.',
+          insight: 'A divergent insight.',
+          summary: 'Counter branch summary.',
+          key_moments: ['Moment 2'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click((await screen.findAllByRole('button', { name: 'roundtable.gallery_title' }))[0]);
+    expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:crossline_gallery');
+    expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('0');
+  });
+
   it('normalizes selected participants when switching an open chamber into one-move-only mode', async () => {
     const user = userEvent.setup();
 

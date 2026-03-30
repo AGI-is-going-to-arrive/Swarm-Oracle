@@ -422,6 +422,60 @@ def test_worldline_roundtable_api_accepts_branch_scoped_selected_representatives
     )
 
 
+def test_worldline_roundtable_api_accepts_selected_witness(client):
+    fixture = _seed_roundtable_reselection_scenario()
+    with Session(get_engine()) as session:
+        witness_agent = session.exec(
+            select(Agent).where(
+                Agent.scenario_id == fixture["scenario_id"],
+                Agent.name == "秩序督军",
+            )
+        ).first()
+        assert witness_agent is not None
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selected_representatives": [
+                {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+                {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
+            ],
+            "selected_witness": {"branch_id": fixture["branch_a_id"], "agent_id": witness_agent.id},
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    witnesses = [participant for participant in snapshot["participants"] if participant["role_slot"] == "critic"]
+    assert len(witnesses) == 1
+    assert witnesses[0]["source_branch_id"] == fixture["branch_a_id"]
+    assert witnesses[0]["source_agent_id"] == witness_agent.id
+
+
+def test_worldline_roundtable_api_rejects_selected_witness_when_it_matches_the_representative(client):
+    fixture = _seed_roundtable_reselection_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selected_representatives": [
+                {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+                {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
+            ],
+            "selected_witness": {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 422
+    assert create_resp.json()["detail"]["code"] == "ENDING_ROOM_WITNESS_SELECTION_INVALID"
+
+
 def test_worldline_roundtable_api_rejects_all_present_followup(client):
     fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
     second_branch_id = _append_completed_branch(

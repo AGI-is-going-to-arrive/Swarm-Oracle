@@ -135,6 +135,25 @@ async function enterRoomFromPicker(page) {
   };
 }
 
+async function openGallery(page) {
+  await page.getByRole("button", { name: /Crossline Gallery|异线旁听席/i }).first().click();
+  await page.waitForSelector(".ending-chat-modal", { timeout: 15000 });
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (!modalState?.room_id) return null;
+      if (modalState.room_type !== "crossline_gallery") return null;
+      if (modalState.can_send !== false) return null;
+      if (!modalState.has_result) return null;
+      return current;
+    },
+    "crossline gallery usable state",
+    20000,
+  );
+}
+
 async function runMultiDesktop(context, frontendUrl, outputDir) {
   const page = await context.newPage();
   const { multiId } = await findScenarioIds(frontendUrl);
@@ -210,6 +229,16 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
   fs.writeFileSync(path.join(outputDir, "multi-picker-B-one-move.json"), JSON.stringify(pickerB, null, 2));
   fs.writeFileSync(path.join(outputDir, "multi-one-move-B.json"), JSON.stringify(oneMoveState, null, 2));
 
+  await page.locator(".ending-chat-close").click();
+  await page.waitForTimeout(400);
+
+  const galleryState = await openGallery(page);
+  await saveScreenshot(page, path.join(outputDir, "multi-crossline-gallery.png"));
+  fs.writeFileSync(
+    path.join(outputDir, "multi-crossline-gallery.json"),
+    JSON.stringify(galleryState, null, 2),
+  );
+
   await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
   await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitFor(
@@ -243,6 +272,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
     allPresentState: allPresentState?.page?.controls?.modal_state ?? null,
     pickerB,
     oneMoveState: oneMoveState?.page?.controls?.modal_state ?? null,
+    galleryState: galleryState?.page?.controls?.modal_state ?? null,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
     importedUrl,
   };

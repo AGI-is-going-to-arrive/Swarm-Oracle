@@ -28,6 +28,7 @@ import type {
 
 export interface EndingRoomDraft {
   turnId: string;
+  threadId: string | null;
   participantId: string;
   phase: EndingRoomPhase;
   sequence: number;
@@ -36,6 +37,7 @@ export interface EndingRoomDraft {
 
 interface DraftStartPayload {
   room_id: string;
+  thread_id?: string | null;
   turn_id: string;
   participant_id: string;
   phase: EndingRoomPhase;
@@ -44,6 +46,7 @@ interface DraftStartPayload {
 
 interface DraftDeltaPayload {
   room_id: string;
+  thread_id?: string | null;
   turn_id: string;
   participant_id: string;
   delta: string;
@@ -165,6 +168,14 @@ function resolveDefaultThreadId(snapshot: EndingRoomSnapshot | null): string | n
   return snapshot.threads.find((thread) => thread.mode === 'room')?.id
     ?? snapshot.threads[0]?.id
     ?? null;
+}
+
+function resolveDraftThreadId(
+  threadId: string | null | undefined,
+  snapshot: EndingRoomSnapshot | null,
+): string | null {
+  if (threadId) return threadId;
+  return resolveDefaultThreadId(snapshot);
 }
 
 function mergeThreadSnapshot(
@@ -368,15 +379,16 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   }),
 
   startDraft: (payload) => set((state) => ({
-    pendingDrafts: {
-      ...state.pendingDrafts,
-      [payload.turn_id]: {
-        turnId: payload.turn_id,
-        participantId: payload.participant_id,
-        phase: payload.phase,
-        sequence: payload.sequence,
-        content: '',
-      },
+      pendingDrafts: {
+        ...state.pendingDrafts,
+        [payload.turn_id]: {
+          turnId: payload.turn_id,
+          threadId: resolveDraftThreadId(payload.thread_id, state.snapshot),
+          participantId: payload.participant_id,
+          phase: payload.phase,
+          sequence: payload.sequence,
+          content: '',
+        },
     },
   })),
 
@@ -387,6 +399,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
         ...state.pendingDrafts,
         [payload.turn_id]: {
           turnId: payload.turn_id,
+          threadId: current?.threadId ?? resolveDraftThreadId(payload.thread_id, state.snapshot),
           participantId: payload.participant_id,
           phase: current?.phase ?? state.snapshot?.current_phase ?? 'opening',
           sequence: current?.sequence ?? 0,

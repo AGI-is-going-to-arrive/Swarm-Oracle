@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-30
-> 状态更新（2026-03-30）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；当前残余主要集中在 follow-up 与经典模式的流式一致性、ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
+> 状态更新（2026-03-30，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已补到 `角色化 + 题材化 + 去重复`，前端也已接入 profile skin + hook chips + 轻量氛围动效；`crossline_gallery`、`manual_shortlist`、`expert_witness` 这三条轻扩展当前也已形成最小可玩闭环。当前真正剩余的核心不再是链路打通，而是 replay/share/import 最终签收、更深的 persona vocabulary、以及 `trait_mix / fault_line_first / witness_augmented` 这些后续桌型与选席策略。
 
 ---
 
@@ -26,6 +26,78 @@
 - 读写原始 simulation transcript 的第二套入口
 - 默认可查看所有世界线全文的“跨线记忆池”
 - 为了玩法扩展而破坏现有 `What-If -> Simulation -> Result -> Archive` 主闭环
+
+## 0.1 当前真值（2026-03-30，覆盖旧状态）
+
+下次继续执行前，默认以本节为准，而不是把后文所有历史 TODO 逐条当成未完成项。
+
+### 已经完成并可直接复用
+
+1. `ending_chamber`
+   - 结果页 CTA -> participant picker -> live room 已完成
+   - `archivist_route / hotseat / all_present` 已完成
+   - room/thread transcript 隔离、scope notice、只读 replay / import 基线已完成
+2. `one_move_only`
+   - 已是独立 `room_type`
+   - 与 `ending_chamber` 不再 scope 混线
+3. `worldline_roundtable`
+   - live / reseat / replay readonly 已完成
+   - `manual_shortlist` 已完成
+   - `expert_witness` 已完成
+   - `hotseat` follow-up 已完成
+   - mobile live 首屏已压到“可直接追问”的程度
+4. `crossline_gallery`
+   - 结果页入口、摘要只读展示、local readonly copy / import 基线已完成
+5. Oracle follow-up 流式链路
+   - 已从“整段生成后一次性 commit”升级到：
+     - `user_turn_commit`
+     - `assistant turn_start`
+     - `assistant turn_delta`
+     - `assistant turn_commit`
+   - provider 不支持 stream 时，会先探测，再自动回退到非流式生成 + 伪流式 delta 收口
+6. Oracle 文案层
+   - 已完成 `LLM-first + deterministic fallback`
+   - 已完成 `recent lines` 去重
+   - 已完成 `scene/profile` 语言层
+   - 已完成 `profile-specific` 视觉皮肤与轻量氛围动效
+
+### 当前真正还没最终签收的点
+
+1. `Phase E replay/share/import`
+   - ending-room / roundtable 的最终 permalink/share 合同还需要一次专门签收
+2. `persona-specific vocabulary`
+   - 现在已经不是模板硬拼，但同一题材下不同角色的词汇层次还可以继续拉开
+3. `theme atmosphere`
+   - 现有 profile skin + 微动效已经接上，但还没有做到更强的 ambient motion / audio / Theater 联动
+4. 更进一步的玩法扩展
+   - `后续三回合`
+   - `证据投牌`
+   - `trait_mix / fault_line_first / witness_augmented` 这些 recipe 还没有进入正式签收
+
+### 后续执行的硬优先级
+
+后续不要再泛泛说“继续优化 UI 交互”。下一阶段的正确顺序固定为：
+
+1. `persona-specific vocabulary`
+   - 让同题材下不同角色的说话习惯再拉开
+2. `theme skin + 微动效 + 氛围层`
+   - 只放大已经做好的文案差异
+3. `replay/share/import` 最终签收
+4. 轻玩法扩展
+   - 只在不破坏主闭环的前提下推进
+
+## 0.2 下次执行的约束
+
+下次继续做 23 线时，必须遵守下面这条总原则：
+
+`先优化 Oracle 文案的角色化、题材化和去重复，再让 UI/氛围层只负责放大这种差异。`
+
+明确禁止：
+
+- 因为“还想更有代入感”就重新发明第二套视觉系统
+- 在文案差异不足时继续堆复杂组件
+- 为了做玩法而把 Oracle 做成通用群聊平台
+- 为了追求“像 MiroFish”而模糊“结局卡锚定 / 当前世界线锚定 / room/thread 隔离”这三条边界
 
 ---
 
@@ -278,12 +350,18 @@ SwarmOracle 自己的独特点必须保持：
 
 ## 3.2 Phase B — 后端新域与世界线隔离
 
-> 状态更新（2026-03-29）：
+> 状态更新（2026-03-30，最新）：
 > - backend 独立 `ending_room` 域、REST/WS、scenario 删除清理、L2 branch scope 检索已落地
-> - `Phase B` 当前可签成：**后端严格签收通过**
-> - 本 session 又补齐了 `Phase B+` 最小后端增量：`ending_room_thread`、`GET /api/ending-room/thread/{thread_id}`、`POST /api/ending-room/{room_id}/user-turn`、`POST /api/ending-room/{room_id}/thread`、`POST /api/ending-room/thread/{thread_id}/user-turn`、room/thread memory partition、`worldline_echo_key`
-> - 前端当前不是空白，但仍只签到单结局结果页 MVP；多结局结果页、participant picker、thread UI 的正式验收要到 `Phase C2/C3`
-> - 本轮后端定向验证：`tests/test_ending_room_service.py + tests/test_ending_room_api.py + tests/test_ending_room_ws.py = 43 passed`
+> - `Phase B` 可继续视为：**后端严格签收通过**
+> - `Phase B+` 当前不止是 room/thread memory partition：
+>   - follow-up assistant turn 已升级成“优先真流式 + probe fallback”
+>   - endpoint 不再只返回整段 committed turn，而会走 `turn_start / turn_delta / turn_commit`
+>   - thread-scoped draft 所需 `thread_id` 也已补齐到 WS 事件
+> - 当前后端 residual 已不在“有没有新域”，而在：
+>   - persona vocabulary 继续拉开
+>   - replay/share/import 最终签收
+> - 当前定向回归口径：
+>   - `tests/test_ending_room_service.py + tests/test_ending_room_api.py + tests/test_ending_room_ws.py = 69 passed`
 
 ### 目标
 
@@ -427,6 +505,8 @@ ending_room_turn_error:
 
 ### Follow-up 流式升级（新增，Mandatory）
 
+> 状态更新（2026-03-30）：这节的升级已经完成，下面保留为合同与实现约束，而不再是未来 TODO。
+
 `follow-up` 不应长期停留在“后端整段生成完再一次性 commit”的口径。
 
 目标要升级成 **更接近经典模式 agent 发言的 live 体验**，但仍严格遵守 `ending_room` 域的 mixed-streaming contract：
@@ -546,14 +626,17 @@ POST /api/ending-room/{room_id}/replay-artifact     # 第二阶段可补
 
 ## 3.3 Phase C — 结果页单结局会客厅 MVP
 
-> 状态更新（2026-03-29，晚）：
+> 状态更新（2026-03-30，latest truth）：
 > - 这条线已经不再停在“只能开 modal 看 auto recap”的最早口径
 > - 当前真实代码里，结果页 CTA 会先进入 participant picker，再把 `selected_agent_ids` 带进 room scope
 > - 单结局 `EndingChatModal` 当前已接上 thread rail、follow-up composer、`archivist_route / hotseat / all_present`
 > - 单结局桌面 `1600x900` 与移动端 `390x844` 的 picker / chamber / hotseat / all-present 当前已做真实浏览器验收
 > - 多结局结果页当前已通过专项 E2E：按各自 ending 打开 picker / chamber / one-move
 > - `WorldlineRoundtableView` 当前已落地 live / reseat / replay readonly，并进入稳定 `release:signoff` 总链
-> - 当前仍未单独签收的残余主要是 ending-room replay/share/import 单链、roundtable mobile 一屏体验与文案质感
+> - 当前这节的 residual 已经从“功能没做完”收口到：
+>   - ending-room / roundtable replay/share/import 最终专项签收
+>   - persona vocabulary 继续拉开
+>   - profile-specific ambient motion / audio / Theater 联动皮肤
 
 ### 目标
 
@@ -620,37 +703,43 @@ frontend/src/i18n/*                 # 中文/英文词条
 - 中英双语文案正确
 - 移动端 `390x844` 下无遮挡、无溢出
 
-### 当前体验评审结论（2026-03-29 晚）
+### 当前体验评审结论（2026-03-30，latest truth）
 
-`Phase C` 当前只能算“功能打通”，还不能算“确实可玩”。
+这节原来的问题清单大部分已经被解决，下次执行时不要再把它们当成未完成项。
 
-本轮现场 review 暴露的根因如下：
+当前已经解决：
 
-1. 会客厅 participant 不是“这条世界线里真实参与讨论的 agent roster”
-   - 当前后端是从 `anchor_branch_id` 里裁出 `1-2` 个代表，再加一个 `Archivist`
-   - 用户在结果页底部看到的整局参与 Agent，与会客厅里看到的人不是同一语义层
-2. 用户当前无法指定“哪个 agent / 哪几个 agent”进入 `进入会客厅 / 只改一步`
-   - 现有 contract 没有 `selected_agent_ids`
-   - 现有 CTA 只带 `branch id + mode`
-3. 文案过于 deterministic 和模板化
-   - 当前 `_build_room_plan()` 更像 Phase B/Phase C 的数据链路验证文案，不像角色复盘
-   - 典型问题是“像总结报告，不像人说话”
-4. 右侧缺少角色感与玩法感
-   - 没有复用 Theater 的像素头像
-   - 没有 active speaker 动效
-   - 没有角色简介、persona、影响度说明
-5. 左侧直接铺一整段 story，阅读成本太高
-   - 用户进入玩法后，第一眼看到的是信息墙，而不是“和谁复盘、为什么是这些人”
-6. replay permalink 仍有不稳定表现
-   - 不阻塞单结局会客厅主链
-   - 但阻塞后续 `Phase E replay/share/import`
-7. 本轮现场演示与实机观察主要集中在**单结局结果页**
-   - 还没有把“多结局结果页下，每张 ending card 分别进入 `进入会客厅 / 只改一步`”做成单独签收
-   - 因此当前不能声称“多结局场景下这两个模式已经充分验收”
+1. participant roster 错位
+   - 当前结果页 CTA 已先进入 participant picker
+   - room scope 已正式吃进 `selected_agent_ids`
+2. 手动选人缺失
+   - `ending_chamber / one_move_only` 已允许手动选人
+3. transcript 缺少角色感
+   - 像素头像 / role / persona / impact / active speaker 高亮已接上
+4. 左侧 story 信息墙
+   - 当前已改成更偏玩法信息架构，不再默认只是一堵长文
+5. 多结局结果页覆盖不足
+   - 多结局 `ending_chamber / one_move_only` 已有专项 E2E
+6. follow-up 像“整段跳出”
+   - 当前 follow-up assistant turn 已升级成后端优先真流式 + fallback
+7. 文案过于 deterministic
+   - 当前已补到：
+     - `LLM-first + deterministic fallback`
+     - `recent line` 去重
+     - `profile/theme` 语言层
+     - `persona-specific` 基础词汇拉开
 
-因此在进入 `Phase D` 前，必须补一个新的强制阶段：
+当前仍然保留的残余：
 
-- `Phase C2 — 参与者驱动与可玩性修复`
+1. replay/share/import 还缺一次最终专项签收
+2. 文案层已经不是模板硬拼，但还可以继续深化：
+   - `persona-specific vocabulary`
+   - `profile/theme lexicon`
+   - `conflict/tension shaping`
+3. 视觉层已经有 profile skin + 轻量氛围动效，但还不是最终形态：
+   - `ambient motion`
+   - `audio/SFX`
+   - `Theater 联动皮肤`
 
 ---
 
@@ -1047,15 +1136,15 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 
 ## 3.3.2 Phase C3 — 同线听证 / 热座追问（Strongly Recommended Before Phase D Signoff）
 
-> 状态更新（2026-03-29）：
+> 状态更新（2026-03-30，latest truth）：
 > - backend 侧 `follow-up thread / user-turn / memory partition` 已先按 `Phase B+` 最小口径落地
 > - 当前已能创建 thread、读取 thread snapshot、写 room/thread follow-up turn，并显式区分 room memory 与 thread memory
 > - `delete_scenario` 也已把 `ending_room_thread` 纳入清理
 > - frontend 当前已接上 thread UI / thread store / thread WS、scope notice、room/thread transcript 切换，以及 `archivist_route / hotseat / all_present`
-> - 当前真实签收口径已经从“thread UI 还没做”推进到“单结局 follow-up 可玩”，但这节仍不能整体签收：
->   - 多结局 follow-up 还没做完整独立验收
->   - replay/read-only thread 只读链路还没补齐
->   - `Worldline Roundtable` 自己的 follow-up 还没开工
+> - 当前这节不再是“单结局 follow-up 可玩”的阶段，而是：
+>   - 单结局与 roundtable follow-up 都已具备可玩基线
+>   - 流式链路已升级成后端优先真流式 + probe fallback
+>   - 后续重点转向更深的 persona/theme 文案层和 replay/share 最终签收
 
 ### 目标
 
@@ -1146,22 +1235,39 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 
 ## 3.4 Phase D — 世界线圆桌
 
+> 状态更新（2026-03-30，最新）：
+> - `WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地并进入稳定 `release:signoff` 总链
+> - `manual_shortlist` 与 `expert_witness` 已形成最小可玩闭环
+> - roundtable 自己的 follow-up / hotseat 已完成
+> - 当前已补上：
+>   - profile-aware 文案层
+>   - profile skin / hook chips / 轻量微动效
+> - `Phase D` 当前不再是“从 0 到 1”阶段，而是“可玩基线已完成，且已继续补到 `manual_shortlist / expert_witness`；后续再做更强的题材代入和更深玩法”的阶段
+
 ### 目标
 
 多结局场景下，允许用户发起“世界线圆桌”进行跨结局复盘，但不读取他线全文。
 
-### 推荐首版角色数
+### 当前桌面口径
 
-只做 3 席：
+当前真实代码口径不是早期那版“固定 3 席桌”了，而是：
 
-1. `档案官 / Archivist`
-2. `结局代表 A`
-3. `结局代表 B`
+1. `representative`
+   - 默认模式
+   - 当前入桌的每条 worldline 各派 `1` 名代表
+   - 另带 `Archivist`
+2. `manual_shortlist`
+   - 用户手动指定 `2-4` 条 worldline 入桌
+   - shortlist 外的 worldline 当前不入桌
+3. `expert_witness`
+   - 维持当前代表席
+   - 再额外请入 `1` 位当前 worldline 证人
 
-多于两条结局时：
+也就是说，多于两条结局时：
 
-- 默认选概率最高两条
-- 其余进入 `异线旁听席`
+- 默认仍可全量代表入桌
+- `manual_shortlist` 时可主动缩成 `2-4` 条线
+- `crossline_gallery` 则负责承担“桌外世界线的摘要旁听”
 
 ### 主持与轮转机制
 
@@ -1191,14 +1297,15 @@ frontend/src/components/EndingRoomSpeakerBadge.css
    - 默认模式
    - 每条结局 `1` 名代表 + `Archivist`
 2. `manual_shortlist`
-   - 用户手动指定 `2-4` 个席位
-   - 适合“我只想看这几位怎么吵”
+   - 已完成
+   - 用户手动指定 `2-4` 条 worldline 入桌
+   - 适合“我只想看这几条线怎么吵”
 3. `trait_mix`
    - 系统按 persona / 角色标签自动推荐冲突更强的组合
    - 例如：`冒进者 vs 稳定派 vs 理想主义者`
 4. `expert_witness`
-   - 每条结局保留 `1` 名代表
-   - 某个阶段允许额外请入 `1` 名当前 worldline 的专家证人，发 `1` 轮短证词
+   - 已完成
+   - 在当前代表席基础上额外请入 `1` 名当前 worldline 的专家证人，发 `1` 轮短证词
 
 ### 席位编排策略（新增）
 
@@ -1293,6 +1400,11 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ## 3.5 Phase E — Replay / Share / Import
 
+> 状态更新（2026-03-30，最新）：
+> - local read-only copy / import 基线已完成
+> - replay readonly 基线已完成
+> - 这节当前真正未完成的是“最终 permalink/share 合同的专项签收”
+
 ### 目标
 
 让会客厅和圆桌具备与主模式一致的传播链路，但保持只读和权限边界不变。
@@ -1319,6 +1431,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 ---
 
 ## 3.6 Phase F — 轻玩法扩展
+
+> 状态更新（2026-03-30，最新）：
+> - 这节仍是后续阶段，当前不应先于 replay/share/import 最终签收和 persona/theme polish 推进
 
 ### 目标
 
@@ -1350,6 +1465,112 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 - 不重跑整局
 - 不制造复杂状态机
 - 所有玩法都必须锚定某张结局卡或某个关键转折卡
+
+---
+
+## 3.7 Phase G — Persona Vocabulary / Theme Skin / Atmosphere Polish
+
+> 状态：**next recommended phase**
+> 说明：这节是当前最应该推进的阶段，优先级高于新增玩法和更大 UI 结构改造。
+
+### 目标
+
+把 Oracle 当前“已经可玩”的基线继续抬到“更像这个角色、这个题材、这个房间里的话”。
+
+一句话要求：
+
+`先拉开角色说话习惯，再让题材皮肤和氛围层只负责放大这些差异。`
+
+### G1. Persona-specific Vocabulary
+
+后端优先做：
+
+1. 同题材下不同角色的词汇习惯拉开
+   - `ruler / imperial`
+   - `field commander`
+   - `civic operator`
+   - `scholar / witness / archivist`
+2. hotseat 与 all-present 的句式分工继续拉开
+   - `hotseat`: 先答，再钉 hinge/cost
+   - `all_present`: 每位 speaker 只补一个角度，不替全场总结
+3. 加强冲突感
+   - 不只“说不同内容”，还要“说得像不同立场的人”
+
+建议拆成：
+
+```text
+G1-A: persona vocabulary dictionaries
+G1-B: interaction-mode-specific cadence
+G1-C: conflict / tension shaping
+```
+
+### G2. Theme Skin + 微动效 + 氛围层
+
+前端只做放大，不改主骨架：
+
+1. 继续复用现有 `GameplayProfile` 资产
+   - 不另起第二套 Oracle design system
+2. 允许补强：
+   - profile-specific frame / chip / accent
+   - ambient float / glow / dust / scroll shimmer
+   - profile-specific audio / SFX（若后续引入）
+3. 禁止：
+   - 因为想“更沉浸”而牺牲可读性
+   - 因为题材化而把页面重新设计成另一款产品
+
+### G3. 题材与 Theater 联动（可后置）
+
+这节不是当前阻塞，但可以在 G1/G2 之后推进：
+
+1. Oracle room 与当前 `scene_theme / gameplay profile` 的背景 motif 联动
+2. Roundtable / Chamber 的 skin 与 Theater scene 形成弱关联
+3. 仍然不允许读取越权上下文，不允许引入“看起来很像跨线”的误导视觉
+
+### 验收
+
+只有以下都满足，才能把 Phase G 视为完成：
+
+1. 同题材下不同角色的开头与词汇明显不同
+2. `Archivist` 不再和普通 speaker 撞节奏
+3. `law / faith / empire / frontier / governance ...` 至少 5 个 profile 的词汇感可区分
+4. fallback 路径也保留题材感，而不是一掉回 generic
+5. profile skin 与 hook chips 不影响移动端首屏可追问
+6. UI 仍然属于当前 SwarmOracle 视觉语言，而不是新产品
+
+---
+
+## 3.8 Phase H — Replay/Share Final Signoff + Next Playability Expansions
+
+> 状态：**after Phase G**
+
+### 目标
+
+在不打断当前可玩主链的前提下，把 replay/share 彻底收口，再考虑轻玩法扩展。
+
+### H1. Replay / Share / Import 最终签收
+
+必须单独签收：
+
+1. ending-room permalink
+2. roundtable permalink
+3. readonly replay
+4. import local run
+5. share 文案中英一致
+
+### H2. 轻玩法扩展（只在 H1 完成后）
+
+推荐顺序：
+
+1. `expert_witness / witness_augmented`
+2. `trait_mix / fault_line_first`
+3. `后续三回合`
+4. `证据投牌`
+
+要求：
+
+- 任何新增玩法都不能破坏 room/thread scope
+- 任何新增玩法都不能把 Oracle 变成通用 chat 平台
+- 任何新增玩法都必须锚定结局卡 / 转折卡 / quote / verdict
 
 ---
 
@@ -2054,25 +2275,41 @@ npm run assets:provenance:check
 15. 头像、动态效果、排版与题材语义一致，不像另一款产品
 16. 单结局与多结局结果页都分别签收过 `进入会客厅 / 只改一步 / 追问线程`
 17. 圆桌 verdict 后继续追问时，用户能清楚知道当前仍被限制在“本桌 scope”内
+18. 同题材下不同角色的说话习惯可区分，不是“同一段话换个名字”
+19. `law / faith / empire / frontier / governance ...` 的 profile 词汇感能被用户感知到
+20. fallback 路径也保持题材感与角色感，不会一退回就变 generic
+21. profile skin / hook chips / 微动效只放大文案差异，不破坏移动端首屏与可读性
 
 ---
 
 ## 10. 建议执行顺序
 
-推荐严格按以下顺序推进，不要并行硬上所有阶段：
+历史阶段的当前口径：
 
-1. Phase A：冻结命名、契约、i18n key
-2. Phase B：后端新域 + L2 隔离修复
-3. Phase C：结果页单结局会客厅 MVP
-4. Phase C2：参与者驱动与可玩性修复
-5. Phase C3：同线听证 / 热座追问 / thread 隔离
-6. Phase C2/C3 回归测试 + cross-browser + mobile + visual QA
-7. Phase D：世界线圆桌
-8. Phase D 回归测试 + visual QA
-9. Phase E：replay/share/import
-10. Phase F：轻玩法扩展
-11. 资产补齐与 provenance 收口
-12. 最终 `release:signoff`
+1. `Phase A-D`
+   - 已完成并具备可玩基线
+   - 本轮又额外补到了：
+     - `crossline_gallery`
+     - `manual_shortlist`
+     - `expert_witness`
+2. `Phase E`
+   - 基线已通，待最终专项签收
+3. `Phase F`
+   - 暂未进入正式优先级
+
+从下一次继续执行开始，推荐严格按以下顺序推进：
+
+1. `Phase G1`
+   - persona-specific vocabulary
+2. `Phase G2`
+   - theme skin + 微动效 + 氛围层
+3. `Phase G3`
+   - Oracle 与 Theater 的弱联动皮肤（可后置）
+4. `Phase E`
+   - replay/share/import 最终专项签收
+5. `Phase H2 / Phase F`
+   - 轻玩法扩展
+6. 最终 `release:signoff`
 
 如果资源有限，首个可交付里只做：
 
@@ -2085,7 +2322,12 @@ npm run assets:provenance:check
 - 必要 i18n
 - 桌面 + 移动 E2E
 
-把 `世界线圆桌` 放到第二个迭代里，会更稳；但 **不允许** 在缺少选人、人物卡、追问线程和去模板化发言的情况下就直接跳进 `Phase D`。
+当前已经不需要再把 `世界线圆桌` 放到第二个迭代里讨论“要不要做”。它已经在可玩基线上。
+
+真正不允许的是：
+
+- 在 persona/theme 文案层还没继续拉开时，就直接堆更复杂的 UI
+- 在 replay/share/import 没做最终签收前，就同时开太多新玩法分支
 
 ---
 

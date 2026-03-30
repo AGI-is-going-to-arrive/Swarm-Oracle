@@ -100,6 +100,7 @@ describe('useEndingRoomWS', () => {
           type: 'ending_room_turn_start',
           data: {
             room_id: 'room-1',
+            thread_id: 'thread-room',
             turn_id: 'turn-1',
             participant_id: 'p-1',
             phase: 'opening',
@@ -113,6 +114,7 @@ describe('useEndingRoomWS', () => {
           type: 'ending_room_turn_delta',
           data: {
             room_id: 'room-1',
+            thread_id: 'thread-room',
             turn_id: 'turn-1',
             participant_id: 'p-1',
             delta: 'Hello',
@@ -140,10 +142,12 @@ describe('useEndingRoomWS', () => {
     });
 
     expect(storeState.startDraft).toHaveBeenCalledWith(expect.objectContaining({
+      thread_id: 'thread-room',
       turn_id: 'turn-1',
       participant_id: 'p-1',
     }));
     expect(storeState.appendDraft).toHaveBeenCalledWith(expect.objectContaining({
+      thread_id: 'thread-room',
       turn_id: 'turn-1',
       delta: 'Hello',
     }));

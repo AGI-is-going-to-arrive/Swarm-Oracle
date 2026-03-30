@@ -1,7 +1,11 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
+import {
+  getGameplayProfileFrameSrc,
+  type GameplayProfileId,
+} from './gameplayCards';
 import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import { useEndingRoomWS } from '../hooks/useEndingRoomWS';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
@@ -9,6 +13,7 @@ import type {
   AgentMessage,
   EndingRoomInteractionMode,
   EndingRoomParticipant,
+  EndingRoomPhase,
   EndingRoomResult,
   EndingRoomSnapshot,
   EndingRoomThreadSnapshot,
@@ -26,10 +31,12 @@ interface EndingChatModalProps {
   scenarioId: string;
   branch: StoryData['branches'][number] | null;
   roomType: EndingRoomType;
+  selectedBranchIds?: string[];
   selectedAgentIds?: string[];
   language: 'zh' | 'en';
   readOnly: boolean;
   fallbackMessages?: AgentMessage[];
+  galleryBranches?: StoryData['branches'];
   replayState?: {
     snapshot: EndingRoomSnapshot;
     result: EndingRoomResult | null;
@@ -39,10 +46,21 @@ interface EndingChatModalProps {
     activeThreadId?: string | null;
     selectedAgentIds?: string[];
   } | null;
+  profileId?: GameplayProfileId | null;
+  profileLabel?: string | null;
+  profileHooks?: string[];
   headerActions?: ReactNode;
   onClose: () => void;
   onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+}
+
+interface EndingChatRenderDraft {
+  key: string;
+  participantId: string | null;
+  phase: EndingRoomPhase;
+  content: string;
+  variant: 'stream' | 'placeholder';
 }
 
 function roleLabel(participant: EndingRoomParticipant, isZh: boolean): string {
@@ -131,11 +149,16 @@ export default function EndingChatModal({
   scenarioId,
   branch,
   roomType,
+  selectedBranchIds = [],
   selectedAgentIds: selectedAgentIdsProp,
   language,
   readOnly,
   fallbackMessages: fallbackMessagesProp,
+  galleryBranches = [],
   replayState = null,
+  profileId = null,
+  profileLabel = null,
+  profileHooks = [],
   headerActions = null,
   onClose,
   onModeChange,
@@ -152,6 +175,7 @@ export default function EndingChatModal({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
   const isZh = language === 'zh';
+  const profileFrameSrc = profileId ? getGameplayProfileFrameSrc(profileId) : null;
   const {
     snapshot,
     result,
@@ -176,9 +200,14 @@ export default function EndingChatModal({
     reset,
   } = useEndingRoomStore();
 
+  const effectiveRoomType = (readOnly && replayState?.snapshot
+    ? replayState.snapshot.room_type
+    : snapshot?.room_type) ?? roomType;
+  const isCrosslineGallery = effectiveRoomType === 'crossline_gallery';
+
   useEndingRoomWS(
     snapshot?.id,
-    open && !readOnly && Boolean(snapshot?.id) && status !== 'error',
+    open && !readOnly && !isCrosslineGallery && Boolean(snapshot?.id) && status !== 'error',
   );
 
   const effectiveSnapshot = readOnly && replayState?.snapshot
@@ -243,7 +272,7 @@ export default function EndingChatModal({
     void openRoom(scenarioId, {
       roomType,
       anchorBranchId: branch.id,
-      selectedBranchIds: [branch.id],
+      selectedBranchIds: selectedBranchIds.length > 0 ? selectedBranchIds : [branch.id],
       ...(selectedAgentIds.length > 0 ? { selectedAgentIds } : {}),
       language,
     }).then(async (roomId) => {
@@ -266,7 +295,7 @@ export default function EndingChatModal({
         window.clearTimeout(bootstrapDelayTimer);
       }
     };
-  }, [branch, language, loadRoom, open, openRoom, readOnly, reset, roomType, scenarioId, selectedAgentIds]);
+  }, [branch, language, loadRoom, open, openRoom, readOnly, reset, roomType, scenarioId, selectedAgentIds, selectedBranchIds]);
 
   const finalResultSyncRef = useRef<string | null>(null);
 
@@ -464,17 +493,87 @@ export default function EndingChatModal({
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
     [pendingDrafts],
   );
-  const visibleDrafts = readOnly ? [] : sortedDrafts;
-  const currentSpeakerTurnKey = (activeThread?.mode !== 'followup'
-    ? visibleDrafts.at(-1)?.turnId
-    : null) ?? currentTurns.at(-1)?.key ?? null;
-  const currentSpeakerParticipantId = visibleDrafts.at(-1)?.participantId
-    ?? currentTurns.at(-1)?.participantId
-    ?? null;
+  const visibleDrafts = useMemo(
+    () => {
+      if (readOnly) return [];
+      const targetThreadId = activeThread?.id ?? defaultThreadId;
+      if (!targetThreadId) return sortedDrafts;
+      if (activeThread?.mode === 'followup') {
+        return sortedDrafts.filter((draft) => draft.threadId === activeThread.id);
+      }
+      return sortedDrafts.filter((draft) => draft.threadId === targetThreadId);
+    },
+    [activeThread?.id, activeThread?.mode, defaultThreadId, readOnly, sortedDrafts],
+  );
 
   const effectiveInteractionMode = readOnly
     ? (activeThread?.mode === 'followup' ? activeThread.interaction_mode : 'archivist_route')
     : interactionMode;
+  const composerEnabled = !readOnly && !isCrosslineGallery && Boolean(effectiveResult) && Boolean(effectiveSnapshot?.id);
+  const selectedHotseatParticipant = targetableParticipants.find(
+    (participant) => participant.source_agent_id === selectedAgentId,
+  ) ?? null;
+  const displayedDrafts = useMemo<EndingChatRenderDraft[]>(
+    () => {
+      if (visibleDrafts.length > 0) {
+        return visibleDrafts.map((draft) => ({
+          key: draft.turnId,
+          participantId: draft.participantId,
+          phase: draft.phase,
+          content: draft.content.trim()
+            ? draft.content
+            : (
+              effectiveInteractionMode === 'hotseat'
+                ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
+                : effectiveInteractionMode === 'all_present'
+                  ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
+                  : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…')
+            ),
+          variant: draft.content.trim() ? 'stream' : 'placeholder',
+        }));
+      }
+      if (readOnly || !sending || !composerEnabled) {
+        return [];
+      }
+      const placeholderParticipantId = effectiveInteractionMode === 'hotseat'
+        ? (selectedHotseatParticipant?.id ?? null)
+        : participants.find((participant) => participant.role_slot === 'archivist')?.id
+          ?? participants[0]?.id
+          ?? null;
+      const placeholderContent = effectiveInteractionMode === 'hotseat'
+        ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
+        : effectiveInteractionMode === 'all_present'
+          ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
+          : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…');
+      return [
+        {
+          key: '__local-pending__',
+          participantId: placeholderParticipantId,
+          phase: activeThread?.turns.at(-1)?.phase
+            ?? effectiveSnapshot?.current_phase
+            ?? 'verdict',
+          content: placeholderContent,
+          variant: 'placeholder',
+        },
+      ];
+    },
+    [
+      activeThread?.turns,
+      composerEnabled,
+      effectiveInteractionMode,
+      effectiveSnapshot?.current_phase,
+      isZh,
+      participants,
+      readOnly,
+      selectedHotseatParticipant?.id,
+      sending,
+      visibleDrafts,
+    ],
+  );
+  const currentSpeakerTurnKey = displayedDrafts.at(-1)?.key ?? currentTurns.at(-1)?.key ?? null;
+  const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
+    ?? currentTurns.at(-1)?.participantId
+    ?? null;
 
   useEffect(() => {
     setReplayActiveThreadId(replayState?.activeThreadId ?? null);
@@ -488,7 +587,7 @@ export default function EndingChatModal({
   useEffect(() => {
     const transcriptList = transcriptListRef.current;
     if (!transcriptList) return;
-    const visibleTurnCount = currentTurns.length + visibleDrafts.length;
+    const visibleTurnCount = currentTurns.length + displayedDrafts.length;
     if (visibleTurnCount === 0) {
       transcriptHydratedRef.current = false;
       transcriptAutoStickRef.current = false;
@@ -499,13 +598,13 @@ export default function EndingChatModal({
       transcriptList.scrollTop = 0;
       return;
     }
-    if (visibleDrafts.length > 0 || transcriptAutoStickRef.current) {
+    if (displayedDrafts.length > 0 || transcriptAutoStickRef.current) {
       transcriptList.scrollTop = transcriptList.scrollHeight;
-      if (visibleDrafts.length === 0) {
+      if (displayedDrafts.length === 0) {
         transcriptAutoStickRef.current = false;
       }
     }
-  }, [activeThread?.id, currentTurns.length, effectiveSnapshot?.id, visibleDrafts.length]);
+  }, [activeThread?.id, currentTurns.length, displayedDrafts.length, effectiveSnapshot?.id]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -525,12 +624,12 @@ export default function EndingChatModal({
       status: readOnly ? 'done' : status,
       has_result: Boolean(effectiveResult),
       turn_count: currentTurns.length,
-      pending_draft_count: visibleDrafts.length,
+      pending_draft_count: displayedDrafts.length,
       active_phase: effectiveSnapshot?.current_phase ?? null,
       active_thread_id: activeThread?.id ?? null,
       thread_count: threads.length,
       interaction_mode: effectiveInteractionMode,
-      can_send: Boolean(!readOnly && effectiveResult && effectiveSnapshot?.id),
+      can_send: Boolean(composerEnabled),
       can_share_replay: Boolean(effectiveSnapshot?.id && effectiveResult),
       can_import_replay: Boolean(readOnly && replayState?.snapshot),
       sending,
@@ -554,10 +653,24 @@ export default function EndingChatModal({
     sending,
     effectiveSnapshot?.current_phase,
     effectiveSnapshot?.id,
-    visibleDrafts.length,
+    displayedDrafts.length,
     status,
     threads.length,
   ]);
+
+  const threadDisplayLabels = useMemo(() => {
+    const seen = new Map<string, number>();
+    const labels: Record<string, string> = {};
+    for (const thread of threads) {
+      const base = threadLabel(thread, isZh);
+      const count = (seen.get(base) ?? 0) + 1;
+      seen.set(base, count);
+      labels[thread.id] = count === 1
+        ? base
+        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
+    }
+    return labels;
+  }, [isZh, threads]);
 
   if (!open || !branch) {
     return null;
@@ -567,10 +680,6 @@ export default function EndingChatModal({
   const collapsedStory = storyText.length > 280 && !storyExpanded
     ? `${storyText.slice(0, 280)}…`
     : storyText;
-  const composerEnabled = !readOnly && Boolean(effectiveResult) && Boolean(effectiveSnapshot?.id);
-  const selectedHotseatParticipant = targetableParticipants.find(
-    (participant) => participant.source_agent_id === selectedAgentId,
-  ) ?? null;
   const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
     ? [selectedAgentId]
     : interactionMode === 'all_present'
@@ -593,25 +702,20 @@ export default function EndingChatModal({
   const transcriptSubtitle = activeThread
     ? scopeText(activeThread, scopeNotice, isZh)
     : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
+  const galleryCards = galleryBranches
+    .filter((candidate) => candidate.id !== branch.id)
+    .sort((left, right) => right.probability - left.probability);
+  const transcriptTitle = isCrosslineGallery ? t('roundtable.gallery_title') : t('ending_room.transcript_title');
+  const transcriptHeaderCopy = isCrosslineGallery ? t('roundtable.gallery_hint') : transcriptSubtitle;
+  const transcriptHeaderNote = isCrosslineGallery
+    ? t('ending_room.foreign_summary_badge')
+    : (activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading'));
   const interactionModeNote = readOnly
     ? t('ending_room.replay_readonly')
     : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
-  const threadDisplayLabels = useMemo(() => {
-    const seen = new Map<string, number>();
-    const labels: Record<string, string> = {};
-    for (const thread of threads) {
-      const base = threadLabel(thread, isZh);
-      const count = (seen.get(base) ?? 0) + 1;
-      seen.set(base, count);
-      labels[thread.id] = count === 1
-        ? base
-        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
-    }
-    return labels;
-  }, [isZh, threads]);
 
   const handleCreateThread = async () => {
-    if (!snapshot?.id || readOnly) return;
+    if (!snapshot?.id || readOnly || isCrosslineGallery) return;
     if (interactionMode === 'hotseat' && !selectedAgentId) return;
     const payload = interactionMode === 'hotseat' && selectedAgentId
       ? {
@@ -628,6 +732,7 @@ export default function EndingChatModal({
   };
 
   const handleSend = async () => {
+    if (isCrosslineGallery) return;
     const content = composerDraft.trim();
     if (!content) return;
     transcriptAutoStickRef.current = true;
@@ -670,12 +775,18 @@ export default function EndingChatModal({
     <div className="ending-chat-overlay" onClick={onClose}>
       <div
         ref={modalRef}
-        className="ending-chat-modal"
+        className={`ending-chat-modal ${profileId ? `oracle-skin oracle-skin--${profileId}` : ''}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="ending-chat-title"
         data-testid="ending-chat-modal"
+        data-profile={profileId ?? undefined}
+        style={
+          profileFrameSrc
+            ? ({ '--oracle-profile-frame': `url(${profileFrameSrc})` } as CSSProperties)
+            : undefined
+        }
       >
         <header className="ending-chat-header">
           <div>
@@ -683,14 +794,24 @@ export default function EndingChatModal({
             <h2 id="ending-chat-title" className="ending-chat-title">{branch.title}</h2>
             <div className="ending-chat-meta-row">
               <span className="ending-chat-badge ending-chat-badge--primary">
-                {getEndingRoomModeLabel(effectiveSnapshot?.room_type ?? roomType, t)}
+                {getEndingRoomModeLabel(effectiveRoomType, t)}
               </span>
               <span className="ending-chat-badge">
                 {getEndingRoomStatusLabel(readOnly ? 'done' : (effectiveSnapshot?.status ?? (status === 'loading' ? 'draft' : 'error')), t)}
               </span>
               <span className="ending-chat-badge">{t('ending_room.current_branch_badge')}</span>
               <span className="ending-chat-probability">{((branch.probability ?? 0) * 100).toFixed(1)}%</span>
+              {profileLabel && (
+                <span className="ending-chat-badge ending-chat-badge--profile">{profileLabel}</span>
+              )}
             </div>
+            {profileHooks.length > 0 && (
+              <div className="ending-chat-theme-strip" aria-label={isZh ? '题材提示' : 'Theme cues'}>
+                {profileHooks.slice(0, 2).map((hook) => (
+                  <span key={hook} className="ending-chat-theme-chip">{hook}</span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="ending-chat-header__actions">
             {headerActions}
@@ -700,7 +821,7 @@ export default function EndingChatModal({
           </div>
         </header>
 
-        {!readOnly && (
+        {!readOnly && !isCrosslineGallery && (
           <div className="ending-chat-tabs" role="tablist" aria-label={t('ending_room.title')}>
             <button
               type="button"
@@ -721,85 +842,94 @@ export default function EndingChatModal({
 
         <div className="ending-chat-body">
           <aside className="ending-chat-sidebar">
-            <section className="ending-chat-panel">
-              <div className="ending-chat-panel__heading">
-                <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
-                {!readOnly && effectiveSnapshot?.id && (
-                  <div className="ending-chat-panel__actions">
-                    <button
-                      type="button"
-                      className="ending-chat-inline-button"
-                      onClick={() => void handleCreateThread()}
-                    >
-                      {isZh ? '新建追问线程' : 'New thread'}
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="ending-chat-participant-strip">
-                {participants.length === 0 && (
-                  <div className="ending-chat-participant-empty">
-                    {isZh
-                      ? '当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。'
-                      : 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.'}
-                  </div>
-                )}
-                {participants.map((participant) => {
-                  const metrics = participantMetrics(participant);
-                  const isSelected = selectedAgentId === participant.source_agent_id;
-                  const hotseatSelectable = interactionMode === 'hotseat' && participant.source_agent_id;
-                  const isCurrentSpeaker = currentSpeakerParticipantId === participant.id;
-                  const isHotseatFocus = effectiveInteractionMode === 'hotseat' && isSelected;
-                  return (
-                    <button
-                      key={participant.id}
-                      type="button"
-                      className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''} ${isCurrentSpeaker ? 'is-current-speaker' : ''} ${isHotseatFocus ? 'is-hotseat-focus' : ''}`}
-                      onClick={() => {
-                        if (!hotseatSelectable) return;
-                        setSelectedAgentId(participant.source_agent_id ?? null);
-                      }}
-                      disabled={!hotseatSelectable}
-                    >
-                      <img
-                        className="ending-chat-participant-card__avatar"
-                        src={participantSprite(participant)}
-                        alt=""
-                        aria-hidden="true"
-                      />
-                      <div className="ending-chat-participant-card__copy">
-                        <strong>
-                          {participant.display_name}
-                          {isCurrentSpeaker && (
-                            <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
-                              {isZh ? '正在发言' : 'Speaking'}
-                            </span>
-                          )}
-                          {!isCurrentSpeaker && isHotseatFocus && (
-                            <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
-                              {isZh ? '当前追问对象' : 'Current target'}
-                            </span>
-                          )}
-                        </strong>
-                        <span>{metrics.role || roleLabel(participant, isZh)}</span>
-                        {metrics.persona && <small>{metrics.persona}</small>}
-                      </div>
-                      <div className="ending-chat-participant-metrics">
-                        <em>{isZh ? `影响 ${Math.round(metrics.impactScore * 100)}` : `Impact ${Math.round(metrics.impactScore * 100)}`}</em>
-                        <em>{isZh ? `发言 ${metrics.turnCount}` : `${metrics.turnCount} turns`}</em>
-                        <em>{isZh ? `转折 ${metrics.keyMomentHits}` : `${metrics.keyMomentHits} hinge hits`}</em>
-                        {metrics.lastRoundSpoken > 0 && <em>{`R${metrics.lastRoundSpoken}`}</em>}
-                      </div>
-                      {metrics.fallbackCast && (
-                        <span className="ending-chat-participant-flag">
-                          {isZh ? '兜底阵容' : 'Fallback lineup'}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            {isCrosslineGallery ? (
+              <section className="ending-chat-panel ending-chat-panel--notice">
+                <div className="ending-chat-panel__heading">
+                  <h3>{t('roundtable.gallery_title')}</h3>
+                </div>
+                <p>{t('roundtable.gallery_hint')}</p>
+              </section>
+            ) : (
+              <section className="ending-chat-panel">
+                <div className="ending-chat-panel__heading">
+                  <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
+                  {!readOnly && effectiveSnapshot?.id && (
+                    <div className="ending-chat-panel__actions">
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => void handleCreateThread()}
+                      >
+                        {isZh ? '新建追问线程' : 'New thread'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="ending-chat-participant-strip">
+                  {participants.length === 0 && (
+                    <div className="ending-chat-participant-empty">
+                      {isZh
+                        ? '当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。'
+                        : 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.'}
+                    </div>
+                  )}
+                  {participants.map((participant) => {
+                    const metrics = participantMetrics(participant);
+                    const isSelected = selectedAgentId === participant.source_agent_id;
+                    const hotseatSelectable = interactionMode === 'hotseat' && participant.source_agent_id;
+                    const isCurrentSpeaker = currentSpeakerParticipantId === participant.id;
+                    const isHotseatFocus = effectiveInteractionMode === 'hotseat' && isSelected;
+                    return (
+                      <button
+                        key={participant.id}
+                        type="button"
+                        className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''} ${isCurrentSpeaker ? 'is-current-speaker' : ''} ${isHotseatFocus ? 'is-hotseat-focus' : ''}`}
+                        onClick={() => {
+                          if (!hotseatSelectable) return;
+                          setSelectedAgentId(participant.source_agent_id ?? null);
+                        }}
+                        disabled={!hotseatSelectable}
+                      >
+                        <img
+                          className="ending-chat-participant-card__avatar"
+                          src={participantSprite(participant)}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                        <div className="ending-chat-participant-card__copy">
+                          <strong>
+                            {participant.display_name}
+                            {isCurrentSpeaker && (
+                              <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
+                                {isZh ? '正在发言' : 'Speaking'}
+                              </span>
+                            )}
+                            {!isCurrentSpeaker && isHotseatFocus && (
+                              <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
+                                {isZh ? '当前追问对象' : 'Current target'}
+                              </span>
+                            )}
+                          </strong>
+                          <span>{metrics.role || roleLabel(participant, isZh)}</span>
+                          {metrics.persona && <small>{metrics.persona}</small>}
+                        </div>
+                        <div className="ending-chat-participant-metrics">
+                          <em>{isZh ? `影响 ${Math.round(metrics.impactScore * 100)}` : `Impact ${Math.round(metrics.impactScore * 100)}`}</em>
+                          <em>{isZh ? `发言 ${metrics.turnCount}` : `${metrics.turnCount} turns`}</em>
+                          <em>{isZh ? `转折 ${metrics.keyMomentHits}` : `${metrics.keyMomentHits} hinge hits`}</em>
+                          {metrics.lastRoundSpoken > 0 && <em>{`R${metrics.lastRoundSpoken}`}</em>}
+                        </div>
+                        {metrics.fallbackCast && (
+                          <span className="ending-chat-participant-flag">
+                            {isZh ? '兜底阵容' : 'Fallback lineup'}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
 
             {effectiveResult && (
               <section className="ending-chat-panel ending-chat-panel--summary">
@@ -850,18 +980,16 @@ export default function EndingChatModal({
             )}
           </aside>
 
-          <section className="ending-chat-transcript">
-            <div className="ending-chat-transcript-header">
-              <div>
-                <h3>{t('ending_room.transcript_title')}</h3>
-                <p>{transcriptSubtitle}</p>
+            <section className="ending-chat-transcript">
+              <div className="ending-chat-transcript-header">
+                <div>
+                  <h3>{transcriptTitle}</h3>
+                  <p>{transcriptHeaderCopy}</p>
+                </div>
+                <span className="ending-chat-note">{transcriptHeaderNote}</span>
               </div>
-              <span className="ending-chat-note">
-                {activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading')}
-              </span>
-            </div>
 
-            {threads.length > 0 && (
+            {!isCrosslineGallery && threads.length > 0 && (
               <div className="ending-chat-thread-rail" role="tablist" aria-label={isZh ? '追问线程' : 'Follow-up threads'}>
                 {threads.map((thread) => (
                   <button
@@ -889,15 +1017,45 @@ export default function EndingChatModal({
             )}
 
             <div ref={transcriptListRef} className="ending-chat-transcript-list">
-              {!readOnly && currentTurns.length === 0 && visibleDrafts.length === 0 && status === 'loading' && (
+              {isCrosslineGallery && (
+                <div className="ending-chat-gallery-list">
+                  {galleryCards.length === 0 ? (
+                    <div className="ending-chat-empty-state">{t('roundtable.gallery_hint')}</div>
+                  ) : (
+                    galleryCards.map((galleryBranch) => (
+                      <article key={galleryBranch.id} className="ending-chat-gallery-card">
+                        <header className="ending-chat-gallery-card__header">
+                          <div>
+                            <strong>{galleryBranch.title}</strong>
+                            <span>{t('ending_room.foreign_summary_badge')}</span>
+                          </div>
+                          <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
+                        </header>
+                        <p>{galleryBranch.story || galleryBranch.insight || '—'}</p>
+                        {galleryBranch.insight && (
+                          <blockquote>{galleryBranch.insight}</blockquote>
+                        )}
+                        {galleryBranch.key_moments.length > 0 && (
+                          <ul className="ending-chat-gallery-card__moments">
+                            {galleryBranch.key_moments.slice(0, 3).map((moment) => (
+                              <li key={moment}>{moment}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </article>
+                    ))
+                  )}
+                </div>
+              )}
+              {!isCrosslineGallery && !readOnly && currentTurns.length === 0 && displayedDrafts.length === 0 && status === 'loading' && (
                 <div className="ending-chat-empty-state">{t('ending_room.loading')}</div>
               )}
-              {!readOnly && currentTurns.length === 0 && visibleDrafts.length === 0 && status !== 'loading' && (
+              {!isCrosslineGallery && !readOnly && currentTurns.length === 0 && displayedDrafts.length === 0 && status !== 'loading' && (
                 <div className="ending-chat-empty-state">
                   {readOnly ? t('ending_room.replay_readonly') : t('ending_room.empty')}
                 </div>
               )}
-              {currentTurns.map((message) => (
+              {!isCrosslineGallery && currentTurns.map((message) => (
                 <article
                   key={message.key}
                   className={`ending-chat-bubble ${message.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''}`}
@@ -910,13 +1068,14 @@ export default function EndingChatModal({
                   <p>{message.content}</p>
                 </article>
               ))}
-              {(activeThread?.mode !== 'followup' ? visibleDrafts : []).map((draft) => (
+              {!isCrosslineGallery && displayedDrafts.map((draft) => (
                 <article
-                  key={draft.turnId}
-                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.turnId === currentSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                  key={draft.key}
+                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.variant === 'placeholder' ? 'ending-chat-bubble--placeholder' : ''} ${draft.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''}`}
+                  aria-busy={draft.variant === 'placeholder'}
                 >
                   <header>
-                    <strong>{participantsById.get(draft.participantId)?.display_name ?? t('ending_room.participant_unknown')}</strong>
+                    <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? t('ending_room.participant_unknown')}</strong>
                     <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
                     <em className="ending-chat-draft-badge">{t('ending_room.draft_badge')}</em>
                   </header>
@@ -925,9 +1084,9 @@ export default function EndingChatModal({
               ))}
             </div>
 
-            {readOnly ? (
+            {readOnly || isCrosslineGallery ? (
               <div className="ending-chat-composer ending-chat-composer--readonly">
-                <span className="ending-chat-scope-notice">{t('ending_room.replay_readonly')}</span>
+                <span className="ending-chat-scope-notice">{isCrosslineGallery ? t('roundtable.gallery_hint') : t('ending_room.replay_readonly')}</span>
               </div>
             ) : (
               <div className="ending-chat-composer">

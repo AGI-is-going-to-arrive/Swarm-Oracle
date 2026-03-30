@@ -9,6 +9,7 @@ import logging
 import re
 import threading
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,11 +39,14 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import _uuid, get_engine
+from app.services.debate_prompts import get_debate_profile_style, infer_debate_profile
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json,
+    llm_call_stream,
     llm_request_scope,
+    probe_streaming_support,
 )
 from app.services.runtime_lock import (
     acquire_runtime_lock,
@@ -61,6 +65,8 @@ ENDING_ROOM_RUNTIME_ERROR = {
 }
 _ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
 _ORACLE_LLM_REWRITE_TIMEOUT_SECONDS = 6.0
+_ORACLE_STREAM_PROBE_TIMEOUT_SECONDS = 6.0
+_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS = 20.0
 
 
 class EndingRoomServiceError(Exception):
@@ -75,6 +81,25 @@ class EndingRoomServiceError(Exception):
 
 # Backward-compatible alias for in-progress callers.
 EndingRoomDomainError = EndingRoomServiceError
+
+
+@dataclass(frozen=True)
+class _OracleFollowupPlan:
+    turn_id: str
+    room_id: str
+    thread_id: str
+    sequence: int
+    phase: EndingRoomPhase
+    participant: EndingRoomParticipant
+    anchor_copy: str
+    memory_partition_id: str
+    interaction_mode: EndingRoomInteractionMode
+    addressed_refs: list[str] | None
+    question_anchor_ids: list[str] | None
+    cited_branch_id: str | None
+    cited_refs_json: dict[str, Any]
+    user_content: str
+    thread_mode: EndingRoomThreadMode
 
 
 def _room_phase_field() -> str:
@@ -144,6 +169,28 @@ def _normalize_selected_representatives(
         seen_branch_ids.add(branch_id)
         normalized.append({"branch_id": branch_id, "agent_id": agent_id})
     return normalized
+
+
+def _normalize_selected_witness(
+    selected_witness: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    if selected_witness is None:
+        return None
+    if not isinstance(selected_witness, dict):
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+            "selected_witness must be an object with branch_id and agent_id",
+        )
+    branch_id = str(selected_witness.get("branch_id") or "").strip()
+    agent_id = str(selected_witness.get("agent_id") or "").strip()
+    if not branch_id or not agent_id:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+            "selected_witness must include branch_id and agent_id",
+        )
+    return {"branch_id": branch_id, "agent_id": agent_id}
 
 
 def _sort_scope_branch_ids(branches: list[Branch]) -> list[str]:
@@ -431,6 +478,41 @@ def _build_roundtable_crossfire_content(branch_cards: list[dict[str, Any]], *, l
     )
 
 
+def _build_roundtable_witness_content(
+    branch_card: dict[str, Any],
+    *,
+    witness: EndingRoomParticipant,
+    branch_rows: list[dict[str, Any]],
+    language: str,
+) -> str:
+    evidence_hook = _roundtable_branch_hook(branch_card, language=language)
+    witness_evidence = _build_participant_followup_evidence(
+        witness,
+        branch_rows=branch_rows,
+        evidence_hook=evidence_hook,
+    )
+    quote = str(witness_evidence.get("latest_quote") or "").strip()
+    latest_round = int(witness_evidence.get("latest_round") or 0)
+    role_hint = str((witness.persona_snapshot_json or {}).get("agent_role") or "").strip()
+    bio_hint = str((witness.persona_snapshot_json or {}).get("bio_short") or "").strip()
+    branch_title = str((witness.persona_snapshot_json or {}).get("witness_branch_title") or branch_card.get("title") or "").strip()
+    if language == "zh":
+        quote_clause = f"我在 R{latest_round} 当时说过「{quote}」。" if quote and latest_round > 0 else ""
+        return (
+            f"{witness.display_name}：证人只补这一段。"
+            f"{quote_clause}"
+            f"{f'{role_hint}，' if role_hint else ''}{bio_hint or '我只把这条线自己留下的证据补给圆桌。'}"
+            f"在《{branch_title}》里，真正先失手的是「{evidence_hook}」这一下；我只替这条线把它讲实，不替全桌下结论。"
+        )
+    quote_clause = f"In R{latest_round} I said '{quote}'. " if quote and latest_round > 0 else ""
+    return (
+        f"{witness.display_name}: this witness note only covers one hinge. "
+        f"{quote_clause}"
+        f"{f'{role_hint}. ' if role_hint else ''}{bio_hint or 'I am only filling in the evidence this branch actually left behind.'} "
+        f"Inside {branch_title}, the first real slip was '{evidence_hook}'; I am here to make that concrete, not to summarize the whole table."
+    )
+
+
 def _load_branch_rows(
     session: Session,
     branch_id: str,
@@ -705,6 +787,65 @@ def _roundtable_representative_def(
     }
 
 
+def _roundtable_witness_def(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch: Branch,
+    selected_branch_ids: list[str],
+    selected_agent_id: str,
+    selected_representative_by_branch: dict[str, str],
+    language: str,
+) -> dict[str, Any]:
+    branch_agents = _visible_branch_agents(
+        session,
+        scenario_id,
+        branch.id,
+        language=language,
+    )
+    branch_agents_by_id = {
+        str(agent["source_agent_id"]): agent
+        for agent in branch_agents
+        if agent.get("source_agent_id")
+    }
+    speaker = branch_agents_by_id.get(selected_agent_id)
+    if speaker is None:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+            "selected_witness must belong to the target worldline roster",
+        )
+    if selected_representative_by_branch.get(branch.id) == selected_agent_id:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+            "selected_witness must be different from the seated representative on the same worldline",
+        )
+    return {
+        "role_slot": EndingRoomRoleSlot.CRITIC.value,
+        "display_name": speaker["display_name"],
+        "source_branch_id": branch.id,
+        "source_agent_id": str(speaker["source_agent_id"]),
+        "persona_snapshot_json": {
+            "agent_role": speaker.get("agent_role") or "",
+            "agent_persona": speaker.get("agent_persona") or "",
+            "bio_short": speaker.get("bio_short"),
+            "impact_score": speaker.get("impact_score"),
+            "turn_count": speaker.get("turn_count"),
+            "key_moment_hits": speaker.get("key_moment_hits"),
+            "last_round_spoken": speaker.get("last_round_spoken"),
+            "selection_reason": "expert_witness",
+            "fallback_cast": speaker.get("fallback_cast", False),
+            "tier": speaker.get("tier"),
+            "witness_branch_title": branch.title,
+        },
+        "visibility_scope_json": {
+            "fulltext_branch_ids": [branch.id],
+            "summary_branch_ids": [item for item in selected_branch_ids if item != branch.id],
+        },
+    }
+
+
 def _participant_defs(
     session: Session,
     *,
@@ -714,6 +855,7 @@ def _participant_defs(
     selected_branch_ids: list[str],
     selected_agent_ids: list[str],
     selected_representatives: list[dict[str, str]],
+    selected_witness: dict[str, str] | None,
     language: str,
 ) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
@@ -733,6 +875,25 @@ def _participant_defs(
                     branch=branch,
                     selected_branch_ids=selected_branch_ids,
                     selected_agent_id=selected_representative_by_branch.get(branch_id),
+                    language=language,
+                )
+            )
+        if selected_witness is not None:
+            witness_branch = branch_map.get(selected_witness["branch_id"])
+            if witness_branch is None:
+                raise EndingRoomServiceError(
+                    422,
+                    "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+                    "selected_witness must target a selected worldline",
+                )
+            participants.append(
+                _roundtable_witness_def(
+                    session,
+                    scenario_id=scenario.id,
+                    branch=witness_branch,
+                    selected_branch_ids=selected_branch_ids,
+                    selected_agent_id=selected_witness["agent_id"],
+                    selected_representative_by_branch=selected_representative_by_branch,
                     language=language,
                 )
             )
@@ -930,6 +1091,7 @@ def _participant_set_hash(
     selected_branch_ids: list[str],
     selected_agent_ids: list[str],
     selected_representatives: list[dict[str, str]],
+    selected_witness: dict[str, str] | None,
     language: str,
     participant_defs: list[dict[str, Any]],
 ) -> str:
@@ -940,6 +1102,7 @@ def _participant_set_hash(
             "selected_branch_ids": selected_branch_ids,
             "selected_agent_ids": selected_agent_ids,
             "selected_representatives": selected_representatives,
+            "selected_witness": selected_witness,
             "language": language,
             "participants": [
                 {
@@ -1000,6 +1163,7 @@ def create_ending_room(
     selected_branch_ids: list[str],
     selected_agent_ids: list[str] | None = None,
     selected_representatives: list[dict[str, Any]] | None = None,
+    selected_witness: dict[str, Any] | None = None,
     language: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
@@ -1011,6 +1175,7 @@ def create_ending_room(
     normalized_branch_ids = _normalize_branch_ids(selected_branch_ids)
     normalized_agent_ids = _normalize_branch_ids(selected_agent_ids or [])
     normalized_representatives = _normalize_selected_representatives(selected_representatives)
+    normalized_witness = _normalize_selected_witness(selected_witness)
     if not normalized_branch_ids:
         raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")
 
@@ -1035,6 +1200,12 @@ def create_ending_room(
                 422,
                 "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
                 "worldline_roundtable must use selected_representatives instead of selected_agent_ids",
+            )
+        if normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_witness is not None:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+                "selected_witness is only supported for worldline roundtables",
             )
         if normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_representatives:
             raise EndingRoomServiceError(
@@ -1079,6 +1250,12 @@ def create_ending_room(
                 normalized_representatives,
                 normalized_branch_ids,
             )
+        if normalized_witness is not None and normalized_witness["branch_id"] not in normalized_branch_ids:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_WITNESS_SELECTION_INVALID",
+                "selected_witness must target selected branches",
+            )
 
         resolved_language = _detect_language(scenario.question, language)
         participant_defs = _participant_defs(
@@ -1089,6 +1266,7 @@ def create_ending_room(
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
             selected_representatives=normalized_representatives,
+            selected_witness=normalized_witness,
             language=resolved_language,
         )
         participant_hash = _participant_set_hash(
@@ -1097,6 +1275,7 @@ def create_ending_room(
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
             selected_representatives=normalized_representatives,
+            selected_witness=normalized_witness,
             language=resolved_language,
             participant_defs=participant_defs,
         )
@@ -1171,6 +1350,7 @@ def create_ending_room(
                 "memory_partition_id": _room_memory_partition_id(room.id),
                 "selected_agent_ids": normalized_agent_ids,
                 "selected_representatives": normalized_representatives,
+                "selected_witness": normalized_witness,
             }
             session.add(room)
             _ensure_default_thread(session, room)
@@ -1589,18 +1769,40 @@ def _build_followup_reply_content(
 ) -> str:
     target_label = response_participant.display_name
     addressed_label = " / ".join(participant.display_name for participant in addressed_participants)
+    addressed_label_zh = addressed_label or "被点名角色"
+    addressed_label_zh_roundtable = addressed_label or "被点名代表"
+    addressed_label_en = addressed_label or "the addressed speaker"
+    addressed_label_en_roundtable = addressed_label or "the addressed representative"
     is_archivist = response_participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+    variant_seed = "|".join(
+        [
+            room.id,
+            response_participant.id,
+            interaction_mode.value,
+            str(response_index),
+            sanitize_untrusted_text(user_content, max_chars=96),
+        ]
+    )
     role_hint = str(participant_evidence.get("role_hint") or "").strip()
     bio_hint = str(participant_evidence.get("bio_hint") or "").strip()
     evidence_hint = str(participant_evidence.get("evidence_hook") or room.title).strip()
     latest_quote = str(participant_evidence.get("latest_quote") or "").strip()
     latest_round = int(participant_evidence.get("latest_round") or 0)
     angle_label = _followup_angle_label(role_hint, language=room.language)
+    profile_focus_hint = _oracle_profile_focus_hint(room)
     if room.language == "zh":
         if thread.mode == EndingRoomThreadMode.ROOM:
-            focus = "我只顺着这间会客厅已经摆开的线索回答，不替别处补词。"
+            focus = _stable_oracle_choice(variant_seed + ":focus", [
+                "我只顺着这间会客厅已经摆开的线索回答，不替别处补词。",
+                "这次我只接这间会客厅里已经摆出来的证据，不往别处借词。",
+                "我就沿着这张桌上的线索往下讲，不替别处补旁枝。",
+            ])
         else:
-            focus = "我只沿着这条追问继续往下说，不把别处的声音混进来。"
+            focus = _stable_oracle_choice(variant_seed + ":focus", [
+                "我只沿着这条追问继续往下说，不把别处的声音混进来。",
+                "这次只顺着当前追问往下掰，不把别处的杂音拉进来。",
+                "我就按这条追问继续说，不把旁线的声音掺进来。",
+            ])
         quote_clause = (
             f"我在 R{latest_round} 当时说过「{latest_quote}」。"
             if latest_quote and latest_round > 0
@@ -1616,39 +1818,66 @@ def _build_followup_reply_content(
                 return (
                     f"{target_label}：这轮我不替所有人抢结论。"
                     f"{addressed_label or '当前阵容'}各守一条线，我只把焦点锁在「{evidence_hint}」上。{focus}"
-                )
-            opener = "我先补一句" if response_index == 0 else "我再接一层"
+                    )
+            opener = _stable_oracle_choice(variant_seed + ":relay", [
+                "我先补一句",
+                "我先接这一角",
+                "我先把这一层讲清",
+            ]) if response_index == 0 else _stable_oracle_choice(variant_seed + ":relay", [
+                "我再接一层",
+                "我补另一面",
+                "我把另一扣也补上",
+            ])
             role_prefix = f"{role_hint}。" if role_hint else ""
             stance_prefix = f"{bio_hint} " if bio_hint else ""
             return (
                 f"{target_label}：{opener}{role_prefix}"
                 f"{stance_prefix}{quote_clause}"
                 f"所以这轮我只把 {angle_label} 讲具体，不把责任抹平成抽象命运。{focus}"
+                f"{f'别把{profile_focus_hint}讲成空话。' if profile_focus_hint else ''}"
             )
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
             if is_archivist:
                 if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
                     return (
-                        f"{target_label}：这轮先只听 {addressed_label or '被点名代表'} 把那一手讲透。"
+                        f"{target_label}：这轮先只听 {addressed_label_zh_roundtable} 把那一手讲透。"
                         "我只补两件事：这一步为什么会把后面钉死，以及改它要付什么代价。"
                     )
+                archivist_hotseat_open = _stable_oracle_choice(
+                    variant_seed + ":arch-hotseat",
+                    [
+                        f"这轮热座先听 {addressed_label_zh} 把自己的判断说透。",
+                        f"这次先让 {addressed_label_zh} 把那一步讲透，我只补后果。",
+                        f"这轮先别抢话，先听 {addressed_label_zh} 把那一手掰开。",
+                    ],
+                )
                 return (
-                    f"{target_label}：这轮热座先听 {addressed_label or '被点名角色'} 把自己的判断说透。"
+                    f"{target_label}：{archivist_hotseat_open}"
                     f"我只补两件事：那一步为什么会锁死后续，以及改它要付什么代价。{focus}"
+                    f"{f'重点别离开{profile_focus_hint}。' if profile_focus_hint else ''}"
                 )
             persona_prefix = f"{bio_hint} " if bio_hint else ""
             role_prefix = f"{role_hint}。" if role_hint else ""
             if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
                 return (
-                    f"{target_label}：你就盯着这一步问，那我也不绕。{role_prefix}"
+                    f"{target_label}：{_stable_oracle_choice(variant_seed + ':hotseat-open', [
+                        '你就盯着这一步问，那我也不绕。',
+                        '你问到这一下，我就直说。',
+                        '既然你盯的是这一手，我就不兜圈子。'
+                    ])}{role_prefix}"
                     f"{persona_prefix}{quote_clause}"
                     f"真要把关键一手往后压半轮，先坏的不是结局名义上的输赢，而是{angle_label}这根线先松；它一松，后面的代价会自己滚大。"
                 )
             return (
-                f"{target_label}：你点到的就是这一下。{role_prefix}"
+                f"{target_label}：{_stable_oracle_choice(variant_seed + ':hotseat-open', [
+                    '你点的就是最先松掉的那一扣。',
+                    '真要追这条责，就得从这一下说起。',
+                    '你问到的正是这一步。'
+                ])}{role_prefix}"
                 f"{persona_prefix}{quote_clause}"
                 f"如果只改一手，我会先把「{evidence_hint}」前的判断慢半拍，先把 {angle_label} 重新对齐；这样能压住失控，但短期一定更乱。"
                 f"{focus}"
+                f"{f'这一下真正牵着的是{profile_focus_hint}。' if profile_focus_hint else ''}"
             )
         if is_archivist:
             if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1657,8 +1886,13 @@ def _build_followup_reply_content(
                     f"这一问我先只钉住「{evidence_hint}」这道分叉，再把话交给最该负责的代表。"
                 )
             return (
-                f"{target_label}：我先替你筛掉噪声。"
+                f"{target_label}：{_stable_oracle_choice(variant_seed + ':arch-route', [
+                    '我先把噪声压下去。',
+                    '我先把这问钉回真正的分叉点。',
+                    '先别让旁枝把问题带偏。'
+                ])}"
                 f"这一问先压回「{evidence_hint}」，再只点当前世界线里最相关的 1-2 位参与者回答。{focus}"
+                f"{f'别把{profile_focus_hint}说成空词。' if profile_focus_hint else ''}"
             )
         if addressed_label:
             if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1680,9 +1914,17 @@ def _build_followup_reply_content(
             f"围绕「{user_content}」，我先把「{evidence_hint}」这处转折说清，再把代价讲明白。{focus}"
         )
     if thread.mode == EndingRoomThreadMode.ROOM:
-        focus = "I am staying with the evidence already on this chamber table, not borrowing from elsewhere."
+        focus = _stable_oracle_choice(variant_seed + ":focus-en", [
+            "I am staying with the evidence already on this chamber table, not borrowing from elsewhere.",
+            "I am only working with what is already on this chamber table, not importing another branch.",
+            "I will keep this answer on the evidence already in front of this chamber, not on some other line.",
+        ])
     else:
-        focus = "I am staying on this follow-up thread and not blending in voices from elsewhere."
+        focus = _stable_oracle_choice(variant_seed + ":focus-en", [
+            "I am staying on this follow-up thread and not blending in voices from elsewhere.",
+            "I am keeping this answer inside the active follow-up thread, not pulling in stray voices.",
+            "I will stay with this thread only and keep the side-noise out of it.",
+        ])
     quote_clause = (
         f"In R{latest_round} I said '{latest_quote}'."
         if latest_quote and latest_round > 0
@@ -1699,34 +1941,61 @@ def _build_followup_reply_content(
                 f"{target_label}: this pass is about division of labor, not instant consensus. "
                 f"{addressed_label or 'The current table'} each hold one strand while I keep the hinge on '{evidence_hint}'. {focus}"
             )
-        opener = "I will take the first angle" if response_index == 0 else "Let me add one more angle"
+        opener = _stable_oracle_choice(variant_seed + ":relay-en", [
+            "I will take the first angle",
+            "Let me take the first cut",
+            "I will open from my side of it",
+        ]) if response_index == 0 else _stable_oracle_choice(variant_seed + ":relay-en", [
+            "Let me add another angle",
+            "I will pick up the next edge",
+            "Let me layer in the other side",
+        ])
         role_prefix = f"{role_hint}. " if role_hint else ""
         stance_prefix = f"{bio_hint} " if bio_hint else ""
         return (
             f"{target_label}: {opener} {role_prefix}{stance_prefix}{quote_clause} "
             f"In this round I am only covering {angle_label}, not dissolving into generic commentary. {focus}"
+            f"{f' Keep {profile_focus_hint} concrete.' if profile_focus_hint else ''}"
         )
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
         if is_archivist:
             if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
                 return (
-                    f"{target_label}: let {addressed_label or 'the addressed representative'} answer that move cleanly first. "
+                    f"{target_label}: let {addressed_label_en_roundtable} answer that move cleanly first. "
                     "I am only here to pin the consequence and the cost after that answer lands."
                 )
+            archivist_hotseat_open = _stable_oracle_choice(
+                variant_seed + ":arch-hotseat-en",
+                [
+                    f"the hotseat answer comes first from {addressed_label_en}.",
+                    f"let {addressed_label_en} take the hinge first; I will only close the cost.",
+                    f"we start with {addressed_label_en} on the exact move, then I tighten the tradeoff.",
+                ],
+            )
             return (
-                f"{target_label}: the hotseat answer comes first from {addressed_label or 'the addressed speaker'}. "
+                f"{target_label}: {archivist_hotseat_open} "
                 f"I only collapse the tradeoff after that answer lands. {focus}"
+                f"{f' Keep {profile_focus_hint} concrete.' if profile_focus_hint else ''}"
             )
         persona_prefix = f"{bio_hint} " if bio_hint else ""
         role_prefix = f"{role_hint}. " if role_hint else ""
         if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
             return (
-                f"{target_label}: you are asking about the exact move, so I will stay on it. {role_prefix}{persona_prefix}{quote_clause} "
+                f"{target_label}: {_stable_oracle_choice(variant_seed + ':hotseat-open-en', [
+                    'you are asking about the exact move, so I will stay on it.',
+                    'you pinned the hinge, so I will answer from the hinge.',
+                    'if we are staying on that move, then I will answer it head-on.'
+                ])} {role_prefix}{persona_prefix}{quote_clause} "
                 f"If that hinge slips half a beat later, {angle_label} loosens first and the rest of this branch pays for it."
             )
         return (
-            f"{target_label}: you pointed at the exact hinge. {role_prefix}{persona_prefix}{quote_clause} "
+            f"{target_label}: {_stable_oracle_choice(variant_seed + ':hotseat-open-en', [
+                'you pointed at the exact hinge.',
+                'that is the move you have to put under the lamp.',
+                'if you want the first real miss, it starts here.'
+            ])} {role_prefix}{persona_prefix}{quote_clause} "
             f"If I only get one correction, I slow down the move right before '{evidence_hint}' and realign {angle_label}; it buys control at the cost of tempo. {focus}"
+            f"{f' That is where {profile_focus_hint} gets tested first.' if profile_focus_hint else ''}"
         )
     if is_archivist:
         if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1735,8 +2004,13 @@ def _build_followup_reply_content(
                 f"I am pinning this question to '{evidence_hint}' first, then handing it to the representative who owns that damage."
             )
         return (
-            f"{target_label}: I will route from the current room memory first. "
+            f"{target_label}: {_stable_oracle_choice(variant_seed + ':arch-route-en', [
+                'I will pin the hinge before I route the answer.',
+                'Let me force the question back onto the real hinge first.',
+                'First I narrow the hinge, then I hand the floor to the right voice.'
+            ])} "
             f"The question stays pinned to '{evidence_hint}', then I hand it only to the most relevant current-worldline speakers. {focus}"
+            f"{f' Keep {profile_focus_hint} concrete.' if profile_focus_hint else ''}"
         )
     if addressed_label:
         if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1788,11 +2062,97 @@ def _oracle_speaker_brief(participant: EndingRoomParticipant) -> str:
     return ", ".join(pieces)
 
 
+def _stable_oracle_choice(seed: str, options: list[str]) -> str:
+    if not options:
+        return ""
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    return options[digest[0] % len(options)]
+
+
+def _oracle_recent_lines_digest(recent_lines: list[str] | None, *, limit: int = 4) -> str:
+    cleaned = [
+        sanitize_untrusted_text(line, max_chars=180)
+        for line in (recent_lines or [])
+        if str(line or "").strip()
+    ]
+    if not cleaned:
+        return ""
+    window = cleaned[-limit:]
+    return "\n".join(f"- {line}" for line in window)
+
+
+def _oracle_profile_id(room: EndingRoom) -> str:
+    question = ""
+    scene_theme = ""
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, room.scenario_id)
+        if scenario is not None:
+            question = str(scenario.question or "")
+            scene_theme = str(getattr(scenario, "scene_theme", "") or "")
+    profile_id = infer_debate_profile(question)
+    if profile_id != "generic":
+        return profile_id
+    scene_theme_lower = scene_theme.lower()
+    for candidate in (
+        "law",
+        "governance",
+        "war",
+        "empire",
+        "industry",
+        "trade",
+        "faith",
+        "ecology",
+        "frontier",
+        "mythic",
+        "survival",
+    ):
+        if candidate in scene_theme_lower:
+            return candidate
+    return "generic"
+
+
+def _oracle_profile_scene_brief(room: EndingRoom) -> str:
+    profile_id = _oracle_profile_id(room)
+    style = get_debate_profile_style(room.language, profile_id)
+    if room.language == "zh":
+        scene_labels = {
+            "law": "法政",
+            "governance": "治理",
+            "war": "战争",
+            "empire": "帝国",
+            "industry": "工业",
+            "trade": "贸易",
+            "faith": "信仰",
+            "ecology": "生态",
+            "frontier": "边疆",
+            "mythic": "神话",
+            "survival": "生存",
+            "generic": "通用",
+        }
+        return (
+            f"profile={profile_id}({scene_labels.get(profile_id, '通用')})\n"
+            f"lexicon_focus={style.get('pressure') or style.get('pro_case') or ''}\n"
+            f"judge_focus={style.get('judge_focus') or ''}"
+        )
+    return (
+        f"profile={profile_id}\n"
+        f"lexicon_focus={style.get('pressure') or style.get('pro_case') or ''}\n"
+        f"judge_focus={style.get('judge_focus') or ''}"
+    )
+
+
+def _oracle_profile_focus_hint(room: EndingRoom) -> str:
+    profile_id = _oracle_profile_id(room)
+    style = get_debate_profile_style(room.language, profile_id)
+    return str(style.get("judge_focus") or style.get("pressure") or "").strip()
+
+
 def _oracle_context_digest(room: EndingRoom, *, participant: EndingRoomParticipant, user_content: str | None = None) -> str:
     lines = [
         f"room_type={room.room_type.value}",
         f"room_title={room.title}",
         f"language={room.language}",
+        _oracle_profile_scene_brief(room),
         f"speaker={_oracle_speaker_brief(participant)}",
         f"scope={_oracle_scope_notice(room)}",
     ]
@@ -1818,6 +2178,7 @@ def _oracle_voice_brief(
     participant: EndingRoomParticipant,
     phase: EndingRoomPhase,
     thread_mode: EndingRoomThreadMode | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
 ) -> str:
     is_archivist = participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1858,6 +2219,16 @@ def _oracle_voice_brief(
             "Speak like a strategist making one hard correction under pressure. "
             "Lead with the move, then the reason, then the cost. No fluff."
         )
+    if interaction_mode == EndingRoomInteractionMode.HOTSEAT and not is_archivist:
+        return (
+            "Answer like someone just got called out on the exact hinge. "
+            "Open with the answer, then name the decisive mistake, then the cost if needed. No throat-clearing."
+        )
+    if interaction_mode == EndingRoomInteractionMode.ALL_PRESENT and not is_archivist:
+        return (
+            "Answer like one speaker in a tight relay. "
+            "Only contribute your angle; do not summarize for the whole room or echo the previous speaker's opener."
+        )
     if is_archivist and thread_mode == EndingRoomThreadMode.FOLLOWUP:
         return (
             "Speak like a moderator pinning the question to one hinge and one consequence. "
@@ -1870,7 +2241,7 @@ def _oracle_voice_brief(
         )
     return (
         "Speak like a current-worldline participant who still owns the consequences. "
-        "Be concrete, slightly defensive, and causal."
+        "Be concrete, slightly defensive, causal, and use domain-specific nouns instead of generic abstractions."
     )
 
 
@@ -1880,11 +2251,15 @@ def _oracle_banned_process_phrases(language: str) -> str:
             "- Do not repeat phrases like “我只顺着…回答 / 我只沿着…继续 / 我会继续沿着…这根线说下去 / 我先替你筛掉噪声”\n"
             "- Do not literally restate scope or room permissions unless the user explicitly asks about scope\n"
             "- Do not use the room title as if it were the actual hinge when a more concrete hinge already exists\n"
+            "- Avoid stock openings like “先失手的，不是终局… / 你点到的就是这一下… / 这轮热座先听…” unless the anchor copy truly requires them\n"
+            "- Avoid repeating the same sentence rhythm or first clause used by the immediately previous speaker\n"
         )
     return (
         "- Do not repeat phrases like 'I am staying with...', 'I will stay on...', 'I will route from...', or 'let me filter the noise'\n"
         "- Do not literally restate scope or permissions unless the user explicitly asks about them\n"
         "- Do not treat the room title as the hinge when a more concrete hinge already exists\n"
+        "- Avoid stock openings like 'the first miss was not the ending...' or 'you pointed to the exact hinge...' unless the anchor copy truly requires them\n"
+        "- Avoid repeating the same sentence rhythm or first clause used by the immediately previous speaker\n"
     )
 
 
@@ -1932,12 +2307,31 @@ def _build_oracle_rewrite_prompt(
     anchor_copy: str,
     user_content: str | None = None,
     thread_mode: EndingRoomThreadMode | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+    recent_lines: list[str] | None = None,
+    output_json: bool = True,
 ) -> str:
     task_line = (
         "Rewrite this SwarmOracle Oracle Chambers line so it feels like a sharp in-world voice instead of a template."
         if user_content is None
         else "Rewrite this Oracle Chambers follow-up reply so it sounds grounded, direct, and in-character."
     )
+    structural_note = ""
+    if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+        structural_note = (
+            "For hotseat follow-up, answer the user's question in the first sentence. "
+            "Then pin one hinge and one cost. Do not spend the first sentence on self-introduction."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
+        structural_note = (
+            "For all-present follow-up, this speaker should add only one distinct angle. "
+            "Do not summarize the room or echo the previous speaker's cadence."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
+        structural_note = (
+            "For archivist-route follow-up, the Archivist should frame the hinge and route cleanly; "
+            "other speakers should answer the hinge directly instead of restating the workflow."
+        )
     phase_note = ""
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.OPENING:
         phase_note = (
@@ -1952,24 +2346,29 @@ def _build_oracle_rewrite_prompt(
         )
     output_hint = (
         "Keep the same language as the anchor copy. Output strict JSON only: {\"content\":\"...\"}"
+        if output_json
+        else "Keep the same language as the anchor copy. Output plain text only with no JSON, bullets, or labels."
     )
     return (
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         "You are a writing polisher for SwarmOracle Oracle Chambers.\n"
         f"{task_line}\n"
-        f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode)}\n"
+        f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"
         "Hard rules:\n"
         "- Preserve the exact factual scope and conclusion of the anchor copy\n"
         "- Do not invent facts, branches, quotes, or motives that are not already implied\n"
         "- Sound like the speaker, not like a customer-support assistant or system prompt\n"
         "- Prefer concrete, playable phrasing over abstract summaries\n"
+        "- Use scene-appropriate nouns and pressure points when natural; do not collapse everything into generic 'situation / outcome / consequence' wording\n"
         "- Keep it compact: one short paragraph, no bullets\n"
         "- Respect the scope notice exactly, but keep it implicit unless the user explicitly asks about boundaries\n"
         f"{_oracle_banned_process_phrases(room.language)}"
+        f"{structural_note}\n"
         f"{phase_note}\n"
         f"{output_hint}\n\n"
         f"{format_untrusted_text_block('Context', _oracle_context_digest(room, participant=participant, user_content=user_content), max_chars=1600)}\n\n"
         f"{format_untrusted_text_block('Anchor Copy', anchor_copy, max_chars=1200)}\n\n"
+        f"{format_untrusted_text_block('Recent Lines To Avoid Mimicking', _oracle_recent_lines_digest(recent_lines), max_chars=1200) if recent_lines else ''}\n"
         f"phase={phase.value}\n"
         f"thread_mode={(thread_mode.value if thread_mode is not None else 'room')}\n"
         f"scope_notice={_oracle_scope_notice(room, thread_mode=thread_mode)}\n"
@@ -1984,6 +2383,8 @@ async def _maybe_rewrite_oracle_copy(
     anchor_copy: str,
     user_content: str | None = None,
     thread_mode: EndingRoomThreadMode | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+    recent_lines: list[str] | None = None,
     purpose: str,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
@@ -1995,6 +2396,9 @@ async def _maybe_rewrite_oracle_copy(
         anchor_copy=anchor_copy,
         user_content=user_content,
         thread_mode=thread_mode,
+        interaction_mode=interaction_mode,
+        recent_lines=recent_lines,
+        output_json=True,
     )
     try:
         with llm_request_scope(quota_key=None, purpose=purpose):
@@ -2019,6 +2423,70 @@ async def _maybe_rewrite_oracle_copy(
     except Exception as exc:
         logger.warning("Oracle Chambers LLM fallback for %s: %s", purpose, exc)
         return anchor_copy
+
+
+async def _oracle_followup_streaming_supported() -> bool:
+    if not settings.ORACLE_CHAMBERS_USE_LLM:
+        return False
+    try:
+        probe = await probe_streaming_support(
+            model=settings.LLM_MODEL_NAME,
+            timeout=_ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.warning("Oracle follow-up stream probe failed: %s", exc)
+        return False
+    supported = bool(probe.get("supported"))
+    if not supported:
+        logger.info(
+            "Oracle follow-up stream fallback engaged: %s",
+            probe.get("reason") or "unsupported",
+        )
+    return supported
+
+
+async def _stream_oracle_copy(
+    *,
+    room: EndingRoom,
+    participant: EndingRoomParticipant,
+    phase: EndingRoomPhase,
+    anchor_copy: str,
+    user_content: str | None = None,
+    thread_mode: EndingRoomThreadMode | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+    recent_lines: list[str] | None = None,
+    purpose: str,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> str:
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=phase,
+        anchor_copy=anchor_copy,
+        user_content=user_content,
+        thread_mode=thread_mode,
+        interaction_mode=interaction_mode,
+        recent_lines=recent_lines,
+        output_json=False,
+    )
+    chunks: list[str] = []
+    with llm_request_scope(quota_key=None, purpose=purpose):
+        async for delta in llm_call_stream(
+            prompt,
+            reasoning_effort="low",
+            temperature=0.55,
+            timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
+        ):
+            if not delta:
+                continue
+            chunks.append(delta)
+            if on_delta is not None:
+                await on_delta(delta)
+    polished = _strip_oracle_scope_boilerplate(
+        "".join(chunks),
+        language=room.language,
+    )
+    return _normalize_oracle_generated_content(polished, fallback=anchor_copy)
 
 
 def _rebuild_room_result(
@@ -2090,6 +2558,10 @@ async def _enhance_room_plan_with_llm(
                 participant=participant,
                 phase=turn["phase"],
                 anchor_copy=turn["content"],
+                recent_lines=[
+                    planned_turns[prev_index]["content"]
+                    for prev_index in range(max(0, index - 2), index)
+                ],
                 purpose=f"oracle_{room.room_type.value}_{turn['phase'].value}",
             )
         )
@@ -2110,7 +2582,7 @@ async def _enhance_room_plan_with_llm(
     return enhanced_turns, _rebuild_room_result(room, participants, enhanced_turns, result)
 
 
-async def _persist_followup_turns(
+def _build_followup_turn_plans(
     session: Session,
     *,
     room: EndingRoom,
@@ -2122,7 +2594,7 @@ async def _persist_followup_turns(
     addressed_agent_ids: list[str],
     question_anchor_ids: list[str],
     interaction_mode: EndingRoomInteractionMode,
-) -> list[EndingRoomTurn]:
+) -> tuple[EndingRoomTurn, list[_OracleFollowupPlan]]:
     branch_rows_by_id: dict[str, list[dict[str, Any]]] = {}
     branch_hooks_by_id: dict[str, str] = {}
     fallback_hook = room.title
@@ -2225,7 +2697,6 @@ async def _persist_followup_turns(
         cited_refs_json={"kind": "user_turn"},
     )
     session.add(user_turn)
-    turns: list[EndingRoomTurn] = [user_turn]
     anchor_payloads = [
         (
             response_participant,
@@ -2243,45 +2714,86 @@ async def _persist_followup_turns(
         )
         for index, response_participant in enumerate(response_participants)
     ]
-    rewritten_contents = await asyncio.gather(
-        *[
-            _maybe_rewrite_oracle_copy(
-                room=room,
-                participant=response_participant,
-                phase=_get_room_phase(room),
-                anchor_copy=anchor_content,
-                user_content=content,
-                thread_mode=thread.mode,
-                purpose=f"oracle_followup_{interaction_mode.value}",
-            )
-            for response_participant, anchor_content in anchor_payloads
-        ]
-    )
-    for index, response_participant in enumerate(response_participants, start=1):
-        response_turn = EndingRoomTurn(
-            room_id=room.id,
-            thread_id=thread.id,
-            sequence=base_sequence + 1 + index,
-            phase=_get_room_phase(room),
-            participant_id=response_participant.id,
-            content=rewritten_contents[index - 1],
-            emotion="measured",
-            source=EndingRoomTurnSource.ASSISTANT_FOLLOWUP,
-            interaction_mode=interaction_mode,
-            memory_partition_id=memory_partition_id,
-            addressed_agent_ids_json=normalized_addressed_refs,
-            question_anchor_ids_json=question_anchor_ids or None,
-            cited_branch_id=response_participant.source_branch_id,
-            cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
-        )
-        session.add(response_turn)
-        turns.append(response_turn)
     room.updated_at = _now()
     thread.updated_at = _now()
     session.add(room)
     session.add(thread)
     session.flush()
-    return turns
+    session.commit()
+    session.refresh(user_turn)
+    plans: list[_OracleFollowupPlan] = []
+    for index, response_participant in enumerate(response_participants, start=1):
+        plans.append(
+            _OracleFollowupPlan(
+                turn_id=_uuid(),
+                room_id=room.id,
+                thread_id=thread.id,
+                sequence=base_sequence + 1 + index,
+                phase=_get_room_phase(room),
+                participant=response_participant,
+                anchor_copy=anchor_payloads[index - 1][1],
+                memory_partition_id=memory_partition_id,
+                interaction_mode=interaction_mode,
+                addressed_refs=normalized_addressed_refs,
+                question_anchor_ids=question_anchor_ids or None,
+                cited_branch_id=response_participant.source_branch_id,
+                cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
+                user_content=content,
+                thread_mode=thread.mode,
+            )
+        )
+    return user_turn, plans
+
+
+def _load_recent_thread_lines(session: Session, thread_id: str, *, limit: int = 4) -> list[str]:
+    turns = session.exec(
+        select(EndingRoomTurn)
+        .where(EndingRoomTurn.thread_id == thread_id)
+        .order_by(EndingRoomTurn.sequence.desc(), EndingRoomTurn.id.desc())
+        .limit(limit)
+    ).all()
+    return [turn.content for turn in reversed(turns) if str(turn.content or "").strip()]
+
+
+def _commit_followup_assistant_turn(
+    plan: _OracleFollowupPlan,
+    *,
+    content: str,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, plan.room_id)
+        thread = session.get(EndingRoomThread, plan.thread_id)
+        if room is None or thread is None:
+            raise EndingRoomServiceError(
+                404,
+                "ENDING_ROOM_THREAD_NOT_FOUND",
+                "Ending room thread not found",
+            )
+        response_turn = EndingRoomTurn(
+            id=plan.turn_id,
+            room_id=plan.room_id,
+            thread_id=plan.thread_id,
+            sequence=plan.sequence,
+            phase=plan.phase,
+            participant_id=plan.participant.id,
+            content=content,
+            emotion="measured",
+            source=EndingRoomTurnSource.ASSISTANT_FOLLOWUP,
+            interaction_mode=plan.interaction_mode,
+            memory_partition_id=plan.memory_partition_id,
+            addressed_agent_ids_json=plan.addressed_refs,
+            question_anchor_ids_json=plan.question_anchor_ids,
+            cited_branch_id=plan.cited_branch_id,
+            cited_refs_json=plan.cited_refs_json,
+        )
+        session.add(response_turn)
+        room.updated_at = _now()
+        thread.updated_at = _now()
+        session.add(room)
+        session.add(thread)
+        session.commit()
+        session.refresh(response_turn)
+        return _serialize_turn(response_turn)
 
 
 async def _append_followup_turns_with_retry(
@@ -2291,6 +2803,7 @@ async def _append_followup_turns_with_retry(
     addressed_agent_ids: list[str],
     question_anchor_ids: list[str],
     interaction_mode: EndingRoomInteractionMode,
+    ws_callback: EndingRoomBroadcast | None = None,
 ) -> list[dict[str, Any]]:
     normalized_content = str(content or "").strip()
     if not normalized_content:
@@ -2307,6 +2820,10 @@ async def _append_followup_turns_with_retry(
         if anchor_id and anchor_id.strip()
     ]
 
+    prepared_user_turn: dict[str, Any] | None = None
+    prepared_plans: list[_OracleFollowupPlan] = []
+    prepared_room: EndingRoom | None = None
+    thread_recent_lines: list[str] = []
     for _attempt in range(3):
         try:
             with Session(get_engine()) as session:
@@ -2329,6 +2846,7 @@ async def _append_followup_turns_with_retry(
                 _ensure_followup_write_allowed(room)
                 _ensure_interaction_mode_allowed(room, interaction_mode)
                 user_participant = _ensure_user_participant(session, room)
+                thread_recent_lines = _load_recent_thread_lines(session, thread.id)
                 addressed_participants = _resolve_addressed_participants(
                     participants,
                     effective_addressed_agent_ids,
@@ -2344,7 +2862,7 @@ async def _append_followup_turns_with_retry(
                     addressed_participants,
                     interaction_mode,
                 )
-                turns = await _persist_followup_turns(
+                user_turn, plans = _build_followup_turn_plans(
                     session,
                     room=room,
                     thread=thread,
@@ -2356,21 +2874,128 @@ async def _append_followup_turns_with_retry(
                     question_anchor_ids=normalized_question_anchor_ids,
                     interaction_mode=interaction_mode,
                 )
-                session.commit()
-                for turn in turns:
-                    session.refresh(turn)
-                return [_serialize_turn(turn) for turn in turns]
+                prepared_user_turn = _serialize_turn(user_turn)
+                prepared_plans = plans
+                prepared_room = room
+                break
         except IntegrityError:
             continue
         except OperationalError:
             await asyncio.sleep(0.05 * (_attempt + 1))
             continue
+    else:
+        raise EndingRoomServiceError(
+            409,
+            "ENDING_ROOM_SEQUENCE_CONFLICT",
+            "Failed to append follow-up turns because the room changed concurrently",
+        )
 
-    raise EndingRoomServiceError(
-        409,
-        "ENDING_ROOM_SEQUENCE_CONFLICT",
-        "Failed to append follow-up turns because the room changed concurrently",
-)
+    assert prepared_user_turn is not None
+    assert prepared_room is not None
+    await _broadcast(prepared_user_turn["room_id"], ws_callback, {
+        "type": "ending_room_turn_commit",
+        "data": prepared_user_turn,
+    })
+    stream_supported = await _oracle_followup_streaming_supported()
+    committed_turns = [prepared_user_turn]
+    recent_lines = [*thread_recent_lines, prepared_user_turn["content"]]
+    for plan in prepared_plans:
+        await _broadcast(
+            plan.room_id,
+            ws_callback,
+            {
+                "type": "ending_room_turn_start",
+                "data": {
+                    "room_id": plan.room_id,
+                    "thread_id": plan.thread_id,
+                    "turn_id": plan.turn_id,
+                    "participant_id": plan.participant.id,
+                    "phase": plan.phase.value,
+                    "sequence": plan.sequence,
+                },
+            },
+        )
+        generated_content = plan.anchor_copy
+        streamed = False
+        if settings.ORACLE_CHAMBERS_USE_LLM and stream_supported:
+            try:
+                chunk_index = 0
+
+                async def _on_delta(delta: str) -> None:
+                    nonlocal chunk_index
+                    if not delta:
+                        return
+                    chunk_index += 1
+                    await _broadcast(
+                        plan.room_id,
+                        ws_callback,
+                        {
+                            "type": "ending_room_turn_delta",
+                            "data": {
+                                "room_id": plan.room_id,
+                                "thread_id": plan.thread_id,
+                                "turn_id": plan.turn_id,
+                                "participant_id": plan.participant.id,
+                                "delta": delta,
+                                "chunk_index": chunk_index,
+                            },
+                        },
+                    )
+
+                generated_content = await _stream_oracle_copy(
+                    room=prepared_room,
+                    participant=plan.participant,
+                    phase=plan.phase,
+                    anchor_copy=plan.anchor_copy,
+                    user_content=plan.user_content,
+                    thread_mode=plan.thread_mode,
+                    interaction_mode=plan.interaction_mode,
+                    recent_lines=recent_lines,
+                    purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
+                    on_delta=_on_delta,
+                )
+                streamed = True
+            except Exception as exc:
+                logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
+        if not streamed:
+            generated_content = await _maybe_rewrite_oracle_copy(
+                room=prepared_room,
+                participant=plan.participant,
+                phase=plan.phase,
+                anchor_copy=plan.anchor_copy,
+                user_content=plan.user_content,
+                thread_mode=plan.thread_mode,
+                interaction_mode=plan.interaction_mode,
+                recent_lines=recent_lines,
+                purpose=f"oracle_followup_{plan.interaction_mode.value}",
+            )
+            for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
+                await _broadcast(
+                    plan.room_id,
+                    ws_callback,
+                    {
+                        "type": "ending_room_turn_delta",
+                        "data": {
+                            "room_id": plan.room_id,
+                            "thread_id": plan.thread_id,
+                            "turn_id": plan.turn_id,
+                            "participant_id": plan.participant.id,
+                            "delta": delta,
+                            "chunk_index": chunk_index,
+                        },
+                    },
+                )
+                await asyncio.sleep(0)
+        committed_turn = _commit_followup_assistant_turn(plan, content=generated_content)
+        committed_turns.append(committed_turn)
+        recent_lines.append(committed_turn["content"])
+        await _broadcast(
+            plan.room_id,
+            ws_callback,
+            {"type": "ending_room_turn_commit", "data": committed_turn},
+        )
+
+    return committed_turns
 
 
 async def append_room_user_turn_async(
@@ -2380,6 +3005,7 @@ async def append_room_user_turn_async(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    ws_callback: EndingRoomBroadcast | None = None,
 ) -> dict[str, Any]:
     with Session(get_engine()) as session:
         room = session.get(EndingRoom, room_id)
@@ -2403,6 +3029,7 @@ async def append_room_user_turn_async(
         addressed_agent_ids=addressed_agent_ids or [],
         question_anchor_ids=question_anchor_ids or [],
         interaction_mode=resolved_mode,
+        ws_callback=ws_callback,
     )
     return {
         "room_id": room_id,
@@ -2438,6 +3065,7 @@ async def append_thread_user_turn_async(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    ws_callback: EndingRoomBroadcast | None = None,
 ) -> dict[str, Any]:
     if interaction_mode is None:
         thread_snapshot = load_ending_room_thread_snapshot(thread_id)
@@ -2450,6 +3078,7 @@ async def append_thread_user_turn_async(
         addressed_agent_ids=addressed_agent_ids or [],
         question_anchor_ids=question_anchor_ids or [],
         interaction_mode=resolved_mode,
+        ws_callback=ws_callback,
     )
     thread_snapshot = load_ending_room_thread_snapshot(thread_id)
     return {
@@ -2701,6 +3330,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             representative["branch"]["branch_id"]: representative["branch"]
             for representative in context["representatives"]
         }
+        witness = next((participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.CRITIC), None)
         planned_turns = [
             {
                 "participant_id": participant.id,
@@ -2717,11 +3347,27 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             for participant in participants
             if participant.role_slot == EndingRoomRoleSlot.REPRESENTATIVE
         ]
+        if witness is not None and witness.source_branch_id is not None:
+          planned_turns.append(
+              {
+                  "participant_id": witness.id,
+                  "phase": EndingRoomPhase.CROSSFIRE,
+                  "content": _build_roundtable_witness_content(
+                      branch_cards_by_id.get(witness.source_branch_id, {}),
+                      witness=witness,
+                      branch_rows=_load_branch_rows(session, witness.source_branch_id, language=room.language),
+                      language=room.language,
+                  ),
+                  "emotion": "measured",
+                  "cited_branch_id": witness.source_branch_id,
+                  "cited_refs_json": {"mode": "witness_fulltext"},
+              }
+          )
         planned_turns.extend(
             [
                 {
                     "participant_id": archivist.id,
-                    "phase": EndingRoomPhase.CROSSFIRE,
+                    "phase": EndingRoomPhase.CLOSING,
                     "content": _build_roundtable_crossfire_content(
                         context["branches"],
                         language=room.language,
@@ -2751,7 +3397,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             "phase_insights": [
                 _phase_insight(room.language, turn["phase"], turn["content"])
                 for turn in planned_turns
-                if turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.VERDICT}
+                if turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT}
             ],
             "supporting_turns": [
                 {
@@ -2765,7 +3411,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                     ),
                     "explanation": turn["content"],
                 }
-                for turn in planned_turns[:3]
+                for turn in planned_turns[: min(4, len(planned_turns))]
             ],
             "scope": {"summary_branch_count": len(context["branches"])},
         }
@@ -3128,6 +3774,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                     "type": "ending_room_turn_start",
                     "data": {
                         "room_id": room_id,
+                        "thread_id": room_thread_id,
                         "turn_id": turn_id,
                         "participant_id": turn_plan["participant_id"],
                         "phase": turn_plan["phase"].value,
@@ -3143,6 +3790,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                         "type": "ending_room_turn_delta",
                         "data": {
                             "room_id": room_id,
+                            "thread_id": room_thread_id,
                             "turn_id": turn_id,
                             "participant_id": turn_plan["participant_id"],
                             "delta": delta,

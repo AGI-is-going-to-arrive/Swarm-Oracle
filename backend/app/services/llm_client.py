@@ -140,6 +140,9 @@ _runtime_guard_table_ensured_keys_lock = threading.Lock()
 _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
+_STREAM_SUPPORT_CACHE_TTL_SECONDS = 300.0
+_stream_support_cache: dict[str, tuple[float, bool, str | None]] = {}
+_stream_support_cache_lock = threading.Lock()
 
 
 @contextmanager
@@ -161,6 +164,12 @@ def _normalize_quota_key(raw: str | None) -> str | None:
 
 def _provider_key(base_url: str | None) -> str:
     return (base_url or settings.LLM_RESPONSES_URL).strip().lower()
+
+
+def _stream_support_cache_key(*, base_url: str | None, model: str | None) -> str:
+    target_url = (base_url or settings.LLM_RESPONSES_URL).strip().lower()
+    target_model = (model or settings.LLM_MODEL_NAME).strip().lower()
+    return f"{target_url}::{target_model}"
 
 
 def is_local_provider_url(base_url: str | None = None) -> bool:
@@ -371,6 +380,70 @@ async def measure_provider_parallelism(
         "tested_parallelism": tested_parallelism,
         "recommended": _estimate_probe_recommendations(estimated_parallelism),
         "failure": failure_reason,
+    }
+
+
+async def probe_streaming_support(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    timeout: float = 8.0,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Probe whether the effective provider/model pair supports SSE streaming.
+
+    The result is cached briefly because Oracle follow-up may call this often.
+    Probe failures are treated as "unsupported" so callers can safely fall back.
+    """
+    effective_model = model or settings.LLM_MODEL_NAME
+    cache_key = _stream_support_cache_key(base_url=base_url, model=effective_model)
+    now = monotonic()
+    if not force_refresh:
+        with _stream_support_cache_lock:
+            cached = _stream_support_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _STREAM_SUPPORT_CACHE_TTL_SECONDS:
+            checked_at, supported, reason = cached
+            return {
+                "status": "ok",
+                "model": effective_model,
+                "supported": supported,
+                "reason": reason,
+                "cached": True,
+                "checked_at": checked_at,
+            }
+
+    supported = False
+    reason: str | None = None
+    try:
+        async for chunk in llm_call_stream(
+            "Reply with exactly OK.",
+            reasoning_effort="low",
+            model=model,
+            timeout=timeout,
+            api_key=api_key,
+            base_url=base_url,
+        ):
+            if chunk.strip():
+                supported = True
+                break
+        if not supported:
+            reason = "No stream chunks received"
+    except LLMError as exc:
+        reason = _sanitize_error(str(exc))
+    except Exception as exc:  # pragma: no cover - defensive probe fallback
+        reason = _sanitize_error(str(exc))
+
+    checked_at = monotonic()
+    with _stream_support_cache_lock:
+        _stream_support_cache[cache_key] = (checked_at, supported, reason)
+    return {
+        "status": "ok",
+        "model": effective_model,
+        "supported": supported,
+        "reason": reason,
+        "cached": False,
+        "checked_at": checked_at,
     }
 
 

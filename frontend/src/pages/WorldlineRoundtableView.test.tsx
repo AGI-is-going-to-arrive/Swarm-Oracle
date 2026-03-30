@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -191,14 +191,30 @@ const {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => ({
-      'roundtable.title': 'Worldline Roundtable',
-      'roundtable.entry_cta': 'Start Roundtable',
-      'roundtable.entry_hint': 'Invite one representative from each ending and let the Archivist host the debrief.',
-      'roundtable.loading': 'Preparing the worldline roundtable...',
-      'roundtable.role_archivist': 'Archivist',
-      'common.loading': 'Loading',
-    }[key] ?? key),
+    t: (key: string, options?: Record<string, unknown>) => {
+      if (key === 'roundtable.shortlist_count') {
+        return `${String(options?.count ?? '')} / ${String(options?.max ?? '')} worldlines selected`;
+      }
+      return ({
+        'roundtable.title': 'Worldline Roundtable',
+        'roundtable.entry_cta': 'Start Roundtable',
+        'roundtable.entry_hint': 'Invite one representative from each ending and let the Archivist host the debrief.',
+        'roundtable.selection_mode_representative': 'All representatives',
+        'roundtable.selection_mode_manual_shortlist': 'Manual shortlist',
+        'roundtable.selection_mode_expert_witness': 'Expert witness',
+        'roundtable.shortlist_hint': 'Seat only the worldlines you pick here.',
+        'roundtable.shortlist_toggle_on': 'Seat this worldline',
+        'roundtable.shortlist_toggle_off': 'Leave this worldline out',
+        'roundtable.witness_hint': 'Keep one representative for each worldline, then invite one extra witness.',
+        'roundtable.witness_section': 'Witness stand',
+        'roundtable.witness_selected': 'Current witness',
+        'roundtable.witness_badge': 'Expert witness',
+        'roundtable.role_witness': 'Expert witness',
+        'roundtable.loading': 'Preparing the worldline roundtable...',
+        'roundtable.role_archivist': 'Archivist',
+        'common.loading': 'Loading',
+      }[key] ?? key);
+    },
     i18n: {
       language: 'en',
       changeLanguage: vi.fn(async () => {}),
@@ -379,8 +395,134 @@ describe('WorldlineRoundtableView', () => {
         { branchId: 'branch-a', agentId: 'agent-a' },
         { branchId: 'branch-b', agentId: 'agent-b' },
       ],
+      selectedWitness: null,
     });
     expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+  });
+
+  it('lets manual_shortlist launch only the selected worldlines', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked three ways?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-b', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+        { id: 'msg-c', branch: 'branch-c', agent: 'Representative C', agent_id: 'agent-c', message: 'C', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked three ways?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.5, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.3, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-c', title: 'Archive C', probability: 0.2, status: 'COMPLETED', story: 'Story C', insight: 'Insight C', key_moments: ['C'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-c', name: 'Representative C', role: 'Speaker', persona: 'Keeps C loud.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Manual shortlist' }));
+    expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: 'Seat this worldline' })[0]);
+    expect(screen.getByText('3 / 3 worldlines selected')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: 'Leave this worldline out' })[2]);
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+      roomType: 'worldline_roundtable',
+      selectedBranchIds: ['branch-a', 'branch-b'],
+      language: 'en',
+      selectedRepresentatives: [
+        { branchId: 'branch-a', agentId: 'agent-a' },
+        { branchId: 'branch-b', agentId: 'agent-b' },
+      ],
+      selectedWitness: null,
+    });
+  });
+
+  it('launches expert_witness with an extra witness selection', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked with one witness?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-a2', branch: 'branch-a', agent: 'Witness A', agent_id: 'agent-c', message: 'A witness', emotion: 'focused', round: 2 },
+        { id: 'msg-b', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked with one witness?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.6, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.4, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-c', name: 'Witness A', role: 'Quartermaster', persona: 'Tracks the missing grain.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expert witness' }));
+    expect(screen.getByText('Witness stand')).toBeInTheDocument();
+    const witnessStand = screen.getByText('Witness stand').closest('section');
+    expect(witnessStand).not.toBeNull();
+    await user.click(within(witnessStand as HTMLElement).getByRole('button', { name: /Witness A/ }));
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+      roomType: 'worldline_roundtable',
+      selectedBranchIds: ['branch-a', 'branch-b'],
+      language: 'en',
+      selectedRepresentatives: [
+        { branchId: 'branch-a', agentId: 'agent-a' },
+        { branchId: 'branch-b', agentId: 'agent-b' },
+      ],
+      selectedWitness: { branchId: 'branch-a', agentId: 'agent-c' },
+    });
   });
 
   it('allows reseating representatives after a live table is already open', async () => {
@@ -582,6 +724,7 @@ describe('WorldlineRoundtableView', () => {
         { branchId: 'branch-a', agentId: 'agent-c' },
         { branchId: 'branch-b', agentId: 'agent-b' },
       ],
+      selectedWitness: null,
     });
     expect(loadRoomMock).toHaveBeenCalledWith('room-1');
   });
@@ -934,6 +1077,7 @@ describe('WorldlineRoundtableView', () => {
         { branchId: 'branch-a', agentId: 'agent-a' },
         { branchId: 'branch-b', agentId: 'agent-b' },
       ],
+      selectedWitness: null,
     });
     expect(loadRoomMock).toHaveBeenCalledWith('room-1');
   });
