@@ -52,9 +52,10 @@ class CreateEndingRoomRequest(BaseModel):
     selected_agent_ids: list[str] = Field(default_factory=list)
     selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list)
     selected_witness: SelectedRepresentativeRequest | None = None
+    selection_recipe: str | None = None
     language: str | None = None
 
-    @field_validator("anchor_branch_id", "language")
+    @field_validator("anchor_branch_id", "language", "selection_recipe")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -92,6 +93,15 @@ class CreateEndingRoomRequest(BaseModel):
     def validate_shape(self) -> "CreateEndingRoomRequest":
         if self.language is not None and self.language not in {"zh", "en"}:
             raise ValueError("language must be zh or en")
+        if self.selection_recipe is not None and self.selection_recipe not in {
+            "representative",
+            "manual_shortlist",
+            "expert_witness",
+            "trait_mix",
+            "fault_line_first",
+            "witness_augmented",
+        }:
+            raise ValueError("selection_recipe is not supported")
         if self.room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY} and self.anchor_branch_id is None:
             raise ValueError("anchor_branch_id is required for single-branch rooms")
         if self.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_agent_ids:
@@ -172,6 +182,7 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
                 for item in req.selected_representatives
             ],
             selected_witness=req.selected_witness.model_dump(mode="python") if req.selected_witness is not None else None,
+            selection_recipe=req.selection_recipe,
             language=req.language,
         )
     except EndingRoomServiceError as exc:

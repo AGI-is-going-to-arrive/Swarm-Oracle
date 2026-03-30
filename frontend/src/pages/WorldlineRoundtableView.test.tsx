@@ -4,6 +4,11 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorldlineRoundtableView from './WorldlineRoundtableView';
+import { clearPretextCache } from '../lib/textLayout/pretext';
+import {
+  ORACLE_TEXT_LAYOUT_CONTRACTS,
+  predictTextOverflow,
+} from '../lib/textLayout/textOverflowPredictor';
 
 const {
   getMockLanguage,
@@ -213,11 +218,18 @@ vi.mock('react-i18next', () => ({
         'roundtable.selection_mode_representative': 'All representatives',
         'roundtable.selection_mode_manual_shortlist': 'Manual shortlist',
         'roundtable.selection_mode_expert_witness': 'Expert witness',
+        'roundtable.selection_mode_trait_mix': 'Trait mix',
+        'roundtable.selection_mode_fault_line_first': 'Fault line first',
+        'roundtable.selection_mode_witness_augmented': 'Witness augmented',
         'roundtable.shortlist_hint': 'Seat only the worldlines you pick here.',
+        'roundtable.trait_mix_hint': 'Auto-seat a higher-contrast cast.',
+        'roundtable.fault_line_hint': 'Auto-seat the two most divergent worldlines first.',
         'roundtable.shortlist_toggle_on': 'Seat this worldline',
         'roundtable.shortlist_toggle_off': 'Leave this worldline out',
         'roundtable.witness_hint': 'Keep one representative for each worldline, then invite one extra witness.',
+        'roundtable.witness_augmented_hint': 'Keep the representative seats, then auto-add one extra witness.',
         'roundtable.witness_section': 'Witness stand',
+        'roundtable.witness_augmented_section': 'Augmented witness stand',
         'roundtable.witness_selected': 'Current witness',
         'roundtable.witness_badge': 'Expert witness',
         'roundtable.role_witness': 'Expert witness',
@@ -405,6 +417,7 @@ describe('WorldlineRoundtableView', () => {
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'representative',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -521,6 +534,7 @@ describe('WorldlineRoundtableView', () => {
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'manual_shortlist',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -583,6 +597,190 @@ describe('WorldlineRoundtableView', () => {
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'expert_witness',
+      language: 'en',
+      selectedRepresentatives: [
+        { branchId: 'branch-a', agentId: 'agent-a' },
+        { branchId: 'branch-b', agentId: 'agent-b' },
+      ],
+      selectedWitness: { branchId: 'branch-a', agentId: 'agent-c' },
+    });
+  });
+
+  it('uses trait_mix to auto-pick a more contrasted cast', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked into rival courts and frontier command?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a1', branch: 'branch-a', agent: 'Emperor A', agent_id: 'agent-a1', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-a2', branch: 'branch-a', agent: 'Clerk A', agent_id: 'agent-a2', message: 'A2', emotion: 'focused', round: 2 },
+        { id: 'msg-b1', branch: 'branch-b', agent: 'Marshal B', agent_id: 'agent-b1', message: 'B', emotion: 'focused', round: 1 },
+        { id: 'msg-b2', branch: 'branch-b', agent: 'Priest B', agent_id: 'agent-b2', message: 'Broken vow', emotion: 'focused', round: 2 },
+        { id: 'msg-b3', branch: 'branch-b', agent: 'Priest B', agent_id: 'agent-b2', message: 'Broken vow again', emotion: 'focused', round: 3 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked into rival courts and frontier command?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.55, status: 'COMPLETED', story: 'Story A', insight: 'Court politics split the archive.', key_moments: ['Court panic'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.45, status: 'COMPLETED', story: 'Story B', insight: 'The temple framed the split as a broken vow.', key_moments: ['Broken vow'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a1', name: 'Emperor A', role: 'Emperor', persona: 'Keeps the court intact.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-a2', name: 'Clerk A', role: 'Ledger clerk', persona: 'Tracks every missing seal.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-b1', name: 'Marshal B', role: 'Frontier commander', persona: 'Pushes supply and tempo.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-b2', name: 'Priest B', role: 'Temple priest', persona: 'Frames the branch as a broken vow.', tier: 'CORE', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Trait mix' }));
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+      roomType: 'worldline_roundtable',
+      selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'trait_mix',
+      language: 'en',
+      selectedRepresentatives: [
+        { branchId: 'branch-a', agentId: 'agent-a1' },
+        { branchId: 'branch-b', agentId: 'agent-b2' },
+      ],
+      selectedWitness: null,
+    });
+  });
+
+  it('uses fault_line_first to auto-shortlist the strongest split', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive split across court, frontier, and market pressure?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a', branch: 'branch-a', agent: 'Emperor A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-b', branch: 'branch-b', agent: 'Marshal B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+        { id: 'msg-c', branch: 'branch-c', agent: 'Merchant C', agent_id: 'agent-c', message: 'C', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive split across court, frontier, and market pressure?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Court Line', probability: 0.52, status: 'COMPLETED', story: 'Story A', insight: 'Court legitimacy cracks first.', key_moments: ['Court panic'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Frontier Line', probability: 0.18, status: 'COMPLETED', story: 'Story B', insight: 'Frontier supply and orbit timing snap first.', key_moments: ['Orbit convoy delay'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-c', title: 'Market Line', probability: 0.30, status: 'COMPLETED', story: 'Story C', insight: 'Cash rotation freezes first.', key_moments: ['Cash run'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Emperor A', role: 'Emperor', persona: 'Keeps the court intact.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Marshal B', role: 'Frontier commander', persona: 'Pushes supply and tempo.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-c', name: 'Merchant C', role: 'Market broker', persona: 'Protects foot traffic and cash rotation.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Fault line first' }));
+    expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+      roomType: 'worldline_roundtable',
+      selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'fault_line_first',
+      language: 'en',
+      selectedRepresentatives: [
+        { branchId: 'branch-a', agentId: 'agent-a' },
+        { branchId: 'branch-b', agentId: 'agent-b' },
+      ],
+      selectedWitness: null,
+    });
+  });
+
+  it('uses witness_augmented to auto-attach a witness without manual picking', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked with an extra witness?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a1', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-a2', branch: 'branch-a', agent: 'Witness A', agent_id: 'agent-c', message: 'A witness', emotion: 'focused', round: 2 },
+        { id: 'msg-b1', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked with an extra witness?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.6, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.4, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-c', name: 'Witness A', role: 'Quartermaster', persona: 'Tracks the missing grain.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Witness augmented' }));
+    expect(screen.getByText('Augmented witness stand')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+      roomType: 'worldline_roundtable',
+      selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'witness_augmented',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -786,6 +984,7 @@ describe('WorldlineRoundtableView', () => {
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'representative',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-c' },
@@ -1139,6 +1338,7 @@ describe('WorldlineRoundtableView', () => {
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
+      selectionRecipe: 'representative',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -1147,5 +1347,25 @@ describe('WorldlineRoundtableView', () => {
       selectedWitness: null,
     });
     expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+  });
+});
+
+describe('WorldlineRoundtableView text layout contracts', () => {
+  beforeEach(() => {
+    clearPretextCache();
+  });
+
+  it('keeps the picker hint readable but flags extreme transcript monologues', () => {
+    const pickerPrediction = predictTextOverflow(
+      'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.roundtablePickerHint,
+    );
+    const transcriptPrediction = predictTextOverflow(
+      'Roundtable verdict: this branch kept calling panic strategy, panic strategy, and panic strategy until every cost looked inevitable and every missing witness got folded back into the same generic explanation.',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.roundtableTranscriptBubble,
+    );
+
+    expect(pickerPrediction.overflow).toBe(false);
+    expect(transcriptPrediction.lineCount).toBeGreaterThan(1);
   });
 });

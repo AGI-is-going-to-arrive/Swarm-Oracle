@@ -107,6 +107,38 @@ async function saveScreenshot(page, filePath) {
   });
 }
 
+async function armClipboardCapture(page) {
+  await page.evaluate(() => {
+    const globalWindow = window;
+    globalWindow.__swarmCopiedText = null;
+    const writeText = async (text) => {
+      globalWindow.__swarmCopiedText = text;
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+  });
+}
+
+async function readCapturedClipboard(page) {
+  return page.evaluate(() => window.__swarmCopiedText ?? null);
+}
+
+async function waitForCapturedClipboardUrl(page, label, timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const url = await readCapturedClipboard(page);
+    if (typeof url === "string" && url.includes("roomShare=")) {
+      return url;
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 async function openPicker(page, buttonRegex, index) {
   await page.getByRole("button", { name: buttonRegex }).nth(index).click();
   await page.waitForSelector(".ending-room-picker", { timeout: 10000 });
@@ -239,6 +271,35 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
     JSON.stringify(galleryState, null, 2),
   );
 
+  await armClipboardCapture(page);
+  await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+  const shareReplayUrl = await waitForCapturedClipboardUrl(page, "ending-room copied share permalink");
+  const sharePage = await page.context().newPage();
+  await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
+  const artifactReadonly = await waitFor(
+    sharePage,
+    async () => {
+      const current = await getAutomationState(sharePage);
+      const modalState = current?.page?.controls?.modal_state;
+      if (modalState?.read_only === true && modalState?.can_import_replay === true) {
+        return current;
+      }
+      return null;
+    },
+    "ending-room artifact replay readonly state",
+    20000,
+  );
+  await saveScreenshot(sharePage, path.join(outputDir, "multi-ending-room-replay-artifact.png"));
+  fs.writeFileSync(
+    path.join(outputDir, "multi-ending-room-replay-artifact.json"),
+    JSON.stringify(artifactReadonly, null, 2),
+  );
+  await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
+    hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+  }).last().click();
+  await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
+  const artifactImportedUrl = sharePage.url();
+
   await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
   await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitFor(
@@ -273,6 +334,8 @@ async function runMultiDesktop(context, frontendUrl, outputDir) {
     pickerB,
     oneMoveState: oneMoveState?.page?.controls?.modal_state ?? null,
     galleryState: galleryState?.page?.controls?.modal_state ?? null,
+    artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
+    artifactImportedUrl,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
     importedUrl,
   };

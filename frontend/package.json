@@ -43,6 +43,7 @@
     "e2e:debate": "node scripts/e2e-debate-suite.mjs full"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.3",
     "@xyflow/react": "^12.10.1",
     "dagre": "^0.8.5",
     "gif.js": "^0.2.0",

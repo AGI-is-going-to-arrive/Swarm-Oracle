@@ -10,6 +10,12 @@
   --oracle-aura: oklch(70% 0.1 250 / 0.16);
 }
 
+.oracle-skin--governance {
+  --oracle-accent: oklch(68% 0.12 225);
+  --oracle-accent-soft: oklch(95% 0.03 225 / 0.74);
+  --oracle-aura: oklch(74% 0.08 225 / 0.16);
+}
+
 .oracle-skin--faith {
   --oracle-accent: oklch(72% 0.16 85);
   --oracle-accent-soft: oklch(96% 0.03 85 / 0.74);
@@ -22,7 +28,18 @@
   --oracle-aura: oklch(72% 0.14 35 / 0.16);
 }
 
-.oracle-skin--frontier,
+.oracle-skin--industry {
+  --oracle-accent: oklch(74% 0.13 72);
+  --oracle-accent-soft: oklch(95% 0.03 72 / 0.72);
+  --oracle-aura: oklch(76% 0.1 72 / 0.16);
+}
+
+.oracle-skin--frontier {
+  --oracle-accent: oklch(71% 0.12 190);
+  --oracle-accent-soft: oklch(95% 0.03 190 / 0.72);
+  --oracle-aura: oklch(75% 0.09 190 / 0.16);
+}
+
 .oracle-skin--trade {
   --oracle-accent: oklch(68% 0.14 150);
   --oracle-accent-soft: oklch(95% 0.03 150 / 0.72);
@@ -39,6 +56,18 @@
   --oracle-accent: oklch(66% 0.16 145);
   --oracle-accent-soft: oklch(95% 0.03 145 / 0.72);
   --oracle-aura: oklch(72% 0.12 145 / 0.16);
+}
+
+.oracle-skin--survival {
+  --oracle-accent: oklch(72% 0.14 120);
+  --oracle-accent-soft: oklch(95% 0.03 120 / 0.72);
+  --oracle-aura: oklch(75% 0.1 120 / 0.16);
+}
+
+.oracle-skin--mythic {
+  --oracle-accent: oklch(74% 0.09 285);
+  --oracle-accent-soft: oklch(95% 0.03 285 / 0.72);
+  --oracle-aura: oklch(76% 0.08 285 / 0.16);
 }
 
 .ending-chat-overlay {

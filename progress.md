@@ -258,6 +258,225 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - 首次 `onopen` 后若第一条事件 sequence 已大于 1，不再重复触发一次额外 resync
   - `frontend/src/hooks/useEndingRoomWS.test.tsx`
     - 新增首帧高 sequence 不重复 resync 的回归测试
+
+## 2026-03-30 Pretext P0 / P1 minimal spike
+
+- 已先按当前真值重新对齐：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/pretext_integration_plan.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+- 依赖与参考源：
+  - `frontend/package-lock.json` 已新增 `@chenglou/pretext@^0.0.3`
+  - 为避免重复走在线搜索，已将官方仓库克隆到 `/tmp/pretext`
+- 本轮只做了 P0 / P1 的最小可验证 spike，没有提前动 P2-P5：
+  - 新增 `frontend/src/lib/textLayout/pretext.ts`
+    - 纯函数封装 `prepareText()` / `measureParagraph()` / `clearPretextCache()`
+    - 包含 locale 同步与 wrapper cache
+    - 默认拒绝 `system-ui`，避免踩中官方 README 标记的 macOS 精度风险
+  - 新增 `frontend/src/lib/textLayout/textOverflowPredictor.ts`
+    - 提供 `estimateLineCount()` / `estimateBubbleHeight()` / `predictTextOverflow()`
+    - 收口 ResultView / EndingChatModal / WorldlineRoundtable 的只读文本 contract
+  - 新增测试：
+    - `frontend/src/lib/textLayout/pretext.test.ts`
+    - `frontend/src/lib/textLayout/textOverflowPredictor.test.ts`
+  - 扩展页面级 contract 测试：
+    - `frontend/src/pages/ResultView.test.tsx`
+    - `frontend/src/components/EndingChatModal.test.tsx`
+    - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+  - `frontend/src/setupTests.ts`
+    - 增加稳定的 canvas `measureText` mock，保证 jsdom 下可执行 pretext contract
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts`
+    - `9 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-pretext-p1-ending-room --headless`
+    - 通过；multi / mobile ending-room、one-move、crossline gallery、readonly replay、local import 全链正常
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-pretext-p1-roundtable --headless`
+    - 通过；ready / reseat / expert witness / follow-up / readonly replay / mobile fit 全链正常
+- 人工视觉 QA：
+  - 通过 `playwright-interactive` 实机检查了：
+    - 桌面结果页
+    - 桌面 Ending Chamber live modal
+    - 移动端 Worldline Roundtable live room
+  - 当前观察没有新增显性裁切、主题失真或 replay/import 行为回退
+- 当前遗留：
+  - `frontend/src/components/EndingChatModal.test.tsx` 在本地 Vitest worker 里存在“子进程不自行退出”的基线问题；不是新增断言失败，库级/页面级新增 contract 已能单独跑通，功能链路则由 Ending Room E2E 和人工 QA 覆盖
+- 下一步：
+  - 进入 `Phase G`：继续补 persona vocabulary / theme atmosphere
+  - 仍按约定：每一步完成后都做一次专项 review/E2E，再进入下一阶段
+
+## 2026-03-30 Phase G — persona vocabulary / theme atmosphere
+
+- 本轮目标：
+  - 后端继续拉开 Oracle 的角色词汇和句式手感
+  - 前端补齐缺失 profile 的 skin / 氛围色，不重做骨架
+- 已完成的后端文案层补强：
+  - `backend/app/services/ending_room_service.py`
+    - `_oracle_role_voice_variant`
+      - 新增 `faith / industry / frontier / survival / scholar`
+    - `_build_roundtable_opening_content`
+      - 为上述新 variant 补齐 deterministic opening 句式
+    - `_followup_angle_label`
+      - 新增 `誓约链 / 产能链 / 轨道链 / 生存链 / 证词链`
+    - `_oracle_role_pressure_clause`
+      - 新增对应压力句
+    - `_oracle_voice_brief`
+      - 扩充新 variant 的 voice brief
+      - `Archivist` 追加 profile focus 提示，避免掉回 generic moderator
+- 已完成的前端氛围层补强：
+  - `frontend/src/components/EndingChatModal.css`
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 新增/拆分 profile palette：
+      - `governance`
+      - `industry`
+      - `trade`
+      - `frontier`
+      - `survival`
+      - `mythic`
+      - 并把 `war` / `empire` 从共用色拆开
+    - 现有 `oracle-atmosphere-drift` / `oracle-chip-float` 继续沿用，不改布局骨架
+- 新增后端测试：
+  - `backend/tests/test_ending_room_service.py`
+    - faith opening 词汇
+    - industry opening 词汇
+    - frontier opening 词汇
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `78 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-phase-g-ending-room --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-phase-g-roundtable --headless`
+    - 通过
+- 人工视觉 QA：
+  - 重新检查了：
+    - 桌面 Ending Chamber live modal
+    - 移动端 Worldline Roundtable live room
+  - 当前没有看到新增裁切、首屏按钮叠压或 profile skin 导致的可读性下降
+- 当前结论：
+  - `Phase G` 这一轮可视为完成
+  - 下一步进入 replay/share/import 最终签收
+
+## 2026-03-30 Phase H1 — replay/share/import final signoff
+
+- 本轮目标：
+  - 把 Oracle 的 replay/share/import 从“已可用”推进到“已专项签收”
+  - 尤其补上 `roomShare artifact -> readonly -> import` 这条之前只在实现层存在、但没有单独收口的链路
+- 本轮代码侧补强：
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增 ending-room `roomShare` artifact replay + import 回归测试
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 新增 clipboard capture
+    - 新增 `Copy replay -> roomShare -> readonly replay -> Import as Local Run` 链路校验
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - 新增 clipboard capture
+    - 新增 `Copy replay -> roomShare -> readonly replay -> Import local run` 链路校验
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - `32 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-phase-h-ending-room --headless`
+    - 通过
+    - summary 中已包含：
+      - `artifactReadonly`
+      - `artifactImportedUrl`
+      - `replayReadonly`
+      - `importedUrl`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-phase-h-roundtable --headless`
+    - 通过
+    - summary 中已包含：
+      - `artifactReadonly`
+      - `artifactImportedUrl`
+      - `replayReadonly`
+  - 工件目录：
+    - `frontend/output/e2e/20260330-phase-h-ending-room/`
+    - `frontend/output/e2e/20260330-phase-h-roundtable/`
+- 说明：
+  - roundtable 的 artifact replay 在 jsdom 单测里仍不适合直接走正规化链路断言；这条已由真实浏览器 E2E 覆盖，因此本轮保留高信号的 ResultView 单测 + 两条真实 E2E，而不强行维持一个脆弱单测
+- 当前结论：
+  - replay/share/import 最终签收已完成
+  - 下一步进入 `Phase D` 后续扩展桌型：`trait_mix / fault_line_first / witness_augmented`
+
+## 2026-03-30 Phase D follow-up extensions + mobile hero polish
+
+- 本轮目标：
+  - 完成 `trait_mix / fault_line_first / witness_augmented`
+  - 修掉 roundtable mobile hero 顶部状态条可读性差、视觉不一致的问题
+- 已完成的后端改动：
+  - `backend/app/api/ending_rooms.py`
+    - 新增 `selection_recipe`
+  - `backend/app/services/ending_room_service.py`
+    - `worldline_roundtable` 支持记录 `selection_recipe`
+    - room dedupe 命中已有 room 时，会回写最新 `selection_recipe` 到 config/snapshot，避免 UI 模式元信息丢失
+    - `trait_mix / fault_line_first / witness_augmented` 会把对应 selection reason 带进 participant / witness persona snapshot
+  - `backend/tests/test_ending_room_service.py`
+    - 新增：
+      - `trait_mix` selection_reason
+      - `witness_augmented` selection_reason
+      - reused room 时 `selection_recipe` metadata 更新
+- 已完成的前端改动：
+  - `frontend/src/types.ts`
+  - `frontend/src/api/client.ts`
+    - 新增 `RoundtableSelectionRecipe` 与 `selectionRecipe`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - picker 新增：
+      - `trait_mix`
+      - `fault_line_first`
+      - `witness_augmented`
+    - `trait_mix`
+      - 会主动改出更高冲突感的代表组合
+    - `fault_line_first`
+      - 会只挑分歧最大的两条线入桌
+    - `witness_augmented`
+      - 自动补一位证人，不再要求手点
+    - replay / artifact replay 会恢复 `selection_mode`
+    - picker 打开后不再被 live snapshot 的旧代表反向覆盖
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - roundtable mobile hero 顶部 meta 区改成统一的半透状态带
+    - `准备中 / 世界线 / 代表 / 线程 / profile chip` 现在都有一致底色与更清晰对比
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增：
+      - `trait_mix`
+      - `fault_line_first`
+      - `witness_augmented`
+      的 launch contract 覆盖
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - full suite 现已覆盖：
+      - `traitMix`
+      - `faultLineFirst`
+      - `witnessAugmented`
+      - 以及 artifact replay readonly / import
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
+    - `81 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - `32 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-phase-d-extensions --headless`
+    - 通过
+    - summary 已包含：
+      - `traitMix`
+      - `faultLineFirst`
+      - `witnessAugmented`
+      - `artifactReadonly`
+      - `artifactImportedUrl`
+      - `replayReadonly`
+- 人工视觉 QA：
+  - roundtable mobile hero 顶部状态条已重新截图确认
+  - 现在 `准备中 / 6条世界线 / 0位代表 / 0条线程 / 帝国统合` 同一视觉语言、对比度更稳
+- 当前结论：
+  - `trait_mix / fault_line_first / witness_augmented` 已进入可玩签收
+  - roundtable mobile hero 顶部状态条问题已修复
 - 新一轮验证：
   - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx`
     - `28 passed`

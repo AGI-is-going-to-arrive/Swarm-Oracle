@@ -511,6 +511,74 @@ def test_worldline_roundtable_selected_representatives_hash_is_branch_scoped():
     assert first_snapshot["id"] == second_snapshot["id"]
 
 
+def test_worldline_roundtable_reuse_updates_selection_recipe_metadata():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="representative",
+        language="zh",
+    )
+    reused_snapshot, reused_created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_b_id, branch_a_id],
+        selected_representatives=[
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="trait_mix",
+        language="zh",
+    )
+
+    assert created is True
+    assert reused_created is False
+    assert snapshot["id"] == reused_snapshot["id"]
+    assert reused_snapshot["selection_recipe"] == "trait_mix"
+
+
+def test_worldline_roundtable_trait_mix_marks_selection_reason():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="trait_mix",
+        language="zh",
+    )
+
+    assert created is True
+    representatives = [
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    ]
+    assert representatives
+    assert all(
+        participant["persona_snapshot_json"]["selection_reason"] == "trait_mix"
+        for participant in representatives
+    )
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        assert (room.config_json or {}).get("selection_recipe") == "trait_mix"
+
+
 def test_worldline_roundtable_supports_selected_witness():
     scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
 
@@ -549,6 +617,41 @@ def test_worldline_roundtable_supports_selected_witness():
             "branch_id": branch_a_id,
             "agent_id": witness_agent.id,
         }
+
+
+def test_worldline_roundtable_supports_witness_augmented_reason():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    with Session(get_engine()) as session:
+        witness_agent = session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                Agent.name == "秩序督军",
+            )
+        ).first()
+        assert witness_agent is not None
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selected_witness={"branch_id": branch_a_id, "agent_id": witness_agent.id},
+        selection_recipe="witness_augmented",
+        language="zh",
+    )
+
+    assert created is True
+    witness = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "critic"
+    )
+    assert witness["persona_snapshot_json"]["selection_reason"] == "witness_augmented"
 
 
 def test_worldline_roundtable_background_emits_expert_witness_testimony():
@@ -687,6 +790,78 @@ def test_roundtable_opening_anchor_market_voice_mentions_cashflow_pressure():
 
     assert "客流" in opening
     assert "现钱" in opening
+
+
+def test_roundtable_opening_anchor_faith_voice_mentions_vow_and_trust():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="伊莱恩",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "神殿祭司"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "圣坛裂痕",
+            "insight": "共同体先在仪式承诺上失去了底线。",
+            "key_moments": ["临时改祭仪式"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert "誓约" in opening
+    assert "信任" in opening
+
+
+def test_roundtable_opening_anchor_industry_voice_mentions_throughput_and_backup():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="陈工",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "电网调度工程师"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "电网脱锁",
+            "insight": "整条生产链先在备援调度上断了一拍。",
+            "key_moments": ["跳过负荷复核"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert "产能" in opening
+    assert "备援" in opening
+
+
+def test_roundtable_opening_anchor_frontier_voice_mentions_orbit_and_life_support():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="沈星河",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "轨道拓荒舰队领航员"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "轨道殖民延误",
+            "insight": "整条补给线在生命维持缓冲耗尽前已经失去节拍。",
+            "key_moments": ["延后补给窗口"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert "轨道" in opening
+    assert "生命维持" in opening
 
 
 def test_branch_scope_context_keeps_foreign_fulltext_isolated():

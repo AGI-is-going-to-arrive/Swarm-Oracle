@@ -10,30 +10,64 @@
   --oracle-aura: rgba(124, 166, 255, 0.14);
 }
 
+.oracle-skin--governance {
+  --oracle-accent: rgba(114, 191, 223, 0.94);
+  --oracle-accent-soft: rgba(114, 191, 223, 0.16);
+  --oracle-aura: rgba(114, 191, 223, 0.14);
+}
+
 .oracle-skin--faith {
   --oracle-accent: rgba(230, 204, 122, 0.94);
   --oracle-accent-soft: rgba(230, 204, 122, 0.16);
   --oracle-aura: rgba(230, 204, 122, 0.14);
 }
 
-.oracle-skin--empire,
-.oracle-skin--war {
+.oracle-skin--empire {
   --oracle-accent: rgba(221, 132, 98, 0.94);
   --oracle-accent-soft: rgba(221, 132, 98, 0.16);
   --oracle-aura: rgba(221, 132, 98, 0.14);
 }
 
-.oracle-skin--frontier,
+.oracle-skin--war {
+  --oracle-accent: rgba(214, 104, 88, 0.94);
+  --oracle-accent-soft: rgba(214, 104, 88, 0.16);
+  --oracle-aura: rgba(214, 104, 88, 0.15);
+}
+
+.oracle-skin--industry {
+  --oracle-accent: rgba(215, 162, 92, 0.94);
+  --oracle-accent-soft: rgba(215, 162, 92, 0.16);
+  --oracle-aura: rgba(215, 162, 92, 0.14);
+}
+
 .oracle-skin--trade {
   --oracle-accent: rgba(108, 205, 168, 0.92);
   --oracle-accent-soft: rgba(108, 205, 168, 0.15);
   --oracle-aura: rgba(108, 205, 168, 0.13);
 }
 
+.oracle-skin--frontier {
+  --oracle-accent: rgba(110, 214, 212, 0.92);
+  --oracle-accent-soft: rgba(110, 214, 212, 0.15);
+  --oracle-aura: rgba(110, 214, 212, 0.13);
+}
+
 .oracle-skin--ecology {
   --oracle-accent: rgba(124, 198, 118, 0.92);
   --oracle-accent-soft: rgba(124, 198, 118, 0.14);
   --oracle-aura: rgba(124, 198, 118, 0.13);
+}
+
+.oracle-skin--survival {
+  --oracle-accent: rgba(176, 198, 108, 0.92);
+  --oracle-accent-soft: rgba(176, 198, 108, 0.14);
+  --oracle-aura: rgba(176, 198, 108, 0.13);
+}
+
+.oracle-skin--mythic {
+  --oracle-accent: rgba(160, 174, 208, 0.94);
+  --oracle-accent-soft: rgba(160, 174, 208, 0.16);
+  --oracle-aura: rgba(160, 174, 208, 0.15);
 }
 
 .worldline-roundtable-view {
@@ -848,17 +882,36 @@
     line-height: 1.26;
   }
 
-  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta {
+  .worldline-roundtable-hero__meta {
     gap: 6px;
+    padding: 6px 8px;
+    border-radius: 14px;
+    background: rgba(11, 14, 21, 0.66);
+    border: 1px solid rgba(217, 181, 108, 0.14);
+    backdrop-filter: blur(10px);
   }
 
-  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta .archive-chip {
-    padding: 4px 7px;
+  .worldline-roundtable-hero__meta .archive-chip {
+    padding: 4px 8px;
     font-size: 0.68rem;
+    border: 1px solid rgba(217, 181, 108, 0.18);
+    background: rgba(18, 22, 31, 0.9);
+    color: rgba(244, 240, 231, 0.92);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.36);
   }
 
-  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta .archive-chip:last-child {
-    display: none;
+  .worldline-roundtable-hero__meta .archive-chip:last-child {
+    display: inline-flex;
+  }
+
+  .worldline-roundtable-hero__meta .archive-chip--profile {
+    border-color: color-mix(in srgb, var(--oracle-accent) 48%, rgba(217, 181, 108, 0.22));
+    background: color-mix(in srgb, var(--oracle-accent-soft) 72%, rgba(14, 19, 28, 0.84));
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta {
+    gap: 4px;
   }
 
   .worldline-roundtable-theme-strip {

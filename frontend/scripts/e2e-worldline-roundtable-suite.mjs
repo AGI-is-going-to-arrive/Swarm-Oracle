@@ -96,6 +96,38 @@ async function saveScreenshot(page, filePath) {
   });
 }
 
+async function armClipboardCapture(page) {
+  await page.evaluate(() => {
+    const globalWindow = window;
+    globalWindow.__swarmCopiedText = null;
+    const writeText = async (text) => {
+      globalWindow.__swarmCopiedText = text;
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText,
+      },
+    });
+  });
+}
+
+async function readCapturedClipboard(page) {
+  return page.evaluate(() => window.__swarmCopiedText ?? null);
+}
+
+async function waitForCapturedClipboardUrl(page, label, timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const url = await readCapturedClipboard(page);
+    if (typeof url === "string" && url.includes("roomShare=")) {
+      return url;
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 async function readAutomation(page) {
   const raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
   if (!raw) return null;
@@ -236,6 +268,40 @@ async function addExpertWitness(page) {
   };
 }
 
+async function reopenWithSelectionMode(page, {
+  modeButton,
+  expectedMode,
+  expectWitness = false,
+  label,
+}) {
+  const before = await readAutomation(page);
+  const previousRoomId = before?.scene?.room_id ?? null;
+  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+  await page.getByRole("button", { name: modeButton }).first().click();
+  await page.getByRole("button", { name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i }).first().click();
+
+  const state = await waitForAutomation(
+    page,
+    (payload) => payload.page?.kind === "worldline_roundtable"
+      && payload.page?.controls?.selection_mode === expectedMode
+      && payload.page?.controls?.has_result === true
+      && payload.scene?.room_id
+      && payload.scene.room_id !== previousRoomId
+      && (!expectWitness || payload.page?.controls?.has_witness === true),
+    20000,
+    label,
+  );
+
+  return {
+    previousRoomId,
+    nextRoomId: state?.scene?.room_id ?? null,
+    selectionMode: state?.page?.controls?.selection_mode ?? null,
+    selectedBranchCount: state?.page?.controls?.selected_branch_count ?? null,
+    hasWitness: state?.page?.controls?.has_witness ?? false,
+  };
+}
+
 async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   const page = await context.newPage();
   const scenarioId = await findMultiEndingScenarioId(backendUrl);
@@ -250,6 +316,31 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   const expertWitness = await addExpertWitness(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-expert-witness.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-expert-witness.json"), expertWitness);
+
+  const traitMix = await reopenWithSelectionMode(page, {
+    modeButton: /Trait mix|冲突人设混编/i,
+    expectedMode: "trait_mix",
+    label: "trait mix roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-trait-mix.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-trait-mix.json"), traitMix);
+
+  const faultLineFirst = await reopenWithSelectionMode(page, {
+    modeButton: /Fault line first|先看最大分歧/i,
+    expectedMode: "fault_line_first",
+    label: "fault line first roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-fault-line-first.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-fault-line-first.json"), faultLineFirst);
+
+  const witnessAugmented = await reopenWithSelectionMode(page, {
+    modeButton: /Witness augmented|自动增补证人/i,
+    expectedMode: "witness_augmented",
+    expectWitness: true,
+    label: "witness augmented roundtable",
+  });
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-witness-augmented.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-witness-augmented.json"), witnessAugmented);
 
   const archivist = await sendComposer(
     page,
@@ -272,6 +363,25 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseat);
 
+  await armClipboardCapture(page);
+  await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+  const shareReplayUrl = await waitForCapturedClipboardUrl(page, "roundtable copied share permalink");
+  const sharePage = await context.newPage();
+  await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
+  const artifactReadonly = await waitForAutomation(
+    sharePage,
+    (payload) => payload.page?.kind === "worldline_roundtable"
+      && payload.page?.controls?.is_read_only === true
+      && payload.page?.controls?.can_send === false,
+    15000,
+    "roundtable artifact replay readonly state",
+  );
+  await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact.json"), artifactReadonly);
+  await sharePage.getByRole("button", { name: /Import local run|导入本地运行/i }).click();
+  await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
+  const artifactImportedUrl = sharePage.url();
+
   await page.getByRole("button", { name: /Save(?:d)? (local )?read-only copy|Read-only copy saved|保存本地只读副本|已保存本地只读副本|保存只读副本|只读副本已保存/i }).click();
   await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitForAutomation(
@@ -290,8 +400,13 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir) {
     ready,
     reseated,
     expertWitness,
+    traitMix,
+    faultLineFirst,
+    witnessAugmented,
     archivist,
     hotseat,
+    artifactReadonly,
+    artifactImportedUrl,
     replayReadonly,
   };
 }

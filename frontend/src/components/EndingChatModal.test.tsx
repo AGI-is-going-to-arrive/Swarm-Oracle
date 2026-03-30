@@ -2,6 +2,12 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { clearPretextCache } from '../lib/textLayout/pretext';
+import {
+  ORACLE_TEXT_LAYOUT_CONTRACTS,
+  estimateBubbleHeight,
+  predictTextOverflow,
+} from '../lib/textLayout/textOverflowPredictor';
 import EndingChatModal from './EndingChatModal';
 
 const onAutomationStateChangeMock = vi.fn();
@@ -168,6 +174,26 @@ describe('EndingChatModal', () => {
     expect(screen.getAllByText('Replay mode is read-only for ending chambers.').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(storeState.openRoom).not.toHaveBeenCalled();
+  });
+
+  it('keeps a read-only contract for committed and draft bubble sizing', () => {
+    clearPretextCache();
+
+    const committedPrediction = predictTextOverflow(
+      'Archivist: the hinge failed because everyone treated optics as stability.',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.endingRoomBubble,
+    );
+    const draftHeight = estimateBubbleHeight(
+      '请先钉住真正的转折点，再把代价拆开。\n第二行继续追问：是谁把这次误判扩散成了整条世界线的共识？',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.endingRoomDraftBubble,
+    );
+    const committedHeight = estimateBubbleHeight(
+      'Archivist: the hinge failed because everyone treated optics as stability.',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.endingRoomBubble,
+    );
+
+    expect(committedPrediction.overflow).toBe(false);
+    expect(draftHeight).toBeGreaterThan(committedHeight);
   });
 
   it('renders crossline gallery as a summary-only view', () => {

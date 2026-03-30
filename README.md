@@ -14,10 +14,9 @@
   - director campaign、玩法卡、结构化押注
 - 最近一次稳定全链签收工件位于 `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`。
 - 当前仍在持续收口的增量主要是：
-  - ending-room replay/share/import 专项签收
   - follow-up 与经典模式的流式一致性
-  - roundtable mobile 一屏体验
-  - `trait_mix / fault_line_first / witness_augmented` 等后续桌型
+  - `pretext` 是否继续推进到运行时 transcript 稳定化（`P2+`）
+  - Oracle 更深的回归、跨浏览器与 corner-case hardening
 
 ## 文档契约
 
@@ -49,7 +48,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
-| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay readonly、`manual_shortlist`、`expert_witness` |
+| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` |
 | Replay & Import | 主模式与 Debate 均支持 |
 | i18n | UI 与自动生成内容按输入语言联动输出 |
 

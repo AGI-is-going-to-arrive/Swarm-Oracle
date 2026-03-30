@@ -87,16 +87,23 @@
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态 |
+| `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` 只读文本预测 / overflow contract |
 
 ## 当前边界
 
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- `WorldlineRoundtableView` 当前已支持：
+  - `manual_shortlist`
+  - `expert_witness`
+  - `trait_mix`
+  - `fault_line_first`
+  - `witness_augmented`
 - roundtable mobile 当前以 `live room` 为优先目标：
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
-- `pretext` 尚未接入运行时；若推进，将先作为 `ResultView / EndingChatModal / WorldlineRoundtableView` 的只读文本布局预测层，而不是全站布局内核。
+- `pretext` 已以只读 helper / contract 形式落地在 `frontend/src/lib/textLayout/*` 与相关页面测试中；当前还没有接入运行时 transcript 布局内核。
 
 ## 查找路径
 

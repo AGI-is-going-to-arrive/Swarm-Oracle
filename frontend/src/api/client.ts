@@ -367,6 +367,7 @@ export async function createEndingRoom(
             },
           }
         : {}),
+      ...(payload.selectionRecipe ? { selection_recipe: payload.selectionRecipe } : {}),
       ...(payload.language ? { language: payload.language } : {}),
     }),
   });

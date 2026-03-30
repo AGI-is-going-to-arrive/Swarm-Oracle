@@ -697,6 +697,7 @@ export interface EndingRoomSnapshot {
   updated_at: string;
   memory_partition_version?: number;
   memory_partition_id?: string | null;
+  selection_recipe?: RoundtableSelectionRecipe | null;
   participants: EndingRoomParticipant[];
   threads: EndingRoomThread[];
   turns: EndingRoomTurn[];
@@ -717,6 +718,14 @@ export interface RoundtableWitnessSelection {
   agentId: string;
 }
 
+export type RoundtableSelectionRecipe =
+  | 'representative'
+  | 'manual_shortlist'
+  | 'expert_witness'
+  | 'trait_mix'
+  | 'fault_line_first'
+  | 'witness_augmented';
+
 export interface CreateEndingRoomRequest {
   roomType: EndingRoomType;
   anchorBranchId?: string | null;
@@ -724,6 +733,7 @@ export interface CreateEndingRoomRequest {
   selectedAgentIds?: string[];
   selectedRepresentatives?: RoundtableRepresentativeSelection[];
   selectedWitness?: RoundtableWitnessSelection | null;
+  selectionRecipe?: RoundtableSelectionRecipe;
   language?: 'zh' | 'en';
 }
 

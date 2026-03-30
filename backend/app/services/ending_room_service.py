@@ -381,6 +381,16 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         return "finance"
     if any(token in normalized for token in ("摊主", "商户", "商贩", "市场", "港口", "贸易", "货运", "vendor", "merchant", "market", "port", "trade", "freight")):
         return "market"
+    if any(token in normalized for token in ("祭司", "祭坛", "神官", "修士", "神谕", "priest", "cleric", "oracle", "temple", "faith", "ritual", "covenant")):
+        return "faith"
+    if any(token in normalized for token in ("工程", "工厂", "电网", "产能", "后勤", "调度", "engineer", "factory", "industrial", "grid", "throughput", "logistics", "plant")):
+        return "industry"
+    if any(token in normalized for token in ("边疆", "拓荒", "殖民", "轨道", "补给舱", "生命维持", "pilot", "orbital", "frontier", "colony", "expedition", "convoy", "airlock", "life support")):
+        return "frontier"
+    if any(token in normalized for token in ("避难", "药品", "口粮", "撤离", "医疗", "scout", "medic", "refuge", "ration", "evacuation", "shelter", "survival")):
+        return "survival"
+    if any(token in normalized for token in ("史官", "书记官", "学者", "档案", "证人", "scribe", "scholar", "historian", "witness", "record", "ledger", "clerk")):
+        return "scholar"
     if any(token in normalized for token in ("议长", "speaker", "minister", "scribe", "文书", "ledger", "council")):
         return "civic"
     return "plain"
@@ -421,6 +431,31 @@ def _build_roundtable_opening_content(
             return (
                 f"《{title}》不是到了结局才疼，而是在“{hook}”这里先把客流、摊位和现钱周转一起挤坏了。"
                 f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '一旦现钱链先断，后面的收场就只剩谁来吞下损失。'}"
+            )
+        if variant == "faith":
+            return (
+                f"《{title}》不是到结尾才裂开，而是在“{hook}”这里先把誓约、祭坛和共同体信任一起掏松了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '一旦共同誓约先松，后面的代价就会沿着裂口越滚越大。'}"
+            )
+        if variant == "industry":
+            return (
+                f"《{title}》不是到收尾才断电，而是在“{hook}”这里先把产能、调度和备援一起拉歪了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '节拍一歪，后面的代价就会按整条链路往外传。'}"
+            )
+        if variant == "frontier":
+            return (
+                f"《{title}》不是到结局才失压，而是在“{hook}”这里先把轨道节拍、补给窗和生命维持一起扯紧了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '边疆一旦先失去缓冲，后面的收场就只剩谁先断供。'}"
+            )
+        if variant == "survival":
+            return (
+                f"《{title}》不是到最后才崩，而是在“{hook}”这里先把避难、药品和口粮配给一起挤穿了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '生存链先破，后面的代价就只会越来越直接。'}"
+            )
+        if variant == "scholar":
+            return (
+                f"《{title}》是从“{hook}”这里开始对不上证词和账册的，后面每一层解释都只能越补越漏。"
+                f"{f'最后才会落到“{insight}”。' if insight and insight != hook else '真正的代价，是后面的每一步都开始替这处证词断口埋单。'}"
             )
         if variant == "civic":
             return (
@@ -468,6 +503,56 @@ def _build_roundtable_opening_content(
         )
         return (
             f"{title} does not start hurting at the finale. It starts when '{hook}' squeezes stalls, customers, and cash rotation first. "
+            f"{ending_clause}"
+        )
+    if variant == "faith":
+        ending_clause = (
+            f"That is how it keeps sliding toward '{insight}'."
+            if insight and insight != hook
+            else "Once the shared covenant loosens first, the later cost only compounds along the fracture."
+        )
+        return (
+            f"{title} does not first split at the finale. It splits when '{hook}' loosens vows, ritual legitimacy, and communal trust together. "
+            f"{ending_clause}"
+        )
+    if variant == "industry":
+        ending_clause = (
+            f"From there it keeps drifting toward '{insight}'."
+            if insight and insight != hook
+            else "Once throughput and backup timing are bent first, the later cost just propagates down the line."
+        )
+        return (
+            f"{title} does not first fail at the ending. It fails when '{hook}' bends throughput, dispatch rhythm, and fallback capacity together. "
+            f"{ending_clause}"
+        )
+    if variant == "frontier":
+        ending_clause = (
+            f"That is how it keeps sliding toward '{insight}'."
+            if insight and insight != hook
+            else "Once orbital timing and life-support slack are squeezed first, the later cost becomes a question of who loses air, fuel, or time."
+        )
+        return (
+            f"{title} does not first lose pressure at the finale. It starts when '{hook}' tightens orbital timing, supply windows, and life-support slack together. "
+            f"{ending_clause}"
+        )
+    if variant == "survival":
+        ending_clause = (
+            f"That is how it keeps sliding toward '{insight}'."
+            if insight and insight != hook
+            else "Once refuge, medicine, and ration slack are punctured first, the later cost only turns more immediate."
+        )
+        return (
+            f"{title} does not first collapse at the ending. It starts when '{hook}' punctures refuge, medicine, and ration slack together. "
+            f"{ending_clause}"
+        )
+    if variant == "scholar":
+        ending_clause = (
+            f"That is how it ends up at '{insight}'."
+            if insight and insight != hook
+            else "The real cost is that every later explanation starts paying for the first record gap."
+        )
+        return (
+            f"{title} first slips at '{hook}', where the testimony and ledger stop lining up cleanly. "
             f"{ending_clause}"
         )
     if variant == "civic":
@@ -596,6 +681,16 @@ def _followup_angle_label(role_hint: str | None, *, language: str) -> str:
         return "清算链" if language == "zh" else "the settlement chain"
     if any(token in normalized for token in ("摊主", "商户", "商贩", "市场", "港口", "贸易", "货运", "vendor", "merchant", "market", "trade", "port", "freight")):
         return "现钱链" if language == "zh" else "the cash-flow chain"
+    if any(token in normalized for token in ("祭司", "祭坛", "神官", "神谕", "priest", "cleric", "oracle", "temple", "faith", "ritual", "covenant")):
+        return "誓约链" if language == "zh" else "the covenant chain"
+    if any(token in normalized for token in ("工程", "工厂", "电网", "产能", "后勤", "调度", "engineer", "factory", "industrial", "grid", "throughput", "logistics", "plant")):
+        return "产能链" if language == "zh" else "the throughput chain"
+    if any(token in normalized for token in ("边疆", "拓荒", "殖民", "轨道", "补给舱", "生命维持", "pilot", "orbital", "frontier", "colony", "expedition", "convoy", "airlock", "life support")):
+        return "轨道链" if language == "zh" else "the orbital chain"
+    if any(token in normalized for token in ("避难", "药品", "口粮", "撤离", "医疗", "scout", "medic", "refuge", "ration", "evacuation", "shelter", "survival")):
+        return "生存链" if language == "zh" else "the survival chain"
+    if any(token in normalized for token in ("史官", "书记官", "学者", "档案", "证人", "scribe", "scholar", "historian", "witness", "record", "ledger", "clerk")):
+        return "证词链" if language == "zh" else "the testimony chain"
     if any(token in normalized for token in ("档案", "scribe", "record", "ledger", "minister", "文书", "coordinator")):
         return "记录链" if language == "zh" else "the records chain"
     return "因果链" if language == "zh" else "the causal chain"
@@ -613,6 +708,16 @@ def _oracle_role_pressure_clause(variant: str, *, language: str) -> str:
             return "我盯的不是场面，而是清算链、流动性和挤兑预期什么时候先松。"
         if variant == "market":
             return "我盯的不是口号，而是客流、摊位和现钱周转先在哪一步被挤坏。"
+        if variant == "faith":
+            return "我盯的不是口头神圣感，而是誓约、仪式边界和共同体信任先在哪一步松掉。"
+        if variant == "industry":
+            return "我盯的不是漂亮产量，而是产能、调度和备援先在哪一处脱节。"
+        if variant == "frontier":
+            return "我盯的不是远景口号，而是轨道窗口、补给节拍和生命维持先在哪一下吃紧。"
+        if variant == "survival":
+            return "我盯的不是安慰话，而是避难位、药品和口粮先在哪一步不够用了。"
+        if variant == "scholar":
+            return "我盯的不是好听说法，而是证词、账册和责任顺序先从哪一行开始对不上。"
         return ""
     if variant == "imperial":
         return "I am not tracking posture. I am tracking command, legitimacy, and whether provincial order can still be forced back into line."
@@ -624,6 +729,16 @@ def _oracle_role_pressure_clause(variant: str, *, language: str) -> str:
         return "I am not tracking optics. I am tracking settlement rails, liquidity strain, and when the run expectation starts to loosen."
     if variant == "market":
         return "I am not tracking slogans. I am tracking foot traffic, stall order, and where cash flow gets squeezed first."
+    if variant == "faith":
+        return "I am not tracking sacred posture. I am tracking vows, ritual boundaries, and where communal trust loosens first."
+    if variant == "industry":
+        return "I am not tracking glossy output. I am tracking throughput, dispatch rhythm, and where fallback capacity first drops out."
+    if variant == "frontier":
+        return "I am not tracking frontier romance. I am tracking orbital windows, convoy timing, and where life-support slack tightens first."
+    if variant == "survival":
+        return "I am not tracking reassurance. I am tracking shelter slots, medicine, and where ration slack fails first."
+    if variant == "scholar":
+        return "I am not tracking polished spin. I am tracking testimony order, record gaps, and which line of the ledger stops lining up first."
     return ""
 
 
@@ -791,6 +906,7 @@ def _roundtable_representative_def(
     branch: Branch,
     selected_branch_ids: list[str],
     selected_agent_id: str | None,
+    selection_reason_override: str | None,
     language: str,
 ) -> dict[str, Any]:
     branch_agents = _visible_branch_agents(
@@ -815,7 +931,7 @@ def _roundtable_representative_def(
             )
         speaker = {
             **speaker,
-            "selection_reason": "user_selected",
+            "selection_reason": selection_reason_override or "user_selected",
         }
     else:
         speaker = branch_agents[0] if branch_agents else None
@@ -859,6 +975,7 @@ def _roundtable_witness_def(
     selected_branch_ids: list[str],
     selected_agent_id: str,
     selected_representative_by_branch: dict[str, str],
+    selection_reason: str,
     language: str,
 ) -> dict[str, Any]:
     branch_agents = _visible_branch_agents(
@@ -898,7 +1015,7 @@ def _roundtable_witness_def(
             "turn_count": speaker.get("turn_count"),
             "key_moment_hits": speaker.get("key_moment_hits"),
             "last_round_spoken": speaker.get("last_round_spoken"),
-            "selection_reason": "expert_witness",
+            "selection_reason": selection_reason,
             "fallback_cast": speaker.get("fallback_cast", False),
             "tier": speaker.get("tier"),
             "witness_branch_title": branch.title,
@@ -920,6 +1037,7 @@ def _participant_defs(
     selected_agent_ids: list[str],
     selected_representatives: list[dict[str, str]],
     selected_witness: dict[str, str] | None,
+    selection_recipe: str | None,
     language: str,
 ) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
@@ -930,6 +1048,11 @@ def _participant_defs(
             item["branch_id"]: item["agent_id"]
             for item in selected_representatives
         }
+        representative_selection_reason = (
+            selection_recipe
+            if selection_recipe in {"trait_mix", "fault_line_first", "witness_augmented"}
+            else None
+        )
         for branch_id in selected_branch_ids:
             branch = branch_map[branch_id]
             participants.append(
@@ -939,6 +1062,7 @@ def _participant_defs(
                     branch=branch,
                     selected_branch_ids=selected_branch_ids,
                     selected_agent_id=selected_representative_by_branch.get(branch_id),
+                    selection_reason_override=representative_selection_reason,
                     language=language,
                 )
             )
@@ -958,6 +1082,11 @@ def _participant_defs(
                     selected_branch_ids=selected_branch_ids,
                     selected_agent_id=selected_witness["agent_id"],
                     selected_representative_by_branch=selected_representative_by_branch,
+                    selection_reason=(
+                        "witness_augmented"
+                        if selection_recipe == "witness_augmented"
+                        else "expert_witness"
+                    ),
                     language=language,
                 )
             )
@@ -1228,6 +1357,7 @@ def create_ending_room(
     selected_agent_ids: list[str] | None = None,
     selected_representatives: list[dict[str, Any]] | None = None,
     selected_witness: dict[str, Any] | None = None,
+    selection_recipe: str | None = None,
     language: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
@@ -1331,6 +1461,7 @@ def create_ending_room(
             selected_agent_ids=normalized_agent_ids,
             selected_representatives=normalized_representatives,
             selected_witness=normalized_witness,
+            selection_recipe=selection_recipe,
             language=resolved_language,
         )
         participant_hash = _participant_set_hash(
@@ -1355,6 +1486,14 @@ def create_ending_room(
             if existing_room.status == EndingRoomStatus.ERROR:
                 _reset_room_for_retry(session, existing_room)
                 return load_ending_room_snapshot(existing_room.id), True
+            if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+                existing_room.config_json = {
+                    **(existing_room.config_json or {}),
+                    "selection_recipe": selection_recipe,
+                }
+                existing_room.updated_at = _now()
+                session.add(existing_room)
+                session.commit()
             return load_ending_room_snapshot(existing_room.id), False
 
         title_map = {
@@ -1415,6 +1554,7 @@ def create_ending_room(
                 "selected_agent_ids": normalized_agent_ids,
                 "selected_representatives": normalized_representatives,
                 "selected_witness": normalized_witness,
+                "selection_recipe": selection_recipe,
             }
             session.add(room)
             _ensure_default_thread(session, room)
@@ -1489,6 +1629,7 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
             "updated_at": room.updated_at.isoformat(),
             "memory_partition_version": room.memory_partition_version,
             "memory_partition_id": (room.config_json or {}).get("memory_partition_id"),
+            "selection_recipe": (room.config_json or {}).get("selection_recipe"),
             "participants": [_serialize_participant(item) for item in participants],
             "threads": [_serialize_thread(item) for item in threads],
             "turns": [_serialize_turn(item) for item in turns],
@@ -2251,11 +2392,18 @@ def _oracle_voice_brief(
     interaction_mode: EndingRoomInteractionMode | None = None,
 ) -> str:
     is_archivist = participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+    profile_focus_hint = _oracle_profile_focus_hint(room)
+    profile_focus_clause = (
+        f" Keep {profile_focus_hint} concrete."
+        if profile_focus_hint and room.language != "zh"
+        else (f" 别把{profile_focus_hint}讲成空话。" if profile_focus_hint else "")
+    )
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
         if is_archivist:
             return (
                 "Speak like a sharp moderator who can collapse six branches into one clear hinge. "
                 "Do not sound bureaucratic or defensive. One crisp frame, then the handoff or verdict."
+                f"{profile_focus_clause}"
             )
         variant = _oracle_role_voice_variant(
             str(participant.persona_snapshot_json.get("agent_role") if participant.persona_snapshot_json else ""),
@@ -2285,6 +2433,31 @@ def _oracle_voice_brief(
                 "Speak like someone who feels policy through foot traffic, cash rotation, and stall-level disruption. "
                 "Prefer customer flow, payment friction, and loss allocation over abstract governance phrasing."
             )
+        if variant == "faith":
+            return (
+                "Speak like a keeper of vows and communal legitimacy under strain. "
+                "Prefer oaths, ritual boundaries, fracture lines, and trust erosion over generic morale talk."
+            )
+        if variant == "industry":
+            return (
+                "Speak like an operator of plants, grids, and dispatch rhythm. "
+                "Name throughput, maintenance debt, fallback capacity, or timing gaps before abstractions."
+            )
+        if variant == "frontier":
+            return (
+                "Speak like a frontier operator living on convoy windows and life-support slack. "
+                "Prefer orbit timing, hull risk, supply windows, or airlock pressure over generic exploration rhetoric."
+            )
+        if variant == "survival":
+            return (
+                "Speak like someone triaging collapse at street level. "
+                "Prefer shelter slots, ration math, clinic capacity, or evacuation order over abstract resilience slogans."
+            )
+        if variant == "scholar":
+            return (
+                "Speak like a witness or scribe aligning testimony, ledgers, and sequence. "
+                "Prefer record gaps, contradictory lines, and evidentiary order over sweeping narration."
+            )
         if variant == "civic":
             return (
                 "Speak like a political or administrative operator: procedural, precise, and quietly accusatory. "
@@ -2313,11 +2486,13 @@ def _oracle_voice_brief(
         return (
             "Speak like a moderator pinning the question to one hinge and one consequence. "
             "Do not explain permissions or workflow unless the user explicitly asks."
+            f"{profile_focus_clause}"
         )
     if is_archivist:
         return (
             "Speak like a debrief host tightening the scene, not like a support agent. "
             "Frame the hinge in one sentence, then route or conclude."
+            f"{profile_focus_clause}"
         )
     return (
         "Speak like a current-worldline participant who still owns the consequences. "

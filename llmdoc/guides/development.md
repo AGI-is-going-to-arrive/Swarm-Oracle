@@ -90,7 +90,7 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
+npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
@@ -99,6 +99,14 @@ node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:1892
 node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-full --headless
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
 ```
+
+当前脚本口径：
+
+- `e2e-ending-room-followup-suite.mjs full`
+  - 覆盖 live / one-move / crossline gallery / `roomShare` artifact readonly / local readonly / import
+- `e2e-worldline-roundtable-suite.mjs full`
+  - 覆盖 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`
+  - 同时覆盖 artifact replay readonly / import
 
 ### Type Check 与 Build
 

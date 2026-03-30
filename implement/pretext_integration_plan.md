@@ -3,7 +3,13 @@
 > 文档类型：active archive
 > 当前真值：否，作为独立接入计划使用；当前产品真值仍以 `README.md` 与 `llmdoc/*` 为准
 > 当前时间：2026-03-30
-> 状态：proposed
+> 状态：P0 / P1 minimal spike 已完成；P2-P5 尚未启动
+
+> 状态更新（2026-03-30，最新）：
+> - `@chenglou/pretext@0.0.3` 已安装进 `frontend/`
+> - `frontend/src/lib/textLayout/pretext.ts` 与 `textOverflowPredictor.ts` 已落地
+> - `ResultView / EndingChatModal / WorldlineRoundtableView` 的只读文本 contract 已接入测试层
+> - 当前还没有把 `pretext` 接进运行时 transcript 布局；也没有提前推进 `P2-P5`
 
 ---
 
@@ -204,11 +210,24 @@
 4. 若 `P1` 证明有收益，再做 `P2`
 5. 最后继续 `trait_mix / fault_line_first / witness_augmented`
 
+本轮实际执行结果：
+
+1. `Phase G`
+   - 已完成
+2. `replay / share / import`
+   - 已完成专项签收
+3. `pretext P0 / P1`
+   - 已完成最小 spike
+4. `P2-P5`
+   - 尚未启动
+
 ---
 
 ## 3. 分阶段接入计划
 
 ## P0 — Research Spike
+
+> 当前状态：已完成
 
 ### 目标
 
@@ -268,6 +287,8 @@
 
 ## P1 — Read-Only 预测层接入
 
+> 当前状态：已完成
+
 ### 目标
 
 让 `pretext` 先进入“只读预测层”，不直接接管渲染。
@@ -308,6 +329,8 @@
 
 ## P2 — Oracle Transcript 稳定化
 
+> 当前状态：未开始
+
 ### 目标
 
 把 `pretext` 的收益用到 Oracle 最值钱的文本面：`transcript` 与 `draft bubble`。
@@ -340,6 +363,8 @@
 
 ## P3 — Input / Authoring 面
 
+> 当前状态：未开始
+
 ### 目标
 
 降低输入文本面依赖 `scrollHeight` 的程度。
@@ -366,6 +391,8 @@
 ---
 
 ## P4 — Canvas / Theater 可选桥接
+
+> 当前状态：未开始
 
 ### 目标
 
@@ -394,6 +421,8 @@
 ---
 
 ## P5 — QA / CI 文本契约
+
+> 当前状态：未开始
 
 ### 目标
 

@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-30
-> 状态更新（2026-03-30，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，其中 `finance / market` 这批语域已进 deterministic fallback 与 voice brief；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更轻的 ambient drift。`crossline_gallery`、`manual_shortlist`、`expert_witness` 这三条轻扩展当前也已形成最小可玩闭环；Oracle 页面 UI 语言不再被 `scenario.language` 反向覆盖，roundtable mobile live-room 也已收口到无页面级纵向滚动。当前真正剩余的核心不再是链路打通，而是 replay/share/import 最终签收、更深的 persona vocabulary、以及 `trait_mix / fault_line_first / witness_augmented` 这些后续桌型与选席策略。
+> 状态更新（2026-03-30，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 也已完成专项签收。当前真正剩余的核心不再是玩法缺口，而是 follow-up 与经典模式的流式一致性、以及更深的 corner-case / regression hardening。
 
 ---
 
@@ -66,17 +66,13 @@
 
 ### 当前真正还没最终签收的点
 
-1. `Phase E replay/share/import`
-   - ending-room / roundtable 的最终 permalink/share 合同还需要一次专门签收
-2. `persona-specific vocabulary`
-   - 现在已经不是模板硬拼，但同一题材下不同角色的词汇层次还可以继续拉开
-   - 当前已补第一批 `finance / market` 语域，后面仍要继续扩到更多 profile / role
-3. `theme atmosphere`
-   - 现有 profile skin + 微动效已经接上，并补了更轻的 ambient drift，但还没有做到更强的 ambient motion / audio / Theater 联动
-4. 更进一步的玩法扩展
+1. `follow-up / classic mode` 的更深流式一致性
+   - 当前 Oracle 自己的流式链路已升级，但与经典模式的整体验收口径还可以继续收紧
+2. `corner-case / regression hardening`
+   - 当前主链已签收，但还值得做更完整的 review、跨浏览器与异常路径拷打
+3. 更进一步的玩法扩展
    - `后续三回合`
    - `证据投牌`
-   - `trait_mix / fault_line_first / witness_augmented` 这些 recipe 还没有进入正式签收
 
 ### 后续执行的硬优先级
 
@@ -1241,12 +1237,12 @@ frontend/src/components/EndingRoomSpeakerBadge.css
 
 > 状态更新（2026-03-30，最新）：
 > - `WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地并进入稳定 `release:signoff` 总链
-> - `manual_shortlist` 与 `expert_witness` 已形成最小可玩闭环
+> - `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented` 已形成最小可玩闭环
 > - roundtable 自己的 follow-up / hotseat 已完成
 > - 当前已补上：
 >   - profile-aware 文案层
 >   - profile skin / hook chips / 轻量微动效
-> - `Phase D` 当前不再是“从 0 到 1”阶段，而是“可玩基线已完成，且已继续补到 `manual_shortlist / expert_witness`；后续再做更强的题材代入和更深玩法”的阶段
+> - `Phase D` 当前不再是“从 0 到 1”阶段，而是“可玩基线已完成，且已继续补到 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`；后续只剩更大的玩法扩展和更深 hardening”的阶段
 
 ### 目标
 
@@ -1305,6 +1301,7 @@ frontend/src/components/EndingRoomSpeakerBadge.css
    - 用户手动指定 `2-4` 条 worldline 入桌
    - 适合“我只想看这几条线怎么吵”
 3. `trait_mix`
+   - 已完成
    - 系统按 persona / 角色标签自动推荐冲突更强的组合
    - 例如：`冒进者 vs 稳定派 vs 理想主义者`
 4. `expert_witness`
@@ -1319,10 +1316,12 @@ frontend/src/components/EndingRoomSpeakerBadge.css
    - 默认模式
    - 概率最高的 `2` 条世界线入桌
 2. `fault_line_first`
+   - 已完成
    - 优先选择分歧最大的两条世界线
 3. `manual_shortlist`
    - 用户手动指定 `2-4` 个席位
 4. `witness_augmented`
+   - 已完成
    - 代表席固定，再额外请入 `1` 个证人席位
 
 实现边界：
@@ -1405,9 +1404,9 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 ## 3.5 Phase E — Replay / Share / Import
 
 > 状态更新（2026-03-30，最新）：
-> - local read-only copy / import 基线已完成
-> - replay readonly 基线已完成
-> - 这节当前真正未完成的是“最终 permalink/share 合同的专项签收”
+> - local read-only copy / import 已完成
+> - replay readonly 已完成
+> - ending-room / roundtable 的 permalink / artifact share / readonly replay / import 已完成专项签收
 
 ### 目标
 
@@ -1437,7 +1436,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 ## 3.6 Phase F — 轻玩法扩展
 
 > 状态更新（2026-03-30，最新）：
-> - 这节仍是后续阶段，当前不应先于 replay/share/import 最终签收和 persona/theme polish 推进
+> - `trait_mix / fault_line_first / witness_augmented` 已完成
+> - 当前仍留在后续阶段的，只剩 `后续三回合 / 证据投牌` 这类再下一轮玩法扩展
 
 ### 目标
 
@@ -1474,8 +1474,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ## 3.7 Phase G — Persona Vocabulary / Theme Skin / Atmosphere Polish
 
-> 状态：**in progress**
-> 说明：这节仍是当前最应该推进的阶段，优先级高于新增玩法和更大 UI 结构改造。当前已补第一批 `finance / market` 语域、Oracle UI 语言 authority 收口、以及更轻的 ambient drift；但这还不是最终签收状态。
+> 状态：**done**
+> 说明：本轮已完成更深的 persona vocabulary、profile skin、hook chips、ambient drift 与 roundtable mobile 顶部状态带清晰度修复。
 
 ### 目标
 
@@ -1571,7 +1571,9 @@ G1-C: conflict / tension shaping
 推荐顺序：
 
 1. `expert_witness / witness_augmented`
+   - 已完成
 2. `trait_mix / fault_line_first`
+   - 已完成
 3. `后续三回合`
 4. `证据投牌`
 

@@ -9,6 +9,11 @@ import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
 import type { Scenario } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
+import { clearPretextCache } from '../lib/textLayout/pretext';
+import {
+  ORACLE_TEXT_LAYOUT_CONTRACTS,
+  predictTextOverflow,
+} from '../lib/textLayout/textOverflowPredictor';
 import ResultView from './ResultView';
 
 const {
@@ -410,6 +415,10 @@ beforeEach(() => {
 });
 
 describe('ResultView campaign summary', () => {
+  beforeEach(() => {
+    clearPretextCache();
+  });
+
   it('keeps the current UI language instead of forcing the scenario language on Oracle result pages', async () => {
     setMockLanguage('en');
     vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
@@ -598,6 +607,113 @@ describe('ResultView campaign summary', () => {
       expect(screen.getByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
     });
     expect(screen.getByRole('button', { name: 'Import as Local Run' })).toBeInTheDocument();
+  });
+
+  it('loads ending-room artifact shares as read-only replay and still allows local import', async () => {
+    const user = userEvent.setup();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue({
+      id: 'artifact-room-1',
+      kind: 'ending_room_v1',
+      created_at: '2026-03-30T00:00:00Z',
+      payload: {
+        kind: 'ending_room_v1',
+        scenarioReplay: {
+          scenario: {
+            id: 'scenario-1',
+            question: 'What if the archive had to sync?',
+            status: 'done',
+            created_at: '2026-03-17T00:00:00Z',
+            total_rounds: 5,
+            mode: 'blackboard',
+            visualization_enabled: false,
+            scene_theme: 'law_court',
+            agents: [],
+            branches: [],
+            groups: [],
+            hierarchical: false,
+            director_state: null,
+            gameplay_state: null,
+          },
+          storyData: {
+            scenario_id: 'scenario-1',
+            question: 'What if the archive had to sync?',
+            status: 'done',
+            branches: [{
+              id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+              status: 'COMPLETED',
+              story: 'A complete branch story.',
+              insight: 'A durable insight.',
+              key_moments: ['Moment 1'],
+              parent_branch_id: null,
+              fork_reason: '',
+            }],
+          },
+          agents: [
+            { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+          ],
+          predictions: [],
+          scenarioMeta: {
+            director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+            cooldowns: {},
+            cards: { usageLog: [] },
+            betting: { bets: [] },
+            commitment: { active: false, branchId: null, branchTitle: null, committedAtRound: null, committedAt: null, outcome: null },
+            objectives: { generatedForQuestion: null, generatedForProfile: null, goals: [] },
+            archive: { keyMoments: ['Moment 1'], branchSnapshots: [] },
+          },
+          campaignScenarioSummary: null,
+          campaignSummary: null,
+          isDailyChallenge: false,
+        },
+        roomSnapshot: {
+          id: 'room-artifact',
+          scenario_id: 'scenario-1',
+          anchor_branch_id: 'branch-1',
+          room_type: 'ending_chamber',
+          title: 'Ending Chamber',
+          language: 'en',
+          status: 'done',
+          current_phase: 'verdict',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+          memory_partition_id: 'room-partition',
+          result_ready: true,
+          participants: [],
+          threads: [],
+          turns: [],
+        },
+        roomResult: {
+          summary: 'The chamber wrapped.',
+          archivist_note: 'Keep the scope narrow.',
+          supporting_turns: [],
+          next_move: null,
+          by_phase: [],
+          quotes: [],
+        },
+        branchId: 'branch-1',
+        selectedAgentIds: ['agent-1'],
+        activeThreadId: 'thread-room',
+      },
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/result/replay?roomShare=artifact-room-1']}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
+
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
   it('finalizes campaign progress and renders the summary block', async () => {
@@ -2288,5 +2404,26 @@ describe('ResultView campaign summary', () => {
         }),
       ]);
     });
+  });
+});
+
+describe('ResultView text layout contracts', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    clearPretextCache();
+  });
+
+  it('flags oversized ending titles while keeping share copy within the read-only budget', () => {
+    const titlePrediction = predictTextOverflow(
+      '如果金融防线和边疆补给同时失守，这条世界线是否还会把体面误当成稳定的最后借口，同时继续要求档案官替所有成本兜底并把错误包装成必然结局',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.resultEndingTitle,
+    );
+    const sharePrediction = predictTextOverflow(
+      'Worldline verdict: the hinge failed because nobody slowed down the first bad call.\nPermalink stays readable, replay stays read-only, and import does not rerun the model.',
+      ORACLE_TEXT_LAYOUT_CONTRACTS.resultShareCopy,
+    );
+
+    expect(titlePrediction.overflow).toBe(true);
+    expect(sharePrediction.overflow).toBe(false);
   });
 });

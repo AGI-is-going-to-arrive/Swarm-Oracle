@@ -31,7 +31,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `进入会客厅`
   - `只改一步`
   - `异线旁听席`
-- `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness`。
+- `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
+- ending-room / roundtable 的 replay/share/import 已完成专项签收。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 
 ## 当前工程边界
@@ -50,11 +51,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近一次稳定总链签收工件位于：
   - `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`
 - 当前仍在继续收口的内容：
-  - ending-room replay/share/import 专项签收
   - follow-up 与经典模式的流式一致性
-  - Oracle 更深的 persona vocabulary / theme atmosphere
-  - Oracle transcript 文本稳定性与溢出契约
-  - `trait_mix / fault_line_first / witness_augmented` 等后续桌型
+  - `pretext` 更深的 transcript 运行时稳定化（`P2+` 尚未启动）
+  - Oracle 更深的回归、跨浏览器与 corner-case hardening
 
 ## 文档入口
 

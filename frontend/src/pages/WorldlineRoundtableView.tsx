@@ -13,6 +13,7 @@ import {
 import { copyText } from '../lib/copyText';
 import {
   buildBranchEndingRoomCandidates,
+  type EndingRoomCandidate,
 } from '../lib/endingRoomCandidates';
 import {
   buildOracleReplayShareUrl,
@@ -43,6 +44,7 @@ import type {
   AgentInfo,
   EndingRoomParticipant,
   RoundtableRepresentativeSelection,
+  RoundtableSelectionRecipe,
   RoundtableWitnessSelection,
   EndingRoomThreadSnapshot,
   Scenario,
@@ -113,7 +115,7 @@ function getRoundtableModeNote(
     : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
 }
 
-type RoundtableSelectionMode = 'representative' | 'manual_shortlist' | 'expert_witness';
+type RoundtableSelectionMode = RoundtableSelectionRecipe;
 
 const MANUAL_SHORTLIST_MIN = 2;
 const MANUAL_SHORTLIST_MAX = 4;
@@ -170,6 +172,166 @@ function normalizeManualShortlist(branchOrder: string[], selectedBranchIds: stri
 
 function buildDefaultManualShortlist(branchOrder: string[]): string[] {
   return branchOrder.slice(0, Math.min(MANUAL_SHORTLIST_MIN, branchOrder.length));
+}
+
+type CandidateVoiceVariant =
+  | 'imperial'
+  | 'field'
+  | 'finance'
+  | 'market'
+  | 'faith'
+  | 'industry'
+  | 'frontier'
+  | 'survival'
+  | 'scholar'
+  | 'civic'
+  | 'plain';
+
+function detectCandidateVoiceVariant(candidate: Pick<EndingRoomCandidate, 'name' | 'role' | 'persona'>): CandidateVoiceVariant {
+  const normalized = `${candidate.name} ${candidate.role} ${candidate.persona ?? ''}`.trim().toLowerCase();
+  if (/(皇|king|queen|emperor|crown|court)/u.test(normalized)) return 'imperial';
+  if (/(将|统帅|指挥官|舰队|commander|captain|marshal|fleet|guard)/u.test(normalized)) return 'field';
+  if (/(银行|行长|财政|金融|清算|流动性|bank|banker|finance|treasury|settlement|liquidity)/u.test(normalized)) return 'finance';
+  if (/(摊主|商户|商贩|市场|港口|贸易|货运|vendor|merchant|market|port|trade|freight)/u.test(normalized)) return 'market';
+  if (/(祭司|祭坛|神官|神谕|priest|cleric|oracle|temple|faith|ritual|covenant)/u.test(normalized)) return 'faith';
+  if (/(工程|工厂|电网|产能|后勤|调度|engineer|factory|industrial|grid|throughput|logistics|plant)/u.test(normalized)) return 'industry';
+  if (/(边疆|拓荒|殖民|轨道|补给舱|生命维持|pilot|orbital|frontier|colony|expedition|convoy|airlock|life support)/u.test(normalized)) return 'frontier';
+  if (/(避难|药品|口粮|撤离|医疗|scout|medic|refuge|ration|evacuation|shelter|survival)/u.test(normalized)) return 'survival';
+  if (/(史官|书记官|学者|档案|证人|scribe|scholar|historian|witness|record|ledger|clerk)/u.test(normalized)) return 'scholar';
+  if (/(议长|书记|委员|minister|speaker|council|administrator|governor|civic)/u.test(normalized)) return 'civic';
+  return 'plain';
+}
+
+function chooseTraitMixRepresentatives(
+  branchOrder: string[],
+  branchCandidates: Record<string, EndingRoomCandidate[]>,
+  current: Record<string, string>,
+): { next: Record<string, string>; changed: boolean } {
+  const defaultRepresentatives = chooseRepresentativeDefaults(branchOrder, branchCandidates, current).next;
+  const next = { ...defaultRepresentatives };
+  const usedVariants = new Map<CandidateVoiceVariant, number>();
+  let changed = false;
+
+  branchOrder.forEach((branchId, branchIndex) => {
+    const candidates = branchCandidates[branchId] ?? [];
+    if (candidates.length === 0) return;
+    const rotationIndex = branchIndex % candidates.length;
+    const rotated = [
+      ...candidates.slice(rotationIndex),
+      ...candidates.slice(0, rotationIndex),
+    ];
+    const ranked = rotated.sort((left, right) => {
+      const leftVariant = detectCandidateVoiceVariant(left);
+      const rightVariant = detectCandidateVoiceVariant(right);
+      const leftScore = Math.round(left.impactScore * 100)
+        + left.keyMomentHits * 14
+        + left.contributionCount * 5
+        + left.lastRound
+        + ((usedVariants.get(leftVariant) ?? 0) === 0 ? 38 : 0)
+        - (usedVariants.get(leftVariant) ?? 0) * 28
+        - (leftVariant === 'plain' ? 10 : 0)
+        - (left.fallbackCast ? 6 : 0)
+        + (defaultRepresentatives[branchId] === left.id ? 2 : 0);
+      const rightScore = Math.round(right.impactScore * 100)
+        + right.keyMomentHits * 14
+        + right.contributionCount * 5
+        + right.lastRound
+        + ((usedVariants.get(rightVariant) ?? 0) === 0 ? 38 : 0)
+        - (usedVariants.get(rightVariant) ?? 0) * 28
+        - (rightVariant === 'plain' ? 10 : 0)
+        - (right.fallbackCast ? 6 : 0)
+        + (defaultRepresentatives[branchId] === right.id ? 2 : 0);
+      return rightScore - leftScore || right.name.localeCompare(left.name);
+    });
+    const chosen = ranked[0];
+    if (!chosen) return;
+    if (next[branchId] !== chosen.id) {
+      next[branchId] = chosen.id;
+      changed = true;
+    }
+    const chosenVariant = detectCandidateVoiceVariant(chosen);
+    usedVariants.set(chosenVariant, (usedVariants.get(chosenVariant) ?? 0) + 1);
+  });
+
+  const stayedDefault = branchOrder.every((branchId) => (
+    next[branchId] != null && next[branchId] === defaultRepresentatives[branchId]
+  ));
+  if (stayedDefault) {
+    for (const [branchIndex, branchId] of branchOrder.entries()) {
+      const candidates = branchCandidates[branchId] ?? [];
+      const alternative = candidates[(branchIndex + 1) % candidates.length];
+      if (!alternative) continue;
+      next[branchId] = alternative.id;
+      changed = true;
+      break;
+    }
+  }
+
+  return { next, changed };
+}
+
+function extractBranchLexicon(branch: { title: string; insight: string; key_moments?: string[] }): Set<string> {
+  const joined = `${branch.title} ${branch.insight} ${(branch.key_moments ?? []).join(' ')}`.toLowerCase();
+  return new Set(joined.match(/[\p{L}\p{N}_-]+/gu) ?? []);
+}
+
+function chooseFaultLineBranchIds(
+  branchOrder: string[],
+  branchesById: Map<string, StoryData['branches'][number]>,
+  branchCandidates: Record<string, EndingRoomCandidate[]>,
+): string[] {
+  if (branchOrder.length <= 2) {
+    return [...branchOrder];
+  }
+
+  const anchorBranchId = branchOrder[0];
+  const anchorBranch = branchesById.get(anchorBranchId);
+  if (!anchorBranch) {
+    return branchOrder.slice(0, 2);
+  }
+  const anchorVariant = detectCandidateVoiceVariant(branchCandidates[anchorBranchId]?.[0] ?? {
+    name: '',
+    role: '',
+    persona: '',
+  });
+  const anchorLexicon = extractBranchLexicon(anchorBranch);
+
+  let bestBranchId = branchOrder[1] ?? anchorBranchId;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const branchId of branchOrder.slice(1)) {
+    const branch = branchesById.get(branchId);
+    if (!branch) continue;
+    const branchVariant = detectCandidateVoiceVariant(branchCandidates[branchId]?.[0] ?? {
+      name: '',
+      role: '',
+      persona: '',
+    });
+    const branchLexicon = extractBranchLexicon(branch);
+    const sharedTokenCount = [...anchorLexicon].filter((token) => branchLexicon.has(token)).length;
+    const unionCount = new Set([...anchorLexicon, ...branchLexicon]).size || 1;
+    const lexicalDistance = 1 - (sharedTokenCount / unionCount);
+    const score = Math.abs((anchorBranch.probability ?? 0) - (branch.probability ?? 0)) * 100
+      + (anchorVariant === branchVariant ? 0 : 34)
+      + lexicalDistance * 48
+      + Math.round((branchCandidates[branchId]?.[0]?.impactScore ?? 0) * 10);
+    if (score > bestScore) {
+      bestScore = score;
+      bestBranchId = branchId;
+    }
+  }
+
+  return branchOrder.filter((branchId) => branchId === anchorBranchId || branchId === bestBranchId);
+}
+
+function chooseWitnessAugmentedSelection(
+  witnessCandidates: WitnessCandidate[],
+): RoundtableWitnessSelection | null {
+  const ranked = [...witnessCandidates].sort((left, right) => (
+    right.impactScore - left.impactScore
+    || right.name.localeCompare(left.name)
+  ));
+  const winner = ranked.find((candidate) => candidate.branchId !== ranked[0]?.branchId) ?? ranked[0];
+  return winner ? { branchId: winner.branchId, agentId: winner.agentId } : null;
 }
 
 function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
@@ -467,7 +629,7 @@ export default function WorldlineRoundtableView() {
   }, [representatives, selectedRepresentativeId]);
 
   useEffect(() => {
-    if (replayPayload || !effectiveSnapshot || representatives.length === 0) {
+    if (replayPayload || !effectiveSnapshot || representatives.length === 0 || editingRepresentatives) {
       return;
     }
     setSelectedRepresentatives((current) => {
@@ -481,10 +643,10 @@ export default function WorldlineRoundtableView() {
       }
       return changed ? next : current;
     });
-  }, [effectiveSnapshot?.id, replayPayload, representatives]);
+  }, [editingRepresentatives, effectiveSnapshot?.id, replayPayload, representatives]);
 
   useEffect(() => {
-    if (replayPayload || branchOrder.length === 0 || representatives.length === 0) {
+    if (replayPayload || branchOrder.length === 0 || representatives.length === 0 || editingRepresentatives) {
       return;
     }
     const liveBranchIds = normalizeManualShortlist(
@@ -497,27 +659,62 @@ export default function WorldlineRoundtableView() {
       return;
     }
     setManualShortlistBranchIds(liveBranchIds);
-    setSelectionMode(liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative');
-  }, [branchOrder, replayPayload, representatives]);
+    setSelectionMode(
+      effectiveSnapshot?.selection_recipe
+      ?? (liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative'),
+    );
+  }, [branchOrder, editingRepresentatives, effectiveSnapshot?.selection_recipe, replayPayload, representatives]);
 
   useEffect(() => {
-    if (replayPayload || !effectiveSnapshot) {
+    if (replayPayload || !effectiveSnapshot || editingRepresentatives) {
       return;
     }
     const witness = participants.find((participant) => participant.role_slot === 'critic');
     if (!witness?.source_branch_id || !witness.source_agent_id) {
       return;
     }
-    setSelectionMode('expert_witness');
+    if (effectiveSnapshot.selection_recipe === 'witness_augmented') {
+      setSelectionMode('witness_augmented');
+    } else {
+      setSelectionMode('expert_witness');
+    }
     setSelectedWitness({
       branchId: witness.source_branch_id,
       agentId: witness.source_agent_id,
     });
-  }, [effectiveSnapshot?.id, participants, replayPayload]);
+  }, [editingRepresentatives, effectiveSnapshot, participants, replayPayload]);
 
   useEffect(() => {
     setReplayActiveThreadId(replayPayload?.activeThreadId ?? null);
   }, [replayPayload?.activeThreadId, replayPayload?.roomSnapshot?.id]);
+
+  useEffect(() => {
+    if (!replayPayload) {
+      return;
+    }
+    const replayRepresentativeBranches = normalizeManualShortlist(
+      branchOrder,
+      replayPayload.roomSnapshot.participants
+        .filter((participant) => participant.role_slot === 'representative')
+        .map((participant) => participant.source_branch_id)
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (replayRepresentativeBranches.length > 0) {
+      setManualShortlistBranchIds(replayRepresentativeBranches);
+    }
+    if (replayPayload.roomSnapshot.selection_recipe) {
+      setSelectionMode(replayPayload.roomSnapshot.selection_recipe);
+      return;
+    }
+    const hasWitness = replayPayload.roomSnapshot.participants.some((participant) => participant.role_slot === 'critic');
+    setSelectionMode(
+      hasWitness
+        ? 'expert_witness'
+        : (replayRepresentativeBranches.length > 0 && replayRepresentativeBranches.length < branchOrder.length
+          ? 'manual_shortlist'
+          : 'representative'),
+    );
+  }, [branchOrder, replayPayload]);
 
   const currentTurns = useMemo(() => {
     const roomTurns = effectiveSnapshot?.turns ?? [];
@@ -751,13 +948,14 @@ export default function WorldlineRoundtableView() {
     }
   }, [importingReplay, isZh, navigate, replayPayload]);
 
+  const selectionUsesShortlist = selectionMode === 'manual_shortlist' || selectionMode === 'fault_line_first';
   const selectedBranchIdsForLaunch = useMemo(
     () => (
-      selectionMode === 'manual_shortlist'
+      selectionUsesShortlist
         ? normalizeManualShortlist(branchOrder, manualShortlistBranchIds)
         : branchOrder
     ),
-    [branchOrder, manualShortlistBranchIds, selectionMode],
+    [branchOrder, manualShortlistBranchIds, selectionUsesShortlist],
   );
   const witnessCandidates = useMemo<WitnessCandidate[]>(
     () => selectedBranchIdsForLaunch.flatMap((branchId) => {
@@ -777,6 +975,28 @@ export default function WorldlineRoundtableView() {
     }),
     [branchCandidates, branchesById, selectedBranchIdsForLaunch, selectedRepresentatives],
   );
+
+  useEffect(() => {
+    if (replayPayload || branchOrder.length === 0) {
+      return;
+    }
+    if (selectionMode === 'trait_mix') {
+      setSelectedRepresentatives((current) => {
+        const { next, changed } = chooseTraitMixRepresentatives(branchOrder, branchCandidates, current);
+        return changed ? next : current;
+      });
+      setSelectedWitness(null);
+      return;
+    }
+    if (selectionMode === 'fault_line_first') {
+      setManualShortlistBranchIds(chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates));
+      setSelectedWitness(null);
+      return;
+    }
+    if (selectionMode === 'witness_augmented') {
+      setSelectedWitness((current) => current ?? chooseWitnessAugmentedSelection(witnessCandidates));
+    }
+  }, [branchCandidates, branchOrder, branchesById, replayPayload, selectionMode, witnessCandidates]);
 
   useEffect(() => {
     if (replayPayload || witnessCandidates.length === 0) {
@@ -828,12 +1048,23 @@ export default function WorldlineRoundtableView() {
         return buildDefaultManualShortlist(branchOrder);
       });
     }
+    if (nextMode === 'fault_line_first') {
+      setManualShortlistBranchIds(chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates));
+      setSelectedWitness(null);
+    }
+    if (nextMode === 'trait_mix') {
+      setSelectedRepresentatives((current) => chooseTraitMixRepresentatives(branchOrder, branchCandidates, current).next);
+      setSelectedWitness(null);
+    }
     if (nextMode === 'expert_witness') {
       setSelectedWitness((current) => current ?? (witnessCandidates[0]
         ? { branchId: witnessCandidates[0].branchId, agentId: witnessCandidates[0].agentId }
         : null));
     }
-  }, [branchOrder, manualShortlistMax, manualShortlistMin, witnessCandidates]);
+    if (nextMode === 'witness_augmented') {
+      setSelectedWitness(chooseWitnessAugmentedSelection(witnessCandidates));
+    }
+  }, [branchCandidates, branchOrder, branchesById, manualShortlistMax, manualShortlistMin, witnessCandidates]);
 
   const handleLaunchRoundtable = useCallback(async () => {
     if (!scenario?.id || launchingRoom || selectedBranchIdsForLaunch.length === 0) return;
@@ -852,7 +1083,7 @@ export default function WorldlineRoundtableView() {
               : null;
           })
           .filter((value): value is RoundtableRepresentativeSelection => Boolean(value)),
-        selectedWitness: selectionMode === 'expert_witness'
+        selectedWitness: (selectionMode === 'expert_witness' || selectionMode === 'witness_augmented')
           ? (
             selectedWitness
             ?? (witnessCandidates[0]
@@ -860,6 +1091,7 @@ export default function WorldlineRoundtableView() {
               : null)
           )
           : null,
+        selectionRecipe: selectionMode,
         language: uiLanguage,
       });
       await loadRoom(roomId);
@@ -1164,6 +1396,12 @@ export default function WorldlineRoundtableView() {
               <p className="worldline-roundtable-picker__hint">
                 {selectionMode === 'manual_shortlist'
                   ? t('roundtable.shortlist_hint')
+                  : selectionMode === 'trait_mix'
+                    ? t('roundtable.trait_mix_hint')
+                    : selectionMode === 'fault_line_first'
+                      ? t('roundtable.fault_line_hint')
+                      : selectionMode === 'witness_augmented'
+                        ? t('roundtable.witness_augmented_hint')
                   : (isZh
                     ? (effectiveSnapshot
                       ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
@@ -1195,7 +1433,30 @@ export default function WorldlineRoundtableView() {
                 >
                   {t('roundtable.selection_mode_expert_witness')}
                 </button>
-                {selectionMode === 'manual_shortlist' && (
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'trait_mix' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('trait_mix')}
+                >
+                  {t('roundtable.selection_mode_trait_mix')}
+                </button>
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'fault_line_first' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('fault_line_first')}
+                  disabled={branchOrder.length < 2}
+                >
+                  {t('roundtable.selection_mode_fault_line_first')}
+                </button>
+                <button
+                  type="button"
+                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'witness_augmented' ? 'is-active' : ''}`}
+                  onClick={() => handleSelectionModeChange('witness_augmented')}
+                  disabled={witnessCandidates.length === 0}
+                >
+                  {t('roundtable.selection_mode_witness_augmented')}
+                </button>
+                {selectionUsesShortlist && (
                   <span className="worldline-roundtable-picker__count">
                     {t('roundtable.shortlist_count', {
                       count: selectedBranchIdsForLaunch.length,
@@ -1237,8 +1498,8 @@ export default function WorldlineRoundtableView() {
           <div className="worldline-roundtable-picker-grid">
             {(storyData?.branches ?? []).map((branch) => {
               const candidates = branchCandidates[branch.id] ?? [];
-              const branchSelected = selectionMode !== 'manual_shortlist' || selectedBranchIdsForLaunch.includes(branch.id);
-              const branchToggleDisabled = selectionMode !== 'manual_shortlist'
+              const branchSelected = !selectionUsesShortlist || selectedBranchIdsForLaunch.includes(branch.id);
+              const branchToggleDisabled = !selectionUsesShortlist
                 || (
                   branchSelected
                     ? selectedBranchIdsForLaunch.length <= manualShortlistMin
@@ -1251,7 +1512,7 @@ export default function WorldlineRoundtableView() {
                       <strong>{branch.title}</strong>
                       <span>{Math.round((branch.probability ?? 0) * 100)}%</span>
                     </div>
-                {selectionMode === 'manual_shortlist' && branchOrder.length > MANUAL_SHORTLIST_MIN && (
+                {selectionUsesShortlist && branchOrder.length > MANUAL_SHORTLIST_MIN && (
                       <button
                         type="button"
                         className={`worldline-roundtable-picker-branch__toggle ${branchSelected ? 'is-active' : ''}`}
@@ -1296,17 +1557,19 @@ export default function WorldlineRoundtableView() {
               );
             })}
           </div>
-          {selectionMode === 'expert_witness' && (
+          {(selectionMode === 'expert_witness' || selectionMode === 'witness_augmented') && (
             <section className="worldline-roundtable-picker-witness">
               <div className="worldline-roundtable-card__heading">
-                <h3>{t('roundtable.witness_section')}</h3>
+                <h3>{selectionMode === 'witness_augmented' ? t('roundtable.witness_augmented_section') : t('roundtable.witness_section')}</h3>
                 {selectedWitness && (
                   <span className="worldline-roundtable-picker__count">
                     {t('roundtable.witness_selected')}
                   </span>
                 )}
               </div>
-              <p className="worldline-roundtable-picker__hint">{t('roundtable.witness_hint')}</p>
+              <p className="worldline-roundtable-picker__hint">
+                {selectionMode === 'witness_augmented' ? t('roundtable.witness_augmented_hint') : t('roundtable.witness_hint')}
+              </p>
               <div className="worldline-roundtable-picker-witness__options">
                 {witnessCandidates.map((candidate) => {
                   const selected = selectedWitness?.branchId === candidate.branchId && selectedWitness?.agentId === candidate.agentId;
