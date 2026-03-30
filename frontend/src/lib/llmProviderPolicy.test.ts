@@ -36,6 +36,8 @@ describe('llmProviderPolicy', () => {
       baseUrl: ' https://example.com/v1/chat/completions ',
       model: ' gpt-test ',
       reasoningEffort: ' medium ',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
     });
 
     expect(loadLlmProviderPolicy()).toEqual({
@@ -44,6 +46,25 @@ describe('llmProviderPolicy', () => {
       model: 'gpt-test',
       reasoningEffort: 'medium',
       disableUserQuota: false,
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
+    });
+  });
+
+  it('preserves explicit zero rate limits instead of clearing them', () => {
+    saveLlmProviderPolicy({
+      requestsPerMinute: 0,
+      tokensPerMinute: 0,
+    });
+
+    expect(loadLlmProviderPolicy()).toEqual({
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      disableUserQuota: false,
+      requestsPerMinute: 0,
+      tokensPerMinute: 0,
     });
   });
 
@@ -67,6 +88,8 @@ describe('llmProviderPolicy', () => {
       model: '',
       reasoningEffort: '',
       disableUserQuota: false,
+      requestsPerMinute: null,
+      tokensPerMinute: null,
     });
   });
 
@@ -116,6 +139,8 @@ describe('llmProviderPolicy', () => {
       baseUrl: 'https://example.com/v1',
       model: 'gpt-legacy',
       reasoningEffort: 'high',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
     }));
 
     expect(loadLlmProviderPolicy()).toEqual({
@@ -124,6 +149,8 @@ describe('llmProviderPolicy', () => {
       model: 'gpt-legacy',
       reasoningEffort: 'high',
       disableUserQuota: false,
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
     });
     expect(window.sessionStorage.getItem('swarmoracle.llm-provider-policy.v1')).toContain('sk-legacy');
     expect(window.localStorage.getItem('swarmoracle.llm-provider-policy.v1')).toBeNull();

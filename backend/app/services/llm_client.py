@@ -17,7 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from sqlalchemy import create_engine
@@ -52,10 +52,25 @@ def _sanitize_error(msg: str) -> str:
     return msg
 
 
+def _resolve_llm_api_url(url: str | None = None) -> str:
+    """Resolve a provider base URL into a concrete OpenAI-compatible endpoint."""
+    target_url = (url or settings.LLM_RESPONSES_URL).strip()
+    if not target_url:
+        target_url = settings.LLM_RESPONSES_URL
+
+    parsed = urlparse(target_url)
+    normalized_path = parsed.path.rstrip("/")
+    if normalized_path.endswith("/chat/completions") or normalized_path.endswith("/responses"):
+        return urlunparse(parsed._replace(path=normalized_path))
+
+    resolved_path = f"{normalized_path}/chat/completions" if normalized_path else "/chat/completions"
+    return urlunparse(parsed._replace(path=resolved_path))
+
+
 def _is_chat_completions_api(url: str | None = None) -> bool:
     """Detect API mode at call time (not module load) for test flexibility."""
-    target_url = url or settings.LLM_RESPONSES_URL
-    return "chat/completions" in target_url
+    target_url = _resolve_llm_api_url(url)
+    return target_url.endswith("/chat/completions")
 
 
 class LLMError(Exception):
@@ -64,6 +79,14 @@ class LLMError(Exception):
 
 class LLMBackpressureError(LLMError):
     """Raised when the server-side LLM queue is saturated."""
+
+
+class LLMRateLimitWindowError(LLMBackpressureError):
+    """Raised when a request must wait for the next RPM/TPM window."""
+
+    def __init__(self, message: str, *, wait_seconds: float):
+        super().__init__(message)
+        self.wait_seconds = max(0.05, wait_seconds)
 
 
 class LLMCircuitOpenError(LLMError):
@@ -101,6 +124,18 @@ def sanitize_untrusted_text(text: str, *, max_chars: int = 4000) -> str:
     return normalized
 
 
+def _strip_reasoning_blocks(text: str) -> str:
+    """Remove provider-emitted reasoning blocks from user-visible text output."""
+    cleaned = text
+    pattern = re.compile(r"^\s*<think>[\s\S]*?</think>\s*", re.IGNORECASE)
+    while True:
+        next_cleaned = pattern.sub("", cleaned, count=1)
+        if next_cleaned == cleaned:
+            break
+        cleaned = next_cleaned
+    return cleaned.lstrip()
+
+
 def has_prompt_injection_markers(text: str) -> bool:
     """Detect common prompt-injection phrasing in untrusted text."""
     lowered = text.lower()
@@ -122,9 +157,12 @@ class LLMRequestContext:
 
     quota_key: str | None = None
     purpose: str | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
 
 
 _REQUEST_CONTEXT = ContextVar("llm_request_context", default=LLMRequestContext())
+_REQUEST_SCOPE_UNSET = object()
 _guard_lock = asyncio.Lock()
 _pending_requests = 0
 _pending_by_quota: dict[str, int] = defaultdict(int)
@@ -133,22 +171,51 @@ _provider_circuit_until: dict[str, float] = defaultdict(float)
 _global_semaphore: asyncio.Semaphore | None = None
 _global_semaphore_limit = 0
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
+_RUNTIME_RATE_LIMIT_TABLE = "llm_runtime_rate_limit"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
 _SQLITE_RUNTIME_GUARD_DB_TIMEOUT_SECONDS = 1.0
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_CACHE_TTL_SECONDS = 120.0
 _runtime_guard_table_ensured_keys: set[str] = set()
+_runtime_rate_limit_table_ensured_keys: set[str] = set()
 _runtime_guard_table_ensured_keys_lock = threading.Lock()
+_runtime_rate_limit_table_ensured_keys_lock = threading.Lock()
 _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
 _STREAM_SUPPORT_CACHE_TTL_SECONDS = 300.0
 _stream_support_cache: dict[str, tuple[float, bool, str | None]] = {}
 _stream_support_cache_lock = threading.Lock()
+_rate_limit_requests: dict[str, dict[int, int]] = defaultdict(dict)
+_rate_limit_tokens: dict[str, dict[int, int]] = defaultdict(dict)
 
 
 @contextmanager
-def llm_request_scope(*, quota_key: str | None = None, purpose: str | None = None):
+def llm_request_scope(
+    *,
+    quota_key: str | None | object = _REQUEST_SCOPE_UNSET,
+    purpose: str | None | object = _REQUEST_SCOPE_UNSET,
+    requests_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
+    tokens_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
+):
     """Attach request-scoped quota metadata to downstream LLM calls."""
-    token = _REQUEST_CONTEXT.set(LLMRequestContext(quota_key=quota_key, purpose=purpose))
+    current = _REQUEST_CONTEXT.get()
+    token = _REQUEST_CONTEXT.set(
+        LLMRequestContext(
+            quota_key=current.quota_key if quota_key is _REQUEST_SCOPE_UNSET else quota_key,
+            purpose=current.purpose if purpose is _REQUEST_SCOPE_UNSET else purpose,
+            requests_per_minute=(
+                current.requests_per_minute
+                if requests_per_minute is _REQUEST_SCOPE_UNSET
+                else requests_per_minute
+            ),
+            tokens_per_minute=(
+                current.tokens_per_minute
+                if tokens_per_minute is _REQUEST_SCOPE_UNSET
+                else tokens_per_minute
+            ),
+        )
+    )
     try:
         yield
     finally:
@@ -162,19 +229,29 @@ def _normalize_quota_key(raw: str | None) -> str | None:
     return normalized or None
 
 
+def _coerce_optional_non_negative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def _provider_key(base_url: str | None) -> str:
-    return (base_url or settings.LLM_RESPONSES_URL).strip().lower()
+    return _resolve_llm_api_url(base_url).strip().lower()
 
 
 def _stream_support_cache_key(*, base_url: str | None, model: str | None) -> str:
-    target_url = (base_url or settings.LLM_RESPONSES_URL).strip().lower()
+    target_url = _resolve_llm_api_url(base_url).strip().lower()
     target_model = (model or settings.LLM_MODEL_NAME).strip().lower()
     return f"{target_url}::{target_model}"
 
 
 def is_local_provider_url(base_url: str | None = None) -> bool:
     """Return whether the effective LLM endpoint points to a local/self-hosted host."""
-    effective_url = (base_url or settings.LLM_RESPONSES_URL).strip()
+    effective_url = _resolve_llm_api_url(base_url)
     hostname = (urlparse(effective_url).hostname or "").strip().lower()
     return hostname in _LOCAL_LLM_HOSTS
 
@@ -246,6 +323,40 @@ def _get_user_pending_limit() -> int | None:
     return max(1, settings.LLM_USER_MAX_PENDING)
 
 
+def _get_rate_limits() -> tuple[int | None, int | None]:
+    """Return effective RPM/TPM caps, or None for each when disabled."""
+    request_context = _REQUEST_CONTEXT.get()
+    rpm = _coerce_optional_non_negative_int(
+        request_context.requests_per_minute
+        if request_context.requests_per_minute is not None
+        else settings.LLM_REQUESTS_PER_MINUTE
+    )
+    tpm = _coerce_optional_non_negative_int(
+        request_context.tokens_per_minute
+        if request_context.tokens_per_minute is not None
+        else settings.LLM_TOKENS_PER_MINUTE
+    )
+    return (
+        None if rpm is None or rpm <= 0 else max(1, rpm),
+        None if tpm is None or tpm <= 0 else max(1, tpm),
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token usage from plain-text input (conservative fallback)."""
+    if not text:
+        return 1
+    normalized = text.replace("\n", " ")
+    return max(1, len(normalized) // 4 + 1)
+
+
+def _normalize_reasoning_effort(value: str | None) -> str | None:
+    normalized = (value or "").strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    return None
+
+
 def _build_llm_payload(
     *,
     input_text: str,
@@ -258,7 +369,7 @@ def _build_llm_payload(
     payload: dict[str, Any] = {
         "model": model or settings.LLM_MODEL_NAME,
     }
-    effort = reasoning_effort or settings.LLM_REASONING_EFFORT
+    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
 
     if is_chat:
         payload["messages"] = [{"role": "user", "content": input_text}]
@@ -302,7 +413,7 @@ async def _probe_provider_request(
     timeout: float,
 ) -> tuple[bool, str | None]:
     """Issue one raw provider request without runtime-guard quotas for probe purposes."""
-    target_url = base_url or settings.LLM_RESPONSES_URL
+    target_url = _resolve_llm_api_url(base_url)
     target_key = api_key or settings.LLM_API_KEY
     payload, _ = _build_llm_payload(
         input_text="Respond with exactly: OK",
@@ -335,6 +446,8 @@ async def measure_provider_parallelism(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
     max_parallelism: int = 8,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
@@ -344,10 +457,34 @@ async def measure_provider_parallelism(
     provider/API-key pair rather than the backend's fairness controls.
     """
     effective_model = model or settings.LLM_MODEL_NAME
+    configured_rpm = _coerce_optional_non_negative_int(requests_per_minute)
+    configured_tpm = _coerce_optional_non_negative_int(tokens_per_minute)
     tested_parallelism = max(1, min(max_parallelism, 12))
     local_provider = is_local_provider_url(base_url)
     estimated_parallelism = 0
     failure_reason: str | None = None
+
+    # When the caller explicitly asks for a low request budget, probing with
+    # 1..N concurrent requests burns the provider quota before the real run
+    # starts. In that case, return a conservative recommendation without
+    # issuing additional fan-out requests beyond the health check.
+    if configured_rpm is not None and configured_rpm > 0 and configured_rpm <= 12:
+        estimated_parallelism = max(1, min(configured_rpm, 2))
+        return {
+            "status": "ok",
+            "model": effective_model,
+            "local_provider": local_provider,
+            "allow_disable_user_quota": local_provider,
+            "estimated_parallelism": estimated_parallelism,
+            "tested_parallelism": 1,
+            "recommended": _estimate_probe_recommendations(estimated_parallelism),
+            "failure": None,
+            "rate_limit_hint": {
+                "requests_per_minute": configured_rpm,
+                "tokens_per_minute": configured_tpm,
+                "mode": "configured_budget",
+            },
+        }
 
     async with httpx.AsyncClient() as client:
         for width in range(1, tested_parallelism + 1):
@@ -458,6 +595,226 @@ def _runtime_guard_db_path() -> str | None:
     if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
         return None
     return db_path
+
+
+def _rate_window_start(now: float | None = None) -> int:
+    """Return the current RPM/TPM bucket index."""
+    return int((now or time.time()) // _RATE_LIMIT_WINDOW_SECONDS)
+
+
+def _seconds_until_next_rate_window(now: float | None = None) -> float:
+    current = now or time.time()
+    next_window = (_rate_window_start(current) + 1) * _RATE_LIMIT_WINDOW_SECONDS
+    return max(0.05, next_window - current)
+
+
+def _prune_rate_state(state: dict[str, dict[int, int]], window_start: int) -> None:
+    """Drop expired entries from a provider->window state map."""
+    cutoff = window_start - 1
+    stale_keys = []
+    for provider_key, windows in list(state.items()):
+        for existing_window in list(windows.keys()):
+            if existing_window < cutoff:
+                stale_keys.append((provider_key, existing_window))
+        if not windows:
+            continue
+        if all(existing_window < cutoff for existing_window in windows.keys()):
+            state.pop(provider_key, None)
+
+    for provider_key, existing_window in stale_keys:
+        windows = state.get(provider_key)
+        if windows is not None:
+            windows.pop(existing_window, None)
+
+
+def _consume_in_process_rate_limit(*, provider_key: str, estimated_tokens: int) -> None:
+    """Consume one request + estimated tokens against in-process RPM/TPM buckets."""
+    rpm_limit, tpm_limit = _get_rate_limits()
+    if rpm_limit is None and tpm_limit is None:
+        return
+
+    now = time.time()
+    window_start = _rate_window_start(now)
+    provider_key = provider_key.strip().lower()
+    if provider_key == "":
+        provider_key = "default"
+
+    _prune_rate_state(_rate_limit_requests, window_start)
+    _prune_rate_state(_rate_limit_tokens, window_start)
+
+    request_windows = _rate_limit_requests[provider_key]
+    token_windows = _rate_limit_tokens[provider_key]
+    request_windows.setdefault(window_start, 0)
+    token_windows.setdefault(window_start, 0)
+
+    if rpm_limit is not None and request_windows[window_start] + 1 > rpm_limit:
+        raise LLMRateLimitWindowError(
+            "LLM request-rate limit reached; waiting for next window",
+            wait_seconds=_seconds_until_next_rate_window(now),
+        )
+
+    if tpm_limit is not None and token_windows[window_start] + estimated_tokens > tpm_limit:
+        raise LLMRateLimitWindowError(
+            "LLM token-rate limit reached; waiting for next window",
+            wait_seconds=_seconds_until_next_rate_window(now),
+        )
+
+    request_windows[window_start] += 1
+    token_windows[window_start] += estimated_tokens
+
+
+def _ensure_rate_window_table(conn: Any, *, cache_key: str | None = None) -> None:
+    if cache_key is not None:
+        with _runtime_rate_limit_table_ensured_keys_lock:
+            if cache_key in _runtime_rate_limit_table_ensured_keys:
+                return
+    _exec_runtime_guard_sql(
+        conn,
+        f"""
+        CREATE TABLE IF NOT EXISTS {_RUNTIME_RATE_LIMIT_TABLE} (
+            provider_key TEXT NOT NULL,
+            window_start INTEGER NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            token_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(provider_key, window_start)
+        )
+        """
+    )
+    _exec_runtime_guard_sql(
+        conn,
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{_RUNTIME_RATE_LIMIT_TABLE}_provider_key
+        ON {_RUNTIME_RATE_LIMIT_TABLE} (provider_key)
+        """
+    )
+    if cache_key is not None:
+        with _runtime_rate_limit_table_ensured_keys_lock:
+            _runtime_rate_limit_table_ensured_keys.add(cache_key)
+
+
+def _consume_sqlite_rate_limit(
+    *,
+    conn: Any,
+    provider_key: str,
+    estimated_tokens: int,
+    cache_key: str | None = None,
+) -> None:
+    """Reserve one RPM/TPM slot in SQLite for the current minute window."""
+    rpm_limit, tpm_limit = _get_rate_limits()
+    if rpm_limit is None and tpm_limit is None:
+        return
+
+    estimated_tokens = max(1, estimated_tokens)
+    provider_key = provider_key.strip().lower() or "default"
+    window_start = _rate_window_start()
+    _ensure_rate_window_table(conn, cache_key=cache_key)
+
+    _exec_runtime_guard_sql(
+        conn,
+        f"DELETE FROM {_RUNTIME_RATE_LIMIT_TABLE} WHERE window_start < ?",
+        (window_start - 1,),
+    )
+
+    request_count = int(
+        _exec_runtime_guard_sql(
+            conn,
+            (
+                f"SELECT COALESCE(MAX(request_count), 0) "
+                f"FROM {_RUNTIME_RATE_LIMIT_TABLE} "
+                f"WHERE provider_key = ? AND window_start = ?"
+            ),
+            (provider_key, window_start),
+        ).scalar_one(),
+    )
+    token_count = int(
+        _exec_runtime_guard_sql(
+            conn,
+            (
+                f"SELECT COALESCE(MAX(token_count), 0) "
+                f"FROM {_RUNTIME_RATE_LIMIT_TABLE} "
+                f"WHERE provider_key = ? AND window_start = ?"
+            ),
+            (provider_key, window_start),
+        ).scalar_one(),
+    )
+
+    if rpm_limit is not None and request_count + 1 > rpm_limit:
+        raise LLMRateLimitWindowError(
+            "LLM request-rate limit reached; waiting for next window",
+            wait_seconds=_seconds_until_next_rate_window(),
+        )
+    if tpm_limit is not None and token_count + estimated_tokens > tpm_limit:
+        raise LLMRateLimitWindowError(
+            "LLM token-rate limit reached; waiting for next window",
+            wait_seconds=_seconds_until_next_rate_window(),
+        )
+
+    _exec_runtime_guard_sql(
+        conn,
+        (
+            f"INSERT INTO {_RUNTIME_RATE_LIMIT_TABLE} "
+            f"(provider_key, window_start, request_count, token_count) "
+            f"VALUES (?, ?, ?, ?) "
+            f"ON CONFLICT(provider_key, window_start) DO UPDATE "
+            f"SET request_count = request_count + 1, "
+            f"token_count = token_count + excluded.token_count"
+        ),
+        (provider_key, window_start, 1, estimated_tokens),
+    )
+
+
+def _adjust_in_process_rate_limit_tokens(*, provider_key: str, delta_tokens: int) -> None:
+    if delta_tokens == 0:
+        return
+    window_start = _rate_window_start()
+    provider_key = provider_key.strip().lower() or "default"
+    _prune_rate_state(_rate_limit_tokens, window_start)
+    token_windows = _rate_limit_tokens[provider_key]
+    current = int(token_windows.get(window_start, 0))
+    updated = max(0, current + delta_tokens)
+    if updated == 0:
+        token_windows.pop(window_start, None)
+        if not token_windows:
+            _rate_limit_tokens.pop(provider_key, None)
+        return
+    token_windows[window_start] = updated
+
+
+def _adjust_sqlite_rate_limit_tokens(
+    *,
+    db_path: str | None,
+    provider_key: str,
+    delta_tokens: int,
+) -> None:
+    if delta_tokens == 0:
+        return
+    resolved_db_path = db_path or _runtime_guard_db_path()
+    engine, should_dispose = _get_runtime_guard_engine(resolved_db_path)
+    window_start = _rate_window_start()
+    normalized_provider_key = provider_key.strip().lower() or "default"
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _ensure_rate_window_table(conn, cache_key=resolved_db_path)
+                _exec_runtime_guard_sql(
+                    conn,
+                    (
+                        f"UPDATE {_RUNTIME_RATE_LIMIT_TABLE} "
+                        f"SET token_count = CASE "
+                        f"WHEN token_count + ? < 0 THEN 0 "
+                        f"ELSE token_count + ? END "
+                        f"WHERE provider_key = ? AND window_start = ?"
+                    ),
+                    (delta_tokens, delta_tokens, normalized_provider_key, window_start),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    finally:
+        if should_dispose:
+            engine.dispose()
 
 
 def _resolve_sqlite_db_path(path: str | None) -> str | None:
@@ -602,13 +959,17 @@ def _reserve_sqlite_runtime_slot(
     *,
     db_path: str | None = None,
     quota_key: str | None,
+    provider_key: str | None = None,
     lease_seconds: float,
+    estimated_tokens: int = 1,
 ) -> str:
     """Reserve one global runtime slot in SQLite for cross-process accounting."""
     resolved_db_path = db_path or _runtime_guard_db_path()
     reservation_id = uuid.uuid4().hex
     now = time.time()
     expires_at = now + max(lease_seconds, 30.0)
+    normalized_provider_key = (provider_key or "default").strip().lower() or "default"
+    rpm_limit, tpm_limit = _get_rate_limits()
     user_limit = _get_user_pending_limit()
     global_pending_limit = _get_global_pending_limit()
     engine, should_dispose = _get_runtime_guard_engine(resolved_db_path)
@@ -618,6 +979,13 @@ def _reserve_sqlite_runtime_slot(
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
                 _ensure_runtime_guard_table(conn, cache_key=resolved_db_path)
+                if rpm_limit is not None or tpm_limit is not None:
+                    _consume_sqlite_rate_limit(
+                        conn=conn,
+                        provider_key=normalized_provider_key,
+                        estimated_tokens=estimated_tokens,
+                        cache_key=resolved_db_path,
+                    )
                 _exec_runtime_guard_sql(
                     conn,
                     f"DELETE FROM {_RUNTIME_GUARD_TABLE} WHERE expires_at <= ?",
@@ -693,57 +1061,103 @@ async def _reserve_runtime_slot(
     quota_key: str | None,
     provider_key: str,
     lease_seconds: float,
+    estimated_tokens: int | None = None,
 ) -> str | None:
     global _pending_requests
-    now = monotonic()
-    reservation_id: str | None = None
-    use_in_process_counts = False
-    user_limit = _get_user_pending_limit()
-    global_pending_limit = _get_global_pending_limit()
-    async with _guard_lock:
-        circuit_until = _provider_circuit_until.get(provider_key, 0.0)
-        if circuit_until > now:
-            wait_seconds = max(1, int(circuit_until - now))
-            raise LLMCircuitOpenError(
-                f"LLM provider temporarily unavailable; retry after ~{wait_seconds}s"
+    effective_tokens = max(1, int(estimated_tokens or _estimate_tokens("")))
+    deadline = monotonic() + max(lease_seconds, _RATE_LIMIT_WINDOW_SECONDS * 2)
+
+    while True:
+        now = monotonic()
+        reservation_id: str | None = None
+        use_in_process_counts = False
+        wait_seconds: float | None = None
+        user_limit = _get_user_pending_limit()
+        global_pending_limit = _get_global_pending_limit()
+        rpm_limit, tpm_limit = _get_rate_limits()
+
+        async with _guard_lock:
+            circuit_until = _provider_circuit_until.get(provider_key, 0.0)
+            if circuit_until > now:
+                wait_seconds = max(1, int(circuit_until - now))
+                raise LLMCircuitOpenError(
+                    f"LLM provider temporarily unavailable; retry after ~{wait_seconds}s"
+                )
+
+            db_path = _runtime_guard_db_path()
+            should_use_sqlite = (
+                db_path is not None
+                and (
+                    global_pending_limit is not None
+                    or (quota_key is not None and user_limit is not None)
+                    or rpm_limit is not None
+                    or tpm_limit is not None
+                )
             )
 
-        db_path = _runtime_guard_db_path()
-        if db_path is not None and (global_pending_limit is not None or user_limit is not None):
-            try:
-                reservation_id = _reserve_sqlite_runtime_slot(
-                    db_path=db_path,
-                    quota_key=quota_key,
-                    lease_seconds=lease_seconds,
+            if should_use_sqlite:
+                try:
+                    reservation_id = _reserve_sqlite_runtime_slot(
+                        db_path=db_path,
+                        quota_key=quota_key,
+                        provider_key=provider_key,
+                        lease_seconds=lease_seconds,
+                        estimated_tokens=effective_tokens,
+                    )
+                except LLMRateLimitWindowError as exc:
+                    wait_seconds = exc.wait_seconds
+                except LLMBackpressureError:
+                    raise
+                except (sqlite3.Error, SQLAlchemyError) as exc:
+                    logger.warning(
+                        "SQLite runtime guard unavailable; "
+                        "falling back to in-process counts: %s",
+                        exc,
+                    )
+                    reservation_id = None
+
+            if wait_seconds is None and reservation_id is None:
+                if global_pending_limit is not None and _pending_requests >= global_pending_limit:
+                    raise LLMBackpressureError("LLM queue is full; retry later")
+
+                if quota_key and user_limit is not None and _pending_by_quota[quota_key] >= user_limit:
+                    raise LLMBackpressureError("Too many in-flight LLM requests for this user")
+
+                if rpm_limit is not None or tpm_limit is not None:
+                    try:
+                        _consume_in_process_rate_limit(
+                            provider_key=provider_key,
+                            estimated_tokens=effective_tokens,
+                        )
+                    except LLMRateLimitWindowError as exc:
+                        wait_seconds = exc.wait_seconds
+
+                use_in_process_counts = (
+                    wait_seconds is None
+                    and (
+                        global_pending_limit is not None
+                        or (quota_key is not None and user_limit is not None)
+                        or rpm_limit is not None
+                        or tpm_limit is not None
+                    )
                 )
-            except LLMBackpressureError:
-                raise
-            except (sqlite3.Error, SQLAlchemyError) as exc:
-                logger.warning(
-                    "SQLite runtime guard unavailable; "
-                    "falling back to in-process counts: %s",
-                    exc,
-                )
-                reservation_id = None
 
-        if reservation_id is None:
-            if global_pending_limit is not None and _pending_requests >= global_pending_limit:
-                raise LLMBackpressureError("LLM queue is full; retry later")
+            if wait_seconds is None and use_in_process_counts:
+                if global_pending_limit is not None:
+                    _pending_requests += 1
+                if quota_key and user_limit is not None:
+                    _pending_by_quota[quota_key] += 1
 
-            if quota_key and user_limit is not None and _pending_by_quota[quota_key] >= user_limit:
-                raise LLMBackpressureError("Too many in-flight LLM requests for this user")
-            use_in_process_counts = global_pending_limit is not None or (quota_key is not None and user_limit is not None)
+        if wait_seconds is not None:
+            if monotonic() + wait_seconds > deadline:
+                raise LLMBackpressureError("LLM rate limit wait exceeded request budget")
+            await asyncio.sleep(wait_seconds)
+            continue
 
-        if use_in_process_counts:
-            if global_pending_limit is not None:
-                _pending_requests += 1
-            if quota_key and user_limit is not None:
-                _pending_by_quota[quota_key] += 1
-
-    semaphore = _get_global_semaphore()
-    if semaphore is not None:
-        await semaphore.acquire()
-    return reservation_id
+        semaphore = _get_global_semaphore()
+        if semaphore is not None:
+            await semaphore.acquire()
+        return reservation_id
 
 
 async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | None) -> None:
@@ -789,6 +1203,59 @@ async def _record_provider_failure(provider_key: str) -> None:
             _provider_failures[provider_key] = failures
 
 
+def _extract_total_usage_tokens(data: dict[str, Any]) -> int | None:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    direct_total = _coerce_optional_non_negative_int(usage.get("total_tokens"))
+    if direct_total is not None:
+        return max(1, direct_total)
+
+    prompt_tokens = _coerce_optional_non_negative_int(
+        usage.get("prompt_tokens", usage.get("input_tokens"))
+    )
+    completion_tokens = _coerce_optional_non_negative_int(
+        usage.get("completion_tokens", usage.get("output_tokens"))
+    )
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    return max(1, (prompt_tokens or 0) + (completion_tokens or 0))
+
+
+async def _reconcile_rate_limit_usage(
+    *,
+    provider_key: str,
+    reservation_id: str | None,
+    estimated_tokens: int,
+    actual_tokens: int | None,
+) -> None:
+    tpm_limit = _get_rate_limits()[1]
+    if tpm_limit is None or actual_tokens is None:
+        return
+
+    delta_tokens = actual_tokens - max(1, estimated_tokens)
+    if delta_tokens == 0:
+        return
+
+    async with _guard_lock:
+        db_path = _runtime_guard_db_path()
+        try:
+            if db_path is not None and reservation_id is not None:
+                _adjust_sqlite_rate_limit_tokens(
+                    db_path=db_path,
+                    provider_key=provider_key,
+                    delta_tokens=delta_tokens,
+                )
+            else:
+                _adjust_in_process_rate_limit_tokens(
+                    provider_key=provider_key,
+                    delta_tokens=delta_tokens,
+                )
+        except (sqlite3.Error, SQLAlchemyError) as exc:
+            logger.warning("Failed to reconcile runtime token usage: %s", exc)
+
+
 async def llm_call(
     input_text: str,
     *,
@@ -815,16 +1282,17 @@ async def llm_call(
     """
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
-    target_url = base_url or settings.LLM_RESPONSES_URL
+    target_url = _resolve_llm_api_url(base_url)
     target_key = api_key or settings.LLM_API_KEY
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
+    estimated_tokens = _estimate_tokens(input_text)
 
     payload: dict[str, Any] = {
         "model": model or settings.LLM_MODEL_NAME,
     }
 
-    effort = reasoning_effort or settings.LLM_REASONING_EFFORT
+    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
 
     if is_chat:
         # ── Chat Completions API ──
@@ -848,7 +1316,9 @@ async def llm_call(
         quota_key=quota_key,
         provider_key=provider_key,
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
+        estimated_tokens=estimated_tokens,
     )
+    data: dict[str, Any] | None = None
     try:
         client = _get_shared_async_client()
         max_retries = 3
@@ -904,13 +1374,20 @@ async def llm_call(
             await _record_provider_failure(provider_key)
             logger.error("LLM call failed after %d attempts", max_retries + 1)
             raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
+
+        data = resp.json()
+        await _reconcile_rate_limit_usage(
+            provider_key=provider_key,
+            reservation_id=reservation_id,
+            estimated_tokens=estimated_tokens,
+            actual_tokens=_extract_total_usage_tokens(data),
+        )
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
             reservation_id=reservation_id,
         )
-
-    data = resp.json()
+    assert data is not None
 
     try:
         if is_chat:
@@ -933,6 +1410,7 @@ async def llm_call(
     usage = data.get("usage", {})
     tok_in = usage.get("prompt_tokens") or usage.get("input_tokens", "?")
     tok_out = usage.get("completion_tokens") or usage.get("output_tokens", "?")
+    text = _strip_reasoning_blocks(text)
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
                  len(text), tok_in, tok_out)
     await _record_provider_success(provider_key)
@@ -1177,7 +1655,7 @@ async def llm_call_stream(
     """
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
-    target_url = base_url or settings.LLM_RESPONSES_URL
+    target_url = _resolve_llm_api_url(base_url)
     target_key = api_key or settings.LLM_API_KEY
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
@@ -1187,7 +1665,7 @@ async def llm_call_stream(
         "stream": True,
     }
 
-    effort = reasoning_effort or settings.LLM_REASONING_EFFORT
+    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
 
     if is_chat:
         payload["messages"] = [{"role": "user", "content": input_text}]
@@ -1208,6 +1686,7 @@ async def llm_call_stream(
         quota_key=quota_key,
         provider_key=provider_key,
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
+        estimated_tokens=estimated_tokens,
     )
     try:
         client = _get_shared_async_client()

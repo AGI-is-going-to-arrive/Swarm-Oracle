@@ -294,6 +294,16 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
     effective_base_url = overrides.get("base_url") or provider_policy.get("llm_base_url")
     effective_model = overrides.get("model") or provider_policy.get("llm_model")
     effective_api_key = overrides.get("api_key")
+    effective_requests_per_minute = (
+        overrides.get("requests_per_minute")
+        if overrides.get("requests_per_minute") is not None
+        else provider_policy.get("llm_requests_per_minute")
+    )
+    effective_tokens_per_minute = (
+        overrides.get("tokens_per_minute")
+        if overrides.get("tokens_per_minute") is not None
+        else provider_policy.get("llm_tokens_per_minute")
+    )
     quota_key = overrides.get("quota_key") or provider_policy.get("user_id")
 
     try:
@@ -320,6 +330,8 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="prediction_scoring",
+            requests_per_minute=effective_requests_per_minute,
+            tokens_per_minute=effective_tokens_per_minute,
         ):
             result = await llm_call_json(
                 prompt,

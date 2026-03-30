@@ -34,6 +34,9 @@ class TestLLMCall:
         llm_client._global_semaphore = None
         llm_client._global_semaphore_limit = 0
         llm_client._runtime_guard_table_ensured_keys.clear()
+        llm_client._runtime_rate_limit_table_ensured_keys.clear()
+        llm_client._rate_limit_requests.clear()
+        llm_client._rate_limit_tokens.clear()
 
     @pytest.mark.asyncio
     async def test_global_backpressure_rejects_when_queue_is_full(self, monkeypatch):
@@ -333,6 +336,8 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
         monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 1)
         monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 0)
 
         first = llm_client._reserve_sqlite_runtime_slot(quota_key=None, lease_seconds=30)
         llm_client._release_sqlite_runtime_slot(reservation_id=first)
@@ -346,6 +351,132 @@ class TestLLMCall:
             if command.startswith("CREATE TABLE") or command.startswith("CREATE INDEX")
         ]
         assert len(ddl_commands) == 3
+
+    @pytest.mark.asyncio
+    async def test_sqlite_runtime_rate_limit_waits_for_next_rpm_window(self, monkeypatch, tmp_path):
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_rate_limit_rpm.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 0)
+        current_window = {"value": 0}
+
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
+
+        async def _advance_sleep(_seconds):
+            current_window["value"] += 1
+
+        monkeypatch.setattr(llm_client.asyncio, "sleep", _advance_sleep)
+
+        first = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-rate-rpm",
+            lease_seconds=30,
+            estimated_tokens=10,
+        )
+        assert first is not None
+        second = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-rate-rpm",
+            lease_seconds=30,
+            estimated_tokens=10,
+        )
+        assert second is not None
+
+    @pytest.mark.asyncio
+    async def test_sqlite_runtime_rate_limit_waits_for_next_tpm_window(self, monkeypatch, tmp_path):
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_rate_limit_tpm.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 50)
+        current_window = {"value": 0}
+
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
+
+        async def _advance_sleep(_seconds):
+            current_window["value"] += 1
+
+        monkeypatch.setattr(llm_client.asyncio, "sleep", _advance_sleep)
+
+        first = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-rate-tpm",
+            lease_seconds=30,
+            estimated_tokens=25,
+        )
+        assert first is not None
+        second = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-rate-tpm",
+            lease_seconds=30,
+            estimated_tokens=30,
+        )
+        assert second is not None
+
+    @pytest.mark.asyncio
+    async def test_in_process_runtime_rate_limit_waits_for_next_tpm_window(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 50)
+        current_window = {"value": 0}
+
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
+
+        async def _advance_sleep(_seconds):
+            current_window["value"] += 1
+
+        monkeypatch.setattr(llm_client.asyncio, "sleep", _advance_sleep)
+
+        first = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-in-process",
+            lease_seconds=30,
+            estimated_tokens=25,
+        )
+        assert first is None
+        second = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider-in-process",
+            lease_seconds=30,
+            estimated_tokens=30,
+        )
+        assert second is None
+
+    @pytest.mark.asyncio
+    async def test_request_scoped_rate_limits_override_server_defaults(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 10)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 100000)
+
+        with llm_client.llm_request_scope(requests_per_minute=1, tokens_per_minute=50):
+            first = await llm_client._reserve_runtime_slot(
+                quota_key=None,
+                provider_key="provider-override",
+                lease_seconds=30,
+                estimated_tokens=25,
+            )
+            assert first is None
+            with pytest.raises(LLMBackpressureError):
+                await llm_client._reserve_runtime_slot(
+                    quota_key=None,
+                    provider_key="provider-override",
+                    lease_seconds=30,
+                    estimated_tokens=30,
+                )
 
     @pytest.mark.asyncio
     async def test_global_semaphore_is_not_replaced_after_runtime_change(self, monkeypatch):
@@ -427,6 +558,132 @@ class TestLLMCall:
         assert captured["json"]["temperature"] == 0.4
         assert captured["json"]["reasoning_effort"] == "low"
         assert captured["json"]["model"] == "gpt-test"
+
+    @pytest.mark.asyncio
+    async def test_root_base_url_is_resolved_to_chat_completions(self, monkeypatch):
+        captured = {}
+
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "OK",
+                            }
+                        }
+                    ]
+                }
+
+        class _FakeClient:
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                captured["url"] = str(url)
+                captured["json"] = json
+                captured["headers"] = headers
+                captured["timeout"] = timeout
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with OK.",
+            reasoning_effort="low",
+            base_url="https://api.edgefn.net/v1",
+            api_key="sk-test",
+            model="MiniMax-M2.5",
+        )
+
+        assert result == "OK"
+        assert captured["url"] == "https://api.edgefn.net/v1/chat/completions"
+
+    @pytest.mark.asyncio
+    async def test_llm_call_reconciles_actual_usage_tokens(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 50)
+
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "OK",
+                            }
+                        }
+                    ],
+                    "usage": {
+                        "total_tokens": 40,
+                    },
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+
+        result = await llm_call(
+            "short prompt",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "OK"
+        provider_key = "https://example.com/v1/chat/completions"
+        window_start = llm_client._rate_window_start()
+        assert llm_client._rate_limit_tokens[provider_key][window_start] == 40
+
+    @pytest.mark.asyncio
+    async def test_llm_call_strips_think_blocks_from_text_output(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "<think>hidden reasoning</think>\nVisible answer",
+                            }
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 0)
+
+        result = await llm_call(
+            "Reply with one sentence.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Visible answer"
 
     def test_shared_async_client_is_reused(self):
         first = llm_client._get_shared_async_client()
@@ -653,11 +910,16 @@ class TestLLMCallJSON:
 
 class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_health_check_ok(self):
+    async def test_health_check_ok(self, monkeypatch):
         """health_check should return status=ok when LLM is reachable."""
+        async def _fake_llm_call(*_args, **_kwargs):
+            return "OK"
+
+        monkeypatch.setattr(llm_client, "llm_call", _fake_llm_call)
+
         result = await health_check()
         assert result["status"] == "ok"
-        assert result["model"] == "gpt-5.4-mini"
+        assert result["model"] == "MiniMax-M2.5"
 
     @pytest.mark.asyncio
     async def test_health_check_error_on_bad_url(self, monkeypatch):

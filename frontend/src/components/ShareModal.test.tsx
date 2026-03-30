@@ -37,6 +37,8 @@ describe('ShareModal automation callback', () => {
       baseUrl: 'https://example.com/v1/chat/completions',
       model: 'gpt-test',
       reasoningEffort: 'medium',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
     }));
     vi.stubGlobal('sessionStorage', {
       getItem: vi.fn((key: string) => sessionStore.get(key) ?? null),
@@ -98,6 +100,8 @@ describe('ShareModal automation callback', () => {
       llmApiKey: 'sk-test',
       llmBaseUrl: 'https://example.com/v1/chat/completions',
       llmModel: 'gpt-test',
+      llmRequestsPerMinute: 10,
+      llmTokensPerMinute: 100000,
       userId: 'director-1',
     });
   });

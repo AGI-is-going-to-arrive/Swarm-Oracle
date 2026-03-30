@@ -86,7 +86,16 @@ class ScorePredictionsRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_requests_per_minute: int | None = None
+    llm_tokens_per_minute: int | None = None
     user_id: str | None = None
+
+    @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
+    @classmethod
+    def validate_optional_non_negative_limit(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("LLM rate limits must be >= 0")
+        return value
 
 
 # ── Endpoints ─────────────────────────────────────────
@@ -218,11 +227,19 @@ async def trigger_scoring(
 
     req = req or ScorePredictionsRequest()
     llm_overrides = None
-    if req.llm_api_key or req.llm_base_url or req.llm_model:
+    if (
+        req.llm_api_key
+        or req.llm_base_url
+        or req.llm_model
+        or req.llm_requests_per_minute is not None
+        or req.llm_tokens_per_minute is not None
+    ):
         llm_overrides = {
             "api_key": req.llm_api_key,
             "base_url": req.llm_base_url,
             "model": req.llm_model,
+            "requests_per_minute": req.llm_requests_per_minute,
+            "tokens_per_minute": req.llm_tokens_per_minute,
             "quota_key": req.user_id,
         }
 

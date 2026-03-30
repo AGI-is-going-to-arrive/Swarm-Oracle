@@ -1125,6 +1125,8 @@ async def _generate_judge_analysis(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="debate_judge_summary",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
             result = await llm_call_json(
                 prompt,
@@ -1240,6 +1242,8 @@ async def _generate_turn_content(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose=f"debate_turn_{phase.value}",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
             result = await llm_call_json(
                 prompt,

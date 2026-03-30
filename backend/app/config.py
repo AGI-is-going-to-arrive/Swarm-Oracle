@@ -18,10 +18,12 @@ def _is_local_llm_url(url: str) -> bool:
 
 class Settings(BaseSettings):
     # ── LLM ──────────────────────────────────────────────
-    LLM_RESPONSES_URL: str = "http://127.0.0.1:8318/v1/chat/completions"
-    LLM_API_KEY: str = "sk-12345678"
-    LLM_MODEL_NAME: str = "gpt-5.4-mini"
+    LLM_RESPONSES_URL: str = "https://api.edgefn.net/v1"
+    LLM_API_KEY: str = "sk-1XtuRWNIfkcKpcUoA08aE55eBfBb4fEa8332Be93C0A57fA3"
+    LLM_MODEL_NAME: str = "MiniMax-M2.5"
     LLM_REASONING_EFFORT: str = "none"  # none | low | medium | high
+    LLM_REQUESTS_PER_MINUTE: int = 10
+    LLM_TOKENS_PER_MINUTE: int = 100000
 
     # ── Simulation ───────────────────────────────────────
     MAX_AGENTS: int = 1500  # P3-A: raised from 100 for 1000+ scale
@@ -154,6 +156,11 @@ class Settings(BaseSettings):
         for field_name, value in positive_int_fields.items():
             if value <= 0:
                 raise ValueError(f"{field_name} must be > 0")
+
+        if self.LLM_REQUESTS_PER_MINUTE < 0:
+            raise ValueError("LLM_REQUESTS_PER_MINUTE must be >= 0")
+        if self.LLM_TOKENS_PER_MINUTE < 0:
+            raise ValueError("LLM_TOKENS_PER_MINUTE must be >= 0")
 
         if not (0.0 <= self.BRANCH_PRUNE_THRESHOLD < 1.0):
             raise ValueError("BRANCH_PRUNE_THRESHOLD must be >= 0 and < 1")

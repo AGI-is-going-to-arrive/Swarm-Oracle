@@ -11,6 +11,8 @@ def test_settings_defaults():
     assert s.LLM_RESPONSES_URL.startswith("http")
     assert s.LLM_MODEL_NAME  # not empty
     assert s.LLM_REASONING_EFFORT in ("none", "low", "medium", "high")
+    assert s.LLM_REQUESTS_PER_MINUTE >= 0
+    assert s.LLM_TOKENS_PER_MINUTE >= 0
     assert s.LOG_LEVEL == "INFO"
     assert s.LOG_FORMAT == "json"
     assert s.MAX_AGENTS > 0
@@ -30,12 +32,16 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("LLM_MODEL_NAME", "test-model-name")
     monkeypatch.setenv("MAX_AGENTS", "42")
     monkeypatch.setenv("LLM_REASONING_EFFORT", "medium")
+    monkeypatch.setenv("LLM_REQUESTS_PER_MINUTE", "7")
+    monkeypatch.setenv("LLM_TOKENS_PER_MINUTE", "12345")
 
     from app.config import Settings
     s = Settings()
     assert s.LLM_MODEL_NAME == "test-model-name"
     assert s.MAX_AGENTS == 42
     assert s.LLM_REASONING_EFFORT == "medium"
+    assert s.LLM_REQUESTS_PER_MINUTE == 7
+    assert s.LLM_TOKENS_PER_MINUTE == 12345
 
 
 def test_memory_budget_settings_from_env(monkeypatch):

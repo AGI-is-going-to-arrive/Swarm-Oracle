@@ -43,7 +43,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "temperature?": 0.4, "branch_sensitivity?": 0.7, "fork_prompt_variant?": "b", "fork_detector_active_branch_limit?": 1, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "disable_user_quota?": true}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
+| `POST /api/scenario` | POST | 创建场景并启动后台模拟 | `{"question": "如果...", "user_id?": "device-or-account-id", "num_agents?": 20, "rounds?": 10, "mode?": "blackboard", "hierarchical?": false, "visualization_enabled?": true, "temperature?": 0.4, "branch_sensitivity?": 0.7, "fork_prompt_variant?": "b", "fork_detector_active_branch_limit?": 1, "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "llm_requests_per_minute?": 10, "llm_tokens_per_minute?": 100000, "disable_user_quota?": true}` | ScenarioResponse（立即返回 `status="simulating"`、`mode`、`hierarchical`、`visualization_enabled`；若 Theater 启用，还会立即带 `scene_theme` 与一条 provisional root branch） |
 | `GET /api/scenario/{id}` | GET | 获取场景详情 | — | Scenario 对象（含 `visualization_enabled`、`scene_theme`、`director_state`、`gameplay_state`、`agents[]`、`branches[]`、`messages[]`；当前 `messages[*]` 还会带 `diverge / branch_title`，`branches[*]` 还会带 `fork_round`，顶层还会带 `fork_debug`） |
 | `POST /api/scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario | `{"scenario": ScenarioSnapshot}` | ScenarioResponse |
 | `GET /api/scenario/{id}/branches` | GET | 获取分支列表 | — | BranchInfo[] |
@@ -84,6 +84,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `branch_sensitivity` 合法范围：`0.0 <= branch_sensitivity <= 1.0`
 > - `fork_prompt_variant` 当前支持：`a / b / c / d / e / f`
 > - `fork_detector_active_branch_limit` 合法范围：`0 <= value <= MAX_BRANCHES`
+> - `llm_requests_per_minute / llm_tokens_per_minute` 合法范围：`>= 0`
 > - `disable_user_quota` 只对本地 / self-hosted provider 生效；若本次运行最终走的不是本地 provider，会被忽略
 
 > `POST /api/scenario` 当前新增的 fork runtime 调参字段：
@@ -134,7 +135,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 | `GET /api/scenarios` | GET | 场景列表（分页+筛选） | `?status=done&limit=20&offset=0` | `{scenarios[], total, limit, offset}` |
 | `DELETE /api/scenario/{id}` | DELETE | 删除场景（级联删除所有关联数据） | — | `{status: "deleted", scenario_id}` |
 | `GET /api/scenario/{id}/export` | GET | 导出场景 Markdown；当前会直接作为附件下载，文件名形如 `swarmoracle-<id8>.md` | — | `text/markdown` |
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；provider overrides 当前只能走 `POST body`，不能放在 `GET query` 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{platform, platform_name, copy}` |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案 (P6)；provider overrides 当前只能走 `POST body`，不能放在 `GET query` 里 | `POST` body 可选 `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "llm_requests_per_minute?": 10, "llm_tokens_per_minute?": 100000, "user_id?": "..."}` | `{platform, platform_name, copy}` |
 | `GET /api/intervention-templates` | GET | 干预模板列表 (P4-D) | — | `InterventionTemplate[]` |
 
 > `DELETE /api/scenario/{id}` 当前除了级联删除 SQL 数据外，还会：
@@ -184,7 +185,7 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 |------|------|------|--------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前） | `{"prediction_text": "...", "confidence?": 0.5, "user_name?": "匿名预言家", "user_id?": "device-or-account-id"}` | PredictionResponse |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测 | `?limit=50&offset=0`（均可选；默认 `limit=50`） | PredictionResponse[] |
-| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "user_id?": "..."}` | `{attempted, scored, failed, all_failed, results[]}` |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；当前也支持可选 provider policy | `{"llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "llm_requests_per_minute?": 10, "llm_tokens_per_minute?": 100000, "user_id?": "..."}` | `{attempted, scored, failed, all_failed, results[]}` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜 | `?limit=20&offset=0` | LeaderboardEntry[] |
 
 > 这 4 个 endpoint 当前只由专用模块 `app/api/predictions.py` 提供；`scenarios.py` 不再持有 legacy 同名路由。
@@ -397,6 +398,8 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `llm_api_key?`
 > - `llm_base_url?`
 > - `llm_model?`
+> - `llm_requests_per_minute?`
+> - `llm_tokens_per_minute?`
 >
 > 当 `llm.status == "ok"` 时，响应当前还会尝试返回可选 `probe`；其字段至少包括：
 > - `estimated_parallelism`
@@ -404,12 +407,14 @@ Base URL: 后端服务根地址，例如 `http://localhost:18927`
 > - `recommended`（`agents_min / agents_max / rounds_min / rounds_max`）
 > - `local_provider`
 > - `allow_disable_user_quota`
+>
+> 若这次请求明确给了较低的 `llm_requests_per_minute`，backend 当前会改走更保守的 configured-budget probe，不再先用大 fan-out 把 provider 配额打满。
 
 ### Debate Arena (Track D)
 
 | 端点 | 方法 | 描述 | 请求体 | 响应 |
 |------|------|------|--------|------|
-| `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "reasoning_effort?": "low"}` | DebateSnapshot |
+| `POST /api/debate` | POST | 创建独立 Debate Arena，并立即返回 live snapshot | `{"question": "如果...", "profile_hint?": "law", "user_id?": "...", "llm_api_key?": "", "llm_base_url?": "", "llm_model?": "", "llm_requests_per_minute?": 10, "llm_tokens_per_minute?": 100000, "reasoning_effort?": "low"}` | DebateSnapshot |
 | `GET /api/debate/{id}` | GET | 获取 Debate live snapshot | — | DebateSnapshot（当前顶层还会带 `phase_insights[]`） |
 | `GET /api/debate/{id}/result` | GET | 获取 Debate verdict 结果 | — | DebateResultPayload（当前顶层也会带 `phase_insights[]` 与 `adjudication_mode`） |
 | `POST /api/debate/import-replay` | POST | 把 replay 快照导入为真实本地 Debate；当前会保留导入 payload 里的 `phase_insights` 与 `adjudication_mode` | `{"debate": DebateResultPayload}` | DebateSnapshot |

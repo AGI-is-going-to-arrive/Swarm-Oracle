@@ -4,6 +4,8 @@ export interface LlmProviderPolicy {
   model: string;
   reasoningEffort: string;
   disableUserQuota: boolean;
+  requestsPerMinute: number | null;
+  tokensPerMinute: number | null;
 }
 
 const STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
@@ -14,6 +16,8 @@ const EMPTY_POLICY: LlmProviderPolicy = {
   model: '',
   reasoningEffort: '',
   disableUserQuota: false,
+  requestsPerMinute: null,
+  tokensPerMinute: null,
 };
 
 function normalizeText(value: unknown): string {
@@ -22,6 +26,15 @@ function normalizeText(value: unknown): string {
 
 function normalizeBoolean(value: unknown): boolean {
   return value === true;
+}
+
+function normalizeOptionalNonNegativeInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) return null;
+  return normalized;
 }
 
 function canUseWindow(): boolean {
@@ -38,6 +51,14 @@ function canWriteStorage(storage: Storage): storage is Storage & { setItem: (key
 
 function canRemoveFromStorage(storage: Storage): storage is Storage & { removeItem: (key: string) => void } {
   return typeof storage.removeItem === 'function';
+}
+
+function hasPolicyContent(policy: LlmProviderPolicy): boolean {
+  return Object.entries(policy).some(([key, value]) => {
+    if (key === 'disableUserQuota') return value === true;
+    if (key === 'requestsPerMinute' || key === 'tokensPerMinute') return value !== null;
+    return Boolean(value);
+  });
 }
 
 function getSessionPolicyStorage(): Storage | null {
@@ -64,6 +85,8 @@ function readPolicyRecord(storage: Storage | null): LlmProviderPolicy | null {
       model: normalizeText(parsed.model),
       reasoningEffort: normalizeText(parsed.reasoningEffort),
       disableUserQuota: normalizeBoolean(parsed.disableUserQuota),
+      requestsPerMinute: normalizeOptionalNonNegativeInteger(parsed.requestsPerMinute),
+      tokensPerMinute: normalizeOptionalNonNegativeInteger(parsed.tokensPerMinute),
     };
   } catch {
     return null;
@@ -77,7 +100,7 @@ function migrateLegacyPolicy(sessionStorage: Storage): LlmProviderPolicy | null 
   const legacyPolicy = readPolicyRecord(legacyStorage);
   if (!legacyPolicy) return null;
 
-  const hasContent = Object.values(legacyPolicy).some(Boolean);
+  const hasContent = hasPolicyContent(legacyPolicy);
   if (!hasContent) return null;
 
   try {
@@ -108,12 +131,14 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
   const normalized: LlmProviderPolicy = {
     apiKey: normalizeText(policy.apiKey),
     baseUrl: normalizeText(policy.baseUrl),
-    model: normalizeText(policy.model),
-    reasoningEffort: normalizeText(policy.reasoningEffort),
-    disableUserQuota: normalizeBoolean(policy.disableUserQuota),
+      model: normalizeText(policy.model),
+      reasoningEffort: normalizeText(policy.reasoningEffort),
+      disableUserQuota: normalizeBoolean(policy.disableUserQuota),
+      requestsPerMinute: normalizeOptionalNonNegativeInteger(policy.requestsPerMinute),
+      tokensPerMinute: normalizeOptionalNonNegativeInteger(policy.tokensPerMinute),
   };
 
-  const hasContent = Object.entries(normalized).some(([key, value]) => key === 'disableUserQuota' ? value : Boolean(value));
+  const hasContent = hasPolicyContent(normalized);
   if (!hasContent) {
     if (canRemoveFromStorage(storage)) {
       try {

@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
 from app.api.errors import api_error, api_error_from_exception
@@ -35,7 +35,16 @@ class SocialCopyRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_requests_per_minute: int | None = None
+    llm_tokens_per_minute: int | None = None
     user_id: str | None = None
+
+    @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
+    @classmethod
+    def validate_optional_non_negative_limit(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("LLM rate limits must be >= 0")
+        return value
 
 
 # ── Social Platform Prompts (P6) ─────────────────────────
@@ -307,6 +316,16 @@ async def _generate_social_copy(
     effective_base_url = req.llm_base_url or provider_policy.get("llm_base_url")
     effective_model = req.llm_model or provider_policy.get("llm_model")
     effective_api_key = req.llm_api_key
+    effective_requests_per_minute = (
+        req.llm_requests_per_minute
+        if req.llm_requests_per_minute is not None
+        else provider_policy.get("llm_requests_per_minute")
+    )
+    effective_tokens_per_minute = (
+        req.llm_tokens_per_minute
+        if req.llm_tokens_per_minute is not None
+        else provider_policy.get("llm_tokens_per_minute")
+    )
     quota_key = req.user_id or provider_policy.get("user_id")
 
     prompt_language = "Chinese" if output_language == "Chinese" else "English"
@@ -338,6 +357,8 @@ async def _generate_social_copy(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="social_copy",
+            requests_per_minute=effective_requests_per_minute,
+            tokens_per_minute=effective_tokens_per_minute,
         ):
             copy = await llm_call(
                 prompt,

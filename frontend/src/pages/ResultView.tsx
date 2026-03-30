@@ -815,6 +815,8 @@ export default function ResultView() {
         llmApiKey: providerPolicy.apiKey || undefined,
         llmBaseUrl: providerPolicy.baseUrl || undefined,
         llmModel: providerPolicy.model || undefined,
+        llmRequestsPerMinute: providerPolicy.requestsPerMinute ?? undefined,
+        llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
         userId: directorIdentity.userId,
       });
       // Reload predictions to show scores

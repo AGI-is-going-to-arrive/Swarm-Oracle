@@ -8,20 +8,32 @@
 
 | 变量 | 类型 | 默认值 | 描述 |
 |------|------|--------|------|
-| `LLM_RESPONSES_URL` | str | `http://127.0.0.1:8318/v1/chat/completions` | OpenAI兼容API端点；Docker 默认模板 `.env.docker` 会改写成 `http://host.docker.internal:8318/v1/chat/completions` |
-| `LLM_API_KEY` | str | `sk-12345678` | API密钥 |
-| `LLM_MODEL_NAME` | str | `gpt-5.4-mini` | 模型名称 |
+| `LLM_RESPONSES_URL` | str | `https://api.edgefn.net/v1` | OpenAI兼容API地址；当前 backend 会在调用时自动补成具体 endpoint（例如 `/chat/completions`），所以 BYOK 既支持填完整 endpoint，也支持直接填到 `/v1` |
+| `LLM_API_KEY` | str | 非占位 key（当前模板已指向 edgefn） | API密钥 |
+| `LLM_MODEL_NAME` | str | `MiniMax-M2.5` | 模型名称 |
 | `LLM_REASONING_EFFORT` | str | `none` | 推理强度 (`none` / `low` / `medium` / `high`) |
+| `LLM_REQUESTS_PER_MINUTE` | int | `10` | 服务器默认 RPM；`<= 0` 表示关闭这层限制 |
+| `LLM_TOKENS_PER_MINUTE` | int | `100000` | 服务器默认 TPM；`<= 0` 表示关闭这层限制 |
 | `DEBATE_USE_LLM` | bool | `true` | Debate Arena 回合文案是否优先走 LLM；关闭时会退回 deterministic 文案 |
 
-> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户可在创建场景时通过 `llm_api_key`、`llm_base_url`、`llm_model` 字段覆盖，支持所有 OpenAI 兼容 API；当前同一份 provider policy 也已贯通到 `createDebate / social copy / scorePredictions`。前端这份 provider policy 现在按标签页会话保存在 `sessionStorage`，关闭该标签页后会清空；若用户浏览器里还留有旧 `localStorage` 记录，前端首次读取时会自动迁移一次。前端当前也可在创建 scenario 时透传 `disable_user_quota`；但 backend 只会在目标 provider 判定为本地 / self-hosted 时，对该次运行跳过 user-level fairness cap。这不会绕过 `LLM_CONCURRENCY / LLM_MAX_PENDING` 这类全局并发闸门，对非本地 provider 也不会生效。
+> **BYOK (P4-E)**: 以上 LLM 配置为服务器默认值。用户当前可在首页或对应调用点透传 `llm_api_key / llm_base_url / llm_model / llm_requests_per_minute / llm_tokens_per_minute` 覆盖，支持所有 OpenAI 兼容 API；同一份 provider policy 仍贯通 `createScenario / createDebate / social copy / scorePredictions`。前端这份 provider policy 继续按标签页会话保存在 `sessionStorage`，关闭标签页后清空；若浏览器里仍有旧 `localStorage` 记录，首次读取时会自动迁移一次。首页当前还会：
+> - 给每个 BYOK 字段显示一行人话说明
+> - 在用户填了 `RPM / TPM` 后即时给出预算提醒
+> - 若当前 `agents / rounds` 超预算，直接禁止主模式 `Start Simulation`
+>
+> backend 当前会把 `RPM / TPM` 当作 request-scoped runtime limit：
+> - 窗口打满时，会等到下一个窗口再发，而不是直接把 agent 打成“沉默了”
+> - 非流式调用会在 provider 返回 `usage` 后回填真实 token 计数
+> - 流式路径当前仍以估算 token 做准入
+>
+> `disable_user_quota` 仍只对本地 / self-hosted provider 生效；它只跳过 user-level fairness cap，不会绕过 `LLM_CONCURRENCY / LLM_MAX_PENDING` 这类全局并发闸门。
 
 > **启动期校验**:
 > - 占位 `LLM_API_KEY = sk-12345678` 当前只允许用于本地 LLM 网关（如 `localhost / 127.0.0.1 / host.docker.internal`）
 > - 若 `LLM_RESPONSES_URL` 指向非本地端点，配置加载阶段就会拒绝占位 key，而不是等到第一次 LLM 调用才失败
 > - `LLM_MODEL_NAME` 当前不能为空；空白值会在配置加载阶段直接报错
 
-> **Docker 运行提示**: 如果后端在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_RESPONSES_URL` 不能继续写 `127.0.0.1`。仓库默认 Docker 模板 `.env.docker` 已改成 `http://host.docker.internal:8318/v1/chat/completions`；同时 compose 会给 backend 注入 `host.docker.internal:host-gateway`。Linux 如需覆盖，改 `.env.docker` 即可。
+> **Docker 运行提示**: 当前仓库默认 Docker 模板已经直接指向 edgefn，不再默认假设宿主机本地代理。如果你要把容器切回宿主机本地 LLM，再把 `.env.docker` 里的 `LLM_RESPONSES_URL` 改回 `host.docker.internal` 即可。
 
 ## Scenario Runtime Tuning
 

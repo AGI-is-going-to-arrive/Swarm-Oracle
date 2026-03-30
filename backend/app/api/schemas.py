@@ -23,8 +23,10 @@ class CreateScenarioRequest(BaseModel):
     fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection; 0 disables the budget
     # P4-E: BYOK — bring your own key
     llm_api_key: str | None = None    # OpenAI-compatible API key
-    llm_base_url: str | None = None   # OpenAI-compatible base URL (e.g. https://api.openai.com/v1/chat/completions)
+    llm_base_url: str | None = None   # OpenAI-compatible base URL or endpoint (e.g. https://api.openai.com/v1)
     llm_model: str | None = None      # Model name override (e.g. gpt-4o, claude-3.5-sonnet)
+    llm_requests_per_minute: int | None = None  # Optional request-rate cap for this run; 0 disables the cap
+    llm_tokens_per_minute: int | None = None  # Optional token-rate cap for this run; 0 disables the cap
     disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
@@ -108,12 +110,28 @@ class CreateScenarioRequest(BaseModel):
             )
         return v
 
+    @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
+    @classmethod
+    def validate_optional_non_negative_limit(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError("LLM rate limits must be >= 0")
+        return v
+
 
 class TestLlmRequest(BaseModel):
     """Request body for BYOK connection test."""
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_requests_per_minute: int | None = None
+    llm_tokens_per_minute: int | None = None
+
+    @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
+    @classmethod
+    def validate_test_optional_non_negative_limit(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError("LLM rate limits must be >= 0")
+        return v
 
 
 class InterveneRequest(BaseModel):

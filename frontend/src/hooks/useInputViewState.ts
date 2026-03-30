@@ -63,11 +63,26 @@ function normalizeChallengeDefinition(
   };
 }
 
+function formatOptionalIntegerInput(value: number | null): string {
+  return value == null ? '' : String(value);
+}
+
+function parseOptionalIntegerInput(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.trunc(parsed);
+  return normalized < 0 ? null : normalized;
+}
+
 export function useInputByokSettings(t: TranslateFn) {
   const [showByok, setShowByok] = useState(false);
   const [llmApiKey, setLlmApiKey] = useState('');
   const [llmBaseUrl, setLlmBaseUrl] = useState('');
   const [llmModel, setLlmModel] = useState('');
+  const [llmRequestsPerMinute, setLlmRequestsPerMinute] = useState('');
+  const [llmTokensPerMinute, setLlmTokensPerMinute] = useState('');
   const [disableUserQuota, setDisableUserQuota] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
   const [testError, setTestError] = useState('');
@@ -90,12 +105,16 @@ export function useInputByokSettings(t: TranslateFn) {
     setLlmApiKey(storedPolicy.apiKey);
     setLlmBaseUrl(storedPolicy.baseUrl);
     setLlmModel(storedPolicy.model);
+    setLlmRequestsPerMinute(formatOptionalIntegerInput(storedPolicy.requestsPerMinute));
+    setLlmTokensPerMinute(formatOptionalIntegerInput(storedPolicy.tokensPerMinute));
     setDisableUserQuota(storedPolicy.disableUserQuota);
     setReasoningEffort(storedPolicy.reasoningEffort);
     setShowByok(Boolean(
       storedPolicy.apiKey
       || storedPolicy.baseUrl
       || storedPolicy.model
+      || storedPolicy.requestsPerMinute != null
+      || storedPolicy.tokensPerMinute != null
       || storedPolicy.disableUserQuota
     ));
     providerPolicyHydrated.current = true;
@@ -107,10 +126,20 @@ export function useInputByokSettings(t: TranslateFn) {
       apiKey: llmApiKey,
       baseUrl: llmBaseUrl,
       model: llmModel,
+      requestsPerMinute: parseOptionalIntegerInput(llmRequestsPerMinute),
+      tokensPerMinute: parseOptionalIntegerInput(llmTokensPerMinute),
       disableUserQuota,
       reasoningEffort,
     });
-  }, [disableUserQuota, llmApiKey, llmBaseUrl, llmModel, reasoningEffort]);
+  }, [
+    disableUserQuota,
+    llmApiKey,
+    llmBaseUrl,
+    llmModel,
+    llmRequestsPerMinute,
+    llmTokensPerMinute,
+    reasoningEffort,
+  ]);
 
   useEffect(() => {
     setTestStatus('idle');
@@ -127,6 +156,8 @@ export function useInputByokSettings(t: TranslateFn) {
         llmApiKey || undefined,
         llmBaseUrl || undefined,
         llmModel || undefined,
+        parseOptionalIntegerInput(llmRequestsPerMinute) ?? undefined,
+        parseOptionalIntegerInput(llmTokensPerMinute) ?? undefined,
       );
       if (res.llm.status === 'ok') {
         setTestStatus('ok');
@@ -153,7 +184,7 @@ export function useInputByokSettings(t: TranslateFn) {
     }
     window.setTimeout(() => setTestStatus('idle'), 5000);
     return { ok: false as const, probe: null };
-  }, [currentConfigKey, llmApiKey, llmBaseUrl, llmModel, t]);
+  }, [currentConfigKey, llmApiKey, llmBaseUrl, llmModel, llmRequestsPerMinute, llmTokensPerMinute, t]);
 
   return {
     showByok,
@@ -164,6 +195,10 @@ export function useInputByokSettings(t: TranslateFn) {
     setLlmBaseUrl,
     llmModel,
     setLlmModel,
+    llmRequestsPerMinute,
+    setLlmRequestsPerMinute,
+    llmTokensPerMinute,
+    setLlmTokensPerMinute,
     disableUserQuota,
     setDisableUserQuota,
     testStatus,

@@ -95,6 +95,8 @@ export interface LlmProviderRequestOptions {
   llmApiKey?: string;
   llmBaseUrl?: string;
   llmModel?: string;
+  llmRequestsPerMinute?: number;
+  llmTokensPerMinute?: number;
   reasoningEffort?: string;
   temperature?: number;
   branchSensitivity?: number;
@@ -241,6 +243,8 @@ export async function testLlmConnection(
   apiKey?: string,
   baseUrl?: string,
   model?: string,
+  requestsPerMinute?: number,
+  tokensPerMinute?: number,
 ): Promise<{ server: string; llm: { status: string; model: string; response?: string; error?: string }; probe?: LlmProbeResponse | null }> {
   return request('/health/test', {
     method: 'POST',
@@ -248,6 +252,8 @@ export async function testLlmConnection(
       ...(apiKey && { llm_api_key: apiKey }),
       ...(baseUrl && { llm_base_url: baseUrl }),
       ...(model && { llm_model: model }),
+      ...(requestsPerMinute != null && { llm_requests_per_minute: requestsPerMinute }),
+      ...(tokensPerMinute != null && { llm_tokens_per_minute: tokensPerMinute }),
     }),
   });
 }
@@ -265,6 +271,8 @@ export async function createScenario(
     llmApiKey,
     llmBaseUrl,
     llmModel,
+    llmRequestsPerMinute,
+    llmTokensPerMinute,
     reasoningEffort,
     temperature,
     branchSensitivity,
@@ -285,6 +293,8 @@ export async function createScenario(
       ...(llmApiKey && { llm_api_key: llmApiKey }),
       ...(llmBaseUrl && { llm_base_url: llmBaseUrl }),
       ...(llmModel && { llm_model: llmModel }),
+      ...(llmRequestsPerMinute != null && { llm_requests_per_minute: llmRequestsPerMinute }),
+      ...(llmTokensPerMinute != null && { llm_tokens_per_minute: llmTokensPerMinute }),
       ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
       ...(temperature != null && { temperature }),
       ...(branchSensitivity != null && { branch_sensitivity: branchSensitivity }),
@@ -311,6 +321,8 @@ export async function createDebate(
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
       ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
       ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.llmRequestsPerMinute != null && { llm_requests_per_minute: options.llmRequestsPerMinute }),
+      ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
       ...(options?.reasoningEffort && { reasoning_effort: options.reasoningEffort }),
       ...(options?.userId && { user_id: options.userId }),
     }),
@@ -585,6 +597,8 @@ export async function generateSocialCopy(
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
       ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
       ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.llmRequestsPerMinute != null && { llm_requests_per_minute: options.llmRequestsPerMinute }),
+      ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
       ...(options?.userId && { user_id: options.userId }),
     }),
   }, SOCIAL_COPY_TIMEOUT);
@@ -624,6 +638,8 @@ export async function scorePredictions(
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
       ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
       ...(options?.llmModel && { llm_model: options.llmModel }),
+      ...(options?.llmRequestsPerMinute != null && { llm_requests_per_minute: options.llmRequestsPerMinute }),
+      ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
       ...(options?.userId && { user_id: options.userId }),
     }),
   });

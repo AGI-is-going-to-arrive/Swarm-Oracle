@@ -134,10 +134,29 @@ async def run_sim_background(
         }
         if branch_id is not None:
             sim_kwargs["branch_id"] = branch_id
-        await asyncio.wait_for(
-            run_simulation(**sim_kwargs),
-            timeout=total_timeout,
-        )
+
+        scope_kwargs: dict[str, object] = {"purpose": "scenario_runtime"}
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}
+            effective_base_url = (
+                (llm_overrides or {}).get("base_url")
+                or parsed_context.get("llm_base_url")
+            )
+            user_id = parsed_context.get("user_id")
+            disable_user_quota = bool(parsed_context.get("disable_user_quota"))
+            if disable_user_quota and is_local_provider_url(effective_base_url):
+                scope_kwargs["quota_key"] = None
+            elif user_id:
+                scope_kwargs["quota_key"] = f"user:{user_id}"
+            scope_kwargs["requests_per_minute"] = parsed_context.get("llm_requests_per_minute")
+            scope_kwargs["tokens_per_minute"] = parsed_context.get("llm_tokens_per_minute")
+
+        with llm_request_scope(**scope_kwargs):
+            await asyncio.wait_for(
+                run_simulation(**sim_kwargs),
+                timeout=total_timeout,
+            )
     except asyncio.TimeoutError:
         logger.error("Simulation %s timed out after %ds", scenario_id, settings.MAX_ROUNDS * 180)
         try:
@@ -202,6 +221,8 @@ async def parse_and_run_background(
     llm_api_key: str | None,
     llm_base_url: str | None,
     llm_model: str | None,
+    llm_requests_per_minute: int | None,
+    llm_tokens_per_minute: int | None,
     disable_user_quota: bool | None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
@@ -231,7 +252,12 @@ async def parse_and_run_background(
     quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)
 
     try:
-        with llm_request_scope(quota_key=quota_key, purpose="scenario_parse"):
+        with llm_request_scope(
+            quota_key=quota_key,
+            purpose="scenario_parse",
+            requests_per_minute=llm_requests_per_minute,
+            tokens_per_minute=llm_tokens_per_minute,
+        ):
             parsed = await parse_question(
                 question,
                 max_agents=num_agents,
@@ -285,6 +311,10 @@ async def parse_and_run_background(
         parsed["llm_temperature"] = temperature
     if reasoning_effort:
         parsed["reasoning_effort"] = reasoning_effort
+    if llm_requests_per_minute is not None:
+        parsed["llm_requests_per_minute"] = llm_requests_per_minute
+    if llm_tokens_per_minute is not None:
+        parsed["llm_tokens_per_minute"] = llm_tokens_per_minute
 
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -374,7 +404,12 @@ async def parse_and_run_background(
             "model": llm_model,
         }
 
-    with llm_request_scope(quota_key=quota_key, purpose="scenario_runtime"):
+    with llm_request_scope(
+        quota_key=quota_key,
+        purpose="scenario_runtime",
+        requests_per_minute=llm_requests_per_minute,
+        tokens_per_minute=llm_tokens_per_minute,
+    ):
         await run_sim_background(
             scenario_id,
             llm_overrides=llm_overrides,

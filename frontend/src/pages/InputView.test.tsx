@@ -67,6 +67,42 @@ const {
     if (key === 'home.byok_probe_recommendation') {
       return `Recommended ${options?.agentsMin}-${options?.agentsMax} agents and ${options?.roundsMin}-${options?.roundsMax} rounds`;
     }
+    if (key === 'home.byok_budget_title') {
+      return 'Budget Reminder';
+    }
+    if (key === 'home.byok_budget_recommendation') {
+      return `At ${options?.rounds} rounds stay at or below ${options?.agentsMax} agents; at ${options?.agents} agents stay at or below ${options?.roundsMax} rounds`;
+    }
+    if (key === 'home.byok_budget_warning') {
+      return 'Current settings are above the estimated budget.';
+    }
+    if (key === 'home.byok_budget_blocked') {
+      return 'Current main-simulation settings exceed the RPM/TPM budget, so start is blocked.';
+    }
+    if (key === 'home.byok_api_key_help') {
+      return 'Paste your provider API key. It stays only in this tab session.';
+    }
+    if (key === 'home.byok_base_url_help') {
+      return 'Use an OpenAI-compatible endpoint, including root URLs like .../v1.';
+    }
+    if (key === 'home.byok_model_help') {
+      return 'Use the exact provider model id you want to call.';
+    }
+    if (key === 'home.byok_rpm_help') {
+      return 'Maximum requests per minute. This caps how many turns can move in parallel.';
+    }
+    if (key === 'home.byok_tpm_help') {
+      return 'Maximum tokens per minute. This caps long-context and high-round runs.';
+    }
+    if (key === 'home.slider_min') {
+      return `Min ${options?.value}`;
+    }
+    if (key === 'home.slider_max') {
+      return `Max ${options?.value}`;
+    }
+    if (key === 'home.agents_minimum') {
+      return `Min ${options?.value}`;
+    }
     if (key === 'home.simulation_eta_hint') {
       return `${options?.agents} agents × ${options?.rounds} rounds · about ${options?.minutes} min for the main simulation`;
     }
@@ -349,14 +385,16 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('20 agents × 5 rounds · about 6 min for the main simulation')).toBeInTheDocument();
+    expect(await screen.findByText('5 agents × 5 rounds · about 4 min for the main simulation')).toBeInTheDocument();
     expect(screen.getByText('Debate Arena usually resolves in 3-5 minutes.')).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('slider', { name: 'home.rounds_label' }), {
       target: { value: '10' },
     });
 
-    expect(await screen.findByText('20 agents × 10 rounds · about 12 min for the main simulation')).toBeInTheDocument();
+    expect(await screen.findByText('5 agents × 10 rounds · about 9 min for the main simulation')).toBeInTheDocument();
+    expect(screen.getAllByText('Min 3').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Max 40').length).toBeGreaterThan(0);
   });
 
   it('prefers backend challenge rotation when the API returns remote definitions', async () => {
@@ -398,7 +436,7 @@ describe('InputView campaign progress', () => {
     );
 
     expect(await screen.findByText('Remote daily question en')).toBeInTheDocument();
-    expect(getCampaignDailyChallengeStatusMock).toHaveBeenLastCalledWith(
+    expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
       'director-1',
       'law',
       '2026-03-17',
@@ -494,6 +532,8 @@ describe('InputView campaign progress', () => {
       baseUrl: '',
       model: '',
       reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
       disableUserQuota: false,
     }));
 
@@ -538,6 +578,8 @@ describe('InputView campaign progress', () => {
       baseUrl: '',
       model: '',
       reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
       disableUserQuota: false,
     }));
 
@@ -555,6 +597,62 @@ describe('InputView campaign progress', () => {
     expect(await screen.findByText('Provider Preflight')).toBeInTheDocument();
     expect(screen.getByText('Estimated parallelism 6')).toBeInTheDocument();
     expect(screen.getByText('Recommended 3-24 agents and 3-8 rounds')).toBeInTheDocument();
+  });
+
+  it('shows a dynamic budget reminder from typed RPM/TPM values', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
+    await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');
+
+    expect(await screen.findByText('Budget Reminder')).toBeInTheDocument();
+    expect(screen.getByText('At 5 rounds stay at or below 5 agents; at 5 agents stay at or below 5 rounds')).toBeInTheDocument();
+  });
+
+  it('shows short helper copy for each BYOK field', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+
+    expect(screen.getByText('Paste your provider API key. It stays only in this tab session.')).toBeInTheDocument();
+    expect(screen.getByText('Use an OpenAI-compatible endpoint, including root URLs like .../v1.')).toBeInTheDocument();
+    expect(screen.getByText('Use the exact provider model id you want to call.')).toBeInTheDocument();
+    expect(screen.getByText('Maximum requests per minute. This caps how many turns can move in parallel.')).toBeInTheDocument();
+    expect(screen.getByText('Maximum tokens per minute. This caps long-context and high-round runs.')).toBeInTheDocument();
+  });
+
+  it('blocks simulation start when the current settings exceed the typed RPM/TPM budget', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
+    await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');
+    fireEvent.change(screen.getByRole('slider', { name: 'home.agents_label' }), {
+      target: { value: '20' },
+    });
+
+    expect(await screen.findByText('Current settings are above the estimated budget.')).toBeInTheDocument();
+    expect(screen.getByText('Current main-simulation settings exceed the RPM/TPM budget, so start is blocked.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
   });
 
   it('runs a BYOK preflight automatically before starting a simulation and forwards the local override', async () => {
@@ -584,6 +682,8 @@ describe('InputView campaign progress', () => {
       baseUrl: '',
       model: '',
       reasoningEffort: '',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
       disableUserQuota: true,
     }));
 
@@ -605,6 +705,8 @@ describe('InputView campaign progress', () => {
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
         question: 'Launch with BYOK',
+        llmRequestsPerMinute: 10,
+        llmTokensPerMinute: 100000,
         disableUserQuota: true,
       }));
     });

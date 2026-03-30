@@ -262,8 +262,8 @@ alembic/ ──► Alembic 数据库迁移框架
   - `llm_call_stream(...)` — SSE 流式异步生成器
   - `llm_call_json_stream(...)` — 流式 + JSON 解析
   - `health_check()` — 连通性检查
-- **健康探测**: `POST /api/health/test` 先跑 `health_check()`；只有 LLM status=`ok` 时才会附带 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要
-- **特性**: 支持 Chat Completions 和 Responses API 两种格式
+- **健康探测**: `POST /api/health/test` 先跑 `health_check()`；只有 LLM status=`ok` 时才会附带 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要；若请求显式给了较低 `RPM`，当前会改走更保守的 configured-budget probe，不再先把 provider 配额打满
+- **特性**: 支持 Chat Completions 和 Responses API 两种格式；若用户或配置只填到根 `.../v1`，当前会在调用时自动补成具体 endpoint（默认 `/chat/completions`）
 - **指数退避重试** (P1-3): 对 429/5xx 错误自动重试 3 次，退避间隔 1s→2s→4s；当前实现直接复用模块级 `asyncio`，5xx 重试路径不会再触发本地 `UnboundLocalError`
 - **HTTP client 生命周期**: `llm_call()` / `llm_call_stream()` 当前复用共享 `httpx.AsyncClient`，但这份 client 现在是按 event loop 归属隔离的：切到新 loop 时会重建 client，旧 client 走后台 best-effort 关闭；进程退出时仍由 `main.py` 的 shutdown/lifespan 统一关闭当前共享 client
 - **JSON 容错**:
@@ -281,13 +281,16 @@ alembic/ ──► Alembic 数据库迁移框架
   - 同一 provider 连续失败会按 `LLM_CIRCUIT_BREAKER_THRESHOLD / RESET_SECONDS` 打开简易熔断；这部分和全局 semaphore 当前都仍是进程内状态
   - LLM pending reservation 和 `runtime_lock.py` 是两条不同的 SQLite 共享治理链路：前者管 LLM 配额，后者管 simulation / debate 后台任务防重入
   - `llm_call_stream()` 当前也支持连接阶段重试；只有在首个 content 产出前才会重试，避免重复发出部分流片段
+  - request-scoped `RPM / TPM` 当前已正式接进 runtime guard；窗口打满时会等到下一个窗口再发，而不是直接把 agent 打成“沉默了”
+  - 非流式 `llm_call()` 当前还会在 provider 返回 `usage` 后回填真实 token 计数；流式路径则继续用估算 token 做准入
 - **输入防护**:
   - `sanitize_untrusted_text()` / `format_untrusted_text_block()` 会把用户题面、干预文本、评分输入等包成 `UNTRUSTED DATA`
   - 常见 prompt-injection 语句只会作为待分析数据进入 prompt，不再直接裸拼到系统指令附近
 - **错误脱敏**: `_sanitize_error()` 当前除了 `Bearer ...`，还会掩码更通用的 key/token-like secret 片段，降低 BYOK/provider 错误回包把凭证打进日志的风险
+- **推理参数兼容**: `reasoning_effort = none` 当前不再原样发给只接受 `low / medium / high` 的 provider；用户可见文本返回前也会剥掉前置 `<think>...</think>` 块，避免社交文案或普通文本泄漏模型思考内容
 - **BYOK (P4-E)**: 所有函数接受 `api_key`/`base_url`/`model` 可选覆盖，用户可自带 OpenAI 兼容 API Key；API Key 仅内存传递不持久化
 - **temperature**: `llm_call / llm_call_json / llm_call_stream / llm_call_json_stream` 当前也都接受可选 `temperature`；仅当目标 provider 是 Chat Completions 路径时，才会把 `temperature` 写进 payload
-- **Provider policy 贯通**: 当前 BYOK/provider policy 已接进 `createScenario / social copy / score-predictions / createDebate`，同一份 `user_id` 也会参与用户级 pending 配额
+- **Provider policy 贯通**: 当前 BYOK/provider policy 已接进 `createScenario / social copy / score-predictions / createDebate`，覆盖项也已扩到 `requests_per_minute / tokens_per_minute`；同一份 `user_id` 仍会参与用户级 pending 配额
 - **容器部署提示**: 如果后端在 Docker 容器内运行而 LLM 服务在宿主机本地，`LLM_RESPONSES_URL` 需要改为 `host.docker.internal` 或其他宿主可达地址；`POST /api/health` 会同步探测 LLM，因此容器健康检查现改用 `GET /`
 
 ### `parser.py` (≈200行) — 问题解析
@@ -475,7 +478,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `scenarios.py` — 核心 REST 路由
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled`, `disable_user_quota` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate；`disable_user_quota` 只在本地/self-hosted provider 下才会真正关闭用户级 quota |
+| `POST /scenario` | POST | 创建场景（含 `num_agents`, `mode`, `visualization_enabled`, `disable_user_quota`，以及可选 `llm_requests_per_minute / llm_tokens_per_minute` 参数），立即返回 `simulating` 占位场景；若启用 Theater，会同步返回 `scene_theme` 与一条 provisional root branch，后台继续 parse + simulate；`disable_user_quota` 只在本地/self-hosted provider 下才会真正关闭用户级 quota |
 | `GET /scenario/{id}` | GET | 获取场景详情；读之前会先 reconcile 卡在 `simulating / narrating` 但其实已终局的 scenario 到 `done`；响应包含 `visualization_enabled`、`scene_theme`、顶层 `director_state / gameplay_state / fork_debug`，以及 `messages[]` 里的 `diverge / branch_title`、`branches[]` 里的 `fork_round`，供前端恢复 Theater 状态和分叉上下文 |
 | `POST /scenario/import-replay` | POST | 把 replay 快照导入为真实本地 scenario；当前给 `/result/replay` 与 `/sim/replay` 的“导入为本地运行”按钮使用；请求体会先做 payload bytes、`question` 长度，以及 `groups / agents / branches / messages` 数量上限校验 |
 | `GET /scenario/{id}/branches` | GET | 获取分支列表 |
@@ -489,7 +492,7 @@ alembic/ ──► Alembic 数据库迁移框架
 | `GET /replay-artifact/{id}` | GET | 读取 replay payload；供 replay 页面 hydrate |
 | `GET /intervention-templates` | GET | 干预模板列表 (P4-D) |
 
-> 补充：`POST /api/health/test` 会先做 `health_check()`；只有 LLM 连通时才会追加 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要。
+> 补充：`POST /api/health/test` 会先做 `health_check()`；只有 LLM 连通时才会追加 `probe`，内容来自 `measure_provider_parallelism()` 的并发探测摘要。若请求明确给了较低 `llm_requests_per_minute`，这条 probe 当前会收成 configured-budget 模式，不再主动发大量并发探测请求。
 
 ### `interventions.py` — 干预路由
 | 端点 | 方法 | 描述 |
@@ -515,7 +518,7 @@ alembic/ ──► Alembic 数据库迁移框架
 ### `social.py` — 社交媒体文案路由 (P6)
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；当前 wrapper / instruction 会跟随场景语言，所有平台都按场景语言输出，`reddit / x` 不再单独强制英文；非中英文场景会复用英文 scaffold 并显式注入目标语言 directive |
+| `GET /api/scenario/{id}/social/{platform}` / `POST /api/scenario/{id}/social/{platform}` | GET / POST | 生成社交媒体文案；provider overrides 当前只能走 `POST body`，不能放在 `GET query`；`POST body` 现也支持可选 `llm_requests_per_minute / llm_tokens_per_minute`；当前 wrapper / instruction 会跟随场景语言，所有平台都按场景语言输出，`reddit / x` 不再单独强制英文；非中英文场景会复用英文 scaffold 并显式注入目标语言 directive |
 
 > social 路由当前也已纳入结构化错误口径；像 `LLM temporarily unavailable / generation failed` 这类失败，仍保留原 message 含义，但现在会通过 `{code, message}` 对外返回，而不是混用自由文本 detail。
 
@@ -556,7 +559,7 @@ alembic/ ──► Alembic 数据库迁移框架
 |------|------|------|
 | `POST /api/scenario/{id}/predict` | POST | 提交预测（模拟完成前；当前 `confidence` 走 Pydantic 范围校验） |
 | `GET /api/scenario/{id}/predictions` | GET | 列出场景所有预测；若 scenario 不存在则返回 `404` |
-| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；响应当前会显式带 `attempted / scored / failed / all_failed / results` |
+| `POST /api/scenario/{id}/score-predictions` | POST | 触发 LLM 评分；请求体当前也支持可选 `llm_requests_per_minute / llm_tokens_per_minute`；响应会显式带 `attempted / scored / failed / all_failed / results` |
 | `GET /api/leaderboard` | GET | 全局预测排行榜；支持 `limit / offset` |
 - **默认名策略**: 若 `predict` 请求里的 `user_name` 留空，当前会按 scenario 语言回退到匿名预测者显示名，而不是固定中文
 - **提交通道**: 当前同一 `scenario_id + user_id`（含匿名 `anonymous`）只允许一条 prediction；重复提交会返回结构化冲突错误

@@ -788,6 +788,8 @@ describe('ResultView campaign summary', () => {
       baseUrl: 'https://example.com/v1/chat/completions',
       model: 'gpt-test',
       reasoningEffort: 'medium',
+      requestsPerMinute: 10,
+      tokensPerMinute: 100000,
     }));
 
     listPredictionsMock
@@ -832,6 +834,8 @@ describe('ResultView campaign summary', () => {
         llmApiKey: 'sk-test',
         llmBaseUrl: 'https://example.com/v1/chat/completions',
         llmModel: 'gpt-test',
+        llmRequestsPerMinute: 10,
+        llmTokensPerMinute: 100000,
         userId: 'director-1',
       });
     });

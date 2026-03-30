@@ -354,6 +354,8 @@ async def api_health_test(req: TestLlmRequest):
             api_key=req.llm_api_key or None,
             base_url=req.llm_base_url or None,
             model=req.llm_model or None,
+            requests_per_minute=req.llm_requests_per_minute,
+            tokens_per_minute=req.llm_tokens_per_minute,
         )
     return {"server": "ok", "llm": llm_status, "probe": probe}
 
@@ -435,6 +437,8 @@ async def create_scenario(req: CreateScenarioRequest):
             llm_api_key=req.llm_api_key,
             llm_base_url=req.llm_base_url,
             llm_model=req.llm_model,
+            llm_requests_per_minute=req.llm_requests_per_minute,
+            llm_tokens_per_minute=req.llm_tokens_per_minute,
             disable_user_quota=req.disable_user_quota,
         )
     )

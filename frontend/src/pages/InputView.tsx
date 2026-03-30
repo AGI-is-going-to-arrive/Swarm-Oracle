@@ -40,6 +40,23 @@ function estimateSimulationMinutes(rounds: number, numAgents: number) {
   return Math.max(1, Math.round(rounds * (0.75 + numAgents * 0.0225)));
 }
 
+const HOME_DEFAULT_ROUNDS = 5;
+const HOME_DEFAULT_AGENTS = 5;
+const HOME_MAX_ROUNDS = 40;
+const HOME_MAX_AGENTS = 40;
+const BYOK_BUDGET_MINUTES = 3;
+const BYOK_REQUEST_BUFFER = 3;
+const BYOK_TOKEN_BUFFER = 8_000;
+const BYOK_ESTIMATED_TOKENS_PER_TURN = 1_600;
+
+function parseOptionalRuntimeLimit(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.trunc(parsed);
+}
+
 /* ── Loading Step Component ───────────────────────────────── */
 function LoadingStep({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   return (
@@ -56,8 +73,8 @@ export function InputView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const [question, setQuestion] = useState('');
-  const [rounds, setRounds] = useState(5);
-  const [numAgents, setNumAgents] = useState(20);
+  const [rounds, setRounds] = useState(HOME_DEFAULT_ROUNDS);
+  const [numAgents, setNumAgents] = useState(HOME_DEFAULT_AGENTS);
   const [mode, setMode] = useState<'raw' | 'blackboard'>('blackboard');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
@@ -84,6 +101,10 @@ export function InputView() {
     setLlmBaseUrl,
     llmModel,
     setLlmModel,
+    llmRequestsPerMinute,
+    setLlmRequestsPerMinute,
+    llmTokensPerMinute,
+    setLlmTokensPerMinute,
     disableUserQuota,
     setDisableUserQuota,
     testStatus,
@@ -126,6 +147,8 @@ export function InputView() {
   const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
     ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
     : null;
+  const byokRequestsPerMinute = parseOptionalRuntimeLimit(llmRequestsPerMinute);
+  const byokTokensPerMinute = parseOptionalRuntimeLimit(llmTokensPerMinute);
   const hasDirectorGrowth =
     (campaignProfile?.total_runs ?? 0) > 0
     || campaignBadges.length > 0
@@ -162,6 +185,32 @@ export function InputView() {
       exceedsRounds: rounds > recommendation.rounds_max,
     };
   }, [numAgents, probeResult, rounds]);
+  const byokBudgetRecommendation = useMemo(() => {
+    if (byokRequestsPerMinute == null && byokTokensPerMinute == null) return null;
+
+    const requestTurnBudget = byokRequestsPerMinute != null
+      ? Math.max(1, byokRequestsPerMinute * BYOK_BUDGET_MINUTES - BYOK_REQUEST_BUFFER)
+      : Number.POSITIVE_INFINITY;
+    const tokenTurnBudget = byokTokensPerMinute != null
+      ? Math.max(
+        1,
+        Math.floor(
+          Math.max(0, byokTokensPerMinute * BYOK_BUDGET_MINUTES - BYOK_TOKEN_BUFFER)
+          / BYOK_ESTIMATED_TOKENS_PER_TURN,
+        ),
+      )
+      : Number.POSITIVE_INFINITY;
+    const turnBudget = Math.max(1, Math.floor(Math.min(requestTurnBudget, tokenTurnBudget)));
+    const agentsMax = Math.max(1, Math.min(HOME_MAX_AGENTS, Math.floor(turnBudget / Math.max(1, rounds))));
+    const roundsMax = Math.max(1, Math.min(HOME_MAX_ROUNDS, Math.floor(turnBudget / Math.max(1, numAgents))));
+
+    return {
+      agentsMax,
+      roundsMax,
+      overBudget: numAgents > agentsMax || rounds > roundsMax,
+    };
+  }, [byokRequestsPerMinute, byokTokensPerMinute, numAgents, rounds]);
+  const isSimulationBudgetBlocked = Boolean(byokBudgetRecommendation?.overBudget);
   const runtimePresetConfig = useMemo(
     () => getScenarioRuntimePresetConfig(runtimePreset),
     [runtimePreset],
@@ -334,6 +383,7 @@ export function InputView() {
   }) => {
     const trimmed = nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
+    if (isSimulationBudgetBlocked) return;
 
     if (llmApiKey.trim() && !hasFreshProbe) {
       const probe = await handleTestConnection();
@@ -352,6 +402,8 @@ export function InputView() {
         llmApiKey: llmApiKey || undefined,
         llmBaseUrl: llmBaseUrl || undefined,
         llmModel: llmModel || undefined,
+        llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
+        llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
         visualizationEnabled: nextVisualization,
         userId: directorIdentity.userId,
@@ -381,6 +433,8 @@ export function InputView() {
         llmApiKey: llmApiKey || undefined,
         llmBaseUrl: llmBaseUrl || undefined,
         llmModel: llmModel || undefined,
+        llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
+        llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
         userId: directorIdentity.userId,
       });
@@ -480,6 +534,8 @@ export function InputView() {
         byok_test_status: testStatus,
         error: buildAutomationErrorState(submitErrorCode, submitError),
         byok_test_error: buildAutomationErrorState(null, testStatus === 'fail' ? testError : null),
+        byok_requests_per_minute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : null,
+        byok_tokens_per_minute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : null,
         byok_disable_user_quota: disableUserQuota,
         byok_probe: probeResult
           ? {
@@ -544,7 +600,7 @@ export function InputView() {
           daily_profile_score_to_next_level: dailyMastery?.score_to_next_level ?? null,
         },
         controls: {
-          can_start_simulation: Boolean(question.trim()) && !isSubmitting,
+          can_start_simulation: Boolean(question.trim()) && !isSubmitting && !isSimulationBudgetBlocked,
           can_start_debate: Boolean(question.trim()) && !isSubmitting,
         },
       },
@@ -596,7 +652,11 @@ export function InputView() {
     dailyMastery?.score_to_next_level,
     topMasteryEntries,
     directorIdentity.userId,
+    byokRequestsPerMinute,
+    byokTokensPerMinute,
+    isSimulationBudgetBlocked,
     disableUserQuota,
+    testError,
   ]);
 
   return (
@@ -884,13 +944,17 @@ export function InputView() {
                 className="rounds-slider"
                 aria-label={t('home.rounds_label')}
                 min={3}
-                max={40}
+                max={HOME_MAX_ROUNDS}
                 step={1}
                 value={rounds}
                 onChange={(e) => setRounds(Number(e.target.value))}
                 disabled={isSubmitting}
               />
               <span className="rounds-value">{rounds}</span>
+            </div>
+            <div className="slider-scale" aria-hidden="true">
+              <span>{t('home.slider_min', { value: 3 })}</span>
+              <span>{t('home.slider_max', { value: HOME_MAX_ROUNDS })}</span>
             </div>
             <span className="rounds-hint">
               {rounds <= 5 ? t('home.rounds_fast') : rounds <= 15 ? t('home.rounds_standard') : rounds <= 25 ? t('home.rounds_deep') : t('home.rounds_extreme')}
@@ -907,7 +971,7 @@ export function InputView() {
                 className="agents-slider"
                 aria-label={t('home.agents_label')}
                 min={3}
-                max={100}
+                max={HOME_MAX_AGENTS}
                 step={1}
                 value={numAgents}
                 onChange={(e) => setNumAgents(Number(e.target.value))}
@@ -915,8 +979,12 @@ export function InputView() {
               />
               <span className="agents-value">{numAgents}</span>
             </div>
+            <div className="slider-scale" aria-hidden="true">
+              <span>{t('home.agents_minimum', { value: 3 })}</span>
+              <span>{t('home.slider_max', { value: HOME_MAX_AGENTS })}</span>
+            </div>
             <span className="agents-hint">
-              {numAgents <= 10 ? t('home.agents_few') : numAgents <= 30 ? t('home.agents_standard') : numAgents <= 60 ? t('home.agents_large') : t('home.agents_extreme')}
+              {numAgents <= 10 ? t('home.agents_few') : numAgents <= 20 ? t('home.agents_standard') : numAgents <= 30 ? t('home.agents_large') : t('home.agents_extreme')}
             </span>
           </div>
 
@@ -1042,6 +1110,7 @@ export function InputView() {
               <div className="byok-fields">
                 <div className="byok-field">
                   <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
+                  <span className="byok-field-help">{t('home.byok_api_key_help')}</span>
                   <input
                     id="byok-key"
                     type="password"
@@ -1055,6 +1124,7 @@ export function InputView() {
                 </div>
                 <div className="byok-field">
                   <label className="byok-label" htmlFor="byok-url">{t('home.byok_base_url_label')}</label>
+                  <span className="byok-field-help">{t('home.byok_base_url_help')}</span>
                   <input
                     id="byok-url"
                     type="url"
@@ -1067,6 +1137,7 @@ export function InputView() {
                 </div>
                 <div className="byok-field">
                   <label className="byok-label" htmlFor="byok-model">{t('home.byok_model_label')}</label>
+                  <span className="byok-field-help">{t('home.byok_model_help')}</span>
                   <input
                     id="byok-model"
                     type="text"
@@ -1075,6 +1146,38 @@ export function InputView() {
                     onChange={(e) => setLlmModel(e.target.value)}
                     placeholder="gpt-4o / claude-3.5-sonnet / ..."
                     disabled={isSubmitting}
+                  />
+                </div>
+                <div className="byok-field">
+                  <label className="byok-label" htmlFor="byok-rpm">{t('home.byok_rpm_label')}</label>
+                  <span className="byok-field-help">{t('home.byok_rpm_help')}</span>
+                  <input
+                    id="byok-rpm"
+                    type="number"
+                    min="1"
+                    step="1"
+                    className="input byok-input"
+                    value={llmRequestsPerMinute}
+                    onChange={(e) => setLlmRequestsPerMinute(e.target.value)}
+                    placeholder="10"
+                    disabled={isSubmitting}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="byok-field">
+                  <label className="byok-label" htmlFor="byok-tpm">{t('home.byok_tpm_label')}</label>
+                  <span className="byok-field-help">{t('home.byok_tpm_help')}</span>
+                  <input
+                    id="byok-tpm"
+                    type="number"
+                    min="1"
+                    step="1"
+                    className="input byok-input"
+                    value={llmTokensPerMinute}
+                    onChange={(e) => setLlmTokensPerMinute(e.target.value)}
+                    placeholder="100000"
+                    disabled={isSubmitting}
+                    inputMode="numeric"
                   />
                 </div>
                 <label className="byok-switch">
@@ -1105,6 +1208,26 @@ export function InputView() {
                     <span className="byok-test-error">{testError}</span>
                   )}
                 </div>
+                {byokBudgetRecommendation && (
+                  <div className={`byok-probe-card ${byokBudgetRecommendation.overBudget ? 'byok-probe-card--warn' : ''}`}>
+                    <div className="byok-probe-card__title-row">
+                      <strong>{t('home.byok_budget_title')}</strong>
+                    </div>
+                    <p className="byok-probe-copy">
+                      {t('home.byok_budget_recommendation', {
+                        rounds,
+                        agentsMax: byokBudgetRecommendation.agentsMax,
+                        agents: numAgents,
+                        roundsMax: byokBudgetRecommendation.roundsMax,
+                      })}
+                    </p>
+                    {byokBudgetRecommendation.overBudget && (
+                      <p className="byok-probe-warning">
+                        {t('home.byok_budget_warning')}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {probeResult && byokRecommendation && (
                   <div className={`byok-probe-card ${(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) ? 'byok-probe-card--warn' : ''}`}>
                     <div className="byok-probe-card__title-row">
@@ -1146,10 +1269,15 @@ export function InputView() {
           </div>
 
           <div className="input-view__submit-row">
+            {isSimulationBudgetBlocked && (
+              <p className="byok-probe-warning">
+                {t('home.byok_budget_blocked')}
+              </p>
+            )}
             <button
               className="btn btn-primary btn--submit"
               onClick={() => handleSubmit(question)}
-              disabled={!question.trim() || isSubmitting}
+              disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked}
             >
               {isSubmitting ? <span className="spinner spinner--sm" /> : null}
               {t('home.submit')}

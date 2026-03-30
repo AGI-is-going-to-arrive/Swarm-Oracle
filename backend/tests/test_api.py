@@ -167,7 +167,7 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["server"] == "ok"
         assert "llm" in data
-        assert data["llm"]["model"] == "gpt-5.4-mini"
+        assert data["llm"]["model"] == "MiniMax-M2.5"
 
     def test_health_test_returns_probe_summary(self, client, monkeypatch):
         async def _fake_health_check(**kwargs):
@@ -407,6 +407,36 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 200
         assert scheduled["count"] == 1
         assert captured["disable_user_quota"] is True
+
+    def test_create_scenario_forwards_llm_rate_limits(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_requests_per_minute": 10,
+            "llm_tokens_per_minute": 100000,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["llm_requests_per_minute"] == 10
+        assert captured["llm_tokens_per_minute"] == 100000
 
     def test_create_scenario_forwards_temperature(self, client, monkeypatch):
         scheduled = {"count": 0}

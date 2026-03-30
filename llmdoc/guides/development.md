@@ -54,7 +54,7 @@ cp .env.example backend/.env
 
 - `docker compose` 默认读取仓库根目录 `.env.docker`。
 - `.env.example` 是本地直启 backend 的模板，不再作为 Docker 默认环境文件。
-- 默认模型为 `gpt-5.4-mini`；若本地网关没有该模型映射，需要先更新网关。
+- 当前模板默认模型为 `MiniMax-M2.5`，默认地址为 `https://api.edgefn.net/v1`，并带 `RPM=10 / TPM=100000`。若你要切回别的网关或本地代理，直接改 `backend/.env` / `.env.docker` 即可。
 - backend 当前默认输出 JSON 结构化日志；如需切回传统文本，可在 `backend/.env` 里设 `LOG_FORMAT=plain`。`LOG_LEVEL` 默认 `INFO`。
 - memory 压缩预算当前也可通过 backend `.env` 调整；相关 `MEMORY_COMPRESS_* / MEMORY_*_MAX_RECENT / MEMORY_*_CONTEXT_MAX_CHARS` 仅供 backend 开发者/运维调参，不暴露到前端用户。
 
@@ -70,6 +70,33 @@ cp .env.example backend/.env
   - 当前发布判断的唯一合同。
 
 ## 本 session 新增定向验证
+
+- 本轮这类“MiniMax/edgefn 默认 provider + request-scoped RPM/TPM + BYOK 预算提醒/阻断 + Oracle/roundtable 回归”改动，当前还额外实跑通过：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_api.py -k 'test_health or forwards_llm_rate_limits' -q`
+    - `3 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_config.py -q`
+    - `16 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_corner_cases.py -k 'root_v1_url' -q`
+    - `1 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_llm_client.py -k 'waits_for_next_rpm_window or waits_for_next_tpm_window or llm_call_strips_think_blocks_from_text_output or root_base_url_is_resolved_to_chat_completions or llm_call_reconciles_actual_usage_tokens' -q`
+    - `6 passed`
+  - `cd frontend && npm test -- --run src/lib/llmProviderPolicy.test.ts src/pages/InputView.test.tsx src/components/ShareModal.test.tsx src/pages/ResultView.test.tsx`
+    - `42 passed`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx`
+    - `14 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run e2e:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/rpm-tpm-full --headless`
+    - 通过；工件 `frontend/output/e2e/rpm-tpm-full/summary.json`
+  - `cd frontend && npm run e2e:ending-room:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/rpm-tpm-ending-room --headless`
+    - 通过；覆盖 ending chamber / one move / crossline gallery / replay readonly
+  - `cd frontend && npm run e2e:roundtable:full -- --url http://127.0.0.1:18928 --output-dir output/e2e/rpm-tpm-roundtable --headless`
+    - 通过；覆盖 ready / reseat / expert witness / hotseat / replay readonly + mobile fit
+  - 手工实测：
+    - 主模式 `3 agents / 3 rounds`：`done`，3 个 agent 各 3 条真实发言，无 `沉默了`
+    - Debate：首页起局后到 `done`，结果接口返回 `winner=opposition / verdict_tone=balance`
+    - 社交文案：`POST /api/scenario/{id}/social/xiaohongshu` 返回 `200`，并已剥掉 `<think>`
+    - 预算压力观察：`20 agents / 5 rounds` 在 `RPM=10 / TPM=100000` 下不会把 agent 打成 silence，但会显著拖长总时长，因此首页当前会直接阻断超预算起局
 
 - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py -q`
   - `58 passed in 4.92s`

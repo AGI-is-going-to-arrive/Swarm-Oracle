@@ -107,9 +107,11 @@ npm run dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint | `http://127.0.0.1:8318/v1/chat/completions` |
-| `LLM_API_KEY` | API key | `sk-12345678` |
-| `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` |
+| `LLM_RESPONSES_URL` | OpenAI-compatible API endpoint or root base URL | `https://api.edgefn.net/v1` |
+| `LLM_API_KEY` | API key | non-placeholder key in current templates |
+| `LLM_MODEL_NAME` | Model name | `MiniMax-M2.5` |
+| `LLM_REQUESTS_PER_MINUTE` | Default request-rate limit | `10` |
+| `LLM_TOKENS_PER_MINUTE` | Default token-rate limit | `100000` |
 | `MAX_AGENTS` | Max agents per scenario | `1500` |
 | `MAX_ROUNDS` | Max rounds | `40` |
 | `LOG_LEVEL` | Backend log level | `INFO` |
@@ -120,8 +122,9 @@ npm run dev
 - 占位 `LLM_API_KEY=sk-12345678` 当前只适用于本地网关，例如 `localhost`、`127.0.0.1` 或 `host.docker.internal`。
 - 如果 `LLM_RESPONSES_URL` 指向非本地 LLM 端点，后端会在配置加载阶段直接拒绝占位 key，而不是等到第一次调用时才失败。
 - `LLM_MODEL_NAME` 不能为空；留空会在配置加载阶段直接报错。
-- `POST /api/health/test` 在 LLM 可用时还会返回 provider probe 摘要，供首页 BYOK 预检显示推荐的 `agents / rounds` 区间。
+- `POST /api/health/test` 在 LLM 可用时还会返回 provider probe 摘要，供首页 BYOK 预检显示推荐的 `agents / rounds` 区间；若请求明确给了较低 `RPM`，probe 会收成更保守的 configured-budget 模式。
 - `disable_user_quota` 只对本地 / 自托管 provider 生效；它只跳过 user-level fairness cap，不会绕过全局并发闸门。
+- 当前首页 BYOK 还支持 `RPM / TPM` 输入，并会在超预算时直接阻止主模式启动。
 - backend 默认输出结构化 JSON 日志；`uvicorn` 相关日志也会统一走同一套 root formatter。
 - memory 压缩预算当前也可在 backend `.env` 中调节；`MEMORY_COMPRESS_* / MEMORY_*_MAX_RECENT / MEMORY_*_CONTEXT_MAX_CHARS` 只给 backend 开发者/运维调参，不暴露到前端用户。
 

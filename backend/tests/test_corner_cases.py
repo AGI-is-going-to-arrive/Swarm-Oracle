@@ -228,6 +228,12 @@ class TestRuntimeURLDetection:
             mock_settings.LLM_RESPONSES_URL = "http://host/v1/responses"
             assert _is_chat_completions_api() is False
 
+    def test_treats_root_v1_url_as_chat_completions(self):
+        from app.services.llm_client import _is_chat_completions_api
+        with patch("app.services.llm_client.settings") as mock_settings:
+            mock_settings.LLM_RESPONSES_URL = "https://api.edgefn.net/v1"
+            assert _is_chat_completions_api() is True
+
     def test_url_change_reflected_immediately(self):
         from app.services.llm_client import _is_chat_completions_api
         with patch("app.services.llm_client.settings") as mock_settings:
