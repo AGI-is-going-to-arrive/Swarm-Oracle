@@ -18,6 +18,7 @@ from app.models import (
     BranchStatus,
     EndingRoom,
     EndingRoomInteractionMode,
+    EndingRoomPhase,
     EndingRoomParticipant,
     EndingRoomThread,
     EndingRoomTurn,
@@ -31,6 +32,7 @@ from app.models.database import get_engine, init_db
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     _build_room_plan,
+    _build_oracle_rewrite_prompt,
     _build_roundtable_opening_content,
     _room_memory_partition,
     append_room_user_turn,
@@ -718,6 +720,76 @@ def test_roundtable_opening_anchor_varies_by_role_hint():
 
     assert opening.startswith("《调度失误》先失手的")
     assert "我代表《调度失误》发言" not in opening
+
+
+def test_roundtable_opening_english_falls_back_to_english_hinges_when_source_copy_is_cjk():
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "调度失误",
+            "story": "一次调度失误在军权与文书之间撕开裂口。",
+            "insight": "真正关键的是谁先抓住命令链。",
+            "key_moments": ["先封住命令链"],
+        },
+        participant=None,
+        language="en",
+    )
+
+    assert "调度失误" not in opening
+    assert "命令链" not in opening
+    assert "this ending" in opening
+    assert "first decisive hinge" in opening
+
+
+def test_one_move_only_english_copy_does_not_embed_cjk_hinges_or_persona_lines():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world(
+        question="What if a coastal city banned cash in two weeks?",
+    )
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ONE_MOVE_ONLY,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=[agent_ids[0]],
+        language="en",
+    )
+
+    assert created is True
+    payload = asyncio.run(_run_room(snapshot["id"], AsyncMock(side_effect=_noop_broadcast)))
+    transcript = " ".join(turn["content"] for turn in payload["turns"])
+
+    assert "命令链" not in transcript
+    assert "先封住" not in transcript
+    assert "the first decisive hinge" in transcript
+
+
+def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments_in_english():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Representative A",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"branch_title": "调度失误", "agent_role": "Marshal"},
+    )
+
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="I speak for 调度失误: the hinge was '先封住命令链'.",
+        output_json=False,
+    )
+
+    assert "do not leave untranslated Chinese fragments" in prompt
 
 
 def test_roundtable_opening_anchor_field_voice_is_more_frontline():

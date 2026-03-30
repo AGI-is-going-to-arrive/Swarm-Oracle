@@ -656,10 +656,10 @@ export default function WorldlineRoundtableView() {
       }
       return changed ? next : current;
     });
-  }, [editingRepresentatives, effectiveSnapshot?.id, replayPayload, representatives]);
+  }, [editingRepresentatives, effectiveSnapshot, replayPayload, representatives]);
 
   useEffect(() => {
-    if (replayPayload || branchOrder.length === 0 || representatives.length === 0 || editingRepresentatives) {
+    if (replayPayload || !effectiveSnapshot?.id || branchOrder.length === 0 || representatives.length === 0 || editingRepresentatives) {
       return;
     }
     const liveBranchIds = normalizeManualShortlist(
@@ -676,7 +676,7 @@ export default function WorldlineRoundtableView() {
       effectiveSnapshot?.selection_recipe
       ?? (liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative'),
     );
-  }, [branchOrder, editingRepresentatives, effectiveSnapshot?.selection_recipe, replayPayload, representatives]);
+  }, [branchOrder, editingRepresentatives, effectiveSnapshot?.id, effectiveSnapshot?.selection_recipe, replayPayload, representatives]);
 
   useEffect(() => {
     if (replayPayload || !effectiveSnapshot || editingRepresentatives) {
@@ -866,9 +866,12 @@ export default function WorldlineRoundtableView() {
       transcriptAutoStickRef.current = false;
     }
   }, [currentTurns.length, displayedDrafts.length]);
-  const addressedAgentIds = interactionMode === 'hotseat' && selectedRepresentativeId
-    ? [selectedRepresentativeId]
-    : [];
+  const addressedAgentIds = useMemo(
+    () => (interactionMode === 'hotseat' && selectedRepresentativeId
+      ? [selectedRepresentativeId]
+      : []),
+    [interactionMode, selectedRepresentativeId],
+  );
   const transcriptSubtitle = scopeNotice && activeThread && scopeNotice.threadId === activeThread.id
     ? (
       activeThread.mode === 'followup'
@@ -1157,7 +1160,7 @@ export default function WorldlineRoundtableView() {
     } finally {
       setLaunchingRoom(false);
     }
-  }, [launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, witnessCandidates]);
+  }, [launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, selectionMode, uiLanguage, witnessCandidates]);
 
   const handleEditRepresentatives = useCallback(() => {
     setEditingRepresentatives(true);
@@ -1227,7 +1230,9 @@ export default function WorldlineRoundtableView() {
     loadThread,
     representatives,
     selectedRepresentativeId,
+    setActiveThread,
     snapshot?.id,
+    threadList,
   ]);
 
   useEffect(() => {
@@ -1290,13 +1295,13 @@ export default function WorldlineRoundtableView() {
     activeThread?.id,
     composerEnabled,
     currentTurns.length,
+    participants,
     effectiveResult,
     effectiveSnapshot,
     error,
     interactionMode,
     loading,
     displayedDrafts.length,
-    participants.length,
     replayPayload,
     representatives.length,
     selectedBranchIdsForLaunch.length,

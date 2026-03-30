@@ -98,6 +98,10 @@
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
+- `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
+- 单结局结果页当前不展示 `worldline_roundtable / crossline_gallery` 入口，只保留 `ending_chamber / one_move_only`。
+- Oracle fresh live room 的 English deterministic anchor copy 当前已补去混句兜底；single-ending / roundtable 在 fresh room 下不会再把中文 hinge 直接嵌进英文句子。
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
   - `expert_witness`
@@ -110,6 +114,11 @@
 - 当前 Oracle mobile 专项脚本已覆盖：
   - ending-room：`hotseat / all_present / crossline_gallery / artifact readonly / local readonly / reload restore / import`
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
+- 当前 single-ending Oracle 已额外做过真实浏览器复核：
+  - 结果页无 `Start Roundtable / Crossline Gallery`
+  - `ending_chamber / one_move_only` 可正常打开
+  - single-ending chamber readonly replay 仍可 `import`
+  - mobile `390x844` 下 chamber modal 仍能完整落在视口内
 - `pretext` 已以只读 helper / contract 形式落地在 `frontend/src/lib/textLayout/*` 与相关页面测试中；当前还没有接入运行时 transcript 布局内核。
 
 ## 查找路径

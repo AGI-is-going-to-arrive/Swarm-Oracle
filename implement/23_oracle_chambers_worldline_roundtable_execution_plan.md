@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-31
-> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。当前真正剩余的核心不再是玩法缺口，而是 follow-up 与经典模式的流式一致性、以及更深的 corner-case / regression hardening。
+> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。当前真正剩余的核心不再是玩法缺口，而是 follow-up 与经典模式的流式一致性、以及更深的 corner-case / regression hardening。
 
 ---
 
@@ -37,6 +37,7 @@
    - 结果页 CTA -> participant picker -> live room 已完成
    - `archivist_route / hotseat / all_present` 已完成
    - room/thread transcript 隔离、scope notice、只读 replay / import 基线已完成
+   - 单结局结果页当前已重新核对：只保留 `进入会客厅 / 只改一步`
 2. `one_move_only`
    - 已是独立 `room_type`
    - 与 `ending_chamber` 不再 scope 混线
@@ -63,6 +64,7 @@
    - 已完成 `profile-specific` 视觉皮肤与轻量氛围动效
    - 当前 UI 语言不再被 `scenario.language` 强制覆盖
    - `finance / market` 这批角色语域已进入第一轮词汇拉开
+   - fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子
 
 ### 当前真正还没最终签收的点
 

@@ -296,7 +296,8 @@ vi.mock('../game/managers/VizSynthesizer', () => ({
   mapRoleToSpriteId: () => 'sprite_default',
 }));
 
-  beforeEach(() => {
+beforeEach(() => {
+  setMockLanguage('en');
   createReplayArtifactMock.mockClear();
   buildOracleReplayShareUrlMock.mockClear();
   buildOracleReplayUrlMock.mockClear();
@@ -802,6 +803,59 @@ describe('WorldlineRoundtableView', () => {
       ],
       selectedWitness: { branchId: 'branch-a', agentId: 'agent-c' },
     });
+  });
+
+  it('keeps the latest witness mode when switching between expert_witness and witness_augmented before launch', async () => {
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked with an extra witness?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a1', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-a2', branch: 'branch-a', agent: 'Witness A', agent_id: 'agent-c', message: 'A witness', emotion: 'focused', round: 2 },
+        { id: 'msg-b1', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked with an extra witness?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.6, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.4, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+      { id: 'agent-c', name: 'Witness A', role: 'Quartermaster', persona: 'Tracks the missing grain.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expert witness' }));
+    await user.click(screen.getByRole('button', { name: 'Witness augmented' }));
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
+      selectionRecipe: 'witness_augmented',
+      selectedWitness: { branchId: 'branch-a', agentId: 'agent-c' },
+    }));
   });
 
   it('allows reseating representatives after a live table is already open', async () => {

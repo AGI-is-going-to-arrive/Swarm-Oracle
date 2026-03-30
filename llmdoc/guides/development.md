@@ -107,6 +107,14 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - 覆盖桌面 + mobile 的 `live / hotseat / all_present / one-move / crossline gallery / artifact readonly / local readonly / reload restore / import`
 - `e2e-ending-room-followup-suite.mjs mobile`
   - 只跑移动端多结局链路，适合单独复核 `hotseat / all_present / crossline gallery / readonly replay / restore / import`
+- `single-ending`
+  - 当前仍是单独手动浏览器复核项，不在 `e2e-ending-room-followup-suite.mjs` 的 CLI summary 主入口里
+  - 最小口径：
+    - 结果页不展示 `发起圆桌 / 异线旁听席`
+    - 保留 `进入会客厅 / 只改一步`
+    - `ending_chamber` live -> readonly replay -> import 成立
+    - `one_move_only` 可正常打开并完成
+    - 桌面 / mobile 与中英语言切换都要看一次
 - `e2e-worldline-roundtable-suite.mjs full`
   - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat / artifact/local readonly / reload restore / import`
 - `e2e-worldline-roundtable-suite.mjs mobile`

@@ -362,12 +362,31 @@ def _compact_clause(value: str | None, *, limit: int = 88) -> str | None:
     return re.sub(r"[。！？.!?；;：:，,、]+$", "", text)
 
 
+def _oracle_visible_clause(value: str | None, *, language: str, limit: int = 88) -> str | None:
+    text = _compact_clause(value, limit=limit)
+    if not text:
+        return None
+    if language == "en" and _CJK_RE.search(text):
+        return None
+    return text
+
+
+def _oracle_visible_text(value: str | None, *, language: str, limit: int = 96) -> str | None:
+    text = _compact_text(value, limit=limit)
+    if not text:
+        return None
+    if language == "en" and _CJK_RE.search(text):
+        return None
+    return text
+
+
 def _roundtable_branch_hook(branch_card: dict[str, Any], *, language: str) -> str:
     return (
-        _compact_clause((branch_card.get("key_moments") or [None])[0], limit=48)
-        or _compact_clause(branch_card.get("insight"), limit=72)
-        or _compact_clause(branch_card.get("story"), limit=72)
-        or (branch_card.get("title") or ("当前世界线" if language == "zh" else "this ending"))
+        _oracle_visible_clause((branch_card.get("key_moments") or [None])[0], language=language, limit=48)
+        or _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
+        or _oracle_visible_clause(branch_card.get("story"), language=language, limit=72)
+        or _oracle_visible_text(branch_card.get("title"), language=language, limit=40)
+        or ("当前世界线" if language == "zh" else "the first decisive hinge")
     )
 
 
@@ -402,11 +421,11 @@ def _build_roundtable_opening_content(
     participant: EndingRoomParticipant | None = None,
     language: str,
 ) -> str:
-    title = str(branch_card.get("title") or "").strip() or (
+    title = _oracle_visible_text(branch_card.get("title"), language=language, limit=40) or (
         "当前世界线" if language == "zh" else "this ending"
     )
     hook = _roundtable_branch_hook(branch_card, language=language)
-    insight = _compact_clause(branch_card.get("insight"), limit=72)
+    insight = _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
     snapshot = participant.persona_snapshot_json if participant is not None else {}
     role_hint = str((snapshot or {}).get("agent_role") or "").strip()
     bio_hint = str((snapshot or {}).get("bio_short") or (snapshot or {}).get("agent_persona") or "").strip()
@@ -579,21 +598,26 @@ def _build_roundtable_crossfire_content(branch_cards: list[dict[str, Any]], *, l
         )
     lead = branch_cards[0]
     lead_hook = _roundtable_branch_hook(lead, language=language)
+    lead_title = _oracle_visible_text(lead.get("title"), language=language, limit=40) or (
+        "当前世界线" if language == "zh" else "this ending"
+    )
     rival = branch_cards[1] if len(branch_cards) > 1 else None
     if language == "zh":
         if rival is None:
-            return f"我先只盯《{lead.get('title') or '当前世界线'}》里“{lead_hook}”这一手，因为真正的差别就从这里被放大。"
+            return f"我先只盯《{lead_title}》里“{lead_hook}”这一手，因为真正的差别就从这里被放大。"
         rival_hook = _roundtable_branch_hook(rival, language=language)
+        rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "另一条世界线"
         return (
-            f"我先把两条线最早失手的地方摆出来：《{lead.get('title') or '当前世界线'}》先在“{lead_hook}”上偏了，"
-            f"《{rival.get('title') or '另一条世界线'}》则在“{rival_hook}”上先松了口子。"
+            f"我先把两条线最早失手的地方摆出来：《{lead_title}》先在“{lead_hook}”上偏了，"
+            f"《{rival_title}》则在“{rival_hook}”上先松了口子。"
         )
     if rival is None:
-        return f"I am keeping the focus on the hinge '{lead_hook}' inside {lead.get('title') or 'this ending'}, because that is where the difference first starts to widen."
+        return f"I am keeping the focus on the hinge '{lead_hook}' inside {lead_title}, because that is where the difference first starts to widen."
     rival_hook = _roundtable_branch_hook(rival, language=language)
+    rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "another ending"
     return (
-        f"I am putting the first slips side by side: {lead.get('title') or 'one ending'} starts to drift at '{lead_hook}', "
-        f"while {rival.get('title') or 'another ending'} first loosens at '{rival_hook}'."
+        f"I am putting the first slips side by side: {lead_title} starts to drift at '{lead_hook}', "
+        f"while {rival_title} first loosens at '{rival_hook}'."
     )
 
 
@@ -610,11 +634,15 @@ def _build_roundtable_witness_content(
         branch_rows=branch_rows,
         evidence_hook=evidence_hook,
     )
-    quote = str(witness_evidence.get("latest_quote") or "").strip()
+    quote = _oracle_visible_text(str(witness_evidence.get("latest_quote") or "").strip(), language=language, limit=120) or ""
     latest_round = int(witness_evidence.get("latest_round") or 0)
     role_hint = str((witness.persona_snapshot_json or {}).get("agent_role") or "").strip()
     bio_hint = str((witness.persona_snapshot_json or {}).get("bio_short") or "").strip()
-    branch_title = str((witness.persona_snapshot_json or {}).get("witness_branch_title") or branch_card.get("title") or "").strip()
+    branch_title = _oracle_visible_text(
+        str((witness.persona_snapshot_json or {}).get("witness_branch_title") or branch_card.get("title") or "").strip(),
+        language=language,
+        limit=40,
+    ) or ("当前世界线" if language == "zh" else "this branch")
     if language == "zh":
         quote_clause = f"我在 R{latest_round} 当时说过「{quote}」。" if quote and latest_round > 0 else ""
         return (
@@ -2368,8 +2396,9 @@ def _oracle_context_digest(room: EndingRoom, *, participant: EndingRoomParticipa
         f"scope={_oracle_scope_notice(room)}",
     ]
     snapshot = participant.persona_snapshot_json or {}
-    if snapshot.get("branch_title"):
-        lines.append(f"branch_title={snapshot['branch_title']}")
+    branch_title = _oracle_visible_text(snapshot.get("branch_title"), language=room.language, limit=40)
+    if branch_title:
+        lines.append(f"branch_title={branch_title}")
     if snapshot.get("impact_score") is not None:
         lines.append(f"impact_score={snapshot['impact_score']}")
     if snapshot.get("turn_count") is not None:
@@ -2615,6 +2644,7 @@ def _build_oracle_rewrite_prompt(
         "- Sound like the speaker, not like a customer-support assistant or system prompt\n"
         "- Prefer concrete, playable phrasing over abstract summaries\n"
         "- Use scene-appropriate nouns and pressure points when natural; do not collapse everything into generic 'situation / outcome / consequence' wording\n"
+        "- If the target language is English, do not leave untranslated Chinese fragments inside an otherwise English sentence; paraphrase or translate them into English instead\n"
         "- Keep it compact: one short paragraph, no bullets\n"
         "- Respect the scope notice exactly, but keep it implicit unless the user explicitly asks about boundaries\n"
         f"{_oracle_banned_process_phrases(room.language)}"
@@ -3690,6 +3720,12 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         or context["anchor_branch"]["story"]
         or context["anchor_branch"]["title"]
     )
+    evidence_hook_display = _roundtable_branch_hook(context["anchor_branch"], language=room.language)
+    anchor_branch_title = _oracle_visible_text(
+        context["anchor_branch"]["title"],
+        language=room.language,
+        limit=40,
+    ) or ("当前世界线" if room.language == "zh" else "this ending")
     primary_evidence = _build_participant_followup_evidence(
         primary_speaker,
         branch_rows=branch_rows,
@@ -3707,21 +3743,24 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
     role_hint = str(primary_meta.get("agent_role") or "").strip()
     persona_hint = str(primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip()
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
+        safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
+        safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
         move_text = (
-            f"动作：在「{evidence_hook}」发生前先插入一轮复核。"
+            f"动作：在「{evidence_hook_display}」发生前先插入一轮复核。"
             f" 理由：这样能把误判从全局扩散，改成局部复核。"
             f" 代价：短期节奏会更乱，且会暴露更多协调成本。"
             if room.language == "zh"
             else (
-                f"Move: insert one verification pass right before '{evidence_hook}'."
+                f"Move: insert one verification pass right before '{evidence_hook_display}'."
                 f" Why: that turns a system-wide mistake into a local re-check."
                 f" Risk: the short-term rhythm gets messier and coordination costs rise."
             )
         )
         primary_quote = primary_evidence.get("latest_quote")
         primary_round = int(primary_evidence.get("latest_round") or 0)
+        primary_quote_display = _oracle_visible_text(primary_quote, language=room.language, limit=120)
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""
-        primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote}'. " if primary_quote and primary_round > 0 else ""
+        primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote_display}'. " if primary_quote_display and primary_round > 0 else ""
         planned_turns = [
             {
                 "participant_id": primary_speaker.id,
@@ -3729,16 +3768,16 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                 "content": (
                     f"{primary_speaker.display_name}："
                     f"{primary_quote_clause_zh}"
-                    f"那一步也把世界线推到了《{context['anchor_branch']['title']}》。"
+                    f"那一步也把世界线推到了《{anchor_branch_title}》。"
                     f"{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"
-                    f"如果只让我改一手，我会先把「{evidence_hook}」前的判断慢半拍，再让复核真正跟上。"
+                    f"如果只让我改一手，我会先把「{evidence_hook_display}」前的判断慢半拍，再让复核真正跟上。"
                     if room.language == "zh"
                     else (
                         f"{primary_speaker.display_name}: "
                         f"{primary_quote_clause_en}"
-                        f"That also pushed the branch toward {context['anchor_branch']['title']}. "
-                        f"{(role_hint + '. ') if role_hint else ''}{persona_hint or 'I was optimizing for immediate stability.'} "
-                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook}' and make the verification loop catch up."
+                        f"That also pushed the branch toward {anchor_branch_title}. "
+                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{safe_persona_hint or 'I was optimizing for immediate stability.'} "
+                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook_display}' and make the verification loop catch up."
                     )
                 ),
                 "emotion": "reflective",
@@ -3777,13 +3816,18 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
 
     verdict_text = (
         f"档案官结论：这条线之所以成立，不是因为命运自己滑过去了，"
-        f"而是「{evidence_hook}」这处转折没人及时踩刹车。权限守在当前分支，复盘才盯得住真实因果。"
+        f"而是「{evidence_hook_display}」这处转折没人及时踩刹车。权限守在当前分支，复盘才盯得住真实因果。"
         if room.language == "zh"
         else (
             f"Archivist note: this branch held not because fate drifted there on its own, "
-            f"but because '{evidence_hook}' was never cut off in time. Keep permissions inside the current branch "
+            f"but because '{evidence_hook_display}' was never cut off in time. Keep permissions inside the current branch "
             f"and the debrief stays causal instead of turning into collage."
         )
+    )
+    primary_quote_display = _oracle_visible_text(
+        primary_evidence.get("latest_quote"),
+        language=room.language,
+        limit=120,
     )
     primary_debrief_quote_zh = (
         f"我在 R{primary_evidence.get('latest_round')} 当时说过「{primary_evidence.get('latest_quote')}」。"
@@ -3791,8 +3835,8 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         else ""
     )
     primary_debrief_quote_en = (
-        f"In R{primary_evidence.get('latest_round')} I said '{primary_evidence.get('latest_quote')}'. "
-        if primary_evidence.get("latest_quote") and primary_evidence.get("latest_round")
+        f"In R{primary_evidence.get('latest_round')} I said '{primary_quote_display}'. "
+        if primary_quote_display and primary_evidence.get("latest_round")
         else ""
     )
     planned_turns = [
@@ -3800,14 +3844,14 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             "participant_id": primary_speaker.id,
             "phase": EndingRoomPhase.OPENING,
             "content": (
-                f"{primary_speaker.display_name}：先把焦点放回《{context['anchor_branch']['title']}》。"
+                f"{primary_speaker.display_name}：先把焦点放回《{anchor_branch_title}》。"
                 f"{primary_debrief_quote_zh}"
-                f"真正的支点是「{evidence_hook}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
+                f"真正的支点是「{evidence_hook_display}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
                 if room.language == "zh"
                 else (
-                    f"{primary_speaker.display_name}: let me put the focus back on {context['anchor_branch']['title']}. "
+                    f"{primary_speaker.display_name}: let me put the focus back on {anchor_branch_title}. "
                     f"{primary_debrief_quote_en}"
-                    f"The hinge was '{evidence_hook}', and once nobody interrupted it, the rest of the ending rolled downhill from there."
+                    f"The hinge was '{evidence_hook_display}', and once nobody interrupted it, the rest of the ending rolled downhill from there."
                 )
             ),
             "emotion": "focused",
@@ -3816,14 +3860,19 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         },
     ]
     if secondary_speaker is not None:
+        secondary_quote_display = _oracle_visible_text(
+            secondary_evidence.get("latest_quote") if secondary_evidence else None,
+            language=room.language,
+            limit=120,
+        )
         secondary_quote_clause_zh = (
             f"我在 R{secondary_evidence.get('latest_round')} 其实更在意「{secondary_evidence.get('latest_quote')}」。"
             if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")
             else ""
         )
         secondary_quote_clause_en = (
-            f"In R{secondary_evidence.get('latest_round')} I leaned on '{secondary_evidence.get('latest_quote')}'. "
-            if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")
+            f"In R{secondary_evidence.get('latest_round')} I leaned on '{secondary_quote_display}'. "
+            if secondary_evidence and secondary_quote_display and secondary_evidence.get("latest_round")
             else ""
         )
         planned_turns.append(

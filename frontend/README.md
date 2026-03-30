@@ -36,6 +36,10 @@ React + TypeScript frontend for SwarmOracle.
   replay URL building, token encoding/decoding, import helpers
 - `oracleReplay.ts / replayCodec.ts`
   Oracle replay share now falls back to a local read-only link when artifact storage is unavailable and URL-token sharing is too large to ship
+- `WorldlineRoundtableView.tsx`
+  launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
+- `useEndingRoomWS.ts`
+  Oracle WS reconnect now reuses the latest connect callback instead of holding a stale self-reference
 - `scenarioMeta`
   compatibility/cache layer, not cross-device authority
   authority-backed replay snapshots now strip redundant `cards / bets / branchSnapshots`
@@ -100,6 +104,13 @@ npm run build:spike:phaser-custom
 - Current Oracle mobile targeted coverage now includes:
   - ending-room `hotseat / all_present / crossline gallery / artifact readonly / local readonly / local reload restore / import`
   - roundtable `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
+- Current Oracle targeted QA also rechecked a true single-ending result page in a real browser:
+  - no `Start Roundtable`
+  - no `Crossline Gallery`
+  - `Enter Chamber / One Move Only` both open correctly
+  - single-ending chamber readonly replay still imports back into `/sim/:id`
+  - English live-room copy no longer mixes raw Chinese hinge text into English sentences
+- Current `e2e-ending-room-followup-suite.mjs` CLI entry still writes the multi-ending desktop/mobile summary path; single-ending Oracle verification is currently a separate manual browser pass.
 - Current default build shrinks the `phaser` chunk from about `1202.19 kB` to `718.11 kB` (`328.41 kB` → `202.34 kB` gzip).
 - Default signoff contract:
   - targeted backend checks

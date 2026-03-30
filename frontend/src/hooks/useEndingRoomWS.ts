@@ -19,6 +19,7 @@ function resolveEndingRoomWsHost() {
 
 export function useEndingRoomWS(roomId: string | undefined, ready = true) {
   const wsRef = useRef<WebSocket | null>(null);
+  const connectRef = useRef<(() => void) | null>(null);
   const reconnectCount = useRef(0);
   const cleanedUp = useRef(false);
   const connectTimerRef = useRef<number | null>(null);
@@ -225,7 +226,9 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
         if (reconnectTimerRef.current) {
           window.clearTimeout(reconnectTimerRef.current);
         }
-        reconnectTimerRef.current = window.setTimeout(connect, delay);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          connectRef.current?.();
+        }, delay);
       }
     };
 
@@ -237,6 +240,10 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
       });
     };
   }, [ready, rememberEventId, requestRoomResync, roomId]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     lastSequenceRef.current = 0;

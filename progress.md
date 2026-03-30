@@ -15531,3 +15531,57 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 当前判断更新：
   - Oracle 主链不是“还在补 replay/mobile 基础能力”，而是这轮已经把 replay fallback、readonly hotseat 语义和 mobile signoff 工件重新收到了同一口径。
   - 下次如果继续做，不该再重复补这些基础链路；优先级应回到更深的 follow-up 流式一致性和 corner-case / regression hardening。
+
+## 2026-03-31 Phase B-E audit hardening pass
+
+- 已重新读取：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 本轮高信号发现：
+  - `WorldlineRoundtableView.tsx` 存在真实 stale-closure 风险：
+    - `handleLaunchRoundtable()` 之前缺 `selectionMode/uiLanguage` 依赖
+    - `handleSend()` 之前缺 `threadList/setActiveThread` 依赖
+    - 这会让“切模式/切语言/热座线程切换后再发送”的 payload 有机会带旧值
+  - `useEndingRoomWS.ts` 的重连逻辑之前在 callback 初始化里直接引用 `connect`，虽然未必立刻炸，但静态规则已经把它标成潜在不稳定点。
+  - 真实浏览器英文 QA 确认 Oracle transcript 存在 mixed-language leakage：
+    - 英文 UI 壳下，roundtable transcript 会把中文 branch title / hinge 原样嵌进英文句子
+    - 这与 `23` 文档里“中英双语必须同时成立”的要求冲突
+- 本轮代码修复：
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 补齐关键 callback/effect 依赖
+    - `addressedAgentIds` 改成 `useMemo`，避免 Hook 依赖抖动
+  - `frontend/src/hooks/useEndingRoomWS.ts`
+    - 重连改为通过 `connectRef` 调度，避免 callback 自引用结构
+  - `backend/app/services/ending_room_service.py`
+    - 新增英文房间下的 Oracle 文本可见性兜底：
+      - 对 CJK branch title / hinge / quote 在英文 deterministic anchor 中不再直接原样拼接
+      - Oracle rewrite prompt 显式禁止“英文句子里残留未翻译中文碎片”
+    - single-ending / roundtable 的 English anchor copy 同步改用上述兜底
+  - `backend/tests/test_ending_room_service.py`
+    - 新增英文 opening fallback 与 rewrite prompt 约束测试
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增 witness mode 切换后 launch payload 断言
+    - 统一在测试前重置 mock language，避免测试夹具语言泄漏
+- 本轮验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py -q`
+    - `60 passed`
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx`
+    - `7 passed`
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx -t "keeps the current UI language and launches the room in that language even when the scenario language differs"`
+    - 通过
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx -t "keeps the latest witness mode when switching between expert_witness and witness_augmented before launch"`
+    - 通过
+  - `cd frontend && npx eslint src/pages/WorldlineRoundtableView.tsx src/hooks/useEndingRoomWS.ts`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - 通过
+  - 真实 Playwright QA：
+    - 英文 roundtable 在 fresh room 下，之前那种“英文句子里嵌中文 hinge/summary”已被压成英文泛化表述，不再肉眼混句
+- 当前残余/下轮建议：
+  - `src/pages/WorldlineRoundtableView.test.tsx` 整文件一起跑时仍会在前 2-3 个用例后卡住；单用例可通过，说明问题更像历史测试夹具隔离/未清理异步状态，而不是本轮功能回退。
+  - 如果下一轮继续，优先清掉这个整文件挂测问题，再补“英文房间下 single-ending follow-up”的显式浏览器验证。
