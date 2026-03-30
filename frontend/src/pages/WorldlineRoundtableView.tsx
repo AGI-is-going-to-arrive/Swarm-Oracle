@@ -194,17 +194,6 @@ function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
   }, {});
 }
 
-function inferOracleLanguage(...candidates: Array<string | null | undefined>): 'zh' | 'en' | null {
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (/[\u4e00-\u9fff]/.test(candidate)) {
-      return 'zh';
-    }
-    return 'en';
-  }
-  return null;
-}
-
 export default function WorldlineRoundtableView() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -269,15 +258,7 @@ export default function WorldlineRoundtableView() {
   const effectiveThreadOrder = replaySnapshot
     ? replaySnapshot.threads.map((thread) => thread.id)
     : threadOrder;
-  const targetLanguageSource = replayPayload?.roomSnapshot.language
-    ?? replayPayload?.scenarioReplay?.scenario.language
-    ?? scenario?.language
-    ?? inferOracleLanguage(
-      replayPayload?.scenarioReplay?.storyData.question,
-      storyData?.question,
-      scenario?.question,
-    );
-  const preferredLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
+  const uiLanguage: 'zh' | 'en' = isZh ? 'zh' : 'en';
   const oracleProfile = useMemo(
     () => inferGameplayProfile(
       replayPayload?.scenarioReplay?.scenario.question
@@ -327,14 +308,6 @@ export default function WorldlineRoundtableView() {
     snapshot?.id,
     !replayPayload && Boolean(snapshot?.id) && status !== 'error',
   );
-
-  useEffect(() => {
-    if (!targetLanguageSource) return;
-    const targetLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
-    if (!i18n.language.startsWith(targetLanguage)) {
-      void i18n.changeLanguage(targetLanguage);
-    }
-  }, [i18n, targetLanguageSource]);
 
   useEffect(() => {
     let cancelled = false;
@@ -887,7 +860,7 @@ export default function WorldlineRoundtableView() {
               : null)
           )
           : null,
-        language: preferredLanguage,
+        language: uiLanguage,
       });
       await loadRoom(roomId);
       setEditingRepresentatives(false);

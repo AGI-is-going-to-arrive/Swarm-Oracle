@@ -92,7 +92,11 @@
 
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
-- roundtable mobile 一屏体验仍有后续优化空间。
+- Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- roundtable mobile 当前以 `live room` 为优先目标：
+  - `live room` 已收口到首屏无页面级纵向滚动
+  - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
+- `pretext` 尚未接入运行时；若推进，将先作为 `ResultView / EndingChatModal / WorldlineRoundtableView` 的只读文本布局预测层，而不是全站布局内核。
 
 ## 查找路径
 

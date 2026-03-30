@@ -641,6 +641,54 @@ def test_roundtable_opening_anchor_field_voice_is_more_frontline():
     assert "前线" in opening
 
 
+def test_roundtable_opening_anchor_finance_voice_mentions_liquidity_chain():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="周志远",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "商业银行行长"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "现金禁令风暴",
+            "insight": "银行先被挤兑预期拖住了手脚。",
+            "key_moments": ["流动性挑战"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert "清算" in opening
+    assert "流动性" in opening
+
+
+def test_roundtable_opening_anchor_market_voice_mentions_cashflow_pressure():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="林小满",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "水产市场摊主"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "现金禁令风暴",
+            "insight": "市场摊位先被现金流和客流冲击撕开了口子。",
+            "key_moments": ["下载数字人民币"],
+        },
+        participant=participant,
+        language="zh",
+    )
+
+    assert "客流" in opening
+    assert "现钱" in opening
+
+
 def test_branch_scope_context_keeps_foreign_fulltext_isolated():
     scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
 

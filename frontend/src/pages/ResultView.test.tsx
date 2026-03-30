@@ -45,6 +45,7 @@ const {
 const {
   setMockLanguage,
   getMockLanguage,
+  changeLanguageMock,
   stableTranslator,
 } = vi.hoisted(() => {
   let currentLanguage = 'en';
@@ -67,9 +68,13 @@ const {
     }
     return key;
   };
+  const changeLanguageMock = vi.fn(async (language: string) => {
+    currentLanguage = language;
+  });
   return {
     setMockLanguage,
     getMockLanguage,
+    changeLanguageMock,
     stableTranslator,
   };
 });
@@ -93,9 +98,7 @@ vi.mock('react-i18next', () => ({
       get language() {
         return getMockLanguage();
       },
-      changeLanguage: vi.fn(async (language: string) => {
-        setMockLanguage(language);
-      }),
+      changeLanguage: changeLanguageMock,
     },
   }),
 }));
@@ -380,6 +383,7 @@ vi.mock('../components/ShareModal', () => ({
 
 beforeEach(() => {
   setMockLanguage('en');
+  changeLanguageMock.mockClear();
   endingRoomStoreState.snapshot = null;
   endingRoomStoreState.result = null;
   endingRoomStoreState.activeThreadId = null;
@@ -406,6 +410,53 @@ beforeEach(() => {
 });
 
 describe('ResultView campaign summary', () => {
+  it('keeps the current UI language instead of forcing the scenario language on Oracle result pages', async () => {
+    setMockLanguage('en');
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: '如果档案必须同步？',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      language: 'zh',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+      director_state: null,
+      gameplay_state: null,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: '如果档案必须同步？',
+      status: 'done',
+      branches: [{
+        id: 'branch-1',
+        title: 'Archive Branch',
+        probability: 1,
+        status: 'COMPLETED',
+        story: 'A complete branch story.',
+        insight: 'A durable insight.',
+        key_moments: ['Moment 1'],
+        parent_branch_id: null,
+        fork_reason: '',
+      }],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(changeLanguageMock).not.toHaveBeenCalled();
+    expect(getMockLanguage()).toBe('en');
+  });
+
   it('renders ending-room CTAs, opens the picker, and confirms into the modal with the selected mode', async () => {
     const user = userEvent.setup();
 

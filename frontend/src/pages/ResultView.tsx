@@ -278,17 +278,6 @@ function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
     : `R${parsed.round} committed to ${parsed.value}`;
 }
 
-function inferOracleLanguage(...candidates: Array<string | null | undefined>): 'zh' | 'en' | null {
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (/[\u4e00-\u9fff]/.test(candidate)) {
-      return 'zh';
-    }
-    return 'en';
-  }
-  return null;
-}
-
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -388,27 +377,6 @@ export default function ResultView() {
     isZhRef.current = isZh;
     translationRef.current = t;
   }, [isZh, loadResultErrorMessage, replayInvalidMessage, t]);
-
-  useEffect(() => {
-    const targetLanguageSource = replayEndingRoomPayload?.roomSnapshot.language
-      ?? replayPayload?.scenario.language
-      ?? scenario?.language
-      ?? inferOracleLanguage(
-        replayPayload?.storyData.question,
-        storyData?.question,
-        scenario?.question,
-      );
-    if (!targetLanguageSource) return;
-    const targetLanguage = targetLanguageSource === 'zh' ? 'zh' : 'en';
-    if (!i18n.language.startsWith(targetLanguage)) {
-      void i18n.changeLanguage(targetLanguage);
-    }
-  }, [
-    i18n,
-    replayEndingRoomPayload?.roomSnapshot.language,
-    replayPayload?.scenario.language,
-    scenario?.language,
-  ]);
 
   const applyScenarioReplay = useCallback((replay: ScenarioResultReplayPayload) => {
     const replayProfile = inferGameplayProfile(replay.scenario.question, replay.scenario.scene_theme);
@@ -1179,12 +1147,15 @@ export default function ResultView() {
     let cancelled = false;
 
     const buildReplay = async () => {
+      const routeFallbackUrl = id
+        ? `${window.location.origin.replace(/\/$/, '')}/result/${id}`
+        : null;
       if (isReplayMode) {
         setReplayUrl(window.location.href);
         return;
       }
       if (!replaySnapshot) {
-        setReplayUrl(null);
+        setReplayUrl(routeFallbackUrl);
         return;
       }
       const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`;
@@ -1224,7 +1195,7 @@ export default function ResultView() {
     return () => {
       cancelled = true;
     };
-  }, [isReplayMode, replaySnapshot]);
+  }, [id, isReplayMode, replaySnapshot]);
 
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,

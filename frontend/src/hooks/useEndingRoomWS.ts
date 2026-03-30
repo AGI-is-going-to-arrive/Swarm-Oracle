@@ -28,6 +28,7 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
   const lastSequenceRef = useRef(0);
   const lastStreamIdentityRef = useRef<string | null>(null);
   const seenEventIdsRef = useRef<Map<string, true>>(new Map());
+  const socketOpenedRef = useRef(false);
 
   const rememberEventId = useCallback((eventId: string) => {
     seenEventIdsRef.current.delete(eventId);
@@ -83,6 +84,7 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
 
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
+      socketOpenedRef.current = true;
       const messageVersionAtOpen = stateMessageVersionRef.current;
       const reconnectAttempts = reconnectCount.current;
       if (reconnectAttempts > 0) {
@@ -141,7 +143,8 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
               });
               return;
             }
-            if (meta.sequence > lastSequenceRef.current + 1 && roomId) {
+            const isInitialSocketFrame = lastSequenceRef.current === 0 && socketOpenedRef.current;
+            if (!isInitialSocketFrame && meta.sequence > lastSequenceRef.current + 1 && roomId) {
               console.warn(
                 '[EndingRoomWS] Sequence gap detected — polling backend for missed room state',
                 { expected: lastSequenceRef.current + 1, received: meta.sequence },
@@ -241,6 +244,7 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
     seenEventIdsRef.current = new Map();
     stateMessageVersionRef.current = 0;
     resyncRequestVersionRef.current = 0;
+    socketOpenedRef.current = false;
 
     if (!roomId || !ready) {
       return;

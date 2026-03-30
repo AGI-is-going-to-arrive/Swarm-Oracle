@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WorldlineRoundtableView from './WorldlineRoundtableView';
 
 const {
+  getMockLanguage,
+  setMockLanguage,
+  changeLanguageMock,
   appendUserTurnMock,
   copyTextMock,
   createReplayArtifactMock,
@@ -27,6 +30,7 @@ const {
   storeState,
   wsMock,
 } = vi.hoisted(() => {
+  let currentLanguage = 'en';
   const openRoom = vi.fn(async () => 'room-1');
   const loadRoom = vi.fn(async () => {});
   const loadThread = vi.fn(async () => {});
@@ -47,6 +51,13 @@ const {
     updated_at: '2026-03-29T00:00:01Z',
   }));
   return {
+    getMockLanguage: () => currentLanguage,
+    setMockLanguage: (language: string) => {
+      currentLanguage = language;
+    },
+    changeLanguageMock: vi.fn(async (language: string) => {
+      currentLanguage = language;
+    }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
     getAgentsMock: vi.fn(),
     getReplayArtifactMock: vi.fn(),
@@ -216,8 +227,10 @@ vi.mock('react-i18next', () => ({
       }[key] ?? key);
     },
     i18n: {
-      language: 'en',
-      changeLanguage: vi.fn(async () => {}),
+      get language() {
+        return getMockLanguage();
+      },
+      changeLanguage: changeLanguageMock,
     },
   }),
 }));
@@ -271,6 +284,8 @@ vi.mock('../game/managers/VizSynthesizer', () => ({
   loadRoomMock.mockClear();
   loadThreadMock.mockClear();
   createThreadMock.mockClear();
+  changeLanguageMock.mockClear();
+  setMockLanguage('en');
   appendUserTurnMock.mockClear();
   setActiveThreadMock.mockClear();
   setInteractionModeMock.mockClear();
@@ -398,6 +413,58 @@ describe('WorldlineRoundtableView', () => {
       selectedWitness: null,
     });
     expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+  });
+
+  it('keeps the current UI language and launches the room in that language even when the scenario language differs', async () => {
+    setMockLanguage('en');
+    storeState.snapshot = null as any;
+    storeState.result = null as any;
+    storeState.threadsById = {} as any;
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null as any;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: '如果帝国分裂了？',
+      status: 'done',
+      agents: [],
+      language: 'zh',
+      messages: [
+        { id: 'msg-a', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-b', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: '如果帝国分裂了？',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.5, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.5, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    expect(changeLanguageMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+
+    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
+      language: 'en',
+    }));
+    expect(changeLanguageMock).not.toHaveBeenCalled();
   });
 
   it('lets manual_shortlist launch only the selected worldlines', async () => {

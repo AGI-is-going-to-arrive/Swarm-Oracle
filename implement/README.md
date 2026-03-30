@@ -58,6 +58,7 @@
 | 21 | `21_track_d_debate_arena_mvp_blueprint.md` | active archive | 查 Debate MVP 蓝图与验收口径 |
 | 22 | `22_cross_device_state_closure_plan.md` | active archive | 查 authority 收口设计 |
 | 23 | `23_oracle_chambers_worldline_roundtable_execution_plan.md` | active archive | 查 Oracle Chambers / Roundtable 设计与剩余任务 |
+| 24 | `pretext_integration_plan.md` | active archive | 查 `pretext` 接入边界、阶段计划与验收合同 |
 
 ## 当前建议
 

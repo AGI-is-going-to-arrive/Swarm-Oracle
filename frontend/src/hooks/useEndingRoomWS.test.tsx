@@ -285,6 +285,71 @@ describe('useEndingRoomWS', () => {
     expect(storeState.hydrateResult).toHaveBeenCalled();
   });
 
+  it('does not trigger a second resync when the first post-open event starts above sequence one', async () => {
+    getEndingRoomMock.mockResolvedValue({
+      id: 'room-open-gap',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      turns: [],
+      result_ready: true,
+    });
+    getEndingRoomResultMock.mockResolvedValue({
+      id: 'room-open-gap',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      turns: [],
+      result_ready: true,
+      result: { summary: 'Summary' },
+    });
+
+    render(<Harness roomId="room-open-gap" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    await act(async () => {
+      MockWebSocket.instances[0]?.onopen?.({} as Event);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getEndingRoomMock).toHaveBeenCalledTimes(1);
+    expect(getEndingRoomResultMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_phase_change',
+          data: { phase: 'crossfire' },
+          meta: { stream_id: 'room-open-gap', sequence: 14, event_id: 'room-open-gap:14' },
+        }),
+      } as MessageEvent<string>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getEndingRoomMock).toHaveBeenCalledTimes(1);
+    expect(getEndingRoomResultMock).toHaveBeenCalledTimes(1);
+    expect(storeState.setPhase).toHaveBeenCalledWith('crossfire');
+  });
+
   it('does not reconnect after a normal close', () => {
     render(<Harness roomId="room-close" />);
 

@@ -37,6 +37,7 @@
 }
 
 .worldline-roundtable-view {
+  box-sizing: border-box;
   min-height: 100vh;
   padding: 24px;
   background:
@@ -45,6 +46,7 @@
 }
 
 .worldline-roundtable-hero {
+  position: relative;
   display: grid;
   gap: 16px;
   margin-bottom: 24px;
@@ -57,6 +59,26 @@
   background-size: auto, 100% 100%;
   background-position: center, center;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.worldline-roundtable-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 16% 18%, color-mix(in srgb, var(--oracle-accent-soft) 90%, transparent), transparent 26%),
+    radial-gradient(circle at 86% 14%, color-mix(in srgb, var(--oracle-aura) 92%, transparent), transparent 24%),
+    linear-gradient(128deg, transparent 0 42%, color-mix(in srgb, var(--oracle-accent-soft) 42%, transparent) 52%, transparent 64% 100%);
+  mix-blend-mode: screen;
+  opacity: 0.42;
+  animation: oracle-atmosphere-drift 18s ease-in-out infinite;
+}
+
+.worldline-roundtable-hero > * {
+  position: relative;
+  z-index: 1;
 }
 
 .worldline-roundtable-hero__topline {
@@ -799,6 +821,8 @@
   }
 
   .worldline-roundtable-view.is-live-room {
+    height: 100dvh;
+    max-height: 100dvh;
     min-height: 100dvh;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
@@ -1149,6 +1173,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .worldline-roundtable-hero::before,
   .worldline-roundtable-seat.is-current-speaker,
   .worldline-roundtable-seat.is-hotseat-target,
   .worldline-roundtable-transcript-list .ending-chat-bubble.is-current-speaker,

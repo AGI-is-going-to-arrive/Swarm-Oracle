@@ -377,6 +377,10 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         return "imperial"
     if any(token in normalized for token in ("将", "统帅", "指挥官", "舰队", "commander", "captain", "marshal", "fleet", "guard")):
         return "field"
+    if any(token in normalized for token in ("银行", "行长", "财政", "金融", "清算", "流动性", "bank", "banker", "finance", "treasury", "settlement", "liquidity")):
+        return "finance"
+    if any(token in normalized for token in ("摊主", "商户", "商贩", "市场", "港口", "贸易", "货运", "vendor", "merchant", "market", "port", "trade", "freight")):
+        return "market"
     if any(token in normalized for token in ("议长", "speaker", "minister", "scribe", "文书", "ledger", "council")):
         return "civic"
     return "plain"
@@ -408,6 +412,16 @@ def _build_roundtable_opening_content(
                 f"《{title}》是在“{hook}”这里先把前线掏空的，不是到了结局才突然坏掉。"
                 f"{f'后面会一路滑向“{insight}”。' if insight and insight != hook else '前线一空，后面的收场就只是时间问题。'}"
             )
+        if variant == "finance":
+            return (
+                f"《{title}》不是到收尾才出事，而是在“{hook}”这里先把清算、流动性和信心链一起撬松了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '资金预期一松，后面的代价就只会越滚越大。'}"
+            )
+        if variant == "market":
+            return (
+                f"《{title}》不是到了结局才疼，而是在“{hook}”这里先把客流、摊位和现钱周转一起挤坏了。"
+                f"{f'后面才会一路滑向“{insight}”。' if insight and insight != hook else '一旦现钱链先断，后面的收场就只剩谁来吞下损失。'}"
+            )
         if variant == "civic":
             return (
                 f"《{title}》是从“{hook}”这里开始对不上账的，后面每一层解释都只能越补越漏。"
@@ -434,6 +448,26 @@ def _build_roundtable_opening_content(
         )
         return (
             f"{title} was lost before the ending label ever appeared: '{hook}' emptied the front first. "
+            f"{ending_clause}"
+        )
+    if variant == "finance":
+        ending_clause = (
+            f"From there it kept drifting toward '{insight}'."
+            if insight and insight != hook
+            else "Once the settlement rail loosened, the rest of the cost only compounded."
+        )
+        return (
+            f"{title} does not first break at the ending. It breaks when '{hook}' loosens settlement, liquidity, and confidence at once. "
+            f"{ending_clause}"
+        )
+    if variant == "market":
+        ending_clause = (
+            f"That is how it keeps sliding toward '{insight}'."
+            if insight and insight != hook
+            else "Once foot traffic and cash rotation are squeezed first, the later cost only turns into loss allocation."
+        )
+        return (
+            f"{title} does not start hurting at the finale. It starts when '{hook}' squeezes stalls, customers, and cash rotation first. "
             f"{ending_clause}"
         )
     if variant == "civic":
@@ -558,9 +592,39 @@ def _followup_angle_label(role_hint: str | None, *, language: str) -> str:
         return "权力链" if language == "zh" else "the authority chain"
     if any(token in normalized for token in ("将", "统帅", "general", "commander", "captain", "marshal", "guard")):
         return "执行链" if language == "zh" else "the execution chain"
+    if any(token in normalized for token in ("银行", "行长", "财政", "金融", "清算", "流动性", "bank", "banker", "finance", "treasury", "settlement", "liquidity")):
+        return "清算链" if language == "zh" else "the settlement chain"
+    if any(token in normalized for token in ("摊主", "商户", "商贩", "市场", "港口", "贸易", "货运", "vendor", "merchant", "market", "trade", "port", "freight")):
+        return "现钱链" if language == "zh" else "the cash-flow chain"
     if any(token in normalized for token in ("档案", "scribe", "record", "ledger", "minister", "文书", "coordinator")):
         return "记录链" if language == "zh" else "the records chain"
     return "因果链" if language == "zh" else "the causal chain"
+
+
+def _oracle_role_pressure_clause(variant: str, *, language: str) -> str:
+    if language == "zh":
+        if variant == "imperial":
+            return "我盯的不是一句面子话，而是谁还能把号令、体面和行省秩序压回原位。"
+        if variant == "field":
+            return "我盯的是前线、补给和调度空窗，不是事后好看的解释。"
+        if variant == "civic":
+            return "我盯的是账册、解释链和最后到底谁来签字背责。"
+        if variant == "finance":
+            return "我盯的不是场面，而是清算链、流动性和挤兑预期什么时候先松。"
+        if variant == "market":
+            return "我盯的不是口号，而是客流、摊位和现钱周转先在哪一步被挤坏。"
+        return ""
+    if variant == "imperial":
+        return "I am not tracking posture. I am tracking command, legitimacy, and whether provincial order can still be forced back into line."
+    if variant == "field":
+        return "I am tracking the line, the supply rail, and the tempo gap, not the polished explanation after the loss."
+    if variant == "civic":
+        return "I am tracking the ledger, the explanation chain, and who is left signing for the damage."
+    if variant == "finance":
+        return "I am not tracking optics. I am tracking settlement rails, liquidity strain, and when the run expectation starts to loosen."
+    if variant == "market":
+        return "I am not tracking slogans. I am tracking foot traffic, stall order, and where cash flow gets squeezed first."
+    return ""
 
 
 def _build_participant_followup_evidence(
@@ -1789,6 +1853,8 @@ def _build_followup_reply_content(
     latest_quote = str(participant_evidence.get("latest_quote") or "").strip()
     latest_round = int(participant_evidence.get("latest_round") or 0)
     angle_label = _followup_angle_label(role_hint, language=room.language)
+    role_variant = _oracle_role_voice_variant(role_hint, bio_hint)
+    role_pressure_clause = _oracle_role_pressure_clause(role_variant, language=room.language)
     profile_focus_hint = _oracle_profile_focus_hint(room)
     if room.language == "zh":
         if thread.mode == EndingRoomThreadMode.ROOM:
@@ -1834,6 +1900,7 @@ def _build_followup_reply_content(
                 f"{target_label}：{opener}{role_prefix}"
                 f"{stance_prefix}{quote_clause}"
                 f"所以这轮我只把 {angle_label} 讲具体，不把责任抹平成抽象命运。{focus}"
+                f"{role_pressure_clause}"
                 f"{f'别把{profile_focus_hint}讲成空话。' if profile_focus_hint else ''}"
             )
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
@@ -1877,6 +1944,7 @@ def _build_followup_reply_content(
                 f"{persona_prefix}{quote_clause}"
                 f"如果只改一手，我会先把「{evidence_hint}」前的判断慢半拍，先把 {angle_label} 重新对齐；这样能压住失控，但短期一定更乱。"
                 f"{focus}"
+                f"{role_pressure_clause}"
                 f"{f'这一下真正牵着的是{profile_focus_hint}。' if profile_focus_hint else ''}"
             )
         if is_archivist:
@@ -1955,6 +2023,7 @@ def _build_followup_reply_content(
         return (
             f"{target_label}: {opener} {role_prefix}{stance_prefix}{quote_clause} "
             f"In this round I am only covering {angle_label}, not dissolving into generic commentary. {focus}"
+            f" {role_pressure_clause}"
             f"{f' Keep {profile_focus_hint} concrete.' if profile_focus_hint else ''}"
         )
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
@@ -1995,6 +2064,7 @@ def _build_followup_reply_content(
                 'if you want the first real miss, it starts here.'
             ])} {role_prefix}{persona_prefix}{quote_clause} "
             f"If I only get one correction, I slow down the move right before '{evidence_hint}' and realign {angle_label}; it buys control at the cost of tempo. {focus}"
+            f" {role_pressure_clause}"
             f"{f' That is where {profile_focus_hint} gets tested first.' if profile_focus_hint else ''}"
         )
     if is_archivist:
@@ -2204,6 +2274,16 @@ def _oracle_voice_brief(
             return (
                 "Speak like a frontline commander: concrete, tactile, and unsentimental. "
                 "Name positions, tempo, losses, supplies, or lines before abstractions."
+            )
+        if variant == "finance":
+            return (
+                "Speak like a wary finance operator: numbers-first, run-aware, and sensitive to settlement, liquidity, and confidence breaks. "
+                "Prefer balance-sheet pressure over heroic rhetoric."
+            )
+        if variant == "market":
+            return (
+                "Speak like someone who feels policy through foot traffic, cash rotation, and stall-level disruption. "
+                "Prefer customer flow, payment friction, and loss allocation over abstract governance phrasing."
             )
         if variant == "civic":
             return (

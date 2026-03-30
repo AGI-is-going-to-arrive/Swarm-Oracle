@@ -220,6 +220,153 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 备注：
   - `backend/tests/test_llm_client.py` 全量里仍有 3 条直接打默认 `8318` 的现网连通测试会受本地网关授权状态影响；与这次 follow-up streaming 改动无直接关系，因此本轮签收不以那 3 条为阻塞。
 
+## 2026-03-30 Oracle Chambers / Roundtable re-audit pass
+
+- 已重新对齐当前真值：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `.impeccable.md`
+- 代码/文档差异结论：
+  - 当前真实已落地的 roundtable 桌型仍是 `representative / manual_shortlist / expert_witness`。
+  - `trait_mix / fault_line_first / witness_augmented` 仍未在代码中落地，和执行方案后半段“后续阶段”描述一致，不应误判为当前回退。
+- 本轮首先发现并修复了一个真实前端降级 bug：
+  - `frontend/src/pages/ResultView.tsx`
+  - 当 replay artifact 存储失败且 replay token 过大时，结果页原本会把 `copy permalink` 一并禁用。
+  - 现已改为：即便 replay payload 尚未生成，也先稳定回退到 `/result/:id` permalink，再尝试升级为 artifact/token URL。
+- 当前已完成的验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `238 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `21 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+- 下一步：
+  - 启动 backend/frontend 本地服务
+  - 跑 Oracle 专项 E2E：ending-room / follow-up / roundtable / cross-browser / mobile
+  - 再做浏览器内视觉 QA 与命名/可玩性/动画体验复核
+
+- 补充修复（同轮继续）：
+  - `frontend/src/components/EndingChatModal.css`
+    - 移动端头部操作区从单列改为双列
+    - 缩短会客厅移动端 sidebar 首屏占高，避免 composer 被挤出首屏
+  - `frontend/src/hooks/useEndingRoomWS.ts`
+    - 首次 `onopen` 后若第一条事件 sequence 已大于 1，不再重复触发一次额外 resync
+  - `frontend/src/hooks/useEndingRoomWS.test.tsx`
+    - 新增首帧高 sequence 不重复 resync 的回归测试
+- 新一轮验证：
+  - `cd frontend && npm test -- --run src/hooks/useEndingRoomWS.test.tsx src/pages/ResultView.test.tsx`
+    - `28 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-ending-room-full-reaudit --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-ending-room-followup-reaudit --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-roundtable-full-reaudit --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-cross-browser-reaudit --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-codex-ending-room-mobile-after-ws-fix --headless`
+    - 通过；mobile console 中不再出现 `Sequence gap detected`
+- 当前人工 QA 结论：
+  - `ending_chamber / one_move_only / crossline_gallery / manual_shortlist / expert_witness / roundtable hotseat` 都已具备可玩闭环
+  - `trait_mix / fault_line_first / witness_augmented` 仍未落地，但按执行方案最新状态，它们属于后续扩展而非当前回退
+  - roundtable mobile 仍允许纵向滚动，但 composer 已保持可见，属于可玩而非阻塞
+
+## 2026-03-30 Oracle polish follow-up: mobile no-scroll + UI-language authority
+
+- 已完成：
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - `worldline-roundtable-view` 增加 `box-sizing: border-box`
+    - mobile live-room 视口改为 `height/max-height: 100dvh`
+    - roundtable mobile 现在不再出现页面级纵向滚动
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 新建 roundtable room 时，`language` 现在跟随当前 UI 语言，而不是 scenario 语言
+    - 删除 Oracle 页面强制 `changeLanguage()` 的逻辑
+  - `frontend/src/pages/ResultView.tsx`
+    - 删除 Oracle/replay 结果页强制跟随 scenario 语言的逻辑
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增“scenario 语言与 UI 语言不一致时，仍以当前 UI 语言开房且不强制切换 UI”的测试
+  - `frontend/src/pages/ResultView.test.tsx`
+    - 新增“Oracle result page 不强制把 UI 语言改成 scenario 语言”的测试
+- 新验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/hooks/useEndingRoomWS.test.tsx`
+    - `36 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260330-codex-roundtable-mobile-no-scroll --headless`
+    - 通过；`fit.canScrollY = false`
+
+## 2026-03-30 Pretext feasibility + Phase G first push
+
+- `pretext` 调研结论：
+  - 官方仓库与 npm 都确认它是 **multiline text measurement & layout** 库，不是通用动画/微交互库。
+  - 官方 README 明确主打：
+    - `prepare()/layout()` 做纯算术文本高度与行数计算
+    - `prepareWithSegments/layoutWithLines/layoutNextLine()` 做 Canvas/SVG 等自绘布局
+  - 对本项目来说，它**不能“全面优化整个前端”**，因为当前主要文本面仍是 DOM/CSS 布局，不存在大规模热路径 DOM 文本测量瓶颈。
+  - 如果后续真要接，最有价值的 POC 只会是：
+    - transcript/结果卡的预布局与溢出预测
+    - 需要 canvas/SVG/server-side 预排版的特殊文本面
+  - 不适合作为 Oracle/Result/Debate 全站通用优化主线。
+- 本轮已按当前真值继续推进 `Phase G` 的第一步：
+  - `backend/app/services/ending_room_service.py`
+    - Oracle 角色语域新增 `finance / market` 两类 voice variant
+    - `followup angle` 新增 `清算链 / 现钱链`
+    - deterministic fallback 与 voice brief 现在会显式带出 `清算、流动性、客流、现钱周转` 等更具体词汇
+  - `frontend/src/components/EndingChatModal.css`
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 新增轻量 atmosphere drift 层，保持现有 SwarmOracle 视觉语言，不改结构
+- 本轮新增验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py -k 'roundtable_opening_anchor' -q`
+    - `4 passed`
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/hooks/useEndingRoomWS.test.tsx`
+    - `36 passed`
+  - `cd frontend && npm run build`
+    - 通过
+
+- 文档落盘：
+  - 新增 `implement/pretext_integration_plan.md`
+  - 已把 `pretext` 的官方能力、适配边界、P0-P5 分阶段计划、非目标、风险和推荐顺序写入实现归档
+  - `implement/README.md` 已同步索引
+
+## 2026-03-30 Pretext plan hardening + testing evidence
+
+- 本轮继续把 `implement/pretext_integration_plan.md` 从“方向性计划”补成“可执行计划”：
+  - 增加：
+    - 页面状态拆分适配判断
+    - 开发前提
+    - code review checklist
+    - 单元/集成测试矩阵
+    - E2E 计划
+    - Playwright Interactive / CLI 观察口径
+    - 当前项目里的真实观察基线
+- 本轮实际执行的测试/观察：
+  - `cd frontend && node scripts/e2e-ending-room-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260330-pretext-plan-ending-room-mobile --headless`
+    - 通过
+  - `Playwright CLI`
+    - 打开 `http://127.0.0.1:18928/result/0536610d-67ae-452c-b86d-bfdc7b362313`
+    - 抓到当前结果页 snapshot：`.playwright-cli/page-2026-03-30T13-34-08-150Z.yml`
+  - `playwright-interactive`
+    - 桌面态人工检查 `ResultView` 长标题/长 insight/按钮标签
+    - 移动端人工检查 `roundtable` 的 `picker` 状态与 live-room 状态分离
+- 这轮得到的计划级结论：
+  - `pretext` 真正高价值的切入点仍是：
+    - `ResultView`
+    - `EndingChatModal`
+    - `WorldlineRoundtableView`
+  - 不应先碰：
+    - 动画层
+    - WS/store
+    - 全站统一接管 DOM 文本布局
+
 ## 2026-03-30 Oracle copy quality boundary push
 
 - 本轮目标：

@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-30
-> 状态更新（2026-03-30，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已补到 `角色化 + 题材化 + 去重复`，前端也已接入 profile skin + hook chips + 轻量氛围动效；`crossline_gallery`、`manual_shortlist`、`expert_witness` 这三条轻扩展当前也已形成最小可玩闭环。当前真正剩余的核心不再是链路打通，而是 replay/share/import 最终签收、更深的 persona vocabulary、以及 `trait_mix / fault_line_first / witness_augmented` 这些后续桌型与选席策略。
+> 状态更新（2026-03-30，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，其中 `finance / market` 这批语域已进 deterministic fallback 与 voice brief；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更轻的 ambient drift。`crossline_gallery`、`manual_shortlist`、`expert_witness` 这三条轻扩展当前也已形成最小可玩闭环；Oracle 页面 UI 语言不再被 `scenario.language` 反向覆盖，roundtable mobile live-room 也已收口到无页面级纵向滚动。当前真正剩余的核心不再是链路打通，而是 replay/share/import 最终签收、更深的 persona vocabulary、以及 `trait_mix / fault_line_first / witness_augmented` 这些后续桌型与选席策略。
 
 ---
 
@@ -46,6 +46,7 @@
    - `expert_witness` 已完成
    - `hotseat` follow-up 已完成
    - mobile live 首屏已压到“可直接追问”的程度
+   - live-room 当前已收口到无页面级纵向滚动；picker / reseat 仍允许滚动
 4. `crossline_gallery`
    - 结果页入口、摘要只读展示、local readonly copy / import 基线已完成
 5. Oracle follow-up 流式链路
@@ -60,6 +61,8 @@
    - 已完成 `recent lines` 去重
    - 已完成 `scene/profile` 语言层
    - 已完成 `profile-specific` 视觉皮肤与轻量氛围动效
+   - 当前 UI 语言不再被 `scenario.language` 强制覆盖
+   - `finance / market` 这批角色语域已进入第一轮词汇拉开
 
 ### 当前真正还没最终签收的点
 
@@ -67,8 +70,9 @@
    - ending-room / roundtable 的最终 permalink/share 合同还需要一次专门签收
 2. `persona-specific vocabulary`
    - 现在已经不是模板硬拼，但同一题材下不同角色的词汇层次还可以继续拉开
+   - 当前已补第一批 `finance / market` 语域，后面仍要继续扩到更多 profile / role
 3. `theme atmosphere`
-   - 现有 profile skin + 微动效已经接上，但还没有做到更强的 ambient motion / audio / Theater 联动
+   - 现有 profile skin + 微动效已经接上，并补了更轻的 ambient drift，但还没有做到更强的 ambient motion / audio / Theater 联动
 4. 更进一步的玩法扩展
    - `后续三回合`
    - `证据投牌`
@@ -1470,8 +1474,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
 
 ## 3.7 Phase G — Persona Vocabulary / Theme Skin / Atmosphere Polish
 
-> 状态：**next recommended phase**
-> 说明：这节是当前最应该推进的阶段，优先级高于新增玩法和更大 UI 结构改造。
+> 状态：**in progress**
+> 说明：这节仍是当前最应该推进的阶段，优先级高于新增玩法和更大 UI 结构改造。当前已补第一批 `finance / market` 语域、Oracle UI 语言 authority 收口、以及更轻的 ambient drift；但这还不是最终签收状态。
 
 ### 目标
 
@@ -1489,6 +1493,8 @@ frontend/src/hooks/useWorldlineRoundtableWS.ts
    - `ruler / imperial`
    - `field commander`
    - `civic operator`
+   - `finance / settlement`
+   - `market / cashflow`
    - `scholar / witness / archivist`
 2. hotseat 与 all-present 的句式分工继续拉开
    - `hotseat`: 先答，再钉 hinge/cost
@@ -1514,7 +1520,10 @@ G1-C: conflict / tension shaping
    - profile-specific frame / chip / accent
    - ambient float / glow / dust / scroll shimmer
    - profile-specific audio / SFX（若后续引入）
-3. 禁止：
+3. 当前已落地：
+   - `EndingChatModal / WorldlineRoundtableView` 的更轻 ambient drift
+   - Oracle 页面当前跟随用户 UI 语言，而不是反向被 scenario 语言覆盖
+4. 禁止：
    - 因为想“更沉浸”而牺牲可读性
    - 因为题材化而把页面重新设计成另一款产品
 
