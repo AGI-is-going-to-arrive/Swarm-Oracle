@@ -152,6 +152,14 @@
 
 - `ending_room` 是独立域，room/thread memory partition 隔离。
 - `crossline_gallery` 是只读摘要视图，不会开启可写 follow-up。
+- `POST /api/ending-room/{room_id}/thread`
+  当前也接受 `question_anchor_ids`，用于显式记录 thread 是由哪个 `quote / verdict / key_moment / phase` 发起。
+- `POST /api/ending-room/{room_id}/user-turn` 与 `POST /api/ending-room/thread/{thread_id}/user-turn`
+  当前都接受 `question_anchor_ids`。
+- `GET /api/ending-room/thread/{thread_id}` 与 room/result snapshot 里的 turn 数据
+  当前都会回显：
+  - `question_anchor_ids_json`
+  - 便于 replay/read-only 恢复与自动化验证锚点语义。
 
 ## WebSocket
 

@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { copyText } from '../lib/copyText';
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
 import {
   getGameplayProfileFrameSrc,
@@ -61,6 +62,12 @@ interface EndingChatRenderDraft {
   phase: EndingRoomPhase;
   content: string;
   variant: 'stream' | 'placeholder';
+}
+
+interface AnchorAction {
+  anchorIds: string[];
+  prompt: string;
+  threadTitle?: string | null;
 }
 
 function roleLabel(participant: EndingRoomParticipant, isZh: boolean): string {
@@ -139,9 +146,57 @@ function getInteractionModeNote(
       ? '让当前阵容都接一句，更容易看见分工和分歧。'
       : 'Let the current lineup each answer once to expose roles and disagreements.';
   }
+  if (mode === 'thread_followup') {
+    return isZh
+      ? '把一个具体问题留在单独线程里继续追，不让旁支干扰当前结论。'
+      : 'Keep one concrete question in its own follow-up thread so the verdict stays legible.';
+  }
   return isZh
     ? '先让档案官接住问题，再把话题抛回最相关的人。'
     : 'Let the Archivist frame the question first, then route it to the most relevant voice.';
+}
+
+function buildEndingVerdictPrompt(summary: string, isZh: boolean): string {
+  const trimmed = summary.trim();
+  if (!trimmed) {
+    return isZh
+      ? '沿着当前结局继续追问：为什么这个结论会成立？'
+      : 'Continue from this ending: why did this verdict hold?';
+  }
+  return isZh
+    ? `沿着当前结局继续追问：为什么“${trimmed}”会成立？`
+    : `Continue from this ending: why did "${trimmed}" hold?`;
+}
+
+function buildEndingInsightPrompt(insight: string, isZh: boolean): string {
+  const trimmed = insight.trim();
+  if (!trimmed) {
+    return isZh
+      ? '围绕这条洞察继续追问：哪一步才是真正的转折？'
+      : 'Push on this insight: which move was the true hinge?';
+  }
+  return isZh
+    ? `围绕这条洞察继续追问：${trimmed}`
+    : `Push on this insight: ${trimmed}`;
+}
+
+function buildEndingAnchorId(kind: 'verdict' | 'insight' | 'key_moment' | 'quote', scope: string, extra?: string | number): string {
+  return extra == null
+    ? `ending:${kind}:${scope}`
+    : `ending:${kind}:${scope}:${String(extra)}`;
+}
+
+function trimQuoteSnippet(content: string, maxLength = 120): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}…`;
+}
+
+function buildEndingQuotePrompt(speaker: string, content: string, isZh: boolean): string {
+  const snippet = trimQuoteSnippet(content);
+  return isZh
+    ? `沿着这句继续追问：${speaker} 提到“${snippet}”。这句话真正指向了哪一步转折？`
+    : `Follow this quote: ${speaker} said "${snippet}". Which hinge was this line really pointing at?`;
 }
 
 export default function EndingChatModal({
@@ -174,6 +229,8 @@ export default function EndingChatModal({
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
+  const [briefCopied, setBriefCopied] = useState(false);
+  const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const isZh = language === 'zh';
   const profileFrameSrc = profileId ? getGameplayProfileFrameSrc(profileId) : null;
   const {
@@ -687,18 +744,6 @@ export default function EndingChatModal({
         .map((participant) => participant.source_agent_id)
         .filter((value): value is string => Boolean(value))
       : [];
-  const anchorSuggestions = [
-    ...(branch.key_moments?.slice(0, 3) ?? []).map((moment) => ({
-      label: isZh ? '关键转折' : 'Key moment',
-      value: isZh ? `为什么这里会转向：${moment}` : `Why did the worldline turn here: ${moment}`,
-    })),
-    {
-      label: isZh ? '档案结论' : 'Archivist verdict',
-      value: isZh
-        ? `沿着当前结局继续追问：为什么这个结论会成立？`
-        : 'Continue from this ending: why did this verdict hold?',
-    },
-  ];
   const transcriptSubtitle = activeThread
     ? scopeText(activeThread, scopeNotice, isZh)
     : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
@@ -713,6 +758,118 @@ export default function EndingChatModal({
   const interactionModeNote = readOnly
     ? t('ending_room.replay_readonly')
     : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
+  const verdictPrompt = useMemo(
+    () => buildEndingVerdictPrompt(effectiveResult?.summary ?? '', isZh),
+    [effectiveResult?.summary, isZh],
+  );
+  const insightPrompt = useMemo(
+    () => (branch?.insight ? buildEndingInsightPrompt(branch.insight, isZh) : ''),
+    [branch?.insight, isZh],
+  );
+  const verdictAnchorAction = useMemo<AnchorAction>(
+    () => ({
+      anchorIds: [buildEndingAnchorId('verdict', branch.id)],
+      prompt: verdictPrompt,
+      threadTitle: null,
+    }),
+    [branch.id, verdictPrompt],
+  );
+  const insightAnchorAction = useMemo<AnchorAction | null>(
+    () => (
+      branch.insight
+        ? {
+            anchorIds: [buildEndingAnchorId('insight', branch.id)],
+            prompt: insightPrompt,
+            threadTitle: null,
+          }
+        : null
+    ),
+    [branch.id, branch.insight, insightPrompt],
+  );
+  const keyMomentAnchorActions = useMemo<AnchorAction[]>(
+    () => (branch.key_moments?.slice(0, 3) ?? []).map((moment, index) => ({
+      anchorIds: [buildEndingAnchorId('key_moment', branch.id, index)],
+      prompt: isZh ? `为什么这里会转向：${moment}` : `Why did the worldline turn here: ${moment}`,
+      threadTitle: isZh ? '关键转折' : 'Key moment',
+    })),
+    [branch.id, branch.key_moments, isZh],
+  );
+  const anchorSuggestions = [
+    ...keyMomentAnchorActions.map((action) => ({
+      label: isZh ? '关键转折' : 'Key moment',
+      action,
+    })),
+    {
+      label: isZh ? '档案结论' : 'Archivist verdict',
+      action: verdictAnchorAction,
+    },
+  ];
+  const meetingBrief = useMemo(() => {
+    if (!branch) return '';
+    const lines = [
+      `# ${branch.title}`,
+      '',
+      isZh ? '## 当前范围' : '## Scope',
+      transcriptSubtitle,
+    ];
+    if (effectiveResult?.summary) {
+      lines.push('', isZh ? '## 档案结论' : '## Archivist Verdict', effectiveResult.summary);
+    }
+    if (effectiveResult?.next_move && effectiveResult.next_move !== effectiveResult.summary) {
+      lines.push('', isZh ? '## 只改一步' : '## One Move Only', effectiveResult.next_move);
+    }
+    if (branch.insight) {
+      lines.push('', isZh ? '## 当前洞察' : '## Current Insight', branch.insight);
+    }
+    if ((branch.key_moments?.length ?? 0) > 0) {
+      lines.push('', isZh ? '## 关键转折' : '## Key Moments');
+      (branch.key_moments ?? []).slice(0, 3).forEach((moment) => {
+        lines.push(`- ${moment}`);
+      });
+    }
+    return lines.join('\n');
+  }, [branch, effectiveResult?.next_move, effectiveResult?.summary, transcriptSubtitle]);
+
+  const handleCopyBrief = async () => {
+    if (!meetingBrief) return;
+    await copyText(meetingBrief);
+    setBriefCopied(true);
+    window.setTimeout(() => setBriefCopied(false), 1800);
+  };
+
+  const activateAnchor = (action: AnchorAction) => {
+    setComposerDraft(action.prompt);
+    setPendingQuestionAnchorIds(action.anchorIds);
+  };
+
+  const handleStartAnchoredThread = async (action: AnchorAction) => {
+    if (!snapshot?.id || readOnly || isCrosslineGallery) return;
+    const thread = await createThread(snapshot.id, {
+      title: action.threadTitle ?? null,
+      questionAnchorIds: action.anchorIds,
+      interactionMode: 'thread_followup',
+    });
+    setActiveThread(thread.id);
+    setInteractionMode('thread_followup');
+    await loadThread(thread.id);
+    activateAnchor(action);
+  };
+
+  const handleFollowQuote = (anchorId: string, speaker: string, content: string) => {
+    activateAnchor({
+      anchorIds: [anchorId],
+      prompt: buildEndingQuotePrompt(speaker, content, isZh),
+      threadTitle: speaker,
+    });
+  };
+
+  const handleQuoteThread = async (anchorId: string, speaker: string, content: string) => {
+    await handleStartAnchoredThread({
+      anchorIds: [anchorId],
+      prompt: buildEndingQuotePrompt(speaker, content, isZh),
+      threadTitle: speaker,
+    });
+  };
 
   const handleCreateThread = async () => {
     if (!snapshot?.id || readOnly || isCrosslineGallery) return;
@@ -736,7 +893,7 @@ export default function EndingChatModal({
     const content = composerDraft.trim();
     if (!content) return;
     transcriptAutoStickRef.current = true;
-    if (interactionMode !== 'hotseat' && defaultThreadId && activeThread?.mode === 'followup') {
+    if ((interactionMode === 'archivist_route' || interactionMode === 'all_present') && defaultThreadId && activeThread?.mode === 'followup') {
       setActiveThread(defaultThreadId);
     }
     if (interactionMode === 'hotseat' && selectedAgentId && snapshot?.id) {
@@ -758,6 +915,7 @@ export default function EndingChatModal({
           const thread = await createThread(snapshot.id, {
             title: participants.find((participant) => participant.source_agent_id === selectedAgentId)?.display_name ?? null,
             addressedAgentIds,
+            questionAnchorIds: pendingQuestionAnchorIds,
             interactionMode: 'hotseat',
           });
           await loadThread(thread.id);
@@ -767,8 +925,10 @@ export default function EndingChatModal({
     await appendUserTurn({
       content,
       addressedAgentIds,
+      questionAnchorIds: pendingQuestionAnchorIds,
       interactionMode,
     });
+    setPendingQuestionAnchorIds([]);
   };
 
   return (
@@ -933,7 +1093,39 @@ export default function EndingChatModal({
 
             {effectiveResult && (
               <section className="ending-chat-panel ending-chat-panel--summary">
-                <h3>{t('roundtable.phase_verdict')}</h3>
+                <div className="ending-chat-panel__heading">
+                  <h3>{t('roundtable.phase_verdict')}</h3>
+                  <div className="ending-chat-panel__actions">
+                    {!readOnly && (
+                      <>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => activateAnchor(verdictAnchorAction)}
+                          disabled={!composerEnabled}
+                        >
+                          {t('ending_room.action_continue')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
+                          disabled={!composerEnabled}
+                        >
+                          {t('ending_room.action_new_thread')}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      className="ending-chat-inline-button"
+                      onClick={() => void handleCopyBrief()}
+                      disabled={!meetingBrief}
+                    >
+                      {briefCopied ? t('ending_room.action_brief_copied') : t('ending_room.action_copy_brief')}
+                    </button>
+                  </div>
+                </div>
                 <p>{effectiveResult.summary}</p>
                 {effectiveResult.next_move && effectiveResult.next_move !== effectiveResult.summary && (
                   <>
@@ -962,7 +1154,24 @@ export default function EndingChatModal({
 
             {branch.insight && (
               <section className="ending-chat-panel">
-                <h3>{t('result.insight')}</h3>
+                <div className="ending-chat-panel__heading">
+                  <h3>{t('result.insight')}</h3>
+                  {!readOnly && (
+                    <div className="ending-chat-panel__actions">
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => {
+                          if (!insightAnchorAction) return;
+                          activateAnchor(insightAnchorAction);
+                        }}
+                        disabled={!composerEnabled}
+                      >
+                        {t('ending_room.action_follow_insight')}
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <blockquote>{branch.insight}</blockquote>
               </section>
             )}
@@ -1066,6 +1275,24 @@ export default function EndingChatModal({
                     <span>{message.phase}</span>
                   </header>
                   <p>{message.content}</p>
+                  {composerEnabled && message.roleSlot !== 'user' && (
+                    <div className="ending-chat-bubble__actions">
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => handleFollowQuote(buildEndingAnchorId('quote', branch.id, message.key), message.speaker, message.content)}
+                      >
+                        {t('ending_room.action_follow_quote')}
+                      </button>
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => void handleQuoteThread(buildEndingAnchorId('quote', branch.id, message.key), message.speaker, message.content)}
+                      >
+                        {t('ending_room.action_new_thread')}
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))}
               {!isCrosslineGallery && displayedDrafts.map((draft) => (
@@ -1124,16 +1351,33 @@ export default function EndingChatModal({
               <div className="ending-chat-anchor-row">
                 {anchorSuggestions.map((anchor) => (
                   <button
-                    key={`${anchor.label}-${anchor.value}`}
+                    key={`${anchor.label}-${anchor.action.prompt}`}
                     type="button"
                     className="ending-chat-anchor-chip"
                     disabled={!composerEnabled}
-                    onClick={() => setComposerDraft(anchor.value)}
+                    onClick={() => activateAnchor(anchor.action)}
                   >
                     <span>{anchor.label}</span>
                   </button>
                 ))}
               </div>
+
+              {pendingQuestionAnchorIds.length > 0 && composerDraft.trim().length > 0 && (
+                <div className="ending-chat-anchor-actions">
+                  <button
+                    type="button"
+                    className="ending-chat-inline-button"
+                    disabled={!composerEnabled}
+                    onClick={() => void handleStartAnchoredThread({
+                      anchorIds: pendingQuestionAnchorIds,
+                      prompt: composerDraft,
+                      threadTitle: null,
+                    })}
+                  >
+                    {t('ending_room.action_thread_from_anchor')}
+                  </button>
+                </div>
+              )}
 
               {interactionMode === 'hotseat' && targetableParticipants.length > 0 && (
                 <div className="ending-chat-hotseat-row">

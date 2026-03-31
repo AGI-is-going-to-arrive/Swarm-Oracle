@@ -71,6 +71,10 @@
 - `ending_room` 是独立域。
 - room、thread、participant、turn 都在独立表中维护。
 - room/thread transcript 与 memory partition 隔离，不与主模式消息链混用。
+- `ending_room_turn.question_anchor_ids_json`
+  当前已用于显式记录 `quote / verdict / key_moment / phase` 等锚点来源。
+- `ending_room_thread.question_anchor_ids_json`
+  当前也已成为真实字段，thread create 与后续 replay/read-only 恢复都能保留锚点语义。
 
 ## 运行时约束
 
@@ -91,6 +95,7 @@
 - 出站事件统一带顶层 `meta`，供前端按 `sequence / event_id` 去重与补拉。
 - 空闲期会发送轻量 `heartbeat`，便于更快暴露半断开连接。
 - `ending_room` 也有独立 WS 通道，不复用 scenario/debate stream。
+- Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 
 ## 源码入口建议
 

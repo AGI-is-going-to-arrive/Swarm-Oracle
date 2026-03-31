@@ -55,7 +55,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
-| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；readonly replay 已重新签收到移动端 hotseat thread / local restore / import 主链；单结局结果页只暴露 `进入会客厅 / 只改一步` |
+| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问`；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到移动端 hotseat thread / local restore / import 主链；单结局结果页只暴露 `进入会客厅 / 只改一步` |
 | Replay & Import | 主模式与 Debate 均支持 |
 | i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子 |
 

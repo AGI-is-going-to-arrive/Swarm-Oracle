@@ -15585,3 +15585,174 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 当前残余/下轮建议：
   - `src/pages/WorldlineRoundtableView.test.tsx` 整文件一起跑时仍会在前 2-3 个用例后卡住；单用例可通过，说明问题更像历史测试夹具隔离/未清理异步状态，而不是本轮功能回退。
   - 如果下一轮继续，优先清掉这个整文件挂测问题，再补“英文房间下 single-ending follow-up”的显式浏览器验证。
+
+## 2026-03-31 Oracle follow-up affordance pass
+
+- 本轮目标：
+  - 给 `EndingChatModal` / `WorldlineRoundtableView` 增加更低摩擦的追问入口
+  - 保持现有 worldline / room / thread scope 规则不变
+  - 验证中英双语、桌面/移动端和浏览器兼容性
+
+- 本轮前端实现：
+  - `frontend/src/components/EndingChatModal.tsx`
+    - 新增 `档案总结` 卡片动作：`继续追问 / 另开线程 / 复制纪要`
+    - `Insight` 卡片新增 `追问洞察`
+    - `thread_followup` 模式说明文案补齐
+    - 发送逻辑改为允许 `thread_followup` 保持在线程内发送，不再被错误打回主厅
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 新增圆桌总结动作：`Continue this table / Start anchored thread / Copy roundtable brief`
+    - 阶段洞察卡新增 `Follow this phase / Start anchored thread`
+    - composer 上方新增圆桌锚点 chips
+    - `thread_followup` 模式说明文案补齐
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 补齐上述新动作词条
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - 为总结动作区与阶段洞察动作区补样式，不改原有 Oracle 视觉语言
+
+- 本轮测试更新：
+  - `frontend/src/components/EndingChatModal.test.tsx`
+    - 新增 verdict action / copy brief 行为断言
+    - 收紧跨线 gallery 断言，避免脆弱文本计数
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增 roundtable summary action / anchored thread 行为断言
+
+- 本轮验证结果：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx --reporter=verbose`
+    - 目标测试全部通过（reporter 输出已确认）
+  - `cd frontend && npm test -- --run src/i18n/locales.test.ts`
+    - 通过
+  - `cd frontend && npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json && npm run build`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q`
+    - `249 passed`
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260331-codex-ending-room-followup-full --headless`
+    - 已产出 `summary.json`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18929 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260331-codex-roundtable-full --headless`
+    - 已产出 `summary.json`
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18929 --output-dir output/e2e/20260331-codex-cross-browser --headless`
+    - Firefox / WebKit summary 已落盘
+
+- 交互式浏览器复核结论：
+  - roundtable 英文 UI 下新动作按钮可见、可点，`Continue this table` 会正确预填 composer，`Copy roundtable brief` 会进入 copied 状态，`Start anchored thread` 会新增 follow-up thread
+  - mobile 中文 single-ending 结果页仍只显示 `进入会客厅 / 只改一步`，没有 roundtable / gallery 入口
+  - mobile 中文 chamber 中新动作按钮可见、可点，`继续追问 / 复制纪要 / 另开线程` 都正常生效
+  - roundtable mobile fit 仍满足：
+    - `languageSwitchOverlapsTopline = false`
+    - `languageSwitchOverlapsComposer = false`
+    - `composerOverlapsTranscript = false`
+
+- 关于 `pretext`：
+  - 本轮没有把 `pretext` 深接到 Oracle 运行时 transcript 内核
+  - 当前结论是：现有 `textLayout` 合同 + E2E/mobile fit 已足以覆盖这轮新增动作，不需要为了几个 summary/action surface 再扩大接入面
+
+- 后续若继续推进：
+  - 可以考虑把 anchored thread 从 summary/phase 卡继续扩到 transcript quote 级操作
+  - 如果 Oracle 后续继续增加长句锚点或更厚的 summary 卡，再评估是否把 `pretext` 扩到这些新 surface 的只读布局预测
+
+## 2026-03-31 Oracle quote-anchor pass
+
+- 本轮增量：
+  - `frontend/src/components/EndingChatModal.tsx`
+    - transcript 已提交气泡下新增 `沿这句追问 / 另开线程`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - roundtable transcript 已提交气泡下新增 `Follow this quote / Start anchored thread`
+  - `frontend/src/components/EndingChatModal.css`
+    - 新增 bubble action row 样式
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 补齐 quote action 词条
+  - `frontend/src/components/EndingChatModal.test.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增 quote action 行为断言
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx --reporter=verbose`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18929 --output-dir output/e2e/20260331-codex-ending-room-followup-quote-full --headless`
+    - `summary.json` 已落盘
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18929 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260331-codex-roundtable-quote-full --headless`
+    - `summary.json` 已落盘
+
+- 真实浏览器补验：
+  - mobile 中文 single-ending chamber：
+    - transcript 气泡下可见 `沿这句追问 / 另开线程`
+    - `沿这句追问` 会正确预填 composer
+    - `另开线程` 会新增线程 tab
+  - desktop 英文 roundtable：
+    - transcript 气泡下可见 `Follow this quote / Start anchored thread`
+    - `Follow this quote` 会正确预填 composer
+    - `Start anchored thread` 会新增线程 tab，并把 quote prompt 带入线程上下文
+
+- 关于 `pretext`：
+  - quote action pass 仍未要求把 `pretext` 深接入运行时 transcript
+  - 当前判断不变：先把它留在只读布局预测 / 溢出 contract 层即可
+
+## 2026-03-31 Oracle explicit questionAnchorIds pass
+
+- 本轮目标：
+  - 不再只用 prompt 模拟锚点
+  - 把 `quote / verdict / key moment / phase` 统一成显式 `questionAnchorIds`
+  - 让 `createThread` 与 `appendUserTurn` 都能带锚点语义
+
+- 合同与数据层变更：
+  - `frontend/src/types.ts`
+    - `CreateEndingRoomThreadRequest.questionAnchorIds`
+    - `EndingRoomThread.question_anchor_ids_json`
+  - `frontend/src/api/client.ts`
+    - `createEndingRoomThread()` 开始透传 `question_anchor_ids`
+  - `backend/app/api/ending_rooms.py`
+    - `CreateEndingRoomThreadRequest` 新增 `question_anchor_ids`
+  - `backend/app/services/ending_room_service.py`
+    - `_serialize_thread()` 返回 `question_anchor_ids_json`
+    - `create_ending_room_thread()` 持久化 thread 级 anchor ids，并把它纳入 `participant_set_hash`
+  - `backend/app/models/ending_room.py`
+  - `backend/app/models/database.py`
+    - `ending_room_thread.question_anchor_ids_json` 已加入模型与迁移
+
+- 前端统一规则：
+  - `EndingChatModal.tsx`
+    - `verdict / insight / key moment / quote` 全部走统一的 `AnchorAction`
+    - 选中锚点后，composer 会携带 `pendingQuestionAnchorIds`
+    - 发送追问时显式透传 `questionAnchorIds`
+    - 新增通用动作：`按当前锚点另开线程`
+  - `WorldlineRoundtableView.tsx`
+    - `verdict / phase / quote` 同样走统一 `AnchorAction`
+    - thread 创建与用户追问都透传 `questionAnchorIds`
+    - 新增通用动作：`Start thread from current anchor`
+
+- 测试：
+  - `frontend/src/stores/endingRoomStore.test.ts`
+    - 新增 `questionAnchorIds` 透传断言
+  - `frontend/src/components/EndingChatModal.test.tsx`
+    - 新增 key moment / quote 锚点断言
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增 verdict / quote 锚点断言
+  - `backend/tests/test_ending_room_service.py`
+  - `backend/tests/test_ending_room_api.py`
+    - 新增 thread 级 `question_anchor_ids_json` 断言
+
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/stores/endingRoomStore.test.ts --reporter=verbose`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py -q`
+    - `78 passed`
+
+- 结论：
+  - 现在 thread/create 与 user-turn/send 两条链都能显式持有锚点语义
+  - quote / verdict / key moment 不再只是“文本看起来像锚点”，而是 payload 里真的有可持久化的 anchor ids
+  - 最初 `mobile roundtable artifact replay readonly` 复现 timeout；根因是 roundtable replay 模式下 `render_game_to_text` 仍上报 store 的 `interactionMode`，没有用 active replay thread 的真实 `interaction_mode`
+  - 修复后，`20260331-codex-roundtable-anchors-mobile-rerun2` 已验证：
+    - `artifactReadonly.interaction_mode = hotseat`
+    - `replayReadonly.interaction_mode = hotseat`
+    - `replayCoverageError = null`

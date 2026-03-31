@@ -742,7 +742,14 @@
       "participant_unknown": "Unknown",
       "archivist_note": "Archivist Note",
       "current_branch_badge": "Current worldline",
-      "foreign_summary_badge": "Crossline summary"
+      "foreign_summary_badge": "Crossline summary",
+      "action_continue": "Continue from verdict",
+      "action_new_thread": "Start anchored thread",
+      "action_copy_brief": "Copy chamber brief",
+      "action_brief_copied": "Chamber brief copied",
+      "action_follow_insight": "Follow this insight",
+      "action_follow_quote": "Follow this quote",
+      "action_thread_from_anchor": "Start thread from current anchor"
     },
     "roundtable": {
       "title": "Worldline Roundtable",
@@ -781,7 +788,14 @@
       "role_archivist": "Archivist",
       "role_representative": "Ending Representative",
       "gallery_title": "Crossline Gallery",
-      "gallery_hint": "This view exposes summaries and key quotes from other worldlines, not the full transcript."
+      "gallery_hint": "This view exposes summaries and key quotes from other worldlines, not the full transcript.",
+      "action_continue": "Continue this table",
+      "action_new_thread": "Start anchored thread",
+      "action_copy_brief": "Copy roundtable brief",
+      "action_brief_copied": "Roundtable brief copied",
+      "action_follow_phase": "Follow this phase",
+      "action_follow_quote": "Follow this quote",
+      "action_thread_from_anchor": "Start thread from current anchor"
     },
     "common": {
       "loading": "Loading…",

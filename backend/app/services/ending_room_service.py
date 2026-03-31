@@ -265,6 +265,7 @@ def _serialize_thread(thread: EndingRoomThread) -> dict[str, Any]:
         "participant_set_hash": thread.participant_set_hash,
         "memory_partition_id": thread.memory_partition_id,
         "addressed_agent_ids_json": thread.addressed_agent_ids_json,
+        "question_anchor_ids_json": thread.question_anchor_ids_json,
         "created_at": thread.created_at.isoformat(),
         "updated_at": thread.updated_at.isoformat(),
     }
@@ -1933,6 +1934,7 @@ def create_ending_room_thread(
     *,
     title: str | None = None,
     addressed_agent_ids: list[str] | None = None,
+    question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode = EndingRoomInteractionMode.THREAD_FOLLOWUP,
 ) -> dict[str, Any]:
     with Session(get_engine()) as session:
@@ -1960,6 +1962,7 @@ def create_ending_room_thread(
                         for key in [_address_reference_for_participant(room, participant)]
                         if key
                     ],
+                    "question_anchor_ids": question_anchor_ids or [],
                     "title": resolved_title,
                 },
                 ensure_ascii=False,
@@ -1980,6 +1983,7 @@ def create_ending_room_thread(
                 for key in [_address_reference_for_participant(room, participant)]
                 if key
             ],
+            question_anchor_ids_json=question_anchor_ids or None,
         )
         thread.memory_partition_id = _thread_memory_partition_id(room_id, thread.id)
         session.add(thread)

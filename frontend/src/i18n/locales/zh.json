@@ -742,7 +742,14 @@
       "participant_unknown": "未知角色",
       "archivist_note": "档案官注记",
       "current_branch_badge": "当前世界线",
-      "foreign_summary_badge": "异线摘要"
+      "foreign_summary_badge": "异线摘要",
+      "action_continue": "继续追问",
+      "action_new_thread": "另开线程",
+      "action_copy_brief": "复制纪要",
+      "action_brief_copied": "纪要已复制",
+      "action_follow_insight": "追问洞察",
+      "action_follow_quote": "沿这句追问",
+      "action_thread_from_anchor": "按当前锚点另开线程"
     },
     "roundtable": {
       "title": "世界线圆桌",
@@ -781,7 +788,14 @@
       "role_archivist": "档案官",
       "role_representative": "结局代表",
       "gallery_title": "异线旁听席",
-      "gallery_hint": "这里只展示其他世界线的摘要与关键引文，不开放全文。"
+      "gallery_hint": "这里只展示其他世界线的摘要与关键引文，不开放全文。",
+      "action_continue": "继续追问",
+      "action_new_thread": "另开线程",
+      "action_copy_brief": "复制纪要",
+      "action_brief_copied": "纪要已复制",
+      "action_follow_phase": "追问这一阶段",
+      "action_follow_quote": "沿这句追问",
+      "action_thread_from_anchor": "按当前锚点另开线程"
     },
     "common": {
       "loading": "加载中…",

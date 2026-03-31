@@ -346,6 +346,30 @@
   backdrop-filter: blur(8px);
 }
 
+.worldline-roundtable-summary__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.worldline-roundtable-summary__eyebrow {
+  display: inline-flex;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(217, 181, 108, 0.82);
+}
+
+.worldline-roundtable-summary__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .worldline-roundtable-card--summary h2 {
   margin: 0 0 10px;
   color: rgba(236, 233, 227, 0.96);
@@ -615,6 +639,13 @@
 .worldline-roundtable-seat small,
 .worldline-roundtable-insight p {
   color: rgba(236, 233, 227, 0.72);
+}
+
+.worldline-roundtable-insight__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .worldline-roundtable-seat.is-selected {

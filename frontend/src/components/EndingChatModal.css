@@ -759,6 +759,13 @@
   color: var(--text-muted);
 }
 
+.ending-chat-bubble__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .ending-chat-draft-badge {
   color: var(--color-primary);
 }
@@ -788,6 +795,13 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.ending-chat-anchor-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
 .ending-chat-mode-pill,

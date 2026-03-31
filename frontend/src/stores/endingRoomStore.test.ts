@@ -230,9 +230,14 @@ describe('endingRoomStore', () => {
 
     await useEndingRoomStore.getState().createThread('room-1', {
       title: 'Archivist follow-up',
+      questionAnchorIds: ['ending:verdict:branch-1'],
       interactionMode: 'thread_followup',
     });
 
+    expect(createEndingRoomThreadMock).toHaveBeenCalledWith('room-1', expect.objectContaining({
+      title: 'Archivist follow-up',
+      questionAnchorIds: ['ending:verdict:branch-1'],
+    }));
     expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-followup');
     expect(useEndingRoomStore.getState().threadOrder).toContain('thread-followup');
   });
@@ -297,11 +302,13 @@ describe('endingRoomStore', () => {
 
     await useEndingRoomStore.getState().appendUserTurn({
       content: 'Stay inside this thread.',
+      questionAnchorIds: ['ending:quote:branch-1:turn-1'],
       interactionMode: 'thread_followup',
     });
 
     expect(appendEndingRoomThreadUserTurnMock).toHaveBeenCalledWith('thread-followup', expect.objectContaining({
       content: 'Stay inside this thread.',
+      questionAnchorIds: ['ending:quote:branch-1:turn-1'],
     }));
     expect(useEndingRoomStore.getState().composerDraft).toBe('');
   });
@@ -436,11 +443,13 @@ describe('endingRoomStore', () => {
 
     await useEndingRoomStore.getState().appendUserTurn({
       content: 'User follow-up',
+      questionAnchorIds: ['ending:key_moment:branch-1:0'],
       interactionMode: 'archivist_route',
     });
 
     expect(appendEndingRoomUserTurnMock).toHaveBeenCalledWith('room-1', expect.objectContaining({
       content: 'User follow-up',
+      questionAnchorIds: ['ending:key_moment:branch-1:0'],
     }));
     expect(getEndingRoomMock).toHaveBeenCalledWith('room-1');
     expect(useEndingRoomStore.getState().snapshot?.participants[0]?.display_name).toBe('You');

@@ -393,6 +393,7 @@ export async function createEndingRoomThread(
     body: JSON.stringify({
       ...(payload.title ? { title: payload.title } : {}),
       ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
+      ...(payload.questionAnchorIds?.length ? { question_anchor_ids: payload.questionAnchorIds } : {}),
       ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
     }),
   });

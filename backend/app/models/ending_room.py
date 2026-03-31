@@ -132,6 +132,7 @@ class EndingRoomThread(SQLModel, table=True):
     participant_set_hash: str
     memory_partition_id: str = Field(index=True)
     addressed_agent_ids_json: list[str] | None = Field(default=None, sa_column=Column(JSON))
+    question_anchor_ids_json: list[str] | None = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 

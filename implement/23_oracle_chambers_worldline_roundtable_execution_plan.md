@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-31
-> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。当前真正剩余的核心不再是玩法缺口，而是 follow-up 与经典模式的流式一致性、以及更深的 corner-case / regression hardening。
+> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。
 
 ---
 
@@ -65,6 +65,28 @@
    - 当前 UI 语言不再被 `scenario.language` 强制覆盖
    - `finance / market` 这批角色语域已进入第一轮词汇拉开
    - fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子
+7. `legend-talk` 借鉴的低摩擦工作台动作
+   - 已按 Oracle 边界项目化落地，不做通用群聊化扩张
+   - single-ending 当前已支持：
+     - `继续追问`
+     - `另开线程`
+     - `复制纪要`
+     - `追问洞察`
+     - transcript `quote` 级 `沿这句追问 / 另开线程`
+   - roundtable 当前已支持：
+     - `Continue this table / Start anchored thread / Copy roundtable brief`
+     - `phase insight` 级追问与开线程
+     - transcript `quote` 级 `Follow this quote / Start anchored thread`
+8. 显式锚点合同
+   - `quote / verdict / key_moment / phase` 当前都不再只是 prompt 文案，而是显式 `questionAnchorIds`
+   - `appendUserTurn()` 与 `createThread()` 当前都已透传并持久化锚点
+   - `ending_room_thread.question_anchor_ids_json` 当前已成为真实字段
+9. replay / readonly 恢复
+   - `mobile roundtable artifact replay readonly` 的 `interaction_mode` 当前已修正为跟随 active replay thread，不再卡在 `archivist_route`
+   - 重新验收口径：
+     - `artifactReadonly.interaction_mode = hotseat`
+     - `replayReadonly.interaction_mode = hotseat`
+     - `replayCoverageError = null`
 
 ### 当前真正还没最终签收的点
 
@@ -75,6 +97,8 @@
 3. 更进一步的玩法扩展
    - `后续三回合`
    - `证据投牌`
+4. 锚点可观测性与回显
+   - 当前锚点语义已入 payload / 持久化，但 UI 还没有把“这个线程由哪个 anchor 发起”显式展示成 badge / scope notice
 
 ### 后续执行的硬优先级
 
@@ -100,6 +124,73 @@
 - 在文案差异不足时继续堆复杂组件
 - 为了做玩法而把 Oracle 做成通用群聊平台
 - 为了追求“像 MiroFish”而模糊“结局卡锚定 / 当前世界线锚定 / room/thread 隔离”这三条边界
+
+## 0.3 下次直接执行的高价值收口（未执行，直接按本节开工）
+
+下面三项当前**明确未执行**，保留为下一轮直接可做条目；它们不是本轮 blocker，但会决定这条线后续是否足够可观测、可回归、可维护。
+
+### A. 给锚点做更强的可观测性
+
+目标：
+
+- 在线程 rail、scope notice 或 transcript header 中显式展示：
+  - 当前 thread 的 anchor label
+  - anchor kind
+  - 该 anchor 是否来自 `verdict / key_moment / quote / phase`
+
+最小实现建议：
+
+1. `EndingChatModal`
+   - 在 follow-up thread chip 或 transcript note 上增加 `anchor badge`
+2. `WorldlineRoundtableView`
+   - 在 thread rail / transcript header 上增加 `anchor badge`
+3. badge 只显示用户可理解的 label，不直接暴露内部 `questionAnchorIds`
+
+### B. 补 thread/read-only 的锚点回显测试
+
+目标：
+
+- 不只验证锚点进入 payload
+- 还要验证：
+  - readonly replay 下 thread 仍保留原 anchor 语义
+  - reload restore 后 anchor badge / scope note 仍正确
+  - import local run 后 anchor 相关只读语义不丢
+
+最小测试建议：
+
+1. frontend
+   - `EndingChatModal.test.tsx`
+   - `WorldlineRoundtableView.test.tsx`
+2. E2E
+   - ending-room / roundtable readonly replay
+   - reload restore
+   - import local run
+
+### C. 把自动化输出再细一点
+
+目标：
+
+- 当前 `render_game_to_text` 已足够判断链路是否通
+- 下一步应让自动化 summary 能显式带出：
+  - `active_thread_id`
+  - `interaction_mode`
+  - `question_anchor_ids`
+  - `thread.question_anchor_ids_json`
+
+最小实现建议：
+
+1. `EndingChatModal` automation payload
+   - 当前 modal state 下追加 `active_question_anchor_ids`
+2. `WorldlineRoundtableView` automation payload
+   - 当前 page controls 或 scene 附加 `active_question_anchor_ids`
+3. E2E summary
+   - 将 anchor 信息落到 `summary.json`
+
+执行原则：
+
+- 这三项只做“观测与 QA”，不扩玩法边界
+- 不允许为做可观测性而引入新的跨线读取
+- 不允许因为测试便利而弱化 room/thread membrane
 
 ---
 
@@ -304,6 +395,16 @@ SwarmOracle 自己要成立的独特点：
   - 借的是 `Supervisor / 主持人` 的编排方式、轮转节奏、自动化多角色协作，不借“通用群聊工作台”的产品定位
 - 参考 `xAI multi-agent`
   - 借的是 `leader + hidden sub-agents + only committed output visible` 的执行结构，不借“把隐藏推理或中间 planning 全量暴露给用户”
+- 参考 `legend-talk`
+  - 借的是“低摩擦圆桌工作台动作”：
+    - 快速继续一轮
+    - 从某句话继续追问
+    - 从当前锚点直接另开线程
+    - 复制纪要
+  - 不借：
+    - 通用思想家聊天室
+    - 同一会话里任意加人减人并直接改写当前 room
+    - 无边界的本地工作台历史容器
 
 SwarmOracle 自己的独特点必须保持：
 
@@ -1071,11 +1172,18 @@ frontend/src/components/EndingRoomSpeakerBadge.css
   - `继续追问`
   - `点名追问`
   - `当前全员回应`
+- `EndingChatModal / WorldlineRoundtableView` 当前统一锚点规则应为：
+  - `预填追问`
+  - `另开线程`
+  - 适用锚点：`verdict / key_moment / quote / phase`
 - `follow-up` 若启用流式：
   - 必须复用与经典模式接近的“当前说话中”视觉结构
   - 当前 responder 的 participant card / avatar / ring 同步高亮
   - thread 内 draft 与 committed transcript 显式区分
   - `all_present` 逐位 responder 切换时，active highlight 必须同步切换
+- 当前合同要求：
+  - `appendUserTurn()` 必须显式带 `questionAnchorIds`
+  - `createThread()` 必须显式带 `questionAnchorIds`
 - 必须支持从 `key_moment card` 直接发起追问：
   - `为什么这里转向了？`
   - `如果不这么做会怎样？`
@@ -1608,6 +1716,7 @@ G1-C: conflict / tension shaping
 - 新增：
   - `ending_room_thread`
   - `ending_room_thread.participant_set_hash`
+  - `ending_room_thread.question_anchor_ids_json`
   - `ending_room_participant.worldline_echo_key`
 
 ### B2. API
@@ -1625,6 +1734,9 @@ G1-C: conflict / tension shaping
   - `POST /api/ending-room/{room_id}/thread`
   - `GET /api/ending-room/thread/{thread_id}`
   - `POST /api/ending-room/thread/{thread_id}/user-turn`
+- `user-turn` 与 `thread create` 当前都应接受：
+  - `question_anchor_ids`
+  - 并在 response snapshot 中回显 `question_anchor_ids_json`
 
 ### B3. WS
 
@@ -3164,12 +3276,15 @@ ending_room_scope_notice
    - `thread rail`
    - `followup composer`
 2. 新增行为
-   - 自动复盘完成后展示 `继续追问`
-   - 支持 `archivist_route / hotseat / all_present`
-   - 支持从 `key_moment / quote / verdict` 发起 thread
+  - 自动复盘完成后展示 `继续追问`
+  - 支持 `archivist_route / hotseat / all_present`
+  - 支持从 `key_moment / quote / verdict` 发起 thread
+  - 支持统一锚点动作：
+    - `预填追问`
+    - `按当前锚点另开线程`
 3. 新增文案提示
-   - `只基于当前世界线`
-   - `只基于当前桌面`
+  - `只基于当前世界线`
+  - `只基于当前桌面`
    - `只基于当前追问线程`
 
 建议状态边界：

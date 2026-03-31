@@ -1204,6 +1204,7 @@ def test_room_and_thread_followup_memory_stay_partitioned():
         snapshot["id"],
         title="热座追问",
         addressed_agent_ids=[addressed_agent_id],
+        question_anchor_ids=["km-1"],
         interaction_mode=EndingRoomInteractionMode.HOTSEAT,
     )
 
@@ -1228,6 +1229,7 @@ def test_room_and_thread_followup_memory_stay_partitioned():
     assert all(turn["memory_partition_id"] == room_snapshot["memory_partition_id"] for turn in room_followup["turns"])
     assert thread_followup["memory_partition_id"] == refreshed_thread["memory_partition_id"]
     assert all(turn["memory_partition_id"] == refreshed_thread["memory_partition_id"] for turn in thread_followup["turns"])
+    assert refreshed_thread["question_anchor_ids_json"] == ["km-1"]
     assert any(turn["content"] == "房间级追问" for turn in room_memory)
     assert all(turn["content"] != "线程级追问" for turn in room_memory)
     assert any(turn["content"] == "线程级追问" for turn in thread_memory)
@@ -1869,13 +1871,14 @@ def test_thread_followup_context_isolated_from_other_threads():
     assert created is True
     asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
 
-    first_thread = create_ending_room_thread(snapshot["id"], title="线程 A")
+    first_thread = create_ending_room_thread(snapshot["id"], title="线程 A", question_anchor_ids=["verdict"])
     second_thread = create_ending_room_thread(snapshot["id"], title="线程 B")
 
     first_payload = append_thread_user_turn(first_thread["id"], content="线程 A 里的追问")
     second_payload = append_thread_user_turn(second_thread["id"], content="线程 B 里的追问")
 
     assert first_payload["memory_partition_id"] != second_payload["memory_partition_id"]
+    assert load_ending_room_thread_snapshot(first_thread["id"])["question_anchor_ids_json"] == ["verdict"]
 
     room_context = build_room_followup_context(snapshot["id"])
     thread_context = build_thread_followup_context(first_thread["id"])

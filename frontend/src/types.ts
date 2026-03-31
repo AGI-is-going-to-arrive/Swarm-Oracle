@@ -647,6 +647,7 @@ export interface EndingRoomThread {
   participant_set_hash: string;
   memory_partition_id: string;
   addressed_agent_ids_json?: string[] | null;
+  question_anchor_ids_json?: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -740,6 +741,7 @@ export interface CreateEndingRoomRequest {
 export interface CreateEndingRoomThreadRequest {
   title?: string | null;
   addressedAgentIds?: string[];
+  questionAnchorIds?: string[];
   interactionMode?: EndingRoomInteractionMode;
 }
 

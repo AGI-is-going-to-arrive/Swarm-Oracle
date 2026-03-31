@@ -265,6 +265,7 @@ def init_db():
                     "TEXT DEFAULT 'archivist_route'",
                 )
                 _migrate_add_column(conn, "ending_room_thread", "addressed_agent_ids_json", "TEXT")
+                _migrate_add_column(conn, "ending_room_thread", "question_anchor_ids_json", "TEXT")
                 _migrate_add_column(conn, "ending_room_turn", "thread_id", "TEXT")
                 _migrate_add_column(conn, "ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'")
                 _migrate_add_column(

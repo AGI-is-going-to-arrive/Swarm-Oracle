@@ -242,7 +242,15 @@ vi.mock('react-i18next', () => ({
         'roundtable.witness_badge': 'Expert witness',
         'roundtable.role_witness': 'Expert witness',
         'roundtable.loading': 'Preparing the worldline roundtable...',
+        'roundtable.phase_verdict': 'Archive Verdict',
         'roundtable.role_archivist': 'Archivist',
+        'roundtable.action_continue': 'Continue this table',
+        'roundtable.action_new_thread': 'Start anchored thread',
+        'roundtable.action_copy_brief': 'Copy roundtable brief',
+        'roundtable.action_brief_copied': 'Roundtable brief copied',
+        'roundtable.action_follow_phase': 'Follow this phase',
+        'roundtable.action_follow_quote': 'Follow this quote',
+        'roundtable.action_thread_from_anchor': 'Start thread from current anchor',
         'common.loading': 'Loading',
       }[key] ?? key);
     },
@@ -557,6 +565,529 @@ describe('WorldlineRoundtableView', () => {
       ],
       selectedWitness: null,
     });
+  });
+
+  it('offers quick follow-up and brief-copy actions on the summary rail', async () => {
+    const user = userEvent.setup();
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+      result_ready: true,
+    } as any;
+    storeState.result = {
+      summary: 'The roundtable converged on a single hinge.',
+      archivist_note: 'Summary-only crossline scope held.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Archive the hinge.',
+          moderator_focus: 'Keep the scope narrow.',
+          commentary: 'Done.',
+        },
+      ],
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Main Desk',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The roundtable converged on a single hinge.');
+
+    await user.click(screen.getByRole('button', { name: 'Continue this table' }));
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Continue from this table: why did "The roundtable converged on a single hinge." become the table verdict?');
+
+    await user.click(screen.getByRole('button', { name: 'Copy roundtable brief' }));
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
+    expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Archivist Verdict'));
+  });
+
+  it('can start an anchored follow-up thread from a phase insight card', async () => {
+    const user = userEvent.setup();
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+      result_ready: true,
+    } as any;
+    storeState.result = {
+      summary: 'The roundtable converged on a single hinge.',
+      archivist_note: 'Summary-only crossline scope held.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Archive the hinge.',
+          moderator_focus: 'Keep the scope narrow.',
+          commentary: 'Done.',
+        },
+      ],
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Main Desk',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Archive the hinge.');
+    await user.click(screen.getAllByRole('button', { name: 'Start anchored thread' })[1]);
+
+    await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
+      title: 'Archive Verdict',
+      questionAnchorIds: ['roundtable:phase:room-1:verdict-0'],
+      interactionMode: 'thread_followup',
+    }));
+    expect(setInteractionModeMock).toHaveBeenCalledWith('thread_followup');
+  });
+
+  it('lets a verdict chip reuse the same thread-from-anchor rule', async () => {
+    const user = userEvent.setup();
+    setComposerDraftMock.mockImplementation((value: string) => {
+      storeState.composerDraft = value;
+    });
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [],
+      result_ready: true,
+    } as any;
+    storeState.result = {
+      summary: 'Existing live summary.',
+      archivist_note: 'Current table summary.',
+      phase_insights: [],
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        ...storeState.snapshot.threads[0],
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: [],
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Archive A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Story A',
+          insight: 'Insight A',
+          key_moments: ['A'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'Archive B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Story B',
+          insight: 'Insight B',
+          key_moments: ['B'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('button', { name: 'Continue this table' });
+    await user.click(screen.getByRole('button', { name: 'Continue this table' }));
+    await user.click(screen.getByRole('button', { name: 'Start thread from current anchor' }));
+    await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
+      title: null,
+      questionAnchorIds: ['roundtable:verdict:room-1'],
+      interactionMode: 'thread_followup',
+    }));
+  });
+
+  it('can anchor a thread from a committed roundtable quote', async () => {
+    const user = userEvent.setup();
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'rep-a',
+          content: 'Existing live roundtable.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+      result_ready: true,
+    } as any;
+    storeState.result = {
+      summary: 'Existing live summary.',
+      archivist_note: 'Current table summary.',
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        ...storeState.snapshot.threads[0],
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: storeState.snapshot.turns,
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Archive A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Story A',
+          insight: 'Insight A',
+          key_moments: ['A'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'Archive B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Story B',
+          insight: 'Insight B',
+          key_moments: ['B'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Existing live roundtable.');
+    const quoteBubble = screen.getByText('Existing live roundtable.').closest('article');
+    expect(quoteBubble).not.toBeNull();
+    const quoteBubbleScope = within(quoteBubble as HTMLElement);
+
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'Follow this quote' }));
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Follow this quote: Representative A said "Existing live roundtable.". Which disagreement on this table does that line actually lock in?');
+
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'Start anchored thread' }));
+    await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
+      title: 'Representative A',
+      questionAnchorIds: ['roundtable:quote:thread-room:turn-1'],
+      interactionMode: 'thread_followup',
+    }));
   });
 
   it('launches expert_witness with an extra witness selection', async () => {

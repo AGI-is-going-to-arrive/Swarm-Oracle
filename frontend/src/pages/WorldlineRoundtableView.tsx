@@ -112,9 +112,57 @@ function getRoundtableModeNote(
         ? '只追问一个代表，适合把这条线的解释问透。'
         : 'Question one representative when you want a single worldline to answer cleanly.');
   }
+  if (mode === 'thread_followup') {
+    return isZh
+      ? '把一个具体分歧留在单独线程里继续追，不让主桌记录变成杂音堆叠。'
+      : 'Keep one concrete disagreement in its own follow-up thread so the main table stays legible.';
+  }
   return isZh
     ? '先让档案官收束争点，再把问题抛回最相关的代表。'
     : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
+}
+
+function buildRoundtableVerdictPrompt(summary: string, isZh: boolean): string {
+  const trimmed = summary.trim();
+  if (!trimmed) {
+    return isZh
+      ? '沿着当前圆桌继续追问：这桌最后为什么会收敛成这个结论？'
+      : 'Continue from this table: why did the roundtable settle on this verdict?';
+  }
+  return isZh
+    ? `沿着当前圆桌继续追问：为什么“${trimmed}”会成为这桌结论？`
+    : `Continue from this table: why did "${trimmed}" become the table verdict?`;
+}
+
+function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean): string {
+  const trimmed = stakes.trim();
+  if (!trimmed) {
+    return isZh
+      ? `围绕“${label}”这一阶段继续追问：这一轮真正的分歧是什么？`
+      : `Push on "${label}": what was the real disagreement in this phase?`;
+  }
+  return isZh
+    ? `围绕“${label}”这一阶段继续追问：${trimmed}`
+    : `Push on "${label}": ${trimmed}`;
+}
+
+function buildRoundtableAnchorId(kind: 'verdict' | 'phase' | 'quote', scope: string, extra?: string | number): string {
+  return extra == null
+    ? `roundtable:${kind}:${scope}`
+    : `roundtable:${kind}:${scope}:${String(extra)}`;
+}
+
+function trimQuoteSnippet(content: string, maxLength = 120): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}…`;
+}
+
+function buildRoundtableQuotePrompt(speaker: string, content: string, isZh: boolean): string {
+  const snippet = trimQuoteSnippet(content);
+  return isZh
+    ? `沿着这句继续追问：${speaker} 提到“${snippet}”。这句真正卡住了本桌哪条分歧？`
+    : `Follow this quote: ${speaker} said "${snippet}". Which disagreement on this table does that line actually lock in?`;
 }
 
 type RoundtableSelectionMode = RoundtableSelectionRecipe;
@@ -130,6 +178,12 @@ interface WitnessCandidate {
   role: string;
   persona?: string;
   impactScore: number;
+}
+
+interface AnchorAction {
+  anchorIds: string[];
+  prompt: string;
+  threadTitle?: string | null;
 }
 
 function chooseRepresentativeDefaults(
@@ -385,6 +439,8 @@ export default function WorldlineRoundtableView() {
   const [launchingRoom, setLaunchingRoom] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
+  const [briefCopied, setBriefCopied] = useState(false);
+  const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const transcriptAutoStickRef = useRef(false);
   const transcriptListRef = useRef<HTMLDivElement>(null);
 
@@ -899,6 +955,102 @@ export default function WorldlineRoundtableView() {
   const interactionModeNote = replayPayload
     ? (isZh ? '回放模式下只读查看当前桌面。' : 'Replay mode is read-only for this table.')
     : getRoundtableModeNote(interactionMode, isZh, selectedRepresentative?.display_name ?? null);
+  const verdictPrompt = useMemo(
+    () => buildRoundtableVerdictPrompt(effectiveResult?.summary ?? '', isZh),
+    [effectiveResult?.summary, isZh],
+  );
+  const verdictAnchorAction = useMemo<AnchorAction>(
+    () => ({
+      anchorIds: [buildRoundtableAnchorId('verdict', effectiveSnapshot?.id ?? 'table')],
+      prompt: verdictPrompt,
+      threadTitle: isZh ? '档案总结' : 'Archive Verdict',
+    }),
+    [effectiveSnapshot?.id, isZh, verdictPrompt],
+  );
+  const phaseActionPrompts = useMemo(
+    () => (effectiveResult?.phase_insights ?? []).slice(0, 3).map((insight, index) => {
+      const label = getEndingRoomPhaseLabel(insight.phase, t);
+      return {
+        key: `${insight.phase}-${index}`,
+        label,
+        action: {
+          anchorIds: [buildRoundtableAnchorId('phase', effectiveSnapshot?.id ?? 'table', `${insight.phase}-${index}`)],
+          prompt: buildRoundtablePhasePrompt(label, insight.stakes, isZh),
+          threadTitle: label,
+        } satisfies AnchorAction,
+      };
+    }),
+    [effectiveResult?.phase_insights, effectiveSnapshot?.id, isZh, t],
+  );
+  const meetingBrief = useMemo(() => {
+    const lines = [
+      `# ${t('roundtable.title')}`,
+      '',
+      isZh ? '## 当前问题' : '## Current Question',
+      storyData?.question ?? '—',
+      '',
+      isZh ? '## 当前范围' : '## Scope',
+      transcriptSubtitle,
+    ];
+    if (effectiveResult?.summary) {
+      lines.push('', isZh ? '## 档案总结' : '## Archivist Verdict', effectiveResult.summary);
+    }
+    if (effectiveResult?.archivist_note) {
+      lines.push('', isZh ? '## 档案官注记' : '## Archivist Note', effectiveResult.archivist_note);
+    }
+    if ((effectiveResult?.phase_insights?.length ?? 0) > 0) {
+      lines.push('', isZh ? '## 阶段洞察' : '## Phase Insights');
+      (effectiveResult?.phase_insights ?? []).slice(0, 3).forEach((insight) => {
+        lines.push(`- ${getEndingRoomPhaseLabel(insight.phase, t)}: ${insight.stakes}`);
+      });
+    }
+    if (representatives.length > 0) {
+      lines.push('', isZh ? '## 当前代表席' : '## Current Representatives');
+      representatives.forEach((participant) => {
+        lines.push(`- ${participant.display_name}`);
+      });
+    }
+    return lines.join('\n');
+  }, [effectiveResult?.archivist_note, effectiveResult?.phase_insights, effectiveResult?.summary, isZh, representatives, storyData?.question, t, transcriptSubtitle]);
+
+  const handleCopyBrief = useCallback(async () => {
+    if (!meetingBrief) return;
+    await copyText(meetingBrief);
+    setBriefCopied(true);
+    window.setTimeout(() => setBriefCopied(false), 1800);
+  }, [meetingBrief]);
+
+  const activateAnchor = useCallback((action: AnchorAction) => {
+    setComposerDraft(action.prompt);
+    setPendingQuestionAnchorIds(action.anchorIds);
+  }, [setComposerDraft]);
+
+  const handleStartAnchoredThread = useCallback(async (action: AnchorAction) => {
+    if (!snapshot?.id || replayPayload) return;
+    const thread = await createThread(snapshot.id, {
+      title: action.threadTitle ?? null,
+      questionAnchorIds: action.anchorIds,
+      interactionMode: 'thread_followup',
+    });
+    setActiveThread(thread.id);
+    setInteractionMode('thread_followup');
+    await loadThread(thread.id);
+    activateAnchor(action);
+  }, [activateAnchor, createThread, loadThread, replayPayload, setActiveThread, setInteractionMode, snapshot?.id]);
+  const handleFollowQuote = useCallback((anchorId: string, speaker: string, content: string) => {
+    activateAnchor({
+      anchorIds: [anchorId],
+      prompt: buildRoundtableQuotePrompt(speaker, content, isZh),
+      threadTitle: speaker,
+    });
+  }, [activateAnchor, isZh]);
+  const handleQuoteThread = useCallback(async (anchorId: string, speaker: string, content: string) => {
+    await handleStartAnchoredThread({
+      anchorIds: [anchorId],
+      prompt: buildRoundtableQuotePrompt(speaker, content, isZh),
+      threadTitle: speaker,
+    });
+  }, [handleStartAnchoredThread, isZh]);
 
   const scenarioReplaySnapshot = useMemo(
     () => replayPayload?.scenarioReplay ?? (
@@ -980,6 +1132,12 @@ export default function WorldlineRoundtableView() {
       finalizeCopyState(true);
     }
   }, [effectiveReplayPayload]);
+
+  const automationInteractionMode = replayPayload
+    ? (activeThread?.mode === 'followup'
+      ? activeThread.interaction_mode
+      : 'archivist_route')
+    : interactionMode;
 
   const handleSaveLocalCopy = useCallback(() => {
     if (!effectiveReplayPayload) return;
@@ -1209,6 +1367,7 @@ export default function WorldlineRoundtableView() {
           const thread = await createThread(snapshot.id, {
             title: selectedRepresentative?.display_name ?? null,
             addressedAgentIds,
+            questionAnchorIds: pendingQuestionAnchorIds,
             interactionMode: 'hotseat',
           });
           await loadThread(thread.id);
@@ -1218,8 +1377,10 @@ export default function WorldlineRoundtableView() {
     await appendUserTurn({
       content,
       addressedAgentIds,
+      questionAnchorIds: pendingQuestionAnchorIds,
       interactionMode,
     });
+    setPendingQuestionAnchorIds([]);
   }, [
     activeThread,
     addressedAgentIds,
@@ -1228,6 +1389,7 @@ export default function WorldlineRoundtableView() {
     createThread,
     interactionMode,
     loadThread,
+    pendingQuestionAnchorIds,
     representatives,
     selectedRepresentativeId,
     setActiveThread,
@@ -1271,7 +1433,7 @@ export default function WorldlineRoundtableView() {
           has_witness: participants.some((participant) => participant.role_slot === 'critic'),
           active_thread_id: activeThread?.id ?? null,
           thread_count: threadList.length,
-          interaction_mode: interactionMode,
+          interaction_mode: automationInteractionMode,
           participant_count: participants.length,
           representative_count: representatives.length,
           has_result: Boolean(effectiveResult),
@@ -1300,6 +1462,7 @@ export default function WorldlineRoundtableView() {
     effectiveSnapshot,
     error,
     interactionMode,
+    automationInteractionMode,
     loading,
     displayedDrafts.length,
     replayPayload,
@@ -1671,7 +1834,42 @@ export default function WorldlineRoundtableView() {
                 alt=""
                 aria-hidden="true"
               />
-              <h2>{effectiveResult?.summary ?? t('roundtable.loading')}</h2>
+              <div className="worldline-roundtable-summary__top">
+                <div>
+                  <span className="worldline-roundtable-summary__eyebrow">{t('roundtable.phase_verdict')}</span>
+                  <h2>{effectiveResult?.summary ?? t('roundtable.loading')}</h2>
+                </div>
+                <div className="worldline-roundtable-summary__actions">
+                  {!replayPayload && (
+                    <>
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => activateAnchor(verdictAnchorAction)}
+                        disabled={!composerEnabled}
+                      >
+                        {t('roundtable.action_continue')}
+                      </button>
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button"
+                        onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
+                        disabled={!composerEnabled}
+                      >
+                        {t('roundtable.action_new_thread')}
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="ending-chat-inline-button"
+                    onClick={() => void handleCopyBrief()}
+                    disabled={!meetingBrief}
+                  >
+                    {briefCopied ? t('roundtable.action_brief_copied') : t('roundtable.action_copy_brief')}
+                  </button>
+                </div>
+              </div>
               {effectiveResult?.archivist_note && <p>{effectiveResult.archivist_note}</p>}
             </section>
 
@@ -1760,6 +1958,26 @@ export default function WorldlineRoundtableView() {
                     <article key={`${insight.phase}-${index}`} className="worldline-roundtable-insight">
                       <strong>{getEndingRoomPhaseLabel(insight.phase, t)}</strong>
                       <p>{insight.stakes}</p>
+                      {!replayPayload && (
+                        <div className="worldline-roundtable-insight__actions">
+                          <button
+                            type="button"
+                            className="ending-chat-inline-button"
+                            onClick={() => activateAnchor(phaseActionPrompts[index].action)}
+                            disabled={!composerEnabled}
+                          >
+                            {t('roundtable.action_follow_phase')}
+                          </button>
+                          <button
+                            type="button"
+                            className="ending-chat-inline-button"
+                            onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
+                            disabled={!composerEnabled}
+                          >
+                            {t('roundtable.action_new_thread')}
+                          </button>
+                        </div>
+                      )}
                     </article>
                   ))}
                 </div>
@@ -1829,6 +2047,24 @@ export default function WorldlineRoundtableView() {
                       <span>{turn.phase}</span>
                     </header>
                     <p>{turn.content}</p>
+                    {composerEnabled && turn.roleSlot !== 'user' && (
+                      <div className="ending-chat-bubble__actions">
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => handleFollowQuote(buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key), turn.speaker, turn.content)}
+                        >
+                          {t('roundtable.action_follow_quote')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => void handleQuoteThread(buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key), turn.speaker, turn.content)}
+                        >
+                          {t('roundtable.action_new_thread')}
+                        </button>
+                      </div>
+                    )}
                   </article>
                 ))}
               {!replayPayload && displayedDrafts.map((draft) => (
@@ -1869,6 +2105,47 @@ export default function WorldlineRoundtableView() {
                 <span className="ending-chat-scope-notice">{transcriptSubtitle}</span>
               </div>
               <span className="ending-chat-mode-note">{interactionModeNote}</span>
+
+              {phaseActionPrompts.length > 0 && (
+                <div className="ending-chat-anchor-row">
+                  <button
+                    type="button"
+                    className="ending-chat-anchor-chip"
+                    onClick={() => activateAnchor(verdictAnchorAction)}
+                    disabled={!composerEnabled}
+                  >
+                    <span>{t('roundtable.phase_verdict')}</span>
+                  </button>
+                  {phaseActionPrompts.map((prompt) => (
+                    <button
+                      key={prompt.key}
+                      type="button"
+                      className="ending-chat-anchor-chip"
+                      onClick={() => activateAnchor(prompt.action)}
+                      disabled={!composerEnabled}
+                    >
+                      <span>{prompt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {pendingQuestionAnchorIds.length > 0 && composerDraft.trim().length > 0 && (
+                <div className="ending-chat-anchor-actions">
+                  <button
+                    type="button"
+                    className="ending-chat-inline-button"
+                    disabled={!composerEnabled}
+                    onClick={() => void handleStartAnchoredThread({
+                      anchorIds: pendingQuestionAnchorIds,
+                      prompt: composerDraft,
+                      threadTitle: null,
+                    })}
+                  >
+                    {t('roundtable.action_thread_from_anchor')}
+                  </button>
+                </div>
+              )}
 
               {interactionMode === 'hotseat' && representatives.length > 0 && (
                 <div className="ending-chat-hotseat-row">

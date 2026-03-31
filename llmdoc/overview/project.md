@@ -36,8 +36,20 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
 - `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
+- single-ending 当前已补：
+  - `继续追问`
+  - `另开线程`
+  - `复制纪要`
+  - `追问洞察`
+  - transcript `quote` 级追问 / 开线程
+- roundtable 当前已补：
+  - `Continue this table / Start anchored thread / Copy roundtable brief`
+  - `phase insight` 级追问 / 开线程
+  - transcript `quote` 级追问 / 开线程
+- `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
 - ending-room / roundtable 的 replay/share/import 已完成专项签收。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
+- mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子。
 

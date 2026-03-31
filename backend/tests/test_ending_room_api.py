@@ -554,11 +554,15 @@ def test_create_thread_and_append_thread_user_turn(client):
 
     thread_resp = client.post(
         f"/api/ending-room/{room_snapshot['id']}/thread",
-        json={"title": "追问支线"},
+        json={
+            "title": "追问支线",
+            "question_anchor_ids": ["ending:verdict:branch-1"],
+        },
     )
     assert thread_resp.status_code == 200
     thread_payload = thread_resp.json()
     assert thread_payload["mode"] == "followup"
+    assert thread_payload["question_anchor_ids_json"] == ["ending:verdict:branch-1"]
 
     user_turn_resp = client.post(
         f"/api/ending-room/thread/{thread_payload['id']}/user-turn",

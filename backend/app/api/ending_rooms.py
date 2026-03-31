@@ -116,6 +116,7 @@ class CreateEndingRoomRequest(BaseModel):
 class CreateEndingRoomThreadRequest(BaseModel):
     title: str | None = None
     addressed_agent_ids: list[str] = Field(default_factory=list)
+    question_anchor_ids: list[str] = Field(default_factory=list)
     interaction_mode: EndingRoomInteractionMode = EndingRoomInteractionMode.THREAD_FOLLOWUP
 
     @field_validator("title")
@@ -126,10 +127,10 @@ class CreateEndingRoomThreadRequest(BaseModel):
         cleaned = value.strip()
         return cleaned or None
 
-    @field_validator("addressed_agent_ids")
+    @field_validator("addressed_agent_ids", "question_anchor_ids")
     @classmethod
-    def normalize_addressed_agent_ids(cls, value: list[str]) -> list[str]:
-        return [agent_id.strip() for agent_id in value if agent_id and agent_id.strip()]
+    def normalize_id_list(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item and item.strip()]
 
 
 class EndingRoomUserTurnRequest(BaseModel):
@@ -241,6 +242,7 @@ async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoom
             room_id,
             title=req.title,
             addressed_agent_ids=req.addressed_agent_ids,
+            question_anchor_ids=req.question_anchor_ids,
             interaction_mode=req.interaction_mode,
         )
     except EndingRoomServiceError as exc:

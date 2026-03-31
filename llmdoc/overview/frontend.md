@@ -102,6 +102,17 @@
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
 - 单结局结果页当前不展示 `worldline_roundtable / crossline_gallery` 入口，只保留 `ending_chamber / one_move_only`。
 - Oracle fresh live room 的 English deterministic anchor copy 当前已补去混句兜底；single-ending / roundtable 在 fresh room 下不会再把中文 hinge 直接嵌进英文句子。
+- `EndingChatModal` 当前已补：
+  - `继续追问 / 另开线程 / 复制纪要 / 追问洞察`
+  - transcript `quote` 级 `沿这句追问 / 另开线程`
+- `WorldlineRoundtableView` 当前已补：
+  - `Continue this table / Start anchored thread / Copy roundtable brief`
+  - `phase insight` 级追问 / 开线程
+  - transcript `quote` 级 `Follow this quote / Start anchored thread`
+- Oracle 当前统一锚点规则：
+  - `verdict / key_moment / quote / phase`
+  - 都先落到显式 `questionAnchorIds`
+  - `appendUserTurn()` 与 `createThread()` 两条链都带锚点语义，不再只靠 prompt 预填
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
   - `expert_witness`
@@ -114,6 +125,9 @@
 - 当前 Oracle mobile 专项脚本已覆盖：
   - ending-room：`hotseat / all_present / crossline_gallery / artifact readonly / local readonly / reload restore / import`
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
+- roundtable replay 的自动化口径当前已修正：
+  - readonly replay 下 `interaction_mode` 会跟随 active replay thread
+  - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时
 - 当前 single-ending Oracle 已额外做过真实浏览器复核：
   - 结果页无 `Start Roundtable / Crossline Gallery`
   - `ending_chamber / one_move_only` 可正常打开
