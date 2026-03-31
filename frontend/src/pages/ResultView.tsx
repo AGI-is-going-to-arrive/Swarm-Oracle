@@ -1540,9 +1540,10 @@ export default function ResultView() {
           {branches.map((branch, index) => (
             <article
               key={branch.id}
-              className={`ending-card ${expandedBranch === branch.id ? 'expanded' : ''}`}
+              className={`ending-card ${expandedBranch === branch.id ? 'expanded' : ''} ${index === 0 ? 'ending-card--primary' : ''}`}
               ref={(el) => { if (el) el.style.setProperty('--card-delay', `${index * 0.1}s`); }}
             >
+              {/* Summary-First: always visible */}
               <div className="ending-header">
                 <span className="ending-index">
                   {t('result.ending_card')} {index + 1}
@@ -1550,7 +1551,6 @@ export default function ResultView() {
                 <h2 className="ending-title">{branch.title}</h2>
               </div>
 
-              {/* Probability Bar */}
               <div className="probability-section">
                 <div className="probability-label">
                   <span>{t('result.probability')}</span>
@@ -1560,60 +1560,61 @@ export default function ResultView() {
                 </div>
                 <div className="probability-bar">
                   <div
-                    className="probability-fill"
+                    className={`probability-fill ${(branch.probability ?? 0) > 0.6 ? 'probability-fill--high' : (branch.probability ?? 0) < 0.3 ? 'probability-fill--low' : 'probability-fill--mid'}`}
                     ref={(el) => { if (el) el.style.setProperty('--prob-fill', `${Math.max((branch.probability ?? 0) * 100, 2)}%`); }}
                   />
                 </div>
               </div>
 
-              {/* Fork Reason */}
-              {branch.fork_reason && (
-                <div className="fork-reason">
-                  <span className="fork-label">{t('result.fork_reason')}</span>
-                  <p>{branch.fork_reason}</p>
-                </div>
+              {/* Insight always visible as the card's key takeaway */}
+              {branch.insight && (
+                <blockquote className="insight-quote">{branch.insight}</blockquote>
               )}
 
-              {/* Story Preview / Full */}
-              <div className="story-section">
-                <h3 className="section-label">{t('result.story')}</h3>
-                <p className={`story-text ${expandedBranch === branch.id ? 'full' : 'preview'}`}>
-                  {branch.story || '—'}
-                </p>
-                {branch.story && branch.story.length > 150 && (
-                  <button
-                    className="btn btn-ghost expand-btn"
-                    onClick={() =>
-                      setExpandedBranch(
-                        expandedBranch === branch.id ? null : branch.id,
-                      )
-                    }
-                  >
-                    {expandedBranch === branch.id
-                      ? t('result.collapse')
-                      : t('result.read_full')}
-                  </button>
-                )}
+              {/* Collapsible detail section */}
+              <div className={`ending-detail ${expandedBranch === branch.id ? 'ending-detail--open' : ''}`}>
+                <div className="ending-detail__inner">
+                  {branch.fork_reason && (
+                    <div className="fork-reason">
+                      <span className="fork-label">{t('result.fork_reason')}</span>
+                      <p>{branch.fork_reason}</p>
+                    </div>
+                  )}
+
+                  <div className="story-section">
+                    <h3 className="section-label">{t('result.story')}</h3>
+                    <p className="story-text full">
+                      {branch.story || '\u2014'}
+                    </p>
+                  </div>
+
+                  {branch.key_moments && branch.key_moments.length > 0 && (
+                    <div className="moments-section">
+                      <h3 className="section-label">{t('result.key_moments')}</h3>
+                      <ol className="moments-timeline">
+                        {branch.key_moments.map((moment, mi) => (
+                          <li key={mi}>{moment}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Insight */}
-              {branch.insight && (
-                <div className="insight-section">
-                  <h3 className="section-label">{t('result.insight')}</h3>
-                  <blockquote className="insight-quote">{branch.insight}</blockquote>
-                </div>
-              )}
-
-              {/* Key Moments */}
-              {branch.key_moments && branch.key_moments.length > 0 && (
-                <div className="moments-section">
-                  <h3 className="section-label">{t('result.key_moments')}</h3>
-                  <ol className="moments-list">
-                    {branch.key_moments.map((moment, mi) => (
-                      <li key={mi}>{moment}</li>
-                    ))}
-                  </ol>
-                </div>
+              {/* Expand/collapse toggle */}
+              {(branch.story || branch.fork_reason || (branch.key_moments && branch.key_moments.length > 0)) && (
+                <button
+                  className="btn btn-ghost expand-btn"
+                  onClick={() =>
+                    setExpandedBranch(
+                      expandedBranch === branch.id ? null : branch.id,
+                    )
+                  }
+                >
+                  {expandedBranch === branch.id
+                    ? t('result.collapse')
+                    : t('result.read_full')}
+                </button>
               )}
 
               <div className="ending-room-actions">
@@ -1722,7 +1723,7 @@ export default function ResultView() {
             className="result-archive__art"
             role="img"
             aria-label={t('common.archive_seal_alt')}
-            style={{ backgroundImage: 'url(/assets/ui/generated/archive_panel.png)' }}
+            style={{ backgroundImage: 'repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.04) 0 1px, transparent 1px 12px), radial-gradient(ellipse at 30% 30%, oklch(55% 0.22 350 / 0.08), transparent 60%)' }}
           />
           <div className="result-archive__meta">
             {gameplayProfileLabel && (

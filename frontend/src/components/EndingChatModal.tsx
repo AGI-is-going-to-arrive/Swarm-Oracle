@@ -296,6 +296,17 @@ export default function EndingChatModal({
     () => participants.filter((participant) => participant.role_slot !== 'archivist' && participant.source_agent_id),
     [participants],
   );
+
+  const speakerIndexMap = useMemo(() => {
+    const seen = new Map<string, number>();
+    let idx = 0;
+    for (const p of participants) {
+      if (!seen.has(p.display_name)) {
+        seen.set(p.display_name, idx++);
+      }
+    }
+    return seen;
+  }, [participants]);
   const branchKeyMoments = useMemo(
     () => branch?.key_moments ?? [],
     [branch?.key_moments],
@@ -1347,8 +1358,9 @@ export default function EndingChatModal({
               {!isCrosslineGallery && currentTurns.map((message) => (
                 <article
                   key={message.key}
-                  className={`ending-chat-bubble ${message.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''}`}
+                  className={`ending-chat-bubble ${message.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''} ${message.phase === 'verdict' ? 'ending-chat-bubble--verdict' : ''}`}
                   style={{ minHeight: `${transcriptBubbleLayouts[message.key]?.minHeightPx ?? 0}px` }}
+                  data-speaker={speakerIndexMap.get(message.speaker) ?? 0}
                   data-layout-lines={transcriptBubbleLayouts[message.key]?.lineCount ?? undefined}
                   data-layout-overflow={transcriptBubbleLayouts[message.key]?.overflow ? 'true' : 'false'}
                 >

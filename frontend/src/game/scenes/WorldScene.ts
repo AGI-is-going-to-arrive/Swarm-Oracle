@@ -155,10 +155,10 @@ const BUBBLE_STYLES: Record<string, { bg: number; bgAlpha: number; borderColor: 
 };
 const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.neutral;
 const BUBBLE_TEXT_FONT_STACK = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-const BUBBLE_TEXT_RESOLUTION = 3;
+const BUBBLE_TEXT_RESOLUTION = 4;
 const BUBBLE_BASE_OFFSET_Y = -74;
 const BUBBLE_MAX_STACK = 4;
-const BUBBLE_MAX_VISIBLE = 2;
+const BUBBLE_MAX_VISIBLE_CAP = 8;
 const BUBBLE_MAX_TEXT_CHARS = 72;
 const BUBBLE_COMPACT_MAX_TEXT_CHARS = 48;
 const BUBBLE_TEXT_WRAP_MIN_WIDTH = 180;
@@ -1078,9 +1078,11 @@ export class WorldScene extends Phaser.Scene {
     const agent = this.agentSprites.get(spriteId);
     if (!agent?.gameObject) return;
     const renderedViewportWidth = this.scale.displaySize?.width ?? this.scale.width;
-    const isCompactViewport = renderedViewportWidth < 560;
+    const isCompactViewport = renderedViewportWidth < 360;
     const maxChars = isCompactViewport ? BUBBLE_COMPACT_MAX_TEXT_CHARS : BUBBLE_MAX_TEXT_CHARS;
-    const maxVisibleBubbles = isCompactViewport ? 1 : BUBBLE_MAX_VISIBLE;
+    // Dynamic: allow up to agentCount bubbles (capped), so all agents can speak simultaneously
+    const agentCount = this.agentSprites.size || 3;
+    const maxVisibleBubbles = isCompactViewport ? 2 : Math.min(agentCount, BUBBLE_MAX_VISIBLE_CAP);
     const visibleText = isCompactViewport
       ? `${agent.name}：${normalizeBubbleText(text, maxChars)}`
       : normalizeBubbleText(text, maxChars);
@@ -1121,15 +1123,15 @@ export class WorldScene extends Phaser.Scene {
       lineSpacing: 4,
       fixedWidth: bubbleWrapWidth,
       wordWrap: { width: bubbleWrapWidth, useAdvancedWrap: true },
-      stroke: isCompactViewport ? '#120d1b' : '#f7f2ff',
-      strokeThickness: isCompactViewport ? 0 : 1,
+      stroke: isCompactViewport ? '#0a0614' : '#f7f2ff',
+      strokeThickness: isCompactViewport ? 1.5 : 1,
       shadow: {
         offsetX: 0,
-        offsetY: isCompactViewport ? 0 : 1,
-        color: isCompactViewport ? 'rgba(0, 0, 0, 0)' : 'rgba(8, 10, 22, 0.35)',
-        blur: 0,
-        stroke: false,
-        fill: !isCompactViewport,
+        offsetY: 1,
+        color: isCompactViewport ? 'rgba(0, 0, 0, 0.5)' : 'rgba(8, 10, 22, 0.35)',
+        blur: isCompactViewport ? 2 : 0,
+        stroke: isCompactViewport,
+        fill: true,
       },
     };
 

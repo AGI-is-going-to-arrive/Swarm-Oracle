@@ -393,8 +393,6 @@ describe('InputView campaign progress', () => {
     });
 
     expect(await screen.findByText('5 agents × 10 rounds · about 9 min for the main simulation')).toBeInTheDocument();
-    expect(screen.getAllByText('Min 3').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Max 40').length).toBeGreaterThan(0);
   });
 
   it('prefers backend challenge rotation when the API returns remote definitions', async () => {

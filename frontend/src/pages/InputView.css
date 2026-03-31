@@ -339,8 +339,9 @@
 /* ── Round Count Slider ── */
 .rounds-selector {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 10px 14px;
   width: 100%;
   justify-content: center;
 }
@@ -356,7 +357,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 1;
+  flex: 0 1 280px;
   max-width: 280px;
 }
 
@@ -419,9 +420,10 @@
   white-space: nowrap;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 2px;
   min-width: 56px;
+  text-align: right;
 }
 
 .rounds-time {
@@ -432,8 +434,9 @@
 /* ── Agent Count Slider ── */
 .agents-selector {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 10px 14px;
   width: 100%;
   justify-content: center;
 }
@@ -449,7 +452,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 1;
+  flex: 0 1 280px;
   max-width: 280px;
 }
 
@@ -511,18 +514,9 @@
   color: #999;
   white-space: nowrap;
   min-width: 56px;
+  text-align: right;
 }
 
-.slider-scale {
-  display: flex;
-  justify-content: space-between;
-  width: min(100%, 336px);
-  margin-left: auto;
-  margin-right: auto;
-  font-size: 11px;
-  color: #aaa;
-  line-height: 1;
-}
 
 /* ── Mode Selector ── */
 .mode-selector-wrap {

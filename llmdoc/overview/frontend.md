@@ -77,6 +77,12 @@
 - `PhaserGameLoader` 负责按需加载 Theater。
 - screenshot / GIF capture runtime 已拆分，不进入默认首包。
 - 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`。
+- Theater 气泡当前行为：
+  - 最大同时可见气泡数 = `min(agentCount, 8)`，根据场景内 agent 数量动态计算
+  - compact 模式（canvas 宽 < 360px，即真手机端）下最多 2 个，气泡固定在画面底部中央
+  - 非 compact 模式下气泡跟随各自 agent 头顶显示
+  - 文字渲染分辨率 = 4x（此前为 3x）
+  - compact 模式下文字增加了描边（`strokeThickness: 1.5`）和阴影（`blur: 2`）以提升暗色背景上的可读性
 
 ## 关键模块
 
@@ -90,7 +96,7 @@
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态；`worldlineRoundtableStore` 是 `endingRoomStore` 的 re-export |
-| `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` helper、Oracle transcript layout kernel、overflow contract |
+| `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` helper、Oracle transcript layout kernel、overflow contract、Input 面高度预测 (`inputPredict`)、Canvas bubble 预测 (`canvasTextPredict`)、P5 文本契约测试 (`textContract.test`) |
 | `useTranscriptScroll.ts` | `frontend/src/hooks/useTranscriptScroll.ts` | `EndingChatModal` 与 `WorldlineRoundtableView` 共享的 transcript scroll 锚定 hook |
 | `roundtableHelpers.ts` | `frontend/src/pages/roundtableHelpers.ts` | 圆桌纯函数：选型模式、锚点构建、fault-line 算法、anchor 描述 |
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
@@ -194,9 +200,36 @@
   - `EndingChatModal / WorldlineRoundtableView` 的 bubble `min-height` 预测
   - transcript scroll bottom anchor 稳定化
   - automation payload / E2E summary 当前会带 `transcript_layout`
-- `pretext` 仍然没有扩到：
-  - `InputView`
-  - `WorldScene / Theater`
+- `pretext` 当前已扩展到：
+  - `InputView`：textarea 高度预测替代 scrollHeight 回流，中英语言切换自动重估（`inputPredict.ts`）
+  - P5 文本契约测试矩阵：71 项，覆盖按钮标签 / 卡片标题 / 描述文本 / Oracle 布局 / Share 文案 的中英双语溢出检测（`textContract.test.ts`）
+  - Canvas bubble 尺寸预测模块已独立封装（`canvasTextPredict.ts`），当前未接入 WorldScene（Phaser 渲染差异需进一步对齐）
+- `ResultView` 当前已做 Summary-First 优化：
+  - 结局卡默认只显示标题 + 概率条 + insight 引言 + 操作按钮
+  - 故事、分歧原因、关键时刻需点击"阅读完整故事"展开（`grid-template-rows: 0fr` 折叠动画，Safari < 16 有 `@supports` 降级）
+  - 桌面端 2 列网格布局，主结局（概率最高）跨两列
+  - 概率条按区间着色：>60% rose、30-60% amber、<30% gray
+  - 关键时刻改为 mini-timeline 视觉化
+  - 故事文本限宽 62ch、行高 1.8，提升长文可读性
+- `EndingChatModal` 当前已补对话可读性优化：
+  - speaker 左侧色标：按参与者 index 自动分配 oklch 颜色
+  - 档案官 verdict 消息用高亮卡样式突出
+  - transcript 气泡文本限宽 58ch、行高 1.75
+  - transcript 列表间距从 12px 增加到 16px
+- 贴图修复：`/assets/ui/generated/` 下的 1408x768 AI 全景图引用已全部替换为 CSS gradient / box-shadow，涉及 EndingChatModal.css、WorldlineRoundtable.css、ResultView.css 共 15 处
+  - speaker glow → `radial-gradient`
+  - archivist emblem → `conic-gradient`
+  - oracle chamber panel → `repeating-linear-gradient` 细条纹
+  - dossier divider → `linear-gradient` 渐变线
+  - influence badge → `radial-gradient` 圆点
+  - `daily_challenge_panel.png` 保留原图（`object-fit: cover` 裁切效果尚可）
+- 交互动效当前已补：
+  - PredictionModal：modal 入场、confidence badge 颜色反馈、成功脉冲、提交 shimmer
+  - GameplayCardsModal：卡牌选择弹跳 + icon pop、未激活灰化
+  - InterventionModal：模式选择弹跳、模板标签微交互
+  - EndingChatModal：bubble 入场动画、anchor 高亮、线程切换过渡、idle 粒子
+  - WorldlineRoundtable：idle 环境粒子
+  - 所有新增动画均有 `prefers-reduced-motion: reduce` 覆盖
 - `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
   - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）当前复用已有 card frame 素材作为占位。
   - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`），当前复用已有场景图作为占位。

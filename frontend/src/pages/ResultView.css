@@ -83,13 +83,16 @@
 .endings-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 32px;
+  gap: 20px;
   margin-bottom: 64px;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 860px) {
   .endings-grid {
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  }
+  .ending-card--primary {
+    grid-column: 1 / -1;
   }
 }
 
@@ -224,8 +227,10 @@
   font-family: var(--font-body);
   font-size: var(--text-sm);
   color: var(--text-primary);
-  line-height: 1.7;
+  line-height: 1.8;
   white-space: pre-line;
+  max-width: 62ch;
+  letter-spacing: 0.01em;
 }
 
 .story-text.preview {
@@ -241,27 +246,84 @@
 }
 
 .expand-btn {
-  margin-top: 8px;
+  margin-top: 12px;
   font-size: var(--text-xs) !important;
-  padding: 4px 12px !important;
+  padding: 6px 16px !important;
+  border: 1px solid var(--border-default) !important;
+  border-radius: var(--radius-full) !important;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.expand-btn:hover {
+  background: color-mix(in oklab, var(--color-primary) 6%, var(--bg-surface));
+  border-color: color-mix(in oklab, var(--color-primary) 22%, var(--border-default));
 }
 
 /* ── Insight ─────────────────────────────────────────── */
 
-.insight-section {
-  margin-bottom: 20px;
+/* ── Collapsible Detail Section ──────────────────────── */
+.ending-detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
 }
 
+/* Fallback for browsers without 0fr support (Safari < 16) */
+@supports not (grid-template-rows: 0fr) {
+  .ending-detail {
+    display: block;
+    max-height: 0;
+    transition: max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .ending-detail--open {
+    max-height: none;
+  }
+}
+
+.ending-detail > * {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.ending-detail--open {
+  grid-template-rows: 1fr;
+}
+
+.ending-detail__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 16px;
+}
+
+/* ── Insight (always visible) ──────────────────────── */
 .insight-quote {
   font-family: var(--font-heading);
   font-size: var(--text-base);
   font-style: italic;
   font-weight: 400;
   color: var(--text-secondary);
-  border-left: 2px solid var(--color-primary);
-  padding-left: 16px;
+  border-left: 3px solid var(--color-primary);
+  padding: 12px 16px;
   margin: 0;
-  line-height: 1.6;
+  line-height: 1.7;
+  max-width: 56ch;
+  background: color-mix(in oklab, var(--color-primary) 3%, var(--bg-surface));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* Probability color variants */
+.probability-fill--high {
+  background: var(--color-primary);
+}
+.probability-fill--mid {
+  background: var(--color-warning);
+}
+.probability-fill--low {
+  background: var(--text-muted);
 }
 
 /* ── Key Moments ─────────────────────────────────────── */
@@ -281,6 +343,48 @@
 .moments-list li::marker {
   color: var(--color-primary);
   font-weight: 600;
+}
+
+/* ── Key Moments Timeline ───────────────────────────── */
+.moments-timeline {
+  position: relative;
+  list-style: none;
+  padding-left: 28px;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.moments-timeline::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: linear-gradient(180deg, var(--color-primary), var(--border-default));
+  border-radius: 1px;
+}
+
+.moments-timeline li {
+  position: relative;
+  padding: 6px 0;
+  max-width: 56ch;
+}
+
+.moments-timeline li::before {
+  content: '';
+  position: absolute;
+  left: -23px;
+  top: 13px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 
 .ending-room-actions {
@@ -317,10 +421,10 @@
   border: 1px solid color-mix(in oklab, var(--border-default) 72%, var(--color-primary));
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 94%, white 6%), var(--bg-surface)),
-    url('/assets/ui/generated/oracle_chamber_panel.png'),
+    repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.03) 0 1px, transparent 1px 14px),
     var(--bg-surface);
-  background-size: auto, cover, auto;
-  background-position: center, center top, center;
+  background-size: auto, auto, auto;
+  background-position: center, center, center;
   box-shadow:
     0 28px 80px oklch(0% 0 0 / 0.28),
     inset 0 1px 0 oklch(100% 0 0 / 0.12);
@@ -347,8 +451,10 @@
   top: 18px;
   width: 62px;
   height: 62px;
-  background: url('/assets/ui/generated/oracle_chamber_crest.png') center / contain no-repeat;
-  opacity: 0.12;
+  background: conic-gradient(from 30deg, color-mix(in oklab, var(--color-primary) 18%, transparent), transparent 25%, color-mix(in oklab, var(--color-primary) 18%, transparent) 50%, transparent 75%);
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--color-primary) 12%, transparent);
+  opacity: 0.2;
   pointer-events: none;
 }
 
@@ -458,7 +564,7 @@
 
 .ending-room-picker__card-copy em:first-of-type {
   padding-left: 22px;
-  background-image: url('/assets/ui/generated/ending_room_influence_badge.png');
+  background-image: radial-gradient(circle, var(--color-primary) 3px, transparent 3px);
   background-repeat: no-repeat;
   background-size: 13px 13px;
   background-position: 0 3px;

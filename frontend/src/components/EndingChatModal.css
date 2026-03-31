@@ -81,6 +81,7 @@
   background:
     radial-gradient(circle at top, oklch(76% 0.08 55 / 0.12), transparent 46%),
     color-mix(in oklab, var(--bg-overlay) 82%, black);
+  -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
 }
 
@@ -95,12 +96,12 @@
   border: 1px solid color-mix(in oklab, var(--border-default) 74%, var(--color-primary));
   background:
     radial-gradient(circle at top left, var(--oracle-aura), transparent 34%),
+    repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.03) 0 1px, transparent 1px 14px),
     linear-gradient(180deg, color-mix(in oklab, var(--bg-surface) 94%, white 6%), var(--bg-surface)),
     var(--oracle-profile-frame),
-    url('/assets/ui/generated/oracle_chamber_panel.png'),
     var(--bg-surface);
-  background-size: auto, 100% 100%, cover, auto;
-  background-position: center, center, center top, center;
+  background-size: auto, auto, 100% 100%, cover;
+  background-position: center, center, center, center top;
   box-shadow:
     0 28px 80px oklch(0% 0 0 / 0.28),
     inset 0 1px 0 oklch(100% 0 0 / 0.12);
@@ -150,8 +151,10 @@
   top: 18px;
   width: 68px;
   height: 68px;
-  background: url('/assets/ui/generated/oracle_chamber_crest.png') center / contain no-repeat;
-  opacity: 0.14;
+  background: conic-gradient(from 30deg, var(--oracle-accent-soft), transparent 25%, var(--oracle-accent-soft) 50%, transparent 75%, var(--oracle-accent-soft));
+  border-radius: 50%;
+  border: 1.5px solid var(--oracle-accent-soft);
+  opacity: 0.22;
   pointer-events: none;
 }
 
@@ -459,7 +462,8 @@
   inset: -10px auto auto -8px;
   width: 92px;
   height: 92px;
-  background: url('/assets/ui/generated/ending_room_speaker_glow.png') center / contain no-repeat;
+  background: radial-gradient(circle, var(--oracle-accent-soft), transparent 65%);
+  filter: blur(6px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 180ms ease;
@@ -535,7 +539,7 @@
 
 .ending-chat-participant-metrics em:first-child {
   padding-left: 24px;
-  background-image: url('/assets/ui/generated/ending_room_influence_badge.png');
+  background-image: radial-gradient(circle, var(--oracle-accent) 3px, transparent 3px);
   background-repeat: no-repeat;
   background-size: 14px 14px;
   background-position: 7px center;
@@ -610,8 +614,8 @@
   right: 20px;
   top: 0;
   height: 12px;
-  background: url('/assets/ui/generated/worldline_dossier_divider.png') center / contain no-repeat;
-  opacity: 0.5;
+  background: linear-gradient(90deg, transparent, var(--oracle-accent-soft), transparent);
+  opacity: 0.6;
   pointer-events: none;
 }
 
@@ -637,6 +641,23 @@
   border-color: color-mix(in oklab, var(--color-primary) 42%, var(--border-default));
   background: color-mix(in oklab, var(--color-primary) 8%, transparent);
   color: var(--color-primary);
+  animation: thread-chip-activate 0.25s ease-out;
+}
+
+@keyframes thread-chip-activate {
+  0% { transform: scale(0.95); }
+  50% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+/* Smooth transition for thread switching */
+.ending-chat-thread-chip {
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.ending-chat-thread-chip:hover:not(.is-active) {
+  border-color: color-mix(in oklab, var(--color-primary) 22%, var(--border-default));
+  background: color-mix(in oklab, var(--color-primary) 4%, transparent);
 }
 
 .ending-chat-thread-chip__icon {
@@ -647,7 +668,8 @@
 }
 
 .ending-chat-thread-chip__icon--archivist {
-  background: url('/assets/ui/generated/archivist_emblem.png') center / contain no-repeat;
+  background: conic-gradient(from 45deg, var(--oracle-accent), var(--oracle-accent-soft) 50%, var(--oracle-accent));
+  border-radius: 50%;
 }
 
 .ending-chat-thread-chip__anchor,
@@ -755,6 +777,35 @@
   background: color-mix(in oklab, var(--bg-hover) 72%, transparent);
   border: 1px solid var(--border-subtle);
   padding: 14px 15px;
+  animation: bubble-enter 0.3s ease-out both;
+}
+
+@keyframes bubble-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Anchor highlight when scrolled-to */
+.ending-chat-bubble.is-anchor-target {
+  animation: anchor-highlight 0.6s ease-out;
+}
+
+@keyframes anchor-highlight {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--oracle-accent) 40%, transparent);
+  }
+  30% {
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--oracle-accent) 30%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 @keyframes oracle-speaker-pulse {
@@ -794,9 +845,9 @@
 .ending-chat-bubble.is-current-speaker {
   border-color: color-mix(in oklab, var(--color-primary) 38%, var(--border-default));
   background:
-    url('/assets/ui/generated/ending_room_speaker_glow.png') calc(100% - 10px) 10px / 84px 84px no-repeat,
+    radial-gradient(circle at calc(100% - 40px) 40px, var(--oracle-accent-soft), transparent 60%),
     color-mix(in oklab, var(--bg-hover) 72%, transparent);
-  padding-inline-end: 104px;
+  padding-inline-end: 24px;
   animation: oracle-speaker-pulse 2.2s ease-in-out infinite;
 }
 
@@ -829,7 +880,8 @@
 }
 
 .ending-chat-bubble__icon--archivist {
-  background: url('/assets/ui/generated/archivist_emblem.png') center / contain no-repeat;
+  background: conic-gradient(from 45deg, var(--oracle-accent), var(--oracle-accent-soft) 50%, var(--oracle-accent));
+  border-radius: 50%;
 }
 
 .ending-chat-bubble strong {
@@ -853,6 +905,36 @@
 
 .ending-chat-draft-badge {
   color: var(--color-primary);
+}
+
+/* ── P2: Speaker Color Coding ────────────────────────── */
+.ending-chat-bubble {
+  border-left: 3px solid var(--speaker-color, var(--border-subtle));
+}
+.ending-chat-bubble[data-speaker="0"] { --speaker-color: oklch(65% 0.18 350); }
+.ending-chat-bubble[data-speaker="1"] { --speaker-color: oklch(65% 0.15 220); }
+.ending-chat-bubble[data-speaker="2"] { --speaker-color: oklch(65% 0.15 150); }
+.ending-chat-bubble[data-speaker="3"] { --speaker-color: oklch(65% 0.15 80); }
+.ending-chat-bubble[data-speaker="4"] { --speaker-color: oklch(65% 0.15 280); }
+
+/* ── P2: Verdict Highlight ──────────────────────────── */
+.ending-chat-bubble--verdict {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--oracle-accent-soft) 55%, var(--bg-surface)), var(--bg-surface));
+  border: 1px solid var(--oracle-accent);
+  border-left: 4px solid var(--oracle-accent);
+  padding: 16px 18px;
+}
+
+/* ── P2: Reading Width + Spacing ────────────────────── */
+.ending-chat-bubble p {
+  max-width: 58ch;
+  line-height: 1.75;
+  letter-spacing: 0.005em;
+}
+
+.ending-chat-transcript-list {
+  gap: 16px;
 }
 
 .ending-chat-composer {
@@ -1267,9 +1349,34 @@
   }
 }
 
+/* ── Idle ambient particles for ending chat ──────────────── */
+.ending-chat-modal::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background:
+    radial-gradient(1.5px 1.5px at 10% 22%, var(--oracle-accent-soft), transparent),
+    radial-gradient(1px 1px at 42% 58%, var(--oracle-accent-soft), transparent),
+    radial-gradient(1.5px 1.5px at 65% 15%, var(--oracle-accent-soft), transparent),
+    radial-gradient(1px 1px at 88% 42%, var(--oracle-accent-soft), transparent);
+  opacity: 0.32;
+  animation: ending-idle-particles 20s ease-in-out infinite alternate;
+}
+
+@keyframes ending-idle-particles {
+  0% { transform: translate3d(0, 0, 0); opacity: 0.32; }
+  50% { transform: translate3d(4px, -6px, 0); opacity: 0.44; }
+  100% { transform: translate3d(-3px, 3px, 0); opacity: 0.32; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ending-chat-modal::before,
-  .ending-chat-bubble.is-current-speaker {
+  .ending-chat-bubble.is-current-speaker,
+  .ending-chat-modal::after {
     animation: none;
   }
 

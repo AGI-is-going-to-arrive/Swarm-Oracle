@@ -34,6 +34,7 @@ import {
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
+import { predictTextareaHeight, resolveInputFontSizePx, resolveInputLineHeightMultiplier } from '../lib/textLayout/inputPredict';
 import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {
@@ -236,14 +237,29 @@ export function InputView() {
     const el = questionRef.current;
     if (!el) return;
 
-    const minHeight = window.innerWidth <= 640 ? 96 : 76;
-    const maxHeight = window.innerWidth <= 640 ? 220 : 180;
+    const isMobile = window.innerWidth <= 640;
+    const minHeight = isMobile ? 96 : 76;
+    const maxHeight = isMobile ? 220 : 180;
+    const containerWidth = el.clientWidth || el.offsetWidth || 700;
 
-    el.style.height = '0px';
-    const nextHeight = Math.min(Math.max(el.scrollHeight, minHeight), maxHeight);
+    // Use pretext prediction to avoid DOM reflow (reset to 0 + read scrollHeight)
+    const displayText = el.value || el.placeholder || '';
+    const { height: predicted } = predictTextareaHeight(displayText, containerWidth, {
+      viewportWidth: window.innerWidth,
+      locale: i18n.language,
+    });
+
+    // Pretext prediction with DOM fallback for edge cases
+    let contentHeight = predicted;
+    if (contentHeight <= 0) {
+      el.style.height = '0px';
+      contentHeight = el.scrollHeight;
+    }
+
+    const nextHeight = Math.min(Math.max(contentHeight, minHeight), maxHeight);
     el.style.height = `${nextHeight}px`;
-    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, []);
+    el.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+  }, [i18n.language]);
 
   // Dynamic placeholders from i18n
   const placeholders = useMemo(() => [
@@ -950,12 +966,8 @@ export function InputView() {
                 onChange={(e) => setRounds(Number(e.target.value))}
                 disabled={isSubmitting}
               />
-              <span className="rounds-value">{rounds}</span>
             </div>
-            <div className="slider-scale" aria-hidden="true">
-              <span>{t('home.slider_min', { value: 3 })}</span>
-              <span>{t('home.slider_max', { value: HOME_MAX_ROUNDS })}</span>
-            </div>
+            <span className="rounds-value">{rounds}</span>
             <span className="rounds-hint">
               {rounds <= 5 ? t('home.rounds_fast') : rounds <= 15 ? t('home.rounds_standard') : rounds <= 25 ? t('home.rounds_deep') : t('home.rounds_extreme')}
               <span className="rounds-time">≈{estimatedSimulationMinutes}min</span>
@@ -977,12 +989,8 @@ export function InputView() {
                 onChange={(e) => setNumAgents(Number(e.target.value))}
                 disabled={isSubmitting}
               />
-              <span className="agents-value">{numAgents}</span>
             </div>
-            <div className="slider-scale" aria-hidden="true">
-              <span>{t('home.agents_minimum', { value: 3 })}</span>
-              <span>{t('home.slider_max', { value: HOME_MAX_AGENTS })}</span>
-            </div>
+            <span className="agents-value">{numAgents}</span>
             <span className="agents-hint">
               {numAgents <= 10 ? t('home.agents_few') : numAgents <= 20 ? t('home.agents_standard') : numAgents <= 30 ? t('home.agents_large') : t('home.agents_extreme')}
             </span>

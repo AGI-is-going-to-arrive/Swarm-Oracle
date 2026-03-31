@@ -376,7 +376,7 @@ export default function PredictionModal({
           <div className="pred-field">
             <label className="pred-label" htmlFor="pred-confidence">
               {t('prediction.confidence_label')}
-              <span className="pred-confidence-badge">{confidenceLabel} — {Math.round(confidence * 100)}%</span>
+              <span className={`pred-confidence-badge${confidence > 0.7 ? ' pred-confidence-badge--high' : confidence <= 0.3 ? ' pred-confidence-badge--low' : ''}`}>{confidenceLabel} — {Math.round(confidence * 100)}%</span>
             </label>
             <input
               id="pred-confidence"
