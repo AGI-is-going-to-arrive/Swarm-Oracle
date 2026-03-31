@@ -90,7 +90,7 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
+npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/roundtableSelection.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
@@ -104,21 +104,19 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 当前脚本口径：
 
 - `e2e-ending-room-followup-suite.mjs full`
-  - 覆盖桌面 + mobile 的 `live / hotseat / all_present / one-move / crossline gallery / artifact readonly / local readonly / reload restore / import`
+  - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
+  - current summary 会落出 `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
 - `e2e-ending-room-followup-suite.mjs mobile`
-  - 只跑移动端多结局链路，适合单独复核 `hotseat / all_present / crossline gallery / readonly replay / restore / import`
+  - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
+  - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / crossline gallery / readonly replay / restore / import`
 - `single-ending`
-  - 当前仍是单独手动浏览器复核项，不在 `e2e-ending-room-followup-suite.mjs` 的 CLI summary 主入口里
-  - 最小口径：
-    - 结果页不展示 `发起圆桌 / 异线旁听席`
-    - 保留 `进入会客厅 / 只改一步`
-    - `ending_chamber` live -> readonly replay -> import 成立
-    - `one_move_only` 可正常打开并完成
-    - 桌面 / mobile 与中英语言切换都要看一次
+  - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 当前已进入 CLI summary
+  - 桌面 single-ending 与中英语言切换当前仍建议保留真实浏览器复核
 - `e2e-worldline-roundtable-suite.mjs full`
-  - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat / artifact/local readonly / reload restore / import`
+  - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat`
+  - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
 - `e2e-worldline-roundtable-suite.mjs mobile`
-  - 只跑移动端圆桌链路，适合单独复核 recipe 切换、hotseat thread switch、readonly replay 与 restore/import
+  - 只跑移动端圆桌链路，适合单独复核 recipe 切换、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
 
 ### Type Check 与 Build
 
@@ -173,6 +171,12 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
 - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
+
+最近一轮 Oracle 0.3 锚点观测工件：
+
+- `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
+- `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
+- `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
 
 使用规则：
 

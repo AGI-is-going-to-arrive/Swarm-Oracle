@@ -24,6 +24,7 @@ import type {
 
 import './EndingChatModal.css';
 
+const EMPTY_SELECTED_BRANCH_IDS: string[] = [];
 const EMPTY_SELECTED_AGENT_IDS: string[] = [];
 const EMPTY_FALLBACK_MESSAGES: AgentMessage[] = [];
 
@@ -68,6 +69,13 @@ interface AnchorAction {
   anchorIds: string[];
   prompt: string;
   threadTitle?: string | null;
+}
+
+interface AnchorSummary {
+  ids: string[];
+  kind: string;
+  kindLabel: string;
+  label: string;
 }
 
 function roleLabel(participant: EndingRoomParticipant, isZh: boolean): string {
@@ -199,12 +207,70 @@ function buildEndingQuotePrompt(speaker: string, content: string, isZh: boolean)
     : `Follow this quote: ${speaker} said "${snippet}". Which hinge was this line really pointing at?`;
 }
 
+function getEndingAnchorKindLabel(kind: string, isZh: boolean): string {
+  switch (kind) {
+    case 'verdict':
+      return isZh ? '档案结论' : 'Verdict';
+    case 'insight':
+      return isZh ? '当前洞察' : 'Insight';
+    case 'key_moment':
+      return isZh ? '关键转折' : 'Key moment';
+    case 'quote':
+      return isZh ? '引用句' : 'Quote';
+    default:
+      return isZh ? '锚点' : 'Anchor';
+  }
+}
+
+function describeEndingAnchor(
+  anchorIds: string[] | null | undefined,
+  isZh: boolean,
+  keyMoments: string[],
+  turns: Array<{ key: string; content: string }>,
+): AnchorSummary | null {
+  if (!anchorIds || anchorIds.length === 0) {
+    return null;
+  }
+  const [domain, rawKind, , ...extraParts] = anchorIds[0].split(':');
+  const kind = rawKind ?? 'unknown';
+  const kindLabel = getEndingAnchorKindLabel(kind, isZh);
+  const extra = extraParts.join(':');
+  if (domain !== 'ending') {
+    return {
+      ids: anchorIds,
+      kind: 'unknown',
+      kindLabel,
+      label: trimQuoteSnippet(anchorIds[0], 48),
+    };
+  }
+  if (kind === 'key_moment') {
+    const index = Number(extra);
+    const label = Number.isFinite(index) && keyMoments[index]
+      ? `${kindLabel} · ${trimQuoteSnippet(keyMoments[index], 48)}`
+      : kindLabel;
+    return { ids: anchorIds, kind, kindLabel, label };
+  }
+  if (kind === 'quote') {
+    const matchedTurn = turns.find((turn) => turn.key === extra);
+    const label = matchedTurn
+      ? `${kindLabel} · ${trimQuoteSnippet(matchedTurn.content, 48)}`
+      : kindLabel;
+    return { ids: anchorIds, kind, kindLabel, label };
+  }
+  return {
+    ids: anchorIds,
+    kind,
+    kindLabel,
+    label: kindLabel,
+  };
+}
+
 export default function EndingChatModal({
   open,
   scenarioId,
   branch,
   roomType,
-  selectedBranchIds = [],
+  selectedBranchIds: selectedBranchIdsProp,
   selectedAgentIds: selectedAgentIdsProp,
   language,
   readOnly,
@@ -220,6 +286,7 @@ export default function EndingChatModal({
   onAutomationStateChange,
 }: EndingChatModalProps) {
   const { t } = useTranslation();
+  const selectedBranchIds = selectedBranchIdsProp ?? EMPTY_SELECTED_BRANCH_IDS;
   const selectedAgentIds = selectedAgentIdsProp ?? EMPTY_SELECTED_AGENT_IDS;
   const fallbackMessages = fallbackMessagesProp ?? EMPTY_FALLBACK_MESSAGES;
   const modalRef = useRef<HTMLDivElement>(null);
@@ -631,6 +698,38 @@ export default function EndingChatModal({
   const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
+  const threadDisplayLabels = useMemo(() => {
+    const seen = new Map<string, number>();
+    const labels: Record<string, string> = {};
+    for (const thread of threads) {
+      const base = threadLabel(thread, isZh);
+      const count = (seen.get(base) ?? 0) + 1;
+      seen.set(base, count);
+      labels[thread.id] = count === 1
+        ? base
+        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
+    }
+    return labels;
+  }, [isZh, threads]);
+  const threadAnchorSummaries = useMemo(
+    () => threads.reduce<Record<string, AnchorSummary>>((acc, thread) => {
+      const summary = describeEndingAnchor(
+        thread.question_anchor_ids_json,
+        isZh,
+        branch?.key_moments ?? [],
+        thread.turns.map((turn) => ({ key: turn.id, content: turn.content })),
+      );
+      if (summary) {
+        acc[thread.id] = summary;
+      }
+      return acc;
+    }, {}),
+    [branch?.key_moments, isZh, threads],
+  );
+  const activeThreadAnchorSummary = useMemo(
+    () => (activeThread ? threadAnchorSummaries[activeThread.id] ?? null : null),
+    [activeThread, threadAnchorSummaries],
+  );
 
   useEffect(() => {
     setReplayActiveThreadId(replayState?.activeThreadId ?? null);
@@ -686,6 +785,12 @@ export default function EndingChatModal({
       active_thread_id: activeThread?.id ?? null,
       thread_count: threads.length,
       interaction_mode: effectiveInteractionMode,
+      question_anchor_ids: activeThread?.question_anchor_ids_json ?? [],
+      thread_question_anchor_ids_json: activeThread?.question_anchor_ids_json ?? [],
+      pending_question_anchor_ids: pendingQuestionAnchorIds,
+      anchor_kind: activeThreadAnchorSummary?.kind ?? null,
+      anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
+      anchor_label: activeThreadAnchorSummary?.label ?? null,
       can_send: Boolean(composerEnabled),
       can_share_replay: Boolean(effectiveSnapshot?.id && effectiveResult),
       can_import_replay: Boolean(readOnly && replayState?.snapshot),
@@ -711,23 +816,12 @@ export default function EndingChatModal({
     effectiveSnapshot?.current_phase,
     effectiveSnapshot?.id,
     displayedDrafts.length,
+    pendingQuestionAnchorIds,
     status,
     threads.length,
+    activeThread?.question_anchor_ids_json,
+    activeThreadAnchorSummary,
   ]);
-
-  const threadDisplayLabels = useMemo(() => {
-    const seen = new Map<string, number>();
-    const labels: Record<string, string> = {};
-    for (const thread of threads) {
-      const base = threadLabel(thread, isZh);
-      const count = (seen.get(base) ?? 0) + 1;
-      seen.set(base, count);
-      labels[thread.id] = count === 1
-        ? base
-        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
-    }
-    return labels;
-  }, [isZh, threads]);
 
   if (!open || !branch) {
     return null;
@@ -1195,7 +1289,15 @@ export default function EndingChatModal({
                   <h3>{transcriptTitle}</h3>
                   <p>{transcriptHeaderCopy}</p>
                 </div>
-                <span className="ending-chat-note">{transcriptHeaderNote}</span>
+                <div className="ending-chat-transcript-header__meta">
+                  <span className="ending-chat-note">{transcriptHeaderNote}</span>
+                  {activeThreadAnchorSummary && (
+                    <div className="ending-chat-anchor-summary" title={activeThreadAnchorSummary.label}>
+                      <span className="ending-chat-anchor-summary__kind">{activeThreadAnchorSummary.kindLabel}</span>
+                      <span className="ending-chat-anchor-summary__label">{activeThreadAnchorSummary.label}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
             {!isCrosslineGallery && threads.length > 0 && (
@@ -1219,7 +1321,12 @@ export default function EndingChatModal({
                     }}
                   >
                     {thread.mode === 'room' && <span className="ending-chat-thread-chip__icon ending-chat-thread-chip__icon--archivist" aria-hidden="true" />}
-                    {threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh)}
+                    <span className="ending-chat-thread-chip__label">{threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh)}</span>
+                    {threadAnchorSummaries[thread.id] && (
+                      <span className="ending-chat-thread-chip__anchor" title={threadAnchorSummaries[thread.id].label}>
+                        {threadAnchorSummaries[thread.id].kindLabel}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

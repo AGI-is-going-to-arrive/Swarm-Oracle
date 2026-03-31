@@ -16,6 +16,12 @@ import {
   type EndingRoomCandidate,
 } from '../lib/endingRoomCandidates';
 import {
+  chooseRepresentativeDefaults,
+  chooseTraitMixRepresentatives,
+  detectCandidateVoiceVariant,
+  extractBranchLexicon,
+} from '../lib/roundtableSelection';
+import {
   buildOracleReplayLocalUrl,
   buildOracleReplayShareUrl,
   buildOracleReplayUrl,
@@ -186,39 +192,84 @@ interface AnchorAction {
   threadTitle?: string | null;
 }
 
-function chooseRepresentativeDefaults(
-  branchOrder: string[],
-  branchCandidates: Record<string, ReturnType<typeof buildBranchEndingRoomCandidates>[string]>,
-  current: Record<string, string>,
-): { next: Record<string, string>; changed: boolean } {
-  const next: Record<string, string> = {};
-  const reservedAgentIds = new Set<string>();
-  let changed = false;
+interface AnchorSummary {
+  ids: string[];
+  kind: string;
+  kindLabel: string;
+  label: string;
+}
 
-  for (const branchId of branchOrder) {
-    const candidates = branchCandidates[branchId] ?? [];
-    const currentAgentId = current[branchId];
-    const currentStillValid = currentAgentId && candidates.some((candidate) => candidate.id === currentAgentId);
+function branchListChanged(current: string[], next: string[]) {
+  return current.length !== next.length || current.some((value, index) => value !== next[index]);
+}
 
-    if (currentStillValid) {
-      next[branchId] = currentAgentId;
-      reservedAgentIds.add(currentAgentId);
-      continue;
-    }
+function sameWitnessSelection(
+  current: RoundtableWitnessSelection | null,
+  next: RoundtableWitnessSelection | null,
+) {
+  if (current === next) return true;
+  if (!current || !next) return false;
+  return current.branchId === next.branchId && current.agentId === next.agentId;
+}
 
-    const fallbackCandidate = candidates[0];
-    const diversifiedCandidate = candidates.find((candidate) => !reservedAgentIds.has(candidate.id));
-    const chosenAgentId = diversifiedCandidate?.id ?? fallbackCandidate?.id;
-    if (chosenAgentId) {
-      next[branchId] = chosenAgentId;
-      reservedAgentIds.add(chosenAgentId);
-    }
-    if (currentAgentId !== chosenAgentId) {
-      changed = true;
-    }
+function getRoundtableAnchorKindLabel(kind: string, isZh: boolean): string {
+  switch (kind) {
+    case 'verdict':
+      return isZh ? '档案总结' : 'Archive verdict';
+    case 'phase':
+      return isZh ? '阶段洞察' : 'Phase';
+    case 'quote':
+      return isZh ? '引用句' : 'Quote';
+    default:
+      return isZh ? '锚点' : 'Anchor';
   }
+}
 
-  return { next, changed };
+function describeRoundtableAnchor(
+  anchorIds: string[] | null | undefined,
+  isZh: boolean,
+  phaseInsights: Array<{ phase: string; stakes: string }>,
+  turns: Array<{ key: string; content: string }>,
+  t: (key: string) => string,
+): AnchorSummary | null {
+  if (!anchorIds || anchorIds.length === 0) {
+    return null;
+  }
+  const [domain, rawKind, , ...extraParts] = anchorIds[0].split(':');
+  const kind = rawKind ?? 'unknown';
+  const kindLabel = getRoundtableAnchorKindLabel(kind, isZh);
+  const extra = extraParts.join(':');
+  if (domain !== 'roundtable') {
+    return {
+      ids: anchorIds,
+      kind: 'unknown',
+      kindLabel,
+      label: trimQuoteSnippet(anchorIds[0], 48),
+    };
+  }
+  if (kind === 'phase') {
+    const [phaseName, phaseIndexRaw = '0'] = extra.split(/-(?=[^-]+$)/);
+    const phaseIndex = Number(phaseIndexRaw);
+    const phaseLabel = getEndingRoomPhaseLabel(phaseName as never, t);
+    const phaseInsight = Number.isFinite(phaseIndex) ? phaseInsights[phaseIndex] : undefined;
+    const label = phaseInsight?.stakes
+      ? `${phaseLabel} · ${trimQuoteSnippet(phaseInsight.stakes, 48)}`
+      : phaseLabel;
+    return { ids: anchorIds, kind, kindLabel, label };
+  }
+  if (kind === 'quote') {
+    const matchedTurn = turns.find((turn) => turn.key === extra);
+    const label = matchedTurn
+      ? `${kindLabel} · ${trimQuoteSnippet(matchedTurn.content, 48)}`
+      : kindLabel;
+    return { ids: anchorIds, kind, kindLabel, label };
+  }
+  return {
+    ids: anchorIds,
+    kind,
+    kindLabel,
+    label: kindLabel,
+  };
 }
 
 function normalizeManualShortlist(branchOrder: string[], selectedBranchIds: string[]): string[] {
@@ -228,107 +279,6 @@ function normalizeManualShortlist(branchOrder: string[], selectedBranchIds: stri
 
 function buildDefaultManualShortlist(branchOrder: string[]): string[] {
   return branchOrder.slice(0, Math.min(MANUAL_SHORTLIST_MIN, branchOrder.length));
-}
-
-type CandidateVoiceVariant =
-  | 'imperial'
-  | 'field'
-  | 'finance'
-  | 'market'
-  | 'faith'
-  | 'industry'
-  | 'frontier'
-  | 'survival'
-  | 'scholar'
-  | 'civic'
-  | 'plain';
-
-function detectCandidateVoiceVariant(candidate: Pick<EndingRoomCandidate, 'name' | 'role' | 'persona'>): CandidateVoiceVariant {
-  const normalized = `${candidate.name} ${candidate.role} ${candidate.persona ?? ''}`.trim().toLowerCase();
-  if (/(皇|king|queen|emperor|crown|court)/u.test(normalized)) return 'imperial';
-  if (/(将|统帅|指挥官|舰队|commander|captain|marshal|fleet|guard)/u.test(normalized)) return 'field';
-  if (/(银行|行长|财政|金融|清算|流动性|bank|banker|finance|treasury|settlement|liquidity)/u.test(normalized)) return 'finance';
-  if (/(摊主|商户|商贩|市场|港口|贸易|货运|vendor|merchant|market|port|trade|freight)/u.test(normalized)) return 'market';
-  if (/(祭司|祭坛|神官|神谕|priest|cleric|oracle|temple|faith|ritual|covenant)/u.test(normalized)) return 'faith';
-  if (/(工程|工厂|电网|产能|后勤|调度|engineer|factory|industrial|grid|throughput|logistics|plant)/u.test(normalized)) return 'industry';
-  if (/(边疆|拓荒|殖民|轨道|补给舱|生命维持|pilot|orbital|frontier|colony|expedition|convoy|airlock|life support)/u.test(normalized)) return 'frontier';
-  if (/(避难|药品|口粮|撤离|医疗|scout|medic|refuge|ration|evacuation|shelter|survival)/u.test(normalized)) return 'survival';
-  if (/(史官|书记官|学者|档案|证人|scribe|scholar|historian|witness|record|ledger|clerk)/u.test(normalized)) return 'scholar';
-  if (/(议长|书记|委员|minister|speaker|council|administrator|governor|civic)/u.test(normalized)) return 'civic';
-  return 'plain';
-}
-
-function chooseTraitMixRepresentatives(
-  branchOrder: string[],
-  branchCandidates: Record<string, EndingRoomCandidate[]>,
-  current: Record<string, string>,
-): { next: Record<string, string>; changed: boolean } {
-  const defaultRepresentatives = chooseRepresentativeDefaults(branchOrder, branchCandidates, current).next;
-  const next = { ...defaultRepresentatives };
-  const usedVariants = new Map<CandidateVoiceVariant, number>();
-  let changed = false;
-
-  branchOrder.forEach((branchId, branchIndex) => {
-    const candidates = branchCandidates[branchId] ?? [];
-    if (candidates.length === 0) return;
-    const rotationIndex = branchIndex % candidates.length;
-    const rotated = [
-      ...candidates.slice(rotationIndex),
-      ...candidates.slice(0, rotationIndex),
-    ];
-    const ranked = rotated.sort((left, right) => {
-      const leftVariant = detectCandidateVoiceVariant(left);
-      const rightVariant = detectCandidateVoiceVariant(right);
-      const leftScore = Math.round(left.impactScore * 100)
-        + left.keyMomentHits * 14
-        + left.contributionCount * 5
-        + left.lastRound
-        + ((usedVariants.get(leftVariant) ?? 0) === 0 ? 38 : 0)
-        - (usedVariants.get(leftVariant) ?? 0) * 28
-        - (leftVariant === 'plain' ? 10 : 0)
-        - (left.fallbackCast ? 6 : 0)
-        + (defaultRepresentatives[branchId] === left.id ? 2 : 0);
-      const rightScore = Math.round(right.impactScore * 100)
-        + right.keyMomentHits * 14
-        + right.contributionCount * 5
-        + right.lastRound
-        + ((usedVariants.get(rightVariant) ?? 0) === 0 ? 38 : 0)
-        - (usedVariants.get(rightVariant) ?? 0) * 28
-        - (rightVariant === 'plain' ? 10 : 0)
-        - (right.fallbackCast ? 6 : 0)
-        + (defaultRepresentatives[branchId] === right.id ? 2 : 0);
-      return rightScore - leftScore || right.name.localeCompare(left.name);
-    });
-    const chosen = ranked[0];
-    if (!chosen) return;
-    if (next[branchId] !== chosen.id) {
-      next[branchId] = chosen.id;
-      changed = true;
-    }
-    const chosenVariant = detectCandidateVoiceVariant(chosen);
-    usedVariants.set(chosenVariant, (usedVariants.get(chosenVariant) ?? 0) + 1);
-  });
-
-  const stayedDefault = branchOrder.every((branchId) => (
-    next[branchId] != null && next[branchId] === defaultRepresentatives[branchId]
-  ));
-  if (stayedDefault) {
-    for (const [branchIndex, branchId] of branchOrder.entries()) {
-      const candidates = branchCandidates[branchId] ?? [];
-      const alternative = candidates[(branchIndex + 1) % candidates.length];
-      if (!alternative) continue;
-      next[branchId] = alternative.id;
-      changed = true;
-      break;
-    }
-  }
-
-  return { next, changed };
-}
-
-function extractBranchLexicon(branch: { title: string; insight: string; key_moments?: string[] }): Set<string> {
-  const joined = `${branch.title} ${branch.insight} ${(branch.key_moments ?? []).join(' ')}`.toLowerCase();
-  return new Set(joined.match(/[\p{L}\p{N}_-]+/gu) ?? []);
 }
 
 function chooseFaultLineBranchIds(
@@ -952,6 +902,29 @@ export default function WorldlineRoundtableView() {
     }
     return labels;
   }, [isZh, threadList]);
+  const threadAnchorSummaries = useMemo(
+    () => threadList.reduce<Record<string, AnchorSummary>>((acc, thread) => {
+      const summary = describeRoundtableAnchor(
+        thread.question_anchor_ids_json,
+        isZh,
+        (effectiveResult?.phase_insights ?? []).map((insight) => ({
+          phase: insight.phase,
+          stakes: insight.stakes,
+        })),
+        thread.turns.map((turn) => ({ key: turn.id, content: turn.content })),
+        t,
+      );
+      if (summary) {
+        acc[thread.id] = summary;
+      }
+      return acc;
+    }, {}),
+    [effectiveResult?.phase_insights, isZh, t, threadList],
+  );
+  const activeThreadAnchorSummary = useMemo(
+    () => (activeThread ? threadAnchorSummaries[activeThread.id] ?? null : null),
+    [activeThread, threadAnchorSummaries],
+  );
   const interactionModeNote = replayPayload
     ? (isZh ? '回放模式下只读查看当前桌面。' : 'Replay mode is read-only for this table.')
     : getRoundtableModeNote(interactionMode, isZh, selectedRepresentative?.display_name ?? null);
@@ -1206,12 +1179,21 @@ export default function WorldlineRoundtableView() {
       return;
     }
     if (selectionMode === 'fault_line_first') {
-      setManualShortlistBranchIds(chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates));
+      setManualShortlistBranchIds((current) => {
+        const normalizedCurrent = normalizeManualShortlist(branchOrder, current);
+        const next = chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates);
+        const changed = branchListChanged(normalizedCurrent, next);
+        return changed ? next : current;
+      });
       setSelectedWitness(null);
       return;
     }
     if (selectionMode === 'witness_augmented') {
-      setSelectedWitness((current) => current ?? chooseWitnessAugmentedSelection(witnessCandidates));
+      setSelectedWitness((current) => {
+        const next = current ?? chooseWitnessAugmentedSelection(witnessCandidates);
+        const changed = !sameWitnessSelection(current, next);
+        return changed ? next : current;
+      });
     }
   }, [branchCandidates, branchOrder, branchesById, replayPayload, selectionMode, witnessCandidates]);
 
@@ -1266,11 +1248,19 @@ export default function WorldlineRoundtableView() {
       });
     }
     if (nextMode === 'fault_line_first') {
-      setManualShortlistBranchIds(chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates));
+      setManualShortlistBranchIds((current) => {
+        const normalizedCurrent = normalizeManualShortlist(branchOrder, current);
+        const next = chooseFaultLineBranchIds(branchOrder, branchesById, branchCandidates);
+        const changed = branchListChanged(normalizedCurrent, next);
+        return changed ? next : current;
+      });
       setSelectedWitness(null);
     }
     if (nextMode === 'trait_mix') {
-      setSelectedRepresentatives((current) => chooseTraitMixRepresentatives(branchOrder, branchCandidates, current).next);
+      setSelectedRepresentatives((current) => {
+        const { next, changed } = chooseTraitMixRepresentatives(branchOrder, branchCandidates, current);
+        return changed ? next : current;
+      });
       setSelectedWitness(null);
     }
     if (nextMode === 'expert_witness') {
@@ -1279,7 +1269,11 @@ export default function WorldlineRoundtableView() {
         : null));
     }
     if (nextMode === 'witness_augmented') {
-      setSelectedWitness(chooseWitnessAugmentedSelection(witnessCandidates));
+      setSelectedWitness((current) => {
+        const next = chooseWitnessAugmentedSelection(witnessCandidates);
+        const changed = !sameWitnessSelection(current, next);
+        return changed ? next : current;
+      });
     }
   }, [branchCandidates, branchOrder, branchesById, manualShortlistMax, manualShortlistMin, witnessCandidates]);
 
@@ -1434,6 +1428,12 @@ export default function WorldlineRoundtableView() {
           active_thread_id: activeThread?.id ?? null,
           thread_count: threadList.length,
           interaction_mode: automationInteractionMode,
+          question_anchor_ids: activeThread?.question_anchor_ids_json ?? [],
+          thread_question_anchor_ids_json: activeThread?.question_anchor_ids_json ?? [],
+          pending_question_anchor_ids: pendingQuestionAnchorIds,
+          anchor_kind: activeThreadAnchorSummary?.kind ?? null,
+          anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
+          anchor_label: activeThreadAnchorSummary?.label ?? null,
           participant_count: participants.length,
           representative_count: representatives.length,
           has_result: Boolean(effectiveResult),
@@ -1467,12 +1467,15 @@ export default function WorldlineRoundtableView() {
     displayedDrafts.length,
     replayPayload,
     representatives.length,
+    pendingQuestionAnchorIds,
     selectedBranchIdsForLaunch.length,
     selectionMode,
     showRepresentativePicker,
     storyData?.branches.length,
     storyData?.question,
     threadList.length,
+    activeThread?.question_anchor_ids_json,
+    activeThreadAnchorSummary,
   ]);
 
   const handleBack = useCallback(() => {
@@ -1991,9 +1994,17 @@ export default function WorldlineRoundtableView() {
                 <h3>{isZh ? '圆桌记录' : 'Roundtable transcript'}</h3>
                 <p>{transcriptSubtitle}</p>
               </div>
-              <span className="ending-chat-note">
-                {activeThread ? (threadDisplayLabels[activeThread.id] ?? getThreadLabel(activeThread, isZh)) : t('roundtable.loading')}
-              </span>
+              <div className="ending-chat-transcript-header__meta">
+                <span className="ending-chat-note">
+                  {activeThread ? (threadDisplayLabels[activeThread.id] ?? getThreadLabel(activeThread, isZh)) : t('roundtable.loading')}
+                </span>
+                {activeThreadAnchorSummary && (
+                  <div className="ending-chat-anchor-summary" title={activeThreadAnchorSummary.label}>
+                    <span className="ending-chat-anchor-summary__kind">{activeThreadAnchorSummary.kindLabel}</span>
+                    <span className="ending-chat-anchor-summary__label">{activeThreadAnchorSummary.label}</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {threadList.length > 0 && (
@@ -2017,7 +2028,12 @@ export default function WorldlineRoundtableView() {
                       }
                     }}
                   >
-                    {threadDisplayLabels[thread.id] ?? getThreadLabel(thread, isZh)}
+                    <span className="ending-chat-thread-chip__label">{threadDisplayLabels[thread.id] ?? getThreadLabel(thread, isZh)}</span>
+                    {threadAnchorSummaries[thread.id] && (
+                      <span className="ending-chat-thread-chip__anchor" title={threadAnchorSummaries[thread.id].label}>
+                        {threadAnchorSummaries[thread.id].kindLabel}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

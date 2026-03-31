@@ -534,6 +534,14 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.ending-chat-transcript-header__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(42%, 360px);
+}
+
 .ending-chat-transcript-header p,
 .ending-chat-note,
 .ending-chat-empty,
@@ -576,6 +584,11 @@
   white-space: nowrap;
 }
 
+.ending-chat-thread-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ending-chat-thread-chip.is-active {
   border-color: color-mix(in oklab, var(--color-primary) 42%, var(--border-default));
   background: color-mix(in oklab, var(--color-primary) 8%, transparent);
@@ -591,6 +604,34 @@
 
 .ending-chat-thread-chip__icon--archivist {
   background: url('/assets/ui/generated/archivist_emblem.png') center / contain no-repeat;
+}
+
+.ending-chat-thread-chip__anchor,
+.ending-chat-anchor-summary__kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--oracle-accent) 28%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent-soft) 78%, transparent);
+  color: color-mix(in oklab, var(--oracle-accent) 82%, var(--text-primary));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ending-chat-anchor-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ending-chat-anchor-summary__label {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-secondary);
 }
 
 .ending-chat-transcript-list {
@@ -904,6 +945,15 @@
 
   .ending-chat-transcript {
     min-height: 0;
+  }
+
+  .ending-chat-transcript-header {
+    flex-direction: column;
+  }
+
+  .ending-chat-transcript-header__meta {
+    align-items: flex-start;
+    max-width: 100%;
   }
 
   .ending-chat-composer__row {

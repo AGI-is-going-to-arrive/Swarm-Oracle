@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorldlineRoundtableView from './WorldlineRoundtableView';
 import { clearPretextCache } from '../lib/textLayout/pretext';
@@ -11,6 +11,7 @@ import {
 } from '../lib/textLayout/textOverflowPredictor';
 
 const {
+  createBaseStoreState,
   getMockLanguage,
   setMockLanguage,
   changeLanguageMock,
@@ -61,7 +62,128 @@ const {
     created_at: '2026-03-29T00:00:00Z',
     updated_at: '2026-03-29T00:00:01Z',
   }));
+  const createBaseStoreState = () => ({
+    snapshot: {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: {
+            agent_role: 'Marshal',
+          },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'opening',
+          participant_id: 'rep-a',
+          content: 'The first hinge was delayed too long.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+      result_ready: true,
+    },
+    result: {
+      summary: 'The roundtable converged on a single hinge.',
+      archivist_note: 'Summary-only crossline scope held.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Archive the hinge.',
+          moderator_focus: 'Keep the scope narrow.',
+          commentary: 'Done.',
+        },
+      ],
+    },
+    threadsById: {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Main Desk',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: [
+          {
+            id: 'turn-1',
+            room_id: 'room-1',
+            thread_id: 'thread-room',
+            sequence: 1,
+            phase: 'opening',
+            participant_id: 'rep-a',
+            content: 'The first hinge was delayed too long.',
+            emotion: 'focused',
+            created_at: '2026-03-29T00:00:00Z',
+          },
+        ],
+      },
+    },
+    threadOrder: ['thread-room'],
+    activeThreadId: 'thread-room',
+    interactionMode: 'archivist_route',
+    composerDraft: '',
+    scopeNotice: null,
+    sending: false,
+    status: 'done',
+    pendingDrafts: {},
+    openRoom,
+    loadRoom,
+    loadThread,
+    createThread,
+    appendUserTurn: vi.fn(async () => {}),
+    setActiveThread,
+    setInteractionMode,
+    setComposerDraft,
+    reset,
+  });
   return {
+    createBaseStoreState,
     getMockLanguage: () => currentLanguage,
     setMockLanguage: (language: string) => {
       currentLanguage = language;
@@ -90,126 +212,7 @@ const {
     saveOracleReplayLocalCopyMock: vi.fn((_payload: unknown) => 'local-roundtable'),
     copyTextMock: vi.fn(async (_value: string) => {}),
     wsMock: vi.fn(),
-    storeState: {
-      snapshot: {
-        id: 'room-1',
-        scenario_id: 'scenario-1',
-        anchor_branch_id: null,
-        room_type: 'worldline_roundtable',
-        title: 'Worldline Roundtable',
-        language: 'en',
-        status: 'done',
-        current_phase: 'verdict',
-        created_at: '2026-03-29T00:00:00Z',
-        updated_at: '2026-03-29T00:00:01Z',
-        memory_partition_id: 'room-partition',
-        participants: [
-          {
-            id: 'rep-a',
-            room_id: 'room-1',
-            role_slot: 'representative',
-            display_name: 'Representative A',
-            source_branch_id: 'branch-a',
-            source_agent_id: 'agent-a',
-            persona_snapshot_json: {
-              agent_role: 'Marshal',
-            },
-          },
-          {
-            id: 'archivist',
-            room_id: 'room-1',
-            role_slot: 'archivist',
-            display_name: 'Archivist',
-          },
-        ],
-        threads: [
-          {
-            id: 'thread-room',
-            room_id: 'room-1',
-            title: 'Main Desk',
-            mode: 'room',
-            interaction_mode: 'auto_recap',
-            participant_set_hash: 'hash-room',
-            memory_partition_id: 'room-partition',
-            created_at: '2026-03-29T00:00:00Z',
-            updated_at: '2026-03-29T00:00:01Z',
-          },
-        ],
-        turns: [
-          {
-            id: 'turn-1',
-            room_id: 'room-1',
-            thread_id: 'thread-room',
-            sequence: 1,
-            phase: 'opening',
-            participant_id: 'rep-a',
-            content: 'The first hinge was delayed too long.',
-            emotion: 'focused',
-            created_at: '2026-03-29T00:00:00Z',
-          },
-        ],
-        result_ready: true,
-      },
-      result: {
-        summary: 'The roundtable converged on a single hinge.',
-        archivist_note: 'Summary-only crossline scope held.',
-        phase_insights: [
-          {
-            phase: 'verdict',
-            stakes: 'Archive the hinge.',
-            moderator_focus: 'Keep the scope narrow.',
-            commentary: 'Done.',
-          },
-        ],
-      },
-      threadsById: {
-        'thread-room': {
-          id: 'thread-room',
-          room_id: 'room-1',
-          title: 'Main Desk',
-          mode: 'room',
-          interaction_mode: 'auto_recap',
-          participant_set_hash: 'hash-room',
-          memory_partition_id: 'room-partition',
-          created_at: '2026-03-29T00:00:00Z',
-          updated_at: '2026-03-29T00:00:01Z',
-          room_type: 'worldline_roundtable',
-          room_title: 'Worldline Roundtable',
-          room_status: 'done',
-          language: 'en',
-          turns: [
-            {
-              id: 'turn-1',
-              room_id: 'room-1',
-              thread_id: 'thread-room',
-              sequence: 1,
-              phase: 'opening',
-              participant_id: 'rep-a',
-              content: 'The first hinge was delayed too long.',
-              emotion: 'focused',
-              created_at: '2026-03-29T00:00:00Z',
-            },
-          ],
-        },
-      },
-      threadOrder: ['thread-room'],
-      activeThreadId: 'thread-room',
-      interactionMode: 'archivist_route',
-      composerDraft: '',
-      scopeNotice: null,
-      sending: false,
-      status: 'done',
-      pendingDrafts: {},
-      openRoom,
-      loadRoom,
-      loadThread,
-      createThread,
-      appendUserTurn: vi.fn(async () => {}),
-      setActiveThread,
-      setInteractionMode,
-      setComposerDraft,
-      reset,
-    },
+    storeState: createBaseStoreState(),
   };
 });
 
@@ -306,39 +309,73 @@ vi.mock('../game/managers/VizSynthesizer', () => ({
 
 beforeEach(() => {
   setMockLanguage('en');
-  createReplayArtifactMock.mockClear();
-  buildOracleReplayShareUrlMock.mockClear();
-  buildOracleReplayUrlMock.mockClear();
+  createReplayArtifactMock.mockReset();
+  createReplayArtifactMock.mockImplementation(async () => ({ id: 'artifact-1' }));
+  buildOracleReplayShareUrlMock.mockReset();
+  buildOracleReplayShareUrlMock.mockImplementation((_origin: string, _payload: unknown, artifactId: string) => `https://example.com/roundtable/replay?roomShare=${artifactId}`);
+  buildOracleReplayUrlMock.mockReset();
+  buildOracleReplayUrlMock.mockImplementation(async (_origin: string, _payload: unknown) => 'https://example.com/roundtable/replay?roomReplay=token');
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
   getScenarioMock.mockReset();
   getStoryMock.mockReset();
   importReplayScenarioMock.mockReset();
   loadOracleReplayLocalCopyMock.mockReset();
-  openRoomMock.mockClear();
-  loadRoomMock.mockClear();
-  loadThreadMock.mockClear();
-  createThreadMock.mockClear();
-  changeLanguageMock.mockClear();
-  setMockLanguage('en');
-  appendUserTurnMock.mockClear();
-  setActiveThreadMock.mockClear();
-  setInteractionModeMock.mockClear();
-    setComposerDraftMock.mockClear();
-    resetMock.mockClear();
-    saveOracleReplayLocalCopyMock.mockClear();
-    copyTextMock.mockClear();
-    wsMock.mockClear();
-    Object.defineProperty(window, 'scrollTo', {
-      value: vi.fn(),
-      writable: true,
-      configurable: true,
-    });
-    vi.stubGlobal('localStorage', {
-      getItem: vi.fn(() => null),
-      setItem: vi.fn(),
+  openRoomMock.mockReset();
+  openRoomMock.mockImplementation(async () => 'room-1');
+  loadRoomMock.mockReset();
+  loadRoomMock.mockImplementation(async () => {});
+  loadThreadMock.mockReset();
+  loadThreadMock.mockImplementation(async () => {});
+  createThreadMock.mockReset();
+  createThreadMock.mockImplementation(async () => ({
+    id: 'thread-hotseat',
+    room_id: 'room-1',
+    title: 'Hotseat Thread',
+    mode: 'followup',
+    interaction_mode: 'hotseat',
+    participant_set_hash: 'hash',
+    memory_partition_id: 'partition',
+    room_type: 'worldline_roundtable',
+    room_title: 'Worldline Roundtable',
+    room_status: 'done',
+    language: 'en',
+    turns: [],
+    created_at: '2026-03-29T00:00:00Z',
+    updated_at: '2026-03-29T00:00:01Z',
+  }));
+  changeLanguageMock.mockReset();
+  changeLanguageMock.mockImplementation(async (language: string) => {
+    setMockLanguage(language);
+  });
+  appendUserTurnMock.mockReset();
+  appendUserTurnMock.mockImplementation(async () => {});
+  setActiveThreadMock.mockReset();
+  setInteractionModeMock.mockReset();
+  setComposerDraftMock.mockReset();
+  resetMock.mockReset();
+  saveOracleReplayLocalCopyMock.mockReset();
+  saveOracleReplayLocalCopyMock.mockImplementation((_payload: unknown) => 'local-roundtable');
+  copyTextMock.mockReset();
+  copyTextMock.mockImplementation(async (_value: string) => {});
+  wsMock.mockReset();
+  Object.assign(storeState, createBaseStoreState());
+  Object.defineProperty(window, 'scrollTo', {
+    value: vi.fn(),
+    writable: true,
+    configurable: true,
+  });
+  vi.stubGlobal('localStorage', {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
     removeItem: vi.fn(),
   });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('WorldlineRoundtableView', () => {
@@ -1208,7 +1245,7 @@ describe('WorldlineRoundtableView', () => {
       selectionRecipe: 'trait_mix',
       language: 'en',
       selectedRepresentatives: [
-        { branchId: 'branch-a', agentId: 'agent-a1' },
+        { branchId: 'branch-a', agentId: 'agent-a2' },
         { branchId: 'branch-b', agentId: 'agent-b2' },
       ],
       selectedWitness: null,
@@ -1734,6 +1771,7 @@ describe('WorldlineRoundtableView', () => {
       participant_set_hash: 'hash-hotseat',
       memory_partition_id: 'thread-hotseat-partition',
       addressed_agent_ids_json: ['agent-a'],
+      question_anchor_ids_json: ['roundtable:verdict:room-1'],
       created_at: '2026-03-29T00:00:02Z',
       updated_at: '2026-03-29T00:00:03Z',
     });
@@ -1765,6 +1803,9 @@ describe('WorldlineRoundtableView', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
     expect(screen.getAllByText('Using the active roundtable thread only').length).toBeGreaterThan(0);
+    const threadRail = screen.getByRole('tablist', { name: 'Roundtable threads' });
+    expect(within(threadRail).getByText('Archive verdict')).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === 'Archive verdictArchive verdict')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
     expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();

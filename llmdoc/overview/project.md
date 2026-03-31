@@ -47,6 +47,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `phase insight` 级追问 / 开线程
   - transcript `quote` 级追问 / 开线程
 - `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
+- `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail 与 transcript header 显式显示当前 thread 的 anchor badge。
+- Oracle 自动化口径当前会输出：
+  - `question_anchor_ids`
+  - `thread_question_anchor_ids_json`
+  - `anchor_kind / anchor_label`
+  - `pending_question_anchor_ids`
 - ending-room / roundtable 的 replay/share/import 已完成专项签收。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
@@ -71,6 +77,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近一次 Oracle 专项签收工件位于：
   - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
+- 最近一轮 Oracle 0.3 锚点观测回归工件位于：
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
 - 当前仍在继续收口的内容：
   - follow-up 与经典模式的流式一致性
   - `pretext` 更深的 transcript 运行时稳定化（`P2+` 尚未启动）

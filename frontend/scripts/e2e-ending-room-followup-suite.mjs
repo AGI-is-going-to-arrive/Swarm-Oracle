@@ -52,6 +52,10 @@ async function getAutomationState(page) {
   return parseAutomationState(raw);
 }
 
+function anchorIdsEqual(left, right) {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function resolveBackendUrl(frontendUrl) {
   const url = new URL(frontendUrl);
   const localDevPort = /^1892[89]$|^1893\d$/;
@@ -203,6 +207,59 @@ async function waitForModalSettled(page, label, timeout = 20000) {
     },
     label,
     timeout,
+  );
+}
+
+async function createVerdictAnchoredThread(page, label) {
+  const summaryThreadButton = page.locator(".ending-chat-sidebar").getByRole("button", {
+    name: /Start anchored thread|另开线程/i,
+  }).first();
+  if (await summaryThreadButton.isVisible().catch(() => false)) {
+    await summaryThreadButton.click();
+  } else {
+    await page.getByRole("button", { name: /Continue from verdict|沿着当前结局继续追问|继续追问当前结局|继续追问/i }).first().click();
+    await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click();
+  }
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (
+        modalState?.interaction_mode === "thread_followup"
+        && (modalState?.thread_count ?? 0) >= 2
+        && (modalState?.question_anchor_ids?.length ?? 0) > 0
+        && modalState?.anchor_kind === "verdict"
+      ) {
+        return current;
+      }
+      return null;
+    },
+    label,
+    20000,
+  );
+}
+
+async function sendAnchoredFollowup(page, label) {
+  const sendButton = page.getByRole("button", { name: /Send|发送追问/i });
+  await sendButton.click();
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (
+        modalState?.interaction_mode === "thread_followup"
+        && (modalState?.turn_count ?? 0) > 0
+        && (modalState?.question_anchor_ids?.length ?? 0) > 0
+        && (modalState?.pending_question_anchor_ids?.length ?? 0) === 0
+      ) {
+        return current;
+      }
+      return null;
+    },
+    label,
+    20000,
   );
 }
 
@@ -406,11 +463,139 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     path.join(outputDir, "single-mobile-chamber.json"),
     JSON.stringify({ pickerState, state: automation, fit }, null, 2),
   );
+  await createVerdictAnchoredThread(page, "single ending verdict-anchored thread");
+  const anchoredState = await sendAnchoredFollowup(page, "single ending anchored follow-up commit");
+  await saveScreenshot(page, path.join(outputDir, "single-mobile-anchored-thread.png"));
+  fs.writeFileSync(
+    path.join(outputDir, "single-mobile-anchored-thread.json"),
+    JSON.stringify(anchoredState, null, 2),
+  );
+
+  const anchoredModalState = anchoredState?.page?.controls?.modal_state ?? null;
+  const anchoredThreadId = anchoredModalState?.active_thread_id ?? null;
+  const anchoredAnchorIds = anchoredModalState?.question_anchor_ids ?? [];
+  await armClipboardCapture(page);
+  let artifactReadonly = null;
+  let artifactImportedUrl = null;
+  let replayReadonly = null;
+  let replayReloaded = null;
+  let importedUrl = null;
+  let replayCoverageError = null;
+  try {
+    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    const shareReplayUrl = await waitForCapturedClipboardUrl(page, "single ending copied share permalink");
+    const sharePage = await context.newPage();
+    await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
+    artifactReadonly = await waitFor(
+      sharePage,
+      async () => {
+        const current = await getAutomationState(sharePage);
+        const modalState = current?.page?.controls?.modal_state;
+        if (
+          modalState?.read_only === true
+          && modalState?.can_import_replay === true
+          && (modalState?.active_thread_id ?? null) === anchoredThreadId
+          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
+          && modalState?.anchor_kind === "verdict"
+        ) {
+          return current;
+        }
+        return null;
+      },
+      "single ending artifact replay readonly state",
+      20000,
+    );
+    await saveScreenshot(sharePage, path.join(outputDir, "single-mobile-replay-artifact.png"));
+    fs.writeFileSync(
+      path.join(outputDir, "single-mobile-replay-artifact.json"),
+      JSON.stringify(artifactReadonly, null, 2),
+    );
+    await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
+      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+    }).last().click();
+    await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
+    artifactImportedUrl = sharePage.url();
+
+    await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+    await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
+    replayReadonly = await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        if (
+          modalState?.read_only === true
+          && modalState?.can_send === false
+          && (modalState?.active_thread_id ?? null) === anchoredThreadId
+          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
+          && modalState?.anchor_kind === "verdict"
+        ) {
+          return current;
+        }
+        return null;
+      },
+      "single ending replay readonly state",
+      20000,
+    );
+    await saveScreenshot(page, path.join(outputDir, "single-mobile-replay-readonly.png"));
+    fs.writeFileSync(
+      path.join(outputDir, "single-mobile-replay-readonly.json"),
+      JSON.stringify(replayReadonly, null, 2),
+    );
+    const replayReadonlyUrl = page.url();
+
+    await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
+      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+    }).last().click();
+    await page.waitForURL(/\/sim\//, { timeout: 15000 });
+    importedUrl = page.url();
+
+    const reloadPage = await context.newPage();
+    await reloadPage.goto(replayReadonlyUrl, { waitUntil: "domcontentloaded" });
+    replayReloaded = await waitFor(
+      reloadPage,
+      async () => {
+        const current = await getAutomationState(reloadPage);
+        const modalState = current?.page?.controls?.modal_state;
+        if (
+          modalState?.read_only === true
+          && modalState?.can_send === false
+          && (modalState?.active_thread_id ?? null) === anchoredThreadId
+          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
+          && modalState?.anchor_kind === "verdict"
+        ) {
+          return current;
+        }
+        return null;
+      },
+      "single ending readonly restore",
+      20000,
+    );
+    await saveScreenshot(reloadPage, path.join(outputDir, "single-mobile-replay-readonly-reloaded.png"));
+    fs.writeFileSync(
+      path.join(outputDir, "single-mobile-replay-readonly-reloaded.json"),
+      JSON.stringify(replayReloaded, null, 2),
+    );
+    await reloadPage.close();
+  } catch (error) {
+    replayCoverageError = String(error);
+    fs.writeFileSync(
+      path.join(outputDir, "single-mobile-replay-coverage-error.json"),
+      JSON.stringify({ error: replayCoverageError }, null, 2),
+    );
+  }
   await context.close();
   return {
     resultUrl,
     pickerState,
     modalState: automation?.page?.controls?.modal_state ?? null,
+    anchoredState: anchoredModalState,
+    artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
+    artifactImportedUrl,
+    replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
+    replayReloaded: replayReloaded?.page?.controls?.modal_state ?? null,
+    importedUrl,
+    replayCoverageError,
     fit,
   };
 }
@@ -634,6 +819,7 @@ async function main() {
     }
     if (args.mode === "mobile" || args.mode === "full") {
       summary.mobile = {
+        single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds),
         multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds),
       };
     }

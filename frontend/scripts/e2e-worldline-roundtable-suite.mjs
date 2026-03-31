@@ -141,6 +141,10 @@ async function readAutomation(page) {
   return typeof raw === "string" ? JSON.parse(raw) : raw;
 }
 
+function anchorIdsEqual(left, right) {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 async function waitForAutomation(page, predicate, timeout = 30000, label = "automation state") {
   const start = Date.now();
   while (Date.now() - start < timeout) {
@@ -205,6 +209,75 @@ async function sendComposer(page, prompt, modeText, options = {}) {
     },
     15000,
     `composer send ${modeText}`,
+  );
+}
+
+async function createVerdictAnchoredThread(page, label) {
+  const before = await readAutomation(page);
+  const beforeThreadCount = before?.page?.controls?.thread_count ?? 0;
+  const beforeThreadId = before?.page?.controls?.active_thread_id ?? null;
+  const quoteThreadButton = page
+    .locator(".ending-chat-bubble__actions")
+    .first()
+    .getByRole("button", { name: /Start anchored thread|另开线程/i });
+  if (await quoteThreadButton.isVisible().catch(() => false)) {
+    await quoteThreadButton.click();
+  } else {
+    const globalQuoteThreadButton = page.getByRole("button", { name: /Start anchored thread|另开线程/i }).last();
+    if (await globalQuoteThreadButton.isVisible().catch(() => false)) {
+      await globalQuoteThreadButton.click();
+    } else {
+      await page.getByRole("button", { name: /Archive Verdict|档案总结|档案结论/i }).first().click();
+      await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click();
+    }
+  }
+  return waitForAutomation(
+    page,
+    (payload) => {
+      const controls = payload.page?.controls;
+      if (!controls) return false;
+      return (
+        controls.interaction_mode === "thread_followup"
+        && (
+          (controls.thread_count ?? 0) > beforeThreadCount
+          || (controls.active_thread_id ?? null) !== beforeThreadId
+        )
+      );
+    },
+    20000,
+    label,
+  );
+}
+
+async function sendAnchoredFollowup(page, label) {
+  await page.waitForFunction(() => {
+    const input = document.querySelector(".ending-chat-composer__input");
+    return input instanceof HTMLTextAreaElement && input.value.trim().length > 0;
+  }, { timeout: 10000 });
+  await page.waitForFunction(() => {
+    const raw = window.render_game_to_text?.();
+    if (!raw) return false;
+    const payload = JSON.parse(raw);
+    return payload.page?.controls?.can_send === true;
+  }, { timeout: 10000 });
+  await page.locator(".ending-chat-send").click({ force: true });
+  await page.waitForFunction(() => {
+    const input = document.querySelector(".ending-chat-composer__input");
+    return input instanceof HTMLTextAreaElement && input.value.trim().length === 0;
+  }, { timeout: 10000 });
+  return waitForAutomation(
+    page,
+    (payload) => {
+      const controls = payload.page?.controls;
+      if (!controls) return false;
+      return (
+        controls.interaction_mode === "thread_followup"
+        && (controls.question_anchor_ids?.length ?? 0) > 0
+        && (controls.pending_question_anchor_ids?.length ?? 0) === 0
+      );
+    },
+    20000,
+    label,
   );
 }
 
@@ -471,6 +544,12 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   await focusHotseatThread(page, hotseat?.page?.controls?.active_thread_id ?? null);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseat);
+  await createVerdictAnchoredThread(page, "desktop verdict anchored thread");
+  const anchoredThread = await sendAnchoredFollowup(page, "desktop anchored follow-up commit");
+  const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
+  const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-anchored-thread.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-anchored-thread.json"), anchoredThread);
 
   await armClipboardCapture(page);
   await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
@@ -481,7 +560,10 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     sharePage,
     (payload) => payload.page?.kind === "worldline_roundtable"
       && payload.page?.controls?.is_read_only === true
-      && payload.page?.controls?.can_send === false,
+      && payload.page?.controls?.can_send === false
+      && payload.page?.controls?.active_thread_id === anchoredThreadId
+      && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+      && payload.page?.controls?.anchor_kind === "quote",
     15000,
     "roundtable artifact replay readonly state",
   );
@@ -497,7 +579,10 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     page,
     (payload) => payload.page?.kind === "worldline_roundtable"
       && payload.page?.controls?.is_read_only === true
-      && payload.page?.controls?.can_send === false,
+      && payload.page?.controls?.can_send === false
+      && payload.page?.controls?.active_thread_id === anchoredThreadId
+      && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+      && payload.page?.controls?.anchor_kind === "quote",
     15000,
     "roundtable replay readonly state",
   );
@@ -514,6 +599,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     witnessAugmented,
     archivist,
     hotseat,
+    anchoredThread,
     artifactReadonly,
     artifactImportedUrl,
     replayReadonly,
@@ -575,6 +661,12 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
   await focusHotseatThread(page, hotseatThreadId);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), hotseat);
+  await createVerdictAnchoredThread(page, "mobile verdict anchored thread");
+  const anchoredThread = await sendAnchoredFollowup(page, "mobile anchored follow-up commit");
+  const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
+  const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-anchored-thread.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-anchored-thread.json"), anchoredThread);
 
   await armClipboardCapture(page);
   let artifactReadonly = null;
@@ -593,8 +685,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
       (payload) => payload.page?.kind === "worldline_roundtable"
         && payload.page?.controls?.is_read_only === true
         && payload.page?.controls?.can_send === false
-        && payload.page?.controls?.interaction_mode === "hotseat"
-        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+        && payload.page?.controls?.interaction_mode === "thread_followup"
+        && payload.page?.controls?.active_thread_id === anchoredThreadId
+        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+        && payload.page?.controls?.anchor_kind === "quote",
       20000,
       "mobile roundtable artifact replay readonly state",
     );
@@ -605,8 +699,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
       sharePage,
       (payload) => payload.page?.kind === "worldline_roundtable"
         && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.interaction_mode === "hotseat"
-        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+        && payload.page?.controls?.interaction_mode === "thread_followup"
+        && payload.page?.controls?.active_thread_id === anchoredThreadId
+        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+        && payload.page?.controls?.anchor_kind === "quote",
       20000,
       "mobile roundtable artifact readonly restore",
     );
@@ -623,8 +719,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
       (payload) => payload.page?.kind === "worldline_roundtable"
         && payload.page?.controls?.is_read_only === true
         && payload.page?.controls?.can_send === false
-        && payload.page?.controls?.interaction_mode === "hotseat"
-        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+        && payload.page?.controls?.interaction_mode === "thread_followup"
+        && payload.page?.controls?.active_thread_id === anchoredThreadId
+        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+        && payload.page?.controls?.anchor_kind === "quote",
       20000,
       "mobile roundtable replay readonly state",
     );
@@ -635,8 +733,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
       page,
       (payload) => payload.page?.kind === "worldline_roundtable"
         && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.interaction_mode === "hotseat"
-        && payload.page?.controls?.active_thread_id === hotseatThreadId,
+        && payload.page?.controls?.interaction_mode === "thread_followup"
+        && payload.page?.controls?.active_thread_id === anchoredThreadId
+        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
+        && payload.page?.controls?.anchor_kind === "quote",
       20000,
       "mobile roundtable readonly restore",
     );
@@ -656,6 +756,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     faultLineFirst,
     witnessAugmented,
     hotseat,
+    anchoredThread,
     artifactReadonly,
     artifactReloaded,
     artifactImportedUrl,

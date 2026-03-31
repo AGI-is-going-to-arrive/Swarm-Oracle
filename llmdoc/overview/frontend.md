@@ -88,6 +88,7 @@
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
+| `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态 |
 | `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` 只读文本预测 / overflow contract |
 
@@ -113,6 +114,13 @@
   - `verdict / key_moment / quote / phase`
   - 都先落到显式 `questionAnchorIds`
   - `appendUserTurn()` 与 `createThread()` 两条链都带锚点语义，不再只靠 prompt 预填
+- `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail / transcript header 回显当前 thread 的 anchor badge，只显示用户可读 label，不直接暴露内部 ids。
+- Oracle 自动化状态当前会额外输出：
+  - `question_anchor_ids`
+  - `thread_question_anchor_ids_json`
+  - `pending_question_anchor_ids`
+  - `anchor_kind / anchor_label`
+- `roundtableSelection.ts` 当前承接 `trait_mix` 选择逻辑；`trait_mix / fault_line_first / witness_augmented` 的状态切换已补 no-op guard，避免对同一份 selection 反复写回。
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
   - `expert_witness`
@@ -123,8 +131,8 @@
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
 - 当前 Oracle mobile 专项脚本已覆盖：
-  - ending-room：`hotseat / all_present / crossline_gallery / artifact readonly / local readonly / reload restore / import`
-  - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
+  - ending-room：`mobile single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`，以及 `multi-ending hotseat / all_present / crossline gallery / artifact readonly / local readonly / reload restore / import`
+  - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / quote-anchor thread / artifact readonly / local readonly / reload restore / import`
 - roundtable replay 的自动化口径当前已修正：
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时

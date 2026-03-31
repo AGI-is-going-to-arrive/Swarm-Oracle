@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-31
-> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。
+> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。本轮再补：0.3 的锚点可观测性、thread/read-only 回显测试、自动化 summary 字段已全部落地；`trait_mix / fault_line_first / witness_augmented` 的选择状态也已补幂等保护，避免重复写回同一份 selection。
 
 ---
 
@@ -125,72 +125,63 @@
 - 为了做玩法而把 Oracle 做成通用群聊平台
 - 为了追求“像 MiroFish”而模糊“结局卡锚定 / 当前世界线锚定 / room/thread 隔离”这三条边界
 
-## 0.3 下次直接执行的高价值收口（未执行，直接按本节开工）
+## 0.3 本轮已执行的高价值收口（2026-03-31 已完成）
 
-下面三项当前**明确未执行**，保留为下一轮直接可做条目；它们不是本轮 blocker，但会决定这条线后续是否足够可观测、可回归、可维护。
+下面三项本轮已经落地到当前代码和回归口径里；后续仍可继续拷打，但不再属于“未执行”项。
 
 ### A. 给锚点做更强的可观测性
 
-目标：
-
-- 在线程 rail、scope notice 或 transcript header 中显式展示：
-  - 当前 thread 的 anchor label
-  - anchor kind
-  - 该 anchor 是否来自 `verdict / key_moment / quote / phase`
-
-最小实现建议：
+已完成：
 
 1. `EndingChatModal`
-   - 在 follow-up thread chip 或 transcript note 上增加 `anchor badge`
+   - thread rail 与 transcript header 当前都会显示当前 thread 的 `anchor badge`
 2. `WorldlineRoundtableView`
-   - 在 thread rail / transcript header 上增加 `anchor badge`
-3. badge 只显示用户可理解的 label，不直接暴露内部 `questionAnchorIds`
+   - thread rail 与 transcript header 当前也会显示 `anchor badge`
+3. 当前 badge 只显示用户可读的 `kind / label`，不直接把内部 ids 打到 UI 上
 
 ### B. 补 thread/read-only 的锚点回显测试
 
-目标：
-
-- 不只验证锚点进入 payload
-- 还要验证：
-  - readonly replay 下 thread 仍保留原 anchor 语义
-  - reload restore 后 anchor badge / scope note 仍正确
-  - import local run 后 anchor 相关只读语义不丢
-
-最小测试建议：
+已完成：
 
 1. frontend
-   - `EndingChatModal.test.tsx`
-   - `WorldlineRoundtableView.test.tsx`
+   - `EndingChatModal.test.tsx` 已补 read-only thread anchor badge 断言
+   - `WorldlineRoundtableView.test.tsx` 已补 read-only anchor badge 断言
 2. E2E
-   - ending-room / roundtable readonly replay
-   - reload restore
-   - import local run
+   - ending-room mobile single-ending 已验证：
+     - `verdict-anchor thread`
+     - `artifact readonly`
+     - `local readonly`
+     - `reload restore`
+     - `import local run`
+   - roundtable desktop / mobile 已验证：
+     - `quote-anchor thread`
+     - `artifact readonly`
+     - `local readonly`
+     - `reload restore`
+     - `import local run`
 
 ### C. 把自动化输出再细一点
 
-目标：
+已完成：
 
-- 当前 `render_game_to_text` 已足够判断链路是否通
-- 下一步应让自动化 summary 能显式带出：
-  - `active_thread_id`
-  - `interaction_mode`
-  - `question_anchor_ids`
-  - `thread.question_anchor_ids_json`
+1. `EndingChatModal` automation payload 当前会输出：
+   - `active_thread_id`
+   - `interaction_mode`
+   - `question_anchor_ids`
+   - `thread_question_anchor_ids_json`
+   - `pending_question_anchor_ids`
+   - `anchor_kind / anchor_label`
+2. `WorldlineRoundtableView` automation payload 当前也会输出同一套 anchor 字段
+3. 本轮回归工件已经把这些字段落进 `summary.json`
+   - `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
+   - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
+   - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
 
-最小实现建议：
+当前结论：
 
-1. `EndingChatModal` automation payload
-   - 当前 modal state 下追加 `active_question_anchor_ids`
-2. `WorldlineRoundtableView` automation payload
-   - 当前 page controls 或 scene 附加 `active_question_anchor_ids`
-3. E2E summary
-   - 将 anchor 信息落到 `summary.json`
-
-执行原则：
-
-- 这三项只做“观测与 QA”，不扩玩法边界
-- 不允许为做可观测性而引入新的跨线读取
-- 不允许因为测试便利而弱化 room/thread membrane
+- 这三项已经进入当前真值，不再是“待做”
+- 后续如果继续回归，只需要继续拷打 readonly / reload / import 是否保持同一 anchor thread 语义
+- 不需要为了继续做观测再扩大 room/thread 边界
 
 ---
 

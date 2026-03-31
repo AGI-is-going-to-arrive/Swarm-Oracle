@@ -15756,3 +15756,48 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `artifactReadonly.interaction_mode = hotseat`
     - `replayReadonly.interaction_mode = hotseat`
     - `replayCoverageError = null`
+
+## 2026-03-31 Oracle anchor observability + doc sync pass
+
+- 本轮代码增量：
+  - `frontend/src/components/EndingChatModal.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - thread rail / transcript header 当前会显示 anchor badge
+    - automation payload 当前会显式带：
+      - `question_anchor_ids`
+      - `thread_question_anchor_ids_json`
+      - `pending_question_anchor_ids`
+      - `anchor_kind / anchor_label`
+  - `frontend/src/lib/roundtableSelection.ts`
+  - `frontend/src/lib/roundtableSelection.test.ts`
+    - 抽出 `trait_mix` 选择逻辑纯函数
+    - 修复 `chooseTraitMixRepresentatives()` 幂等性
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - `trait_mix / fault_line_first / witness_augmented` 已补 no-op state guard，避免重复写回相同 selection
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - summary 当前会落出 anchor thread 的 readonly / reload / import 口径
+
+- 文档同步：
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+    - 已按当前代码与工件口径同步 0.3 完成状态
+
+- 本轮验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/lib/roundtableSelection.test.ts --maxWorkers=1 --reporter=basic --testTimeout=10000`
+    - `35 passed`
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
+  - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
+    - ending-room `verdict-anchor`
+    - roundtable `quote-anchor`
+    - 在 live -> readonly -> reload/import 间都能保留同一 thread / anchor 语义
+
+- 当前结论：
+  - 0.3 这一轮现在已经不是“未执行”，而是当前真值的一部分
+  - 临时 `recipe-debug` 日志与组件内 debug hook 已清理
+  - 当前剩余没有新的已知 blocker

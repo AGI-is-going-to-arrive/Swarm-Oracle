@@ -189,6 +189,91 @@ describe('EndingChatModal', () => {
     expect(storeState.openRoom).not.toHaveBeenCalled();
   });
 
+  it('renders anchor badges for a read-only replay thread', () => {
+    const replaySnapshot: any = {
+      id: 'room-replay',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      result_ready: true,
+      participants: [
+        {
+          id: 'p-1',
+          room_id: 'room-replay',
+          role_slot: 'agent',
+          source_agent_id: 'agent-1',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-replay',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+        {
+          id: 'thread-quote',
+          room_id: 'room-replay',
+          title: 'Archivist',
+          mode: 'followup',
+          interaction_mode: 'thread_followup',
+          participant_set_hash: 'hash-quote',
+          memory_partition_id: 'thread-partition',
+          question_anchor_ids_json: ['ending:quote:branch-1:turn-quote'],
+          created_at: '2026-03-29T00:00:02Z',
+          updated_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-quote',
+          room_id: 'room-replay',
+          thread_id: 'thread-quote',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Replay quote to preserve.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:02Z',
+        },
+      ],
+    };
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly
+        replayState={{
+          snapshot: replaySnapshot,
+          result: { summary: 'Replay verdict.' },
+          activeThreadId: 'thread-quote',
+        }}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const threadRail = screen.getByRole('tablist', { name: 'Follow-up threads' });
+    expect(within(threadRail).getByText('Quote')).toBeInTheDocument();
+    expect(screen.getByText('Quote · Replay quote to preserve.')).toBeInTheDocument();
+  });
+
   it('keeps a read-only contract for committed and draft bubble sizing', () => {
     clearPretextCache();
 
@@ -382,6 +467,7 @@ describe('EndingChatModal', () => {
           interaction_mode: 'thread_followup',
           participant_set_hash: 'hash-thread',
           memory_partition_id: 'thread-partition',
+          question_anchor_ids_json: ['ending:key_moment:branch-1:0'],
           created_at: '2026-03-29T00:00:02Z',
           updated_at: '2026-03-29T00:00:03Z',
         },
@@ -455,6 +541,9 @@ describe('EndingChatModal', () => {
     expect(screen.getAllByText('Follow-up Thread').length).toBeGreaterThan(0);
     expect(screen.getByText('Current participants')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    const threadRail = screen.getByRole('tablist', { name: 'Follow-up threads' });
+    expect(within(threadRail).getByText('Key moment')).toBeInTheDocument();
+    expect(screen.getByText('Key moment · Moment 1')).toBeInTheDocument();
     const threadBubble = screen.getByText('Thread-local answer.').closest('article');
     expect(threadBubble).not.toBeNull();
     const threadBubbleScope = within(threadBubble as HTMLElement);
@@ -560,7 +649,7 @@ describe('EndingChatModal', () => {
 
     await user.click(threadBubbleScope.getByRole('button', { name: 'Start anchored thread' }));
     await waitFor(() => expect(storeState.createThread).toHaveBeenCalledWith('room-1', {
-      title: null,
+      title: 'Archivist',
       questionAnchorIds: ['ending:quote:branch-1:turn-1'],
       interactionMode: 'thread_followup',
     }));
