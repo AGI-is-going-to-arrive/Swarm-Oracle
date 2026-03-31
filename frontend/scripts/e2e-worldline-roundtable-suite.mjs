@@ -212,7 +212,17 @@ async function sendComposer(page, prompt, modeText, options = {}) {
   );
 }
 
+async function waitForDraftBubblesToSettle(page, label) {
+  await page.waitForFunction(
+    () => document.querySelectorAll(".ending-chat-bubble--draft").length === 0,
+    { timeout: 20000 },
+  ).catch(() => {
+    throw new Error(`Timed out waiting for ${label}`);
+  });
+}
+
 async function createVerdictAnchoredThread(page, label) {
+  await waitForDraftBubblesToSettle(page, `${label} draft settle`);
   const before = await readAutomation(page);
   const beforeThreadCount = before?.page?.controls?.thread_count ?? 0;
   const beforeThreadId = before?.page?.controls?.active_thread_id ?? null;

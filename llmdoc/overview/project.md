@@ -81,8 +81,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
   - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
   - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
+- 最近一轮 Oracle 流式 hardening 工件位于：
+  - `frontend/output/e2e/20260331-codex-followup-hardening-full/summary.json`
+  - `frontend/output/e2e/20260331-codex-roundtable-hardening-desktop-rerun/summary.json`
+  - `frontend/output/e2e/20260331-codex-roundtable-hardening-mobile-rerun/summary.json`
+  - `frontend/output/e2e/20260331-codex-followup-hardening-mobile-rerun5/summary.json`
 - 当前仍在继续收口的内容：
-  - follow-up 与经典模式的流式一致性
+  - follow-up 与经典模式的更深流式一致性
+    - 本轮已补 `endingRoomStore` stale draft 清理、`llm_call_stream()` streaming probe 变量缺失，以及 mobile `all_present` E2E timeout 阻塞
   - `pretext` 更深的 transcript 运行时稳定化（`P2+` 尚未启动）
   - Oracle 更深的回归、跨浏览器与 corner-case hardening
 

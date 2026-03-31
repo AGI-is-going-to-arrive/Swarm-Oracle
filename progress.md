@@ -15801,3 +15801,23 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - 0.3 这一轮现在已经不是“未执行”，而是当前真值的一部分
   - 临时 `recipe-debug` 日志与组件内 debug hook 已清理
   - 当前剩余没有新的已知 blocker
+
+## 2026-03-31 Follow-up hardening pass
+
+- 目标：继续完成 23 线当前真待办，先收口 follow-up/classic mode 流式一致性与 regression hardening。
+- 已定位缺口：ending-room store 在 committed turn 之后仍可能被迟到的 turn_start/turn_delta 重新生成 ghost draft；room/thread resync 拉回 committed turn 时也不会顺手清残留 draft。
+- 本轮先改 store + 回归测试，随后跑前端定向测试、typecheck 与 Playwright QA。
+
+- 已完成：ending-room store 增加 committed-turn draft 清理与迟到流事件忽略，避免 ghost draft 在 commit 或 resync 后复活。
+- 已完成：补 3 条 store 回归测试，覆盖 late draft / snapshot resync / thread hydrate 三类场景。
+- 已完成：roundtable E2E 脚本在 verdict 锚点开线程前等待 draft bubble 清空，修复 hotseat 流式尚未 commit 时的假阴性超时。
+- 验证：frontend store/UI/WS 定向测试 49/49 通过；TS typecheck 通过；frontend build 通过；backend ending-room 定向回归 84 passed。
+- Playwright：`20260331-codex-followup-hardening-full` 通过；roundtable 初次 full 暴露脚本时序脆弱，修脚本后 desktop/mobile rerun 通过。
+
+- 追加修复：backend `llm_call_stream()` 补回 `estimated_tokens` 计算，消除 Oracle follow-up stream probe 的 `name 'estimated_tokens' is not defined` 真异常。
+- 追加验证：`tests/test_llm_client.py -k stream_retries_before_first_content or probe_streaming_support` 3 passed；Oracle ending-room backend 回归 84 passed。
+- 浏览器复核：修复后 backend 日志中已不再出现 `estimated_tokens` 未定义；真实 follow-up 链路仍可走通。
+- 剩余 QA 阻塞：`e2e-ending-room-followup-suite.mjs mobile` 的 multi-ending `all_present` 仍存在时序脆弱，当前失败点为 `mobile all-present follow-up state`；这属于脚本等待条件问题，非本轮代码修复引入的编译/单测回归。
+
+- 追加收口：mobile follow-up/all_present 的 E2E 成功条件改为接受线程切回主桌、sending 中或 draft 中，不再死盯 turn_count 增长。
+- 追加结果：`e2e-ending-room-followup-suite.mjs mobile` 已跑通，原先唯一剩余的 mobile all_present timeout 阻塞已解除。

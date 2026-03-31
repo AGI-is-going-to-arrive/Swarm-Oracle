@@ -1659,6 +1659,7 @@ async def llm_call_stream(
     target_key = api_key or settings.LLM_API_KEY
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
+    estimated_tokens = max(1, _estimate_tokens(input_text))
 
     payload: dict[str, Any] = {
         "model": model or settings.LLM_MODEL_NAME,

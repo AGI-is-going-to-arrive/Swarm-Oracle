@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-31
-> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。本轮再补：0.3 的锚点可观测性、thread/read-only 回显测试、自动化 summary 字段已全部落地；`trait_mix / fault_line_first / witness_augmented` 的选择状态也已补幂等保护，避免重复写回同一份 selection。
+> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。本轮再补：0.3 的锚点可观测性、thread/read-only 回显测试、自动化 summary 字段已全部落地；`trait_mix / fault_line_first / witness_augmented` 的选择状态也已补幂等保护，避免重复写回同一份 selection。本 session 再补：`endingRoomStore` 当前会在 committed turn / room-thread hydrate 时清 stale draft，迟到 `turn_start / turn_delta` 不再复活 ghost bubble；`llm_call_stream()` 的 `estimated_tokens` 预估已补回，Oracle follow-up stream probe 不再因为变量缺失误触发 fallback；`e2e-worldline-roundtable-suite` 的 verdict anchored thread 与 `e2e-ending-room-followup-suite` 的 mobile `all_present` timeout 也已收口。
 
 ---
 
@@ -57,6 +57,7 @@
      - `assistant turn_delta`
      - `assistant turn_commit`
    - provider 不支持 stream 时，会先探测，再自动回退到非流式生成 + 伪流式 delta 收口
+   - `llm_call_stream()` 的 `estimated_tokens` 预估当前已补回，stream probe 不再因为变量缺失误判成 fallback
 6. Oracle 文案层
    - 已完成 `LLM-first + deterministic fallback`
    - 已完成 `recent lines` 去重
@@ -97,9 +98,6 @@
 3. 更进一步的玩法扩展
    - `后续三回合`
    - `证据投牌`
-4. 锚点可观测性与回显
-   - 当前锚点语义已入 payload / 持久化，但 UI 还没有把“这个线程由哪个 anchor 发起”显式展示成 badge / scope notice
-
 ### 后续执行的硬优先级
 
 后续不要再泛泛说“继续优化 UI 交互”。下一阶段的正确顺序固定为：

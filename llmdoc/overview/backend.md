@@ -85,6 +85,7 @@
   - pending/quota 控制
   - circuit breaker
   - 共享 `httpx.AsyncClient`
+- Oracle follow-up 的 stream support probe 当前复用 `llm_call_stream()`；`estimated_tokens` 预估已补回，不再因为 probe 自身变量缺失而误触发 fallback。
 - 当多个 backend worker 共用同一个 SQLite 文件时：
   - pending/quota 共享计数会生效
   - runtime lock 会跨进程共享

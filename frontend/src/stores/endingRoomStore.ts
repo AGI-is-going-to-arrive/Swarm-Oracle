@@ -212,6 +212,37 @@ function mergeThreadsById(
   return next;
 }
 
+function collectCommittedTurnIds(
+  snapshot: EndingRoomSnapshot | null,
+  threadsById: Record<string, EndingRoomThreadSnapshot>,
+): Set<string> {
+  const committedTurnIds = new Set<string>();
+  snapshot?.turns.forEach((turn) => committedTurnIds.add(turn.id));
+  Object.values(threadsById).forEach((thread) => {
+    thread.turns.forEach((turn) => committedTurnIds.add(turn.id));
+  });
+  return committedTurnIds;
+}
+
+function prunePendingDrafts(
+  pendingDrafts: Record<string, EndingRoomDraft>,
+  committedTurnIds: Set<string>,
+): Record<string, EndingRoomDraft> {
+  if (Object.keys(pendingDrafts).length === 0) {
+    return pendingDrafts;
+  }
+  let changed = false;
+  const next: Record<string, EndingRoomDraft> = {};
+  Object.entries(pendingDrafts).forEach(([turnId, draft]) => {
+    if (committedTurnIds.has(turnId)) {
+      changed = true;
+      return;
+    }
+    next[turnId] = draft;
+  });
+  return changed ? next : pendingDrafts;
+}
+
 function mergeSnapshot(
   current: EndingRoomSnapshot | null,
   incoming: EndingRoomSnapshot,
@@ -293,6 +324,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       status: merged.status,
       language: merged.language,
     });
+    const committedTurnIds = collectCommittedTurnIds(merged, threadsById);
     const threadOrder = sortThreads(merged.threads).map((thread) => thread.id);
     const defaultThreadId = resolveDefaultThreadId(merged);
     return {
@@ -306,7 +338,9 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       error: null,
       errorCode: null,
       result: state.result && state.snapshot?.id === merged.id ? state.result : state.result,
-      pendingDrafts: merged.status === 'done' || merged.status === 'error' ? {} : state.pendingDrafts,
+      pendingDrafts: merged.status === 'done' || merged.status === 'error'
+        ? {}
+        : prunePendingDrafts(state.pendingDrafts, committedTurnIds),
     };
   }),
 
@@ -318,6 +352,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       status: merged.status,
       language: merged.language,
     });
+    const committedTurnIds = collectCommittedTurnIds(merged, threadsById);
     return {
       snapshot: merged,
       threadsById,
@@ -329,20 +364,27 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       status: resolveStateStatus(payload.status),
       error: null,
       errorCode: null,
-      pendingDrafts: payload.status === 'done' || payload.status === 'error' ? {} : state.pendingDrafts,
+      pendingDrafts: payload.status === 'done' || payload.status === 'error'
+        ? {}
+        : prunePendingDrafts(state.pendingDrafts, committedTurnIds),
     };
   }),
 
-  hydrateThread: (thread) => set((state) => ({
-    threadsById: {
+  hydrateThread: (thread) => set((state) => {
+    const threadsById = {
       ...state.threadsById,
       [thread.id]: mergeThreadSnapshot(state.threadsById[thread.id], thread),
-    },
-    threadOrder: state.threadOrder.includes(thread.id)
-      ? state.threadOrder
-      : [...state.threadOrder, thread.id],
-    activeThreadId: state.activeThreadId ?? thread.id,
-  })),
+    };
+    const committedTurnIds = collectCommittedTurnIds(state.snapshot, threadsById);
+    return {
+      threadsById,
+      threadOrder: state.threadOrder.includes(thread.id)
+        ? state.threadOrder
+        : [...state.threadOrder, thread.id],
+      activeThreadId: state.activeThreadId ?? thread.id,
+      pendingDrafts: prunePendingDrafts(state.pendingDrafts, committedTurnIds),
+    };
+  }),
 
   setPhase: (phase) => set((state) => {
     if (!state.snapshot) return state;
@@ -378,7 +420,11 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     return next;
   }),
 
-  startDraft: (payload) => set((state) => ({
+  startDraft: (payload) => set((state) => {
+    if (collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)) {
+      return state;
+    }
+    return {
       pendingDrafts: {
         ...state.pendingDrafts,
         [payload.turn_id]: {
@@ -389,10 +435,14 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
           sequence: payload.sequence,
           content: '',
         },
-    },
-  })),
+      },
+    };
+  }),
 
   appendDraft: (payload) => set((state) => {
+    if (collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)) {
+      return state;
+    }
     const current = state.pendingDrafts[payload.turn_id];
     return {
       pendingDrafts: {

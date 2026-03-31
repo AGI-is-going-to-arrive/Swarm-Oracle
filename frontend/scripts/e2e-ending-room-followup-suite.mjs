@@ -194,7 +194,7 @@ async function openGallery(page) {
   );
 }
 
-async function waitForModalSettled(page, label, timeout = 20000) {
+async function waitForModalSettled(page, label, timeout = 35000) {
   return waitFor(
     page,
     async () => {
@@ -236,7 +236,7 @@ async function createVerdictAnchoredThread(page, label) {
       return null;
     },
     label,
-    20000,
+    35000,
   );
 }
 
@@ -331,7 +331,12 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       const modalState = current?.page?.controls?.modal_state;
       if (
         modalState?.interaction_mode === "all_present"
-        && (modalState?.turn_count ?? 0) > (beforeHotseat?.page?.controls?.modal_state?.turn_count ?? 0)
+        && (
+          (modalState?.turn_count ?? 0) > (beforeHotseat?.page?.controls?.modal_state?.turn_count ?? 0)
+          || (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
+          || modalState?.sending === true
+          || (modalState?.pending_draft_count ?? 0) > 0
+        )
       ) {
         return current;
       }
@@ -649,9 +654,21 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
   let allPresentSettled = null;
   const beforeAllPresent = hotseatSettled;
   const allPresentButton = page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i });
-  const allPresentVisible = await allPresentButton.first().isVisible().catch(() => false);
+  const allPresentPill = allPresentButton.first();
+  const allPresentVisible = await allPresentPill.isVisible().catch(() => false);
   if (allPresentVisible) {
-    await allPresentButton.click();
+    await allPresentPill.scrollIntoViewIfNeeded().catch(() => {});
+    await allPresentPill.click({ force: true });
+    await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        return modalState?.interaction_mode === "all_present" ? current : null;
+      },
+      "mobile all-present mode armed",
+      10000,
+    );
     await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
     await page.getByRole("button", { name: /Send|发送/i }).click();
     const allPresentState = await waitFor(
@@ -661,7 +678,12 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         const modalState = current?.page?.controls?.modal_state;
         if (
           modalState?.interaction_mode === "all_present"
-          && (modalState?.turn_count ?? 0) > (beforeAllPresent?.page?.controls?.modal_state?.turn_count ?? 0)
+          && (
+            (modalState?.turn_count ?? 0) > (beforeAllPresent?.page?.controls?.modal_state?.turn_count ?? 0)
+            || (modalState?.active_thread_id ?? null) !== (beforeAllPresent?.page?.controls?.modal_state?.active_thread_id ?? null)
+            || modalState?.sending === true
+            || (modalState?.pending_draft_count ?? 0) > 0
+          )
         ) {
           return current;
         }

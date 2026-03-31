@@ -206,6 +206,188 @@ describe('endingRoomStore', () => {
     expect(useEndingRoomStore.getState().threadsById['thread-room']?.turns[0]?.content).toBe('Room transcript is present.');
   });
 
+  it('ignores late draft events once the turn has already been committed', () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+
+    useEndingRoomStore.getState().commitTurn({
+      id: 'turn-committed',
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      sequence: 3,
+      phase: 'verdict',
+      participant_id: 'p-1',
+      content: 'Committed answer.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:02Z',
+    });
+
+    useEndingRoomStore.getState().startDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-committed',
+      participant_id: 'p-1',
+      phase: 'verdict',
+      sequence: 3,
+    });
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-committed',
+      participant_id: 'p-1',
+      delta: 'late delta',
+      chunk_index: 99,
+    });
+
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+    expect(useEndingRoomStore.getState().threadsById['thread-room']?.turns[0]?.content).toBe('Committed answer.');
+  });
+
+  it('drops stale pending drafts when a resync snapshot already contains the committed turn', () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+
+    useEndingRoomStore.getState().startDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-ghost',
+      participant_id: 'p-1',
+      phase: 'verdict',
+      sequence: 5,
+    });
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-ghost',
+      participant_id: 'p-1',
+      delta: 'ghost draft',
+      chunk_index: 1,
+    });
+
+    expect(useEndingRoomStore.getState().pendingDrafts['turn-ghost']?.content).toBe('ghost draft');
+
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:02Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [
+        {
+          id: 'turn-ghost',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 5,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Committed after resync.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:02Z',
+        },
+      ],
+      result_ready: true,
+    });
+
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+    expect(useEndingRoomStore.getState().threadsById['thread-room']?.turns[0]?.content).toBe('Committed after resync.');
+  });
+
+  it('drops stale pending drafts when a thread hydrate brings back the committed turn', () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    useEndingRoomStore.getState().hydrateThread({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Investigate the hinge',
+    });
+
+    useEndingRoomStore.getState().startDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      turn_id: 'turn-followup',
+      participant_id: 'p-1',
+      phase: 'verdict',
+      sequence: 6,
+    });
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      turn_id: 'turn-followup',
+      participant_id: 'p-1',
+      delta: 'thread ghost draft',
+      chunk_index: 1,
+    });
+
+    useEndingRoomStore.getState().hydrateThread({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Investigate the hinge',
+      turns: [
+        {
+          id: 'turn-followup',
+          room_id: 'room-1',
+          thread_id: 'thread-followup',
+          sequence: 6,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Committed inside thread.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+    });
+
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+    expect(useEndingRoomStore.getState().threadsById['thread-followup']?.turns[0]?.content).toBe('Committed inside thread.');
+  });
+
   it('creates a follow-up thread and switches the active thread', async () => {
     useEndingRoomStore.getState().hydrateSnapshot({
       id: 'room-1',
