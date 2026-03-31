@@ -89,8 +89,15 @@
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
-| `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态 |
+| `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态；`worldlineRoundtableStore` 是 `endingRoomStore` 的 re-export |
 | `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` helper、Oracle transcript layout kernel、overflow contract |
+| `useTranscriptScroll.ts` | `frontend/src/hooks/useTranscriptScroll.ts` | `EndingChatModal` 与 `WorldlineRoundtableView` 共享的 transcript scroll 锚定 hook |
+| `roundtableHelpers.ts` | `frontend/src/pages/roundtableHelpers.ts` | 圆桌纯函数：选型模式、锚点构建、fault-line 算法、anchor 描述 |
+| `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
+| `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
+| `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
+| `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择） |
+| `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作） |
 
 ## 当前边界
 
@@ -195,10 +202,22 @@
   - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`），当前复用已有场景图作为占位。
   - `inferSceneThemeFromQuestion()` 通过关键词匹配自动路由到新主题。
 
+## 设计 Token 体系
+
+- 全局 token 定义在 `frontend/src/index.css` 的 `:root` 中（OKLCH 色彩空间）。
+- 当前包含：背景色、主色、语义色、文本色、边框、阴影、圆角、字体栈、流体文本尺度、过渡曲线、间距缩放、z-index 层级、状态 badge 色、Oracle 暗色覆层 token。
+- GBC 像素风 token 在 `frontend/src/game/game.css` 中独立定义。
+- Oracle 皮肤（按 gameplay profile 动态切换）在 `WorldlineRoundtable.css` 和 `EndingChatModal.css` 中通过 `.oracle-skin--{id}` 类选择器覆盖。
+- 结果页押注 badge 颜色已迁移到 CSS 变量（`--color-success-bg` / `--color-danger-bg` 等），不再硬编码 hex。
+
 ## 查找路径
 
 - 查页面入口：`frontend/src/pages/*`
+- 查页面 helper：`frontend/src/pages/*Helpers.ts`
+- 查组件 helper：`frontend/src/components/*Helpers.ts`
 - 查 store：`frontend/src/stores/*`
 - 查 lib/helper：`frontend/src/lib/*`
+- 查 hooks：`frontend/src/hooks/*`
 - 查 Theater：`frontend/src/game/*`
+- 查设计 token：`frontend/src/index.css`
 - 查开发/签收命令：`llmdoc/guides/development.md`

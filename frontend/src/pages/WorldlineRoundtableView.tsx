@@ -18,8 +18,6 @@ import {
 import {
   chooseRepresentativeDefaults,
   chooseTraitMixRepresentatives,
-  detectCandidateVoiceVariant,
-  extractBranchLexicon,
 } from '../lib/roundtableSelection';
 import {
   buildOracleReplayLocalUrl,
@@ -51,10 +49,38 @@ import {
   inferGameplayProfile,
 } from '../components/gameplayCards';
 import { ORACLE_UI_ASSETS } from '../lib/themeRegistry';
-import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { useWorldlineRoundtableWS } from '../hooks/useWorldlineRoundtableWS';
 import { useWorldlineRoundtableStore } from '../stores/worldlineRoundtableStore';
+import {
+  type AnchorAction,
+  type AnchorSummary,
+  type RoundtableSelectionMode,
+  type WitnessCandidate,
+  MANUAL_SHORTLIST_MIN,
+  MANUAL_SHORTLIST_MAX,
+  ROUNDTABLE_COLLAPSED_TURN_MAX_LINES,
+  isRoundtableParticipant,
+  getParticipantSprite,
+  getThreadLabel,
+  getParticipantImpactScore,
+  getSelectionReasonLabel,
+  getArchivistModeLabel,
+  getRepresentativeHotseatLabel,
+  getRoundtableModeNote,
+  buildRoundtableVerdictPrompt,
+  buildRoundtablePhasePrompt,
+  buildRoundtableAnchorId,
+  buildRoundtableQuotePrompt,
+  branchListChanged,
+  sameWitnessSelection,
+  describeRoundtableAnchor,
+  normalizeManualShortlist,
+  buildDefaultManualShortlist,
+  chooseFaultLineBranchIds,
+  chooseWitnessAugmentedSelection,
+  buildReplayThreads,
+} from './roundtableHelpers';
 import type {
   AgentInfo,
   EndingRoomParticipant,
@@ -65,310 +91,10 @@ import type {
   Scenario,
   StoryData,
 } from '../types';
+import RoundtablePickerPanel from './RoundtablePickerPanel';
+import RoundtableTranscriptList from './RoundtableTranscriptList';
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
-
-function isRoundtableParticipant(participant: EndingRoomParticipant) {
-  return participant.role_slot === 'representative';
-}
-
-function getParticipantSprite(participant: EndingRoomParticipant) {
-  const agentRole = String(participant.persona_snapshot_json?.agent_role ?? '');
-  return `/assets/characters/${mapRoleToSpriteId(agentRole, participant.display_name)}.png`;
-}
-
-function getThreadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean) {
-  return thread.mode === 'room'
-    ? (isZh ? '主桌记录' : 'Main table')
-    : thread.title;
-}
-
-function getParticipantImpactScore(participant: EndingRoomParticipant) {
-  return Number(participant.persona_snapshot_json?.impact_score ?? 0);
-}
-
-function getSelectionReasonLabel(reason: string, isZh: boolean) {
-  switch (reason) {
-    case 'user_selected':
-      return isZh ? '你点的' : 'Your pick';
-    case 'fallback':
-    case 'fallback_cast':
-      return isZh ? '兜底阵容' : 'Fallback lineup';
-    case 'top_impact':
-      return isZh ? '高影响代表' : 'High impact';
-    default:
-      return reason
-        ? (isZh ? `原因：${reason}` : reason)
-        : '';
-  }
-}
-
-function getArchivistModeLabel(isZh: boolean): string {
-  return isZh ? '档案官主持' : 'Archivist lead';
-}
-
-function getRepresentativeHotseatLabel(isZh: boolean): string {
-  return isZh ? '点名代表' : 'Question one representative';
-}
-
-function getRoundtableModeNote(
-  mode: EndingRoomThreadSnapshot['interaction_mode'],
-  isZh: boolean,
-  selectedName?: string | null,
-): string {
-  if (mode === 'hotseat') {
-    return selectedName
-      ? (isZh
-        ? `只追问 ${selectedName}，适合看这条线如何为自己辩解。`
-        : `Push only ${selectedName} when you want this worldline to defend itself.`)
-      : (isZh
-        ? '只追问一个代表，适合把这条线的解释问透。'
-        : 'Question one representative when you want a single worldline to answer cleanly.');
-  }
-  if (mode === 'thread_followup') {
-    return isZh
-      ? '把一个具体分歧留在单独线程里继续追，不让主桌记录变成杂音堆叠。'
-      : 'Keep one concrete disagreement in its own follow-up thread so the main table stays legible.';
-  }
-  return isZh
-    ? '先让档案官收束争点，再把问题抛回最相关的代表。'
-    : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
-}
-
-function buildRoundtableVerdictPrompt(summary: string, isZh: boolean): string {
-  const trimmed = summary.trim();
-  if (!trimmed) {
-    return isZh
-      ? '沿着当前圆桌继续追问：这桌最后为什么会收敛成这个结论？'
-      : 'Continue from this table: why did the roundtable settle on this verdict?';
-  }
-  return isZh
-    ? `沿着当前圆桌继续追问：为什么“${trimmed}”会成为这桌结论？`
-    : `Continue from this table: why did "${trimmed}" become the table verdict?`;
-}
-
-function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean): string {
-  const trimmed = stakes.trim();
-  if (!trimmed) {
-    return isZh
-      ? `围绕“${label}”这一阶段继续追问：这一轮真正的分歧是什么？`
-      : `Push on "${label}": what was the real disagreement in this phase?`;
-  }
-  return isZh
-    ? `围绕“${label}”这一阶段继续追问：${trimmed}`
-    : `Push on "${label}": ${trimmed}`;
-}
-
-function buildRoundtableAnchorId(kind: 'verdict' | 'phase' | 'quote', scope: string, extra?: string | number): string {
-  return extra == null
-    ? `roundtable:${kind}:${scope}`
-    : `roundtable:${kind}:${scope}:${String(extra)}`;
-}
-
-function trimQuoteSnippet(content: string, maxLength = 120): string {
-  const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength).trimEnd()}…`;
-}
-
-function buildRoundtableQuotePrompt(speaker: string, content: string, isZh: boolean): string {
-  const snippet = trimQuoteSnippet(content);
-  return isZh
-    ? `沿着这句继续追问：${speaker} 提到“${snippet}”。这句真正卡住了本桌哪条分歧？`
-    : `Follow this quote: ${speaker} said "${snippet}". Which disagreement on this table does that line actually lock in?`;
-}
-
-type RoundtableSelectionMode = RoundtableSelectionRecipe;
-
-const MANUAL_SHORTLIST_MIN = 2;
-const MANUAL_SHORTLIST_MAX = 4;
-const ROUNDTABLE_COLLAPSED_TURN_MAX_LINES = 6;
-
-interface WitnessCandidate {
-  branchId: string;
-  branchTitle: string;
-  agentId: string;
-  name: string;
-  role: string;
-  persona?: string;
-  impactScore: number;
-}
-
-interface AnchorAction {
-  anchorIds: string[];
-  prompt: string;
-  threadTitle?: string | null;
-}
-
-interface AnchorSummary {
-  ids: string[];
-  kind: string;
-  kindLabel: string;
-  label: string;
-}
-
-function branchListChanged(current: string[], next: string[]) {
-  return current.length !== next.length || current.some((value, index) => value !== next[index]);
-}
-
-function sameWitnessSelection(
-  current: RoundtableWitnessSelection | null,
-  next: RoundtableWitnessSelection | null,
-) {
-  if (current === next) return true;
-  if (!current || !next) return false;
-  return current.branchId === next.branchId && current.agentId === next.agentId;
-}
-
-function getRoundtableAnchorKindLabel(kind: string, isZh: boolean): string {
-  switch (kind) {
-    case 'verdict':
-      return isZh ? '档案总结' : 'Archive verdict';
-    case 'phase':
-      return isZh ? '阶段洞察' : 'Phase';
-    case 'quote':
-      return isZh ? '引用句' : 'Quote';
-    default:
-      return isZh ? '锚点' : 'Anchor';
-  }
-}
-
-function describeRoundtableAnchor(
-  anchorIds: string[] | null | undefined,
-  isZh: boolean,
-  phaseInsights: Array<{ phase: string; stakes: string }>,
-  turns: Array<{ key: string; content: string }>,
-  t: (key: string) => string,
-): AnchorSummary | null {
-  if (!anchorIds || anchorIds.length === 0) {
-    return null;
-  }
-  const [domain, rawKind, , ...extraParts] = anchorIds[0].split(':');
-  const kind = rawKind ?? 'unknown';
-  const kindLabel = getRoundtableAnchorKindLabel(kind, isZh);
-  const extra = extraParts.join(':');
-  if (domain !== 'roundtable') {
-    return {
-      ids: anchorIds,
-      kind: 'unknown',
-      kindLabel,
-      label: trimQuoteSnippet(anchorIds[0], 48),
-    };
-  }
-  if (kind === 'phase') {
-    const [phaseName, phaseIndexRaw = '0'] = extra.split(/-(?=[^-]+$)/);
-    const phaseIndex = Number(phaseIndexRaw);
-    const phaseLabel = getEndingRoomPhaseLabel(phaseName as never, t);
-    const phaseInsight = Number.isFinite(phaseIndex) ? phaseInsights[phaseIndex] : undefined;
-    const label = phaseInsight?.stakes
-      ? `${phaseLabel} · ${trimQuoteSnippet(phaseInsight.stakes, 48)}`
-      : phaseLabel;
-    return { ids: anchorIds, kind, kindLabel, label };
-  }
-  if (kind === 'quote') {
-    const matchedTurn = turns.find((turn) => turn.key === extra);
-    const label = matchedTurn
-      ? `${kindLabel} · ${trimQuoteSnippet(matchedTurn.content, 48)}`
-      : kindLabel;
-    return { ids: anchorIds, kind, kindLabel, label };
-  }
-  return {
-    ids: anchorIds,
-    kind,
-    kindLabel,
-    label: kindLabel,
-  };
-}
-
-function normalizeManualShortlist(branchOrder: string[], selectedBranchIds: string[]): string[] {
-  const selected = new Set(selectedBranchIds.filter((branchId) => branchOrder.includes(branchId)));
-  return branchOrder.filter((branchId) => selected.has(branchId));
-}
-
-function buildDefaultManualShortlist(branchOrder: string[]): string[] {
-  return branchOrder.slice(0, Math.min(MANUAL_SHORTLIST_MIN, branchOrder.length));
-}
-
-function chooseFaultLineBranchIds(
-  branchOrder: string[],
-  branchesById: Map<string, StoryData['branches'][number]>,
-  branchCandidates: Record<string, EndingRoomCandidate[]>,
-): string[] {
-  if (branchOrder.length <= 2) {
-    return [...branchOrder];
-  }
-
-  const anchorBranchId = branchOrder[0];
-  const anchorBranch = branchesById.get(anchorBranchId);
-  if (!anchorBranch) {
-    return branchOrder.slice(0, 2);
-  }
-  const anchorVariant = detectCandidateVoiceVariant(branchCandidates[anchorBranchId]?.[0] ?? {
-    name: '',
-    role: '',
-    persona: '',
-  });
-  const anchorLexicon = extractBranchLexicon(anchorBranch);
-
-  let bestBranchId = branchOrder[1] ?? anchorBranchId;
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (const branchId of branchOrder.slice(1)) {
-    const branch = branchesById.get(branchId);
-    if (!branch) continue;
-    const branchVariant = detectCandidateVoiceVariant(branchCandidates[branchId]?.[0] ?? {
-      name: '',
-      role: '',
-      persona: '',
-    });
-    const branchLexicon = extractBranchLexicon(branch);
-    const sharedTokenCount = [...anchorLexicon].filter((token) => branchLexicon.has(token)).length;
-    const unionCount = new Set([...anchorLexicon, ...branchLexicon]).size || 1;
-    const lexicalDistance = 1 - (sharedTokenCount / unionCount);
-    const score = Math.abs((anchorBranch.probability ?? 0) - (branch.probability ?? 0)) * 100
-      + (anchorVariant === branchVariant ? 0 : 34)
-      + lexicalDistance * 48
-      + Math.round((branchCandidates[branchId]?.[0]?.impactScore ?? 0) * 10);
-    if (score > bestScore) {
-      bestScore = score;
-      bestBranchId = branchId;
-    }
-  }
-
-  return branchOrder.filter((branchId) => branchId === anchorBranchId || branchId === bestBranchId);
-}
-
-function chooseWitnessAugmentedSelection(
-  witnessCandidates: WitnessCandidate[],
-): RoundtableWitnessSelection | null {
-  const ranked = [...witnessCandidates].sort((left, right) => (
-    right.impactScore - left.impactScore
-    || right.name.localeCompare(left.name)
-  ));
-  const winner = ranked.find((candidate) => candidate.branchId !== ranked[0]?.branchId) ?? ranked[0];
-  return winner ? { branchId: winner.branchId, agentId: winner.agentId } : null;
-}
-
-function buildReplayThreads(snapshot: OracleReplayPayload['roomSnapshot']) {
-  return snapshot.threads.reduce<Record<string, EndingRoomThreadSnapshot>>((acc, thread) => {
-    const turns = snapshot.turns
-      .filter((turn) => {
-        if (turn.thread_id) {
-          return turn.thread_id === thread.id;
-        }
-        return thread.mode === 'room';
-      })
-      .sort((left, right) => left.sequence - right.sequence);
-    acc[thread.id] = {
-      ...thread,
-      room_type: snapshot.room_type,
-      room_title: snapshot.title,
-      room_status: snapshot.status,
-      language: snapshot.language,
-      turns,
-    };
-    return acc;
-  }, {});
-}
 
 export default function WorldlineRoundtableView() {
   const { id } = useParams<{ id: string }>();
@@ -1737,212 +1463,28 @@ export default function WorldlineRoundtableView() {
       {!loading && !error && importError && <div className="worldline-roundtable-empty worldline-roundtable-empty--error">{importError}</div>}
 
       {showRepresentativePicker && (
-        <section className="worldline-roundtable-card worldline-roundtable-card--picker">
-          <div className="worldline-roundtable-card__heading worldline-roundtable-card__heading--stacked">
-            <div>
-              <h3>{isZh ? '改选每条世界线的代表' : 'Reseat each worldline representative'}</h3>
-              <p className="worldline-roundtable-picker__hint">
-                {selectionMode === 'manual_shortlist'
-                  ? t('roundtable.shortlist_hint')
-                  : selectionMode === 'trait_mix'
-                    ? t('roundtable.trait_mix_hint')
-                    : selectionMode === 'fault_line_first'
-                      ? t('roundtable.fault_line_hint')
-                      : selectionMode === 'witness_augmented'
-                        ? t('roundtable.witness_augmented_hint')
-                  : (isZh
-                    ? (effectiveSnapshot
-                      ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
-                      : '每条结局只派一位代表入席。系统会优先按影响度预选，并尽量错开代表，让这桌更有比较价值。')
-                    : (effectiveSnapshot
-                      ? 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.'
-                      : 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.'))}
-              </p>
-              <div className="worldline-roundtable-picker__mode-switch" role="group" aria-label={isZh ? '圆桌桌型' : 'Roundtable seating mode'}>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'representative' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('representative')}
-                >
-                  {t('roundtable.selection_mode_representative')}
-                </button>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'manual_shortlist' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('manual_shortlist')}
-                >
-                  {t('roundtable.selection_mode_manual_shortlist')}
-                </button>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'expert_witness' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('expert_witness')}
-                  disabled={witnessCandidates.length === 0}
-                >
-                  {t('roundtable.selection_mode_expert_witness')}
-                </button>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'trait_mix' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('trait_mix')}
-                >
-                  {t('roundtable.selection_mode_trait_mix')}
-                </button>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'fault_line_first' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('fault_line_first')}
-                  disabled={branchOrder.length < 2}
-                >
-                  {t('roundtable.selection_mode_fault_line_first')}
-                </button>
-                <button
-                  type="button"
-                  className={`worldline-roundtable-picker__mode-pill ${selectionMode === 'witness_augmented' ? 'is-active' : ''}`}
-                  onClick={() => handleSelectionModeChange('witness_augmented')}
-                  disabled={witnessCandidates.length === 0}
-                >
-                  {t('roundtable.selection_mode_witness_augmented')}
-                </button>
-                {selectionUsesShortlist && (
-                  <span className="worldline-roundtable-picker__count">
-                    {t('roundtable.shortlist_count', {
-                      count: selectedBranchIdsForLaunch.length,
-                      max: manualShortlistMax,
-                    })}
-                  </span>
-                )}
-              </div>
-            </div>
-            <div className="worldline-roundtable-picker__actions">
-              {effectiveSnapshot && (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setEditingRepresentatives(false)}
-                  disabled={launchingRoom}
-                >
-                  {isZh ? '返回当前圆桌' : 'Back to current table'}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void handleLaunchRoundtable()}
-                disabled={
-                  launchingRoom
-                  || selectedBranchIdsForLaunch.length === 0
-                  || selectedBranchIdsForLaunch.some((branchId) => !selectedRepresentatives[branchId])
-                }
-              >
-                {launchingRoom
-                  ? (isZh ? '正在开桌…' : 'Launching…')
-                  : (effectiveSnapshot
-                    ? (isZh ? '按当前阵容重开' : 'Reopen this lineup')
-                    : (isZh ? '按当前代表开桌' : 'Open this lineup'))}
-              </button>
-            </div>
-          </div>
-          <div className="worldline-roundtable-picker-grid">
-            {(storyData?.branches ?? []).map((branch) => {
-              const candidates = branchCandidates[branch.id] ?? [];
-              const branchSelected = !selectionUsesShortlist || selectedBranchIdsForLaunch.includes(branch.id);
-              const branchToggleDisabled = !selectionUsesShortlist
-                || (
-                  branchSelected
-                    ? selectedBranchIdsForLaunch.length <= manualShortlistMin
-                    : selectedBranchIdsForLaunch.length >= manualShortlistMax
-                );
-              return (
-                <article key={branch.id} className={`worldline-roundtable-picker-branch ${branchSelected ? 'is-active' : 'is-muted'}`}>
-                  <header className="worldline-roundtable-picker-branch__header">
-                    <div>
-                      <strong>{branch.title}</strong>
-                      <span>{Math.round((branch.probability ?? 0) * 100)}%</span>
-                    </div>
-                {selectionUsesShortlist && branchOrder.length > MANUAL_SHORTLIST_MIN && (
-                      <button
-                        type="button"
-                        className={`worldline-roundtable-picker-branch__toggle ${branchSelected ? 'is-active' : ''}`}
-                        onClick={() => toggleManualShortlistBranch(branch.id)}
-                        disabled={branchToggleDisabled}
-                      >
-                        {branchSelected ? t('roundtable.shortlist_toggle_off') : t('roundtable.shortlist_toggle_on')}
-                      </button>
-                    )}
-                    <p>{branch.insight}</p>
-                  </header>
-                  <div className="worldline-roundtable-picker-branch__options">
-                    {candidates.map((candidate) => {
-                      const selected = selectedRepresentatives[branch.id] === candidate.id;
-                      return (
-                        <button
-                          key={`${branch.id}-${candidate.id}`}
-                          type="button"
-                          className={`worldline-roundtable-picker-card ${selected ? 'is-selected' : ''}`}
-                          disabled={!branchSelected}
-                          onClick={() => setSelectedRepresentatives((current) => ({
-                            ...current,
-                            [branch.id]: candidate.id,
-                          }))}
-                        >
-                          <div className="worldline-roundtable-picker-card__title">
-                            <strong>{candidate.name}</strong>
-                            {selected && <span>{isZh ? '已选代表' : 'Selected'}</span>}
-                          </div>
-                          <span>{candidate.role}</span>
-                          {candidate.persona && <small>{candidate.persona}</small>}
-                          <em>
-                            {isZh
-                              ? `影响 ${Math.round(candidate.impactScore * 100)} · 发言 ${candidate.contributionCount} 次 · 转折命中 ${candidate.keyMomentHits} · 最近 R${candidate.lastRound}`
-                              : `Impact ${Math.round(candidate.impactScore * 100)} · ${candidate.contributionCount} turns · ${candidate.keyMomentHits} hinge hits · latest R${candidate.lastRound}`}
-                          </em>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-          {(selectionMode === 'expert_witness' || selectionMode === 'witness_augmented') && (
-            <section className="worldline-roundtable-picker-witness">
-              <div className="worldline-roundtable-card__heading">
-                <h3>{selectionMode === 'witness_augmented' ? t('roundtable.witness_augmented_section') : t('roundtable.witness_section')}</h3>
-                {selectedWitness && (
-                  <span className="worldline-roundtable-picker__count">
-                    {t('roundtable.witness_selected')}
-                  </span>
-                )}
-              </div>
-              <p className="worldline-roundtable-picker__hint">
-                {selectionMode === 'witness_augmented' ? t('roundtable.witness_augmented_hint') : t('roundtable.witness_hint')}
-              </p>
-              <div className="worldline-roundtable-picker-witness__options">
-                {witnessCandidates.map((candidate) => {
-                  const selected = selectedWitness?.branchId === candidate.branchId && selectedWitness?.agentId === candidate.agentId;
-                  return (
-                    <button
-                      key={`${candidate.branchId}-${candidate.agentId}`}
-                      type="button"
-                      className={`worldline-roundtable-picker-card ${selected ? 'is-selected' : ''}`}
-                      onClick={() => setSelectedWitness({ branchId: candidate.branchId, agentId: candidate.agentId })}
-                    >
-                      <div className="worldline-roundtable-picker-card__title">
-                        <strong>{candidate.name}</strong>
-                        {selected && <span>{t('roundtable.witness_badge')}</span>}
-                      </div>
-                      <span>{candidate.branchTitle}</span>
-                      <small>{candidate.role}</small>
-                      {candidate.persona && <small>{candidate.persona}</small>}
-                      <em>{isZh ? `影响 ${Math.round(candidate.impactScore * 100)}` : `Impact ${Math.round(candidate.impactScore * 100)}`}</em>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-        </section>
+        <RoundtablePickerPanel
+          isZh={isZh}
+          selectionMode={selectionMode}
+          onSelectionModeChange={handleSelectionModeChange}
+          effectiveSnapshot={effectiveSnapshot}
+          branches={storyData?.branches ?? []}
+          branchOrder={branchOrder}
+          branchCandidates={branchCandidates}
+          selectedRepresentatives={selectedRepresentatives}
+          onSelectRepresentative={(branchId, agentId) => setSelectedRepresentatives((current) => ({ ...current, [branchId]: agentId }))}
+          selectedBranchIdsForLaunch={selectedBranchIdsForLaunch}
+          selectionUsesShortlist={selectionUsesShortlist}
+          manualShortlistMin={manualShortlistMin}
+          manualShortlistMax={manualShortlistMax}
+          onToggleManualShortlistBranch={toggleManualShortlistBranch}
+          witnessCandidates={witnessCandidates}
+          selectedWitness={selectedWitness}
+          onSelectWitness={setSelectedWitness}
+          launchingRoom={launchingRoom}
+          onLaunchRoundtable={() => void handleLaunchRoundtable()}
+          onCancelEditing={() => setEditingRepresentatives(false)}
+        />
       )}
 
       {!loading && !error && effectiveSnapshot && !showRepresentativePicker && (
@@ -2173,115 +1715,26 @@ export default function WorldlineRoundtableView() {
               </div>
             )}
 
-              <div
-                ref={transcriptListRef}
-                className="ending-chat-transcript-list worldline-roundtable-transcript-list"
+              <RoundtableTranscriptList
+                listRef={transcriptListRef}
                 onScroll={handleTranscriptScroll}
-              >
-                {currentTurns.map((turn) => {
-                  const bubbleLayout = transcriptBubbleLayouts[turn.key];
-                  const turnAnchorId = buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key);
-                  const canCollapseTurn = (bubbleLayout?.lineCount ?? 0) > ROUNDTABLE_COLLAPSED_TURN_MAX_LINES;
-                  const isTurnExpanded = expandedTurnKeys[turn.key] ?? false;
-                  const showCollapsedTurn = canCollapseTurn && !isTurnExpanded;
-                  return (
-                    <article
-                      key={turn.key}
-                      className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''}`}
-                      style={showCollapsedTurn ? undefined : { minHeight: `${bubbleLayout?.minHeightPx ?? 0}px` }}
-                      data-layout-lines={bubbleLayout?.lineCount ?? undefined}
-                      data-layout-overflow={bubbleLayout?.overflow ? 'true' : 'false'}
-                    >
-                      <header>
-                        {turn.roleSlot === 'archivist' && (
-                          <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
-                        )}
-                        <strong>{turn.speaker}</strong>
-                        {turn.key === activeSpeakerTurnKey && (
-                          <span className="worldline-roundtable-transcript-badge">
-                            {isZh ? '当前发言' : 'Speaking'}
-                          </span>
-                        )}
-                        {turn.participantId === hotseatParticipantId && (
-                          <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--hotseat">
-                            {isZh ? '热座' : 'Hotseat'}
-                          </span>
-                        )}
-                        {showCollapsedTurn && (
-                          <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--overflow">
-                            {isZh ? '长段' : 'Long turn'}
-                          </span>
-                        )}
-                        <span>{turn.phase}</span>
-                      </header>
-                      <p className={showCollapsedTurn ? 'worldline-roundtable-transcript-copy is-collapsed' : 'worldline-roundtable-transcript-copy'}>
-                        {turn.content}
-                      </p>
-                      {(canCollapseTurn || (composerEnabled && turn.roleSlot !== 'user')) && (
-                        <div className="ending-chat-bubble__actions">
-                          {canCollapseTurn && (
-                            <button
-                              type="button"
-                              className="ending-chat-inline-button worldline-roundtable-transcript-toggle"
-                              onClick={() => setExpandedTurnKeys((current) => ({
-                                ...current,
-                                [turn.key]: !isTurnExpanded,
-                              }))}
-                            >
-                              {isTurnExpanded
-                                ? t('roundtable.action_collapse_turn')
-                                : t('roundtable.action_expand_turn')}
-                            </button>
-                          )}
-                          {composerEnabled && turn.roleSlot !== 'user' && (
-                            <>
-                              {turn.roleSlot === 'representative' && (
-                                <button
-                                  type="button"
-                                  className="ending-chat-inline-button"
-                                  onClick={() => handleHotseatQuote(turn.participantId, turn.speaker, turn.content, turnAnchorId)}
-                                >
-                                  {t('roundtable.action_hotseat_quote')}
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className="ending-chat-inline-button"
-                                onClick={() => handleFollowQuote(turnAnchorId, turn.speaker, turn.content)}
-                              >
-                                {t('roundtable.action_follow_quote')}
-                              </button>
-                              <button
-                                type="button"
-                                className="ending-chat-inline-button"
-                                onClick={() => void handleQuoteThread(turnAnchorId, turn.speaker, turn.content)}
-                              >
-                                {t('roundtable.action_new_thread')}
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
-              {!replayPayload && displayedDrafts.map((draft) => (
-                <article
-                  key={draft.key}
-                  className={`ending-chat-bubble ending-chat-bubble--draft ${draft.variant === 'placeholder' ? 'ending-chat-bubble--placeholder' : ''} ${draft.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''}`}
-                  aria-busy={draft.variant === 'placeholder'}
-                  style={{ minHeight: `${transcriptDraftLayouts[draft.key]?.minHeightPx ?? 0}px` }}
-                  data-layout-lines={transcriptDraftLayouts[draft.key]?.lineCount ?? undefined}
-                  data-layout-overflow={transcriptDraftLayouts[draft.key]?.overflow ? 'true' : 'false'}
-                >
-                  <header>
-                    <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>
-                    <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
-                  </header>
-                  <p>{draft.content}</p>
-                </article>
-              ))}
-            </div>
+                isZh={isZh}
+                currentTurns={currentTurns}
+                transcriptBubbleLayouts={transcriptBubbleLayouts}
+                activeThreadId={activeThread?.id ?? null}
+                activeSpeakerTurnKey={activeSpeakerTurnKey}
+                hotseatParticipantId={hotseatParticipantId}
+                expandedTurnKeys={expandedTurnKeys}
+                onToggleExpand={(turnKey) => setExpandedTurnKeys((current) => ({ ...current, [turnKey]: !(current[turnKey] ?? false) }))}
+                composerEnabled={composerEnabled}
+                isReplay={Boolean(replayPayload)}
+                displayedDrafts={displayedDrafts}
+                transcriptDraftLayouts={transcriptDraftLayouts}
+                participantsById={participantsById}
+                onHotseatQuote={handleHotseatQuote}
+                onFollowQuote={handleFollowQuote}
+                onQuoteThread={handleQuoteThread}
+              />
 
             <div className="ending-chat-composer worldline-roundtable-composer">
               <div className="ending-chat-composer__row">

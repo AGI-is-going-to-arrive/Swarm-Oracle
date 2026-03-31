@@ -850,8 +850,8 @@
 }
 
 .archive-chip--challenge {
-  background: color-mix(in oklab, #f59e0b 18%, white);
-  color: #b45309;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
 }
 
 .archive-chip--winner {
@@ -958,15 +958,15 @@
 }
 
 .bet-outcome-chip--hit {
-  background: color-mix(in oklab, #22c55e 16%, white);
-  color: #166534;
-  border-color: color-mix(in oklab, #22c55e 45%, white);
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border-color: var(--color-success-border);
 }
 
 .bet-outcome-chip--miss {
-  background: color-mix(in oklab, #ef4444 12%, white);
-  color: #991b1b;
-  border-color: color-mix(in oklab, #ef4444 32%, white);
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border-color: var(--color-danger-border);
 }
 
 .bet-outcome-chip--pending {
