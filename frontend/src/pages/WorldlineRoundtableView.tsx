@@ -182,6 +182,7 @@ type RoundtableSelectionMode = RoundtableSelectionRecipe;
 
 const MANUAL_SHORTLIST_MIN = 2;
 const MANUAL_SHORTLIST_MAX = 4;
+const ROUNDTABLE_COLLAPSED_TURN_MAX_LINES = 6;
 
 interface WitnessCandidate {
   branchId: string;
@@ -398,6 +399,7 @@ export default function WorldlineRoundtableView() {
   const [importError, setImportError] = useState('');
   const [briefCopied, setBriefCopied] = useState(false);
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
+  const [expandedTurnKeys, setExpandedTurnKeys] = useState<Record<string, boolean>>({});
   const transcriptAutoStickRef = useRef(false);
   const transcriptHydratedRef = useRef(false);
   const transcriptListRef = useRef<HTMLDivElement>(null);
@@ -903,19 +905,32 @@ export default function WorldlineRoundtableView() {
     ),
     [displayedDrafts, transcriptLocale],
   );
+  const collapsedTurnCount = useMemo(
+    () => currentTurns.filter((turn) => {
+      const layout = transcriptBubbleLayouts[turn.key];
+      return (layout?.lineCount ?? 0) > ROUNDTABLE_COLLAPSED_TURN_MAX_LINES
+        && !(expandedTurnKeys[turn.key] ?? false);
+    }).length,
+    [currentTurns, expandedTurnKeys, transcriptBubbleLayouts],
+  );
   const transcriptLayoutTelemetry = useMemo(
     () => summarizeOracleTranscriptLayout(
       transcriptBubbleLayouts,
       transcriptDraftLayouts,
       transcriptScrollSnapshotRef.current,
+      {
+        collapseLineLimit: ROUNDTABLE_COLLAPSED_TURN_MAX_LINES,
+        collapsedTurnCount,
+      },
     ),
-    [transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
+    [collapsedTurnCount, transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
   );
 
   useEffect(() => {
     transcriptHydratedRef.current = false;
     transcriptAutoStickRef.current = false;
     transcriptScrollSnapshotRef.current = null;
+    setExpandedTurnKeys({});
   }, [activeThread?.id, effectiveSnapshot?.id]);
 
   useLayoutEffect(() => {
@@ -1097,6 +1112,18 @@ export default function WorldlineRoundtableView() {
       threadTitle: speaker,
     });
   }, [handleStartAnchoredThread, isZh]);
+  const handleHotseatQuote = useCallback((participantId: string | null, speaker: string, content: string, anchorId: string) => {
+    if (!participantId) {
+      return;
+    }
+    setSelectedRepresentativeId(participantId);
+    setInteractionMode('hotseat');
+    activateAnchor({
+      anchorIds: [anchorId],
+      prompt: buildRoundtableQuotePrompt(speaker, content, isZh),
+      threadTitle: speaker,
+    });
+  }, [activateAnchor, isZh, setInteractionMode]);
 
   const scenarioReplaySnapshot = useMemo(
     () => replayPayload?.scenarioReplay ?? (
@@ -2138,52 +2165,93 @@ export default function WorldlineRoundtableView() {
                 className="ending-chat-transcript-list worldline-roundtable-transcript-list"
                 onScroll={handleTranscriptScroll}
               >
-                {currentTurns.map((turn) => (
-                  <article
-                    key={turn.key}
-                    className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''}`}
-                    style={{ minHeight: `${transcriptBubbleLayouts[turn.key]?.minHeightPx ?? 0}px` }}
-                    data-layout-lines={transcriptBubbleLayouts[turn.key]?.lineCount ?? undefined}
-                    data-layout-overflow={transcriptBubbleLayouts[turn.key]?.overflow ? 'true' : 'false'}
-                  >
-                    <header>
-                      {turn.roleSlot === 'archivist' && (
-                        <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
+                {currentTurns.map((turn) => {
+                  const bubbleLayout = transcriptBubbleLayouts[turn.key];
+                  const turnAnchorId = buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key);
+                  const canCollapseTurn = (bubbleLayout?.lineCount ?? 0) > ROUNDTABLE_COLLAPSED_TURN_MAX_LINES;
+                  const isTurnExpanded = expandedTurnKeys[turn.key] ?? false;
+                  const showCollapsedTurn = canCollapseTurn && !isTurnExpanded;
+                  return (
+                    <article
+                      key={turn.key}
+                      className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''}`}
+                      style={showCollapsedTurn ? undefined : { minHeight: `${bubbleLayout?.minHeightPx ?? 0}px` }}
+                      data-layout-lines={bubbleLayout?.lineCount ?? undefined}
+                      data-layout-overflow={bubbleLayout?.overflow ? 'true' : 'false'}
+                    >
+                      <header>
+                        {turn.roleSlot === 'archivist' && (
+                          <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
+                        )}
+                        <strong>{turn.speaker}</strong>
+                        {turn.key === activeSpeakerTurnKey && (
+                          <span className="worldline-roundtable-transcript-badge">
+                            {isZh ? '当前发言' : 'Speaking'}
+                          </span>
+                        )}
+                        {turn.participantId === hotseatParticipantId && (
+                          <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--hotseat">
+                            {isZh ? '热座' : 'Hotseat'}
+                          </span>
+                        )}
+                        {showCollapsedTurn && (
+                          <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--overflow">
+                            {isZh ? '长段' : 'Long turn'}
+                          </span>
+                        )}
+                        <span>{turn.phase}</span>
+                      </header>
+                      <p className={showCollapsedTurn ? 'worldline-roundtable-transcript-copy is-collapsed' : 'worldline-roundtable-transcript-copy'}>
+                        {turn.content}
+                      </p>
+                      {(canCollapseTurn || (composerEnabled && turn.roleSlot !== 'user')) && (
+                        <div className="ending-chat-bubble__actions">
+                          {canCollapseTurn && (
+                            <button
+                              type="button"
+                              className="ending-chat-inline-button worldline-roundtable-transcript-toggle"
+                              onClick={() => setExpandedTurnKeys((current) => ({
+                                ...current,
+                                [turn.key]: !isTurnExpanded,
+                              }))}
+                            >
+                              {isTurnExpanded
+                                ? t('roundtable.action_collapse_turn')
+                                : t('roundtable.action_expand_turn')}
+                            </button>
+                          )}
+                          {composerEnabled && turn.roleSlot !== 'user' && (
+                            <>
+                              {turn.roleSlot === 'representative' && (
+                                <button
+                                  type="button"
+                                  className="ending-chat-inline-button"
+                                  onClick={() => handleHotseatQuote(turn.participantId, turn.speaker, turn.content, turnAnchorId)}
+                                >
+                                  {t('roundtable.action_hotseat_quote')}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="ending-chat-inline-button"
+                                onClick={() => handleFollowQuote(turnAnchorId, turn.speaker, turn.content)}
+                              >
+                                {t('roundtable.action_follow_quote')}
+                              </button>
+                              <button
+                                type="button"
+                                className="ending-chat-inline-button"
+                                onClick={() => void handleQuoteThread(turnAnchorId, turn.speaker, turn.content)}
+                              >
+                                {t('roundtable.action_new_thread')}
+                              </button>
+                            </>
+                          )}
+                        </div>
                       )}
-                      <strong>{turn.speaker}</strong>
-                      {turn.key === activeSpeakerTurnKey && (
-                        <span className="worldline-roundtable-transcript-badge">
-                          {isZh ? '当前发言' : 'Speaking'}
-                        </span>
-                      )}
-                      {turn.participantId === hotseatParticipantId && (
-                        <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--hotseat">
-                          {isZh ? '热座' : 'Hotseat'}
-                        </span>
-                      )}
-                      <span>{turn.phase}</span>
-                    </header>
-                    <p>{turn.content}</p>
-                    {composerEnabled && turn.roleSlot !== 'user' && (
-                      <div className="ending-chat-bubble__actions">
-                        <button
-                          type="button"
-                          className="ending-chat-inline-button"
-                          onClick={() => handleFollowQuote(buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key), turn.speaker, turn.content)}
-                        >
-                          {t('roundtable.action_follow_quote')}
-                        </button>
-                        <button
-                          type="button"
-                          className="ending-chat-inline-button"
-                          onClick={() => void handleQuoteThread(buildRoundtableAnchorId('quote', activeThread?.id ?? 'table', turn.key), turn.speaker, turn.content)}
-                        >
-                          {t('roundtable.action_new_thread')}
-                        </button>
-                      </div>
-                    )}
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               {!replayPayload && displayedDrafts.map((draft) => (
                 <article
                   key={draft.key}

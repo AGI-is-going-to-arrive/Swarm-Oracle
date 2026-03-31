@@ -371,12 +371,22 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   }),
 
   hydrateThread: (thread) => set((state) => {
+    const snapshot = state.snapshot?.id === thread.room_id
+      ? {
+          ...state.snapshot,
+          threads: sortThreads([
+            ...state.snapshot.threads.filter((currentThread) => currentThread.id !== thread.id),
+            thread,
+          ]),
+        }
+      : state.snapshot;
     const threadsById = {
       ...state.threadsById,
       [thread.id]: mergeThreadSnapshot(state.threadsById[thread.id], thread),
     };
-    const committedTurnIds = collectCommittedTurnIds(state.snapshot, threadsById);
+    const committedTurnIds = collectCommittedTurnIds(snapshot, threadsById);
     return {
+      snapshot,
       threadsById,
       threadOrder: state.threadOrder.includes(thread.id)
         ? state.threadOrder

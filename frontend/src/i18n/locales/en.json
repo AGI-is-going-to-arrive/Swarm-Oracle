@@ -794,8 +794,11 @@
       "action_copy_brief": "Copy roundtable brief",
       "action_brief_copied": "Roundtable brief copied",
       "action_follow_phase": "Follow this phase",
+      "action_hotseat_quote": "Hotseat this rep",
       "action_follow_quote": "Follow this quote",
-      "action_thread_from_anchor": "Start thread from current anchor"
+      "action_thread_from_anchor": "Start thread from current anchor",
+      "action_expand_turn": "Show full turn",
+      "action_collapse_turn": "Collapse turn"
     },
     "common": {
       "loading": "Loading…",

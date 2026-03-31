@@ -30,12 +30,19 @@ export interface OracleTranscriptLayoutTelemetry {
   max_draft_lines: number;
   overflow_turn_count: number;
   overflow_draft_count: number;
+  collapsible_turn_count: number;
+  collapsed_turn_count: number;
   max_turn_min_height_px: number;
   max_draft_min_height_px: number;
   scroll_bottom_offset_px: number | null;
   scroll_height_px: number | null;
   client_height_px: number | null;
   is_bottom_anchored: boolean | null;
+}
+
+interface OracleTranscriptLayoutSummaryOptions {
+  collapseLineLimit?: number;
+  collapsedTurnCount?: number;
 }
 
 export interface TranscriptScrollSnapshot {
@@ -126,9 +133,14 @@ export function summarizeOracleTranscriptLayout(
   turnLayouts: Record<string, OracleTranscriptBubbleLayout>,
   draftLayouts: Record<string, OracleTranscriptBubbleLayout>,
   scrollSnapshot: TranscriptScrollSnapshot | null,
+  options: OracleTranscriptLayoutSummaryOptions = {},
 ): OracleTranscriptLayoutTelemetry {
   const turnValues = Object.values(turnLayouts);
   const draftValues = Object.values(draftLayouts);
+  const collapseLineLimit = options.collapseLineLimit ?? Number.POSITIVE_INFINITY;
+  const collapsibleTurnCount = Number.isFinite(collapseLineLimit)
+    ? turnValues.filter((layout) => layout.lineCount > collapseLineLimit).length
+    : 0;
 
   return {
     turn_count: turnValues.length,
@@ -137,6 +149,8 @@ export function summarizeOracleTranscriptLayout(
     max_draft_lines: Math.max(0, ...draftValues.map((layout) => layout.lineCount)),
     overflow_turn_count: turnValues.filter((layout) => layout.overflow).length,
     overflow_draft_count: draftValues.filter((layout) => layout.overflow).length,
+    collapsible_turn_count: collapsibleTurnCount,
+    collapsed_turn_count: Math.min(options.collapsedTurnCount ?? 0, collapsibleTurnCount),
     max_turn_min_height_px: Math.max(0, ...turnValues.map((layout) => layout.minHeightPx)),
     max_draft_min_height_px: Math.max(0, ...draftValues.map((layout) => layout.minHeightPx)),
     scroll_bottom_offset_px: scrollSnapshot?.bottomOffset ?? null,

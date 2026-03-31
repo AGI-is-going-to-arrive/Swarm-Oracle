@@ -101,8 +101,10 @@
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
+- `endingRoomStore` 当前在 `hydrateThread()` 时也会同步更新 `snapshot.threads`；新建 anchored thread 后，Oracle replay 不会再只序列化旧主桌快照。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
+- roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
@@ -115,6 +117,8 @@
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
+  - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
+  - committed transcript 长段折叠 / 展开
 - Oracle 当前统一锚点规则：
   - `verdict / key_moment / quote / phase`
   - 都先落到显式 `questionAnchorIds`
@@ -130,6 +134,7 @@
   - `stream_state`
   - `anchor_kind / anchor_label`
   - `transcript_layout`
+    - 当前也包含 `collapsible_turn_count / collapsed_turn_count`
 - `roundtableSelection.ts` 当前承接 `trait_mix` 选择逻辑；`trait_mix / fault_line_first / witness_augmented` 的状态切换已补 no-op guard，避免对同一份 selection 反复写回。
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
@@ -166,6 +171,7 @@
   - summary card sticky
   - 长摘要走内部滚动
   - transcript 段落行距更松
+  - committed transcript 长段默认可折叠
 - roundtable replay 的自动化口径当前已修正：
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时

@@ -81,12 +81,18 @@ describe('oracleTranscriptLayout', () => {
         clientHeight: 340,
         scrollTop: 576,
       }),
+      {
+        collapseLineLimit: 0,
+        collapsedTurnCount: 1,
+      },
     );
 
     expect(telemetry.turn_count).toBe(2);
     expect(telemetry.draft_count).toBe(1);
     expect(telemetry.max_turn_lines).toBeGreaterThanOrEqual(1);
     expect(telemetry.max_draft_lines).toBeGreaterThanOrEqual(1);
+    expect(telemetry.collapsible_turn_count).toBeGreaterThanOrEqual(1);
+    expect(telemetry.collapsed_turn_count).toBe(1);
     expect(telemetry.scroll_bottom_offset_px).toBe(4);
     expect(telemetry.is_bottom_anchored).toBe(true);
   });

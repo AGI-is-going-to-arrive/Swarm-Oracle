@@ -46,6 +46,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程
   - transcript `quote` 级追问 / 开线程
+  - transcript `quote` 级 `点名这位代表 / Hotseat this rep`
+- roundtable committed transcript 当前已补长段折叠 / 展开，避免主区直接被长段挤满。
 - `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
 - `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail 与 transcript header 显式显示当前 thread 的 anchor badge。
 - Oracle 自动化口径当前会输出：
@@ -60,6 +62,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - ending-room / roundtable 的 replay/share/import 已完成专项签收。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
+- roundtable 的 anchored thread replay / local readonly / reload restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子。
 
@@ -94,13 +97,20 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `frontend/output/e2e/20260331-codex-followup-stream-lifecycle/summary.json`
   - `frontend/output/e2e/20260331-codex-roundtable-stream-desktop-rerun/summary.json`
   - `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun2/summary.json`
+- 最近一轮 roundtable 可读性收口工件位于：
+  - `frontend/output/e2e/20260331-codex-roundtable-readability-pass-desktop/summary.json`
+- 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件位于：
+  - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
+  - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
 - 最近一轮经典模式流式 hardening 工件位于：
   - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
 - 当前仍在继续收口的内容：
   - follow-up 与经典模式的更深流式一致性
     - 本轮已补 classic `thinkingAgentCount / thinkingAgents` 观测，以及 Oracle `current_speaker_* / pending_drafts / stream_state`
-  - `pretext` 更深的 transcript 运行时稳定化（`P2+` 尚未启动）
-  - Oracle 更深的回归、跨浏览器与 corner-case hardening
+  - `pretext` 更深的 transcript 运行时稳定化
+    - 当前已把 `collapsible_turn_count / collapsed_turn_count` 补进 Oracle transcript layout telemetry
+    - `P3 / P4` 仍未启动
+  - Oracle 更深的回归与 corner-case hardening
     - `corners` 当前已能稳定落 `result.json`，但尾部仍可能打印一次 teardown warning
 
 ## 文档入口

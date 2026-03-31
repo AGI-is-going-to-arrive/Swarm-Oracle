@@ -422,6 +422,7 @@ describe('endingRoomStore', () => {
     }));
     expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-followup');
     expect(useEndingRoomStore.getState().threadOrder).toContain('thread-followup');
+    expect(useEndingRoomStore.getState().snapshot?.threads.map((thread) => thread.id)).toContain('thread-followup');
   });
 
   it('routes composer sends to the thread endpoint when a follow-up thread is active', async () => {

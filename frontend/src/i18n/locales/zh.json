@@ -794,8 +794,11 @@
       "action_copy_brief": "复制纪要",
       "action_brief_copied": "纪要已复制",
       "action_follow_phase": "追问这一阶段",
+      "action_hotseat_quote": "点名这位代表",
       "action_follow_quote": "沿这句追问",
-      "action_thread_from_anchor": "按当前锚点另开线程"
+      "action_thread_from_anchor": "按当前锚点另开线程",
+      "action_expand_turn": "展开全文",
+      "action_collapse_turn": "收起长段"
     },
     "common": {
       "loading": "加载中…",

@@ -128,6 +128,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
     - `current_speaker_turn_key / current_speaker_participant_id`
     - `pending_drafts / stream_state`
     - `transcript_layout`
+      - `collapsible_turn_count / collapsed_turn_count`
   - desktop rerun 当前已能稳定落：
     - hotseat `turn_start / turn_delta / turn_commit`
     - anchored thread `turn_start / turn_delta / turn_commit`
@@ -205,6 +206,15 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
 - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
 - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
+
+最近一轮 roundtable 可读性收口工件：
+
+- `frontend/output/e2e/20260331-codex-roundtable-readability-pass-desktop/summary.json`
+
+最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件：
+
+- `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
+- `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
 
 最近一次 roundtable `full` 稳定工件：
 

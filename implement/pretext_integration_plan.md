@@ -2,14 +2,19 @@
 
 > 文档类型：active archive
 > 当前真值：否，作为独立接入计划使用；当前产品真值仍以 `README.md` 与 `llmdoc/*` 为准
-> 当前时间：2026-03-30
-> 状态：P0 / P1 minimal spike 已完成；P2-P5 尚未启动
+> 当前时间：2026-03-31
+> 状态：P0 / P1 minimal spike 已完成；P2 Oracle transcript scoped 已完成并继续补 contract；P3-P5 尚未启动
 
-> 状态更新（2026-03-30，最新）：
+> 状态更新（2026-03-31，最新）：
 > - `@chenglou/pretext@0.0.3` 已安装进 `frontend/`
 > - `frontend/src/lib/textLayout/pretext.ts` 与 `textOverflowPredictor.ts` 已落地
 > - `ResultView / EndingChatModal / WorldlineRoundtableView` 的只读文本 contract 已接入测试层
-> - 当前还没有把 `pretext` 接进运行时 transcript 布局；也没有提前推进 `P2-P5`
+> - `EndingChatModal / WorldlineRoundtableView` 当前已接进 Oracle transcript 运行时布局内核
+> - `transcript_layout` 当前已补到：
+>   - `turn_count / draft_count`
+>   - `overflow_turn_count / overflow_draft_count`
+>   - `collapsible_turn_count / collapsed_turn_count`
+> - `P3-P5` 当前仍未启动
 
 ---
 
@@ -218,7 +223,12 @@
    - 已完成专项签收
 3. `pretext P0 / P1`
    - 已完成最小 spike
-4. `P2-P5`
+4. `P2`
+   - 已完成 Oracle transcript scoped
+   - 本轮继续补了 readability contract：
+     - `collapsible_turn_count`
+     - `collapsed_turn_count`
+5. `P3-P5`
    - 尚未启动
 
 ---
@@ -371,6 +381,8 @@
   - `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
   - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
   - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
+- 本轮补充工件：
+  - `frontend/output/e2e/20260331-codex-roundtable-readability-pass-desktop/summary.json`
 - 未扩范围：
   - `InputView`
   - `WorldScene / Theater`

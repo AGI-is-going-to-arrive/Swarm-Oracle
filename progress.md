@@ -16086,3 +16086,124 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 当前结论：
   - `mobile anchored thread turn_delta`：已收口
   - `corners summary/teardown`：已从“卡死阻塞”降为“有 warning 但能稳定落盘”
+
+## 2026-03-31 Track 23 continuation — roundtable readability pass
+
+- 已重新读取本轮真值与约束：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `implement/pretext_integration_plan.md`
+  - `.impeccable.md`
+- 已按 23 线技能要求补本轮 QA inventory，覆盖：
+  - roundtable transcript readability
+  - new gameplay surfaces
+  - replay / readonly / anchored thread restore
+  - Firefox / WebKit scoped regression
+  - pretext P2 transcript contract
+- 本轮先做的代码收口：
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - roundtable committed transcript 长段现在默认可折叠/展开，避免超长 monologue 把主区压成信息墙。
+    - transcript quote action 现在新增直达 `hotseat` 的低摩擦入口，复用现有 `quote anchor + hotseat thread` 语义，不改 backend contract。
+  - `frontend/src/pages/WorldlineRoundtable.css`
+    - sidebar 进一步收窄，desktop transcript 可视区增大。
+    - thread chip 增加最大宽度约束，长线程名不再无限挤压 rail。
+    - 新增长段折叠样式与 `Long turn` badge。
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 新增 `Hotseat this rep / 点名这位代表`
+    - 新增 `Show full turn / Collapse turn` 文案
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增热座快捷入口断言
+    - 新增长段折叠/展开断言
+- 本轮现状基线工件：
+  - `frontend/output/e2e/20260331-codex-roundtable-readability-baseline-desktop/summary.json`
+  - 观察到桌面 roundtable 真实痛点主要是：
+    - 长 committed transcript 单条可到 `15` 行
+    - `archivist` 视图 `overflow_turn_count = 18`
+    - 长线程名会把 thread rail 挤得很密
+- 本轮最小验证：
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/i18n/locales.test.ts`
+    - `24 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 下一步：
+  - 做 Oracle Firefox / WebKit scoped regression
+  - 再决定 pretext P2 contract 是否继续补 telemetry / QA gate
+
+## 2026-03-31 Track 23 continuation — scoped regression + pretext P2 contract
+
+- Firefox / WebKit scoped regression 口径：
+  - 目标只看 Oracle roundtable 的
+    - anchored thread
+    - replay readonly
+    - local readonly
+    - reload restore
+  - 不跑无关总链
+  - 使用 `playwright-interactive` 的持久浏览器调试，而不是额外造 test spec
+- 本轮先发现的真实 race：
+  - Firefox 下直接走：
+    - live roundtable -> transcript `Start anchored thread`
+    - `Copy replay`
+    - replay readonly
+  - 初始现象是：
+    - live 页已进入 `thread_followup`
+    - 但 replay readonly 回退成主桌 `archivist_route`
+    - `active_thread_id / anchor_kind` 丢失
+  - 根因已定位：
+    - `endingRoomStore.hydrateThread()` 之前只更新
+      - `threadsById`
+      - `threadOrder`
+      - `activeThreadId`
+    - 没同步把新 thread 写回 `snapshot.threads`
+    - 而 Oracle replay payload 用的是 `snapshot`，不是只看 `threadsById`
+    - 于是 UI 看起来像已经切到 anchored thread，但 replay 序列化仍可能拿旧主桌快照
+- 本轮已实施修复：
+  - `frontend/src/stores/endingRoomStore.ts`
+    - `hydrateThread()` 现在会同步更新 `snapshot.threads`
+  - `frontend/src/stores/endingRoomStore.test.ts`
+    - 新增断言：`createThread()` 后 `snapshot.threads` 必须包含新 follow-up thread
+- 修复后的 cross-browser scoped regression 结果：
+  - 工件目录：
+    - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
+    - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
+  - 两浏览器当前都通过：
+    - `openCount = 1`（先从 picker 开桌）
+    - `anchor_kind = quote`
+    - replay readonly：
+      - `is_read_only = true`
+      - `interaction_mode = thread_followup`
+      - `active_thread_id` 与 live anchored thread 一致
+    - local readonly reload restore：
+      - `interaction_mode = thread_followup`
+      - `active_thread_id` 仍一致
+      - `anchor_kind = quote`
+- pretext P2 contract 强化：
+  - 仍然只限 `P2`
+  - 没有推进：
+    - `P3 / InputView`
+    - `P4 / WorldScene / Theater`
+  - 本轮新增 telemetry：
+    - `collapsible_turn_count`
+    - `collapsed_turn_count`
+  - 作用：
+    - 让自动化区分“有长段风险”与“长段已被 UI 折叠收口”
+  - 涉及文件：
+    - `frontend/src/lib/textLayout/oracleTranscriptLayout.ts`
+    - `frontend/src/lib/textLayout/oracleTranscriptLayout.test.ts`
+    - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+- 本轮回归：
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/lib/textLayout/oracleTranscriptLayout.test.ts src/i18n/locales.test.ts`
+    - `38 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+- 当前剩余阻塞/观察：
+  - roundtable desktop 的长 transcript 仍然很多：
+    - scoped 工件里仍可看到 `max_turn_lines = 15`
+    - `overflow_turn_count` 仍高
+    - 但现在已有折叠 UI 与 `collapsed_turn_count` 可观测，不再是“只能肉眼看出炸了”
+  - `WorldlineRoundtableView.test.tsx` 里本地副本 fallback 用例仍会打印一次预期内 `console.warn(token too large)`，不是失败

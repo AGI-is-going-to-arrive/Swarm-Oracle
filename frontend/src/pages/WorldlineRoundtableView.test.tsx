@@ -252,8 +252,11 @@ vi.mock('react-i18next', () => ({
         'roundtable.action_copy_brief': 'Copy roundtable brief',
         'roundtable.action_brief_copied': 'Roundtable brief copied',
         'roundtable.action_follow_phase': 'Follow this phase',
+        'roundtable.action_hotseat_quote': 'Hotseat this rep',
         'roundtable.action_follow_quote': 'Follow this quote',
         'roundtable.action_thread_from_anchor': 'Start thread from current anchor',
+        'roundtable.action_expand_turn': 'Show full turn',
+        'roundtable.action_collapse_turn': 'Collapse turn',
         'common.loading': 'Loading',
       }[key] ?? key);
     },
@@ -1224,6 +1227,141 @@ describe('WorldlineRoundtableView', () => {
       questionAnchorIds: ['roundtable:quote:thread-room:turn-1'],
       interactionMode: 'thread_followup',
     }));
+  });
+
+  it('lets a representative quote pivot directly into hotseat follow-up', async () => {
+    const user = userEvent.setup();
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'rep-a',
+          content: 'Existing live roundtable.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+      result_ready: true,
+    } as any;
+    storeState.result = {
+      summary: 'Existing live summary.',
+      archivist_note: 'Current table summary.',
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        ...storeState.snapshot.threads[0],
+        room_type: 'worldline_roundtable',
+        room_title: 'Worldline Roundtable',
+        room_status: 'done',
+        language: 'en',
+        turns: storeState.snapshot.turns,
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Archive A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Story A',
+          insight: 'Insight A',
+          key_moments: ['A'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'Archive B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Story B',
+          insight: 'Insight B',
+          key_moments: ['B'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Existing live roundtable.');
+    const quoteBubble = screen.getByText('Existing live roundtable.').closest('article');
+    expect(quoteBubble).not.toBeNull();
+    const quoteBubbleScope = within(quoteBubble as HTMLElement);
+
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'Hotseat this rep' }));
+
+    expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Follow this quote: Representative A said "Existing live roundtable.". Which disagreement on this table does that line actually lock in?');
   });
 
   it('launches expert_witness with an extra witness selection', async () => {
@@ -2211,5 +2349,98 @@ describe('WorldlineRoundtableView text layout contracts', () => {
 
     expect(pickerPrediction.overflow).toBe(false);
     expect(transcriptPrediction.lineCount).toBeGreaterThan(1);
+  });
+
+  it('collapses and expands long transcript monologues in the live table', async () => {
+    const user = userEvent.setup();
+    const longTurn = '圆桌记录反复回到同一个调度失误：先把边防资源挪空，再让财政用短账补洞，最后再把这一连串误差包装成必然代价，于是每个分支都开始为同一套失血逻辑找借口。'.repeat(4);
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        {
+          id: 'turn-long',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'rep-a',
+          content: longTurn,
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+    } as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = {
+      'thread-room': {
+        ...baseState.threadsById['thread-room'],
+        turns: storeState.snapshot.turns,
+      },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Archive A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Story A',
+          insight: 'Insight A',
+          key_moments: ['A'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'Archive B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Story B',
+          insight: 'Insight B',
+          key_moments: ['B'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const turnText = await screen.findByText(longTurn);
+    expect(turnText).toHaveClass('worldline-roundtable-transcript-copy', 'is-collapsed');
+    const collapsedPayload = JSON.parse((window as any).render_game_to_text());
+    expect(collapsedPayload.page.controls.transcript_layout.collapsible_turn_count).toBeGreaterThanOrEqual(1);
+    expect(collapsedPayload.page.controls.transcript_layout.collapsed_turn_count).toBeGreaterThanOrEqual(1);
+
+    await user.click(screen.getByRole('button', { name: 'Show full turn' }));
+    expect(turnText).not.toHaveClass('is-collapsed');
+    const expandedPayload = JSON.parse((window as any).render_game_to_text());
+    expect(expandedPayload.page.controls.transcript_layout.collapsed_turn_count).toBe(0);
+
+    await user.click(screen.getByRole('button', { name: 'Collapse turn' }));
+    expect(turnText).toHaveClass('is-collapsed');
   });
 });
