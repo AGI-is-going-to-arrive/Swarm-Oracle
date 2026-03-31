@@ -113,8 +113,11 @@
 1. `corner-case / regression hardening`
    - 当前主链已签收；`corners` rerun 现在已经能稳定落 `result.json`，剩下主要是一条 teardown warning 噪音
 2. 更进一步的玩法扩展
-   - `后续三回合`
-   - `证据投牌`
+   - `后续三回合`：后端 + 前端已落地，待 E2E 专项签收
+   - `证据投牌`：后端 + 前端已落地（含 scenario 级验证与 4 KB 限制），待 E2E 专项签收
+3. 新增主题场景的专属美术素材
+   - 11 个新主题入口已注册到 `themeRegistry.ts`，当前复用已有场景图
+   - 待 Gemini Image API 可用后批量生成专属素材
 ### 后续执行的硬优先级
 
 后续不要再泛泛说“继续优化 UI 交互”。下一阶段的正确顺序固定为：
@@ -1709,7 +1712,10 @@ G1-C: conflict / tension shaping
 2. `trait_mix / fault_line_first`
    - 已完成
 3. `后续三回合`
+   - 已完成：后端 `EPILOGUE` 交互模式 + 前端按钮（EndingChatModal / WorldlineRoundtableView）
 4. `证据投牌`
+   - 已完成：后端 `EVIDENCE_CARD` 交互模式 + `cited_branch_id` / `cited_refs_json` 全链路 + 前端证据卡抽屉面板
+   - `cited_branch_id` 含 scenario 级验证，`cited_refs_json` 含 4 KB 大小限制
 
 要求：
 

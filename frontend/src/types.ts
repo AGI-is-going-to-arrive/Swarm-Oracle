@@ -596,7 +596,9 @@ export type EndingRoomInteractionMode =
   | 'archivist_route'
   | 'hotseat'
   | 'all_present'
-  | 'thread_followup';
+  | 'thread_followup'
+  | 'epilogue'
+  | 'evidence_card';
 export type EndingRoomTurnSource = 'auto_recap' | 'user_turn' | 'assistant_followup';
 
 export interface EndingRoomScope {
@@ -750,6 +752,8 @@ export interface AppendEndingRoomUserTurnRequest {
   addressedAgentIds?: string[];
   questionAnchorIds?: string[];
   interactionMode?: EndingRoomInteractionMode | null;
+  citedBranchId?: string | null;
+  citedRefsJson?: Record<string, unknown> | null;
 }
 
 export interface StructuredWsError {

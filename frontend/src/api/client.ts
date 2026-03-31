@@ -416,6 +416,8 @@ export async function appendEndingRoomUserTurn(
       ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
       ...(payload.questionAnchorIds?.length ? { question_anchor_ids: payload.questionAnchorIds } : {}),
       ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
+      ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
+      ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
     }),
   });
 }
@@ -432,6 +434,8 @@ export async function appendEndingRoomThreadUserTurn(
       ...(payload.addressedAgentIds?.length ? { addressed_agent_ids: payload.addressedAgentIds } : {}),
       ...(payload.questionAnchorIds?.length ? { question_anchor_ids: payload.questionAnchorIds } : {}),
       ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
+      ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
+      ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
     }),
   });
 }

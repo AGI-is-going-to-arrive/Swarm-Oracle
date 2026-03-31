@@ -29,6 +29,8 @@
   - follow-up 与经典模式的流式一致性
   - `pretext` 是否继续扩到 `P3 / P4`
   - Oracle 更深的 corner-case hardening
+  - `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 已落地后端 + 前端 UI，待更深的 E2E 专项签收
+  - 新增 11 个主题场景（finance、medical、scholar、tech、entertainment、diplomacy 等），当前复用现有场景图作为占位
 
 ## 文档契约
 
@@ -60,7 +62,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
-| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步` |
+| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式 |
 | Replay & Import | 主模式与 Debate 均支持 |
 | i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子 |
 

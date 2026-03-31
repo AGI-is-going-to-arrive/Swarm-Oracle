@@ -377,6 +377,50 @@
   cursor: pointer;
 }
 
+.ending-chat-epilogue-btn {
+  border: 1px solid var(--color-primary);
+  border-radius: 6px;
+  padding: 2px 8px;
+  opacity: 0.85;
+}
+
+.ending-chat-epilogue-btn:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ending-chat-evidence-btn {
+  border: 1px dashed var(--color-primary);
+  border-radius: 6px;
+  padding: 2px 8px;
+  opacity: 0.8;
+  margin-top: 6px;
+}
+
+.ending-chat-evidence-btn:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ending-chat-evidence-drawer {
+  margin: 8px 0;
+  border: 1px dashed var(--border-default);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
+.ending-chat-evidence-drawer > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.ending-chat-evidence-card {
+  border: 1px dashed var(--color-primary);
+  opacity: 0.9;
+}
+
 .ending-chat-participant-strip {
   display: grid;
   gap: 10px;

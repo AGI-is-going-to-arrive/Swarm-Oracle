@@ -156,6 +156,14 @@
   当前也接受 `question_anchor_ids`，用于显式记录 thread 是由哪个 `quote / verdict / key_moment / phase` 发起。
 - `POST /api/ending-room/{room_id}/user-turn` 与 `POST /api/ending-room/thread/{thread_id}/user-turn`
   当前都接受 `question_anchor_ids`。
+  当前还接受可选字段 `cited_branch_id`（引用另一条世界线）和 `cited_refs_json`（引用元数据，上限 4 KB）。
+  当 `cited_branch_id` 存在时，后端会验证它属于同一 scenario，验证失败则静默忽略。
+  当 `interaction_mode` 未指定但 `cited_branch_id` 存在时，自动使用 `evidence_card` 模式。
+- `EndingRoomInteractionMode` 当前支持：
+  `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
+  - `epilogue`：后续三回合短叙事推演。
+  - `evidence_card`：引入另一条世界线的摘要卡。
+  - `epilogue` 与 `evidence_card` 在 `crossline_gallery` 下不可用。
 - `GET /api/ending-room/thread/{thread_id}` 与 room/result snapshot 里的 turn 数据
   当前都会回显：
   - `question_anchor_ids_json`

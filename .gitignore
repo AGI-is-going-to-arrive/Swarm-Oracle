@@ -27,16 +27,26 @@ frontend/.tmp-playwright/
 # Generated runtime artifacts
 .tmp/
 .tmp-playwright/
+.playwright-cli/
 /video/
+/output/
 /*.png
 /*.jpg
 /*.jpeg
 /*.gif
 /后续开发命令
 /后续开发命令.md
+frontend/.tmp-web-game-client*.mjs
+backend/swarmoracle.db.bak-*
 
 # Frontend test outputs: keep only the checked-in sample matrix
 frontend/output/*
 !frontend/output/e2e/
 frontend/output/e2e/*
 !frontend/output/e2e/sample_matrix.json
+
+# Local research notes / exports
+/LobeHub 多模型群聊协作 + Agent文件编辑 简单使用 - 搞七捻三 - LINUX DO.html
+/LobeHub 多模型群聊协作 + Agent文件编辑 简单使用 - 搞七捻三 - LINUX DO_files/
+/swarm_oracle_consolidated_audit.md
+/后续考虑的改进方案.md

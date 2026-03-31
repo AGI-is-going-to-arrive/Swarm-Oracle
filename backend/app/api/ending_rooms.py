@@ -138,6 +138,8 @@ class EndingRoomUserTurnRequest(BaseModel):
     addressed_agent_ids: list[str] = Field(default_factory=list)
     question_anchor_ids: list[str] = Field(default_factory=list)
     interaction_mode: EndingRoomInteractionMode | None = None
+    cited_branch_id: str | None = None
+    cited_refs_json: dict | None = None
 
     @field_validator("content")
     @classmethod
@@ -151,6 +153,25 @@ class EndingRoomUserTurnRequest(BaseModel):
     @classmethod
     def normalize_id_list(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()]
+
+    @field_validator("cited_branch_id")
+    @classmethod
+    def normalize_cited_branch(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("cited_refs_json")
+    @classmethod
+    def validate_cited_refs_size(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        import json as _json
+        serialized = _json.dumps(value, ensure_ascii=False)
+        if len(serialized) > 4096:
+            raise ValueError("cited_refs_json must not exceed 4 KB")
+        return value
 
 
 def _raise_room_error(exc: EndingRoomServiceError) -> None:
@@ -271,6 +292,8 @@ async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRe
             addressed_agent_ids=req.addressed_agent_ids,
             question_anchor_ids=req.question_anchor_ids,
             interaction_mode=req.interaction_mode,
+            cited_branch_id=req.cited_branch_id,
+            cited_refs_json=req.cited_refs_json,
             ws_callback=ending_room_ws_manager.broadcast,
         )
     except EndingRoomServiceError as exc:
@@ -287,6 +310,8 @@ async def create_thread_user_turn_endpoint(thread_id: str, req: EndingRoomUserTu
             addressed_agent_ids=req.addressed_agent_ids,
             question_anchor_ids=req.question_anchor_ids,
             interaction_mode=req.interaction_mode,
+            cited_branch_id=req.cited_branch_id,
+            cited_refs_json=req.cited_refs_json,
             ws_callback=ending_room_ws_manager.broadcast,
         )
     except EndingRoomServiceError as exc:

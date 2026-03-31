@@ -48,6 +48,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - transcript `quote` 级追问 / 开线程
   - transcript `quote` 级 `点名这位代表 / Hotseat this rep`
 - roundtable committed transcript 当前已补长段折叠 / 展开，避免主区直接被长段挤满。
+- 已新增两种交互模式：
+  - `后续三回合 (epilogue)`：在结局讨论后继续 3 回合短叙事推演，不重开主 simulation。
+  - `证据投牌 (evidence_card)`：把另一条世界线的摘要卡引入当前房间，由档案官解释差异。
+  - 两种模式在 `crossline_gallery` 下不可用。
+  - `evidence_card` 的 `cited_branch_id` 会做 scenario 级验证，防止跨场景引用。
 - `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
 - `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail 与 transcript header 显式显示当前 thread 的 anchor badge。
 - Oracle 自动化口径当前会输出：
@@ -112,6 +117,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - `P3 / P4` 仍未启动
   - Oracle 更深的回归与 corner-case hardening
     - `corners` 当前已能稳定落 `result.json`，但尾部仍可能打印一次 teardown warning
+  - `epilogue / evidence_card` 两种新交互模式已落地，待更深 E2E 专项
+  - 新增 11 个主题场景与 6 个 gameplay profiles，场景图当前复用已有素材作为占位
 
 ## 文档入口
 

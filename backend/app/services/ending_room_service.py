@@ -1900,6 +1900,15 @@ def _pick_followup_responder(
         (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
         None,
     )
+    if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+        if archivist is not None:
+            return [archivist]
+        return agent_participants[:1] or participants[:1]
+    if interaction_mode == EndingRoomInteractionMode.EPILOGUE:
+        responders = agent_participants[:3]
+        if archivist is not None:
+            return [archivist, *responders]
+        return responders or participants[:1]
     if interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE and agent_participants:
         routed = agent_participants[:2]
         if archivist is not None:
@@ -1922,6 +1931,18 @@ def _ensure_interaction_mode_allowed(
             422,
             "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED",
             "all_present is not supported for worldline roundtables",
+        )
+    if (
+        room.room_type == EndingRoomType.CROSSLINE_GALLERY
+        and interaction_mode in {
+            EndingRoomInteractionMode.EPILOGUE,
+            EndingRoomInteractionMode.EVIDENCE_CARD,
+        }
+    ):
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED",
+            "epilogue and evidence_card are not supported for crossline galleries",
         )
 
 
@@ -2922,6 +2943,8 @@ def _build_followup_turn_plans(
     addressed_agent_ids: list[str],
     question_anchor_ids: list[str],
     interaction_mode: EndingRoomInteractionMode,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
 ) -> tuple[EndingRoomTurn, list[_OracleFollowupPlan]]:
     branch_rows_by_id: dict[str, list[dict[str, Any]]] = {}
     branch_hooks_by_id: dict[str, str] = {}
@@ -3021,8 +3044,8 @@ def _build_followup_turn_plans(
         memory_partition_id=memory_partition_id,
         addressed_agent_ids_json=normalized_addressed_refs,
         question_anchor_ids_json=question_anchor_ids or None,
-        cited_branch_id=None,
-        cited_refs_json={"kind": "user_turn"},
+        cited_branch_id=cited_branch_id,
+        cited_refs_json=cited_refs_json or {"kind": "user_turn"},
     )
     session.add(user_turn)
     anchor_payloads = [
@@ -3131,11 +3154,32 @@ async def _append_followup_turns_with_retry(
     addressed_agent_ids: list[str],
     question_anchor_ids: list[str],
     interaction_mode: EndingRoomInteractionMode,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
 ) -> list[dict[str, Any]]:
     normalized_content = str(content or "").strip()
     if not normalized_content:
         raise EndingRoomServiceError(422, "ENDING_ROOM_USER_TURN_EMPTY", "content must not be empty")
+
+    validated_cited_branch_id: str | None = None
+    if cited_branch_id:
+        cleaned = cited_branch_id.strip()
+        if cleaned:
+            with Session(get_engine()) as session:
+                thread_for_check = session.get(EndingRoomThread, thread_id)
+                if thread_for_check is not None:
+                    room_for_check = session.get(EndingRoom, thread_for_check.room_id)
+                    if room_for_check is not None:
+                        cited_branch = session.get(Branch, cleaned)
+                        if cited_branch is not None and cited_branch.scenario_id == room_for_check.scenario_id:
+                            validated_cited_branch_id = cleaned
+                        else:
+                            logger.warning(
+                                "cited_branch_id %s does not belong to scenario %s, ignoring",
+                                cleaned,
+                                room_for_check.scenario_id,
+                            )
 
     normalized_addressed_agent_ids = [
         agent_id.strip()
@@ -3201,6 +3245,8 @@ async def _append_followup_turns_with_retry(
                     addressed_agent_ids=effective_addressed_agent_ids,
                     question_anchor_ids=normalized_question_anchor_ids,
                     interaction_mode=interaction_mode,
+                    cited_branch_id=validated_cited_branch_id,
+                    cited_refs_json=cited_refs_json if validated_cited_branch_id or not cited_branch_id else None,
                 )
                 prepared_user_turn = _serialize_turn(user_turn)
                 prepared_plans = plans
@@ -3338,6 +3384,8 @@ async def append_room_user_turn_async(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
 ) -> dict[str, Any]:
     with Session(get_engine()) as session:
@@ -3351,17 +3399,20 @@ async def append_room_user_turn_async(
 
     resolved_mode = interaction_mode
     if resolved_mode is None:
-        resolved_mode = (
-            EndingRoomInteractionMode.HOTSEAT
-            if addressed_agent_ids
-            else EndingRoomInteractionMode.ARCHIVIST_ROUTE
-        )
+        if cited_branch_id:
+            resolved_mode = EndingRoomInteractionMode.EVIDENCE_CARD
+        elif addressed_agent_ids:
+            resolved_mode = EndingRoomInteractionMode.HOTSEAT
+        else:
+            resolved_mode = EndingRoomInteractionMode.ARCHIVIST_ROUTE
     turns = await _append_followup_turns_with_retry(
         thread_id=thread_id,
         content=content,
         addressed_agent_ids=addressed_agent_ids or [],
         question_anchor_ids=question_anchor_ids or [],
         interaction_mode=resolved_mode,
+        cited_branch_id=cited_branch_id,
+        cited_refs_json=cited_refs_json,
         ws_callback=ws_callback,
     )
     return {
@@ -3379,6 +3430,8 @@ def append_room_user_turn(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
         append_room_user_turn_async(
@@ -3387,6 +3440,8 @@ def append_room_user_turn(
             addressed_agent_ids=addressed_agent_ids,
             question_anchor_ids=question_anchor_ids,
             interaction_mode=interaction_mode,
+            cited_branch_id=cited_branch_id,
+            cited_refs_json=cited_refs_json,
         )
     )
 
@@ -3398,11 +3453,16 @@ async def append_thread_user_turn_async(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
 ) -> dict[str, Any]:
     if interaction_mode is None:
-        thread_snapshot = load_ending_room_thread_snapshot(thread_id)
-        resolved_mode = EndingRoomInteractionMode(thread_snapshot["interaction_mode"])
+        if cited_branch_id:
+            resolved_mode = EndingRoomInteractionMode.EVIDENCE_CARD
+        else:
+            thread_snapshot = load_ending_room_thread_snapshot(thread_id)
+            resolved_mode = EndingRoomInteractionMode(thread_snapshot["interaction_mode"])
     else:
         resolved_mode = interaction_mode
     turns = await _append_followup_turns_with_retry(
@@ -3411,6 +3471,8 @@ async def append_thread_user_turn_async(
         addressed_agent_ids=addressed_agent_ids or [],
         question_anchor_ids=question_anchor_ids or [],
         interaction_mode=resolved_mode,
+        cited_branch_id=cited_branch_id,
+        cited_refs_json=cited_refs_json,
         ws_callback=ws_callback,
     )
     thread_snapshot = load_ending_room_thread_snapshot(thread_id)
@@ -3429,6 +3491,8 @@ def append_thread_user_turn(
     addressed_agent_ids: list[str] | None = None,
     question_anchor_ids: list[str] | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
         append_thread_user_turn_async(
@@ -3437,6 +3501,8 @@ def append_thread_user_turn(
             addressed_agent_ids=addressed_agent_ids,
             question_anchor_ids=question_anchor_ids,
             interaction_mode=interaction_mode,
+            cited_branch_id=cited_branch_id,
+            cited_refs_json=cited_refs_json,
         )
     )
 

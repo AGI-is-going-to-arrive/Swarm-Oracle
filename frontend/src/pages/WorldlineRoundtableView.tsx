@@ -1992,6 +1992,19 @@ export default function WorldlineRoundtableView() {
                   >
                     {briefCopied ? t('roundtable.action_brief_copied') : t('roundtable.action_copy_brief')}
                   </button>
+                  {composerEnabled && (
+                    <button
+                      type="button"
+                      className="ending-chat-inline-button ending-chat-epilogue-btn"
+                      onClick={() => {
+                        setComposerDraft(t('ending_room.epilogue_prompt'));
+                        setInteractionMode('epilogue');
+                      }}
+                      title={t('ending_room.epilogue_hint')}
+                    >
+                      {t('ending_room.action_epilogue')}
+                    </button>
+                  )}
                 </div>
               </div>
               {effectiveResult?.archivist_note && <p>{effectiveResult.archivist_note}</p>}

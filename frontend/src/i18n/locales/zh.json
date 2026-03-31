@@ -749,7 +749,14 @@
       "action_brief_copied": "纪要已复制",
       "action_follow_insight": "追问洞察",
       "action_follow_quote": "沿这句追问",
-      "action_thread_from_anchor": "按当前锚点另开线程"
+      "action_thread_from_anchor": "按当前锚点另开线程",
+      "action_epilogue": "后续三回合",
+      "epilogue_hint": "预览这条世界线接下来3回合的短暂发展。",
+      "epilogue_prompt": "这条世界线接下来会发生什么？",
+      "action_evidence_card": "提交证据卡",
+      "evidence_card_hint": "拖入另一条世界线的摘要卡来比较异同。",
+      "evidence_card_label": "来自另一条世界线的证据",
+      "evidence_card_drop_hint": "拖入证据卡来比较世界线差异"
     },
     "roundtable": {
       "title": "世界线圆桌",
@@ -798,7 +805,10 @@
       "action_follow_quote": "沿这句追问",
       "action_thread_from_anchor": "按当前锚点另开线程",
       "action_expand_turn": "展开全文",
-      "action_collapse_turn": "收起长段"
+      "action_collapse_turn": "收起长段",
+      "action_epilogue": "后续三回合",
+      "action_evidence_card": "提交证据卡",
+      "evidence_card_label": "来自另一条世界线的证据"
     },
     "common": {
       "loading": "加载中…",

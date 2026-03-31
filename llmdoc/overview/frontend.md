@@ -82,7 +82,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| `themeRegistry.ts` | `frontend/src/lib/themeRegistry.ts` | Theater / Debate / Oracle 资产注册表 |
+| `themeRegistry.ts` | `frontend/src/lib/themeRegistry.ts` | Theater / Debate / Oracle 资产注册表；当前包含 18 个 gameplay profiles 与 44 个主题场景 |
 | `scenarioAuthority.ts` | `frontend/src/lib/scenarioAuthority.ts` | 主模式 authority 合流入口 |
 | `scenarioGameplayState.ts` | `frontend/src/lib/scenarioGameplayState.ts` | gameplay_state 映射与判等 |
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
@@ -113,12 +113,15 @@
 - `EndingChatModal` 当前已补：
   - `继续追问 / 另开线程 / 复制纪要 / 追问洞察`
   - transcript `quote` 级 `沿这句追问 / 另开线程`
+  - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
+  - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
+  - `后续三回合` 按钮
 - Oracle 当前统一锚点规则：
   - `verdict / key_moment / quote / phase`
   - 都先落到显式 `questionAnchorIds`
@@ -187,6 +190,10 @@
 - `pretext` 仍然没有扩到：
   - `InputView`
   - `WorldScene / Theater`
+- `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
+  - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）当前复用已有 card frame 素材作为占位。
+  - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`），当前复用已有场景图作为占位。
+  - `inferSceneThemeFromQuestion()` 通过关键词匹配自动路由到新主题。
 
 ## 查找路径
 

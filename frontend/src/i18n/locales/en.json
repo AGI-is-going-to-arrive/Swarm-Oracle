@@ -749,7 +749,14 @@
       "action_brief_copied": "Chamber brief copied",
       "action_follow_insight": "Follow this insight",
       "action_follow_quote": "Follow this quote",
-      "action_thread_from_anchor": "Start thread from current anchor"
+      "action_thread_from_anchor": "Start thread from current anchor",
+      "action_epilogue": "Three-turn epilogue",
+      "epilogue_hint": "See a short 3-turn glimpse of what happens next in this worldline.",
+      "epilogue_prompt": "What happens next in this worldline?",
+      "action_evidence_card": "Submit evidence card",
+      "evidence_card_hint": "Drag a summary card from another worldline to compare.",
+      "evidence_card_label": "Evidence from another worldline",
+      "evidence_card_drop_hint": "Drop an evidence card here to compare worldlines"
     },
     "roundtable": {
       "title": "Worldline Roundtable",
@@ -798,7 +805,10 @@
       "action_follow_quote": "Follow this quote",
       "action_thread_from_anchor": "Start thread from current anchor",
       "action_expand_turn": "Show full turn",
-      "action_collapse_turn": "Collapse turn"
+      "action_collapse_turn": "Collapse turn",
+      "action_epilogue": "Three-turn epilogue",
+      "action_evidence_card": "Submit evidence card",
+      "evidence_card_label": "Evidence from another worldline"
     },
     "common": {
       "loading": "Loading…",

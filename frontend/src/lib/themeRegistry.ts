@@ -10,6 +10,12 @@ export type GameplayProfileId =
   | 'frontier'
   | 'mythic'
   | 'survival'
+  | 'finance'
+  | 'scholar'
+  | 'medical'
+  | 'technology'
+  | 'entertainment'
+  | 'diplomacy'
   | 'generic';
 
 interface ThemeRegistryEntry {
@@ -51,6 +57,12 @@ export const GAMEPLAY_PROFILE_FRAME_ASSETS: Record<GameplayProfileId, string> = 
   frontier: '/assets/ui/generated/gameplay_card_frame_frontier.png',
   mythic: '/assets/ui/generated/gameplay_card_frame_mythic.png',
   survival: '/assets/ui/generated/gameplay_card_frame_survival.png',
+  finance: '/assets/ui/generated/gameplay_card_frame_frontier.png',
+  scholar: '/assets/ui/generated/gameplay_card_frame_generic.png',
+  medical: '/assets/ui/generated/gameplay_card_frame_ecology.png',
+  technology: '/assets/ui/generated/gameplay_card_frame_frontier.png',
+  entertainment: '/assets/ui/generated/gameplay_card_frame_mythic.png',
+  diplomacy: '/assets/ui/generated/gameplay_card_frame_governance.png',
   generic: '/assets/ui/generated/gameplay_card_frame_generic.png',
 };
 
@@ -857,6 +869,151 @@ export const THEME_REGISTRY = {
     profileId: 'trade',
     keywords: ['desert', 'sahara', 'oasis', '沙漠', '绿洲'],
   },
+  finance_exchange: {
+    labelZh: '金融交易所',
+    labelEn: 'Finance Exchange',
+    assetPath: '/assets/scenes/trade_harbor.png',
+    profileId: 'finance',
+    keywords: [
+      'stock market', 'stock exchange', 'wall street', 'central bank',
+      'financial crisis', 'currency', 'inflation', 'interest rate',
+      'quantitative easing', 'bond market', 'hedge fund', 'investment',
+      'banking', 'credit', 'debt', 'derivatives', 'futures',
+      '股市', '股票交易所', '华尔街', '央行', '金融危机',
+      '货币', '通胀', '利率', '量化宽松', '债券', '对冲基金',
+      '投资', '银行', '信贷', '债务', '金融',
+    ],
+  },
+  cyber_market: {
+    labelZh: '数字黑市',
+    labelEn: 'Cyber Marketplace',
+    assetPath: '/assets/scenes/surveillance_megacity.png',
+    profileId: 'finance',
+    keywords: [
+      'cryptocurrency', 'bitcoin', 'blockchain', 'digital currency',
+      'dark market', 'cyber economy', 'token', 'NFT', 'DeFi',
+      '加密货币', '比特币', '区块链', '数字货币',
+      '暗网', '数字经济', '代币',
+    ],
+  },
+  medical_institute: {
+    labelZh: '医学研究院',
+    labelEn: 'Medical Research Institute',
+    assetPath: '/assets/scenes/modern_city.png',
+    profileId: 'medical',
+    keywords: [
+      'pandemic', 'vaccine', 'hospital', 'epidemic', 'quarantine',
+      'clinical trial', 'pharmaceutical', 'WHO', 'public health',
+      'biotech', 'gene therapy', 'virus', 'antibiotic', 'surgery',
+      'organ', 'transplant', 'medical ethics', 'triage',
+      '疫情', '疫苗', '医院', '流行病', '隔离',
+      '临床试验', '制药', '公共卫生', '生物技术',
+      '基因', '病毒', '抗生素', '手术', '器官',
+      '移植', '医学伦理', '分诊',
+    ],
+  },
+  academy_hall: {
+    labelZh: '学府大殿',
+    labelEn: 'Academy Grand Hall',
+    assetPath: '/assets/scenes/civic_chamber.png',
+    profileId: 'scholar',
+    keywords: [
+      'university', 'academy', 'school', 'education', 'professor',
+      'student', 'research', 'thesis', 'library', 'curriculum',
+      'exam', 'scholarship', 'lecture', 'seminar', 'campus',
+      'dean', 'faculty', 'academic freedom', 'peer review',
+      '大学', '学院', '学校', '教育', '教授',
+      '学生', '研究', '论文', '图书馆', '课程',
+      '考试', '奖学金', '讲座', '校园', '学术自由',
+      '同行评审', '院长', '教务',
+    ],
+  },
+  tech_campus: {
+    labelZh: '科技园区',
+    labelEn: 'Tech Innovation Campus',
+    assetPath: '/assets/scenes/scifi_base.png',
+    profileId: 'technology',
+    keywords: [
+      'startup', 'silicon valley', 'tech company', 'innovation',
+      'venture capital', 'IPO', 'disruption', 'platform',
+      'app', 'software', 'hardware', 'chip', 'semiconductor',
+      'data center', 'cloud computing', 'quantum computing',
+      '创业', '硅谷', '科技公司', '创新',
+      '风险投资', '颠覆', '平台', '应用',
+      '软件', '硬件', '芯片', '半导体',
+      '数据中心', '云计算', '量子计算',
+    ],
+  },
+  arena_colosseum: {
+    labelZh: '竞技场',
+    labelEn: 'Arena Colosseum',
+    assetPath: '/assets/scenes/ancient_empire.png',
+    profileId: 'entertainment',
+    keywords: [
+      'gladiator', 'colosseum', 'arena', 'sports', 'olympics',
+      'competition', 'tournament', 'champion', 'stadium', 'athlete',
+      'referee', 'league', 'world cup', 'game', 'match',
+      '角斗士', '竞技场', '体育', '奥运', '比赛',
+      '锦标赛', '冠军', '体育场', '运动员', '裁判',
+      '联赛', '世界杯',
+    ],
+  },
+  concert_hall: {
+    labelZh: '音乐厅',
+    labelEn: 'Concert Hall',
+    assetPath: '/assets/scenes/dynastic_palace.png',
+    profileId: 'entertainment',
+    keywords: [
+      'concert', 'music', 'theater', 'opera', 'symphony',
+      'performance', 'art', 'artist', 'gallery', 'museum',
+      'cinema', 'film', 'festival', 'culture', 'creative',
+      '音乐会', '音乐', '剧院', '歌剧', '交响乐',
+      '表演', '艺术', '艺术家', '画廊', '博物馆',
+      '电影', '电影院', '节日', '文化', '创意',
+    ],
+  },
+  media_tower: {
+    labelZh: '传媒之塔',
+    labelEn: 'Media Broadcast Tower',
+    assetPath: '/assets/scenes/surveillance_megacity.png',
+    profileId: 'technology',
+    keywords: [
+      'media', 'broadcast', 'propaganda', 'censorship', 'press freedom',
+      'news', 'journalist', 'social media', 'fake news', 'misinformation',
+      'algorithm bias', 'content moderation', 'information warfare',
+      '媒体', '广播', '宣传', '审查', '新闻自由',
+      '新闻', '记者', '社交媒体', '假新闻', '虚假信息',
+      '算法偏见', '内容审核', '信息战',
+    ],
+  },
+  diplomatic_summit: {
+    labelZh: '外交峰会',
+    labelEn: 'Diplomatic Summit',
+    assetPath: '/assets/scenes/civic_chamber.png',
+    profileId: 'diplomacy',
+    keywords: [
+      'diplomacy', 'summit', 'treaty', 'alliance', 'embargo',
+      'sanctions', 'negotiation', 'ceasefire', 'peace talks',
+      'UN', 'NATO', 'ASEAN', 'EU', 'G20', 'ambassador',
+      'bilateral', 'multilateral', 'sovereignty',
+      '外交', '峰会', '条约', '联盟', '禁运',
+      '制裁', '谈判', '停火', '和谈',
+      '联合国', '大使', '双边', '多边', '主权',
+    ],
+  },
+  underground_network: {
+    labelZh: '地下组织',
+    labelEn: 'Underground Network',
+    assetPath: '/assets/scenes/refuge_compound.png',
+    profileId: 'survival',
+    keywords: [
+      'underground', 'resistance', 'rebel network', 'secret society',
+      'safe house', 'smuggling', 'black market', 'espionage',
+      'insurgency', 'guerrilla', 'clandestine', 'operative',
+      '地下组织', '抵抗', '秘密社团', '安全屋',
+      '走私', '黑市', '间谍', '叛乱', '游击',
+    ],
+  },
 } as const satisfies Record<string, ThemeRegistryEntry>;
 
 export type SceneThemeId = keyof typeof THEME_REGISTRY;
@@ -918,7 +1075,7 @@ export function inferSceneThemeFromQuestion(question: string): SceneThemeId {
     return 'scifi_base';
   }
   if (qLower.includes('贝多芬') || qLower.includes('beethoven') || qLower.includes('art') || qLower.includes('music')) {
-    return 'ancient_empire';
+    return 'concert_hall';
   }
   if (qLower.includes('诸葛亮') || qLower.includes('三国') || qLower.includes('zhuge')) {
     return 'ancient_empire';

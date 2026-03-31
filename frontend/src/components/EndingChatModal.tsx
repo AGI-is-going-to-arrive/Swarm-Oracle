@@ -166,6 +166,16 @@ function getInteractionModeNote(
       ? '把一个具体问题留在单独线程里继续追，不让旁支干扰当前结论。'
       : 'Keep one concrete question in its own follow-up thread so the verdict stays legible.';
   }
+  if (mode === 'epilogue') {
+    return isZh
+      ? '世界线将继续推演3回合，预览后续走向。'
+      : 'The worldline continues for 3 turns to preview what comes next.';
+  }
+  if (mode === 'evidence_card') {
+    return isZh
+      ? '将另一条世界线的证据引入当前讨论，由档案官解释差异。'
+      : 'Introducing evidence from another worldline; the Archivist will explain the differences.';
+  }
   return isZh
     ? '先让档案官接住问题，再把话题抛回最相关的人。'
     : 'Let the Archivist frame the question first, then route it to the most relevant voice.';
@@ -1294,6 +1304,19 @@ export default function EndingChatModal({
                     >
                       {briefCopied ? t('ending_room.action_brief_copied') : t('ending_room.action_copy_brief')}
                     </button>
+                    {effectiveRoomType !== 'crossline_gallery' && composerEnabled && (
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button ending-chat-epilogue-btn"
+                        onClick={() => {
+                          setComposerDraft(t('ending_room.epilogue_prompt'));
+                          setInteractionMode('epilogue');
+                        }}
+                        title={t('ending_room.epilogue_hint')}
+                      >
+                        {t('ending_room.action_epilogue')}
+                      </button>
+                    )}
                   </div>
                 </div>
                 <p>{effectiveResult.summary}</p>
@@ -1438,10 +1461,75 @@ export default function EndingChatModal({
                             ))}
                           </ul>
                         )}
+                        {composerEnabled && (
+                          <button
+                            type="button"
+                            className="ending-chat-inline-button ending-chat-evidence-btn"
+                            onClick={() => {
+                              const evidenceSummary = galleryBranch.insight || galleryBranch.story || galleryBranch.title;
+                              void appendUserTurn({
+                                content: `[${t('ending_room.evidence_card_label')}] ${galleryBranch.title}: ${evidenceSummary}`,
+                                interactionMode: 'evidence_card',
+                                citedBranchId: galleryBranch.id,
+                                citedRefsJson: {
+                                  kind: 'evidence_card',
+                                  evidence_card_kind: 'summary',
+                                  source_branch_title: galleryBranch.title,
+                                  source_summary: galleryBranch.story || '',
+                                  source_insight: galleryBranch.insight || '',
+                                },
+                              });
+                            }}
+                            title={t('ending_room.evidence_card_hint')}
+                          >
+                            {t('ending_room.action_evidence_card')}
+                          </button>
+                        )}
                       </article>
                     ))
                   )}
                 </div>
+              )}
+              {!isCrosslineGallery && composerEnabled && galleryCards.length > 0 && (
+                <details className="ending-chat-evidence-drawer">
+                  <summary>{t('ending_room.evidence_card_drop_hint')}</summary>
+                  <div className="ending-chat-gallery-list">
+                    {galleryCards.map((galleryBranch) => (
+                      <article key={galleryBranch.id} className="ending-chat-gallery-card ending-chat-evidence-card">
+                        <header className="ending-chat-gallery-card__header">
+                          <div>
+                            <strong>{galleryBranch.title}</strong>
+                            <span>{t('ending_room.foreign_summary_badge')}</span>
+                          </div>
+                          <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
+                        </header>
+                        <p>{galleryBranch.insight || galleryBranch.story || '—'}</p>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button ending-chat-evidence-btn"
+                          onClick={() => {
+                            const evidenceSummary = galleryBranch.insight || galleryBranch.story || galleryBranch.title;
+                            void appendUserTurn({
+                              content: `[${t('ending_room.evidence_card_label')}] ${galleryBranch.title}: ${evidenceSummary}`,
+                              interactionMode: 'evidence_card',
+                              citedBranchId: galleryBranch.id,
+                              citedRefsJson: {
+                                kind: 'evidence_card',
+                                evidence_card_kind: 'summary',
+                                source_branch_title: galleryBranch.title,
+                                source_summary: galleryBranch.story || '',
+                                source_insight: galleryBranch.insight || '',
+                              },
+                            });
+                          }}
+                          title={t('ending_room.evidence_card_hint')}
+                        >
+                          {t('ending_room.action_evidence_card')}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </details>
               )}
               {!isCrosslineGallery && !readOnly && currentTurns.length === 0 && displayedDrafts.length === 0 && status === 'loading' && (
                 <div className="ending-chat-empty-state">{t('ending_room.loading')}</div>

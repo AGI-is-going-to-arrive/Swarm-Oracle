@@ -75,6 +75,13 @@
   当前已用于显式记录 `quote / verdict / key_moment / phase` 等锚点来源。
 - `ending_room_thread.question_anchor_ids_json`
   当前也已成为真实字段，thread create 与后续 replay/read-only 恢复都能保留锚点语义。
+- `EndingRoomInteractionMode` 当前支持 7 种模式：
+  `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
+  - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
+  - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
+- `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
+  - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
+  - `cited_refs_json` 有 4 KB 大小限制。
 
 ## 运行时约束
 

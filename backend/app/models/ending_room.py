@@ -60,6 +60,8 @@ class EndingRoomInteractionMode(str, enum.Enum):
     HOTSEAT = "hotseat"
     ALL_PRESENT = "all_present"
     THREAD_FOLLOWUP = "thread_followup"
+    EPILOGUE = "epilogue"
+    EVIDENCE_CARD = "evidence_card"
 
 
 class EndingRoom(SQLModel, table=True):
