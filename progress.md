@@ -15821,3 +15821,42 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 
 - 追加收口：mobile follow-up/all_present 的 E2E 成功条件改为接受线程切回主桌、sending 中或 draft 中，不再死盯 turn_count 增长。
 - 追加结果：`e2e-ending-room-followup-suite.mjs mobile` 已跑通，原先唯一剩余的 mobile all_present timeout 阻塞已解除。
+
+## 2026-03-31 Oracle P2 scoped signoff
+
+- 范围控制：
+  - 未扩到 `P3/P4`
+  - 只在 `EndingChatModal / WorldlineRoundtableView` 补 transcript layout telemetry
+  - telemetry 字段当前统一叫 `transcript_layout`
+- 代码增量：
+  - `frontend/src/lib/textLayout/oracleTranscriptLayout.ts`
+    - 新增 `summarizeOracleTranscriptLayout(...)`
+  - `frontend/src/components/EndingChatModal.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - automation payload 当前会额外输出：
+      - `turn_count / draft_count`
+      - `max_turn_lines / max_draft_lines`
+      - `overflow_turn_count / overflow_draft_count`
+      - `max_turn_min_height_px / max_draft_min_height_px`
+      - `scroll_bottom_offset_px / scroll_height_px / client_height_px`
+      - `is_bottom_anchored`
+  - `frontend/src/lib/textLayout/oracleTranscriptLayout.test.ts`
+  - `frontend/src/components/EndingChatModal.test.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 补 telemetry 输出断言
+- 验证：
+  - `cd frontend && npm test -- --run src/lib/textLayout/oracleTranscriptLayout.test.ts src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260331-codex-p2-signoff-ending-room --headless true`
+    - 通过，`summary.json` 已落 `transcript_layout`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260331-codex-p2-signoff-roundtable-desktop --headless`
+    - 通过，`summary.json` 已落 `transcript_layout`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260331-codex-p2-signoff-roundtable-mobile --headless`
+    - 通过，`summary.json` 已落 `transcript_layout`
+- harness 现状：
+  - `roundtable full` 仍会受 provider 慢路径波动影响；本轮改成 desktop/mobile 分端 signoff 更稳定
+  - `followup full` 当前已可稳定生成新 `summary.json`

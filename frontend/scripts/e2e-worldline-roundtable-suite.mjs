@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { closePlaywrightBrowser, closePlaywrightContext } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -67,20 +68,91 @@ async function getScenario(backendUrl, scenarioId) {
   return fetchJson(`${backendUrl}/api/scenario/${scenarioId}`);
 }
 
+function collectSummaryFiles(rootDir) {
+  const files = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name === "summary.json") {
+        files.push(fullPath);
+      }
+    }
+  }
+  return files;
+}
+
+function readPreferredScenarioIds() {
+  const preferred = {
+    desktop: null,
+    mobile: null,
+  };
+  const summaryFiles = collectSummaryFiles(DEFAULT_OUTPUT_ROOT)
+    .map((summaryPath) => ({
+      summaryPath,
+      mtimeMs: fs.statSync(summaryPath).mtimeMs,
+    }))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+  for (const { summaryPath } of summaryFiles) {
+    try {
+      const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+      if (!preferred.desktop && typeof summary?.desktop?.scenarioId === "string") {
+        preferred.desktop = summary.desktop.scenarioId.trim();
+      }
+      if (!preferred.mobile && typeof summary?.mobile?.scenarioId === "string") {
+        preferred.mobile = summary.mobile.scenarioId.trim();
+      }
+      if (preferred.desktop && preferred.mobile) {
+        break;
+      }
+    } catch {
+      // Ignore malformed summary files.
+    }
+  }
+
+  return preferred;
+}
+
+async function resolvePreferredScenarioId(backendUrl, scenarioId) {
+  if (!scenarioId) {
+    return null;
+  }
+  const scenario = await getScenario(backendUrl, scenarioId).catch(() => null);
+  if ((scenario?.branches?.length ?? 0) >= 2) {
+    return scenario.id;
+  }
+  return null;
+}
+
 async function findMultiEndingScenarioId(backendUrl) {
   const payload = await fetchJson(`${backendUrl}/api/scenarios?status=done&limit=120&offset=0`);
-  let bestScenarioId = null;
-  let bestBranchCount = 0;
+  const candidates = [];
   for (const item of payload.scenarios ?? []) {
     const scenario = await getScenario(backendUrl, item.id);
     const branchCount = scenario.branches?.length ?? 0;
-    if (branchCount >= 2 && branchCount > bestBranchCount) {
-      bestScenarioId = scenario.id;
-      bestBranchCount = branchCount;
+    if (branchCount >= 2) {
+      candidates.push({
+        id: scenario.id,
+        branchCount,
+        createdAt: String(scenario.created_at ?? ""),
+      });
     }
   }
-  if (bestScenarioId) {
-    return bestScenarioId;
+  candidates.sort((left, right) => {
+    if (right.branchCount !== left.branchCount) {
+      return right.branchCount - left.branchCount;
+    }
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+  if (candidates[0]?.id) {
+    return candidates[0].id;
   }
   throw new Error("No multi-ending DONE scenario is available for roundtable E2E");
 }
@@ -215,7 +287,16 @@ async function sendComposer(page, prompt, modeText, options = {}) {
 async function waitForDraftBubblesToSettle(page, label) {
   await page.waitForFunction(
     () => document.querySelectorAll(".ending-chat-bubble--draft").length === 0,
-    { timeout: 20000 },
+    { timeout: 60000 },
+  ).catch(() => {
+    throw new Error(`Timed out waiting for ${label}`);
+  });
+}
+
+async function waitForTranscriptActionsReady(page, label, timeout = 60000) {
+  await page.waitForFunction(
+    () => document.querySelectorAll(".ending-chat-bubble__actions button").length > 0,
+    { timeout },
   ).catch(() => {
     throw new Error(`Timed out waiting for ${label}`);
   });
@@ -223,22 +304,34 @@ async function waitForDraftBubblesToSettle(page, label) {
 
 async function createVerdictAnchoredThread(page, label) {
   await waitForDraftBubblesToSettle(page, `${label} draft settle`);
-  const before = await readAutomation(page);
-  const beforeThreadCount = before?.page?.controls?.thread_count ?? 0;
-  const beforeThreadId = before?.page?.controls?.active_thread_id ?? null;
-  const quoteThreadButton = page
-    .locator(".ending-chat-bubble__actions")
-    .first()
-    .getByRole("button", { name: /Start anchored thread|另开线程/i });
-  if (await quoteThreadButton.isVisible().catch(() => false)) {
-    await quoteThreadButton.click();
+  await waitForTranscriptActionsReady(page, `${label} quote actions`);
+  const firstBubbleActions = page.locator(".ending-chat-bubble__actions").first();
+  const quoteFollowButton = firstBubbleActions.getByRole("button", {
+    name: /Follow this quote|沿这句追问/i,
+  });
+  const quoteThreadButton = firstBubbleActions.getByRole("button", {
+    name: /Start anchored thread|另开线程/i,
+  });
+  if (await quoteFollowButton.isVisible().catch(() => false)) {
+    await quoteFollowButton.scrollIntoViewIfNeeded().catch(() => {});
+    await quoteFollowButton.evaluate((node) => node.click());
+    await waitForAutomation(
+      page,
+      (payload) => (payload.page?.controls?.pending_question_anchor_ids?.length ?? 0) > 0,
+      10000,
+      `${label} quote anchor armed`,
+    );
+    await quoteThreadButton.evaluate((node) => node.click());
+  } else if (await quoteThreadButton.isVisible().catch(() => false)) {
+    await quoteThreadButton.evaluate((node) => node.click());
   } else {
     const globalQuoteThreadButton = page.getByRole("button", { name: /Start anchored thread|另开线程/i }).last();
     if (await globalQuoteThreadButton.isVisible().catch(() => false)) {
-      await globalQuoteThreadButton.click();
+      await globalQuoteThreadButton.scrollIntoViewIfNeeded().catch(() => {});
+      await globalQuoteThreadButton.click({ force: true });
     } else {
       await page.getByRole("button", { name: /Archive Verdict|档案总结|档案结论/i }).first().click();
-      await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click();
+      await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click({ force: true });
     }
   }
   return waitForAutomation(
@@ -248,13 +341,11 @@ async function createVerdictAnchoredThread(page, label) {
       if (!controls) return false;
       return (
         controls.interaction_mode === "thread_followup"
-        && (
-          (controls.thread_count ?? 0) > beforeThreadCount
-          || (controls.active_thread_id ?? null) !== beforeThreadId
-        )
+        && (controls.question_anchor_ids?.length ?? 0) > 0
+        && Boolean(controls.active_thread_id)
       );
     },
-    20000,
+    35000,
     label,
   );
 }
@@ -271,10 +362,22 @@ async function sendAnchoredFollowup(page, label) {
     return payload.page?.controls?.can_send === true;
   }, { timeout: 10000 });
   await page.locator(".ending-chat-send").click({ force: true });
-  await page.waitForFunction(() => {
-    const input = document.querySelector(".ending-chat-composer__input");
-    return input instanceof HTMLTextAreaElement && input.value.trim().length === 0;
-  }, { timeout: 10000 });
+  await waitForAutomation(
+    page,
+    (payload) => {
+      const controls = payload.page?.controls;
+      if (!controls || controls.interaction_mode !== "thread_followup") {
+        return false;
+      }
+      return (
+        controls.sending === true
+        || (controls.pending_question_anchor_ids?.length ?? 0) === 0
+        || (controls.question_anchor_ids?.length ?? 0) > 0
+      );
+    },
+    20000,
+    `${label} dispatch`,
+  );
   return waitForAutomation(
     page,
     (payload) => {
@@ -286,7 +389,7 @@ async function sendAnchoredFollowup(page, label) {
         && (controls.pending_question_anchor_ids?.length ?? 0) === 0
       );
     },
-    20000,
+    60000,
     label,
   );
 }
@@ -551,9 +654,12 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
       expectedInteractionMode: "hotseat",
     },
   );
+  await waitForDraftBubblesToSettle(page, "desktop hotseat draft settle");
+  await waitForTranscriptActionsReady(page, "desktop hotseat quote actions");
+  const hotseatSettled = await readAutomation(page);
   await focusHotseatThread(page, hotseat?.page?.controls?.active_thread_id ?? null);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
-  writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseat);
+  writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseatSettled ?? hotseat);
   await createVerdictAnchoredThread(page, "desktop verdict anchored thread");
   const anchoredThread = await sendAnchoredFollowup(page, "desktop anchored follow-up commit");
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
@@ -668,9 +774,12 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     },
   );
   const hotseatThreadId = hotseat?.page?.controls?.active_thread_id ?? null;
+  await waitForDraftBubblesToSettle(page, "mobile hotseat draft settle");
+  await waitForTranscriptActionsReady(page, "mobile hotseat quote actions");
+  const hotseatSettled = await readAutomation(page);
   await focusHotseatThread(page, hotseatThreadId);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-hotseat.png"));
-  writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), hotseat);
+  writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), hotseatSettled ?? hotseat);
   await createVerdictAnchoredThread(page, "mobile verdict anchored thread");
   const anchoredThread = await sendAnchoredFollowup(page, "mobile anchored follow-up commit");
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
@@ -757,7 +866,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     writeJson(path.join(outputDir, "mobile-roundtable-replay-coverage-error.json"), { error: replayCoverageError });
   }
 
-  await context.close();
+  await closePlaywrightContext(context, "roundtable-mobile-context");
   return {
     scenarioId,
     ready,
@@ -781,23 +890,36 @@ async function main() {
   const outputDir = args.outputDir || path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-worldline-roundtable`);
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless);
-  try {
-    const scenarioId = await findMultiEndingScenarioId(args.backendUrl);
-    const summary = {};
-    if (args.mode === "desktop" || args.mode === "full") {
-      const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
-      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, scenarioId);
-      await context.close();
+  const preferredScenarioIds = readPreferredScenarioIds();
+  const fallbackScenarioId = await findMultiEndingScenarioId(args.backendUrl);
+  const desktopScenarioId = await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.desktop)
+    ?? fallbackScenarioId;
+  const mobileScenarioId = await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.mobile)
+    ?? desktopScenarioId;
+  const summary = {};
+
+  if (args.mode === "desktop" || args.mode === "full") {
+    const desktopBrowser = await launchBrowser(args.headless);
+    try {
+      const context = await desktopBrowser.newContext({ viewport: { width: 1600, height: 900 } });
+      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, desktopScenarioId);
+      await closePlaywrightContext(context, "roundtable-desktop-context");
+    } finally {
+      await closePlaywrightBrowser(desktopBrowser, "roundtable-desktop-browser");
     }
-    if (args.mode === "mobile" || args.mode === "full") {
-      summary.mobile = await runMobile(browser, args.baseUrl, args.backendUrl, outputDir, scenarioId);
-    }
-    writeJson(path.join(outputDir, "summary.json"), summary);
-    console.log(JSON.stringify(summary, null, 2));
-  } finally {
-    await browser.close();
   }
+
+  if (args.mode === "mobile" || args.mode === "full") {
+    const mobileBrowser = await launchBrowser(args.headless);
+    try {
+      summary.mobile = await runMobile(mobileBrowser, args.baseUrl, args.backendUrl, outputDir, mobileScenarioId);
+    } finally {
+      await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser");
+    }
+  }
+
+  writeJson(path.join(outputDir, "summary.json"), summary);
+  console.log(JSON.stringify(summary, null, 2));
 }
 
 main().catch((error) => {

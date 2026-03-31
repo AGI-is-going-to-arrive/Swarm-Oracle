@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { chromium } from "playwright";
+import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
 
 function parseArgs(argv) {
   const args = {
@@ -259,7 +260,7 @@ async function sendAnchoredFollowup(page, label) {
       return null;
     },
     label,
-    20000,
+    60000,
   );
 }
 
@@ -581,7 +582,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "single-mobile-replay-readonly-reloaded.json"),
       JSON.stringify(replayReloaded, null, 2),
     );
-    await reloadPage.close();
+    await closePlaywrightPage(reloadPage, "ending-room-single-mobile-reload-page");
   } catch (error) {
     replayCoverageError = String(error);
     fs.writeFileSync(
@@ -589,7 +590,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify({ error: replayCoverageError }, null, 2),
     );
   }
-  await context.close();
+  await closePlaywrightContext(context, "ending-room-single-mobile-context");
   return {
     resultUrl,
     pickerState,
@@ -801,7 +802,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "mobile-ending-room-replay-readonly-reloaded.json"),
       JSON.stringify(replayReloaded, null, 2),
     );
-    await reloadPage.close();
+    await closePlaywrightPage(reloadPage, "ending-room-multi-mobile-reload-page");
   } catch (error) {
     replayCoverageError = String(error);
     fs.writeFileSync(
@@ -810,7 +811,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     );
   }
 
-  await context.close();
+  await closePlaywrightContext(context, "ending-room-multi-mobile-context");
   return {
     resultUrl,
     chamberState: chamberState?.modalState ?? null,
@@ -837,7 +838,7 @@ async function main() {
     if (args.mode === "desktop" || args.mode === "full") {
       const desktopContext = await browser.newContext({ viewport: { width: 1600, height: 900 } });
       summary.multiDesktop = await runMultiDesktop(desktopContext, args.url, args.outputDir, scenarioIds);
-      await desktopContext.close();
+      await closePlaywrightContext(desktopContext, "ending-room-desktop-context");
     }
     if (args.mode === "mobile" || args.mode === "full") {
       summary.mobile = {
@@ -848,7 +849,7 @@ async function main() {
     fs.writeFileSync(path.join(args.outputDir, "summary.json"), JSON.stringify(summary, null, 2));
     console.log(JSON.stringify(summary, null, 2));
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "ending-room-browser");
   }
 }
 

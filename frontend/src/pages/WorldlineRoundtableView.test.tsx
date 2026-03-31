@@ -861,6 +861,93 @@ describe('WorldlineRoundtableView', () => {
     expect(setInteractionModeMock).toHaveBeenCalledWith('thread_followup');
   });
 
+  it('applies transcript layout metadata to long pending drafts', async () => {
+    const longDraft = '请继续沿着这张圆桌追问：为什么这条世界线会把短期军令当成长期秩序，并要求档案官替所有后续成本收口？';
+    storeState.pendingDrafts = {
+      'draft-1': {
+        turnId: 'draft-1',
+        threadId: 'thread-room',
+        participantId: 'rep-a',
+        phase: 'verdict',
+        content: longDraft,
+        sequence: 2,
+      },
+    } as any;
+
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The roundtable converged on a single hinge.');
+    const bubble = screen.getByText(longDraft).closest('article');
+    expect(bubble).not.toBeNull();
+    expect(Number(bubble?.getAttribute('data-layout-lines') ?? '0')).toBeGreaterThan(1);
+    expect(bubble?.style.minHeight).not.toBe('');
+  });
+
+  it('exposes transcript layout telemetry through render_game_to_text', async () => {
+    storeState.pendingDrafts = {
+      'draft-1': {
+        turnId: 'draft-1',
+        threadId: 'thread-room',
+        participantId: 'rep-a',
+        phase: 'verdict',
+        content: '请继续沿着这张圆桌追问：为什么这条世界线会把短期军令当成长期秩序，并要求档案官替所有后续成本收口？',
+        sequence: 2,
+      },
+    } as any;
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The roundtable converged on a single hinge.');
+    const payload = JSON.parse((window as any).render_game_to_text());
+    expect(payload.page.controls.transcript_layout.turn_count).toBeGreaterThanOrEqual(1);
+    expect(payload.page.controls.transcript_layout.draft_count).toBeGreaterThanOrEqual(1);
+    expect(payload.page.controls.transcript_layout.max_draft_lines).toBeGreaterThan(1);
+    expect(payload.page.controls.transcript_layout.max_draft_min_height_px).toBeGreaterThan(0);
+  });
+
   it('lets a verdict chip reuse the same thread-from-anchor rule', async () => {
     const user = userEvent.setup();
     setComposerDraftMock.mockImplementation((value: string) => {

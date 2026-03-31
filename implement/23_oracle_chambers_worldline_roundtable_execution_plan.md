@@ -4,7 +4,7 @@
 > 当前真值：是，直到实现落地并并入 `README.md` / `llmdoc/*`
 > 阅读方式：本文件按“可直接开工”的执行手册编写，覆盖命名、范围、分阶段开发、测试、review、i18n、跨平台、视觉一致性与素材补齐。
 > 当前时间：2026-03-31
-> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。本轮再补：0.3 的锚点可观测性、thread/read-only 回显测试、自动化 summary 字段已全部落地；`trait_mix / fault_line_first / witness_augmented` 的选择状态也已补幂等保护，避免重复写回同一份 selection。本 session 再补：`endingRoomStore` 当前会在 committed turn / room-thread hydrate 时清 stale draft，迟到 `turn_start / turn_delta` 不再复活 ghost bubble；`llm_call_stream()` 的 `estimated_tokens` 预估已补回，Oracle follow-up stream probe 不再因为变量缺失误触发 fallback；`e2e-worldline-roundtable-suite` 的 verdict anchored thread 与 `e2e-ending-room-followup-suite` 的 mobile `all_present` timeout 也已收口。
+> 状态更新（2026-03-31，最新）：single-ending chamber / one-move、follow-up thread、`WorldlineRoundtableView` 的 live / reseat / replay readonly 已落地，并已进入稳定 `release:signoff` 总链；follow-up 现已升级成“后端优先真流式 + provider 探测 fallback”的 mixed-streaming 链路；Oracle 文案层已继续补到 `角色化 + 题材化 + 去重复`，并已扩到 `finance / market / faith / industry / frontier / survival / scholar` 这些语域；前端也已接入 profile skin + hook chips + 轻量氛围动效，并补了更清晰的 roundtable mobile 顶部状态带。`crossline_gallery`、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented` 当前都已形成最小可玩闭环；ending-room / roundtable 的 replay/share/import 已重新完成一轮桌面 + mobile 专项签收。单结局结果页当前也已重新人工核对：只保留 `进入会客厅 / 只改一步`，不再展示 `发起圆桌 / 异线旁听席`。Oracle fresh live room 的英文 deterministic copy 也已补去混句兜底。额外增量：`legend-talk` 借鉴的“低摩擦工作台动作”当前已项目化落地成 Oracle 自己的 `继续追问 / 另开线程 / 复制纪要 / transcript quote 级追问`；`quote / verdict / key_moment / phase` 当前都已统一进显式 `questionAnchorIds` 合同，thread/create 与 user-turn/send 两条链都能持久化锚点语义；`mobile roundtable artifact replay readonly` 的 timeout 也已定位并修复，当前重新回到 `hotseat + active_thread_id` 可恢复口径。本轮再补：0.3 的锚点可观测性、thread/read-only 回显测试、自动化 summary 字段已全部落地；`trait_mix / fault_line_first / witness_augmented` 的选择状态也已补幂等保护，避免重复写回同一份 selection。本 session 再补：`endingRoomStore` 当前会在 committed turn / room-thread hydrate 时清 stale draft，迟到 `turn_start / turn_delta` 不再复活 ghost bubble；`llm_call_stream()` 的 `estimated_tokens` 预估已补回，Oracle follow-up stream probe 不再因为变量缺失误触发 fallback；`e2e-worldline-roundtable-suite` 的 verdict anchored thread 与 `e2e-ending-room-followup-suite` 的 mobile `all_present` timeout 也已收口。继续补：`pretext` 已不再只是只读 contract；`EndingChatModal / WorldlineRoundtableView` 当前都已接入运行时 transcript 布局内核，automation / summary 会带 `transcript_layout`。脚本侧当前也已补更稳的 Oracle E2E teardown、quote-anchor 交互链、hotseat settle 等待与 per-mode fixture 选择；`followup full` 当前能重新稳定落盘新 `summary.json`，`roundtable` 的 `P2` transcript signoff 当前优先看 desktop / mobile 分端工件，另保留一份已通过的 `full` 稳定工件。
 
 ---
 
@@ -88,6 +88,13 @@
      - `artifactReadonly.interaction_mode = hotseat`
      - `replayReadonly.interaction_mode = hotseat`
      - `replayCoverageError = null`
+10. `pretext / transcript layout`
+   - `EndingChatModal / WorldlineRoundtableView` 当前都已接入 Oracle transcript 运行时布局内核
+   - bubble `min-height` 预测与 transcript bottom-anchor 稳定化已落地
+   - automation payload / E2E summary 当前会直接带 `transcript_layout`
+   - `P2` 当前签收口径：
+     - ending-room 一份 `full` summary
+     - roundtable 当前优先看 desktop / mobile 分端 summary
 
 ### 当前真正还没最终签收的点
 
@@ -175,9 +182,27 @@
    - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
    - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
 
+### D. 把 transcript layout 也落成可签收字段
+
+已完成：
+
+1. `EndingChatModal / WorldlineRoundtableView`
+   - 当前 automation payload 已额外输出 `transcript_layout`
+2. `transcript_layout` 当前统一包含：
+   - `turn_count / draft_count`
+   - `max_turn_lines / max_draft_lines`
+   - `overflow_turn_count / overflow_draft_count`
+   - `max_turn_min_height_px / max_draft_min_height_px`
+   - `scroll_bottom_offset_px / scroll_height_px / client_height_px`
+   - `is_bottom_anchored`
+3. `P2` scoped signoff 工件已落盘：
+   - `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
+   - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
+   - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
+
 当前结论：
 
-- 这三项已经进入当前真值，不再是“待做”
+- 这四项已经进入当前真值，不再是“待做”
 - 后续如果继续回归，只需要继续拷打 readonly / reload / import 是否保持同一 anchor thread 语义
 - 不需要为了继续做观测再扩大 room/thread 边界
 

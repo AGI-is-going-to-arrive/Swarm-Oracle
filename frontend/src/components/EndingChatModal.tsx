@@ -1,8 +1,15 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, type UIEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { copyText } from '../lib/copyText';
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
+import {
+  buildOracleTranscriptLayoutMap,
+  captureTranscriptScrollSnapshot,
+  computeBottomAnchoredScrollTop,
+  summarizeOracleTranscriptLayout,
+  type TranscriptScrollSnapshot,
+} from '../lib/textLayout/oracleTranscriptLayout';
 import {
   getGameplayProfileFrameSrc,
   type GameplayProfileId,
@@ -293,6 +300,7 @@ export default function EndingChatModal({
   const transcriptListRef = useRef<HTMLDivElement>(null);
   const transcriptHydratedRef = useRef(false);
   const transcriptAutoStickRef = useRef(false);
+  const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
@@ -698,6 +706,31 @@ export default function EndingChatModal({
   const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
+  const transcriptLocale = isZh ? 'zh' : 'en';
+  const transcriptBubbleLayouts = useMemo(
+    () => buildOracleTranscriptLayoutMap(
+      currentTurns.map((turn) => ({ key: turn.key, content: turn.content })),
+      'ending_turn',
+      transcriptLocale,
+    ),
+    [currentTurns, transcriptLocale],
+  );
+  const transcriptDraftLayouts = useMemo(
+    () => buildOracleTranscriptLayoutMap(
+      displayedDrafts.map((draft) => ({ key: draft.key, content: draft.content })),
+      'ending_draft',
+      transcriptLocale,
+    ),
+    [displayedDrafts, transcriptLocale],
+  );
+  const transcriptLayoutTelemetry = useMemo(
+    () => summarizeOracleTranscriptLayout(
+      transcriptBubbleLayouts,
+      transcriptDraftLayouts,
+      transcriptScrollSnapshotRef.current,
+    ),
+    [transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
+  );
   const threadDisplayLabels = useMemo(() => {
     const seen = new Map<string, number>();
     const labels: Record<string, string> = {};
@@ -738,29 +771,36 @@ export default function EndingChatModal({
   useEffect(() => {
     transcriptHydratedRef.current = false;
     transcriptAutoStickRef.current = false;
+    transcriptScrollSnapshotRef.current = null;
   }, [activeThread?.id, effectiveSnapshot?.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const transcriptList = transcriptListRef.current;
     if (!transcriptList) return;
     const visibleTurnCount = currentTurns.length + displayedDrafts.length;
     if (visibleTurnCount === 0) {
       transcriptHydratedRef.current = false;
       transcriptAutoStickRef.current = false;
+      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
       return;
     }
     if (!transcriptHydratedRef.current) {
       transcriptHydratedRef.current = true;
       transcriptList.scrollTop = 0;
+      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
       return;
     }
     if (displayedDrafts.length > 0 || transcriptAutoStickRef.current) {
-      transcriptList.scrollTop = transcriptList.scrollHeight;
+      transcriptList.scrollTop = computeBottomAnchoredScrollTop(
+        transcriptList,
+        transcriptScrollSnapshotRef.current,
+      );
       if (displayedDrafts.length === 0) {
         transcriptAutoStickRef.current = false;
       }
     }
-  }, [activeThread?.id, currentTurns.length, displayedDrafts.length, effectiveSnapshot?.id]);
+    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+  }, [activeThread?.id, currentTurns, displayedDrafts, effectiveSnapshot?.id]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -791,6 +831,7 @@ export default function EndingChatModal({
       anchor_kind: activeThreadAnchorSummary?.kind ?? null,
       anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
       anchor_label: activeThreadAnchorSummary?.label ?? null,
+      transcript_layout: transcriptLayoutTelemetry,
       can_send: Boolean(composerEnabled),
       can_share_replay: Boolean(effectiveSnapshot?.id && effectiveResult),
       can_import_replay: Boolean(readOnly && replayState?.snapshot),
@@ -818,6 +859,7 @@ export default function EndingChatModal({
     displayedDrafts.length,
     pendingQuestionAnchorIds,
     status,
+    transcriptLayoutTelemetry,
     threads.length,
     activeThread?.question_anchor_ids_json,
     activeThreadAnchorSummary,
@@ -986,6 +1028,13 @@ export default function EndingChatModal({
     if (isCrosslineGallery) return;
     const content = composerDraft.trim();
     if (!content) return;
+    const transcriptList = transcriptListRef.current;
+    transcriptScrollSnapshotRef.current = transcriptList
+      ? {
+          ...captureTranscriptScrollSnapshot(transcriptList),
+          bottomOffset: 0,
+        }
+      : transcriptScrollSnapshotRef.current;
     transcriptAutoStickRef.current = true;
     if ((interactionMode === 'archivist_route' || interactionMode === 'all_present') && defaultThreadId && activeThread?.mode === 'followup') {
       setActiveThread(defaultThreadId);
@@ -1023,6 +1072,10 @@ export default function EndingChatModal({
       interactionMode,
     });
     setPendingQuestionAnchorIds([]);
+  };
+
+  const handleTranscriptScroll = (event: UIEvent<HTMLDivElement>) => {
+    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(event.currentTarget);
   };
 
   return (
@@ -1332,7 +1385,11 @@ export default function EndingChatModal({
               </div>
             )}
 
-            <div ref={transcriptListRef} className="ending-chat-transcript-list">
+            <div
+              ref={transcriptListRef}
+              className="ending-chat-transcript-list"
+              onScroll={handleTranscriptScroll}
+            >
               {isCrosslineGallery && (
                 <div className="ending-chat-gallery-list">
                   {galleryCards.length === 0 ? (
@@ -1375,6 +1432,9 @@ export default function EndingChatModal({
                 <article
                   key={message.key}
                   className={`ending-chat-bubble ${message.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''} ${message.roleSlot === 'archivist' ? 'is-archivist' : ''} ${message.roleSlot === 'user' ? 'is-user' : ''}`}
+                  style={{ minHeight: `${transcriptBubbleLayouts[message.key]?.minHeightPx ?? 0}px` }}
+                  data-layout-lines={transcriptBubbleLayouts[message.key]?.lineCount ?? undefined}
+                  data-layout-overflow={transcriptBubbleLayouts[message.key]?.overflow ? 'true' : 'false'}
                 >
                   <header>
                     {message.roleSlot === 'archivist' && <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />}
@@ -1407,6 +1467,9 @@ export default function EndingChatModal({
                   key={draft.key}
                   className={`ending-chat-bubble ending-chat-bubble--draft ${draft.variant === 'placeholder' ? 'ending-chat-bubble--placeholder' : ''} ${draft.key === currentSpeakerTurnKey ? 'is-current-speaker' : ''}`}
                   aria-busy={draft.variant === 'placeholder'}
+                  style={{ minHeight: `${transcriptDraftLayouts[draft.key]?.minHeightPx ?? 0}px` }}
+                  data-layout-lines={transcriptDraftLayouts[draft.key]?.lineCount ?? undefined}
+                  data-layout-overflow={transcriptDraftLayouts[draft.key]?.overflow ? 'true' : 'false'}
                 >
                   <header>
                     <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? t('ending_room.participant_unknown')}</strong>

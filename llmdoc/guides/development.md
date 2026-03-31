@@ -90,7 +90,7 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/roundtableSelection.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
+npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
@@ -105,7 +105,9 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 
 - `e2e-ending-room-followup-suite.mjs full`
   - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
-  - current summary 会落出 `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
+  - current summary 会落出：
+    - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
+    - `transcript_layout`
 - `e2e-ending-room-followup-suite.mjs mobile`
   - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
   - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / crossline gallery / readonly replay / restore / import`
@@ -115,8 +117,10 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 - `e2e-worldline-roundtable-suite.mjs full`
   - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat`
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
+  - current summary 会落出 `transcript_layout`
 - `e2e-worldline-roundtable-suite.mjs mobile`
   - 只跑移动端圆桌链路，适合单独复核 recipe 切换、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
+  - 如果目标是 `P2` transcript layout 签收，desktop / mobile 分端 summary 当前比 `full` 更稳
 
 ### Type Check 与 Build
 
@@ -177,6 +181,16 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 - `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
 - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
 - `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
+
+最近一轮 Oracle `P2` transcript layout scoped signoff 工件：
+
+- `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
+- `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
+- `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
+
+最近一次 roundtable `full` 稳定工件：
+
+- `frontend/output/e2e/20260331-codex-roundtable-full-stable5/summary.json`
 
 使用规则：
 

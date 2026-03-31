@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -37,6 +37,13 @@ import {
   getEndingRoomPhaseLabel,
   getEndingRoomStatusLabel,
 } from '../lib/endingRoomLabels';
+import {
+  buildOracleTranscriptLayoutMap,
+  captureTranscriptScrollSnapshot,
+  computeBottomAnchoredScrollTop,
+  summarizeOracleTranscriptLayout,
+  type TranscriptScrollSnapshot,
+} from '../lib/textLayout/oracleTranscriptLayout';
 import {
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
@@ -392,7 +399,9 @@ export default function WorldlineRoundtableView() {
   const [briefCopied, setBriefCopied] = useState(false);
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const transcriptAutoStickRef = useRef(false);
+  const transcriptHydratedRef = useRef(false);
   const transcriptListRef = useRef<HTMLDivElement>(null);
+  const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
 
   const {
     snapshot,
@@ -862,16 +871,65 @@ export default function WorldlineRoundtableView() {
     ?? currentTurns.at(-1)?.participantId
     ?? null;
   const hotseatParticipantId = interactionMode === 'hotseat' ? selectedRepresentativeId : null;
+  const transcriptLocale = isZh ? 'zh' : 'en';
+  const transcriptBubbleLayouts = useMemo(
+    () => buildOracleTranscriptLayoutMap(
+      currentTurns.map((turn) => ({ key: turn.key, content: turn.content })),
+      'roundtable_turn',
+      transcriptLocale,
+    ),
+    [currentTurns, transcriptLocale],
+  );
+  const transcriptDraftLayouts = useMemo(
+    () => buildOracleTranscriptLayoutMap(
+      displayedDrafts.map((draft) => ({ key: draft.key, content: draft.content })),
+      'roundtable_draft',
+      transcriptLocale,
+    ),
+    [displayedDrafts, transcriptLocale],
+  );
+  const transcriptLayoutTelemetry = useMemo(
+    () => summarizeOracleTranscriptLayout(
+      transcriptBubbleLayouts,
+      transcriptDraftLayouts,
+      transcriptScrollSnapshotRef.current,
+    ),
+    [transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
+  );
 
   useEffect(() => {
+    transcriptHydratedRef.current = false;
+    transcriptAutoStickRef.current = false;
+    transcriptScrollSnapshotRef.current = null;
+  }, [activeThread?.id, effectiveSnapshot?.id]);
+
+  useLayoutEffect(() => {
     const transcriptList = transcriptListRef.current;
     if (!transcriptList) return;
-    if (!transcriptAutoStickRef.current) return;
-    transcriptList.scrollTop = transcriptList.scrollHeight;
-    if (displayedDrafts.length === 0) {
+    const visibleTurnCount = currentTurns.length + displayedDrafts.length;
+    if (visibleTurnCount === 0) {
+      transcriptHydratedRef.current = false;
       transcriptAutoStickRef.current = false;
+      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+      return;
     }
-  }, [currentTurns.length, displayedDrafts.length]);
+    if (!transcriptHydratedRef.current) {
+      transcriptHydratedRef.current = true;
+      transcriptList.scrollTop = 0;
+      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+      return;
+    }
+    if (displayedDrafts.length > 0 || transcriptAutoStickRef.current) {
+      transcriptList.scrollTop = computeBottomAnchoredScrollTop(
+        transcriptList,
+        transcriptScrollSnapshotRef.current,
+      );
+      if (displayedDrafts.length === 0) {
+        transcriptAutoStickRef.current = false;
+      }
+    }
+    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+  }, [activeThread?.id, currentTurns, displayedDrafts, effectiveSnapshot?.id]);
   const addressedAgentIds = useMemo(
     () => (interactionMode === 'hotseat' && selectedRepresentativeId
       ? [selectedRepresentativeId]
@@ -1328,6 +1386,13 @@ export default function WorldlineRoundtableView() {
   const handleSend = useCallback(async () => {
     const content = composerDraft.trim();
     if (!content) return;
+    const transcriptList = transcriptListRef.current;
+    transcriptScrollSnapshotRef.current = transcriptList
+      ? {
+          ...captureTranscriptScrollSnapshot(transcriptList),
+          bottomOffset: 0,
+        }
+      : transcriptScrollSnapshotRef.current;
     transcriptAutoStickRef.current = true;
     if (interactionMode === 'hotseat' && selectedRepresentativeId && snapshot?.id) {
       const currentTargetRef = activeThread?.addressed_agent_ids_json?.[0] ?? null;
@@ -1391,6 +1456,10 @@ export default function WorldlineRoundtableView() {
     threadList,
   ]);
 
+  const handleTranscriptScroll = (event: UIEvent<HTMLDivElement>) => {
+    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(event.currentTarget);
+  };
+
   useEffect(() => {
     const win = window as AutomationWindow & {
       advanceTime?: (ms: number) => Promise<void>;
@@ -1434,6 +1503,7 @@ export default function WorldlineRoundtableView() {
           anchor_kind: activeThreadAnchorSummary?.kind ?? null,
           anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
           anchor_label: activeThreadAnchorSummary?.label ?? null,
+          transcript_layout: transcriptLayoutTelemetry,
           participant_count: participants.length,
           representative_count: representatives.length,
           has_result: Boolean(effectiveResult),
@@ -1471,6 +1541,7 @@ export default function WorldlineRoundtableView() {
     selectedBranchIdsForLaunch.length,
     selectionMode,
     showRepresentativePicker,
+    transcriptLayoutTelemetry,
     storyData?.branches.length,
     storyData?.question,
     threadList.length,
@@ -2039,11 +2110,18 @@ export default function WorldlineRoundtableView() {
               </div>
             )}
 
-              <div ref={transcriptListRef} className="ending-chat-transcript-list worldline-roundtable-transcript-list">
+              <div
+                ref={transcriptListRef}
+                className="ending-chat-transcript-list worldline-roundtable-transcript-list"
+                onScroll={handleTranscriptScroll}
+              >
                 {currentTurns.map((turn) => (
                   <article
                     key={turn.key}
                     className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''}`}
+                    style={{ minHeight: `${transcriptBubbleLayouts[turn.key]?.minHeightPx ?? 0}px` }}
+                    data-layout-lines={transcriptBubbleLayouts[turn.key]?.lineCount ?? undefined}
+                    data-layout-overflow={transcriptBubbleLayouts[turn.key]?.overflow ? 'true' : 'false'}
                   >
                     <header>
                       {turn.roleSlot === 'archivist' && (
@@ -2088,6 +2166,9 @@ export default function WorldlineRoundtableView() {
                   key={draft.key}
                   className={`ending-chat-bubble ending-chat-bubble--draft ${draft.variant === 'placeholder' ? 'ending-chat-bubble--placeholder' : ''} ${draft.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''}`}
                   aria-busy={draft.variant === 'placeholder'}
+                  style={{ minHeight: `${transcriptDraftLayouts[draft.key]?.minHeightPx ?? 0}px` }}
+                  data-layout-lines={transcriptDraftLayouts[draft.key]?.lineCount ?? undefined}
+                  data-layout-overflow={transcriptDraftLayouts[draft.key]?.overflow ? 'true' : 'false'}
                 >
                   <header>
                     <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>

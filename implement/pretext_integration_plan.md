@@ -329,7 +329,7 @@
 
 ## P2 — Oracle Transcript 稳定化
 
-> 当前状态：未开始
+> 当前状态：已完成（Oracle transcript scoped）
 
 ### 目标
 
@@ -345,6 +345,7 @@
 1. 在 draft 产生时先用 `pretext` 估算高度
 2. 为 transcript list 提供更稳定的滚动锚点
 3. 在长文本情况下减少 layout jump
+4. 把 transcript layout telemetry 直接落到 automation payload / E2E summary，方便签收
 
 ### 不做的事
 
@@ -358,6 +359,21 @@
 - draft -> commit 过程中布局抖动下降
 - 中英长文本换行更稳定
 - 自动滚动更少出现“刚滚到底又被顶起”的体感问题
+- `ending-room / roundtable` 的签收工件里可以直接看到 `transcript_layout`
+
+### 当前落地说明
+
+- 已落范围：
+  - `frontend/src/components/EndingChatModal.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+  - `frontend/src/lib/textLayout/oracleTranscriptLayout.ts`
+- 已落签收工件：
+  - `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
+  - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
+  - `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
+- 未扩范围：
+  - `InputView`
+  - `WorldScene / Theater`
 
 ---
 

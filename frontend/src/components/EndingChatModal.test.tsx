@@ -189,6 +189,75 @@ describe('EndingChatModal', () => {
     expect(storeState.openRoom).not.toHaveBeenCalled();
   });
 
+  it('applies transcript layout metadata to long replay bubbles', () => {
+    const longContent = '沿着这条世界线继续追问：为什么一次调度失误会被包装成秩序本身，同时把原本可逆的代价推成无法回头的分裂？';
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="zh"
+        readOnly
+        fallbackMessages={[
+          {
+            agent: 'Archivist',
+            agent_id: 'agent-1',
+            message: longContent,
+            emotion: 'calm',
+            branch: 'branch-1',
+            round: 1,
+          },
+        ]}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const bubble = screen.getByText(longContent).closest('article');
+    expect(bubble).not.toBeNull();
+    expect(Number(bubble?.getAttribute('data-layout-lines') ?? '0')).toBeGreaterThan(1);
+    expect(bubble?.style.minHeight).not.toBe('');
+  });
+
+  it('emits transcript layout telemetry in automation payload', async () => {
+    const longContent = '沿着这条世界线继续追问：为什么一次调度失误会被包装成秩序本身，同时把原本可逆的代价推成无法回头的分裂？';
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="zh"
+        readOnly
+        fallbackMessages={[
+          {
+            agent: 'Archivist',
+            agent_id: 'agent-1',
+            message: longContent,
+            emotion: 'calm',
+            branch: 'branch-1',
+            round: 1,
+          },
+        ]}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+        onAutomationStateChange={onAutomationStateChangeMock}
+      />,
+    );
+
+    await waitFor(() => {
+      const payload = onAutomationStateChangeMock.mock.calls
+        .map(([state]) => state)
+        .find((state) => state && typeof state === 'object' && 'transcript_layout' in state) as Record<string, any> | undefined;
+      expect(payload?.transcript_layout?.turn_count).toBeGreaterThanOrEqual(1);
+      expect(payload?.transcript_layout?.max_turn_lines).toBeGreaterThan(1);
+      expect(payload?.transcript_layout?.max_turn_min_height_px).toBeGreaterThan(0);
+    });
+  });
+
   it('renders anchor badges for a read-only replay thread', () => {
     const replaySnapshot: any = {
       id: 'room-replay',

@@ -90,7 +90,7 @@
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态 |
-| `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` 只读文本预测 / overflow contract |
+| `textLayout/*` | `frontend/src/lib/textLayout/` | `pretext` helper、Oracle transcript layout kernel、overflow contract |
 
 ## 当前边界
 
@@ -121,6 +121,7 @@
   - `thread_question_anchor_ids_json`
   - `pending_question_anchor_ids`
   - `anchor_kind / anchor_label`
+  - `transcript_layout`
 - `roundtableSelection.ts` 当前承接 `trait_mix` 选择逻辑；`trait_mix / fault_line_first / witness_augmented` 的状态切换已补 no-op guard，避免对同一份 selection 反复写回。
 - `WorldlineRoundtableView` 当前已支持：
   - `manual_shortlist`
@@ -135,6 +136,15 @@
   - ending-room：`mobile single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`，以及 `multi-ending hotseat / all_present / crossline gallery / artifact readonly / local readonly / reload restore / import`
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / quote-anchor thread / artifact readonly / local readonly / reload restore / import`
 - `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前也已补 mobile `all_present` 的 mode-arm / settled wait，原先 timeout 阻塞已解除。
+- `e2e-ending-room-followup-suite.mjs full` 当前已重新可稳定落 `summary.json`。
+- `e2e-worldline-roundtable-suite.mjs` 当前已补：
+  - 更稳的 quote-anchor thread 交互链
+  - hotseat settle / anchored send 的慢路径等待
+  - desktop / mobile 分 browser 执行
+  - 优先复用最近成功的稳定 fixture
+- roundtable 的 `full` 当前仍可能受 provider 慢路径波动影响；如果目标只是 Oracle transcript `P2` 布局签收，当前更稳的口径是：
+  - desktop 一份 summary
+  - mobile 一份 summary
 - roundtable replay 的自动化口径当前已修正：
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时
@@ -143,7 +153,13 @@
   - `ending_chamber / one_move_only` 可正常打开
   - single-ending chamber readonly replay 仍可 `import`
   - mobile `390x844` 下 chamber modal 仍能完整落在视口内
-- `pretext` 已以只读 helper / contract 形式落地在 `frontend/src/lib/textLayout/*` 与相关页面测试中；当前还没有接入运行时 transcript 布局内核。
+- `pretext` 当前已接到 Oracle transcript 运行时布局内核：
+  - `EndingChatModal / WorldlineRoundtableView` 的 bubble `min-height` 预测
+  - transcript scroll bottom anchor 稳定化
+  - automation payload / E2E summary 当前会带 `transcript_layout`
+- `pretext` 仍然没有扩到：
+  - `InputView`
+  - `WorldScene / Theater`
 
 ## 查找路径
 
