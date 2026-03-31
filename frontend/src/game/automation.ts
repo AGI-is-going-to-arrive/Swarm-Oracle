@@ -12,6 +12,13 @@ export interface AutomationStoreState {
   messageCount: number;
   agentCount: number;
   branchCount: number;
+  thinkingAgentCount?: number;
+  thinkingAgents?: Array<{
+    agent: string;
+    agent_id: string;
+    branch: string;
+    round: number;
+  }>;
 }
 
 export interface AutomationSceneState {

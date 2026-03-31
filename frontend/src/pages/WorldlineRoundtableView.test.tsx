@@ -946,6 +946,18 @@ describe('WorldlineRoundtableView', () => {
     expect(payload.page.controls.transcript_layout.draft_count).toBeGreaterThanOrEqual(1);
     expect(payload.page.controls.transcript_layout.max_draft_lines).toBeGreaterThan(1);
     expect(payload.page.controls.transcript_layout.max_draft_min_height_px).toBeGreaterThan(0);
+    expect(payload.page.controls.current_speaker_turn_key).toBe('draft-1');
+    expect(payload.page.controls.current_speaker_participant_id).toBe('rep-a');
+    expect(payload.page.controls.stream_state).toBe('turn_delta');
+    expect(payload.page.controls.pending_drafts).toEqual([
+      {
+        turn_key: 'draft-1',
+        participant_id: 'rep-a',
+        phase: 'verdict',
+        variant: 'stream',
+        content_length: '请继续沿着这张圆桌追问：为什么这条世界线会把短期军令当成长期秩序，并要求档案官替所有后续成本收口？'.length,
+      },
+    ]);
   });
 
   it('lets a verdict chip reuse the same thread-from-anchor rule', async () => {

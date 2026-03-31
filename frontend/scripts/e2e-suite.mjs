@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser, closePlaywrightContext } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -783,61 +784,78 @@ async function runResultFlow(page, {
   baseUrl,
   scenarioId,
   outputDir,
+  shareCopyOverride = null,
 }) {
   ensureDir(outputDir);
-  await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
-  const initial = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "result" && payload.page?.loading === false,
-    40000,
-    "result page",
-  );
-  writeJson(path.join(outputDir, "result-initial.json"), initial);
-  await saveScreenshot(page, path.join(outputDir, "result-initial.png"));
-
-  const firstExpandButton = page.locator("button.expand-btn").first();
-  if (await firstExpandButton.count()) {
-    await firstExpandButton.click();
-    await page.waitForTimeout(300);
+  const routePattern = `**/api/scenario/${scenarioId}/social/xiaohongshu`;
+  if (shareCopyOverride) {
+    await page.route(routePattern, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(shareCopyOverride),
+      });
+    });
   }
+  try {
+    await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    const initial = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "result" && payload.page?.loading === false,
+      40000,
+      "result page",
+    );
+    writeJson(path.join(outputDir, "result-initial.json"), initial);
+    await saveScreenshot(page, path.join(outputDir, "result-initial.png"));
 
-  await page.getByRole("button", { name: /生成文案|share/i }).click();
-  const shareOpen = await waitForAutomation(
-    page,
-    (payload) => payload.page?.controls?.active_modal === "share",
-    10000,
-    "share modal",
-  );
-  writeJson(path.join(outputDir, "share-modal-open.json"), shareOpen);
-  await saveScreenshot(page, path.join(outputDir, "share-modal-open.png"));
+    const firstExpandButton = page.locator("button.expand-btn").first();
+    if (await firstExpandButton.count()) {
+      await firstExpandButton.click();
+      await page.waitForTimeout(300);
+    }
 
-  await page.getByRole("button", { name: /小红书|xiaohongshu/i }).click();
-  const generated = await waitForAutomation(
-    page,
-    (payload) => (
-      payload.page?.controls?.active_modal === "share"
-      && payload.page?.controls?.modal_state?.active_platform === "xiaohongshu"
-      && payload.page?.controls?.modal_state?.loading === false
-      && payload.page?.controls?.modal_state?.has_copy === true
-    ),
-    SHARE_COPY_WAIT_TIMEOUT_MS,
-    "share generation",
-  );
-  writeJson(path.join(outputDir, "share-generated.json"), generated);
-  await saveScreenshot(page, path.join(outputDir, "share-generated.png"));
+    await page.getByRole("button", { name: /生成文案|share/i }).click();
+    const shareOpen = await waitForAutomation(
+      page,
+      (payload) => payload.page?.controls?.active_modal === "share",
+      10000,
+      "share modal",
+    );
+    writeJson(path.join(outputDir, "share-modal-open.json"), shareOpen);
+    await saveScreenshot(page, path.join(outputDir, "share-modal-open.png"));
 
-  const finalPayload = await readAutomation(page);
-  writeJson(path.join(outputDir, "result-final.json"), finalPayload);
-  await saveScreenshot(page, path.join(outputDir, "result-final.png"));
-  const archiveCards = await extractResultArchiveCards(page);
-  writeJson(path.join(outputDir, "archive-cards.json"), archiveCards);
-  return {
-    scenarioId,
-    branchTitles: finalPayload?.page?.branch_titles ?? [],
-    archiveSummary: finalPayload?.page?.archive_summary ?? null,
-    archiveCards,
-    shareContext: generated?.page?.controls?.modal_state?.share_context ?? null,
-  };
+    await page.getByRole("button", { name: /小红书|xiaohongshu/i }).click();
+    const generated = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.controls?.active_modal === "share"
+        && payload.page?.controls?.modal_state?.active_platform === "xiaohongshu"
+        && payload.page?.controls?.modal_state?.loading === false
+        && payload.page?.controls?.modal_state?.has_copy === true
+      ),
+      SHARE_COPY_WAIT_TIMEOUT_MS,
+      "share generation",
+    );
+    writeJson(path.join(outputDir, "share-generated.json"), generated);
+    await saveScreenshot(page, path.join(outputDir, "share-generated.png"));
+
+    const finalPayload = await readAutomation(page);
+    writeJson(path.join(outputDir, "result-final.json"), finalPayload);
+    await saveScreenshot(page, path.join(outputDir, "result-final.png"));
+    const archiveCards = await extractResultArchiveCards(page);
+    writeJson(path.join(outputDir, "archive-cards.json"), archiveCards);
+    return {
+      scenarioId,
+      branchTitles: finalPayload?.page?.branch_titles ?? [],
+      archiveSummary: finalPayload?.page?.archive_summary ?? null,
+      archiveCards,
+      shareContext: generated?.page?.controls?.modal_state?.share_context ?? null,
+    };
+  } finally {
+    if (shareCopyOverride) {
+      await page.unroute(routePattern);
+    }
+  }
 }
 
 async function runDirectorStateRoundtripCase(page, {
@@ -1158,8 +1176,8 @@ async function runCrossBrowserDirectorStateSuite(args) {
         browserName,
       });
     } finally {
-      await context.close();
-      await browser.close();
+      await closePlaywrightContext(context, `cross-browser-${browserName}-context`);
+      await closePlaywrightBrowser(browser, `cross-browser-${browserName}-browser`);
     }
   }
 
@@ -1797,6 +1815,15 @@ async function runLiveForkMarkerFixtureCase(page, {
             data: { status: "simulating", hierarchical: false },
           },
           {
+            type: "agent_speak_start",
+            data: {
+              agent: "外审议长",
+              agent_id: "fixture-agent-1",
+              branch: fixtureRootBranchId,
+              round: 1,
+            },
+          },
+          {
             type: "agent_speak",
             data: {
               agent: "外审议长",
@@ -1835,6 +1862,7 @@ async function runLiveForkMarkerFixtureCase(page, {
             type: "simulation_done",
           },
         ];
+        const eventDelays = [60, 180, 480, 660, 840, 1020];
 
         events.forEach((payload, index) => {
           this._schedule(() => {
@@ -1854,7 +1882,7 @@ async function runLiveForkMarkerFixtureCase(page, {
                 }),
               }),
             );
-          }, 60 * (index + 1));
+          }, eventDelays[index] ?? (180 * (index + 1)));
         });
       }
 
@@ -1934,6 +1962,20 @@ async function runLiveForkMarkerFixtureCase(page, {
 
   try {
     await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    const thinkingState = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.kind === "simulation"
+        && payload.simulation?.thinkingAgentCount === 1
+        && Array.isArray(payload.simulation?.thinkingAgents)
+        && payload.simulation.thinkingAgents[0]?.agent_id === "fixture-agent-1"
+      ),
+      10000,
+      "live fork fixture thinking state",
+    );
+    writeJson(path.join(outputDir, "live-fork-marker-thinking.json"), thinkingState);
+    await saveScreenshot(page, path.join(outputDir, "live-fork-marker-thinking.png"));
+
     const fixtureState = await waitForAutomation(
       page,
       (payload) => (
@@ -1966,6 +2008,10 @@ async function runLiveForkMarkerFixtureCase(page, {
 
     return {
       scenarioId,
+      thinkingState: {
+        thinkingAgentCount: thinkingState.simulation?.thinkingAgentCount ?? null,
+        thinkingAgents: thinkingState.simulation?.thinkingAgents ?? [],
+      },
       currentRound: fixtureState.simulation?.currentRound ?? null,
       branchCount: fixtureState.simulation?.branchCount ?? null,
       replayState: fixtureState.page?.replay_state ?? null,
@@ -2228,7 +2274,15 @@ async function runShareContextCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  const result = await runResultFlow(page, { baseUrl, scenarioId, outputDir });
+  const result = await runResultFlow(page, {
+    baseUrl,
+    scenarioId,
+    outputDir,
+    shareCopyOverride: {
+      copy: "用于 share-context 回归的稳定小红书文案。",
+      platform_name: "小红书",
+    },
+  });
   const shareContext = result.shareContext;
   return {
     scenarioId,
@@ -2244,11 +2298,11 @@ async function runShareRetryCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  let firstAttempt = true;
+  let attemptCount = 0;
   const routePattern = `**/api/scenario/${scenarioId}/social/xiaohongshu`;
   await page.route(routePattern, async (route) => {
-    if (firstAttempt) {
-      firstAttempt = false;
+    attemptCount += 1;
+    if (attemptCount === 1) {
       await route.fulfill({
         status: 500,
         contentType: "text/plain",
@@ -2256,7 +2310,14 @@ async function runShareRetryCase(page, {
       });
       return;
     }
-    await route.continue();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        copy: "恢复后的分享文案：这一轮重试已经成功，最危险的转折点也被重新钉住。",
+        platform_name: "小红书",
+      }),
+    });
   });
 
   await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
@@ -2566,7 +2627,7 @@ async function runMatrixSuite(args) {
       samples: summaries,
     };
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "matrix-browser");
   }
 }
 
@@ -2693,7 +2754,7 @@ async function runCornersSuite(args) {
       cases,
     };
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "corners-browser");
   }
 }
 
@@ -2851,7 +2912,7 @@ async function runMobileSuite(args) {
       result: result.page ?? null,
     };
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "mobile-browser");
   }
 }
 

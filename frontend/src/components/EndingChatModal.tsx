@@ -706,6 +706,21 @@ export default function EndingChatModal({
   const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
+  const automationPendingDrafts = useMemo(
+    () => displayedDrafts.map((draft) => ({
+      turn_key: draft.key,
+      participant_id: draft.participantId,
+      phase: draft.phase,
+      variant: draft.variant,
+      content_length: draft.content.trim().length,
+    })),
+    [displayedDrafts],
+  );
+  const automationStreamState = automationPendingDrafts.length === 0
+    ? null
+    : automationPendingDrafts.some((draft) => draft.variant === 'stream')
+      ? 'turn_delta'
+      : 'turn_start';
   const transcriptLocale = isZh ? 'zh' : 'en';
   const transcriptBubbleLayouts = useMemo(
     () => buildOracleTranscriptLayoutMap(
@@ -825,9 +840,13 @@ export default function EndingChatModal({
       active_thread_id: activeThread?.id ?? null,
       thread_count: threads.length,
       interaction_mode: effectiveInteractionMode,
+      current_speaker_turn_key: currentSpeakerTurnKey,
+      current_speaker_participant_id: currentSpeakerParticipantId,
       question_anchor_ids: activeThread?.question_anchor_ids_json ?? [],
       thread_question_anchor_ids_json: activeThread?.question_anchor_ids_json ?? [],
       pending_question_anchor_ids: pendingQuestionAnchorIds,
+      pending_drafts: automationPendingDrafts,
+      stream_state: automationStreamState,
       anchor_kind: activeThreadAnchorSummary?.kind ?? null,
       anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
       anchor_label: activeThreadAnchorSummary?.label ?? null,
@@ -844,9 +863,13 @@ export default function EndingChatModal({
   }, [
     activeThread?.id,
     branch,
+    currentSpeakerParticipantId,
+    currentSpeakerTurnKey,
     currentTurns.length,
     effectiveInteractionMode,
     interactionMode,
+    automationPendingDrafts,
+    automationStreamState,
     onAutomationStateChange,
     open,
     readOnly,

@@ -350,6 +350,93 @@ describe('useEndingRoomWS', () => {
     expect(storeState.setPhase).toHaveBeenCalledWith('crossfire');
   });
 
+  it('drops duplicate or stale sequence events from the same room stream', () => {
+    render(<Harness roomId="room-stale-sequence" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_phase_change',
+          data: { phase: 'crossfire' },
+          meta: { stream_id: 'room-stale-sequence', sequence: 1, event_id: 'room-stale-sequence:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_phase_change',
+          data: { phase: 'closing' },
+          meta: { stream_id: 'room-stale-sequence', sequence: 1, event_id: 'room-stale-sequence:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_phase_change',
+          data: { phase: 'opening' },
+          meta: { stream_id: 'room-stale-sequence', sequence: 0, event_id: 'room-stale-sequence:0' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setPhase).toHaveBeenCalledTimes(1);
+    expect(storeState.setPhase).toHaveBeenCalledWith('crossfire');
+  });
+
+  it('ignores stale socket events after a newer ending-room reconnect succeeds', async () => {
+    getEndingRoomMock.mockResolvedValue({
+      id: 'room-stale-socket',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      turns: [],
+      result_ready: false,
+    });
+
+    render(<Harness roomId="room-stale-socket" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.({} as Event);
+      MockWebSocket.instances[0]?.emitClose(1006);
+      vi.advanceTimersByTime(1500);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    await act(async () => {
+      MockWebSocket.instances[1]?.onopen?.({} as Event);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    storeState.setPhase.mockClear();
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_phase_change',
+          data: { phase: 'verdict' },
+          meta: { stream_id: 'room-stale-socket', sequence: 1, event_id: 'room-stale-socket:1' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.emitClose(1006);
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(storeState.setPhase).not.toHaveBeenCalled();
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
   it('does not reconnect after a normal close', () => {
     render(<Harness roomId="room-close" />);
 

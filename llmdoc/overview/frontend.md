@@ -96,6 +96,10 @@
 
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
+- `SimulationView` 的 automation payload 当前已补：
+  - `thinkingAgentCount`
+  - `thinkingAgents`
+  - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
@@ -120,6 +124,10 @@
   - `question_anchor_ids`
   - `thread_question_anchor_ids_json`
   - `pending_question_anchor_ids`
+  - `current_speaker_turn_key`
+  - `current_speaker_participant_id`
+  - `pending_drafts`
+  - `stream_state`
   - `anchor_kind / anchor_label`
   - `transcript_layout`
 - `roundtableSelection.ts` 当前承接 `trait_mix` 选择逻辑；`trait_mix / fault_line_first / witness_augmented` 的状态切换已补 no-op guard，避免对同一份 selection 反复写回。
@@ -137,14 +145,27 @@
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / quote-anchor thread / artifact readonly / local readonly / reload restore / import`
 - `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前也已补 mobile `all_present` 的 mode-arm / settled wait，原先 timeout 阻塞已解除。
 - `e2e-ending-room-followup-suite.mjs full` 当前已重新可稳定落 `summary.json`。
+- `e2e-ending-room-followup-suite.mjs` 当前也会在命中的 follow-up 场景下额外落：
+  - `turn-start`
+  - `turn-delta`
+  - `turn-commit`
+  这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
 - `e2e-worldline-roundtable-suite.mjs` 当前已补：
   - 更稳的 quote-anchor thread 交互链
   - hotseat settle / anchored send 的慢路径等待
   - desktop / mobile 分 browser 执行
   - 优先复用最近成功的稳定 fixture
+- roundtable anchored follow-up 的 desktop / mobile rerun 当前都已重新跑通：
+  - desktop 已能稳定落 `turn_start / turn_delta / turn_commit`
+  - mobile 当前也已重新抓回 `turn_delta`
 - roundtable 的 `full` 当前仍可能受 provider 慢路径波动影响；如果目标只是 Oracle transcript `P2` 布局签收，当前更稳的口径是：
   - desktop 一份 summary
   - mobile 一份 summary
+- roundtable desktop live room 当前已补一轮轻量可读性收口：
+  - 左栏更窄
+  - summary card sticky
+  - 长摘要走内部滚动
+  - transcript 段落行距更松
 - roundtable replay 的自动化口径当前已修正：
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时

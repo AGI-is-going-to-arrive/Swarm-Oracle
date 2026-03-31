@@ -418,6 +418,36 @@ describe('SimulationView replay automation output', () => {
     });
   });
 
+  it('publishes classic streaming thinking agents inside render_game_to_text', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.thinkingAgents = [
+      { agent: '外审议长', agent_id: 'agent-1', branch: 'b1', round: 1 },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.simulation?.thinkingAgentCount).toBe(1);
+      expect(payload?.simulation?.thinkingAgents).toEqual([
+        {
+          agent: '外审议长',
+          agent_id: 'agent-1',
+          branch: 'b1',
+          round: 1,
+        },
+      ]);
+    });
+  });
+
   it('re-collapses the agent panel when the page switches into theater mode', async () => {
     mockStore.viewMode = 'classic';
 

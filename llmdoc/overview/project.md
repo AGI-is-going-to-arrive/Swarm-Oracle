@@ -53,6 +53,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `thread_question_anchor_ids_json`
   - `anchor_kind / anchor_label`
   - `pending_question_anchor_ids`
+  - `current_speaker_turn_key`
+  - `current_speaker_participant_id`
+  - `pending_drafts`
+  - `stream_state`
 - ending-room / roundtable 的 replay/share/import 已完成专项签收。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
@@ -86,11 +90,18 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `frontend/output/e2e/20260331-codex-roundtable-hardening-desktop-rerun/summary.json`
   - `frontend/output/e2e/20260331-codex-roundtable-hardening-mobile-rerun/summary.json`
   - `frontend/output/e2e/20260331-codex-followup-hardening-mobile-rerun5/summary.json`
+- 最近一轮 Oracle 流式观测 rerun 工件位于：
+  - `frontend/output/e2e/20260331-codex-followup-stream-lifecycle/summary.json`
+  - `frontend/output/e2e/20260331-codex-roundtable-stream-desktop-rerun/summary.json`
+  - `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun2/summary.json`
+- 最近一轮经典模式流式 hardening 工件位于：
+  - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
 - 当前仍在继续收口的内容：
   - follow-up 与经典模式的更深流式一致性
-    - 本轮已补 `endingRoomStore` stale draft 清理、`llm_call_stream()` streaming probe 变量缺失，以及 mobile `all_present` E2E timeout 阻塞
+    - 本轮已补 classic `thinkingAgentCount / thinkingAgents` 观测，以及 Oracle `current_speaker_* / pending_drafts / stream_state`
   - `pretext` 更深的 transcript 运行时稳定化（`P2+` 尚未启动）
   - Oracle 更深的回归、跨浏览器与 corner-case hardening
+    - `corners` 当前已能稳定落 `result.json`，但尾部仍可能打印一次 teardown warning
 
 ## 文档入口
 

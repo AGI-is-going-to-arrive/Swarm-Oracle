@@ -116,6 +116,52 @@ async function saveScreenshot(page, filePath) {
   });
 }
 
+function writeJson(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+async function captureStreamLifecycle(page, {
+  label,
+  outputDir,
+  filePrefix,
+  timeout = 60000,
+  isCommitState,
+}) {
+  const captures = {
+    turn_start: null,
+    turn_delta: null,
+    turn_commit: null,
+  };
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const payload = await getAutomationState(page);
+    const modalState = payload?.page?.controls?.modal_state;
+    if (!captures.turn_start && modalState?.pending_draft_count > 0 && modalState?.stream_state === "turn_start") {
+      captures.turn_start = modalState;
+      await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-start.png`));
+      writeJson(path.join(outputDir, `${filePrefix}-turn-start.json`), payload);
+    }
+    if (!captures.turn_delta && modalState?.pending_draft_count > 0 && modalState?.stream_state === "turn_delta") {
+      captures.turn_delta = modalState;
+      await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-delta.png`));
+      writeJson(path.join(outputDir, `${filePrefix}-turn-delta.json`), payload);
+    }
+    if (modalState && isCommitState(modalState, payload)) {
+      if (!captures.turn_commit) {
+        captures.turn_commit = modalState;
+        await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-commit.png`));
+        writeJson(path.join(outputDir, `${filePrefix}-turn-commit.json`), payload);
+      }
+      return {
+        payload,
+        captures,
+      };
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 async function armClipboardCapture(page) {
   await page.evaluate(() => {
     const globalWindow = window;
@@ -241,9 +287,24 @@ async function createVerdictAnchoredThread(page, label) {
   );
 }
 
-async function sendAnchoredFollowup(page, label) {
+async function sendAnchoredFollowup(page, label, options = {}) {
+  const { outputDir = null, filePrefix = null } = options;
   const sendButton = page.getByRole("button", { name: /Send|发送追问/i });
   await sendButton.click();
+  if (outputDir && filePrefix) {
+    return captureStreamLifecycle(page, {
+      label,
+      outputDir,
+      filePrefix,
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "thread_followup"
+        && (modalState?.turn_count ?? 0) > 0
+        && (modalState?.question_anchor_ids?.length ?? 0) > 0
+        && (modalState?.pending_question_anchor_ids?.length ?? 0) === 0
+        && (modalState?.pending_draft_count ?? 0) === 0
+      ),
+    });
+  }
   return waitFor(
     page,
     async () => {
@@ -254,6 +315,7 @@ async function sendAnchoredFollowup(page, label) {
         && (modalState?.turn_count ?? 0) > 0
         && (modalState?.question_anchor_ids?.length ?? 0) > 0
         && (modalState?.pending_question_anchor_ids?.length ?? 0) === 0
+        && (modalState?.pending_draft_count ?? 0) === 0
       ) {
         return current;
       }
@@ -303,50 +365,46 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   await page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).click();
   await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
   await page.getByRole("button", { name: /Send|发送/i }).click();
-  const hotseatState = await waitFor(
-    page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      if (
-        modalState?.interaction_mode === "hotseat"
-        && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
-        && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-      ) {
-        return current;
-      }
-      return null;
-    },
-    "hotseat follow-up state",
-  );
+  const hotseatLifecycle = await captureStreamLifecycle(page, {
+    label: "hotseat follow-up state",
+    outputDir,
+    filePrefix: "multi-chamber-A-hotseat",
+    isCommitState: (modalState) => (
+      modalState?.interaction_mode === "hotseat"
+      && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
+      && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
+      && (modalState?.pending_draft_count ?? 0) === 0
+    ),
+  });
+  const hotseatState = hotseatLifecycle.payload;
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-hotseat.png"));
-  fs.writeFileSync(path.join(outputDir, "multi-chamber-A-hotseat.json"), JSON.stringify(hotseatState, null, 2));
+  writeJson(path.join(outputDir, "multi-chamber-A-hotseat.json"), {
+    state: hotseatState,
+    stream_lifecycle: hotseatLifecycle.captures,
+  });
 
   await page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i }).click();
   await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
   await page.getByRole("button", { name: /Send|发送/i }).click();
-  const allPresentState = await waitFor(
-    page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      if (
-        modalState?.interaction_mode === "all_present"
-        && (
-          (modalState?.turn_count ?? 0) > (beforeHotseat?.page?.controls?.modal_state?.turn_count ?? 0)
-          || (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-          || modalState?.sending === true
-          || (modalState?.pending_draft_count ?? 0) > 0
-        )
-      ) {
-        return current;
-      }
-      return null;
-    },
-    "all-present follow-up state",
-  );
+  const allPresentLifecycle = await captureStreamLifecycle(page, {
+    label: "all-present follow-up state",
+    outputDir,
+    filePrefix: "multi-chamber-A-all-present",
+    isCommitState: (modalState) => (
+      modalState?.interaction_mode === "all_present"
+      && (
+        (modalState?.turn_count ?? 0) > (beforeHotseat?.page?.controls?.modal_state?.turn_count ?? 0)
+        || (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
+      )
+      && (modalState?.pending_draft_count ?? 0) === 0
+    ),
+  });
+  const allPresentState = allPresentLifecycle.payload;
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-all-present.png"));
-  fs.writeFileSync(path.join(outputDir, "multi-chamber-A-all-present.json"), JSON.stringify(allPresentState, null, 2));
+  writeJson(path.join(outputDir, "multi-chamber-A-all-present.json"), {
+    state: allPresentState,
+    stream_lifecycle: allPresentLifecycle.captures,
+  });
 
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
@@ -427,7 +485,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     resultUrl,
     pickerA,
     hotseatState: hotseatState?.page?.controls?.modal_state ?? null,
+    hotseatStreamLifecycle: hotseatLifecycle.captures,
     allPresentState: allPresentState?.page?.controls?.modal_state ?? null,
+    allPresentStreamLifecycle: allPresentLifecycle.captures,
     pickerB,
     oneMoveState: oneMoveState?.page?.controls?.modal_state ?? null,
     galleryState: galleryState?.page?.controls?.modal_state ?? null,
@@ -470,12 +530,16 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     JSON.stringify({ pickerState, state: automation, fit }, null, 2),
   );
   await createVerdictAnchoredThread(page, "single ending verdict-anchored thread");
-  const anchoredState = await sendAnchoredFollowup(page, "single ending anchored follow-up commit");
+  const anchoredLifecycle = await sendAnchoredFollowup(page, "single ending anchored follow-up commit", {
+    outputDir,
+    filePrefix: "single-mobile-anchored-thread",
+  });
+  const anchoredState = anchoredLifecycle.payload;
   await saveScreenshot(page, path.join(outputDir, "single-mobile-anchored-thread.png"));
-  fs.writeFileSync(
-    path.join(outputDir, "single-mobile-anchored-thread.json"),
-    JSON.stringify(anchoredState, null, 2),
-  );
+  writeJson(path.join(outputDir, "single-mobile-anchored-thread.json"), {
+    state: anchoredState,
+    stream_lifecycle: anchoredLifecycle.captures,
+  });
 
   const anchoredModalState = anchoredState?.page?.controls?.modal_state ?? null;
   const anchoredThreadId = anchoredModalState?.active_thread_id ?? null;
@@ -603,6 +667,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     importedUrl,
     replayCoverageError,
     fit,
+    anchoredStreamLifecycle: anchoredLifecycle.captures,
   };
 }
 

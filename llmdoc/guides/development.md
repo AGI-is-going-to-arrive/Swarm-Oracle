@@ -97,6 +97,7 @@ npm run build
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-full --headless
 node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-full --headless
 node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-mobile --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-desktop --headless
 node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-full --headless
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
 ```
@@ -107,19 +108,36 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
+    - `current_speaker_turn_key / current_speaker_participant_id`
+    - `pending_drafts / stream_state`
     - `transcript_layout`
+  - 命中的 follow-up 场景当前还会额外落：
+    - `turn-start`
+    - `turn-delta`
+    - `turn-commit`
 - `e2e-ending-room-followup-suite.mjs mobile`
   - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
   - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / crossline gallery / readonly replay / restore / import`
 - `single-ending`
   - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 当前已进入 CLI summary
   - 桌面 single-ending 与中英语言切换当前仍建议保留真实浏览器复核
+- `e2e-worldline-roundtable-suite.mjs desktop`
+  - 当前适合单独复核 roundtable anchored follow-up 的真流式生命周期
+  - current summary 会落出：
+    - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
+    - `current_speaker_turn_key / current_speaker_participant_id`
+    - `pending_drafts / stream_state`
+    - `transcript_layout`
+  - desktop rerun 当前已能稳定落：
+    - hotseat `turn_start / turn_delta / turn_commit`
+    - anchored thread `turn_start / turn_delta / turn_commit`
 - `e2e-worldline-roundtable-suite.mjs full`
   - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat`
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
   - current summary 会落出 `transcript_layout`
 - `e2e-worldline-roundtable-suite.mjs mobile`
   - 只跑移动端圆桌链路，适合单独复核 recipe 切换、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
+  - mobile rerun 当前也已重新抓回 anchored thread 的 `turn_delta`
   - 如果目标是 `P2` transcript layout 签收，desktop / mobile 分端 summary 当前比 `full` 更稳
 
 ### Type Check 与 Build
@@ -191,6 +209,16 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 最近一次 roundtable `full` 稳定工件：
 
 - `frontend/output/e2e/20260331-codex-roundtable-full-stable5/summary.json`
+
+最近一轮 Oracle 流式观测 rerun 工件：
+
+- `frontend/output/e2e/20260331-codex-followup-stream-lifecycle/summary.json`
+- `frontend/output/e2e/20260331-codex-roundtable-stream-desktop-rerun/summary.json`
+- `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun2/summary.json`
+
+最近一轮经典模式流式 hardening 工件：
+
+- `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
 
 使用规则：
 

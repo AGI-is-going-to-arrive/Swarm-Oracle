@@ -294,7 +294,7 @@
 .worldline-roundtable-shell {
   display: grid;
   gap: 20px;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
   align-items: start;
 }
 
@@ -317,6 +317,14 @@
   background-position: center;
   background-size: cover;
   overflow: hidden;
+}
+
+.worldline-roundtable-view.is-live-room .worldline-roundtable-card--summary {
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .worldline-roundtable-card--summary::before {
@@ -379,6 +387,12 @@
 .worldline-roundtable-card--summary p {
   margin: 0;
   color: rgba(236, 233, 227, 0.8);
+}
+
+.worldline-roundtable-view.is-live-room .worldline-roundtable-card--summary p {
+  max-height: 15rem;
+  overflow: auto;
+  scrollbar-width: thin;
 }
 
 .worldline-roundtable-card__heading {
@@ -752,6 +766,10 @@
 .worldline-roundtable-transcript-list .ending-chat-bubble strong,
 .worldline-roundtable-transcript-list .ending-chat-bubble p {
   color: rgba(25, 28, 36, 0.92);
+}
+
+.worldline-roundtable-transcript-list .ending-chat-bubble p {
+  line-height: 1.68;
 }
 
 .worldline-roundtable-transcript-list .ending-chat-bubble span {

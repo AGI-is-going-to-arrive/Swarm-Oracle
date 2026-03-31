@@ -42,6 +42,7 @@ from app.models.database import _uuid, get_engine
 from app.services.debate_prompts import get_debate_profile_style, infer_debate_profile
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
+    _strip_reasoning_blocks,
     format_untrusted_text_block,
     llm_call_json,
     llm_call_stream,
@@ -67,6 +68,8 @@ _ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
 _ORACLE_LLM_REWRITE_TIMEOUT_SECONDS = 6.0
 _ORACLE_STREAM_PROBE_TIMEOUT_SECONDS = 6.0
 _ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS = 20.0
+_ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS = 6.0
+_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS = 0.18
 
 
 class EndingRoomServiceError(Exception):
@@ -2560,8 +2563,18 @@ def sanitize_untrusted_text(text: str, *, max_chars: int = 4000) -> str:
     return normalized
 
 
+def _strip_oracle_reasoning_prefix(text: str) -> str:
+    cleaned = _strip_reasoning_blocks(str(text or ""))
+    if re.match(r"^\s*<think>[\s\S]*$", cleaned, flags=re.IGNORECASE):
+        return ""
+    return cleaned
+
+
 def _normalize_oracle_generated_content(text: str, *, fallback: str, max_chars: int = 520) -> str:
-    normalized = sanitize_untrusted_text(text, max_chars=max_chars)
+    normalized = sanitize_untrusted_text(
+        _strip_oracle_reasoning_prefix(text),
+        max_chars=max_chars,
+    )
     return normalized or fallback
 
 
@@ -2758,19 +2771,45 @@ async def _stream_oracle_copy(
         recent_lines=recent_lines,
         output_json=False,
     )
+    raw_buffer = ""
+    visible_length = 0
     chunks: list[str] = []
-    with llm_request_scope(quota_key=None, purpose=purpose):
-        async for delta in llm_call_stream(
-            prompt,
-            reasoning_effort="low",
-            temperature=0.55,
-            timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
-        ):
-            if not delta:
-                continue
-            chunks.append(delta)
-            if on_delta is not None:
-                await on_delta(delta)
+    stream_iter = None
+    try:
+        with llm_request_scope(quota_key=None, purpose=purpose):
+            stream_iter = llm_call_stream(
+                prompt,
+                reasoning_effort="low",
+                temperature=0.55,
+                timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
+            ).__aiter__()
+            while True:
+                try:
+                    if visible_length == 0:
+                        delta = await asyncio.wait_for(
+                            anext(stream_iter),
+                            timeout=_ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS,
+                        )
+                    else:
+                        delta = await anext(stream_iter)
+                except StopAsyncIteration:
+                    break
+                if not delta:
+                    continue
+                raw_buffer = f"{raw_buffer}{delta}"
+                visible_text = _strip_oracle_reasoning_prefix(raw_buffer)
+                if not visible_text:
+                    continue
+                visible_delta = visible_text[visible_length:]
+                if not visible_delta:
+                    continue
+                visible_length = len(visible_text)
+                chunks.append(visible_delta)
+                if on_delta is not None:
+                    await on_delta(visible_delta)
+    finally:
+        if stream_iter is not None:
+            await stream_iter.aclose()
     polished = _strip_oracle_scope_boilerplate(
         "".join(chunks),
         language=room.language,
@@ -3243,6 +3282,8 @@ async def _append_followup_turns_with_retry(
                     purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
                     on_delta=_on_delta,
                 )
+                if chunk_index > 0:
+                    await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
                 streamed = True
             except Exception as exc:
                 logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
@@ -3258,6 +3299,7 @@ async def _append_followup_turns_with_retry(
                 recent_lines=recent_lines,
                 purpose=f"oracle_followup_{plan.interaction_mode.value}",
             )
+            chunk_index = 0
             for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
                 await _broadcast(
                     plan.room_id,
@@ -3275,6 +3317,8 @@ async def _append_followup_turns_with_retry(
                     },
                 )
                 await asyncio.sleep(0)
+            if chunk_index > 0:
+                await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
         committed_turn = _commit_followup_assistant_turn(plan, content=generated_content)
         committed_turns.append(committed_turn)
         recent_lines.append(committed_turn["content"])

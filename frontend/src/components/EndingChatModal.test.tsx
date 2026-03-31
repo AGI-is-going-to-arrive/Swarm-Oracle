@@ -1320,10 +1320,26 @@ describe('EndingChatModal', () => {
         readOnly={false}
         onClose={() => {}}
         onModeChange={vi.fn()}
+        onAutomationStateChange={onAutomationStateChangeMock}
       />,
     );
 
     expect(screen.getAllByText('Strategist').length).toBeGreaterThan(0);
     expect(screen.getByText('The hinge is still unfolding...')).toBeInTheDocument();
+    const payload = onAutomationStateChangeMock.mock.calls
+      .map(([state]) => state)
+      .find((state) => state && typeof state === 'object' && 'pending_drafts' in state) as Record<string, any> | undefined;
+    expect(payload?.current_speaker_turn_key).toBe('draft-followup');
+    expect(payload?.current_speaker_participant_id).toBe('p-strategist');
+    expect(payload?.stream_state).toBe('turn_delta');
+    expect(payload?.pending_drafts).toEqual([
+      {
+        turn_key: 'draft-followup',
+        participant_id: 'p-strategist',
+        phase: 'verdict',
+        variant: 'stream',
+        content_length: 'The hinge is still unfolding...'.length,
+      },
+    ]);
   });
 });

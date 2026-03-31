@@ -17,6 +17,15 @@ describe('automation payload helpers', () => {
         messageCount: 5,
         agentCount: 3,
         branchCount: 1,
+        thinkingAgentCount: 1,
+        thinkingAgents: [
+          {
+            agent: '外审议长',
+            agent_id: 'agent-1',
+            branch: 'branch-1',
+            round: 2,
+          },
+        ],
       },
       {
         scene: 'WorldScene',
@@ -46,6 +55,7 @@ describe('automation payload helpers', () => {
     expect(payload.page?.kind).toBe('simulation');
     expect(payload.page?.replay_state?.selected_round).toBe(2);
     expect(payload.simulation.viewMode).toBe('theater');
+    expect(payload.simulation.thinkingAgentCount).toBe(1);
     expect(payload.scene?.scene).toBe('WorldScene');
   });
 
@@ -62,6 +72,8 @@ describe('automation payload helpers', () => {
         messageCount: 0,
         agentCount: 0,
         branchCount: 0,
+        thinkingAgentCount: 0,
+        thinkingAgents: [],
       },
       null,
     );

@@ -588,6 +588,13 @@ export function SimulationView() {
         messageCount: messages.length,
         agentCount: agents.length,
         branchCount: branches.length,
+        thinkingAgentCount: thinkingAgents.length,
+        thinkingAgents: thinkingAgents.map((agent) => ({
+          agent: agent.agent,
+          agent_id: agent.agent_id,
+          branch: agent.branch,
+          round: agent.round,
+        })),
       },
       win.__swarmGetSceneAutomation?.() ?? null,
       {
@@ -714,6 +721,7 @@ export function SimulationView() {
     isSimulationComplete,
     agents.length,
     messages.length,
+    thinkingAgents,
     panelCollapsed,
     gameplayAutomation,
     predictionAutomation,

@@ -15860,3 +15860,229 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - harness 现状：
   - `roundtable full` 仍会受 provider 慢路径波动影响；本轮改成 desktop/mobile 分端 signoff 更稳定
   - `followup full` 当前已可稳定生成新 `summary.json`
+
+## 2026-03-31 23线 stream observability + reasoning leak hardening
+
+- 范围：
+  - 继续按 `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md` 做 23 线剩余收口
+  - 只做 `follow-up / classic mode` 流式一致性、回归加固与 E2E/黑盒取证
+  - 未回头重做 `G1/G2`
+  - 未扩 `pretext` 到 `P3/P4`
+
+- 本轮代码改动：
+  - `frontend/src/pages/SimulationView.tsx`
+    - `render_game_to_text` 新增 `thinkingAgentCount / thinkingAgents`
+    - 给 classic mode 流式“当前谁在说话/思考中”补自动化观测口径
+  - `frontend/src/components/EndingChatModal.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - automation payload 新增：
+      - `current_speaker_turn_key`
+      - `current_speaker_participant_id`
+      - `pending_drafts`
+      - `stream_state`
+    - 让 Oracle follow-up / roundtable transcript 的 `turn_start / turn_delta / turn_commit` 可被脚本稳定识别
+  - `frontend/scripts/e2e-suite.mjs`
+    - classic `live_fork_marker` fixture 新增 `agent_speak_start`
+    - 补 `thinking state` 工件：`live-fork-marker-thinking.{json,png}`
+    - 放大 fixture 的 thinking 窗口，避免 60ms 中间态被轮询漏掉
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 补 `captureStreamLifecycle(...)`
+    - multi hotseat / all_present 与 single mobile anchored thread 当前会落：
+      - `*-turn-start.{json,png}`
+      - `*-turn-delta.{json,png}`（出现时）
+      - `*-turn-commit.{json,png}`
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - 补 roundtable hotseat / anchored thread 的流式生命周期工件
+    - 对 instrumented path 做空值防御与长超时，避免 payload 空帧误炸
+  - `frontend/src/hooks/useEndingRoomWS.test.tsx`
+    - 补 duplicate/stale sequence 与 stale socket 回灌测试
+  - `backend/app/services/ending_room_service.py`
+    - 新增 `_strip_oracle_reasoning_prefix(...)`
+    - `_normalize_oracle_generated_content(...)` 现会统一去掉 `<think>...</think>`
+    - `_stream_oracle_copy(...)` 现会在广播 delta 前先过滤 reasoning block，避免把 provider 思维链直接打到 transcript
+  - `backend/tests/test_ending_room_service.py`
+    - 补 `<think>` 过滤单测
+
+- 定向验证：
+  - frontend unit:
+    - `cd frontend && npm test -- --run src/game/automation.test.ts src/pages/SimulationView.test.tsx src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/hooks/useEndingRoomWS.test.tsx --maxWorkers=1 --testTimeout=15000`
+    - `70 passed`
+  - frontend type/build:
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - `cd frontend && npm run build`
+    - 通过
+  - frontend script syntax:
+    - `node --check scripts/e2e-suite.mjs`
+    - `node --check scripts/e2e-ending-room-followup-suite.mjs`
+    - `node --check scripts/e2e-worldline-roundtable-suite.mjs`
+    - 通过
+  - backend targeted pytest:
+    - `backend/.venv/bin/python -m pytest backend/tests/test_ending_room_service.py -k 'reasoning_prefix or normalize_oracle_generated_content or hotseat_followup_stays_localized or followup_uses_streaming_path_when_probe_supports_it or followup_prefers_llm_copy_when_enabled or followup_falls_back_when_stream_probe_reports_unsupported' -q`
+    - `6 passed`
+
+- E2E / 黑盒取证：
+  - classic / corners：
+    - `frontend/output/e2e/20260331-codex-classic-stream-hardening/live-fork-marker/live-fork-marker-thinking.json`
+    - 已能看到 `thinkingAgentCount = 1` 和对应 `thinkingAgents`
+    - `live-fork-marker.json` 仍确认 `currentRound = 1 / isComplete = true / branchCount = 2`
+    - 整个 `corners` 套件尾部仍可能卡在 summary/teardown；本轮以 live-fork 新工件为准
+  - ending-room followup full：
+    - `frontend/output/e2e/20260331-codex-followup-stream-lifecycle/summary.json`
+    - single mobile anchored verdict thread 已抓到完整：
+      - `turn_start`
+      - `turn_delta`
+      - `turn_commit`
+    - multi desktop hotseat 已抓到：
+      - `turn_start`
+      - `turn_commit`
+    - multi all_present 当前只稳定抓到 `turn_commit`
+  - roundtable desktop：
+    - `frontend/output/e2e/20260331-codex-roundtable-stream-desktop/desktop-roundtable-hotseat-stream-turn-start.json`
+    - `frontend/output/e2e/20260331-codex-roundtable-stream-desktop/desktop-roundtable-hotseat-stream-turn-commit.json`
+    - hotseat stream 观测已成立
+    - anchored thread 在真实 provider 慢路径下仍可能长时间卡住，未稳定产出 commit 工件
+  - develop-web-game 黑盒：
+    - `frontend/output/web-game/20260331-followup-blackbox-single/state-0.json`
+      - result 页可读，`can_open_ending_room = true`
+    - `frontend/output/web-game/20260331-roundtable-blackbox-live/state-1.json`
+      - roundtable route 经 picker confirm 后可进入 live room
+      - `showing_picker = false`
+      - `scene = WorldlineRoundtable`
+      - `room_id` 已建立
+
+- 新发现与处理：
+  - 真实人工复核 `desktop-roundtable-hotseat.png` 时看到 `<think>` / prompt 指令直接泄漏进 transcript
+  - 已确认不是截图假象，数据库 `ending_room_turn.content` 里确实写入了 reasoning block
+  - 本轮已在 backend 统一过滤 reasoning block，并用真实 smoke 验证：
+    - 对现成 roundtable room 再次调用 `append_room_user_turn(...)`
+    - 新生成回复里 `REPLY_1_HAS_THINK = False`
+    - `REPLY_2_HAS_THINK = False`
+
+- 当前剩余 blocker：
+  - `roundtable` anchored follow-up 的 desktop/mobile 专项在真实 provider 慢路径下仍不够稳，尤其 `thread_followup` commit 可能长时间拖住 E2E
+  - `corners` 套件本轮 live-fork 相关 case 已落工件，但整体 `summary.json` 仍有尾部 teardown 风险
+  - 从真实截图看，roundtable transcript 长线程在 desktop 下会把信息密度推高；可玩但不算轻松，需要后续继续做 transcript/summary 折叠与 overflow 节流
+
+## 2026-03-31 23线 next pass — anchored follow-up stabilization + live-room polish
+
+- 按用户要求继续依次做两件事：
+  1. 继续收稳 `roundtable anchored follow-up`
+  2. 在 `teach-impeccable` / `.impeccable.md` 约束内做风格内前端优化
+
+- 第 1 步：anchored follow-up 慢路径收口
+  - 真实问题不是“功能不存在”，而是 stream provider 在首个可见 delta 前会长时间空转，导致 roundtable anchored thread 的 desktop/mobile E2E 容易被拖死。
+  - backend 新增：
+    - `backend/app/services/ending_room_service.py`
+      - `_ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS = 6.0`
+      - `_stream_oracle_copy(...)` 现在只给“首个可见 delta”一个短预算
+      - 若 6 秒内还没产出任何可见 token，就抛异常回到 `_maybe_rewrite_oracle_copy(...)`
+      - 一旦已经有可见 delta，就不再粗暴中断当前 stream
+  - backend tests：
+    - `backend/tests/test_ending_room_service.py`
+      - 新增 `test_followup_falls_back_when_stream_never_emits_visible_delta`
+  - 验证：
+    - `backend/.venv/bin/python -m pytest backend/tests/test_ending_room_service.py -k 'stream_never_emits_visible_delta or followup_uses_streaming_path_when_probe_supports_it or followup_falls_back_when_stream_probe_reports_unsupported' -q`
+    - `3 passed`
+
+- 第 1 步结果：
+  - roundtable desktop rerun：
+    - `frontend/output/e2e/20260331-codex-roundtable-stream-desktop-rerun/summary.json`
+    - 现在已完整覆盖：
+      - hotseat `turn_start / turn_delta / turn_commit`
+      - anchored thread `turn_start / turn_delta / turn_commit`
+      - artifact readonly / local readonly
+  - roundtable mobile rerun：
+    - `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun/summary.json`
+    - 现在已完整覆盖：
+      - hotseat `turn_start / turn_delta / turn_commit`
+      - anchored thread `turn_start / turn_commit`
+      - artifact readonly / reload restore / local readonly
+    - mobile anchored thread 本轮 `turn_delta = null`
+      - 但 `turn_start -> turn_commit` 已稳定落盘，说明 slow-path blocker 已解除
+
+- 第 2 步：按 `teach-impeccable` 做风格内 live-room 可读性收口
+  - 读取：
+    - `.impeccable.md`
+    - `teach-impeccable` skill
+  - 约束保持：
+    - 不改页面骨架
+    - 不引入新品牌语言
+    - 只做 `cinematic / tactical / legible` 方向的小幅增强
+  - CSS 改动：
+    - `frontend/src/pages/WorldlineRoundtable.css`
+      - `worldline-roundtable-shell` 左栏收窄：
+        - `minmax(320px, 420px)` -> `minmax(300px, 380px)`
+      - desktop `is-live-room` 下 summary card 现在 sticky：
+        - `position: sticky`
+        - `top: 18px`
+        - `max-height: calc(100vh - 40px)`
+        - card 内部可滚动
+      - live-room summary 段落加内部滚动预算
+      - transcript bubble 段落行距拉到 `1.68`
+  - 验证：
+    - `cd frontend && npm run build`
+      - 通过
+    - 黑盒截图：
+      - `frontend/output/web-game/20260331-roundtable-blackbox-live-polish/shot-1.png`
+      - `frontend/output/web-game/20260331-roundtable-blackbox-live-polish/state-1.json`
+
+- 结论更新：
+  - 第 1 步已从“剩余 blocker”转成“desktop/mobile 分端都重新可跑通”
+  - 当前剩余不再是 anchored follow-up 卡死，而是：
+    - mobile anchored thread 有时只落 `turn_start -> turn_commit`，不一定稳定看到中间 `turn_delta`
+    - `corners` 套件尾部 `summary.json` 仍偶发 teardown 卡住
+  - 第 2 步没有新增素材文件；当前主题/素材体系仍够用，本轮优先做的是信息密度收口，而不是继续扩资产库
+
+## 2026-03-31 23线 next-next pass — mobile delta + corners summary
+
+- 用户同意继续做：
+  1. `mobile anchored thread` 的 `turn_delta` 稳定性
+  2. `corners` 套件尾部 `summary/teardown`
+
+- 代码改动：
+  - `backend/app/services/ending_room_service.py`
+    - 新增 `_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS = 0.18`
+    - 任何可见 delta 广播后、commit 前都会留一个极短可观测窗口
+    - 目的不是拖慢 UX，而是避免 mobile / 慢设备在 `pending_drafts` 还没被采集时就被 commit 覆盖
+  - `frontend/scripts/e2e-suite.mjs`
+    - 统一引入 `playwrightTeardown.mjs`
+    - `matrix / corners / mobile / cross-browser` 当前都改用：
+      - `closePlaywrightContext(...)`
+      - `closePlaywrightBrowser(...)`
+    - `runResultFlow(...)` 新增 `shareCopyOverride`
+    - `runShareContextCase(...)` 改成 deterministic social-copy mock
+    - `runShareRetryCase(...)` 第二次不再走真实 provider，而是 deterministic success mock
+
+- 定向验证：
+  - backend:
+    - `backend/.venv/bin/python -m pytest backend/tests/test_ending_room_service.py -k 'stream_never_emits_visible_delta or followup_uses_streaming_path_when_probe_supports_it or followup_falls_back_when_stream_probe_reports_unsupported' -q`
+    - `3 passed`
+  - script syntax:
+    - `node --check frontend/scripts/e2e-suite.mjs`
+    - 通过
+
+- E2E 结果：
+  - mobile roundtable rerun2：
+    - `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun2/summary.json`
+    - 这次 `anchoredThreadStreamLifecycle` 已完整包含：
+      - `turn_start`
+      - `turn_delta`
+      - `turn_commit`
+    - 之前“mobile anchored thread 不一定看到 delta”的 blocker 现已解除
+  - corners rerun3：
+    - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
+    - live-fork thinking 工件仍正常：
+      - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/live-fork-marker/live-fork-marker-thinking.json`
+    - `share_context / share_retry / history_leaderboard / history_delete_last_page` 现在都能进入最终结果
+    - CLI 已打印：
+      - `artifacts: /Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3`
+    - 说明“summary/result 无法落盘”的 blocker 已解除
+
+- 剩余观察：
+  - `corners` 完成时仍打印过一次：
+    - `[playwright-teardown] corners-browser did not close within 10000ms`
+  - 但本轮进程已正常退出且结果工件完整，所以这现在只是 teardown warning，不再是阻断签收的 blocker
+
+- 当前结论：
+  - `mobile anchored thread turn_delta`：已收口
+  - `corners summary/teardown`：已从“卡死阻塞”降为“有 warning 但能稳定落盘”

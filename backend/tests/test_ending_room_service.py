@@ -33,8 +33,10 @@ from app.services.ending_room_service import (
     EndingRoomServiceError,
     _build_room_plan,
     _build_oracle_rewrite_prompt,
+    _normalize_oracle_generated_content,
     _build_roundtable_opening_content,
     _room_memory_partition,
+    _strip_oracle_reasoning_prefix,
     append_room_user_turn,
     append_thread_user_turn,
     build_branch_scope_context,
@@ -792,6 +794,20 @@ def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments
     assert "do not leave untranslated Chinese fragments" in prompt
 
 
+def test_strip_oracle_reasoning_prefix_hides_partial_and_closed_think_blocks():
+    assert _strip_oracle_reasoning_prefix("<think>internal chain") == ""
+    assert _strip_oracle_reasoning_prefix("<think>internal chain</think>Visible answer") == "Visible answer"
+
+
+def test_normalize_oracle_generated_content_discards_reasoning_blocks():
+    normalized = _normalize_oracle_generated_content(
+        "<think>keep this hidden</think>档案官：先坏的是执行链，不是结局名义。",
+        fallback="fallback copy",
+    )
+
+    assert normalized == "档案官：先坏的是执行链，不是结局名义。"
+
+
 def test_roundtable_opening_anchor_field_voice_is_more_frontline():
     participant = EndingRoomParticipant(
         room_id="room-1",
@@ -1444,6 +1460,50 @@ def test_followup_uses_streaming_path_when_probe_supports_it(monkeypatch):
     )
 
     assert any("确实走了流式改写" in turn["content"] for turn in followup["turns"][1:])
+
+
+def test_followup_falls_back_when_stream_never_emits_visible_delta(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+
+    async def _fake_probe(**kwargs):
+        return {"supported": True, "reason": None}
+
+    async def _slow_stream(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        yield "太晚了"
+
+    async def _fallback_copy(**kwargs):
+        return "档案官：首个流式 delta 超时后已切回非流式 fallback。"
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", _fake_probe)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_stream", _slow_stream)
+    monkeypatch.setattr(ending_room_service_module, "_maybe_rewrite_oracle_copy", _fallback_copy)
+
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="如果这里拖得太久，先该退回什么？",
+        addressed_agent_ids=[agent_ids[0]],
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+    )
+
+    assert any("首个流式 delta 超时后已切回非流式 fallback" in turn["content"] for turn in followup["turns"][1:])
 
 
 def test_followup_fallback_uses_profile_specific_language_when_llm_is_off(monkeypatch):

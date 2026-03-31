@@ -86,6 +86,8 @@
   - circuit breaker
   - 共享 `httpx.AsyncClient`
 - Oracle follow-up 的 stream support probe 当前复用 `llm_call_stream()`；`estimated_tokens` 预估已补回，不再因为 probe 自身变量缺失而误触发 fallback。
+- Oracle follow-up 流式链路当前会给“首个可见 delta”一个短预算；如果 provider 长时间不出可见 token，会尽快回退到非流式改写，而不是把 anchored follow-up 长时间挂住。
+- Oracle follow-up 当前会在 WebSocket delta 广播和最终 turn 落库前先剥掉 provider reasoning block；`<think>` 不会再泄漏进 transcript。
 - 当多个 backend worker 共用同一个 SQLite 文件时：
   - pending/quota 共享计数会生效
   - runtime lock 会跨进程共享

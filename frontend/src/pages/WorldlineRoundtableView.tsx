@@ -870,6 +870,21 @@ export default function WorldlineRoundtableView() {
   const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
+  const automationPendingDrafts = useMemo(
+    () => displayedDrafts.map((draft) => ({
+      turn_key: draft.key,
+      participant_id: draft.participantId,
+      phase: draft.phase,
+      variant: draft.variant,
+      content_length: draft.content.trim().length,
+    })),
+    [displayedDrafts],
+  );
+  const automationStreamState = automationPendingDrafts.length === 0
+    ? null
+    : automationPendingDrafts.some((draft) => draft.variant === 'stream')
+      ? 'turn_delta'
+      : 'turn_start';
   const hotseatParticipantId = interactionMode === 'hotseat' ? selectedRepresentativeId : null;
   const transcriptLocale = isZh ? 'zh' : 'en';
   const transcriptBubbleLayouts = useMemo(
@@ -1497,9 +1512,13 @@ export default function WorldlineRoundtableView() {
           active_thread_id: activeThread?.id ?? null,
           thread_count: threadList.length,
           interaction_mode: automationInteractionMode,
+          current_speaker_turn_key: activeSpeakerTurnKey,
+          current_speaker_participant_id: currentSpeakerParticipantId,
           question_anchor_ids: activeThread?.question_anchor_ids_json ?? [],
           thread_question_anchor_ids_json: activeThread?.question_anchor_ids_json ?? [],
           pending_question_anchor_ids: pendingQuestionAnchorIds,
+          pending_drafts: automationPendingDrafts,
+          stream_state: automationStreamState,
           anchor_kind: activeThreadAnchorSummary?.kind ?? null,
           anchor_kind_label: activeThreadAnchorSummary?.kindLabel ?? null,
           anchor_label: activeThreadAnchorSummary?.label ?? null,
@@ -1527,6 +1546,8 @@ export default function WorldlineRoundtableView() {
     activeThread?.id,
     composerEnabled,
     currentTurns.length,
+    currentSpeakerParticipantId,
+    activeSpeakerTurnKey,
     participants,
     effectiveResult,
     effectiveSnapshot,
@@ -1535,6 +1556,8 @@ export default function WorldlineRoundtableView() {
     automationInteractionMode,
     loading,
     displayedDrafts.length,
+    automationPendingDrafts,
+    automationStreamState,
     replayPayload,
     representatives.length,
     pendingQuestionAnchorIds,

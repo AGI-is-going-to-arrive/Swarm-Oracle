@@ -229,6 +229,48 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+async function captureStreamLifecycle(page, {
+  label,
+  outputDir,
+  filePrefix,
+  timeout = 60000,
+  isCommitState,
+}) {
+  const captures = {
+    turn_start: null,
+    turn_delta: null,
+    turn_commit: null,
+  };
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const payload = await readAutomation(page);
+    const controls = payload?.page?.controls;
+    if (!captures.turn_start && (controls?.pending_drafts?.length ?? 0) > 0 && controls?.stream_state === "turn_start") {
+      captures.turn_start = controls;
+      await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-start.png`));
+      writeJson(path.join(outputDir, `${filePrefix}-turn-start.json`), payload);
+    }
+    if (!captures.turn_delta && (controls?.pending_drafts?.length ?? 0) > 0 && controls?.stream_state === "turn_delta") {
+      captures.turn_delta = controls;
+      await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-delta.png`));
+      writeJson(path.join(outputDir, `${filePrefix}-turn-delta.json`), payload);
+    }
+    if (controls && isCommitState(controls, payload)) {
+      if (!captures.turn_commit) {
+        captures.turn_commit = controls;
+        await saveScreenshot(page, path.join(outputDir, `${filePrefix}-turn-commit.png`));
+        writeJson(path.join(outputDir, `${filePrefix}-turn-commit.json`), payload);
+      }
+      return {
+        payload,
+        captures,
+      };
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 async function openRoundtable(page, baseUrl, scenarioId) {
   await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: /Start Roundtable|发起圆桌/i }).click();
@@ -251,6 +293,8 @@ async function sendComposer(page, prompt, modeText, options = {}) {
   const {
     expectThreadSwitch = false,
     expectedInteractionMode = null,
+    outputDir = null,
+    filePrefix = null,
   } = options;
   await page.getByRole("button", { name: modeText }).click();
   const before = await readAutomation(page);
@@ -259,26 +303,38 @@ async function sendComposer(page, prompt, modeText, options = {}) {
   const beforeActiveThreadId = before?.page?.controls?.active_thread_id ?? null;
   await page.locator(".ending-chat-composer__input").fill(prompt);
   await page.locator(".ending-chat-send").click();
-  return waitForAutomation(
-    page,
-    (payload) => {
-      const controls = payload.page?.controls;
-      if (!controls) return false;
-      if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) {
-        return false;
-      }
-      if (expectThreadSwitch) {
-        return (
-          (controls.thread_count ?? 0) > beforeThreadCount
-          || (controls.active_thread_id ?? null) !== beforeActiveThreadId
-        );
-      }
+  const isBaseSatisfied = (controls, payload) => {
+    if (!controls || !payload) return false;
+    if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) {
+      return false;
+    }
+    if (expectThreadSwitch) {
       return (
-        (payload.simulation?.messageCount ?? 0) > beforeTurns
-        || (controls.thread_count ?? 0) > beforeThreadCount
+        (controls.thread_count ?? 0) > beforeThreadCount
         || (controls.active_thread_id ?? null) !== beforeActiveThreadId
       );
-    },
+    }
+    return (
+      (payload.simulation?.messageCount ?? 0) > beforeTurns
+      || (controls.thread_count ?? 0) > beforeThreadCount
+      || (controls.active_thread_id ?? null) !== beforeActiveThreadId
+    );
+  };
+  if (outputDir && filePrefix) {
+    return captureStreamLifecycle(page, {
+      label: `composer send ${modeText}`,
+      outputDir,
+      filePrefix,
+      timeout: 60000,
+      isCommitState: (controls, payload) => (
+        isBaseSatisfied(controls, payload)
+        && (controls?.pending_drafts?.length ?? 0) === 0
+      ),
+    });
+  }
+  return waitForAutomation(
+    page,
+    (payload) => isBaseSatisfied(payload?.page?.controls, payload),
     15000,
     `composer send ${modeText}`,
   );
@@ -350,7 +406,8 @@ async function createVerdictAnchoredThread(page, label) {
   );
 }
 
-async function sendAnchoredFollowup(page, label) {
+async function sendAnchoredFollowup(page, label, options = {}) {
+  const { outputDir = null, filePrefix = null } = options;
   await page.waitForFunction(() => {
     const input = document.querySelector(".ending-chat-composer__input");
     return input instanceof HTMLTextAreaElement && input.value.trim().length > 0;
@@ -378,17 +435,23 @@ async function sendAnchoredFollowup(page, label) {
     20000,
     `${label} dispatch`,
   );
+  const isCommitState = (controls) => (
+    controls?.interaction_mode === "thread_followup"
+    && (controls?.question_anchor_ids?.length ?? 0) > 0
+    && (controls?.pending_question_anchor_ids?.length ?? 0) === 0
+    && (controls?.pending_drafts?.length ?? 0) === 0
+  );
+  if (outputDir && filePrefix) {
+    return captureStreamLifecycle(page, {
+      label,
+      outputDir,
+      filePrefix,
+      isCommitState,
+    });
+  }
   return waitForAutomation(
     page,
-    (payload) => {
-      const controls = payload.page?.controls;
-      if (!controls) return false;
-      return (
-        controls.interaction_mode === "thread_followup"
-        && (controls.question_anchor_ids?.length ?? 0) > 0
-        && (controls.pending_question_anchor_ids?.length ?? 0) === 0
-      );
-    },
+    (payload) => isCommitState(payload.page?.controls),
     60000,
     label,
   );
@@ -652,20 +715,33 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     {
       expectThreadSwitch: true,
       expectedInteractionMode: "hotseat",
+      outputDir,
+      filePrefix: "desktop-roundtable-hotseat-stream",
     },
   );
+  const hotseatState = hotseat.payload;
   await waitForDraftBubblesToSettle(page, "desktop hotseat draft settle");
   await waitForTranscriptActionsReady(page, "desktop hotseat quote actions");
   const hotseatSettled = await readAutomation(page);
-  await focusHotseatThread(page, hotseat?.page?.controls?.active_thread_id ?? null);
+  await focusHotseatThread(page, hotseatState?.page?.controls?.active_thread_id ?? null);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-hotseat.png"));
-  writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), hotseatSettled ?? hotseat);
+  writeJson(path.join(outputDir, "desktop-roundtable-hotseat.json"), {
+    state: hotseatSettled ?? hotseatState,
+    stream_lifecycle: hotseat.captures,
+  });
   await createVerdictAnchoredThread(page, "desktop verdict anchored thread");
-  const anchoredThread = await sendAnchoredFollowup(page, "desktop anchored follow-up commit");
+  const anchoredThreadLifecycle = await sendAnchoredFollowup(page, "desktop anchored follow-up commit", {
+    outputDir,
+    filePrefix: "desktop-roundtable-anchored-thread-stream",
+  });
+  const anchoredThread = anchoredThreadLifecycle.payload;
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
   const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-anchored-thread.png"));
-  writeJson(path.join(outputDir, "desktop-roundtable-anchored-thread.json"), anchoredThread);
+  writeJson(path.join(outputDir, "desktop-roundtable-anchored-thread.json"), {
+    state: anchoredThread,
+    stream_lifecycle: anchoredThreadLifecycle.captures,
+  });
 
   await armClipboardCapture(page);
   await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
@@ -714,8 +790,10 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     faultLineFirst,
     witnessAugmented,
     archivist,
-    hotseat,
+    hotseat: hotseatState,
+    hotseatStreamLifecycle: hotseat.captures,
     anchoredThread,
+    anchoredThreadStreamLifecycle: anchoredThreadLifecycle.captures,
     artifactReadonly,
     artifactImportedUrl,
     replayReadonly,
@@ -771,21 +849,34 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     {
       expectThreadSwitch: true,
       expectedInteractionMode: "hotseat",
+      outputDir,
+      filePrefix: "mobile-roundtable-hotseat-stream",
     },
   );
-  const hotseatThreadId = hotseat?.page?.controls?.active_thread_id ?? null;
+  const hotseatState = hotseat.payload;
+  const hotseatThreadId = hotseatState?.page?.controls?.active_thread_id ?? null;
   await waitForDraftBubblesToSettle(page, "mobile hotseat draft settle");
   await waitForTranscriptActionsReady(page, "mobile hotseat quote actions");
   const hotseatSettled = await readAutomation(page);
   await focusHotseatThread(page, hotseatThreadId);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-hotseat.png"));
-  writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), hotseatSettled ?? hotseat);
+  writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), {
+    state: hotseatSettled ?? hotseatState,
+    stream_lifecycle: hotseat.captures,
+  });
   await createVerdictAnchoredThread(page, "mobile verdict anchored thread");
-  const anchoredThread = await sendAnchoredFollowup(page, "mobile anchored follow-up commit");
+  const anchoredThreadLifecycle = await sendAnchoredFollowup(page, "mobile anchored follow-up commit", {
+    outputDir,
+    filePrefix: "mobile-roundtable-anchored-thread-stream",
+  });
+  const anchoredThread = anchoredThreadLifecycle.payload;
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
   const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-anchored-thread.png"));
-  writeJson(path.join(outputDir, "mobile-roundtable-anchored-thread.json"), anchoredThread);
+  writeJson(path.join(outputDir, "mobile-roundtable-anchored-thread.json"), {
+    state: anchoredThread,
+    stream_lifecycle: anchoredThreadLifecycle.captures,
+  });
 
   await armClipboardCapture(page);
   let artifactReadonly = null;
@@ -874,8 +965,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     traitMix,
     faultLineFirst,
     witnessAugmented,
-    hotseat,
+    hotseat: hotseatState,
+    hotseatStreamLifecycle: hotseat.captures,
     anchoredThread,
+    anchoredThreadStreamLifecycle: anchoredThreadLifecycle.captures,
     artifactReadonly,
     artifactReloaded,
     artifactImportedUrl,
