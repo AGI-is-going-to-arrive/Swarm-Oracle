@@ -125,6 +125,7 @@
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
+- `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
 - `endingRoomStore` 当前在 `hydrateThread()` 时也会同步更新 `snapshot.threads`；新建 anchored thread 后，Oracle replay 不会再只序列化旧主桌快照。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
@@ -231,13 +232,14 @@
   - 档案官 verdict 消息用高亮卡样式突出
   - transcript 气泡文本限宽 58ch、行高 1.75
   - transcript 列表间距从 12px 增加到 16px
+  - transcript bubble 内的操作按钮（"沿这句追问 / 另开线程"）当前有上边框分隔线，颜色加深为 `oklch(45% 0.2 350)` + 700 加粗，确保在浅色气泡背景上可读
   - `onAutomationStateChange` 回调改用 `useRef` 稳定引用，修复了 "Maximum update depth exceeded" 循环渲染问题
 - `WorldlineRoundtableView` 圆桌 transcript 当前已补：
   - 按 phase 分组的视觉分隔线（`<h3>` 语义标签 + 渐变横线 + phase label）
   - 每条发言左侧色标（5-hue oklch 调色板，与 EndingChatModal 一致）
   - 档案官发言使用 `--oracle-accent` 跟随主题皮肤变化
   - 移动端分隔线 label 有 `text-overflow: ellipsis` 防溢出
-- 贴图修复：`/assets/ui/generated/` 下的 1408x768 AI 全景图引用已全部替换为 CSS gradient / box-shadow，涉及 EndingChatModal.css、WorldlineRoundtable.css、ResultView.css 共 15 处
+- 贴图修复：`/assets/ui/generated/` 下的 1408x768 AI 全景图引用大部分已替换为 CSS gradient / box-shadow，涉及 EndingChatModal.css、WorldlineRoundtable.css、ResultView.css 共 15 处；ResultView 因果档案区域已改回使用 `scenario.scene_theme` 对应的场景图（带半透明渐变遮罩）
   - speaker glow → `radial-gradient`
   - archivist emblem → `conic-gradient`
   - oracle chamber panel → `repeating-linear-gradient` 细条纹

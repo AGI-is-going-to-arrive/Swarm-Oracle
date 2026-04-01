@@ -123,7 +123,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - 新增 11 个主题场景与 6 个 gameplay profiles，全部 33 个主题场景已有专属 PNG 素材
   - `ResultView` Summary-First 优化已完成：默认只显标题 + 概率 + 引言，故事按需展开；桌面端 2 列网格；关键时刻 timeline 视觉化
   - `EndingChatModal` 对话可读性优化已完成：speaker 左侧色标、verdict 高亮、58ch 行宽、16px 间距
-  - `/assets/ui/generated/` 下的 AI 全景图引用已替换为 CSS gradient（15 处），消除模糊贴图
+  - `/assets/ui/generated/` 下的 AI 全景图引用大部分已替换为 CSS gradient（15 处），ResultView 因果档案改回使用场景图（带遮罩渐变）
   - Theater 气泡可见数量改为动态（`min(agentCount, 8)`），文字分辨率提升到 4x，compact 模式增加描边和阴影
   - Theater 布局重构为 canvas-first 浮动 HUD：控制面板叠加在全屏 canvas 上方，移动端 blur 降级为实色
   - Theater Agent sprite 改为动态缩放（基于 `Math.min(width, height)`，保持 2:3 宽高比），气泡统一 16px 字号 / 220-300px 换行宽度
