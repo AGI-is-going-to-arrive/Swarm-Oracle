@@ -252,7 +252,7 @@
   - WorldlineRoundtable：idle 环境粒子
   - 所有新增动画均有 `prefers-reduced-motion: reduce` 覆盖
 - `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
-  - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）当前复用已有 card frame 素材作为占位。
+  - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）现在均有各自专属 card frame PNG（通过 Gemini Image API 生成），不再复用其他 profile 的素材。
   - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`）。
   - 当前全部 33 个主题场景（含变体）均已有专属 PNG 素材（512x288 像素风），无占位图。
   - `inferSceneThemeFromQuestion()` 通过关键词匹配自动路由到新主题。
