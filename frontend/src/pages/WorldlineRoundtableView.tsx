@@ -368,6 +368,16 @@ export default function WorldlineRoundtableView() {
     () => new Map(participants.map((participant) => [participant.id, participant])),
     [participants],
   );
+  const speakerIndexMap = useMemo(() => {
+    const seen = new Map<string, number>();
+    let idx = 0;
+    for (const p of participants) {
+      if (!seen.has(p.display_name)) {
+        seen.set(p.display_name, idx++);
+      }
+    }
+    return seen;
+  }, [participants]);
   const showRepresentativePicker = !loading && !error && !replayPayload && (!effectiveSnapshot || editingRepresentatives);
 
   useEffect(() => {
@@ -1731,6 +1741,7 @@ export default function WorldlineRoundtableView() {
                 displayedDrafts={displayedDrafts}
                 transcriptDraftLayouts={transcriptDraftLayouts}
                 participantsById={participantsById}
+                speakerIndexMap={speakerIndexMap}
                 onHotseatQuote={handleHotseatQuote}
                 onFollowQuote={handleFollowQuote}
                 onQuoteThread={handleQuoteThread}

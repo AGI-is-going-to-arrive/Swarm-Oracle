@@ -419,6 +419,136 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
     return "plain"
 
 
+# ── Persona Vocabulary Hints ──────────────────────────────────────
+
+_VOCABULARY_HINTS: dict[str, dict[str, str]] = {
+    "imperial": {
+        "zh": "用词偏好：旨意、承祚、正朔、廷议、法度、署令。句式简短命令式，忌长句解释。情绪基调：冷厉克制。",
+        "en": "Vocabulary: decree, mandate, succession, court, edict, sovereign. Clipped imperative sentences. Tone: cold authority.",
+    },
+    "field": {
+        "zh": "用词偏好：防线、粮道、侧翼、轮换、伤亡数、战损比。句式短平快，先结论后补充。情绪基调：铁血不留情面。",
+        "en": "Vocabulary: line, flank, rotation, attrition, supply route, casualties. Short declarative style. Tone: unsentimental steel.",
+    },
+    "finance": {
+        "zh": "用词偏好：头寸、敞口、清算窗口、信用差、票据、对手方。爱用比率与绝对数混合。情绪基调：冷静但暗藏警告。",
+        "en": "Vocabulary: exposure, position, clearing window, credit spread, counterparty, settlement. Mix ratios with absolutes. Tone: calm warning.",
+    },
+    "market": {
+        "zh": "用词偏好：进货价、日流水、摊位费、客流、赊账、尾货。从街面感受讲起。情绪基调：精明带怨气。",
+        "en": "Vocabulary: foot traffic, cost price, stall rent, cash rotation, consignment, dead stock. Ground-level framing. Tone: shrewd grievance.",
+    },
+    "faith": {
+        "zh": "用词偏好：誓约、裂痕、祭仪、托付、圣所、信众。爱用设问和反问。情绪基调：沉痛但不软弱。",
+        "en": "Vocabulary: covenant, fracture, rite, sanctuary, flock, consecration. Rhetorical questions welcome. Tone: solemn grief.",
+    },
+    "industry": {
+        "zh": "用词偏好：产能、维保欠账、调度周期、冗余容量、停机、负荷。数据先行。情绪基调：务实不耐烦。",
+        "en": "Vocabulary: throughput, maintenance debt, dispatch cycle, spare capacity, downtime, load. Data-first framing. Tone: pragmatic impatience.",
+    },
+    "frontier": {
+        "zh": "用词偏好：补给窗口、轨道衰减、气闸、生命维持余量、护航编队。用倒计时感营造紧迫。情绪基调：压抑但精确。",
+        "en": "Vocabulary: supply window, orbital decay, airlock, life-support margin, convoy escort. Countdown urgency. Tone: compressed precision.",
+    },
+    "survival": {
+        "zh": "用词偏好：配给、避难槽位、诊所容量、撤离序列、水源净化率。街头视角。情绪基调：疲惫但坚定。",
+        "en": "Vocabulary: ration, shelter slot, clinic capacity, evacuation order, water purification rate. Street-level triage. Tone: weary resolve.",
+    },
+    "scholar": {
+        "zh": "用词偏好：案卷、证词、时序、缺页、笔录、佐证。爱用'然而记录显示'式转折。情绪基调：克制的较真。",
+        "en": "Vocabulary: ledger, testimony, chronology, missing entry, deposition, corroboration. 'However the record shows' pivots. Tone: restrained pedantry.",
+    },
+    "civic": {
+        "zh": "用词偏好：议程、动议、记录在案、职权范围、审计、问责。程序化措辞。情绪基调：冷淡的程序正义。",
+        "en": "Vocabulary: agenda, motion, on record, jurisdiction, audit, accountability. Procedural phrasing. Tone: cold due process.",
+    },
+}
+
+_ARCHIVIST_VOCABULARY_HINT: dict[str, str] = {
+    "zh": "用词偏好：关键转折、各方、权衡、裁定、总览。句式：先判断后引用。情绪基调：公允但不温吞。",
+    "en": "Vocabulary: pivot, parties, trade-off, ruling, overview. Judge-first-then-cite structure. Tone: fair but sharp.",
+}
+
+
+def _oracle_vocabulary_hints(
+    role_slot: "EndingRoomRoleSlot",
+    variant: str,
+    language: str,
+    persona_snapshot: dict[str, Any] | None = None,
+) -> str:
+    """Build persona vocabulary hint that blends domain terminology with agent-specific identity.
+
+    The hint has two layers:
+    1. Domain palette — static keywords per variant (imperial, finance, etc.)
+    2. Identity layer — dynamic context from the agent's simulation history
+    """
+    lang_key = "zh" if language.startswith("zh") else "en"
+    is_zh = lang_key == "zh"
+
+    if role_slot == EndingRoomRoleSlot.ARCHIVIST:
+        return _ARCHIVIST_VOCABULARY_HINT.get(lang_key, "")
+
+    # Layer 1: domain palette
+    base_hint = _VOCABULARY_HINTS.get(variant, {}).get(lang_key, "")
+
+    # Layer 2: identity from persona_snapshot
+    snapshot = persona_snapshot or {}
+    identity_parts: list[str] = []
+
+    agent_role = str(snapshot.get("agent_role") or "").strip()
+    bio_short = str(snapshot.get("bio_short") or snapshot.get("agent_persona") or "").strip()
+    impact = snapshot.get("impact_score")
+    tier = snapshot.get("tier")
+    turn_count = snapshot.get("turn_count")
+    key_moments = snapshot.get("key_moment_hits")
+
+    if agent_role:
+        identity_parts.append(
+            f"此人身份为「{agent_role}」" if is_zh
+            else f"This speaker's role is '{agent_role}'"
+        )
+    if bio_short:
+        identity_parts.append(
+            f"简介：{bio_short[:80]}" if is_zh
+            else f"Bio: {bio_short[:80]}"
+        )
+
+    # Weight cues — high-impact agents should speak with more authority
+    if isinstance(impact, (int, float)) and impact > 0:
+        if impact >= 7:
+            identity_parts.append(
+                "此人在推演中影响极大，措辞应自信且有分量" if is_zh
+                else "High-impact participant; speak with authority and weight"
+            )
+        elif impact <= 3:
+            identity_parts.append(
+                "此人在推演中影响有限，措辞应谨慎且从自身角度出发" if is_zh
+                else "Low-impact participant; speak cautiously from personal perspective"
+            )
+
+    if isinstance(tier, str) and tier:
+        tier_map_zh = {"core": "核心人物", "supporting": "配角", "minor": "边缘人物"}
+        tier_map_en = {"core": "core figure", "supporting": "supporting character", "minor": "minor figure"}
+        tier_label = (tier_map_zh if is_zh else tier_map_en).get(tier)
+        if tier_label:
+            identity_parts.append(
+                f"叙事地位：{tier_label}" if is_zh
+                else f"Narrative weight: {tier_label}"
+            )
+
+    if isinstance(turn_count, int) and turn_count > 0 and isinstance(key_moments, int) and key_moments > 0:
+        identity_parts.append(
+            f"推演中发言{turn_count}次、参与{key_moments}个关键时刻" if is_zh
+            else f"Spoke {turn_count} times, involved in {key_moments} key moments"
+        )
+
+    identity_hint = "；".join(identity_parts) + "。" if identity_parts else ""
+
+    if base_hint and identity_hint:
+        return f"{base_hint} {identity_hint}"
+    return base_hint or identity_hint
+
+
 def _build_roundtable_opening_content(
     branch_card: dict[str, Any],
     *,
@@ -2671,11 +2801,22 @@ def _build_oracle_rewrite_prompt(
         if output_json
         else "Keep the same language as the anchor copy. Output plain text only with no JSON, bullets, or labels."
     )
+    variant = _oracle_role_voice_variant(
+        str(participant.persona_snapshot_json.get("agent_role") if participant.persona_snapshot_json else ""),
+        str(
+            (participant.persona_snapshot_json or {}).get("bio_short")
+            or (participant.persona_snapshot_json or {}).get("agent_persona")
+            or ""
+        ),
+    )
+    vocab_hint = _oracle_vocabulary_hints(participant.role_slot, variant, room.language, participant.persona_snapshot_json)
+    vocab_line = f"Persona vocabulary: {vocab_hint}\n" if vocab_hint else ""
     return (
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         "You are a writing polisher for SwarmOracle Oracle Chambers.\n"
         f"{task_line}\n"
         f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"
+        f"{vocab_line}"
         "Hard rules:\n"
         "- Preserve the exact factual scope and conclusion of the anchor copy\n"
         "- Do not invent facts, branches, quotes, or motives that are not already implied\n"

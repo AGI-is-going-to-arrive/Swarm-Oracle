@@ -14,6 +14,7 @@
  */
 import Phaser from 'phaser';
 import i18next from 'i18next';
+import { predictBubbleTextSize } from '../lib/textLayout/canvasTextPredict';
 import { EventBridge, dispatchVizEvent } from '../managers/EventBridge';
 import {
   CHARACTER_SPRITE_KEYS,
@@ -161,8 +162,8 @@ const BUBBLE_MAX_STACK = 4;
 const BUBBLE_MAX_VISIBLE_CAP = 8;
 const BUBBLE_MAX_TEXT_CHARS = 72;
 const BUBBLE_COMPACT_MAX_TEXT_CHARS = 48;
-const BUBBLE_TEXT_WRAP_MIN_WIDTH = 180;
-const BUBBLE_TEXT_WRAP_MAX_WIDTH = 240;
+const BUBBLE_TEXT_WRAP_MIN_WIDTH = 220;
+const BUBBLE_TEXT_WRAP_MAX_WIDTH = 300;
 const BUBBLE_TYPEWRITER_LIVE_DELAY_MS = 14;
 const BUBBLE_TYPEWRITER_REPLAY_DELAY_MS = 20;
 const BUBBLE_LIVE_LINGER_MS = 1800;
@@ -855,10 +856,15 @@ export class WorldScene extends Phaser.Scene {
     const container = this.add.container(x, y);
     container.setDepth(10);
 
-    // V3: Drop shadow (ellipse under sprite)
+    // Dynamic sprite sizing — uniform scale preserves 2:3 aspect ratio of original 32×48
+    const baseScale = Math.min(width, height);
+    const spriteW = Math.max(40, Math.round(baseScale * 0.055));
+    const spriteH = Math.round(spriteW * 1.5);
+
+    // V3: Drop shadow (ellipse under sprite, scales with sprite)
     const shadow = this.add.graphics();
     shadow.fillStyle(0x000000, 0.2);
-    shadow.fillEllipse(0, 26, 28, 8);
+    shadow.fillEllipse(0, Math.round(spriteH * 0.5) + 2, Math.round(spriteW * 0.875), Math.round(spriteH * 0.16));
     container.add(shadow);
 
     // Halo circle (behind sprite, initially invisible)
@@ -868,8 +874,8 @@ export class WorldScene extends Phaser.Scene {
 
     // Sprite
     const texKey = this.textures.exists(agent.sprite_id) ? agent.sprite_id : 'sprite_default';
-    // Sprite PNGs are 640×640; shrink to pixel-art size
-    const sprite = this.add.image(0, 0, texKey).setDisplaySize(32, 48);
+    // Sprite PNGs are 640×640; scale proportionally to canvas
+    const sprite = this.add.image(0, 0, texKey).setDisplaySize(spriteW, spriteH);
     if (texKey === 'sprite_default' && agent.sprite_id !== 'sprite_default') {
       this.ensureSpriteTexture(agent.sprite_id, () => {
         if (!sprite.scene || sprite.scene !== this || !sprite.active) return;
@@ -887,7 +893,7 @@ export class WorldScene extends Phaser.Scene {
     container.sendToBack(glowFx);
 
     // Name label with rounded style
-    const label = this.add.text(0, -32, agent.name, {
+    const label = this.add.text(0, -Math.round(spriteH * 0.5) - 8, agent.name, {
       fontSize: '9px',
       color: '#ffffff',
       fontFamily: 'monospace',
@@ -899,7 +905,7 @@ export class WorldScene extends Phaser.Scene {
     // Faction color bar (bottom of sprite)
     const factionBar = this.add.graphics();
     factionBar.fillStyle(FACTION_COLORS.unknown, 0.8);
-    factionBar.fillRoundedRect(-8, 26, 16, 3, 1);
+    factionBar.fillRoundedRect(-8, Math.round(spriteH * 0.5) + 2, 16, 3, 1);
     container.add(factionBar);
 
     // Idle breathing animation
@@ -1113,15 +1119,13 @@ export class WorldScene extends Phaser.Scene {
     const bubbleBorderColor = isCompactViewport ? 0xf5d7ff : style.borderColor;
 
     const bubbleTextStyle = {
-      fontSize: isCompactViewport
-        ? (bubbleMode === 'replay' ? '14px' : '15px')
-        : (bubbleMode === 'replay' ? '13px' : '14px'),
+      fontSize: '16px',
       color: isCompactViewport ? '#fff7ff' : '#1f2335',
       fontFamily: BUBBLE_TEXT_FONT_STACK,
       fontStyle: '700',
       align: 'left' as const,
       lineSpacing: 4,
-      fixedWidth: bubbleWrapWidth,
+      maxLines: 4,
       wordWrap: { width: bubbleWrapWidth, useAdvancedWrap: true },
       stroke: isCompactViewport ? '#0a0614' : '#f7f2ff',
       strokeThickness: isCompactViewport ? 1.5 : 1,
@@ -1140,15 +1144,22 @@ export class WorldScene extends Phaser.Scene {
     // B4: Typewriter — keep a short prefix visible immediately so live updates do not feel delayed.
     const textObj = this.add.text(0, 0, initialText, bubbleTextStyle).setOrigin(0.5).setResolution(bubbleTextResolution);
 
-    // Pre-measure full text for proper bubble size
-    const measureText = this.add.text(0, 0, visibleText, bubbleTextStyle).setOrigin(0.5).setAlpha(0);
-    measureText.setResolution(bubbleTextResolution);
-    const bounds = measureText.getBounds();
-    measureText.destroy();
-
+    // P4: Try pretext canvas prediction first, fall back to Phaser getBounds
     const pad = 12;
-    const bubbleWidth = bounds.width + pad * 2;
-    const bubbleHeight = bounds.height + pad * 2;
+    let bubbleWidth: number;
+    let bubbleHeight: number;
+    const predicted = predictBubbleTextSize(visibleText, bubbleWrapWidth, { fontSizePx: 16 });
+    if (predicted) {
+      bubbleWidth = predicted.textWidth + pad * 2;
+      bubbleHeight = predicted.textHeight + pad * 2;
+    } else {
+      const measureText = this.add.text(0, 0, visibleText, bubbleTextStyle).setOrigin(0.5).setAlpha(0);
+      measureText.setResolution(bubbleTextResolution);
+      const bounds = measureText.getBounds();
+      measureText.destroy();
+      bubbleWidth = bounds.width + pad * 2;
+      bubbleHeight = bounds.height + pad * 2;
+    }
 
     let bubbleOffsetX = 0;
     let bubbleOffsetY = 0;
@@ -1158,7 +1169,7 @@ export class WorldScene extends Phaser.Scene {
       attachToAgent = false;
       bubbleOffsetX = Math.round(this.scale.width / 2);
       bubbleOffsetY = Math.round(
-        this.scale.height - Math.max(104, bubbleHeight / 2 + 44),
+        this.scale.height - Math.max(160, bubbleHeight / 2 + 60),
       );
     } else {
       const overlapCount = new Map<number, number>();

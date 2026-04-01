@@ -116,15 +116,20 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 当前已把 `collapsible_turn_count / collapsed_turn_count` 补进 Oracle transcript layout telemetry
     - `P3 (Input 面文本预测)` 已完成：InputView textarea 高度预测替代 scrollHeight 回流
     - `P5 (QA/CI 文本契约)` 已完成：71 项中英双语溢出检测测试
-    - `P4 (Canvas/Theater)` 预测模块已封装（`canvasTextPredict.ts`），但未接入 WorldScene（Phaser 字体差异待对齐）
+    - `P4 (Canvas/Theater)` 预测模块已封装（`canvasTextPredict.ts`），已正式接入 WorldScene——预测可用时跳过 Phaser `getBounds()` DOM 调用，不可用时自动回退
   - Oracle 更深的回归与 corner-case hardening
     - `corners` 当前已能稳定落 `result.json`，但尾部仍可能打印一次 teardown warning
-  - `epilogue / evidence_card` 两种新交互模式已落地，待更深 E2E 专项
-  - 新增 11 个主题场景与 6 个 gameplay profiles，场景图当前复用已有素材作为占位
+  - `epilogue / evidence_card` 两种新交互模式已落地，E2E 专项已补：`e2e-ending-room-followup-suite.mjs` 当前在 desktop / mobile 链路下覆盖两种模式的完整交互 + 状态验证 + 截图留档
+  - 新增 11 个主题场景与 6 个 gameplay profiles，全部 33 个主题场景已有专属 PNG 素材
   - `ResultView` Summary-First 优化已完成：默认只显标题 + 概率 + 引言，故事按需展开；桌面端 2 列网格；关键时刻 timeline 视觉化
   - `EndingChatModal` 对话可读性优化已完成：speaker 左侧色标、verdict 高亮、58ch 行宽、16px 间距
   - `/assets/ui/generated/` 下的 AI 全景图引用已替换为 CSS gradient（15 处），消除模糊贴图
   - Theater 气泡可见数量改为动态（`min(agentCount, 8)`），文字分辨率提升到 4x，compact 模式增加描边和阴影
+  - Theater 布局重构为 canvas-first 浮动 HUD：控制面板叠加在全屏 canvas 上方，移动端 blur 降级为实色
+  - Theater Agent sprite 改为动态缩放（基于 `Math.min(width, height)`，保持 2:3 宽高比），气泡统一 16px 字号 / 220-300px 换行宽度
+  - 圆桌 transcript 补充按 phase 分组的视觉分隔线和 5-hue speaker 左侧色标
+  - `EndingChatModal` 修复 "Maximum update depth exceeded" 循环渲染（`onAutomationStateChange` 改用 `useRef` 稳定引用）
+  - Oracle 改写 prompt 补充双层角色化词汇提示：领域调色板（10 variants × 中英双语）+ 身份层（从 `persona_snapshot_json` 动态生成）
   - 交互动效补齐：PredictionModal / GameplayCardsModal / InterventionModal / EndingChatModal / WorldlineRoundtable 均有入场动画和微交互，全部覆盖 `prefers-reduced-motion`
 
 ## 文档入口

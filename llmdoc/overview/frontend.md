@@ -77,12 +77,23 @@
 - `PhaserGameLoader` 负责按需加载 Theater。
 - screenshot / GIF capture runtime 已拆分，不进入默认首包。
 - 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`。
+- Theater 当前布局采用 canvas-first 浮动 HUD 方案：
+  - Phaser canvas 以 `position: absolute; inset: 0` 填满整个舞台区域
+  - 控制面板（header / status / director / filters / timeline）浮动在 canvas 上方，使用 `backdrop-filter: blur(12px)` 半透明叠加
+  - 移动端（≤900px）降级为实色半透明背景（`rgba(18, 16, 38, 0.95)`），避免多层 blur 导致帧率下降
+  - Theater 背景色从固定 `#06061a` 改为 `--oracle-bg-dark`，支持主题皮肤过渡
 - Theater 气泡当前行为：
   - 最大同时可见气泡数 = `min(agentCount, 8)`，根据场景内 agent 数量动态计算
-  - compact 模式（canvas 宽 < 360px，即真手机端）下最多 2 个，气泡固定在画面底部中央
+  - compact 模式（canvas 宽 < 360px，即真手机端）下最多 2 个，气泡固定在画面底部中央（底部安全间距从 104px 增加到 160px，避免被浮动 HUD 遮挡）
   - 非 compact 模式下气泡跟随各自 agent 头顶显示
-  - 文字渲染分辨率 = 4x（此前为 3x）
+  - 气泡文字统一为 16px / 700，不再按 compact / replay 区分字号
+  - 气泡换行宽度从 180-240px 增加到 220-300px
+  - 文字渲染分辨率 = 4x
   - compact 模式下文字增加了描边（`strokeThickness: 1.5`）和阴影（`blur: 2`）以提升暗色背景上的可读性
+- Theater Agent sprite 当前采用动态缩放：
+  - 尺寸 = `max(40, Math.min(width, height) * 0.055)` 宽，保持 2:3 宽高比
+  - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算
+  - 原始 640×640 PNG 素材的宽高比不会因为 canvas 比例变化而拉伸
 
 ## 关键模块
 
@@ -103,7 +114,7 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择） |
-| `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作） |
+| `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 
 ## 当前边界
 
@@ -166,6 +177,10 @@
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / quote-anchor thread / artifact readonly / local readonly / reload restore / import`
 - `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前也已补 mobile `all_present` 的 mode-arm / settled wait，原先 timeout 阻塞已解除。
 - `e2e-ending-room-followup-suite.mjs full` 当前已重新可稳定落 `summary.json`。
+- `e2e-ending-room-followup-suite.mjs` 当前也会在 multi-ending 桌面/移动端链路下额外覆盖：
+  - `epilogue`：点击后续三回合按钮 → 预填文案 → 发送 → 等待 `interaction_mode === "epilogue"` settle
+  - `evidence_card`：在 gallery 中点击证据卡按钮 → 等待 `interaction_mode === "evidence_card"` settle
+  - 两种模式均有截图 + JSON artifact 留档
 - `e2e-ending-room-followup-suite.mjs` 当前也会在命中的 follow-up 场景下额外落：
   - `turn-start`
   - `turn-delta`
@@ -203,7 +218,7 @@
 - `pretext` 当前已扩展到：
   - `InputView`：textarea 高度预测替代 scrollHeight 回流，中英语言切换自动重估（`inputPredict.ts`）
   - P5 文本契约测试矩阵：71 项，覆盖按钮标签 / 卡片标题 / 描述文本 / Oracle 布局 / Share 文案 的中英双语溢出检测（`textContract.test.ts`）
-  - Canvas bubble 尺寸预测模块已独立封装（`canvasTextPredict.ts`），当前未接入 WorldScene（Phaser 渲染差异需进一步对齐）
+  - Canvas bubble 尺寸预测模块已独立封装（`canvasTextPredict.ts`），当前已正式接入 WorldScene 的 `showBubble()` 方法——预测可用时跳过 Phaser `getBounds()` DOM 调用，不可用时自动回退原路径
 - `ResultView` 当前已做 Summary-First 优化：
   - 结局卡默认只显示标题 + 概率条 + insight 引言 + 操作按钮
   - 故事、分歧原因、关键时刻需点击"阅读完整故事"展开（`grid-template-rows: 0fr` 折叠动画，Safari < 16 有 `@supports` 降级）
@@ -216,6 +231,12 @@
   - 档案官 verdict 消息用高亮卡样式突出
   - transcript 气泡文本限宽 58ch、行高 1.75
   - transcript 列表间距从 12px 增加到 16px
+  - `onAutomationStateChange` 回调改用 `useRef` 稳定引用，修复了 "Maximum update depth exceeded" 循环渲染问题
+- `WorldlineRoundtableView` 圆桌 transcript 当前已补：
+  - 按 phase 分组的视觉分隔线（`<h3>` 语义标签 + 渐变横线 + phase label）
+  - 每条发言左侧色标（5-hue oklch 调色板，与 EndingChatModal 一致）
+  - 档案官发言使用 `--oracle-accent` 跟随主题皮肤变化
+  - 移动端分隔线 label 有 `text-overflow: ellipsis` 防溢出
 - 贴图修复：`/assets/ui/generated/` 下的 1408x768 AI 全景图引用已全部替换为 CSS gradient / box-shadow，涉及 EndingChatModal.css、WorldlineRoundtable.css、ResultView.css 共 15 处
   - speaker glow → `radial-gradient`
   - archivist emblem → `conic-gradient`
@@ -232,7 +253,8 @@
   - 所有新增动画均有 `prefers-reduced-motion: reduce` 覆盖
 - `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
   - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）当前复用已有 card frame 素材作为占位。
-  - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`），当前复用已有场景图作为占位。
+  - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`）。
+  - 当前全部 33 个主题场景（含变体）均已有专属 PNG 素材（512x288 像素风），无占位图。
   - `inferSceneThemeFromQuestion()` 通过关键词匹配自动路由到新主题。
 
 ## 设计 Token 体系

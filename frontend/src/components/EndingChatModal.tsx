@@ -115,6 +115,10 @@ export default function EndingChatModal({
   const transcriptListRef = useRef<HTMLDivElement>(null);
   const transcriptHydratedRef = useRef(false);
   const transcriptAutoStickRef = useRef(false);
+  // Stable ref for automation callback — breaks the render loop caused by
+  // onAutomationStateChange being recreated by the parent on every render.
+  const automationCallbackRef = useRef(onAutomationStateChange);
+  automationCallbackRef.current = onAutomationStateChange;
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -645,11 +649,11 @@ export default function EndingChatModal({
 
   useEffect(() => {
     if (!open || !branch) {
-      onAutomationStateChange?.(null);
+      automationCallbackRef.current?.(null);
       return;
     }
 
-    onAutomationStateChange?.({
+    automationCallbackRef.current?.({
       kind: 'ending_room_modal',
       branch_id: branch.id,
       room_id: effectiveSnapshot?.id ?? null,
@@ -684,7 +688,7 @@ export default function EndingChatModal({
     });
 
     return () => {
-      onAutomationStateChange?.(null);
+      automationCallbackRef.current?.(null);
     };
   }, [
     activeThread?.id,
@@ -696,7 +700,6 @@ export default function EndingChatModal({
     interactionMode,
     automationPendingDrafts,
     automationStreamState,
-    onAutomationStateChange,
     open,
     readOnly,
     effectiveResult,
@@ -705,7 +708,6 @@ export default function EndingChatModal({
     sending,
     effectiveSnapshot?.current_phase,
     effectiveSnapshot?.id,
-    displayedDrafts.length,
     pendingQuestionAnchorIds,
     status,
     transcriptLayoutTelemetry,

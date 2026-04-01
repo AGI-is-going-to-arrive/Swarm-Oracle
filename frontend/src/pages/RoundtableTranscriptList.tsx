@@ -1,4 +1,4 @@
-import { type RefObject } from 'react';
+import { type RefObject, Fragment, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EndingRoomParticipant, EndingRoomThreadSnapshot } from '../types';
 import type { OracleTranscriptBubbleLayout } from '../lib/textLayout/oracleTranscriptLayout';
@@ -38,6 +38,7 @@ interface Props {
   displayedDrafts: DisplayedDraft[];
   transcriptDraftLayouts: Record<string, OracleTranscriptBubbleLayout>;
   participantsById: Map<string, EndingRoomParticipant>;
+  speakerIndexMap: Map<string, number>;
   onHotseatQuote: (participantId: string, speaker: string, content: string, anchorId: string) => void;
   onFollowQuote: (anchorId: string, speaker: string, content: string) => void;
   onQuoteThread: (anchorId: string, speaker: string, content: string) => void;
@@ -59,11 +60,24 @@ export default function RoundtableTranscriptList({
   displayedDrafts,
   transcriptDraftLayouts,
   participantsById,
+  speakerIndexMap,
   onHotseatQuote,
   onFollowQuote,
   onQuoteThread,
 }: Props) {
   const { t } = useTranslation();
+
+  const dividerTurnKeys = useMemo(() => {
+    const keys = new Set<string>();
+    let currentPhase = '';
+    for (const turn of currentTurns) {
+      if (turn.phase && turn.phase !== currentPhase) {
+        keys.add(turn.key);
+        currentPhase = turn.phase;
+      }
+    }
+    return keys;
+  }, [currentTurns]);
 
   return (
     <div
@@ -72,19 +86,27 @@ export default function RoundtableTranscriptList({
       onScroll={onScroll}
     >
       {currentTurns.map((turn) => {
+        const showPhaseDivider = dividerTurnKeys.has(turn.key);
         const bubbleLayout = transcriptBubbleLayouts[turn.key];
         const turnAnchorId = buildRoundtableAnchorId('quote', activeThreadId ?? 'table', turn.key);
         const canCollapseTurn = (bubbleLayout?.lineCount ?? 0) > ROUNDTABLE_COLLAPSED_TURN_MAX_LINES;
         const isTurnExpanded = expandedTurnKeys[turn.key] ?? false;
         const showCollapsedTurn = canCollapseTurn && !isTurnExpanded;
+        const speakerIdx = speakerIndexMap.get(turn.speaker) ?? 0;
         return (
-          <article
-            key={turn.key}
-            className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''}`}
-            style={showCollapsedTurn ? undefined : { minHeight: `${bubbleLayout?.minHeightPx ?? 0}px` }}
-            data-layout-lines={bubbleLayout?.lineCount ?? undefined}
-            data-layout-overflow={bubbleLayout?.overflow ? 'true' : 'false'}
-          >
+          <Fragment key={turn.key}>
+            {showPhaseDivider && (
+              <h3 className="roundtable-phase-divider" id={`phase-${turn.phase.replace(/\s+/g, '-').toLowerCase()}`}>
+                <span className="roundtable-phase-divider__label">{turn.phase}</span>
+              </h3>
+            )}
+            <article
+              className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''}`}
+              style={showCollapsedTurn ? undefined : { minHeight: `${bubbleLayout?.minHeightPx ?? 0}px` }}
+              data-layout-lines={bubbleLayout?.lineCount ?? undefined}
+              data-layout-overflow={bubbleLayout?.overflow ? 'true' : 'false'}
+              data-speaker={speakerIdx}
+            >
             <header>
               {turn.roleSlot === 'archivist' && (
                 <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
@@ -152,7 +174,8 @@ export default function RoundtableTranscriptList({
                 )}
               </div>
             )}
-          </article>
+            </article>
+          </Fragment>
         );
       })}
       {!isReplay && displayedDrafts.map((draft) => (

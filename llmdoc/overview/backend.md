@@ -79,6 +79,12 @@
   `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
+- Oracle 改写 prompt 当前包含双层角色化词汇提示（`_oracle_vocabulary_hints()`）：
+  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic）提供领域专属术语、句式风格和情绪基调。
+  - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
+  - 高影响力 agent（impact_score ≥ 7）措辞更自信有分量；低影响力 agent（≤ 3）措辞更谨慎。
+  - 档案官有独立的词汇提示，不受 variant 影响。
+  - plain variant 没有领域词汇，但仍会输出 identity 层（只要 snapshot 有数据）。
 - `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
   - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
   - `cited_refs_json` 有 4 KB 大小限制。

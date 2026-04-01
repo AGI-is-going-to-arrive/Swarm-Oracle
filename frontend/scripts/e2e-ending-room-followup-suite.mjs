@@ -406,6 +406,73 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     stream_lifecycle: allPresentLifecycle.captures,
   });
 
+  // ── Epilogue (后续三回合) ──────────────────────────────────
+  const epilogueBtn = page.locator(".ending-chat-epilogue-btn");
+  let epilogueState = null;
+  let epilogueLifecycle = null;
+  if (await epilogueBtn.count() > 0) {
+    const beforeEpilogue = await getAutomationState(page);
+    await epilogueBtn.click();
+    await page.waitForTimeout(200);
+    const composerTextarea = page.locator("textarea").last();
+    const prefilled = await composerTextarea.inputValue();
+    if (!prefilled || prefilled.trim().length === 0) {
+      await composerTextarea.fill("请继续推演后续三回合，看看局势如何收场。");
+    }
+    await page.getByRole("button", { name: /Send|发送/i }).click();
+    epilogueLifecycle = await captureStreamLifecycle(page, {
+      label: "epilogue follow-up state",
+      outputDir,
+      filePrefix: "multi-chamber-A-epilogue",
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "epilogue"
+        && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
+        && (modalState?.pending_draft_count ?? 0) === 0
+      ),
+    });
+    epilogueState = epilogueLifecycle.payload;
+    await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-epilogue.png"));
+    writeJson(path.join(outputDir, "multi-chamber-A-epilogue.json"), {
+      state: epilogueState,
+      stream_lifecycle: epilogueLifecycle.captures,
+    });
+  }
+
+  // ── Mobile Epilogue (后续三回合) ────────────────────────────
+  let mobileEpilogueState = null;
+  const mobileEpilogueBtn = page.locator(".ending-chat-epilogue-btn");
+  if (await mobileEpilogueBtn.count() > 0) {
+    const beforeEpilogue = await getAutomationState(page);
+    await mobileEpilogueBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await mobileEpilogueBtn.click({ force: true });
+    await page.waitForTimeout(200);
+    const composerTextarea = page.locator("textarea").last();
+    const prefilled = await composerTextarea.inputValue();
+    if (!prefilled || prefilled.trim().length === 0) {
+      await composerTextarea.fill("请继续推演后续三回合。");
+    }
+    await page.getByRole("button", { name: /Send|发送/i }).click();
+    mobileEpilogueState = await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        if (
+          modalState?.interaction_mode === "epilogue"
+          && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
+        ) {
+          return current;
+        }
+        return null;
+      },
+      "mobile epilogue follow-up state",
+      25000,
+    );
+    const epilogueSettled = await waitForModalSettled(page, "mobile epilogue settled");
+    await saveScreenshot(page, path.join(outputDir, "mobile-multi-epilogue.png"));
+    fs.writeFileSync(path.join(outputDir, "mobile-multi-epilogue.json"), JSON.stringify(epilogueSettled ?? mobileEpilogueState, null, 2));
+  }
+
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
 
@@ -425,6 +492,31 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     path.join(outputDir, "multi-crossline-gallery.json"),
     JSON.stringify(galleryState, null, 2),
   );
+
+  // ── Evidence Card (证据投牌) ────────────────────────────────
+  const evidenceBtn = page.locator(".ending-chat-evidence-btn").first();
+  let evidenceCardState = null;
+  let evidenceCardLifecycle = null;
+  if (await evidenceBtn.count() > 0) {
+    const beforeEvidence = await getAutomationState(page);
+    await evidenceBtn.click();
+    evidenceCardLifecycle = await captureStreamLifecycle(page, {
+      label: "evidence-card follow-up state",
+      outputDir,
+      filePrefix: "multi-gallery-evidence-card",
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "evidence_card"
+        && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
+        && (modalState?.pending_draft_count ?? 0) === 0
+      ),
+    });
+    evidenceCardState = evidenceCardLifecycle.payload;
+    await saveScreenshot(page, path.join(outputDir, "multi-gallery-evidence-card.png"));
+    writeJson(path.join(outputDir, "multi-gallery-evidence-card.json"), {
+      state: evidenceCardState,
+      stream_lifecycle: evidenceCardLifecycle.captures,
+    });
+  }
 
   await armClipboardCapture(page);
   await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
@@ -488,9 +580,13 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     hotseatStreamLifecycle: hotseatLifecycle.captures,
     allPresentState: allPresentState?.page?.controls?.modal_state ?? null,
     allPresentStreamLifecycle: allPresentLifecycle.captures,
+    epilogueState: epilogueState?.page?.controls?.modal_state ?? null,
+    epilogueStreamLifecycle: epilogueLifecycle?.captures ?? null,
     pickerB,
     oneMoveState: oneMoveState?.page?.controls?.modal_state ?? null,
     galleryState: galleryState?.page?.controls?.modal_state ?? null,
+    evidenceCardState: evidenceCardState?.page?.controls?.modal_state ?? null,
+    evidenceCardStreamLifecycle: evidenceCardLifecycle?.captures ?? null,
     artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
     artifactImportedUrl,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
@@ -772,6 +868,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
   let galleryState = null;
+  let evidenceCardState = null;
   let artifactReadonly = null;
   let artifactImportedUrl = null;
   let replayReadonly = null;
@@ -785,6 +882,33 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "mobile-multi-crossline-gallery.json"),
       JSON.stringify(galleryState, null, 2),
     );
+
+    // ── Mobile Evidence Card (证据投牌) ───────────────────────
+    const mobileEvidenceBtn = page.locator(".ending-chat-evidence-btn").first();
+    if (await mobileEvidenceBtn.count() > 0) {
+      const beforeEvidence = await getAutomationState(page);
+      await mobileEvidenceBtn.scrollIntoViewIfNeeded().catch(() => {});
+      await mobileEvidenceBtn.click({ force: true });
+      evidenceCardState = await waitFor(
+        page,
+        async () => {
+          const current = await getAutomationState(page);
+          const modalState = current?.page?.controls?.modal_state;
+          if (
+            modalState?.interaction_mode === "evidence_card"
+            && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
+          ) {
+            return current;
+          }
+          return null;
+        },
+        "mobile evidence-card follow-up state",
+        25000,
+      );
+      const evidenceSettled = await waitForModalSettled(page, "mobile evidence-card settled");
+      await saveScreenshot(page, path.join(outputDir, "mobile-gallery-evidence-card.png"));
+      fs.writeFileSync(path.join(outputDir, "mobile-gallery-evidence-card.json"), JSON.stringify(evidenceSettled ?? evidenceCardState, null, 2));
+    }
 
     await armClipboardCapture(page);
     await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
@@ -883,7 +1007,9 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     chamberFit,
     hotseatState: hotseatSettled?.page?.controls?.modal_state ?? null,
     allPresentState: allPresentSettled?.page?.controls?.modal_state ?? null,
+    epilogueState: mobileEpilogueState?.page?.controls?.modal_state ?? null,
     galleryState: galleryState?.page?.controls?.modal_state ?? null,
+    evidenceCardState: evidenceCardState?.page?.controls?.modal_state ?? null,
     artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
     artifactImportedUrl,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,

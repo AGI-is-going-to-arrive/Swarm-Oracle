@@ -232,10 +232,38 @@
 }
 
 /* ── Phase 3: Theater capture buttons ───────────────────── */
+
+/* Theater panel: canvas-first layout — game fills entire area, controls float on top */
+.theater-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1 1 auto;
+}
+
+.theater-panel__game-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+}
+
 .theater-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
+  z-index: 10;
+  background: rgba(18, 16, 38, 0.65);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  margin: 12px 12px 0;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  padding: 12px 16px;
 }
 
 .theater-panel__capture {
@@ -310,7 +338,11 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 4px 0 8px;
+  margin: 8px 12px 0;
+  position: relative;
+  z-index: 10;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   padding: 8px 10px;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -321,7 +353,11 @@
 .theater-panel__warmup {
   display: grid;
   gap: 12px;
-  margin: 0 0 12px;
+  margin: 8px 12px 0;
+  position: relative;
+  z-index: 10;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   padding: 14px 16px;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -374,13 +410,24 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: 0 0 12px;
+  margin: auto 12px 0;
+  position: relative;
+  z-index: 10;
+  background: rgba(12, 10, 29, 0.8);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  padding: 12px;
+  border-radius: 16px 16px 0 0;
 }
 
 .theater-panel__director {
   display: grid;
   gap: 10px;
-  margin: 0 0 8px;
+  margin: 8px 12px 0;
+  position: relative;
+  z-index: 10;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   padding: 14px 16px;
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -493,9 +540,15 @@
 }
 
 .theater-panel__timeline {
-  width: 100%;
-  margin: 0 0 8px;
-  z-index: 1;
+  width: auto;
+  margin: 0 12px 12px;
+  position: relative;
+  z-index: 10;
+  background: rgba(12, 10, 29, 0.8);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  padding: 0 12px 12px;
+  border-radius: 0 0 16px 16px;
 }
 
 .theater-panel__timeline .timeline-bar {
@@ -642,6 +695,18 @@
   .theater-panel__commitment::-webkit-scrollbar,
   .theater-panel__filters::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Mobile: replace expensive backdrop-filter with solid bg for GPU perf */
+  .theater-panel__header,
+  .theater-panel__status,
+  .theater-panel__warmup,
+  .theater-panel__director,
+  .theater-panel__filters,
+  .theater-panel__timeline {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 16, 38, 0.95);
   }
 
   .theater-panel__status {
@@ -813,7 +878,8 @@
 
 /* Root modifier when Theater mode is active */
 .simulation-view--theater {
-  background: var(--gbc-deep, #06061a);
+  background: var(--oracle-bg-dark, oklch(12% 0.01 60));
+  transition: background-color 0.8s ease;
 }
 
 .simulation-view--theater .sim-content {

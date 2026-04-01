@@ -74,6 +74,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - Historical full baseline: `815 passed`.
 - Current signoff backend set: `156 passed`.
 - Current session backend regression pack: `269 passed`.
+- Current ending room service tests: `77 passed` (含 13 个角色化词汇提示测试).
 - Current session backend review-fix pack:
   - `python -m pytest tests/test_backend_code_review_fixes.py -q`: `4 passed in 0.45s`
   - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`: `64 passed in 71.56s`

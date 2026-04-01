@@ -35,6 +35,7 @@ from app.services.ending_room_service import (
     _build_oracle_rewrite_prompt,
     _normalize_oracle_generated_content,
     _build_roundtable_opening_content,
+    _oracle_vocabulary_hints,
     _room_memory_partition,
     _strip_oracle_reasoning_prefix,
     append_room_user_turn,
@@ -1990,3 +1991,193 @@ def test_followup_requires_completed_room_result():
         )
 
     assert exc_info.value.code == "ENDING_ROOM_RESULT_NOT_READY"
+
+
+# ── Persona Vocabulary Hints Tests ──────────────────────────────
+
+
+def test_vocabulary_hints_returns_variant_specific_zh_terms():
+    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "finance", "zh")
+    assert "头寸" in hint
+    assert "敞口" in hint
+
+
+def test_vocabulary_hints_returns_variant_specific_en_terms():
+    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "field", "en")
+    assert "flank" in hint
+    assert "attrition" in hint
+
+
+def test_vocabulary_hints_archivist_ignores_variant():
+    hint_zh = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "finance", "zh")
+    assert "裁定" in hint_zh
+    assert "头寸" not in hint_zh
+
+    hint_en = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "imperial", "en")
+    assert "ruling" in hint_en
+    assert "decree" not in hint_en
+
+
+def test_vocabulary_hints_plain_variant_no_snapshot_returns_empty():
+    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "plain", "en")
+    assert hint == ""
+
+
+def test_vocabulary_hints_plain_variant_with_identity_uses_snapshot():
+    """Even for 'plain' variant, identity layer should be generated from persona snapshot."""
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        "plain",
+        "en",
+        persona_snapshot={"agent_role": "Tavern Owner", "bio_short": "Runs the only inn in town", "impact_score": 5},
+    )
+    assert "Tavern Owner" in hint
+    assert "Runs the only inn" in hint
+
+
+def test_vocabulary_hints_all_variants_have_both_languages():
+    from app.services.ending_room_service import _VOCABULARY_HINTS
+    for variant, langs in _VOCABULARY_HINTS.items():
+        assert "zh" in langs, f"Variant {variant} missing zh hint"
+        assert "en" in langs, f"Variant {variant} missing en hint"
+        assert len(langs["zh"]) > 10, f"Variant {variant} zh hint too short"
+        assert len(langs["en"]) > 10, f"Variant {variant} en hint too short"
+
+
+def test_vocabulary_hints_distinct_across_variants():
+    from app.services.ending_room_service import _VOCABULARY_HINTS
+    en_hints = [v["en"] for v in _VOCABULARY_HINTS.values()]
+    assert len(en_hints) == len(set(en_hints)), "English vocabulary hints should be unique per variant"
+
+    zh_hints = [v["zh"] for v in _VOCABULARY_HINTS.values()]
+    assert len(zh_hints) == len(set(zh_hints)), "Chinese vocabulary hints should be unique per variant"
+
+
+def test_vocabulary_hints_identity_layer_includes_high_impact():
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        "imperial",
+        "en",
+        persona_snapshot={"agent_role": "Emperor Diocletian", "impact_score": 9, "tier": "core", "turn_count": 12, "key_moment_hits": 4},
+    )
+    assert "Emperor Diocletian" in hint
+    assert "authority" in hint.lower()
+    assert "core figure" in hint
+    assert "12 times" in hint
+    assert "4 key moments" in hint
+
+
+def test_vocabulary_hints_identity_layer_low_impact_zh():
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.AGENT,
+        "market",
+        "zh",
+        persona_snapshot={"agent_role": "码头搬运工", "bio_short": "靠日结工资生活", "impact_score": 2, "tier": "minor"},
+    )
+    assert "码头搬运工" in hint
+    assert "谨慎" in hint
+    assert "边缘人物" in hint
+    assert "进货价" in hint  # domain palette still present
+
+
+def test_vocabulary_hints_identity_no_metrics_still_includes_role():
+    """If persona has role but no numeric metrics, only identity is emitted."""
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        "faith",
+        "en",
+        persona_snapshot={"agent_role": "High Priest of the Valley Temple"},
+    )
+    assert "High Priest" in hint
+    assert "covenant" in hint  # domain palette
+
+
+def test_rewrite_prompt_includes_vocabulary_for_finance_representative():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Finance Crisis",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Banker A",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"branch_title": "Liquidity Freeze", "agent_role": "Treasury Officer", "impact_score": 7},
+    )
+
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="The clearing window collapsed before the morning bell.",
+        output_json=False,
+    )
+
+    assert "Persona vocabulary:" in prompt
+    assert "exposure" in prompt or "counterparty" in prompt
+    assert "Treasury Officer" in prompt
+
+
+def test_rewrite_prompt_includes_identity_for_plain_variant_with_snapshot():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Generic Chamber",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.AGENT,
+        display_name="Agent X",
+        source_branch_id="branch-x",
+        source_agent_id="agent-x",
+        persona_snapshot_json={"agent_role": "Retired General", "impact_score": 8, "tier": "core"},
+    )
+
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="Things went wrong at the junction.",
+        output_json=False,
+    )
+
+    assert "Persona vocabulary:" in prompt
+    assert "Retired General" in prompt
+
+
+def test_rewrite_prompt_omits_vocabulary_for_plain_variant_no_snapshot():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Generic Chamber",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.AGENT,
+        display_name="Agent X",
+        source_branch_id="branch-x",
+        source_agent_id="agent-x",
+        persona_snapshot_json={"agent_role": "Bystander"},
+    )
+
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="Things went wrong at the junction.",
+        output_json=False,
+    )
+
+    # Plain variant with minimal snapshot — still includes identity from agent_role
+    assert "Bystander" in prompt

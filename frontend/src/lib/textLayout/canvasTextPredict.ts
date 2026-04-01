@@ -39,7 +39,7 @@ export function predictBubbleTextSize(
 ): BubbleSizePrediction | null {
   if (!text || wrapWidth <= 0) return null;
 
-  const fontSizePx = options?.fontSizePx ?? 14;
+  const fontSizePx = options?.fontSizePx ?? 16;
   const lineSpacing = options?.lineSpacing ?? 4;
   // Phaser lineHeight = fontSize + lineSpacing
   const lineHeightPx = fontSizePx + lineSpacing;

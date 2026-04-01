@@ -102,7 +102,7 @@ npm run build:spike:phaser-custom
   - `output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `output/e2e/20260331-oracle-signoff-roundtable/summary.json`
 - Current Oracle mobile targeted coverage now includes:
-  - ending-room `hotseat / all_present / crossline gallery / artifact readonly / local readonly / local reload restore / import`
+  - ending-room `hotseat / all_present / epilogue / crossline gallery / evidence_card / artifact readonly / local readonly / local reload restore / import`
   - roundtable `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
 - Current Oracle targeted QA also rechecked a true single-ending result page in a real browser:
   - no `Start Roundtable`
