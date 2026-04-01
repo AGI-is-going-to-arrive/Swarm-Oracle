@@ -901,6 +901,8 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
 }
 
 .ending-chat-draft-badge {

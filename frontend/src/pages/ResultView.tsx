@@ -71,6 +71,7 @@ import {
 } from '../lib/predictionBetting';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
+import { getThemeAssetPath, isSceneThemeId } from '../lib/themeRegistry';
 import {
   getScenarioRuntimePresetConfig,
   loadScenarioRuntimePreset,
@@ -1723,7 +1724,13 @@ export default function ResultView() {
             className="result-archive__art"
             role="img"
             aria-label={t('common.archive_seal_alt')}
-            style={{ backgroundImage: 'repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.04) 0 1px, transparent 1px 12px), radial-gradient(ellipse at 30% 30%, oklch(55% 0.22 350 / 0.08), transparent 60%)' }}
+            style={{
+              backgroundImage: scenario?.scene_theme && isSceneThemeId(scenario.scene_theme)
+                ? `linear-gradient(180deg, transparent 40%, oklch(98% 0.005 80 / 0.85)), url(${getThemeAssetPath(scenario.scene_theme)})`
+                : 'repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.04) 0 1px, transparent 1px 12px), radial-gradient(ellipse at 30% 30%, oklch(55% 0.22 350 / 0.08), transparent 60%)',
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
           />
           <div className="result-archive__meta">
             {gameplayProfileLabel && (

@@ -299,8 +299,12 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       const snapshot = await getEndingRoom(roomId);
       get().hydrateSnapshot(snapshot);
       if (snapshot.result_ready) {
-        const payload = await getEndingRoomResult(roomId);
-        get().hydrateResult(payload);
+        try {
+          const payload = await getEndingRoomResult(roomId);
+          get().hydrateResult(payload);
+        } catch {
+          // Result not yet available — room is still usable, will retry on next WS event
+        }
       }
     } catch (error) {
       get().setError(error, translate('ending_room.load_failed'));
