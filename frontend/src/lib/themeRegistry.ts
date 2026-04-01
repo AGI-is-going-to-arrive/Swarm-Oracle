@@ -57,12 +57,12 @@ export const GAMEPLAY_PROFILE_FRAME_ASSETS: Record<GameplayProfileId, string> = 
   frontier: '/assets/ui/generated/gameplay_card_frame_frontier.png',
   mythic: '/assets/ui/generated/gameplay_card_frame_mythic.png',
   survival: '/assets/ui/generated/gameplay_card_frame_survival.png',
-  finance: '/assets/ui/generated/gameplay_card_frame_frontier.png',
-  scholar: '/assets/ui/generated/gameplay_card_frame_generic.png',
-  medical: '/assets/ui/generated/gameplay_card_frame_ecology.png',
-  technology: '/assets/ui/generated/gameplay_card_frame_frontier.png',
-  entertainment: '/assets/ui/generated/gameplay_card_frame_mythic.png',
-  diplomacy: '/assets/ui/generated/gameplay_card_frame_governance.png',
+  finance: '/assets/ui/generated/gameplay_card_frame_finance.png',
+  scholar: '/assets/ui/generated/gameplay_card_frame_scholar.png',
+  medical: '/assets/ui/generated/gameplay_card_frame_medical.png',
+  technology: '/assets/ui/generated/gameplay_card_frame_technology.png',
+  entertainment: '/assets/ui/generated/gameplay_card_frame_entertainment.png',
+  diplomacy: '/assets/ui/generated/gameplay_card_frame_diplomacy.png',
   generic: '/assets/ui/generated/gameplay_card_frame_generic.png',
 };
 
@@ -872,7 +872,7 @@ export const THEME_REGISTRY = {
   finance_exchange: {
     labelZh: '金融交易所',
     labelEn: 'Finance Exchange',
-    assetPath: '/assets/scenes/trade_harbor.png',
+    assetPath: '/assets/scenes/finance_exchange.png',
     profileId: 'finance',
     keywords: [
       'stock market', 'stock exchange', 'wall street', 'central bank',
@@ -887,7 +887,7 @@ export const THEME_REGISTRY = {
   cyber_market: {
     labelZh: '数字黑市',
     labelEn: 'Cyber Marketplace',
-    assetPath: '/assets/scenes/surveillance_megacity.png',
+    assetPath: '/assets/scenes/cyber_market.png',
     profileId: 'finance',
     keywords: [
       'cryptocurrency', 'bitcoin', 'blockchain', 'digital currency',
@@ -899,7 +899,7 @@ export const THEME_REGISTRY = {
   medical_institute: {
     labelZh: '医学研究院',
     labelEn: 'Medical Research Institute',
-    assetPath: '/assets/scenes/modern_city.png',
+    assetPath: '/assets/scenes/medical_institute.png',
     profileId: 'medical',
     keywords: [
       'pandemic', 'vaccine', 'hospital', 'epidemic', 'quarantine',
@@ -915,7 +915,7 @@ export const THEME_REGISTRY = {
   academy_hall: {
     labelZh: '学府大殿',
     labelEn: 'Academy Grand Hall',
-    assetPath: '/assets/scenes/civic_chamber.png',
+    assetPath: '/assets/scenes/academy_hall.png',
     profileId: 'scholar',
     keywords: [
       'university', 'academy', 'school', 'education', 'professor',
@@ -931,7 +931,7 @@ export const THEME_REGISTRY = {
   tech_campus: {
     labelZh: '科技园区',
     labelEn: 'Tech Innovation Campus',
-    assetPath: '/assets/scenes/scifi_base.png',
+    assetPath: '/assets/scenes/tech_campus.png',
     profileId: 'technology',
     keywords: [
       'startup', 'silicon valley', 'tech company', 'innovation',
@@ -947,7 +947,7 @@ export const THEME_REGISTRY = {
   arena_colosseum: {
     labelZh: '竞技场',
     labelEn: 'Arena Colosseum',
-    assetPath: '/assets/scenes/ancient_empire.png',
+    assetPath: '/assets/scenes/arena_colosseum.png',
     profileId: 'entertainment',
     keywords: [
       'gladiator', 'colosseum', 'arena', 'sports', 'olympics',
@@ -961,7 +961,7 @@ export const THEME_REGISTRY = {
   concert_hall: {
     labelZh: '音乐厅',
     labelEn: 'Concert Hall',
-    assetPath: '/assets/scenes/dynastic_palace.png',
+    assetPath: '/assets/scenes/concert_hall.png',
     profileId: 'entertainment',
     keywords: [
       'concert', 'music', 'theater', 'opera', 'symphony',
@@ -975,7 +975,7 @@ export const THEME_REGISTRY = {
   media_tower: {
     labelZh: '传媒之塔',
     labelEn: 'Media Broadcast Tower',
-    assetPath: '/assets/scenes/surveillance_megacity.png',
+    assetPath: '/assets/scenes/media_tower.png',
     profileId: 'technology',
     keywords: [
       'media', 'broadcast', 'propaganda', 'censorship', 'press freedom',
@@ -989,7 +989,7 @@ export const THEME_REGISTRY = {
   diplomatic_summit: {
     labelZh: '外交峰会',
     labelEn: 'Diplomatic Summit',
-    assetPath: '/assets/scenes/civic_chamber.png',
+    assetPath: '/assets/scenes/diplomatic_summit.png',
     profileId: 'diplomacy',
     keywords: [
       'diplomacy', 'summit', 'treaty', 'alliance', 'embargo',
@@ -1004,7 +1004,7 @@ export const THEME_REGISTRY = {
   underground_network: {
     labelZh: '地下组织',
     labelEn: 'Underground Network',
-    assetPath: '/assets/scenes/refuge_compound.png',
+    assetPath: '/assets/scenes/underground_network.png',
     profileId: 'survival',
     keywords: [
       'underground', 'resistance', 'rebel network', 'secret society',
