@@ -3,9 +3,9 @@
 > 文档类型：active archive
 > 当前真值：否，作为独立接入计划使用；当前产品真值仍以 `README.md` 与 `llmdoc/*` 为准
 > 当前时间：2026-03-31
-> 状态：P0 / P1 minimal spike 已完成；P2 Oracle transcript scoped 已完成并继续补 contract；P3-P5 尚未启动
+> 状态：P0-P3、P5 已完成；P4 模块已封装但未接入 WorldScene
 
-> 状态更新（2026-03-31，最新）：
+> 状态更新（2026-04-01，最新）：
 > - `@chenglou/pretext@0.0.3` 已安装进 `frontend/`
 > - `frontend/src/lib/textLayout/pretext.ts` 与 `textOverflowPredictor.ts` 已落地
 > - `ResultView / EndingChatModal / WorldlineRoundtableView` 的只读文本 contract 已接入测试层
@@ -14,7 +14,9 @@
 >   - `turn_count / draft_count`
 >   - `overflow_turn_count / overflow_draft_count`
 >   - `collapsible_turn_count / collapsed_turn_count`
-> - `P3-P5` 当前仍未启动
+> - `P3` 已完成：`inputPredict.ts` 替代 InputView textarea 的 scrollHeight 回流（13 测试）
+> - `P4` 模块已封装（`canvasTextPredict.ts`，7 测试），但未接入 WorldScene（Phaser 字体栈差异导致预测偏差，回滚后保留为独立模块）
+> - `P5` 已完成：`textContract.test.ts` 71 项文本契约测试，覆盖中英双语按钮标签 / 卡片标题 / 描述文本 / Oracle 布局 / Share 文案溢出检测
 
 ---
 
