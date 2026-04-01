@@ -14,7 +14,7 @@
  */
 import Phaser from 'phaser';
 import i18next from 'i18next';
-import { predictBubbleTextSize } from '../lib/textLayout/canvasTextPredict';
+import { predictBubbleTextSize } from '../../lib/textLayout/canvasTextPredict';
 import { EventBridge, dispatchVizEvent } from '../managers/EventBridge';
 import {
   CHARACTER_SPRITE_KEYS,
