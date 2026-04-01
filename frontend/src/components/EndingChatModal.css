@@ -905,6 +905,11 @@
   border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
 }
 
+.ending-chat-bubble__actions .ending-chat-inline-button {
+  color: oklch(45% 0.2 350);
+  font-weight: 700;
+}
+
 .ending-chat-draft-badge {
   color: var(--color-primary);
 }
