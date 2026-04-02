@@ -15,6 +15,12 @@ import type {
 
 const BASE = '/api';
 
+function sanitizeErrorText(text: string): string {
+  if (!text || text.length > 200) return 'Server error';
+  if (/Traceback|at\s+\S+\s+\(|<html|<\/div>/i.test(text)) return 'Server error';
+  return text;
+}
+
 const DEFAULT_TIMEOUT = 30000; // M-5 fix: 30s default request timeout
 const SOCIAL_COPY_TIMEOUT = 90000;
 
@@ -81,14 +87,14 @@ async function parseErrorResponse(res: Response): Promise<Error> {
         return new ApiError(res.status, code, message);
       }
       if (typeof parsed.detail === 'string' && parsed.detail) {
-        return new ApiError(res.status, 'UNSTRUCTURED_ERROR', parsed.detail);
+        return new ApiError(res.status, 'UNSTRUCTURED_ERROR', sanitizeErrorText(parsed.detail));
       }
     } catch {
       // Fall through to the raw body text below.
     }
   }
 
-  return new ApiError(res.status, 'UNSTRUCTURED_ERROR', body);
+  return new ApiError(res.status, 'UNSTRUCTURED_ERROR', sanitizeErrorText(body));
 }
 
 export interface LlmProviderRequestOptions {
@@ -331,12 +337,12 @@ export async function createDebate(
 
 /** GET /api/debate/:id — get debate live snapshot */
 export async function getDebate(id: string): Promise<DebateSnapshot> {
-  return safeGet(`/debate/${id}`);
+  return safeGet(`/debate/${encodeURIComponent(id)}`);
 }
 
 /** GET /api/debate/:id/result — get finalized debate result */
 export async function getDebateResult(id: string): Promise<DebateResultPayload> {
-  return safeGet(`/debate/${id}/result`);
+  return safeGet(`/debate/${encodeURIComponent(id)}/result`);
 }
 
 /** POST /api/scenario/:id/ending-room — create or reuse an ending room scope */
@@ -344,7 +350,7 @@ export async function createEndingRoom(
   scenarioId: string,
   payload: CreateEndingRoomRequest,
 ): Promise<EndingRoomSnapshot> {
-  return request(`/scenario/${scenarioId}/ending-room`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/ending-room`, {
     method: 'POST',
     body: JSON.stringify({
       room_type: payload.roomType,
@@ -375,12 +381,12 @@ export async function createEndingRoom(
 
 /** GET /api/ending-room/:id — get ending room live snapshot */
 export async function getEndingRoom(roomId: string): Promise<EndingRoomSnapshot> {
-  return safeGet(`/ending-room/${roomId}`);
+  return safeGet(`/ending-room/${encodeURIComponent(roomId)}`);
 }
 
 /** GET /api/ending-room/:id/result — get finalized ending room payload */
 export async function getEndingRoomResult(roomId: string): Promise<EndingRoomResultPayload> {
-  return safeGet(`/ending-room/${roomId}/result`);
+  return safeGet(`/ending-room/${encodeURIComponent(roomId)}/result`);
 }
 
 /** POST /api/ending-room/:id/thread — create a follow-up thread inside an ending room */
@@ -388,7 +394,7 @@ export async function createEndingRoomThread(
   roomId: string,
   payload: CreateEndingRoomThreadRequest,
 ): Promise<EndingRoomThreadSnapshot> {
-  return request(`/ending-room/${roomId}/thread`, {
+  return request(`/ending-room/${encodeURIComponent(roomId)}/thread`, {
     method: 'POST',
     body: JSON.stringify({
       ...(payload.title ? { title: payload.title } : {}),
@@ -401,7 +407,7 @@ export async function createEndingRoomThread(
 
 /** GET /api/ending-room/thread/:id — fetch a single follow-up thread snapshot */
 export async function getEndingRoomThread(threadId: string): Promise<EndingRoomThreadSnapshot> {
-  return safeGet(`/ending-room/thread/${threadId}`);
+  return safeGet(`/ending-room/thread/${encodeURIComponent(threadId)}`);
 }
 
 /** POST /api/ending-room/:id/user-turn — append a follow-up turn on the room transcript */
@@ -409,7 +415,7 @@ export async function appendEndingRoomUserTurn(
   roomId: string,
   payload: AppendEndingRoomUserTurnRequest,
 ): Promise<{ room_id: string; thread_id: string; memory_partition_id: string; turns: EndingRoomSnapshot['turns'] }> {
-  return request(`/ending-room/${roomId}/user-turn`, {
+  return request(`/ending-room/${encodeURIComponent(roomId)}/user-turn`, {
     method: 'POST',
     body: JSON.stringify({
       content: payload.content,
@@ -427,7 +433,7 @@ export async function appendEndingRoomThreadUserTurn(
   threadId: string,
   payload: AppendEndingRoomUserTurnRequest,
 ): Promise<{ room_id: string; thread_id: string; memory_partition_id: string; turns: EndingRoomSnapshot['turns'] }> {
-  return request(`/ending-room/thread/${threadId}/user-turn`, {
+  return request(`/ending-room/thread/${encodeURIComponent(threadId)}/user-turn`, {
     method: 'POST',
     body: JSON.stringify({
       content: payload.content,
@@ -453,7 +459,7 @@ export async function predictDebate(
   debateId: string,
   payload: DebatePredictionRequest,
 ): Promise<DebatePrediction> {
-  return request(`/debate/${debateId}/predict`, {
+  return request(`/debate/${encodeURIComponent(debateId)}/predict`, {
     method: 'POST',
     body: JSON.stringify({
       kind: payload.kind,
@@ -470,7 +476,7 @@ export async function predictDebate(
 
 /** GET /api/scenario/:id — get scenario status + agents + branches */
 export async function getScenario(id: string): Promise<Scenario> {
-  return safeGet(`/scenario/${id}`);
+  return safeGet(`/scenario/${encodeURIComponent(id)}`);
 }
 
 /** POST /api/scenario/import-replay — persist a replay snapshot as a local scenario */
@@ -494,22 +500,22 @@ export async function createReplayArtifact(
 export async function getReplayArtifact(
   artifactId: string,
 ): Promise<{ id: string; kind: string; payload: Record<string, unknown>; created_at: string }> {
-  return safeGet(`/replay-artifact/${artifactId}`);
+  return safeGet(`/replay-artifact/${encodeURIComponent(artifactId)}`);
 }
 
 /** GET /api/scenario/:id/branches — get branch tree */
 export async function getBranches(id: string): Promise<Branch[]> {
-  return safeGet(`/scenario/${id}/branches`);
+  return safeGet(`/scenario/${encodeURIComponent(id)}/branches`);
 }
 
 /** GET /api/scenario/:id/story — get narrated stories for completed branches */
 export async function getStory(id: string): Promise<StoryData> {
-  return safeGet(`/scenario/${id}/story`);
+  return safeGet(`/scenario/${encodeURIComponent(id)}/story`);
 }
 
 /** GET /api/scenario/:id/agents — get all agents for a scenario */
 export async function getAgents(id: string): Promise<AgentInfo[]> {
-  return safeGet(`/scenario/${id}/agents`);
+  return safeGet(`/scenario/${encodeURIComponent(id)}/agents`);
 }
 
 /** POST /api/scenario/:id/intervene — butterfly effect intervention */
@@ -517,7 +523,7 @@ export async function intervene(
   scenarioId: string,
   payload: InterventionPayload,
 ): Promise<InterventionResponse> {
-  return request(`/scenario/${scenarioId}/intervene`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/intervene`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -528,7 +534,7 @@ export async function interveneRetrospective(
   scenarioId: string,
   payload: RetrospectiveInterventionPayload,
 ): Promise<RetrospectiveInterventionResponse> {
-  return request(`/scenario/${scenarioId}/intervene/retrospective`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/intervene/retrospective`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -539,7 +545,7 @@ export async function interveneBatch(
   scenarioId: string,
   payload: BatchInterventionPayload,
 ): Promise<BatchInterventionResponse> {
-  return request(`/scenario/${scenarioId}/intervene/batch`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/intervene/batch`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -547,7 +553,7 @@ export async function interveneBatch(
 
 /** GET /api/scenario/:id/groups — get hierarchical groups (P3-A) */
 export async function getGroups(scenarioId: string): Promise<AgentGroupDetail[]> {
-  return safeGet(`/scenario/${scenarioId}/groups`);
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/groups`);
 }
 
 // ── P5 API Wrappers ──────────────────────────────────────
@@ -583,12 +589,12 @@ export async function listScenarios(
 
 /** DELETE /api/scenario/:id — cascade delete a scenario (P5-A) */
 export async function deleteScenario(id: string): Promise<{ status: string; scenario_id: string }> {
-  return request(`/scenario/${id}`, { method: 'DELETE' });
+  return request(`/scenario/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 /** GET /api/scenario/:id/export — export scenario as Markdown text (P5-C) */
 export async function exportScenario(id: string): Promise<string> {
-  return requestText(`/scenario/${id}/export`);
+  return requestText(`/scenario/${encodeURIComponent(id)}/export`);
 }
 
 /** Social copy generation — send provider policy in request body to avoid leaking keys in URLs. */
@@ -597,7 +603,7 @@ export async function generateSocialCopy(
   platform: string,
   options?: LlmProviderRequestOptions,
 ): Promise<{ platform: string; platform_name: string; copy: string }> {
-  return request(`/scenario/${id}/social/${platform}`, {
+  return request(`/scenario/${encodeURIComponent(id)}/social/${encodeURIComponent(platform)}`, {
     method: 'POST',
     body: JSON.stringify({
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
@@ -618,7 +624,7 @@ export async function submitPrediction(
   userName?: string,
   userId?: string,
 ): Promise<PredictionInfo> {
-  return request(`/scenario/${scenarioId}/predict`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/predict`, {
     method: 'POST',
     body: JSON.stringify({
       prediction_text: predictionText,
@@ -631,14 +637,14 @@ export async function submitPrediction(
 
 /** GET /api/scenario/:id/predictions — list predictions for a scenario (P5-B) */
 export async function listPredictions(scenarioId: string): Promise<PredictionInfo[]> {
-  return safeGet(`/scenario/${scenarioId}/predictions`);
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/predictions`);
 }
 
 export async function scorePredictions(
   scenarioId: string,
   options?: LlmProviderRequestOptions,
 ): Promise<{ scored: number }> {
-  return request(`/scenario/${scenarioId}/score-predictions`, {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/score-predictions`, {
     method: 'POST',
     body: JSON.stringify({
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
@@ -675,7 +681,7 @@ export async function finalizeCampaign(
   scenarioId: string,
   payload: FinalizeCampaignPayload,
 ): Promise<CampaignFinalizeResult> {
-  return request(`/campaign/scenario/${scenarioId}/finalize`, {
+  return request(`/campaign/scenario/${encodeURIComponent(scenarioId)}/finalize`, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -685,34 +691,34 @@ export async function getCampaignProfile(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignProfileSummary> {
-  return safeGet(`/campaign/profile/${userId}`, options);
+  return safeGet(`/campaign/profile/${encodeURIComponent(userId)}`, options);
 }
 
 export async function getCampaignMastery(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignMastery[]> {
-  return safeGet(`/campaign/profile/${userId}/mastery`, options);
+  return safeGet(`/campaign/profile/${encodeURIComponent(userId)}/mastery`, options);
 }
 
 export async function getCampaignBadges(
   userId: string,
   options?: RequestOptions,
 ): Promise<CampaignBadge[]> {
-  return safeGet(`/campaign/profile/${userId}/badges`, options);
+  return safeGet(`/campaign/profile/${encodeURIComponent(userId)}/badges`, options);
 }
 
 export async function getCampaignScenarioSummary(
   scenarioId: string,
 ): Promise<CampaignScenarioSummary> {
-  return safeGet(`/campaign/scenario/${scenarioId}/summary`);
+  return safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/summary`);
 }
 
 export async function upsertScenarioDirectorState(
   scenarioId: string,
   payload: ScenarioDirectorState,
 ): Promise<ScenarioDirectorStateResponse> {
-  return request(`/campaign/scenario/${scenarioId}/director-state`, {
+  return request(`/campaign/scenario/${encodeURIComponent(scenarioId)}/director-state`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });
@@ -721,14 +727,14 @@ export async function upsertScenarioDirectorState(
 export async function getScenarioDirectorState(
   scenarioId: string,
 ): Promise<ScenarioDirectorStateResponse> {
-  return safeGet(`/campaign/scenario/${scenarioId}/director-state`);
+  return safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/director-state`);
 }
 
 export async function upsertScenarioGameplayState(
   scenarioId: string,
   payload: ScenarioGameplayState,
 ): Promise<ScenarioGameplayStateResponse> {
-  return request(`/campaign/scenario/${scenarioId}/gameplay-state`, {
+  return request(`/campaign/scenario/${encodeURIComponent(scenarioId)}/gameplay-state`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });
@@ -737,7 +743,7 @@ export async function upsertScenarioGameplayState(
 export async function getScenarioGameplayState(
   scenarioId: string,
 ): Promise<ScenarioGameplayStateResponse> {
-  return safeGet(`/campaign/scenario/${scenarioId}/gameplay-state`);
+  return safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/gameplay-state`);
 }
 
 export async function getCampaignDailyChallengeStatus(
@@ -752,7 +758,7 @@ export async function getCampaignDailyChallengeStatus(
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return safeGet(`/campaign/profile/${userId}/daily-status?${params.toString()}`, options);
+  return safeGet(`/campaign/profile/${encodeURIComponent(userId)}/daily-status?${params.toString()}`, options);
 }
 
 export async function getCampaignChallengeRotation(
@@ -777,7 +783,7 @@ export async function getCampaignWeeklySummary(
     local_date: localDate,
     timezone_offset_minutes: String(timezoneOffsetMinutes),
   });
-  return safeGet(`/campaign/profile/${userId}/weekly-summary?${params.toString()}`, options);
+  return safeGet(`/campaign/profile/${encodeURIComponent(userId)}/weekly-summary?${params.toString()}`, options);
 }
 
 /** Intervention template from backend */

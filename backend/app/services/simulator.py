@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 import logging
@@ -61,6 +60,7 @@ _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
+_NARRATE_MAX_CHARS = 3000
 _FORK_DEBUG_TRACE_KEY = "fork_debug_trace"
 _FORK_DEBUG_MAX_SIGNALS = 12
 _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
@@ -142,6 +142,8 @@ def _record_fork_debug_trace(engine, scenario_id: str, entry: dict[str, Any]) ->
         ctx = dict(scenario.parsed_context or {})
         trace = list(ctx.get(_FORK_DEBUG_TRACE_KEY) or [])
         trace.append(entry)
+        if len(trace) > 200:
+            trace = trace[-200:]
         ctx[_FORK_DEBUG_TRACE_KEY] = trace
         scenario.parsed_context = ctx
         session.add(scenario)
@@ -150,29 +152,11 @@ def _record_fork_debug_trace(engine, scenario_id: str, entry: dict[str, Any]) ->
 
 def _get_fork_prompt_template(language: str, variant: str) -> str:
     normalized_variant = (variant or "a").strip().lower()
-    if language == "Chinese":
-        if normalized_variant == "b":
-            return FORK_DETECT_PROMPT_ZH_B
-        if normalized_variant == "c":
-            return FORK_DETECT_PROMPT_ZH_C
-        if normalized_variant == "d":
-            return FORK_DETECT_PROMPT_ZH_D
-        if normalized_variant == "e":
-            return FORK_DETECT_PROMPT_ZH_E
-        if normalized_variant == "f":
-            return FORK_DETECT_PROMPT_ZH_F
-        return FORK_DETECT_PROMPT_ZH
-    if normalized_variant == "b":
-        return FORK_DETECT_PROMPT_EN_B
-    if normalized_variant == "c":
-        return FORK_DETECT_PROMPT_EN_C
-    if normalized_variant == "d":
-        return FORK_DETECT_PROMPT_EN_D
-    if normalized_variant == "e":
-        return FORK_DETECT_PROMPT_EN_E
-    if normalized_variant == "f":
-        return FORK_DETECT_PROMPT_EN_F
-    return FORK_DETECT_PROMPT_EN
+    lang = language if language == "Chinese" else "English"
+    key = (lang, normalized_variant)
+    if key not in _FORK_VARIANTS:
+        key = (lang, "a")  # fallback to default variant
+    return _build_fork_prompt(_FORK_VARIANTS[key], lang)
 
 
 def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
@@ -548,389 +532,266 @@ def _resolve_hierarchical_agent_sets(
     worker_agents = [agent for agent in agents if agent.get("name") not in leader_names]
     return leader_agents, worker_agents, effective_group_leaders
 
-FORK_DETECT_PROMPT_ZH = """你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-请判断:
-1. 这些分歧是根本性的路线之争，还是仅仅是表面争论？
-2. 如果存在实质分歧，它会导致几条截然不同的历史走向？
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明分歧的核心是什么",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字，如：火星殖民计划启动、地球建立统一防线）",
-      "description": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-标题写法要求:
-- 标题要像新闻标题一样吸引眼球，不要用"走向A"这种抽象表达
-- 每个标题用最具辨识度的关键词，让人一眼看懂这条路线的核心区别
-- 好的例子: "全面开战"、"和谈妥协"、"技术突围"、"联盟瓦解"
-- 坏的例子: "积极发展路线"、"保守应对方案"、"第一种可能性"
-
-描述写法要求:
-- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势
-- 不要写笼统的"核心分歧在于…"这种对所有分支通用的话
-- 好的例子: "曹操集结二十万大军南下，目标直取荆州，刘备被迫退守"
-- 坏的例子: "核心分歧在于是否对外扩张"
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN = """You are a sharp historical divergence analyst. Review the discussion below and decide whether it contains a fundamental disagreement strong enough to split the timeline.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-Decide:
-1. Are these disagreements fundamental strategic splits or merely surface-level arguments?
-2. If a material split exists, how many genuinely different future paths does it create?
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence describing the core disagreement",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-Title requirements:
-- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'
-- Use the most distinctive keywords so the difference is obvious at a glance
-- Good examples: "Total War", "Negotiated Peace", "Tech Breakthrough", "Alliance Collapse"
-- Bad examples: "Aggressive Development Path", "Conservative Response Plan", "First Possibility"
-
-Description requirements:
-- Each branch description must be concrete and different from the others
-- Do not repeat generic language like 'the core disagreement is whether to expand outward'
-- Good example: "Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat"
-- Bad example: "The core disagreement is whether to expand outward"
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_ZH_B = """你是一位偏积极的世界线分叉分析师。请分析以下讨论，只要已经出现互斥未来、制度分流、审批路径分裂、责任链改写或不可同时满足的目标，就优先判定应该 fork。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-判定标准:
-1. 不要把 fork 理解成“必须彻底对骂”。只要分歧会导向两条或更多无法同时成立的未来，就可以 fork。
-2. 如果同一事件存在不同审批路径、不同责任归属、不同任务节奏、不同公众叙事，且这些差异会改变后续历史，请倾向于 fork。
-3. 只有当所有人实际上已经收敛到同一路线，只剩措辞、证据门槛或执行细节差异时，才返回 should_fork=false。
-4. 若 should_fork=true，请尽量压缩成 2-4 条最具代表性的未来路径。
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字）",
-      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN_B = """You are an aggressive timeline-fork analyst. If the discussion already implies incompatible futures, diverging institutions, different approval paths, distinct responsibility chains, incompatible mission tempos, or mutually exclusive goals, prefer should_fork=true.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-Decision rubric:
-1. Do not require open hostility. If the disagreement leads to two or more incompatible futures, that is enough to fork.
-2. Prefer forking when the same event can proceed through meaningfully different approval paths, ownership structures, risk postures, public narratives, or downstream institutions.
-3. Return should_fork=false only when the discussion has effectively converged on one path and the remaining differences are wording, evidence thresholds, or implementation details.
-4. If should_fork=true, compress the result into the 2-4 most representative futures.
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_ZH_C = """你是一位世界线分叉分析师。请分析以下讨论。只引入一条更积极的规则：
-只要这些分歧已经隐含两条或更多无法同时成立的未来，即使讨论双方在安全原则上部分一致，也可以判定 should_fork=true。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字）",
-      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN_C = """You are a timeline-fork analyst. Apply one additional rule beyond the default baseline:
-If the disagreement already implies two or more incompatible futures, that alone is enough for should_fork=true, even if the participants still agree on some shared safety or governance principles.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_ZH_D = """你是一位制度分叉分析师。请分析以下讨论。只引入一条额外规则：
-如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字）",
-      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN_D = """You are an institutional fork analyst. Apply one additional rule:
-If the same event can proceed through meaningfully different approval paths, responsibility chains, mission tempos, or governance structures, and those differences would change downstream decisions and historical narrative, you may return should_fork=true.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_ZH_E = """你是一位世界线分叉分析师。请分析以下讨论。只引入一条额外规则：
-只有当讨论已经明显收敛到同一路线，剩下的差异只属于措辞、证据门槛或执行细节时，才返回 should_fork=false。若你在“表层分歧”和“互斥未来”之间拿不准，请倾向于 fork。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字）",
-      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN_E = """You are a timeline-fork analyst. Apply one additional rule:
-Return should_fork=false only when the discussion has clearly converged on one path and the remaining differences are just wording, evidence thresholds, or implementation details. If you are uncertain between a surface disagreement and incompatible futures, lean toward forking.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_ZH_F = """你是一位世界线压缩分析师。请分析以下讨论，并遵循两条规则：
-1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。
-2. 但请强制做“主路径压缩”：默认只返回 2 条最具代表性的未来。只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。
-
-【最近讨论摘要】
-{recent_summary}
-
-【Agent 标记的分歧信号】
-{diverge_signals}
-
-【分支灵敏度】{sensitivity}（0-1，越高越容易触发分支）
-
-输出严格 JSON:
-{{
-  "should_fork": true或false,
-  "reason": "一句话说明这些分歧为何会或不会形成互斥未来",
-  "branches": [
-    {{
-      "title": "简短生动的走向标题（6-12字）",
-      "description": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-额外要求:
-- 若 should_fork=true，优先返回 2 条主路径
-- 只有当第 3 条未来明显独立且无法并入前两条时，才返回 3 条
-- 不要把纯措辞差异、证据门槛差异或执行细节差异当作独立分支
-
-{language_directive}
-"""
-
-FORK_DETECT_PROMPT_EN_F = """You are a timeline-compression analyst. Apply two rules:
-1. If the discussion already implies incompatible futures, or meaningfully different approval paths, responsibility chains, governance structures, or mission tempos, you may fork.
-2. But aggressively compress the result into the fewest representative futures: return 2 branches by default, and only return a 3rd branch when it is clearly independent and cannot be merged into the first two.
-
-[Recent Discussion Summary]
-{recent_summary}
-
-[Divergence Signals Marked By Agents]
-{diverge_signals}
-
-[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)
-
-Return strict JSON:
-{{
-  "should_fork": true or false,
-  "reason": "One sentence on why these disagreements do or do not create incompatible futures",
-  "branches": [
-    {{
-      "title": "A vivid future-path title (3-8 words)",
-      "description": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
-      "probability": 0.6
-    }}
-  ]
-}}
-
-Additional rules:
-- If should_fork=true, prefer 2 representative branches
-- Only return a 3rd branch when it is clearly independent and cannot be merged into the first two
-- Do not create separate branches for wording differences, evidence-threshold differences, or implementation details alone
-
-{language_directive}
-"""
+# ── Fork Detection Prompt Templates (consolidated) ─────────────────────
+#
+# All 12 variants (6 letters x 2 languages) are stored in a single lookup
+# dict keyed by ``(language, variant_letter)``.  ``_get_fork_prompt_template``
+# performs a single dict lookup instead of an if/elif chain.
+#
+# Each variant has a unique persona/criteria section; the shared structural
+# elements (input sections, JSON schema, language_directive) are composed by
+# ``_build_fork_prompt``.
+
+# -- Variant-specific text fragments ------------------------------------------
+# Keys: preamble, criteria, reason_hint, title_hint, desc_hint, postamble
+# Empty string means the section is omitted for that variant.
+
+_FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
+    # ---- Chinese variants ----------------------------------------------------
+    ("Chinese", "a"): {
+        "preamble": "你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。",
+        "criteria": (
+            "请判断:\n"
+            "1. 这些分歧是根本性的路线之争，还是仅仅是表面争论？\n"
+            "2. 如果存在实质分歧，它会导致几条截然不同的历史走向？"
+        ),
+        "reason_hint": "一句话说明分歧的核心是什么",
+        "title_hint": "简短生动的走向标题（6-12字，如：火星殖民计划启动、地球建立统一防线）",
+        "desc_hint": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",
+        "postamble": (
+            "标题写法要求:\n"
+            "- 标题要像新闻标题一样吸引眼球，不要用\"走向A\"这种抽象表达\n"
+            "- 每个标题用最具辨识度的关键词，让人一眼看懂这条路线的核心区别\n"
+            "- 好的例子: \"全面开战\"、\"和谈妥协\"、\"技术突围\"、\"联盟瓦解\"\n"
+            "- 坏的例子: \"积极发展路线\"、\"保守应对方案\"、\"第一种可能性\"\n"
+            "\n"
+            "描述写法要求:\n"
+            "- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势\n"
+            "- 不要写笼统的\"核心分歧在于…\"这种对所有分支通用的话\n"
+            "- 好的例子: \"曹操集结二十万大军南下，目标直取荆州，刘备被迫退守\"\n"
+            "- 坏的例子: \"核心分歧在于是否对外扩张\""
+        ),
+    },
+    ("Chinese", "b"): {
+        "preamble": "你是一位偏积极的世界线分叉分析师。请分析以下讨论，只要已经出现互斥未来、制度分流、审批路径分裂、责任链改写或不可同时满足的目标，就优先判定应该 fork。",
+        "criteria": (
+            "判定标准:\n"
+            "1. 不要把 fork 理解成\u201c必须彻底对骂\u201d。只要分歧会导向两条或更多无法同时成立的未来，就可以 fork。\n"
+            "2. 如果同一事件存在不同审批路径、不同责任归属、不同任务节奏、不同公众叙事，且这些差异会改变后续历史，请倾向于 fork。\n"
+            "3. 只有当所有人实际上已经收敛到同一路线，只剩措辞、证据门槛或执行细节差异时，才返回 should_fork=false。\n"
+            "4. 若 should_fork=true，请尽量压缩成 2-4 条最具代表性的未来路径。"
+        ),
+        "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
+        "title_hint": "简短生动的走向标题（6-12字）",
+        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "postamble": "",
+    },
+    ("Chinese", "c"): {
+        "preamble": (
+            "你是一位世界线分叉分析师。请分析以下讨论。只引入一条更积极的规则：\n"
+            "只要这些分歧已经隐含两条或更多无法同时成立的未来，即使讨论双方在安全原则上部分一致，也可以判定 should_fork=true。"
+        ),
+        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",
+        "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
+        "title_hint": "简短生动的走向标题（6-12字）",
+        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "postamble": "",
+    },
+    ("Chinese", "d"): {
+        "preamble": (
+            "你是一位制度分叉分析师。请分析以下讨论。只引入一条额外规则：\n"
+            "如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。"
+        ),
+        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",
+        "reason_hint": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
+        "title_hint": "简短生动的走向标题（6-12字）",
+        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "postamble": "",
+    },
+    ("Chinese", "e"): {
+        "preamble": (
+            "你是一位世界线分叉分析师。请分析以下讨论。只引入一条额外规则：\n"
+            "只有当讨论已经明显收敛到同一路线，剩下的差异只属于措辞、证据门槛或执行细节时，才返回 should_fork=false。若你在\u201c表层分歧\u201d和\u201c互斥未来\u201d之间拿不准，请倾向于 fork。"
+        ),
+        "criteria": "",
+        "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
+        "title_hint": "简短生动的走向标题（6-12字）",
+        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "postamble": "",
+    },
+    ("Chinese", "f"): {
+        "preamble": (
+            "你是一位世界线压缩分析师。请分析以下讨论，并遵循两条规则：\n"
+            "1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。\n"
+            "2. 但请强制做\u201c主路径压缩\u201d：默认只返回 2 条最具代表性的未来。只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。"
+        ),
+        "criteria": "",
+        "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
+        "title_hint": "简短生动的走向标题（6-12字）",
+        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "postamble": (
+            "额外要求:\n"
+            "- 若 should_fork=true，优先返回 2 条主路径\n"
+            "- 只有当第 3 条未来明显独立且无法并入前两条时，才返回 3 条\n"
+            "- 不要把纯措辞差异、证据门槛差异或执行细节差异当作独立分支"
+        ),
+    },
+    # ---- English variants ----------------------------------------------------
+    ("English", "a"): {
+        "preamble": "You are a sharp historical divergence analyst. Review the discussion below and decide whether it contains a fundamental disagreement strong enough to split the timeline.",
+        "criteria": (
+            "Decide:\n"
+            "1. Are these disagreements fundamental strategic splits or merely surface-level arguments?\n"
+            "2. If a material split exists, how many genuinely different future paths does it create?"
+        ),
+        "reason_hint": "One sentence describing the core disagreement",
+        "title_hint": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",
+        "postamble": (
+            "Title requirements:\n"
+            "- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'\n"
+            "- Use the most distinctive keywords so the difference is obvious at a glance\n"
+            "- Good examples: \"Total War\", \"Negotiated Peace\", \"Tech Breakthrough\", \"Alliance Collapse\"\n"
+            "- Bad examples: \"Aggressive Development Path\", \"Conservative Response Plan\", \"First Possibility\"\n"
+            "\n"
+            "Description requirements:\n"
+            "- Each branch description must be concrete and different from the others\n"
+            "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"
+            "- Good example: \"Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat\"\n"
+            "- Bad example: \"The core disagreement is whether to expand outward\""
+        ),
+    },
+    ("English", "b"): {
+        "preamble": "You are an aggressive timeline-fork analyst. If the discussion already implies incompatible futures, diverging institutions, different approval paths, distinct responsibility chains, incompatible mission tempos, or mutually exclusive goals, prefer should_fork=true.",
+        "criteria": (
+            "Decision rubric:\n"
+            "1. Do not require open hostility. If the disagreement leads to two or more incompatible futures, that is enough to fork.\n"
+            "2. Prefer forking when the same event can proceed through meaningfully different approval paths, ownership structures, risk postures, public narratives, or downstream institutions.\n"
+            "3. Return should_fork=false only when the discussion has effectively converged on one path and the remaining differences are wording, evidence thresholds, or implementation details.\n"
+            "4. If should_fork=true, compress the result into the 2-4 most representative futures."
+        ),
+        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "title_hint": "A vivid future-path title (3-8 words)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "postamble": "",
+    },
+    ("English", "c"): {
+        "preamble": (
+            "You are a timeline-fork analyst. Apply one additional rule beyond the default baseline:\n"
+            "If the disagreement already implies two or more incompatible futures, that alone is enough for should_fork=true, even if the participants still agree on some shared safety or governance principles."
+        ),
+        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",
+        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "title_hint": "A vivid future-path title (3-8 words)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "postamble": "",
+    },
+    ("English", "d"): {
+        "preamble": (
+            "You are an institutional fork analyst. Apply one additional rule:\n"
+            "If the same event can proceed through meaningfully different approval paths, responsibility chains, mission tempos, or governance structures, and those differences would change downstream decisions and historical narrative, you may return should_fork=true."
+        ),
+        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",
+        "reason_hint": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",
+        "title_hint": "A vivid future-path title (3-8 words)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "postamble": "",
+    },
+    ("English", "e"): {
+        "preamble": (
+            "You are a timeline-fork analyst. Apply one additional rule:\n"
+            "Return should_fork=false only when the discussion has clearly converged on one path and the remaining differences are just wording, evidence thresholds, or implementation details. If you are uncertain between a surface disagreement and incompatible futures, lean toward forking."
+        ),
+        "criteria": "",
+        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "title_hint": "A vivid future-path title (3-8 words)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "postamble": "",
+    },
+    ("English", "f"): {
+        "preamble": (
+            "You are a timeline-compression analyst. Apply two rules:\n"
+            "1. If the discussion already implies incompatible futures, or meaningfully different approval paths, responsibility chains, governance structures, or mission tempos, you may fork.\n"
+            "2. But aggressively compress the result into the fewest representative futures: return 2 branches by default, and only return a 3rd branch when it is clearly independent and cannot be merged into the first two."
+        ),
+        "criteria": "",
+        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "title_hint": "A vivid future-path title (3-8 words)",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "postamble": (
+            "Additional rules:\n"
+            "- If should_fork=true, prefer 2 representative branches\n"
+            "- Only return a 3rd branch when it is clearly independent and cannot be merged into the first two\n"
+            "- Do not create separate branches for wording differences, evidence-threshold differences, or implementation details alone"
+        ),
+    },
+}
+
+
+def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
+    """Assemble a fork-detection prompt from variant-specific fragments.
+
+    The structural skeleton (input section headers, JSON schema, language
+    directive placeholder) is language-dependent.  Variant-specific text
+    (persona, criteria, title/desc hints, postamble) is injected from
+    ``variant_data``.
+    """
+    preamble = variant_data["preamble"]
+    criteria = variant_data["criteria"]
+    reason_hint = variant_data["reason_hint"]
+    title_hint = variant_data["title_hint"]
+    desc_hint = variant_data["desc_hint"]
+    postamble = variant_data["postamble"]
+
+    if language == "Chinese":
+        input_section = (
+            "\u3010最近讨论摘要\u3011\n"
+            "{recent_summary}\n"
+            "\n"
+            "\u3010Agent 标记的分歧信号\u3011\n"
+            "{diverge_signals}\n"
+            "\n"
+            "\u3010分支灵敏度\u3011{sensitivity}\uff080-1\uff0c越高越容易触发分支\uff09"
+        )
+        json_label = "输出严格 JSON:"
+        should_fork_val = "true或false"
+    else:
+        input_section = (
+            "[Recent Discussion Summary]\n"
+            "{recent_summary}\n"
+            "\n"
+            "[Divergence Signals Marked By Agents]\n"
+            "{diverge_signals}\n"
+            "\n"
+            "[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)"
+        )
+        json_label = "Return strict JSON:"
+        should_fork_val = "true or false"
+
+    json_block = (
+        "{{\n"
+        f'  "should_fork": {should_fork_val},\n'
+        f'  "reason": "{reason_hint}",\n'
+        '  "branches": [\n'
+        "    {{\n"
+        f'      "title": "{title_hint}",\n'
+        f'      "description": "{desc_hint}",\n'
+        '      "probability": 0.6\n'
+        "    }}\n"
+        "  ]\n"
+        "}}"
+    )
+
+    parts: list[str] = [preamble, input_section]
+    if criteria:
+        parts.append(criteria)
+    parts.append(f"{json_label}\n{json_block}")
+    if postamble:
+        parts.append(postamble)
+    parts.append("{language_directive}")
+
+    # Match original triple-quoted string layout: no leading newline, trailing newline
+    return "\n\n".join(parts) + "\n"
 
 
 # ── Simulation Orchestrator ──────────────────────────────
@@ -1961,15 +1822,12 @@ def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: in
     try:
         parsed = json.loads(round_row.compressed_summary)
     except json.JSONDecodeError:
-        try:
-            parsed = ast.literal_eval(round_row.compressed_summary)
-        except (SyntaxError, ValueError):
-            logger.warning(
-                "Failed to parse historical compressed_summary for branch=%s round=%s",
-                branch_id,
-                round_row.round_number,
-            )
-            return None
+        logger.warning(
+            "Failed to parse historical compressed_summary for branch=%s round=%s",
+            branch_id,
+            round_row.round_number,
+        )
+        return None
     except TypeError:
         logger.warning(
             "Failed to parse historical compressed_summary for branch=%s round=%s",
@@ -1999,7 +1857,7 @@ async def _narrate_branch_data(
         branch_title=branch_info.get("title", ""),
         probability=branch_info.get("probability", 0.5),
         agents_summary=agents_summary,
-        raw_rounds=raw_text[:3000],  # limit to ~3K chars
+        raw_rounds=raw_text[:_NARRATE_MAX_CHARS],  # limit to ~3K chars
         language=language,
         api_key=(llm_overrides or {}).get("api_key"),
         base_url=(llm_overrides or {}).get("base_url"),

@@ -23,6 +23,7 @@ _CHROMA_WRITE_LOCK = threading.Lock()
 _CHROMA_WRITE_LOCK_KEY_PREFIX = "vector-store:chroma-write"
 _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
+_CHROMA_COLLECTION_NAME_MAX = 63  # Chroma DB hard limit
 
 
 def _ensure_chromadb():
@@ -140,7 +141,7 @@ class VectorStore:
     def _collection_name(scenario_id: str) -> str:
         """Build the canonical Chroma collection name for a scenario."""
         name = f"scenario_{scenario_id.replace('-', '_')}"
-        return name[:63] if len(name) > 63 else name
+        return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
 
     def _get_collection(self, scenario_id: str):
         """Get or create a ChromaDB collection for a scenario."""

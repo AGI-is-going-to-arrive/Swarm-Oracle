@@ -157,7 +157,7 @@ class TestRetrospectiveIntervention:
         resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
             "branch_id": bid, "round_number": 1, "text": "",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_intervention_logged(self, client):
         """Intervention should be persisted in InterventionLog."""
@@ -412,7 +412,7 @@ class TestBatchIntervention:
         resp = client.post(f"/api/scenario/{sid}/intervene/batch", json={
             "interventions": [{"branch_id": bid, "text": ""}]
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_batch_single_intervention(self, client):
         """Batch with single intervention should work."""

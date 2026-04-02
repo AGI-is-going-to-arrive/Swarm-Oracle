@@ -70,6 +70,7 @@
 关键约束：
 
 - 正式玩法卡仍走 `intervene`，但 authority、冷却与 director points 在后端校验并落库。
+- `InterveneRequest.text` 和 `RetrospectiveInterveneRequest.text` 上限 2000 字符（strip 后计算），空文本返回 422。
 - 当多个 backend worker 共用同一个 SQLite 文件时，待处理干预会进入共享 pending queue。
 
 ## Campaign Authority
@@ -103,6 +104,7 @@
 关键约束：
 
 - 同一 `scenario_id + user_id` 只能提交一条 prediction。
+- `PredictRequest` 的 `user_id` 和 `user_name` 上限 128 字符。
 - `score-predictions` 支持 request-scoped provider policy。
 
 ## Social / Export / Health
@@ -187,6 +189,9 @@
 
 ## 源码入口
 
+- `CreateScenarioRequest.user_id` 上限 128 字符。
+- `CreateReplayArtifactRequest.kind` 上限 64 字符，不能为空。
+- `/docs`、`/redoc`、`/openapi.json` 默认不暴露，需设置 `EXPOSE_API_DOCS=true`。
 - 路由：`backend/app/api/*.py`
 - schema：`backend/app/api/schemas.py`
 - 运行时逻辑：`backend/app/services/*.py`

@@ -618,13 +618,13 @@ class TestLLMCall:
         result = await llm_call(
             "Reply with OK.",
             reasoning_effort="low",
-            base_url="https://api.edgefn.net/v1",
+            base_url="http://127.0.0.1:8317/v1",
             api_key="sk-test",
-            model="MiniMax-M2.5",
+            model="gpt-5.4-mini",
         )
 
         assert result == "OK"
-        assert captured["url"] == "https://api.edgefn.net/v1/chat/completions"
+        assert captured["url"] == "http://127.0.0.1:8317/v1/chat/completions"
 
     @pytest.mark.asyncio
     async def test_llm_call_reconciles_actual_usage_tokens(self, monkeypatch):
@@ -945,7 +945,7 @@ class TestHealthCheck:
 
         result = await health_check()
         assert result["status"] == "ok"
-        assert result["model"] == "MiniMax-M2.5"
+        assert result["model"] == "gpt-5.4-mini"
 
     @pytest.mark.asyncio
     async def test_health_check_error_on_bad_url(self, monkeypatch):

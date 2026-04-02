@@ -47,6 +47,8 @@ class CreateScenarioRequest(BaseModel):
         if v is None:
             return None
         normalized = v.strip()
+        if len(normalized) > 128:
+            raise ValueError("user_id must be at most 128 characters")
         return normalized or None
 
     @field_validator("num_agents")
@@ -141,6 +143,16 @@ class InterveneRequest(BaseModel):
     profile_id: str | None = None
     directive: str | None = None
 
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("intervention text cannot be empty")
+        if len(normalized) > 2000:
+            raise ValueError("intervention text too long (max 2000 chars)")
+        return normalized
+
     @field_validator("card_id", "profile_id", "directive")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
@@ -161,6 +173,16 @@ class RetrospectiveInterveneRequest(BaseModel):
     branch_id: str
     round_number: int
     text: str
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("intervention text cannot be empty")
+        if len(normalized) > 2000:
+            raise ValueError("intervention text too long (max 2000 chars)")
+        return normalized
 
     @field_validator("round_number")
     @classmethod

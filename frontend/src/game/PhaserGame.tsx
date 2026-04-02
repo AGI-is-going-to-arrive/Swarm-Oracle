@@ -31,18 +31,8 @@ import {
 import { ensureReplayStartsInWorldScene } from './replaySync';
 import { shouldBootstrapWorldScene } from './worldSceneBootstrap';
 import { useSimulationStore } from '../stores/simulationStore';
+import { emotionToHaloColor } from './constants/emotionColors';
 import './game.css';
-
-/** Map emotion → halo color (duplicated from VizSynthesizer to avoid circular dep). */
-function emotionToHaloColor(emotion: string): string {
-  const colors: Record<string, string> = {
-    aggressive: '#ff0000', angry: '#ff3300', anxious: '#ff9900',
-    fearful: '#ff6600', cautious: '#ffcc00', calm: '#66ccff',
-    hopeful: '#00cc66', cooperative: '#33cc33', confident: '#6699ff',
-    neutral: '#999999',
-  };
-  return colors[emotion] || '#999999';
-}
 
 interface PhaserGameProps {
   width?: number;

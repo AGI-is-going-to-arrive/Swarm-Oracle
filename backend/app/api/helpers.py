@@ -37,6 +37,20 @@ from app.services.simulator import reconcile_scenario_done_if_complete, run_simu
 
 logger = logging.getLogger(__name__)
 
+
+class _OpaqueStr(str):
+    """String subclass that hides its value in repr() and structured logs.
+
+    str() and f-string interpolation still return the real value so that
+    ``f"Bearer {key}"`` works correctly with httpx headers.
+    The ``__opaque__`` sentinel is checked by ``_normalize_json_value``
+    in ``logging_utils.py`` to mask the value in JSON log output.
+    """
+    __slots__ = ()
+    __opaque__ = True
+    def __repr__(self) -> str:
+        return "***"
+
 GENERIC_SIMULATION_ERROR_MESSAGE = "Simulation failed unexpectedly. Please retry."
 GENERIC_SIMULATION_ERROR = {
     "code": "SIMULATION_RUNTIME_FAILED",
@@ -398,7 +412,7 @@ async def parse_and_run_background(
     llm_overrides: dict | None = None
     if llm_api_key or llm_base_url or llm_model or temperature is not None:
         llm_overrides = {
-            "api_key": llm_api_key,
+            "api_key": _OpaqueStr(llm_api_key) if llm_api_key else None,
             "base_url": llm_base_url,
             "temperature": temperature,
             "model": llm_model,

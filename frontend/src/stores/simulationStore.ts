@@ -11,6 +11,7 @@ import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMes
 import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent } from '../types';
 
 let seenMessageKeys = new Set<string>();
+let _seenScenarioId: string | null = null;
 
 function messageDedupKey(
   message: Pick<AgentMessage, 'agent_id' | 'branch' | 'round' | 'message'>,
@@ -21,6 +22,7 @@ function messageDedupKey(
 
 function rebuildSeenMessageKeys(messages: AgentMessage[], scenarioId?: string | null) {
   seenMessageKeys = new Set(messages.map((message) => messageDedupKey(message, scenarioId)));
+  _seenScenarioId = scenarioId ?? null;
 }
 
 const STATUS_RANK: Record<SimulationState['status'], number> = {
@@ -272,6 +274,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   },
 
   handleWSEvent: (event: WSEvent) => {
+    const currentScenarioId = useSimulationStore.getState().scenario?.id ?? null;
+    if (currentScenarioId && currentScenarioId !== _seenScenarioId) {
+      seenMessageKeys = new Set<string>();
+      _seenScenarioId = currentScenarioId;
+    }
     switch (event.type) {
       case 'heartbeat':
         break;
@@ -572,7 +579,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
     }),
 
   reset: () => {
-    rebuildSeenMessageKeys([]);
+    seenMessageKeys = new Set<string>();
+    _seenScenarioId = null;
     set(initialState);
   },
 }));

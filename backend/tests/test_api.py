@@ -167,7 +167,7 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["server"] == "ok"
         assert "llm" in data
-        assert data["llm"]["model"] == "MiniMax-M2.5"
+        assert data["llm"]["model"] == "gpt-5.4-mini"
 
     def test_health_test_returns_probe_summary(self, client, monkeypatch):
         async def _fake_health_check(**kwargs):
@@ -1587,7 +1587,7 @@ class TestInterveneEndpoint:
         resp = client.post(f"/api/scenario/{sid}/intervene", json={
             "branch_id": bid, "text": "",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_intervene_whitespace_text(self, client):
         """Should reject whitespace-only intervention text."""
@@ -1598,7 +1598,7 @@ class TestInterveneEndpoint:
         resp = client.post(f"/api/scenario/{sid}/intervene", json={
             "branch_id": bid, "text": "   \n\t  ",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     def test_intervene_missing_fields(self, client):
         """Should reject missing required fields."""

@@ -12,12 +12,12 @@
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `LLM_RESPONSES_URL` | `https://api.edgefn.net/v1` | OpenAI-compatible endpoint 或 base URL |
-| `LLM_API_KEY` | 模板中提供 | 默认 provider API key |
-| `LLM_MODEL_NAME` | `MiniMax-M2.5` | 默认模型 |
+| `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | OpenAI-compatible endpoint 或 base URL |
+| `LLM_API_KEY` | `sk-12345678`（占位） | 默认 provider API key |
+| `LLM_MODEL_NAME` | `gpt-5.4-mini` | 默认模型 |
 | `LLM_REASONING_EFFORT` | `none` | 推理强度 |
-| `LLM_REQUESTS_PER_MINUTE` | `10` | 默认 RPM，`<= 0` 表示关闭 |
-| `LLM_TOKENS_PER_MINUTE` | `100000` | 默认 TPM，`<= 0` 表示关闭 |
+| `LLM_REQUESTS_PER_MINUTE` | `0` | 默认 RPM，`0` 表示不限 |
+| `LLM_TOKENS_PER_MINUTE` | `0` | 默认 TPM，`0` 表示不限 |
 | `DEBATE_USE_LLM` | `true` | Debate 是否优先走 LLM 文案 |
 
 关键约束：
@@ -109,14 +109,16 @@
 |------|--------|------|
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `LOG_FORMAT` | `json` | `json` 或 `plain` |
+| `EXPOSE_API_DOCS` | `false` | 是否暴露 `/docs`、`/redoc`、`/openapi.json`。与 `LOG_LEVEL` 独立，生产环境开 DEBUG 日志不会意外暴露 API schema |
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | `18927` | 监听端口 |
 | `CORS_ORIGINS` | 本地开发 origin 列表 | 允许的前端源 |
 
 说明：
 
-- backend 默认输出 JSON 结构化日志。
+- backend 默认输出 JSON 结构化日志。JSON 序列化器会识别带 `__opaque__` 标记的 secret 类型，输出 `"***"` 而非真实值。
 - `uvicorn / uvicorn.error / uvicorn.access` 会复用同一套 root formatter。
+- `/docs`、`/redoc`、`/openapi.json` 默认不暴露，需显式设置 `EXPOSE_API_DOCS=true` 才可访问。
 
 ## Memory 调参
 

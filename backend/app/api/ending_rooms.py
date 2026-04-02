@@ -193,7 +193,8 @@ async def _broadcast_followup_turns(room_id: str, turns: list[dict]) -> None:
 @router.post("/scenario/{scenario_id}/ending-room")
 async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomRequest):
     try:
-        snapshot, created = create_ending_room(
+        snapshot, created = await asyncio.to_thread(
+            create_ending_room,
             scenario_id,
             room_type=req.room_type,
             anchor_branch_id=req.anchor_branch_id,
@@ -209,6 +210,9 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
+    except Exception:
+        logger.exception("Unexpected error creating ending room for scenario %s", scenario_id)
+        raise api_error(500, "ENDING_ROOM_INTERNAL_ERROR", "Failed to create ending room")
 
     should_schedule = (
         snapshot["status"] in {"draft", "live"}
@@ -237,7 +241,7 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
 @router.get("/ending-room/{room_id}")
 async def get_ending_room_snapshot_endpoint(room_id: str):
     try:
-        snapshot = load_ending_room_snapshot(room_id)
+        snapshot = await asyncio.to_thread(load_ending_room_snapshot, room_id)
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
     if snapshot is None:
@@ -248,7 +252,7 @@ async def get_ending_room_snapshot_endpoint(room_id: str):
 @router.get("/ending-room/{room_id}/result")
 async def get_ending_room_result_endpoint(room_id: str):
     try:
-        payload = load_ending_room_result_payload(room_id)
+        payload = await asyncio.to_thread(load_ending_room_result_payload, room_id)
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
     if payload is None:
@@ -259,7 +263,8 @@ async def get_ending_room_result_endpoint(room_id: str):
 @router.post("/ending-room/{room_id}/thread")
 async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoomThreadRequest):
     try:
-        payload = create_ending_room_thread(
+        payload = await asyncio.to_thread(
+            create_ending_room_thread,
             room_id,
             title=req.title,
             addressed_agent_ids=req.addressed_agent_ids,
@@ -268,6 +273,9 @@ async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoom
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
+    except Exception:
+        logger.exception("Unexpected error creating thread for room %s", room_id)
+        raise api_error(500, "ENDING_ROOM_INTERNAL_ERROR", "Failed to create thread")
     await ending_room_ws_manager.broadcast(
         room_id,
         {"type": "ending_room_thread_created", "data": payload},
@@ -278,7 +286,7 @@ async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoom
 @router.get("/ending-room/thread/{thread_id}")
 async def get_ending_room_thread_endpoint(thread_id: str):
     try:
-        return load_ending_room_thread_snapshot(thread_id)
+        return await asyncio.to_thread(load_ending_room_thread_snapshot, thread_id)
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
 

@@ -1494,7 +1494,8 @@ class TestSaveRoundSummary:
         # No round created — should silently skip
         _save_round_summary(engine, bid, 99, "summary")
 
-    def test_load_latest_summary_supports_legacy_python_repr(self):
+    def test_load_latest_summary_rejects_legacy_python_repr(self):
+        """After removing ast.literal_eval fallback, non-JSON summaries return None."""
         engine = get_engine()
         sid = _make_scenario(engine)
         bid = _create_branch(engine, sid)
@@ -1503,7 +1504,7 @@ class TestSaveRoundSummary:
 
         result = _load_latest_compressed_briefing(engine, bid, before_round=4)
 
-        assert result == {"situation": "旧摘要"}
+        assert result is None
 
 
 class TestCompressRoundMemory:
@@ -1518,18 +1519,20 @@ class TestCompressRoundMemory:
         for round_number in range(1, 11):
             last_round_id = _create_round(engine, bid, round_number)
 
+        import json as _json
         _save_round_summary(
             engine,
             bid,
             5,
-            str(
+            _json.dumps(
                 {
                     "situation": "旧局势",
                     "active_debates": ["旧焦点"],
                     "key_quotes": ["[Agent-A]: 旧原话"],
                     "tension_points": ["旧紧张点"],
                     "consensus": "旧共识",
-                }
+                },
+                ensure_ascii=False,
             ),
         )
         assert last_round_id is not None

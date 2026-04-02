@@ -75,6 +75,16 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
+### Backend 安全审计回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_audit_fixes.py -v
+```
+
+覆盖：输入长度验证、BYOK key 脱敏、OpenAPI 暴露开关、SQLite WAL、WS 消息大小限制、fork prompt 模板一致性、语言检测收口。共 65 个测试。
+
 ### Frontend 定向回归
 
 ```bash

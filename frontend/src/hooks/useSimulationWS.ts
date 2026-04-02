@@ -28,6 +28,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   const lastSequenceRef = useRef(0);
   const lastStreamIdentityRef = useRef<string | null>(null);
   const seenEventIdsRef = useRef<Map<string, true>>(new Map());
+  const connectRef = useRef<() => void>(() => {});
 
   const rememberEventId = useCallback((eventId: string) => {
     seenEventIdsRef.current.delete(eventId);
@@ -78,18 +79,15 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
       if (wsRef.current !== ws) return;
       console.log(`[WS] Connected to scenario ${currentScenarioId}`);
       const reconnectAttempts = reconnectCount.current;
-      const shouldResync = reconnectAttempts > 0;
       const messageVersionAtOpen = stateMessageVersionRef.current;
 
-      if (shouldResync) {
-        console.log('[WS] Reconnected — polling backend for missed state...');
-        logWsDebug('SimulationWS', 'resync_on_reconnect', {
-          streamId: currentScenarioId,
-          reconnectCount: reconnectAttempts,
-          messageVersionAtOpen,
-        });
-        requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
-      }
+      console.log('[WS] Connected — polling backend for current state...');
+      logWsDebug('SimulationWS', 'resync_on_connect', {
+        streamId: currentScenarioId,
+        reconnectCount: reconnectAttempts,
+        messageVersionAtOpen,
+      });
+      requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
       reconnectCount.current = 0;
     };
 
@@ -201,7 +199,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         if (reconnectTimerRef.current) {
           window.clearTimeout(reconnectTimerRef.current);
         }
-        reconnectTimerRef.current = window.setTimeout(connect, delay);
+        reconnectTimerRef.current = window.setTimeout(() => connectRef.current(), delay);
       }
     };
 
@@ -214,7 +212,10 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
     };
   }, [scenarioId, ready, rememberEventId, requestScenarioResync]);
 
+  useEffect(() => { connectRef.current = connect; }, [connect]);
+
   useEffect(() => {
+    if (!scenarioId || !ready) return;
     lastSequenceRef.current = 0;
     lastStreamIdentityRef.current = null;
     seenEventIdsRef.current = new Map();
@@ -237,7 +238,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         wsRef.current = null;
       }
     };
-  }, [connect, scenarioId]);
+  }, [connect, scenarioId, ready]);
 
   return wsRef;
 }

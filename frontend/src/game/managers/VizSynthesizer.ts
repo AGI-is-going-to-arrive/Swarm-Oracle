@@ -10,15 +10,22 @@
 import type { AgentInfo, AgentMessage } from '../../types';
 import { inferSceneThemeFromQuestion } from '../../lib/themeRegistry';
 import { dispatchVizEvent } from './EventBridge';
+import { emotionToHaloColor } from '../constants/emotionColors';
 
 export const MAX_BUBBLE_EVENT_TEXT_CHARS = 180;
 
-export function clipBubbleEventText(text: string): string {
-  if (text.length <= MAX_BUBBLE_EVENT_TEXT_CHARS) {
-    return text;
+export function clipBubbleEventText(text: string, max = MAX_BUBBLE_EVENT_TEXT_CHARS): string {
+  // Prefer Intl.Segmenter for true grapheme safety
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    const segments = [...segmenter.segment(text)];
+    if (segments.length <= max) return text;
+    return segments.slice(0, max - 1).map(s => s.segment).join('') + '…';
   }
-
-  return `${text.slice(0, MAX_BUBBLE_EVENT_TEXT_CHARS - 1)}…`;
+  // Fallback: codepoint-safe (handles surrogate pairs but not composed emoji)
+  const chars = [...text];
+  if (chars.length <= max) return text;
+  return chars.slice(0, max - 1).join('') + '…';
 }
 
 // ── Role → Sprite ID Mapping ────────────────────────────
@@ -497,19 +504,3 @@ export function synthesizeLatestBubbles(
 }
 
 // ── Helpers ─────────────────────────────────────────────
-
-function emotionToHaloColor(emotion: string): string {
-  const colors: Record<string, string> = {
-    aggressive: '#ff0000',
-    angry: '#ff3300',
-    anxious: '#ff9900',
-    fearful: '#ff6600',
-    cautious: '#ffcc00',
-    calm: '#66ccff',
-    hopeful: '#00cc66',
-    cooperative: '#33cc33',
-    confident: '#6699ff',
-    neutral: '#999999',
-  };
-  return colors[emotion] || '#999999';
-}

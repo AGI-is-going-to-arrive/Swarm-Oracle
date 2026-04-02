@@ -39,6 +39,9 @@ _STANDARD_LOG_RECORD_FIELDS = {
 
 
 def _normalize_json_value(value: Any) -> Any:
+    # Check for opaque/secret wrappers before plain str to prevent key leakage
+    if hasattr(value, "__opaque__"):
+        return "***"
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, (datetime, date, time)):

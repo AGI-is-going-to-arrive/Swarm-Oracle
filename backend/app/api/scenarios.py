@@ -15,7 +15,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
@@ -93,6 +93,16 @@ class ImportReplayScenarioRequest(BaseModel):
 class CreateReplayArtifactRequest(BaseModel):
     kind: str
     payload: dict[str, Any]
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("kind cannot be empty")
+        if len(normalized) > 64:
+            raise ValueError("kind too long (max 64 chars)")
+        return normalized
 
 
 def _placeholder_root_title(question: str) -> str:

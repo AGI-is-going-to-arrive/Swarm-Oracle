@@ -61,6 +61,9 @@ app = FastAPI(
     description="群体预言机 — AI 'What-If' Prediction Playground",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if settings.EXPOSE_API_DOCS else None,
+    redoc_url="/redoc" if settings.EXPOSE_API_DOCS else None,
+    openapi_url="/openapi.json" if settings.EXPOSE_API_DOCS else None,
 )
 
 

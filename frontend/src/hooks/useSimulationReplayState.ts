@@ -37,6 +37,7 @@ export function useSimulationReplayState(params: {
   const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
   const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
 
   useEffect(() => {
@@ -158,9 +159,13 @@ export function useSimulationReplayState(params: {
   const handleImportReplay = useCallback(async () => {
     if (!replayPayload || importingReplay) return;
     setImportingReplay(true);
+    setImportError(null);
     try {
       const imported = await importReplayScenario(replayPayload.scenario);
       navigate(`/sim/${imported.id}`);
+    } catch (err) {
+      console.error("Failed to import replay:", err);
+      setImportError(err instanceof Error ? err.message : String(err));
     } finally {
       setImportingReplay(false);
     }
@@ -171,6 +176,7 @@ export function useSimulationReplayState(params: {
     handleImportReplay,
     handleReplayBranchChange,
     handleReplayRoundChange,
+    importError,
     importingReplay,
     isReplayMode,
     panelCollapsed,

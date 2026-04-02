@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Optional
 
-from sqlalchemy import Index
+from sqlalchemy import Index, event
 from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import JSON, Column, Field, Relationship, Session, SQLModel, create_engine
 
@@ -206,7 +206,23 @@ def get_engine():
         from app.config import settings
         with _engine_lock:
             if _engine is None:
-                _engine = create_engine(settings.DATABASE_URL, echo=False)
+                extra_kwargs: dict = {}
+                if settings.DATABASE_URL.startswith("sqlite"):
+                    extra_kwargs["connect_args"] = {"timeout": 5}
+                _engine = create_engine(settings.DATABASE_URL, echo=False, **extra_kwargs)
+                if settings.DATABASE_URL.startswith("sqlite"):
+                    try:
+                        @event.listens_for(_engine, "connect")
+                        def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+                            db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+                            if db_path == ":memory:" or "mode=memory" in db_path:
+                                return
+                            cursor = dbapi_conn.cursor()
+                            cursor.execute("PRAGMA journal_mode=WAL")
+                            cursor.execute("PRAGMA busy_timeout=5000")
+                            cursor.close()
+                    except Exception:
+                        pass  # Tolerate non-SQLAlchemy engine stubs in tests
     return _engine
 
 

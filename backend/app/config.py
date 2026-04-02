@@ -18,12 +18,12 @@ def _is_local_llm_url(url: str) -> bool:
 
 class Settings(BaseSettings):
     # ── LLM ──────────────────────────────────────────────
-    LLM_RESPONSES_URL: str = "https://api.edgefn.net/v1"
-    LLM_API_KEY: str = "sk-1XtuRWNIfkcKpcUoA08aE55eBfBb4fEa8332Be93C0A57fA3"
-    LLM_MODEL_NAME: str = "MiniMax-M2.5"
+    LLM_RESPONSES_URL: str = "http://127.0.0.1:8317/v1"
+    LLM_API_KEY: str = "sk-12345678"
+    LLM_MODEL_NAME: str = "gpt-5.4-mini"
     LLM_REASONING_EFFORT: str = "none"  # none | low | medium | high
-    LLM_REQUESTS_PER_MINUTE: int = 10
-    LLM_TOKENS_PER_MINUTE: int = 100000
+    LLM_REQUESTS_PER_MINUTE: int = 0
+    LLM_TOKENS_PER_MINUTE: int = 0
 
     # ── Simulation ───────────────────────────────────────
     MAX_AGENTS: int = 1500  # P3-A: raised from 100 for 1000+ scale
@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     ORACLE_CHAMBERS_USE_LLM: bool = True
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # json | plain
+    EXPOSE_API_DOCS: bool = False  # Separate toggle for /docs, /redoc, /openapi.json
 
     # ── Database ─────────────────────────────────────────
     DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'swarmoracle.db').resolve()}"

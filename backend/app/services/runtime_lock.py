@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import sqlite3
 import threading
@@ -117,6 +118,9 @@ def _close_threadlocal_sqlite_connections() -> None:
         with suppress(sqlite3.Error):
             conn.close()
     cache.clear()
+
+
+atexit.register(_close_threadlocal_sqlite_connections)
 
 
 def _sweep_expired_inprocess_locks(now: float) -> None:

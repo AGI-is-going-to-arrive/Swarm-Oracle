@@ -59,7 +59,10 @@ class PredictRequest(BaseModel):
     @field_validator("user_id", "user_name")
     @classmethod
     def normalize_optional_text(cls, v: str) -> str:
-        return v.strip()
+        normalized = v.strip()
+        if len(normalized) > 128:
+            raise ValueError("user_id and user_name must be at most 128 characters")
+        return normalized
 
 
 class PredictionResponse(BaseModel):

@@ -41,7 +41,7 @@
       "byok_base_url_label": "Base URL",
       "byok_base_url_help": "填写 OpenAI 兼容接口地址，支持直接填到 /v1。",
       "byok_model_label": "模型名称",
-      "byok_model_help": "填写实际调用的模型 id，例如 MiniMax-M2.5。",
+      "byok_model_help": "填写实际调用的模型 id，例如 gpt-5.4-mini。",
       "byok_rpm_label": "RPM 上限",
       "byok_rpm_help": "每分钟最多请求数，影响能同时推进多少轮发言。",
       "byok_tpm_label": "TPM 上限",
