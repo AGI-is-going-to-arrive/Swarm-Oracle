@@ -29,8 +29,9 @@ from app.services.memory import (
 
 logger = logging.getLogger(__name__)
 
-# Use 8317 endpoint directly (conftest uses the same default for unit tests)
-LLM_API_URL = "http://127.0.0.1:8317/v1/chat/completions"
+# Derive from settings via the same resolver used by llm_client at runtime.
+from app.services.llm_client import _resolve_llm_api_url
+LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 5  # match settings.LLM_CONCURRENCY
 
 # ── Scenario ─────────────────────────────────────────────

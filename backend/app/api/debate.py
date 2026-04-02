@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, WebSocket
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -117,7 +117,7 @@ class DebatePredictionRequest(BaseModel):
     target_value: str
     confidence: float = 0.5
     user_id: str = "anonymous"
-    user_name: str = "Anonymous Director"
+    user_name: str = Field(default="Anonymous Director", max_length=100)
     is_counterplay: bool = False
     counterplay_phase: DebatePhase | None = None
     counterplay_variant: str | None = None

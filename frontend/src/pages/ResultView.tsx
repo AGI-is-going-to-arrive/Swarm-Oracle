@@ -152,7 +152,10 @@ export default function ResultView() {
     selectedAgentIds: string[];
     maxSelectable: number;
   } | null>(null);
-  const [endingRoomAutomation, setEndingRoomAutomation] = useState<Record<string, unknown> | null>(null);
+  const endingRoomAutomationRef = useRef<Record<string, unknown> | null>(null);
+  const setEndingRoomAutomation = useCallback((value: Record<string, unknown> | null) => {
+    endingRoomAutomationRef.current = value;
+  }, []);
   const [challengeLinkCopied, setChallengeLinkCopied] = useState(false);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [endingRoomPermalinkCopied, setEndingRoomPermalinkCopied] = useState(false);
@@ -1374,7 +1377,7 @@ export default function ResultView() {
           can_open_leaderboard: true,
           can_score_predictions: hasUnscored && !scoring && !isReplayMode,
           active_modal: showShare ? 'share' : activeEndingRoomBranch ? 'ending_room' : null,
-          modal_state: showShare ? shareAutomation : activeEndingRoomBranch ? endingRoomAutomation : null,
+          modal_state: showShare ? shareAutomation : activeEndingRoomBranch ? endingRoomAutomationRef.current : null,
           expanded_branch_id: expandedBranch,
         },
         branches: (storyData?.branches ?? []).slice(0, 8).map((branch) => ({
@@ -1395,7 +1398,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, endingRoomAutomation, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
+  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
     return (

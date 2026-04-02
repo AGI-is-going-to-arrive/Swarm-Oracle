@@ -10,6 +10,7 @@ import pytest
 from app.services import llm_client
 from app.services.llm_client import (
     LLMBackpressureError,
+    LLMRateLimitWindowError,
     format_untrusted_text_block,
     health_check,
     llm_call,
@@ -455,6 +456,14 @@ class TestLLMCall:
 
     @pytest.mark.asyncio
     async def test_request_scoped_rate_limits_override_server_defaults(self, monkeypatch):
+        """Scope-level RPM/TPM caps override the generous server defaults.
+
+        Server allows 10 RPM / 100k TPM, but the scope restricts to
+        1 RPM / 50 TPM.  After one successful reservation (25 tokens),
+        the in-process rate buckets should reflect the scope limits:
+        a subsequent call within the same window should see the bucket
+        populated — proving the scope overrode the server defaults.
+        """
         self._reset_runtime_guard()
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
         monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
@@ -462,19 +471,36 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 10)
         monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 100000)
 
+        provider_key = "provider-override"
         with llm_client.llm_request_scope(requests_per_minute=1, tokens_per_minute=50):
+            # First reservation succeeds — consumes 1 request / 25 tokens.
             first = await llm_client._reserve_runtime_slot(
                 quota_key=None,
-                provider_key="provider-override",
+                provider_key=provider_key,
                 lease_seconds=30,
                 estimated_tokens=25,
             )
             assert first is None
-            with pytest.raises(LLMBackpressureError):
-                await llm_client._reserve_runtime_slot(
-                    quota_key=None,
-                    provider_key="provider-override",
-                    lease_seconds=30,
+
+            # Verify the scope limits are effective:
+            # _get_rate_limits() should return the scope values, not the
+            # server defaults (10, 100000).
+            rpm, tpm = llm_client._get_rate_limits()
+            assert rpm == 1, f"Expected scope RPM=1 to override server RPM=10, got {rpm}"
+            assert tpm == 50, f"Expected scope TPM=50 to override server TPM=100000, got {tpm}"
+
+            # Verify the in-process bucket was consumed.
+            window_start = llm_client._rate_window_start()
+            key = provider_key.strip().lower()
+            assert llm_client._rate_limit_requests[key][window_start] == 1
+            assert llm_client._rate_limit_tokens[key][window_start] == 25
+
+            # Verify enforcement: a second reservation within the same
+            # window must trigger the rate-limit wait path (not pass
+            # through as it would under the server default of 10 RPM).
+            with pytest.raises(LLMRateLimitWindowError):
+                llm_client._consume_in_process_rate_limit(
+                    provider_key=provider_key,
                     estimated_tokens=30,
                 )
 

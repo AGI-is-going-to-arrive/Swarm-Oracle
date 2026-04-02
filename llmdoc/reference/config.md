@@ -40,6 +40,7 @@
 说明：
 
 - 这些覆盖项只作用于当前请求，不会改写服务端默认值。
+- `llm_requests_per_minute / llm_tokens_per_minute` 会覆盖服务端默认 RPM/TPM。触发限流后请求会排队等待下一个窗口（最多等 2 个 rate window），不会立即拒绝。
 - `disable_user_quota` 只对本地或 self-hosted provider 生效。
 
 ## Scenario 运行时调参

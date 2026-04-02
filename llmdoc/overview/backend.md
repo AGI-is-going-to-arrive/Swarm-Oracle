@@ -88,6 +88,15 @@
 - `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
   - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
   - `cited_refs_json` 有 4 KB 大小限制。
+- Ending Room API 请求体当前已统一添加输入上限（防超大 payload DOS）：
+  - `selected_branch_ids / selected_agent_ids / selected_representatives` 各 ≤ 50 条
+  - `addressed_agent_ids / question_anchor_ids` 各 ≤ 20 条
+  - `content`（用户追问）≤ 5000 字符
+  - `title`（线程标题）≤ 500 字符
+- Debate API 的 `user_name` 当前限制为 ≤ 100 字符。
+- Campaign gameplay-state API 的列表字段当前也有上限：
+  - `usage_log` ≤ 200 条、`bets` ≤ 100 条、`key_moments` ≤ 100 条、`branch_snapshots` ≤ 50 条
+  - 这些限制远超正常业务用量（一局最多 ~20 Agent / 8 分支），只拦截异常请求。
 
 ## 运行时约束
 
@@ -98,6 +107,7 @@
   - pending/quota 控制
   - circuit breaker
   - 共享 `httpx.AsyncClient`
+  - request-scoped RPM/TPM 限制（BYOK 场景下由前端传入）。scope 限制只覆盖服务端默认值，触发后请求会排队等待下一个窗口，不会立即拒绝。
 - Oracle follow-up 的 stream support probe 当前复用 `llm_call_stream()`；`estimated_tokens` 预估已补回，不再因为 probe 自身变量缺失而误触发 fallback。
 - Oracle follow-up 流式链路当前会给“首个可见 delta”一个短预算；如果 provider 长时间不出可见 token，会尽快回退到非流式改写，而不是把 anchored follow-up 长时间挂住。
 - Oracle follow-up 当前会在 WebSocket delta 广播和最终 turn 落库前先剥掉 provider reasoning block；`<think>` 不会再泄漏进 transcript。

@@ -119,6 +119,7 @@ export default function EndingChatModal({
   // onAutomationStateChange being recreated by the parent on every render.
   const automationCallbackRef = useRef(onAutomationStateChange);
   automationCallbackRef.current = onAutomationStateChange;
+  const lastAutomationJsonRef = useRef<string | null>(null);
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -649,11 +650,14 @@ export default function EndingChatModal({
 
   useEffect(() => {
     if (!open || !branch) {
-      automationCallbackRef.current?.(null);
+      if (lastAutomationJsonRef.current !== null) {
+        lastAutomationJsonRef.current = null;
+        automationCallbackRef.current?.(null);
+      }
       return;
     }
 
-    automationCallbackRef.current?.({
+    const nextState = {
       kind: 'ending_room_modal',
       branch_id: branch.id,
       room_id: effectiveSnapshot?.id ?? null,
@@ -685,7 +689,13 @@ export default function EndingChatModal({
       can_share_replay: Boolean(effectiveSnapshot?.id && effectiveResult),
       can_import_replay: Boolean(readOnly && replayState?.snapshot),
       sending,
-    });
+    };
+    const nextJson = JSON.stringify(nextState);
+    if (nextJson === lastAutomationJsonRef.current) {
+      return;
+    }
+    lastAutomationJsonRef.current = nextJson;
+    automationCallbackRef.current?.(nextState);
 
     return () => {
       automationCallbackRef.current?.(null);

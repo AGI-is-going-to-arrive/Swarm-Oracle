@@ -48,9 +48,9 @@ class SelectedRepresentativeRequest(BaseModel):
 class CreateEndingRoomRequest(BaseModel):
     room_type: EndingRoomType
     anchor_branch_id: str | None = None
-    selected_branch_ids: list[str]
-    selected_agent_ids: list[str] = Field(default_factory=list)
-    selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list)
+    selected_branch_ids: list[str] = Field(max_length=50)
+    selected_agent_ids: list[str] = Field(default_factory=list, max_length=50)
+    selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list, max_length=50)
     selected_witness: SelectedRepresentativeRequest | None = None
     selection_recipe: str | None = None
     language: str | None = None
@@ -114,9 +114,9 @@ class CreateEndingRoomRequest(BaseModel):
 
 
 class CreateEndingRoomThreadRequest(BaseModel):
-    title: str | None = None
-    addressed_agent_ids: list[str] = Field(default_factory=list)
-    question_anchor_ids: list[str] = Field(default_factory=list)
+    title: str | None = Field(default=None, max_length=500)
+    addressed_agent_ids: list[str] = Field(default_factory=list, max_length=20)
+    question_anchor_ids: list[str] = Field(default_factory=list, max_length=20)
     interaction_mode: EndingRoomInteractionMode = EndingRoomInteractionMode.THREAD_FOLLOWUP
 
     @field_validator("title")
@@ -134,9 +134,9 @@ class CreateEndingRoomThreadRequest(BaseModel):
 
 
 class EndingRoomUserTurnRequest(BaseModel):
-    content: str
-    addressed_agent_ids: list[str] = Field(default_factory=list)
-    question_anchor_ids: list[str] = Field(default_factory=list)
+    content: str = Field(max_length=5000)
+    addressed_agent_ids: list[str] = Field(default_factory=list, max_length=20)
+    question_anchor_ids: list[str] = Field(default_factory=list, max_length=20)
     interaction_mode: EndingRoomInteractionMode | None = None
     cited_branch_id: str | None = None
     cited_refs_json: dict | None = None

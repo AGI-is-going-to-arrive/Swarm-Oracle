@@ -386,7 +386,7 @@ class ScenarioGameplayCardUsageResponse(BaseModel):
 
 
 class ScenarioGameplayCardsStateResponse(BaseModel):
-    usage_log: list[ScenarioGameplayCardUsageResponse] = Field(default_factory=list)
+    usage_log: list[ScenarioGameplayCardUsageResponse] = Field(default_factory=list, max_length=200)
 
 
 class ScenarioGameplayBetResponse(BaseModel):
@@ -440,7 +440,7 @@ class ScenarioGameplayBetResponse(BaseModel):
 
 
 class ScenarioGameplayBettingStateResponse(BaseModel):
-    bets: list[ScenarioGameplayBetResponse] = Field(default_factory=list)
+    bets: list[ScenarioGameplayBetResponse] = Field(default_factory=list, max_length=100)
 
 
 class ScenarioGameplayArchiveBranchSnapshotResponse(BaseModel):
@@ -465,8 +465,8 @@ class ScenarioGameplayArchiveBranchSnapshotResponse(BaseModel):
 
 
 class ScenarioGameplayArchiveStateResponse(BaseModel):
-    key_moments: list[str] = Field(default_factory=list)
-    branch_snapshots: list[ScenarioGameplayArchiveBranchSnapshotResponse] = Field(default_factory=list)
+    key_moments: list[str] = Field(default_factory=list, max_length=100)
+    branch_snapshots: list[ScenarioGameplayArchiveBranchSnapshotResponse] = Field(default_factory=list, max_length=50)
 
     @field_validator("key_moments")
     @classmethod

@@ -152,6 +152,8 @@
 
 - `ending_room` 是独立域，room/thread memory partition 隔离。
 - `crossline_gallery` 是只读摘要视图，不会开启可写 follow-up。
+- 请求体列表字段有大小上限（`selected_branch_ids / selected_agent_ids` ≤ 50，`addressed_agent_ids / question_anchor_ids` ≤ 20），超出会返回 Pydantic 422。
+- 用户追问 `content` 上限 5000 字符，线程 `title` 上限 500 字符。
 - `POST /api/ending-room/{room_id}/thread`
   当前也接受 `question_anchor_ids`，用于显式记录 thread 是由哪个 `quote / verdict / key_moment / phase` 发起。
 - `POST /api/ending-room/{room_id}/user-turn` 与 `POST /api/ending-room/thread/{thread_id}/user-turn`

@@ -234,6 +234,7 @@
   - transcript 列表间距从 12px 增加到 16px
   - transcript bubble 内的操作按钮（"沿这句追问 / 另开线程"）当前有上边框分隔线，颜色加深为 `oklch(45% 0.2 350)` + 700 加粗，确保在浅色气泡背景上可读
   - `onAutomationStateChange` 回调改用 `useRef` 稳定引用，修复了 "Maximum update depth exceeded" 循环渲染问题
+  - automation effect 当前会对输出 payload 做 JSON 去重，相同状态不重复上报（只在 modal 关闭或 unmount 时清空快照）
 - `WorldlineRoundtableView` 圆桌 transcript 当前已补：
   - 按 phase 分组的视觉分隔线（`<h3>` 语义标签 + 渐变横线 + phase label）
   - 每条发言左侧色标（5-hue oklch 调色板，与 EndingChatModal 一致）
@@ -253,6 +254,7 @@
   - EndingChatModal：bubble 入场动画、anchor 高亮、线程切换过渡、idle 粒子
   - WorldlineRoundtable：idle 环境粒子
   - 所有新增动画均有 `prefers-reduced-motion: reduce` 覆盖
+- `ResultView` 的 `endingRoomAutomation` 当前使用 `useRef` 而不是 `useState`。原因：EndingChatModal 的 automation effect 每次 deps 变化都会生成新对象并调用 `onAutomationStateChange`。如果用 `useState`，每次调用都会触发 ResultView 重渲染，形成 "store→effect→setState→re-render" 循环（190+ "Maximum update depth exceeded" error）。改为 `useRef` 后回调写入 ref 不触发渲染，`render_game_to_text()` 在调用时通过 `ref.current` 读取最新值。
 - `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
   - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）现在均有各自专属 card frame PNG（通过 Gemini Image API 生成），不再复用其他 profile 的素材。
   - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`）。

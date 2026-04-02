@@ -32,7 +32,8 @@ from app.services.memory import (
     format_messages_for_context,
 )
 
-LLM_API_URL = "http://127.0.0.1:8317/v1/chat/completions"
+from app.services.llm_client import _resolve_llm_api_url
+LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 8
 
 SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。"

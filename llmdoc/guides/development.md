@@ -152,6 +152,22 @@ npm run perf:budgets:check
 npm run assets:provenance:check
 ```
 
+### LLM 集成测试
+
+`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。运行方式：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_blackboard_e2e.py tests/test_token_matrix.py tests/test_e2e_matrix.py -v
+```
+
+如需使用不同 LLM 服务：
+
+```bash
+LLM_API_KEY=sk-xxx LLM_MODEL_NAME=gpt-xxx LLM_RESPONSES_URL=https://your-api/v1 python -m pytest tests/test_token_matrix.py tests/test_e2e_matrix.py -v
+```
+
 ### Backend 健康检查
 
 ```bash
