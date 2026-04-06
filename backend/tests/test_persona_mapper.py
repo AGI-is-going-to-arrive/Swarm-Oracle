@@ -7,18 +7,16 @@ normal, boundary, and corner-case inputs.
 import pytest
 
 from app.visualization.persona_mapper import (
-    DEFAULT_SPRITE,
-    FACTION_SPREAD,
-    SPRITE_MAP,
-    WORLD_HEIGHT,
-    WORLD_WIDTH,
     CENTER_X,
     CENTER_Y,
+    DEFAULT_SPRITE,
+    FACTION_SPREAD,
+    WORLD_HEIGHT,
+    WORLD_WIDTH,
     assign_position,
     assign_sprite,
     assign_sprites_batch,
 )
-
 
 # ── assign_sprite ────────────────────────────────────────
 
@@ -197,8 +195,8 @@ class TestAssignPosition:
             for total in [1, 5, 10, 50]:
                 for idx in range(total):
                     x, y = assign_position(stance, total, idx)
-                    assert 40 <= x <= WORLD_WIDTH - 40, f"x={x} out of bounds for stance={stance}, total={total}, idx={idx}"
-                    assert 40 <= y <= WORLD_HEIGHT - 80, f"y={y} out of bounds for stance={stance}, total={total}, idx={idx}"
+                    assert 40 <= x <= WORLD_WIDTH - 40, f"x={x} out of bounds for stance={stance}, total={total}, idx={idx}"  # noqa: E501
+                    assert 40 <= y <= WORLD_HEIGHT - 80, f"y={y} out of bounds for stance={stance}, total={total}, idx={idx}"  # noqa: E501
 
     def test_multiple_agents_no_exact_overlap(self):
         """With multiple agents, positions should generally not overlap exactly."""

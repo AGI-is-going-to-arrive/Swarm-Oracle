@@ -18,8 +18,8 @@ from app.models import (
     BranchStatus,
     EndingRoom,
     EndingRoomInteractionMode,
-    EndingRoomPhase,
     EndingRoomParticipant,
+    EndingRoomPhase,
     EndingRoomThread,
     EndingRoomTurn,
     EndingRoomTurnSource,
@@ -31,10 +31,10 @@ from app.models import (
 from app.models.database import get_engine, init_db
 from app.services.ending_room_service import (
     EndingRoomServiceError,
-    _build_room_plan,
     _build_oracle_rewrite_prompt,
-    _normalize_oracle_generated_content,
+    _build_room_plan,
     _build_roundtable_opening_content,
+    _normalize_oracle_generated_content,
     _oracle_vocabulary_hints,
     _room_memory_partition,
     _strip_oracle_reasoning_prefix,
@@ -122,9 +122,9 @@ def _seed_multi_agent_branch_world(
         session.flush()
 
         agents = [
-            Agent(scenario_id=scenario.id, name="狄奥多西一世", role="罗马皇帝", persona="以诏令压住裂口"),
-            Agent(scenario_id=scenario.id, name="斯提里科", role="西部统帅", persona="优先接管军权"),
-            Agent(scenario_id=scenario.id, name="阿卡狄乌斯", role="东部皇帝", persona="先稳住文书与府库"),
+            Agent(scenario_id=scenario.id, name="狄奥多西一世", role="罗马皇帝", persona="以诏令压住裂口"),  # noqa: E501
+            Agent(scenario_id=scenario.id, name="斯提里科", role="西部统帅", persona="优先接管军权"),  # noqa: E501
+            Agent(scenario_id=scenario.id, name="阿卡狄乌斯", role="东部皇帝", persona="先稳住文书与府库"),  # noqa: E501
         ]
         for agent in agents:
             session.add(agent)
@@ -169,13 +169,19 @@ def _seed_multi_agent_branch_world(
 
 def _seed_roundtable_reselection_world() -> tuple[str, str, str, str]:
     with Session(get_engine()) as session:
-        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)
+        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)  # noqa: E501
         session.add(scenario)
         session.flush()
 
-        shared_agent = Agent(scenario_id=scenario.id, name="共用史官", role="宫廷史官", persona="我只记录被真正执行的命令")
-        branch_a_agent = Agent(scenario_id=scenario.id, name="秩序督军", role="军政总管", persona="先把兵权和粮道扣住")
-        branch_b_agent = Agent(scenario_id=scenario.id, name="裂变议长", role="地方议长", persona="先让地方议会掌握财政解释权")
+        shared_agent = Agent(
+            scenario_id=scenario.id, name="共用史官", role="宫廷史官", persona="我只记录被真正执行的命令"  # noqa: E501
+        )
+        branch_a_agent = Agent(
+            scenario_id=scenario.id, name="秩序督军", role="军政总管", persona="先把兵权和粮道扣住"
+        )
+        branch_b_agent = Agent(
+            scenario_id=scenario.id, name="裂变议长", role="地方议长", persona="先让地方议会掌握财政解释权"  # noqa: E501
+        )
         for agent in (shared_agent, branch_a_agent, branch_b_agent):
             session.add(agent)
         session.flush()
@@ -323,7 +329,7 @@ def test_create_ending_room_respects_manual_selected_agent_ids():
         for participant in snapshot["participants"]
         if participant["role_slot"] == "agent"
     ]
-    assert [participant["source_agent_id"] for participant in agent_participants] == [agent_ids[2], agent_ids[0]]
+    assert [participant["source_agent_id"] for participant in agent_participants] == [agent_ids[2], agent_ids[0]]  # noqa: E501
     assert agent_participants[0]["persona_snapshot_json"]["selection_reason"] == "user_selected"
     assert agent_participants[0]["persona_snapshot_json"]["impact_score"] > 0
 
@@ -355,7 +361,7 @@ def test_run_ending_room_background_uses_selected_agents_in_auto_recap():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
 
     recap_participants = {
@@ -374,7 +380,7 @@ def test_run_ending_room_background_uses_selected_agents_in_auto_recap():
     }
 
     assert recap_participants >= selected_participant_ids
-    assert any(participant_lookup[turn["participant_id"]]["role_slot"] == "archivist" for turn in payload["turns"])
+    assert any(participant_lookup[turn["participant_id"]]["role_slot"] == "archivist" for turn in payload["turns"])  # noqa: E501
 
 
 def test_create_ending_room_deduplicates_under_concurrency():
@@ -477,7 +483,9 @@ def test_worldline_roundtable_supports_branch_scoped_selected_representatives():
         room = session.get(EndingRoom, snapshot["id"])
         assert room is not None
         scope_branch_ids = list((room.config_json or {}).get("selected_branch_ids") or [])
-        selected_representatives = list((room.config_json or {}).get("selected_representatives") or [])
+        selected_representatives = list(
+            (room.config_json or {}).get("selected_representatives") or []
+        )
 
     assert selected_representatives == [
         {"branch_id": branch_id, "agent_id": shared_agent_id}
@@ -610,7 +618,7 @@ def test_worldline_roundtable_supports_selected_witness():
     )
 
     assert created is True
-    witnesses = [participant for participant in snapshot["participants"] if participant["role_slot"] == "critic"]
+    witnesses = [participant for participant in snapshot["participants"] if participant["role_slot"] == "critic"]  # noqa: E501
     assert len(witnesses) == 1
     assert witnesses[0]["source_branch_id"] == branch_a_id
     assert witnesses[0]["source_agent_id"] == witness_agent.id
@@ -797,7 +805,7 @@ def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments
 
 def test_strip_oracle_reasoning_prefix_hides_partial_and_closed_think_blocks():
     assert _strip_oracle_reasoning_prefix("<think>internal chain") == ""
-    assert _strip_oracle_reasoning_prefix("<think>internal chain</think>Visible answer") == "Visible answer"
+    assert _strip_oracle_reasoning_prefix("<think>internal chain</think>Visible answer") == "Visible answer"  # noqa: E501
 
 
 def test_normalize_oracle_generated_content_discards_reasoning_blocks():
@@ -984,8 +992,12 @@ def test_roundtable_scope_context_only_exposes_own_transcript_per_representative
 
     context = build_roundtable_scope_context(scenario_id, [branch_a_id, branch_b_id])
 
-    rep_a = next(item for item in context["representatives"] if item["branch"]["branch_id"] == branch_a_id)
-    rep_b = next(item for item in context["representatives"] if item["branch"]["branch_id"] == branch_b_id)
+    rep_a = next(
+        item for item in context["representatives"] if item["branch"]["branch_id"] == branch_a_id
+    )
+    rep_b = next(
+        item for item in context["representatives"] if item["branch"]["branch_id"] == branch_b_id
+    )
 
     assert "秩序线全文：只允许会客厅读到这里。" in str(rep_a["own_transcript"])
     assert "裂变线全文：不该泄露给另一条线。" not in str(rep_a["other_branch_summaries"])
@@ -1011,7 +1023,7 @@ def test_scope_context_keeps_transcript_when_agent_record_is_missing():
 
     assert "秩序线全文：只允许会客厅读到这里。" in branch_context["anchor_branch"]["transcript"]
     assert "未知角色" in branch_context["anchor_branch"]["transcript"]
-    assert any("未知角色" in item["own_transcript"] for item in roundtable_context["representatives"])
+    assert any("未知角色" in item["own_transcript"] for item in roundtable_context["representatives"])  # noqa: E501
 
 
 def test_crossline_gallery_is_ready_immediately_and_has_no_transcript():
@@ -1045,7 +1057,7 @@ def test_worldline_roundtable_background_keeps_summary_only_crossline_scope():
     ws_callback = AsyncMock(side_effect=_noop_broadcast)
     result_payload = asyncio.run(_run_room(snapshot["id"], ws_callback))
     turns_text = "\n".join(turn["content"] for turn in result_payload["turns"])
-    opening_turns = [turn["content"] for turn in result_payload["turns"] if turn["phase"] == "opening"]
+    opening_turns = [turn["content"] for turn in result_payload["turns"] if turn["phase"] == "opening"]  # noqa: E501
 
     assert result_payload["status"] == "done"
     assert "各自的结局里看" in result_payload["result"]["summary"]
@@ -1097,7 +1109,7 @@ def test_worldline_roundtable_rejects_all_present_followup():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     with pytest.raises(EndingRoomServiceError) as exc_info:
         append_room_user_turn(
@@ -1120,7 +1132,7 @@ def test_roundtable_followup_uses_branch_specific_hinges_instead_of_room_title()
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     followup = append_room_user_turn(
         snapshot["id"],
         content="哪条世界线最早失手？",
@@ -1177,7 +1189,7 @@ def test_run_ending_room_background_stamps_room_partition_and_default_thread():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     result_payload = load_ending_room_result_payload(snapshot["id"])
 
     room_thread = next(thread for thread in result_payload["threads"] if thread["mode"] == "room")
@@ -1193,7 +1205,7 @@ def test_run_ending_room_background_stamps_room_partition_and_default_thread():
     assert agent_participant["worldline_echo_key"]
     assert len(result_payload["turns"]) >= 1
     assert all(turn["thread_id"] == room_thread["id"] for turn in result_payload["turns"])
-    assert all(turn["memory_partition_id"] == result_payload["memory_partition_id"] for turn in result_payload["turns"])
+    assert all(turn["memory_partition_id"] == result_payload["memory_partition_id"] for turn in result_payload["turns"])  # noqa: E501
     assert all(turn["source"] == "auto_recap" for turn in result_payload["turns"])
     assert all(turn["interaction_mode"] == "auto_recap" for turn in result_payload["turns"])
 
@@ -1209,7 +1221,7 @@ def test_room_and_thread_followup_memory_stay_partitioned():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     room_snapshot = load_ending_room_snapshot(snapshot["id"])
     addressed_agent_id = next(
         participant["source_agent_id"]
@@ -1243,9 +1255,9 @@ def test_room_and_thread_followup_memory_stay_partitioned():
     thread_context = build_thread_followup_context(thread_snapshot["id"])
 
     assert room_followup["memory_partition_id"] == room_snapshot["memory_partition_id"]
-    assert all(turn["memory_partition_id"] == room_snapshot["memory_partition_id"] for turn in room_followup["turns"])
+    assert all(turn["memory_partition_id"] == room_snapshot["memory_partition_id"] for turn in room_followup["turns"])  # noqa: E501
     assert thread_followup["memory_partition_id"] == refreshed_thread["memory_partition_id"]
-    assert all(turn["memory_partition_id"] == refreshed_thread["memory_partition_id"] for turn in thread_followup["turns"])
+    assert all(turn["memory_partition_id"] == refreshed_thread["memory_partition_id"] for turn in thread_followup["turns"])  # noqa: E501
     assert refreshed_thread["question_anchor_ids_json"] == ["km-1"]
     assert any(turn["content"] == "房间级追问" for turn in room_memory)
     assert all(turn["content"] != "线程级追问" for turn in room_memory)
@@ -1270,7 +1282,7 @@ def test_all_present_followup_returns_multiple_current_worldline_responses():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     followup = append_room_user_turn(
         snapshot["id"],
         content="如果让当前阵容都回应一次，他们会怎么分工？",
@@ -1289,6 +1301,7 @@ def test_all_present_followup_returns_multiple_current_worldline_responses():
     assert all("Let me add one more angle" not in turn["content"] for turn in followup["turns"][1:])
     assert all("thread transcript" not in turn["content"] for turn in followup["turns"][1:])
     assert all("room 级摘要" not in turn["content"] for turn in followup["turns"][1:])
+    assert all("<think>" not in turn["content"] for turn in followup["turns"][1:])
 
 
 def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
@@ -1303,7 +1316,7 @@ def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     followup = append_room_user_turn(
         snapshot["id"],
         content="为什么这里会转向？",
@@ -1322,6 +1335,8 @@ def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
     assert "room 级摘要" not in followup["turns"][1]["content"]
     assert "thread transcript" not in followup["turns"][2]["content"]
     assert "room 级摘要" not in followup["turns"][2]["content"]
+    assert "<think>" not in followup["turns"][1]["content"]
+    assert "<think>" not in followup["turns"][2]["content"]
 
 
 def test_archivist_route_followup_returns_distinct_grounded_responses():
@@ -1336,7 +1351,7 @@ def test_archivist_route_followup_returns_distinct_grounded_responses():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     followup = append_room_user_turn(
         snapshot["id"],
         content="如果这里多等一轮，结局会改变吗？",
@@ -1370,10 +1385,10 @@ def test_followup_prefers_llm_copy_when_enabled(monkeypatch):
         return {"content": "斯提里科：我只补一句，问题出在命令链失速。"}
 
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
-    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", AsyncMock(return_value={"supported": False}))
+    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", AsyncMock(return_value={"supported": False}))  # noqa: E501
     monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     followup = append_room_user_turn(
         snapshot["id"],
         content="为什么这里会转向？",
@@ -1398,7 +1413,7 @@ def test_followup_falls_back_when_stream_probe_reports_unsupported(monkeypatch):
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     async def _fake_probe(**kwargs):
         return {"supported": False, "reason": "stream unsupported"}
@@ -1437,7 +1452,7 @@ def test_followup_uses_streaming_path_when_probe_supports_it(monkeypatch):
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     async def _fake_probe(**kwargs):
         return {"supported": True, "reason": None}
@@ -1451,7 +1466,7 @@ def test_followup_uses_streaming_path_when_probe_supports_it(monkeypatch):
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
     monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", _fake_probe)
     monkeypatch.setattr(ending_room_service_module, "_stream_oracle_copy", _fake_stream)
-    monkeypatch.setattr(ending_room_service_module, "_maybe_rewrite_oracle_copy", _fallback_should_not_run)
+    monkeypatch.setattr(ending_room_service_module, "_maybe_rewrite_oracle_copy", _fallback_should_not_run)  # noqa: E501
 
     followup = append_room_user_turn(
         snapshot["id"],
@@ -1475,7 +1490,7 @@ def test_followup_falls_back_when_stream_never_emits_visible_delta(monkeypatch):
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     async def _fake_probe(**kwargs):
         return {"supported": True, "reason": None}
@@ -1504,7 +1519,7 @@ def test_followup_falls_back_when_stream_never_emits_visible_delta(monkeypatch):
         interaction_mode=EndingRoomInteractionMode.HOTSEAT,
     )
 
-    assert any("首个流式 delta 超时后已切回非流式 fallback" in turn["content"] for turn in followup["turns"][1:])
+    assert any("首个流式 delta 超时后已切回非流式 fallback" in turn["content"] for turn in followup["turns"][1:])  # noqa: E501
 
 
 def test_followup_fallback_uses_profile_specific_language_when_llm_is_off(monkeypatch):
@@ -1523,7 +1538,7 @@ def test_followup_fallback_uses_profile_specific_language_when_llm_is_off(monkey
     assert created is True
 
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", False)
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     followup = append_room_user_turn(
         snapshot["id"],
@@ -1547,7 +1562,7 @@ def test_one_move_only_result_uses_action_reason_cost_contract():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
 
     assert len(payload["turns"]) == 2
@@ -1594,7 +1609,7 @@ def test_run_ending_room_background_prefers_llm_verdict_copy_when_enabled(monkey
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
     monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
 
     assert "没人及时踩刹车" in payload["result"]["summary"]
@@ -1618,7 +1633,7 @@ def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatc
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
     monkeypatch.setattr(ending_room_service_module, "llm_call_json", _boom)
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
 
     assert "别再把这一步说成命运" not in payload["result"]["summary"]
@@ -1670,7 +1685,7 @@ def test_run_ending_room_background_recovers_from_partial_auto_recap_progress():
         )
         session.commit()
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     result_payload = load_ending_room_result_payload(snapshot["id"])
 
     sequences = [turn["sequence"] for turn in result_payload["turns"]]
@@ -1690,7 +1705,7 @@ def test_room_phase_and_current_phase_stay_in_sync():
     )
     assert created is True
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     with Session(get_engine()) as session:
         room = session.get(EndingRoom, snapshot["id"])
@@ -1769,28 +1784,28 @@ def test_init_db_normalizes_legacy_ending_room_enum_rows():
     )
 
     assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     engine = get_engine()
     with engine.begin() as conn:
         conn.exec_driver_sql(
-            "UPDATE ending_room SET room_type = 'ending_chamber', status = 'done', phase = 'verdict', current_phase = 'verdict' WHERE id = :room_id",
+            "UPDATE ending_room SET room_type = 'ending_chamber', status = 'done', phase = 'verdict', current_phase = 'verdict' WHERE id = :room_id",  # noqa: E501
             {"room_id": snapshot["id"]},
         )
         conn.exec_driver_sql(
-            "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id",
+            "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id",  # noqa: E501
             {"room_id": snapshot["id"]},
         )
         conn.exec_driver_sql(
-            "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id",
+            "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id",  # noqa: E501
             {"room_id": snapshot["id"]},
         )
         conn.exec_driver_sql(
-            "UPDATE ending_room_participant SET role_slot = 'archivist' WHERE room_id = :room_id AND source_agent_id IS NULL",
+            "UPDATE ending_room_participant SET role_slot = 'archivist' WHERE room_id = :room_id AND source_agent_id IS NULL",  # noqa: E501
             {"room_id": snapshot["id"]},
         )
         conn.exec_driver_sql(
-            "UPDATE ending_room_participant SET role_slot = 'agent' WHERE room_id = :room_id AND source_agent_id IS NOT NULL",
+            "UPDATE ending_room_participant SET role_slot = 'agent' WHERE room_id = :room_id AND source_agent_id IS NOT NULL",  # noqa: E501
             {"room_id": snapshot["id"]},
         )
 
@@ -1806,7 +1821,7 @@ def test_init_db_normalizes_legacy_ending_room_enum_rows():
     assert refreshed["turns"]
     assert {turn["source"] for turn in refreshed["turns"]} == {"auto_recap"}
     assert {turn["interaction_mode"] for turn in refreshed["turns"]} == {"auto_recap"}
-    assert {participant["role_slot"] for participant in refreshed["participants"]} >= {"agent", "archivist"}
+    assert {participant["role_slot"] for participant in refreshed["participants"]} >= {"agent", "archivist"}  # noqa: E501
 
 
 def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch):
@@ -1825,7 +1840,7 @@ def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch)
         lambda *_args, **_kwargs: None,
     )
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     unchanged_snapshot = load_ending_room_snapshot(snapshot["id"])
     assert unchanged_snapshot["status"] == "draft"
@@ -1862,17 +1877,17 @@ def test_init_db_normalizes_legacy_lowercase_ending_room_enums():
         language="zh",
     )
     assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     with Session(get_engine()) as session:
         session.exec(
             text(
-                "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id"
+                "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id"  # noqa: E501
             ).bindparams(room_id=snapshot["id"]),
         )
         session.exec(
             text(
-                "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id"
+                "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id"  # noqa: E501
             ).bindparams(room_id=snapshot["id"]),
         )
         session.commit()
@@ -1894,7 +1909,7 @@ def test_append_room_user_turn_uses_room_memory_partition():
         language="zh",
     )
     assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
     agent_ids = [
         participant["source_agent_id"]
@@ -1910,7 +1925,7 @@ def test_append_room_user_turn_uses_room_memory_partition():
 
     assert payload["memory_partition_id"] == snapshot["memory_partition_id"]
     assert len(payload["turns"]) == 3
-    assert all(turn["memory_partition_id"] == snapshot["memory_partition_id"] for turn in payload["turns"])
+    assert all(turn["memory_partition_id"] == snapshot["memory_partition_id"] for turn in payload["turns"])  # noqa: E501
     assert all(turn["thread_id"] == snapshot["threads"][0]["id"] for turn in payload["turns"])
     assert payload["turns"][0]["source"] == "user_turn"
     assert payload["turns"][1]["interaction_mode"] == "hotseat"
@@ -1930,16 +1945,18 @@ def test_thread_followup_context_isolated_from_other_threads():
         language="zh",
     )
     assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
 
-    first_thread = create_ending_room_thread(snapshot["id"], title="线程 A", question_anchor_ids=["verdict"])
+    first_thread = create_ending_room_thread(
+        snapshot["id"], title="线程 A", question_anchor_ids=["verdict"]
+    )
     second_thread = create_ending_room_thread(snapshot["id"], title="线程 B")
 
     first_payload = append_thread_user_turn(first_thread["id"], content="线程 A 里的追问")
     second_payload = append_thread_user_turn(second_thread["id"], content="线程 B 里的追问")
 
     assert first_payload["memory_partition_id"] != second_payload["memory_partition_id"]
-    assert load_ending_room_thread_snapshot(first_thread["id"])["question_anchor_ids_json"] == ["verdict"]
+    assert load_ending_room_thread_snapshot(first_thread["id"])["question_anchor_ids_json"] == ["verdict"]  # noqa: E501
 
     room_context = build_room_followup_context(snapshot["id"])
     thread_context = build_thread_followup_context(first_thread["id"])
@@ -1963,8 +1980,8 @@ def test_append_room_user_turn_rejects_invalid_addressed_agent_ids():
     )
 
     assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))
-    with pytest.raises(Exception, match="addressed_agent_ids must belong to current room participants"):
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+    with pytest.raises(Exception, match="addressed_agent_ids must belong to current room participants"):  # noqa: E501
         append_room_user_turn(
             snapshot["id"],
             content="只回答我点名的人。",
@@ -1997,29 +2014,39 @@ def test_followup_requires_completed_room_result():
 
 
 def test_vocabulary_hints_returns_variant_specific_zh_terms():
-    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "finance", "zh")
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "finance", "zh"
+    )
     assert "头寸" in hint
     assert "敞口" in hint
 
 
 def test_vocabulary_hints_returns_variant_specific_en_terms():
-    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "field", "en")
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "field", "en"
+    )
     assert "flank" in hint
     assert "attrition" in hint
 
 
 def test_vocabulary_hints_archivist_ignores_variant():
-    hint_zh = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "finance", "zh")
+    hint_zh = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "finance", "zh"
+    )
     assert "裁定" in hint_zh
     assert "头寸" not in hint_zh
 
-    hint_en = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "imperial", "en")
+    hint_en = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST, "imperial", "en"
+    )
     assert "ruling" in hint_en
     assert "decree" not in hint_en
 
 
 def test_vocabulary_hints_plain_variant_no_snapshot_returns_empty():
-    hint = _oracle_vocabulary_hints(ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "plain", "en")
+    hint = _oracle_vocabulary_hints(
+        ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE, "plain", "en"
+    )
     assert hint == ""
 
 
@@ -2029,7 +2056,7 @@ def test_vocabulary_hints_plain_variant_with_identity_uses_snapshot():
         ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
         "plain",
         "en",
-        persona_snapshot={"agent_role": "Tavern Owner", "bio_short": "Runs the only inn in town", "impact_score": 5},
+        persona_snapshot={"agent_role": "Tavern Owner", "bio_short": "Runs the only inn in town", "impact_score": 5},  # noqa: E501
     )
     assert "Tavern Owner" in hint
     assert "Runs the only inn" in hint
@@ -2047,10 +2074,10 @@ def test_vocabulary_hints_all_variants_have_both_languages():
 def test_vocabulary_hints_distinct_across_variants():
     from app.services.ending_room_service import _VOCABULARY_HINTS
     en_hints = [v["en"] for v in _VOCABULARY_HINTS.values()]
-    assert len(en_hints) == len(set(en_hints)), "English vocabulary hints should be unique per variant"
+    assert len(en_hints) == len(set(en_hints)), "English vocabulary hints should be unique per variant"  # noqa: E501
 
     zh_hints = [v["zh"] for v in _VOCABULARY_HINTS.values()]
-    assert len(zh_hints) == len(set(zh_hints)), "Chinese vocabulary hints should be unique per variant"
+    assert len(zh_hints) == len(set(zh_hints)), "Chinese vocabulary hints should be unique per variant"  # noqa: E501
 
 
 def test_vocabulary_hints_identity_layer_includes_high_impact():
@@ -2058,7 +2085,7 @@ def test_vocabulary_hints_identity_layer_includes_high_impact():
         ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
         "imperial",
         "en",
-        persona_snapshot={"agent_role": "Emperor Diocletian", "impact_score": 9, "tier": "core", "turn_count": 12, "key_moment_hits": 4},
+        persona_snapshot={"agent_role": "Emperor Diocletian", "impact_score": 9, "tier": "core", "turn_count": 12, "key_moment_hits": 4},  # noqa: E501
     )
     assert "Emperor Diocletian" in hint
     assert "authority" in hint.lower()
@@ -2072,7 +2099,7 @@ def test_vocabulary_hints_identity_layer_low_impact_zh():
         ending_room_service_module.EndingRoomRoleSlot.AGENT,
         "market",
         "zh",
-        persona_snapshot={"agent_role": "码头搬运工", "bio_short": "靠日结工资生活", "impact_score": 2, "tier": "minor"},
+        persona_snapshot={"agent_role": "码头搬运工", "bio_short": "靠日结工资生活", "impact_score": 2, "tier": "minor"},  # noqa: E501
     )
     assert "码头搬运工" in hint
     assert "谨慎" in hint
@@ -2107,7 +2134,7 @@ def test_rewrite_prompt_includes_vocabulary_for_finance_representative():
         display_name="Banker A",
         source_branch_id="branch-a",
         source_agent_id="agent-a",
-        persona_snapshot_json={"branch_title": "Liquidity Freeze", "agent_role": "Treasury Officer", "impact_score": 7},
+        persona_snapshot_json={"branch_title": "Liquidity Freeze", "agent_role": "Treasury Officer", "impact_score": 7},  # noqa: E501
     )
 
     prompt = _build_oracle_rewrite_prompt(

@@ -77,6 +77,8 @@ export function HudOverlay({ children, canPredict = false, onOpenPrediction }: H
   // Track previous scores for rank change animation
   const prevScoresRef = useRef<Map<string, number>>(new Map());
   const [animateNames, setAnimateNames] = useState<Set<string>>(new Set());
+  // Track odds changes for value tick animation
+  const [oddsKey, setOddsKey] = useState(0);
 
   // Listen to viz events from the EventBridge (DOM CustomEvents)
   const handleVizEvent = useCallback((e: Event) => {
@@ -112,6 +114,8 @@ export function HudOverlay({ children, canPredict = false, onOpenPrediction }: H
         leftPct: (data.left_pct as number) ?? 50,
         rightPct: (data.right_pct as number) ?? 50,
       });
+      // Trigger tick animation by bumping key
+      setOddsKey((k) => k + 1);
     }
   }, []);
 
@@ -159,7 +163,7 @@ export function HudOverlay({ children, canPredict = false, onOpenPrediction }: H
         <div className="hud-bet__content">
           <span className="hud-bet__faction hud-bet__faction--left">
             <FactionIcon color="#F44336" side="left" />{' '}
-            <b>{bet.leftOdds.toFixed(1)}x</b>
+            <b key={`l-${oddsKey}`}>{bet.leftOdds.toFixed(1)}x</b>
           </span>
           <div className="hud-bet__bars">
             <div
@@ -172,7 +176,7 @@ export function HudOverlay({ children, canPredict = false, onOpenPrediction }: H
             />
           </div>
           <span className="hud-bet__faction hud-bet__faction--right">
-            <b>{bet.rightOdds.toFixed(1)}x</b>{' '}
+            <b key={`r-${oddsKey}`}>{bet.rightOdds.toFixed(1)}x</b>{' '}
             <FactionIcon color="#2196F3" side="right" />
           </span>
         </div>

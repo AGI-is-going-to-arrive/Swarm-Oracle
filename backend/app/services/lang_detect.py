@@ -118,7 +118,7 @@ def get_language_directive(language: str) -> str:
     directives = {
         "Chinese": "所有文本使用中文",
         "English": "All output text MUST be in English",
-        "Japanese": "すべてのテキストは日本語で出力してください (All output text must be in Japanese)",
+        "Japanese": "すべてのテキストは日本語で出力してください (All output text must be in Japanese)",  # noqa: E501
         "Korean": "모든 텍스트는 한국어로 출력해 주세요 (All output text must be in Korean)",
         "French": "Tout le texte de sortie doit être en français",
         "German": "Alle Ausgaben müssen auf Deutsch sein",

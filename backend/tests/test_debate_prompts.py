@@ -33,7 +33,7 @@ def test_build_turn_generation_prompt_en_includes_pacing_constraints():
         question="Should every emergency budget be reviewed by a permanent external audit chamber?",
         profile_id="governance",
         anchor_copy="anchor copy",
-        recent_turns=[{"phase": "crossfire", "speaker_name": "Proposition", "content": "You still have no control chain."}],
+        recent_turns=[{"phase": "crossfire", "speaker_name": "Proposition", "content": "You still have no control chain."}],  # noqa: E501
         verdict_tone="balance",
         winner="proposition",
     )

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services.memory import _validate_compress_result, compress_rounds, _COMPRESS_DEFAULTS
+from app.services.memory import _COMPRESS_DEFAULTS, _validate_compress_result, compress_rounds
 
 # ── Sample Data ──────────────────────────────────────────────
 

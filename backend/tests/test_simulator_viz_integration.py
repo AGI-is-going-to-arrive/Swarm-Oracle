@@ -12,13 +12,12 @@ the VisualizationMapper when visualization is enabled, covering:
 
 import pytest
 
-from app.visualization.mapper import VisualizationMapper
+from app.services.simulator import _coerce_stance_value
+from app.visualization.card_events import check_card_trigger, get_card_viz_event
 from app.visualization.events import VizEventType
+from app.visualization.mapper import VisualizationMapper
 from app.visualization.persona_mapper import assign_position
 from app.visualization.scene_selector import select_scene
-from app.visualization.card_events import check_card_trigger, get_card_viz_event, CARD_TYPES
-from app.services.simulator import _coerce_stance_value
-
 
 # ── VisualizationMapper integration (simulate pipeline calls) ──
 

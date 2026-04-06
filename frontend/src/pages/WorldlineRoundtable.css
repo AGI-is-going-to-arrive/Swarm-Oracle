@@ -481,9 +481,15 @@
   gap: 8px;
 }
 
+@keyframes picker-slide-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .worldline-roundtable-picker-grid {
   display: grid;
   gap: 16px;
+  animation: picker-slide-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .worldline-roundtable-picker-branch {
@@ -766,7 +772,14 @@
 .worldline-roundtable-transcript-list .ending-chat-bubble.is-archivist { --speaker-color: var(--oracle-accent, oklch(70% 0.12 60)); }
 
 /* ── Phase dividers ────────────────────────────────────── */
+@keyframes phase-divider-reveal {
+  from { opacity: 0; transform: scaleX(0); transform-origin: left; }
+  to { opacity: 1; transform: scaleX(1); }
+}
+
 h3.roundtable-phase-divider {
+  animation: phase-divider-reveal 0.4s ease-out;
+  transform-origin: left;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1373,7 +1386,9 @@ h3.roundtable-phase-divider {
   .worldline-roundtable-seat.is-current-speaker,
   .worldline-roundtable-seat.is-hotseat-target,
   .worldline-roundtable-transcript-list .ending-chat-bubble.is-current-speaker,
-  .worldline-roundtable-theme-chip {
+  .worldline-roundtable-theme-chip,
+  h3.roundtable-phase-divider,
+  .worldline-roundtable-picker-grid {
     animation: none;
   }
 

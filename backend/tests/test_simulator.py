@@ -307,7 +307,7 @@ class TestRunSimulation:
             if event.get("type") == "status":
                 with Session(engine) as session:
                     current = session.get(Scenario, scenario_id)
-                    pushed_statuses.append((event["data"]["status"], current.status if current else None))
+                    pushed_statuses.append((event["data"]["status"], current.status if current else None))  # noqa: E501
 
         async def _fake_llm_call_json(*_args, **_kwargs):
             return {"content": "维持生命支持优先。", "emotion": "focused", "diverge": None}
@@ -677,7 +677,7 @@ class TestRunSimulation:
         assert all(entry["detector_branch_budget_eligible"] is True for entry in round_two_entries)
 
     @pytest.mark.asyncio
-    async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(
+    async def test_branch_only_resume_starts_after_fork_round_and_preserves_other_pending_interventions(  # noqa: E501
         self,
         monkeypatch,
     ):
@@ -856,7 +856,7 @@ class TestGatherHierarchicalMessages:
             round_id="round-1",
             round_num=3,
             leader_agents=[{"id": "leader-1", "name": "Leader Alpha", "role": "Coordinator"}],
-            worker_agents=[{"id": "worker-1", "name": "Worker Beta", "role": "Analyst", "stance": "반대"}],
+            worker_agents=[{"id": "worker-1", "name": "Worker Beta", "role": "Analyst", "stance": "반대"}],  # noqa: E501
             agent_to_group={"Worker Beta": "alpha"},
             group_leaders={"alpha": "Leader Alpha"},
             setting_bg="bg",
@@ -902,7 +902,7 @@ class TestGatherAgentMessages:
             raise AssertionError("blackboard path should not query recent DB messages")
 
         monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
-        monkeypatch.setattr("app.services.simulator._get_recent_messages", _raise_on_recent_messages)
+        monkeypatch.setattr("app.services.simulator._get_recent_messages", _raise_on_recent_messages)  # noqa: E501
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -1579,7 +1579,16 @@ class TestCompressRoundMemory:
 
         captured = {}
 
-        async def _fake_compress(messages_text, language="Chinese", *, previous_briefing=None, api_key=None, base_url=None, temperature=None, model=None):
+        async def _fake_compress(
+            messages_text,
+            language="Chinese",
+            *,
+            previous_briefing=None,
+            api_key=None,
+            base_url=None,
+            temperature=None,
+            model=None,
+        ):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
             captured["temperature"] = temperature
@@ -1666,7 +1675,18 @@ class TestNarrateBranchData:
 
         captured = {}
 
-        async def _fake_narrate_branch(*, branch_title, probability, agents_summary, raw_rounds, language, api_key=None, base_url=None, temperature=None, model=None):
+        async def _fake_narrate_branch(
+            *,
+            branch_title,
+            probability,
+            agents_summary,
+            raw_rounds,
+            language,
+            api_key=None,
+            base_url=None,
+            temperature=None,
+            model=None,
+        ):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
             captured["temperature"] = temperature

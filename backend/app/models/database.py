@@ -272,7 +272,7 @@ def init_db():
                 _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
                 _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
                 _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
-                _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")
+                _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")  # noqa: E501
                 _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
                 _migrate_add_column(
                     conn,
@@ -311,7 +311,7 @@ def init_db():
                     conn, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"
                 )
                 _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
-                _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
+                _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")  # noqa: E501
                 _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
                 _migrate_add_column(conn, "debate_prediction", "counterplay_variant", "TEXT")
                 _migrate_create_index(
@@ -418,16 +418,16 @@ def init_db():
                 _migrate_normalize_enum_values(conn, "ending_room", "room_type", EndingRoomType)
                 _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
                 _migrate_normalize_enum_values(conn, "ending_room", "phase", EndingRoomPhase)
-                _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)
-                _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)
-                _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)
+                _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)  # noqa: E501
+                _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)  # noqa: E501
+                _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)  # noqa: E501
                 _migrate_normalize_enum_values(
                     conn,
                     "ending_room_thread",
                     "interaction_mode",
                     EndingRoomInteractionMode,
                 )
-                _migrate_normalize_enum_values(conn, "ending_room_turn", "source", EndingRoomTurnSource)
+                _migrate_normalize_enum_values(conn, "ending_room_turn", "source", EndingRoomTurnSource)  # noqa: E501
                 _migrate_normalize_enum_values(
                     conn,
                     "ending_room_turn",
@@ -485,7 +485,7 @@ def _migrate_normalize_enum_values(cursor, table: str, column: str, enum_cls: ty
     for raw_value, canonical_name in value_to_name.items():
         if not _SAFE_IDENTIFIER.match(raw_value) or not _SAFE_IDENTIFIER.match(canonical_name):
             raise ValueError(
-                f"Unsafe enum literal rejected for {table}.{column}: {raw_value!r} -> {canonical_name!r}"
+                f"Unsafe enum literal rejected for {table}.{column}: {raw_value!r} -> {canonical_name!r}"  # noqa: E501
             )
         _sqlite_exec(
             cursor,

@@ -15,19 +15,19 @@ class CreateScenarioRequest(BaseModel):
     num_agents: int | None = None  # User-specified agent count, range 3-1500
     rounds: int | None = None      # User-specified round count (overrides parsed default)
     mode: str | None = "blackboard"  # "raw" | "blackboard"
-    hierarchical: bool | None = None  # P3-A: force hierarchical mode (auto-detected if num_agents > threshold)
-    reasoning_effort: str | None = None  # "low" | "medium" | "high" | None (= use server default or disabled)
+    hierarchical: bool | None = None  # P3-A: force hierarchical mode (auto-detected if num_agents > threshold)  # noqa: E501
+    reasoning_effort: str | None = None  # "low" | "medium" | "high" | None (= use server default or disabled)  # noqa: E501
     temperature: float | None = None  # Chat-completions sampling temperature override
     branch_sensitivity: float | None = None  # Override branch detector sensitivity (0-1)
     fork_prompt_variant: str | None = None  # Detector prompt variant: "a" | "b"
-    fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection; 0 disables the budget
+    fork_detector_active_branch_limit: int | None = None  # Optional cap on active branches eligible for future fork detection; 0 disables the budget  # noqa: E501
     # P4-E: BYOK — bring your own key
     llm_api_key: str | None = None    # OpenAI-compatible API key
     llm_base_url: str | None = None   # OpenAI-compatible base URL or endpoint (e.g. https://api.openai.com/v1)
     llm_model: str | None = None      # Model name override (e.g. gpt-4o, claude-3.5-sonnet)
-    llm_requests_per_minute: int | None = None  # Optional request-rate cap for this run; 0 disables the cap
-    llm_tokens_per_minute: int | None = None  # Optional token-rate cap for this run; 0 disables the cap
-    disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run
+    llm_requests_per_minute: int | None = None  # Optional request-rate cap for this run; 0 disables the cap  # noqa: E501
+    llm_tokens_per_minute: int | None = None  # Optional token-rate cap for this run; 0 disables the cap  # noqa: E501
+    disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run  # noqa: E501
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
 

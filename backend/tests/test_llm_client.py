@@ -364,7 +364,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 0)
         current_window = {"value": 0}
 
-        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])  # noqa: E501
         monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
 
         async def _advance_sleep(_seconds):
@@ -398,7 +398,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 50)
         current_window = {"value": 0}
 
-        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])  # noqa: E501
         monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
 
         async def _advance_sleep(_seconds):
@@ -431,7 +431,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 50)
         current_window = {"value": 0}
 
-        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])
+        monkeypatch.setattr(llm_client, "_rate_window_start", lambda now=None: current_window["value"])  # noqa: E501
         monkeypatch.setattr(llm_client, "_seconds_until_next_rate_window", lambda now=None: 0.01)
 
         async def _advance_sleep(_seconds):

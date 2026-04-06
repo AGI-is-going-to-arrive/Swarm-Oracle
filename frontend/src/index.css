@@ -357,6 +357,75 @@ body:has(.simulation-view--theater) .lang-switch--global {
   50% { opacity: 0.5; }
 }
 
+/* Staggered entry for lists/grids — apply via .stagger-enter on children */
+@keyframes staggerFadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Skeleton shimmer for loading states */
+@keyframes shimmerLoad {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Scale-in reveal for popovers / tooltips */
+@keyframes scaleReveal {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Number counter tick — subtle scale bounce for changing values */
+@keyframes numberTick {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/* Utility classes */
+.stagger-enter > * {
+  opacity: 0;
+  animation: staggerFadeUp 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.stagger-enter > *:nth-child(1) { animation-delay: 0.04s; }
+.stagger-enter > *:nth-child(2) { animation-delay: 0.08s; }
+.stagger-enter > *:nth-child(3) { animation-delay: 0.12s; }
+.stagger-enter > *:nth-child(4) { animation-delay: 0.16s; }
+.stagger-enter > *:nth-child(5) { animation-delay: 0.20s; }
+.stagger-enter > *:nth-child(6) { animation-delay: 0.24s; }
+.stagger-enter > *:nth-child(7) { animation-delay: 0.28s; }
+.stagger-enter > *:nth-child(8) { animation-delay: 0.32s; }
+.stagger-enter > *:nth-child(n+9) { animation-delay: 0.36s; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-surface) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmerLoad 1.5s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+.number-tick {
+  display: inline-block;
+  animation: numberTick 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.scale-reveal {
+  animation: scaleReveal 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .slide-up,
+  .stagger-enter > *,
+  .skeleton,
+  .number-tick,
+  .scale-reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
 /* Badge utility */
 .badge {
   display: inline-flex;

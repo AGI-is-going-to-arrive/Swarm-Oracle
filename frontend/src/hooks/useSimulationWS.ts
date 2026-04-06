@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 
+import { getScenario } from '../api/client';
 import { dispatchVizEvent } from '../game/managers/EventBridge';
 import { logWsDebug } from '../lib/wsDebug';
 import { useSimulationStore } from '../stores/simulationStore';
@@ -48,8 +49,8 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   ) => {
     const resyncVersion = resyncRequestVersionRef.current + 1;
     resyncRequestVersionRef.current = resyncVersion;
-    import('../api/client')
-      .then(({ getScenario }) => getScenario(currentScenarioId))
+    Promise.resolve()
+      .then(() => getScenario(currentScenarioId))
       .then((scenario) => {
         const socketStillCurrent = wsRef.current === socket && socket.readyState === WebSocket.OPEN;
         const requestStillCurrent = resyncRequestVersionRef.current === resyncVersion;

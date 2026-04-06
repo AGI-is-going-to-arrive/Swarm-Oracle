@@ -282,7 +282,7 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     if not text:
         raise api_error(400, "INTERVENTION_TEXT_EMPTY", "Intervention text cannot be empty")
     if len(text) > 2000:
-        raise api_error(400, "INTERVENTION_TEXT_TOO_LONG", "Intervention text too long (max 2000 characters)")
+        raise api_error(400, "INTERVENTION_TEXT_TOO_LONG", "Intervention text too long (max 2000 characters)")  # noqa: E501
 
     engine = get_engine()
 
@@ -302,7 +302,7 @@ async def intervene(scenario_id: str, req: InterveneRequest):
         # Validate the branch exists, belongs to this scenario, and is active
         branch = session.get(Branch, req.branch_id)
         if not branch or branch.scenario_id != scenario_id:
-            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")
+            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
         if branch.status != BranchStatus.ACTIVE:
             raise api_error(
                 400,
@@ -387,7 +387,7 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
 
         branch = session.get(Branch, req.branch_id)
         if not branch or branch.scenario_id != scenario_id:
-            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")
+            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
 
         branch_depth = _get_branch_depth(session, req.branch_id)
         if branch_depth >= MAX_RETROSPECTIVE_FORK_DEPTH:

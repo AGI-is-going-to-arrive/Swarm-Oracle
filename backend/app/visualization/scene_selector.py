@@ -40,7 +40,9 @@ SCENE_MAP: dict[str, str] = {
     "轮值外部评审团重新裁决": "switchboard_forum",
     "轮值外部评审团": "switchboard_forum",
     "lottery-picked emergency committee": "switchboard_forum",
-    "every high-stakes decision had to be re-approved by a rotating external review board": "switchboard_forum",
+    "every high-stakes decision had to be re-approved by a rotating external review board": (
+        "switchboard_forum"
+    ),
     "所有关键城市都必须每三十天由抽签产生的临时委员会接管": "switchboard_forum",
 
     # ── switchboard_forum_variant (more ceremonial / procedural generic governance) ──
@@ -199,7 +201,6 @@ SCENE_MAP: dict[str, str] = {
     # ── factory_foundry (industry / energy / throughput bottleneck) ──
     "resource bottleneck": "factory_foundry",
     "assembly line": "factory_foundry",
-    "power grid": "factory_foundry",
     "foundry": "factory_foundry",
     "smelter": "factory_foundry",
     "refinery": "factory_foundry",

@@ -4,7 +4,6 @@ import pytest
 
 from app.visualization.events import VizEventType, make_viz_event
 
-
 # ── VizEventType enum ───────────────────────────────────
 
 class TestVizEventType:

@@ -141,7 +141,9 @@ class VectorStore:
     def _collection_name(scenario_id: str) -> str:
         """Build the canonical Chroma collection name for a scenario."""
         name = f"scenario_{scenario_id.replace('-', '_')}"
-        return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
+        return (
+            name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
+        )
 
     def _get_collection(self, scenario_id: str):
         """Get or create a ChromaDB collection for a scenario."""
@@ -193,7 +195,7 @@ class VectorStore:
         reason: str,
         exc: Exception,
     ) -> None:
-        """Prefer scenario-local recovery, but invalidate the client when health cannot be verified."""
+        """Prefer scenario-local recovery, but invalidate the client when health cannot be verified."""  # noqa: E501
         self._collections.pop(scenario_id, None)
         client = self._client
         heartbeat = getattr(client, "heartbeat", None)
@@ -373,7 +375,8 @@ class VectorStore:
                 docs = results["documents"][0]  # first query
                 metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
                 for doc, meta in zip(docs, metas):
-                    if allowed_branch_set and str(meta.get("branch_id", "")).strip() not in allowed_branch_set:
+                    if (allowed_branch_set
+                            and str(meta.get("branch_id", "")).strip() not in allowed_branch_set):
                         continue
                     memories.append({
                         "content": doc,

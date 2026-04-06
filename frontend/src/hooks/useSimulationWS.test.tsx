@@ -9,7 +9,9 @@ const storeState = {
   handleWSEvent: vi.fn(),
 };
 
-const getScenarioMock = vi.fn();
+const { getScenarioMock } = vi.hoisted(() => ({
+  getScenarioMock: vi.fn(),
+}));
 
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: {

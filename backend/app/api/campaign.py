@@ -466,7 +466,7 @@ class ScenarioGameplayArchiveBranchSnapshotResponse(BaseModel):
 
 class ScenarioGameplayArchiveStateResponse(BaseModel):
     key_moments: list[str] = Field(default_factory=list, max_length=100)
-    branch_snapshots: list[ScenarioGameplayArchiveBranchSnapshotResponse] = Field(default_factory=list, max_length=50)
+    branch_snapshots: list[ScenarioGameplayArchiveBranchSnapshotResponse] = Field(default_factory=list, max_length=50)  # noqa: E501
 
     @field_validator("key_moments")
     @classmethod
@@ -484,9 +484,9 @@ class ScenarioGameplayArchiveStateResponse(BaseModel):
 
 class ScenarioGameplayStateRequest(BaseModel):
     revision: int = 0
-    cards: ScenarioGameplayCardsStateResponse = Field(default_factory=ScenarioGameplayCardsStateResponse)
-    betting: ScenarioGameplayBettingStateResponse = Field(default_factory=ScenarioGameplayBettingStateResponse)
-    archive: ScenarioGameplayArchiveStateResponse = Field(default_factory=ScenarioGameplayArchiveStateResponse)
+    cards: ScenarioGameplayCardsStateResponse = Field(default_factory=ScenarioGameplayCardsStateResponse)  # noqa: E501
+    betting: ScenarioGameplayBettingStateResponse = Field(default_factory=ScenarioGameplayBettingStateResponse)  # noqa: E501
+    archive: ScenarioGameplayArchiveStateResponse = Field(default_factory=ScenarioGameplayArchiveStateResponse)  # noqa: E501
 
     @field_validator("revision")
     @classmethod

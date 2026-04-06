@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ApiError } from '../api/client';
 import {
   buildCampaignFinalizeCacheEntryKey,
@@ -12,7 +12,6 @@ import {
   getEndingRoomCandidateAvatar,
   readCachedCampaignFinalizeResult,
   writeCachedCampaignFinalizeResult,
-  CAMPAIGN_FINALIZE_CACHE_KEY,
 } from './resultHelpers';
 
 describe('resultHelpers', () => {

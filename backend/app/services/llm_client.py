@@ -63,7 +63,9 @@ def _resolve_llm_api_url(url: str | None = None) -> str:
     if normalized_path.endswith("/chat/completions") or normalized_path.endswith("/responses"):
         return urlunparse(parsed._replace(path=normalized_path))
 
-    resolved_path = f"{normalized_path}/chat/completions" if normalized_path else "/chat/completions"
+    resolved_path = (
+        f"{normalized_path}/chat/completions" if normalized_path else "/chat/completions"
+    )
     return urlunparse(parsed._replace(path=resolved_path))
 
 
@@ -1120,7 +1122,9 @@ async def _reserve_runtime_slot(
                 if global_pending_limit is not None and _pending_requests >= global_pending_limit:
                     raise LLMBackpressureError("LLM queue is full; retry later")
 
-                if quota_key and user_limit is not None and _pending_by_quota[quota_key] >= user_limit:
+                if (quota_key
+                        and user_limit is not None
+                        and _pending_by_quota[quota_key] >= user_limit):
                     raise LLMBackpressureError("Too many in-flight LLM requests for this user")
 
                 if rpm_limit is not None or tpm_limit is not None:

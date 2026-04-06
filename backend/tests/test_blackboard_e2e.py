@@ -21,6 +21,7 @@ import pytest
 
 from app.config import settings
 from app.services.blackboard import Blackboard
+from app.services.llm_client import _resolve_llm_api_url
 from app.services.memory import (
     build_agent_context,
     format_briefing_for_context,
@@ -30,7 +31,6 @@ from app.services.memory import (
 logger = logging.getLogger(__name__)
 
 # Derive from settings via the same resolver used by llm_client at runtime.
-from app.services.llm_client import _resolve_llm_api_url
 LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 5  # match settings.LLM_CONCURRENCY
 
@@ -40,11 +40,11 @@ SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外
 TOPIC = "如果诸葛亮北伐成功占领长安，三国格局将如何改变？"
 
 AGENTS = [
-    {"name": "曹操", "role": "魏国丞相", "persona": "雄才大略，多疑善变", "emotion": "冷静", "tier": "CORE"},
-    {"name": "刘备", "role": "蜀汉之主", "persona": "仁德宽厚，善用贤才", "emotion": "忧虑", "tier": "CORE"},
-    {"name": "孙权", "role": "东吴大帝", "persona": "审时度势，擅长平衡", "emotion": "冷静", "tier": "IMPORTANT"},
-    {"name": "荀彧", "role": "魏国谋士", "persona": "王佐之才，忠汉心切", "emotion": "忧虑", "tier": "MOB"},
-    {"name": "姜维", "role": "蜀汉将领", "persona": "继承北伐遗志，英勇善战", "emotion": "坚定", "tier": "MOB"},
+    {"name": "曹操", "role": "魏国丞相", "persona": "雄才大略，多疑善变", "emotion": "冷静", "tier": "CORE"},  # noqa: E501
+    {"name": "刘备", "role": "蜀汉之主", "persona": "仁德宽厚，善用贤才", "emotion": "忧虑", "tier": "CORE"},  # noqa: E501
+    {"name": "孙权", "role": "东吴大帝", "persona": "审时度势，擅长平衡", "emotion": "冷静", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "荀彧", "role": "魏国谋士", "persona": "王佐之才，忠汉心切", "emotion": "忧虑", "tier": "MOB"},  # noqa: E501
+    {"name": "姜维", "role": "蜀汉将领", "persona": "继承北伐遗志，英勇善战", "emotion": "坚定", "tier": "MOB"},  # noqa: E501
 ]
 
 AGENT_PROMPT = """你是{name}，{role}。性格：{persona}。
@@ -296,7 +296,7 @@ class TestBlackboardE2E:
         rl, bl = raw.total_latency_ms, bb_res.total_latency_ms
         print(f"  {'Total latency (sum)':<30} {rl:>10,.0f} {bl:>10,.0f} {_delta(rl,bl):>+9.1f}%")
 
-        print(f"\n  Per-round prompt tokens:")
+        print("\n  Per-round prompt tokens:")
         for r in range(1, NUM_ROUNDS + 1):
             rr = raw.round_prompt(r)
             br = bb_res.round_prompt(r)
@@ -307,7 +307,7 @@ class TestBlackboardE2E:
         # Growth rate analysis
         print(f"\n  RAW growth: R1→R8 = {raw.round_prompt(1):,} → {raw.round_prompt(NUM_ROUNDS):,} "
               f"(×{raw.round_prompt(NUM_ROUNDS)/max(raw.round_prompt(1),1):.1f})")
-        print(f"  BB  growth: R1→R8 = {bb_res.round_prompt(1):,} → {bb_res.round_prompt(NUM_ROUNDS):,} "
+        print(f"  BB  growth: R1→R8 = {bb_res.round_prompt(1):,} → {bb_res.round_prompt(NUM_ROUNDS):,} "  # noqa: E501
               f"(×{bb_res.round_prompt(NUM_ROUNDS)/max(bb_res.round_prompt(1),1):.1f})")
 
         print()

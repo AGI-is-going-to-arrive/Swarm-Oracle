@@ -82,6 +82,42 @@ const GAMEPLAY_PROFILE_SUMMARIES: Record<GameplayProfileId, GameplayProfileSumma
     hooksZh: ['最后冗余', '撤退路线', '极限配给'],
     hooksEn: ['Last reserves', 'Retreat routes', 'Scarcity rationing'],
   },
+  finance: {
+    labelZh: '金融风暴',
+    labelEn: 'Financial Storm',
+    hooksZh: ['信用裂缝', '流动性陷阱', '监管博弈'],
+    hooksEn: ['Credit fault lines', 'Liquidity traps', 'Regulatory standoffs'],
+  },
+  scholar: {
+    labelZh: '学术论战',
+    labelEn: 'Academic Dispute',
+    hooksZh: ['范式冲突', '学派分裂', '话语权争夺'],
+    hooksEn: ['Paradigm clashes', 'Factional splits', 'Discourse control'],
+  },
+  medical: {
+    labelZh: '医疗前线',
+    labelEn: 'Medical Frontline',
+    hooksZh: ['资源分诊', '伦理红线', '疫情拐点'],
+    hooksEn: ['Resource triage', 'Ethical red lines', 'Pandemic turning points'],
+  },
+  technology: {
+    labelZh: '技术博弈',
+    labelEn: 'Technology Stakes',
+    hooksZh: ['技术路线之争', '算力瓶颈', '架构颠覆'],
+    hooksEn: ['Tech stack wars', 'Compute bottlenecks', 'Architecture disruption'],
+  },
+  entertainment: {
+    labelZh: '娱乐风向',
+    labelEn: 'Entertainment Currents',
+    hooksZh: ['舆论翻车', '流量操盘', '叙事垄断'],
+    hooksEn: ['Public opinion crashes', 'Traffic manipulation', 'Narrative monopoly'],
+  },
+  diplomacy: {
+    labelZh: '外交棋局',
+    labelEn: 'Diplomatic Chessboard',
+    hooksZh: ['条约博弈', '密约筹码', '谈判破裂'],
+    hooksEn: ['Treaty leverage', 'Secret pact chips', 'Negotiation breakdowns'],
+  },
   generic: {
     labelZh: '通用博弈',
     labelEn: 'General Tension',

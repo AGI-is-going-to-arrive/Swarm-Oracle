@@ -34,7 +34,7 @@ import {
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
-import { predictTextareaHeight, resolveInputFontSizePx, resolveInputLineHeightMultiplier } from '../lib/textLayout/inputPredict';
+import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
 import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {

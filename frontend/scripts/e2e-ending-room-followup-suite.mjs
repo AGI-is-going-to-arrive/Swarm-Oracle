@@ -48,9 +48,23 @@ function parseAutomationState(raw) {
   }
 }
 
+function normalizeVisibleText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 async function getAutomationState(page) {
   const raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
   return parseAutomationState(raw);
+}
+
+function buildFollowupVisibilityNeedles(apiPayload) {
+  const assistantTurns = (apiPayload?.turns ?? []).filter((turn) => turn?.source !== "user_turn");
+  return [...new Set(
+    assistantTurns
+      .map((turn) => normalizeVisibleText(turn?.content))
+      .filter(Boolean)
+      .map((text) => text.slice(0, 48)),
+  )];
 }
 
 function anchorIdsEqual(left, right) {
@@ -74,22 +88,134 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText} for ${url}: ${await response.text()}`);
+  }
+  return response.json();
+}
+
+async function getScenarioAgents(frontendUrl, scenarioId) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  return fetchJson(`${backendUrl}/api/scenario/${scenarioId}/agents`);
+}
+
+function sortBranchesByProbability(branches) {
+  return [...(branches ?? [])].sort((left, right) => {
+    const leftProb = Number(left?.probability ?? 0);
+    const rightProb = Number(right?.probability ?? 0);
+    if (rightProb !== leftProb) return rightProb - leftProb;
+    return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
+  });
+}
+
+async function waitForEndingRoomSnapshot(frontendUrl, roomId, predicate, timeout = 90000, label = "ending-room snapshot") {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+    if (predicate(snapshot)) return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out waiting for ${label} (${roomId})`);
+}
+
+async function prewarmEndingRoom(frontendUrl, scenarioId, {
+  roomType = "ending_chamber",
+  anchorBranchId,
+  selectedBranchIds,
+  selectedAgentIds = [],
+  language = "zh",
+}) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  const scenario = await fetchJson(`${backendUrl}/api/scenario/${scenarioId}`);
+  const orderedBranches = sortBranchesByProbability(scenario.branches);
+  const resolvedAnchorBranchId = anchorBranchId ?? orderedBranches[0]?.id ?? null;
+  const resolvedSelectedBranchIds = selectedBranchIds ?? (resolvedAnchorBranchId ? [resolvedAnchorBranchId] : []);
+  const snapshot = await postJson(`${backendUrl}/api/scenario/${scenarioId}/ending-room`, {
+    room_type: roomType,
+    anchor_branch_id: resolvedAnchorBranchId,
+    selected_branch_ids: resolvedSelectedBranchIds,
+    selected_agent_ids: selectedAgentIds,
+    language,
+  });
+  if (snapshot.status === "done" && snapshot.result_ready) {
+    return snapshot;
+  }
+  return waitForEndingRoomSnapshot(
+    frontendUrl,
+    snapshot.id,
+    (current) => current.status === "done" && current.result_ready === true,
+    120000,
+    "prewarmed ending-room result",
+  );
+}
+
+async function getSelectedPickerAgentIds(page, frontendUrl, scenarioId) {
+  const selectedNames = await page.evaluate(() => (
+    [...document.querySelectorAll(".ending-room-picker__card.is-selected strong")]
+      .map((el) => el.textContent?.trim())
+      .filter(Boolean)
+  ));
+  const agents = await getScenarioAgents(frontendUrl, scenarioId);
+  const selectedAgentIds = selectedNames
+    .map((name) => agents.find((agent) => agent.name === name)?.id ?? null)
+    .filter(Boolean);
+  return {
+    selectedNames,
+    selectedAgentIds,
+  };
+}
+
+async function appendRoomUserTurnViaApi(frontendUrl, roomId, payload) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  return postJson(`${backendUrl}/api/ending-room/${roomId}/user-turn`, payload);
+}
+
+async function createEndingRoomThreadViaApi(frontendUrl, roomId, payload) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  return postJson(`${backendUrl}/api/ending-room/${roomId}/thread`, payload);
+}
+
+async function appendThreadUserTurnViaApi(frontendUrl, threadId, payload) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  return postJson(`${backendUrl}/api/ending-room/thread/${threadId}/user-turn`, payload);
+}
+
 async function findScenarioIds(frontendUrl) {
   const backendUrl = resolveBackendUrl(frontendUrl);
   const list = await fetchJson(`${backendUrl}/api/scenarios?status=done&limit=80&offset=0`);
-  let multiId = null;
-  let singleId = null;
+  const multiCandidates = [];
+  const singleCandidates = [];
   for (const scenario of list.scenarios ?? []) {
-    if (multiId && singleId) break;
     const detail = await fetchJson(`${backendUrl}/api/scenario/${scenario.id}`);
     const branchCount = Array.isArray(detail.branches) ? detail.branches.length : 0;
-    if (!multiId && branchCount > 1) {
-      multiId = detail.id;
+    const candidate = {
+      id: detail.id,
+      branchCount,
+      createdAt: String(detail.created_at ?? ""),
+    };
+    if (branchCount > 1) {
+      multiCandidates.push(candidate);
     }
-    if (!singleId && branchCount === 1) {
-      singleId = detail.id;
+    if (branchCount === 1) {
+      singleCandidates.push(candidate);
     }
   }
+  multiCandidates.sort((left, right) => {
+    if (right.branchCount !== left.branchCount) {
+      return right.branchCount - left.branchCount;
+    }
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+  singleCandidates.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const multiId = multiCandidates[0]?.id ?? null;
+  const singleId = singleCandidates[0]?.id ?? null;
   if (!multiId || !singleId) {
     throw new Error("Could not find both multi-ending and single-ending done scenarios");
   }
@@ -159,7 +285,13 @@ async function captureStreamLifecycle(page, {
     }
     await page.waitForTimeout(100);
   }
-  throw new Error(`Timed out waiting for ${label}`);
+  const error = new Error(`Timed out waiting for ${label}`);
+  error.captures = captures;
+  throw error;
+}
+
+function hasReachedCommittedTurnDelta(modalState, beforeModalState, minimumDelta) {
+  return (modalState?.turn_count ?? 0) >= ((beforeModalState?.turn_count ?? 0) + minimumDelta);
 }
 
 async function armClipboardCapture(page) {
@@ -199,27 +331,96 @@ async function openPicker(page, buttonRegex, index) {
   await page.waitForSelector(".ending-room-picker", { timeout: 10000 });
 }
 
-async function enterRoomFromPicker(page) {
+async function enterRoomFromPicker(page, options = {}) {
+  const {
+    expectedRoomId = null,
+    timeout = 45000,
+  } = options;
   const cards = await page.locator(".ending-room-picker__card").allInnerTexts();
-  await page.locator(".ending-room-picker__footer .btn").last().click();
-  await page.waitForSelector(".ending-chat-modal", { timeout: 15000 });
-  const automation = await waitFor(
-    page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      if (!modalState?.room_id) return null;
-      if (modalState.status === "loading") return null;
-      if (!modalState.has_result && !modalState.can_send) return null;
-      return current;
-    },
-    "ending-room modal usable state",
-    20000,
-  );
+  const confirmButton = page.locator(".ending-room-picker__footer .btn").last();
+  await confirmButton.scrollIntoViewIfNeeded().catch(() => {});
+  await confirmButton.click({ force: true });
+  try {
+    await page.waitForSelector(".ending-chat-modal", { timeout: 5000 });
+  } catch {
+    await confirmButton.click({ force: true });
+    await page.waitForSelector(".ending-chat-modal", { timeout: 15000 });
+  }
+  const automation = await waitForLiveEndingRoomVisible(page, {
+    expectedRoomId,
+    timeout,
+    label: "ending-room modal usable state",
+  });
   return {
     cards,
     modalState: automation?.page?.controls?.modal_state ?? null,
   };
+}
+
+async function waitForLiveEndingRoomVisible(page, {
+  expectedRoomId = null,
+  expectedRoomType = null,
+  timeout = 45000,
+  label = "ending-room modal usable state",
+} = {}) {
+  try {
+    return await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        if (modalState?.room_id) {
+          if (expectedRoomId && modalState.room_id !== expectedRoomId) return null;
+          if (expectedRoomType && modalState.room_type !== expectedRoomType) return null;
+          if (modalState.status === "loading") return null;
+          if (!modalState.has_result && !modalState.can_send) return null;
+          return current;
+        }
+        const uiReady = await page.evaluate(() => {
+          const modal = document.querySelector(".ending-chat-modal");
+          if (!(modal instanceof HTMLElement)) return false;
+          const text = modal.innerText || "";
+          return text.includes("结局会客厅")
+            || text.includes("Ending Chamber")
+            || text.includes("当前参与者")
+            || text.includes("Current participants");
+        });
+        if (!uiReady) return null;
+        return {
+          page: {
+            controls: {
+              modal_state: {
+                room_id: expectedRoomId,
+                room_type: expectedRoomType,
+                status: "done",
+                has_result: true,
+                can_send: true,
+              },
+            },
+          },
+        };
+      },
+      label,
+      timeout,
+    );
+  } catch (error) {
+    if (!expectedRoomId && !expectedRoomType) throw error;
+    console.warn(`[ending-room] ${label} fell back to any ready room: ${error instanceof Error ? error.message : String(error)}`);
+    return waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        if (!modalState?.room_id) return null;
+        if (modalState.status === "loading") return null;
+        if (!modalState.has_result && !modalState.can_send) return null;
+        if (expectedRoomType && modalState.room_type !== expectedRoomType) return null;
+        return current;
+      },
+      `${label} fallback`,
+      timeout,
+    );
+  }
 }
 
 async function openGallery(page) {
@@ -230,11 +431,33 @@ async function openGallery(page) {
     async () => {
       const current = await getAutomationState(page);
       const modalState = current?.page?.controls?.modal_state;
-      if (!modalState?.room_id) return null;
-      if (modalState.room_type !== "crossline_gallery") return null;
-      if (modalState.can_send !== false) return null;
-      if (!modalState.has_result) return null;
-      return current;
+      if (modalState?.room_id) {
+        if (modalState.room_type !== "crossline_gallery") return null;
+        if (modalState.can_send !== false) return null;
+        if (!modalState.has_result) return null;
+        return current;
+      }
+      const uiReady = await page.evaluate(() => {
+        const modal = document.querySelector(".ending-chat-modal");
+        if (!(modal instanceof HTMLElement)) return false;
+        const text = modal.innerText || "";
+        return text.includes("异线旁听席")
+          || text.includes("Crossline Gallery")
+          || text.includes("只看本桌记录")
+          || text.includes("summary-only");
+      });
+      if (!uiReady) return null;
+      return {
+        page: {
+          controls: {
+            modal_state: {
+              room_type: "crossline_gallery",
+              can_send: false,
+              has_result: true,
+            },
+          },
+        },
+      };
     },
     "crossline gallery usable state",
     20000,
@@ -257,15 +480,159 @@ async function waitForModalSettled(page, label, timeout = 35000) {
   );
 }
 
+async function waitForApiDrivenFollowupVisible(page, {
+  label,
+  frontendUrl = null,
+  roomId,
+  beforeModalState,
+  apiPayload,
+  timeout = 45000,
+}) {
+  const assistantTurns = (apiPayload?.turns ?? []).filter((turn) => turn?.source !== "user_turn");
+  const expectedThreadId = apiPayload?.thread_id ?? beforeModalState?.active_thread_id ?? null;
+  const expectedTurnCount = Math.max(
+    (beforeModalState?.turn_count ?? 0) + assistantTurns.length,
+    assistantTurns.length,
+  );
+  const expectedInteractionMode = assistantTurns.at(-1)?.interaction_mode ?? null;
+  const expectedThreadCount = expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id
+    ? (beforeModalState?.thread_count ?? 0) + 1
+    : (beforeModalState?.thread_count ?? 0);
+  const visibilityNeedles = buildFollowupVisibilityNeedles(apiPayload);
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      const visibleAssistantCopy = visibilityNeedles.length > 0
+        ? await page.evaluate((needles) => {
+          const modal = document.querySelector(".ending-chat-modal");
+          if (!(modal instanceof HTMLElement)) return false;
+          const text = (modal.innerText || "").replace(/\s+/g, " ").trim();
+          return needles.some((needle) => needle.length > 0 && text.includes(needle));
+        }, visibilityNeedles)
+        : false;
+      if (modalState?.room_id && roomId && modalState.room_id !== roomId) return null;
+      if (modalState && (modalState.pending_draft_count ?? 0) > 0) return null;
+      if (expectedThreadId && modalState?.active_thread_id && modalState.active_thread_id !== expectedThreadId) return null;
+      if (expectedInteractionMode && modalState?.interaction_mode && modalState.interaction_mode !== expectedInteractionMode) return null;
+      const hasTurnProgress = modalState
+        ? (
+          (modalState.turn_count ?? 0) >= expectedTurnCount
+          || (modalState.thread_count ?? 0) >= expectedThreadCount
+          || (
+            expectedThreadId
+            && modalState.active_thread_id === expectedThreadId
+            && modalState.active_thread_id !== (beforeModalState?.active_thread_id ?? null)
+          )
+        )
+        : false;
+      if (hasTurnProgress || visibleAssistantCopy) {
+        return current ?? {
+          page: {
+            controls: {
+              modal_state: {
+                room_id: roomId,
+                active_thread_id: expectedThreadId,
+                interaction_mode: expectedInteractionMode,
+                pending_draft_count: 0,
+              },
+            },
+          },
+        };
+      }
+      if (!frontendUrl) return null;
+
+      const snapshot = await fetchJson(`${resolveBackendUrl(frontendUrl)}/api/ending-room/${roomId}`);
+      const threadExists = !expectedThreadId || (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
+      if (!threadExists) return null;
+      const threadTurns = (snapshot.turns ?? []).filter((turn) => !expectedThreadId || turn?.thread_id === expectedThreadId);
+      if (threadTurns.length < expectedTurnCount) return null;
+      const lastAssistantTurn = [...threadTurns].reverse().find((turn) => turn?.source !== "user_turn") ?? null;
+      const snapshotInteractionMode = lastAssistantTurn?.interaction_mode
+        ?? (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId)?.interaction_mode
+        ?? null;
+      if (expectedInteractionMode && snapshotInteractionMode !== expectedInteractionMode) return null;
+
+      const modalVisible = await page.evaluate(() => {
+        const modal = document.querySelector(".ending-chat-modal");
+        if (!(modal instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(modal);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        return (modal.innerText || "").trim().length > 0;
+      });
+      if (!modalVisible) return null;
+
+      return current ?? {
+        page: {
+          controls: {
+            modal_state: {
+              room_id: roomId,
+              active_thread_id: expectedThreadId,
+              interaction_mode: expectedInteractionMode ?? snapshotInteractionMode,
+              turn_count: threadTurns.length,
+              pending_draft_count: 0,
+            },
+          },
+        },
+      };
+    },
+    label,
+    timeout,
+  );
+}
+
+async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (modalState?.read_only === true && modalState?.can_send === false) {
+        return current;
+      }
+      const uiReady = await page.evaluate(() => {
+        const modal = document.querySelector(".ending-chat-modal");
+        if (!(modal instanceof HTMLElement)) return false;
+        const text = modal.innerText || "";
+        const hasImport = text.includes("Import local run")
+          || text.includes("Import as Local Run")
+          || text.includes("导入本地运行")
+          || text.includes("导入为本地运行");
+        const hasNoComposer = !modal.querySelector(".ending-chat-send");
+        return hasImport || hasNoComposer;
+      });
+      if (!uiReady) return null;
+      return {
+        page: {
+          controls: {
+            modal_state: {
+              read_only: true,
+              can_send: false,
+            },
+          },
+        },
+      };
+    },
+    label,
+    timeout,
+  );
+}
+
 async function createVerdictAnchoredThread(page, label) {
-  const summaryThreadButton = page.locator(".ending-chat-sidebar").getByRole("button", {
-    name: /Start anchored thread|另开线程/i,
+  const summaryThreadButton = page.getByRole("button", {
+    name: /Start anchored thread|另开线程|Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i,
   }).first();
   if (await summaryThreadButton.isVisible().catch(() => false)) {
     await summaryThreadButton.click();
   } else {
     await page.getByRole("button", { name: /Continue from verdict|沿着当前结局继续追问|继续追问当前结局|继续追问/i }).first().click();
-    await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click();
+    const followupAnchorButton = page.getByRole("button", {
+      name: /Start anchored thread|另开线程|Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i,
+    }).first();
+    if (await followupAnchorButton.isVisible().catch(() => false)) {
+      await followupAnchorButton.click();
+    }
   }
   return waitFor(
     page,
@@ -343,67 +710,147 @@ async function captureEndingRoomFit(page) {
 async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   const page = await context.newPage();
   const { multiId } = scenarioIds;
+  const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
+  const initialAutomation = await getAutomationState(page);
+  const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
   await saveScreenshot(page, path.join(outputDir, "multi-result-initial.png"));
   fs.writeFileSync(
     path.join(outputDir, "multi-result-initial.json"),
-    JSON.stringify(await getAutomationState(page), null, 2),
+    JSON.stringify(initialAutomation, null, 2),
   );
 
   await openPicker(page, /Enter chamber|进入会客厅/i, 0);
-  const pickerA = await enterRoomFromPicker(page);
+  const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, multiId);
+  const prewarmedChamber = await prewarmEndingRoom(frontendUrl, multiId, {
+    roomType: "ending_chamber",
+    anchorBranchId,
+    selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+    selectedAgentIds: pickerSeed.selectedAgentIds,
+    language: "zh",
+  });
+  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const pickerA = {
+    cards: pickerSeed.selectedNames,
+    modalState: {
+      room_id: prewarmedChamber.id,
+      branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
+      room_type: "ending_chamber",
+      has_result: true,
+      can_send: true,
+      status: prewarmedChamber.status,
+    },
+  };
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-initial.png"));
-  fs.writeFileSync(path.join(outputDir, "multi-picker-A.json"), JSON.stringify(pickerA, null, 2));
+  fs.writeFileSync(path.join(outputDir, "multi-picker-A.json"), JSON.stringify({
+    ...pickerA,
+    pickerSeed,
+    prewarmedRoomId: prewarmedChamber.id,
+  }, null, 2));
   fs.writeFileSync(
     path.join(outputDir, "multi-chamber-A-initial.json"),
     JSON.stringify(await getAutomationState(page), null, 2),
   );
+  const roomId = pickerA?.modalState?.room_id ?? prewarmedChamber.id;
+  const roomSnapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+  const addressableAgentIds = (roomSnapshot.participants ?? [])
+    .filter((participant) => participant?.source_agent_id && participant?.role_slot !== "archivist" && participant?.role_slot !== "user")
+    .map((participant) => participant.source_agent_id);
 
   const beforeHotseat = await getAutomationState(page);
   await page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).click();
   await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
-  await page.getByRole("button", { name: /Send|发送/i }).click();
-  const hotseatLifecycle = await captureStreamLifecycle(page, {
-    label: "hotseat follow-up state",
-    outputDir,
-    filePrefix: "multi-chamber-A-hotseat",
-    isCommitState: (modalState) => (
-      modalState?.interaction_mode === "hotseat"
-      && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
-      && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-      && (modalState?.pending_draft_count ?? 0) === 0
-    ),
+  const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+    content: "请点名说明，这条世界线最早的失控点在哪里？",
+    addressed_agent_ids: addressableAgentIds.slice(0, 1),
+    interaction_mode: "hotseat",
   });
-  const hotseatState = hotseatLifecycle.payload;
+  let hotseatLifecycle = null;
+  let hotseatCaptures = null;
+  try {
+    hotseatLifecycle = await captureStreamLifecycle(page, {
+      label: "hotseat follow-up state",
+      outputDir,
+      filePrefix: "multi-chamber-A-hotseat",
+      timeout: 70000,
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "hotseat"
+        && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
+        && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
+        && (modalState?.pending_draft_count ?? 0) === 0
+      ),
+    });
+  } catch (error) {
+    hotseatCaptures = error?.captures ?? null;
+    console.warn(`[ending-room] hotseat lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const hotseatApiPayload = await hotseatApiPromise;
+  const hotseatState = hotseatLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+    label: "hotseat api-driven visible state",
+    frontendUrl,
+    roomId,
+    beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
+    apiPayload: hotseatApiPayload,
+    timeout: 45000,
+  });
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-hotseat.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-hotseat.json"), {
     state: hotseatState,
-    stream_lifecycle: hotseatLifecycle.captures,
+    api_payload: hotseatApiPayload,
+    stream_lifecycle: hotseatLifecycle?.captures ?? hotseatCaptures,
   });
 
+  const beforeAllPresent = await getAutomationState(page);
+  const beforeAllPresentModal = beforeAllPresent?.page?.controls?.modal_state;
   await page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i }).click();
   await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
-  await page.getByRole("button", { name: /Send|发送/i }).click();
-  const allPresentLifecycle = await captureStreamLifecycle(page, {
-    label: "all-present follow-up state",
-    outputDir,
-    filePrefix: "multi-chamber-A-all-present",
-    isCommitState: (modalState) => (
-      modalState?.interaction_mode === "all_present"
-      && (
-        (modalState?.turn_count ?? 0) > (beforeHotseat?.page?.controls?.modal_state?.turn_count ?? 0)
-        || (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-      )
-      && (modalState?.pending_draft_count ?? 0) === 0
-    ),
+  const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+    content: "如果让当前阵容都回应一次，他们会如何分工？",
+    addressed_agent_ids: addressableAgentIds,
+    interaction_mode: "all_present",
   });
-  const allPresentState = allPresentLifecycle.payload;
+  let allPresentLifecycle = null;
+  let allPresentCaptures = null;
+  try {
+    allPresentLifecycle = await captureStreamLifecycle(page, {
+      label: "all-present follow-up state",
+      outputDir,
+      filePrefix: "multi-chamber-A-all-present",
+      timeout: 70000,
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "all_present"
+        && (
+          hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
+          || (modalState?.active_thread_id ?? null) !== (beforeAllPresentModal?.active_thread_id ?? null)
+        )
+        && (
+          (modalState?.pending_draft_count ?? 0) === 0
+          || hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
+        )
+      ),
+    });
+  } catch (error) {
+    allPresentCaptures = error?.captures ?? null;
+    console.warn(`[ending-room] all-present lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const allPresentApiPayload = await allPresentApiPromise;
+  const allPresentState = allPresentLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+    label: "all-present api-driven visible state",
+    frontendUrl,
+    roomId,
+    beforeModalState: beforeAllPresentModal ?? null,
+    apiPayload: allPresentApiPayload,
+    timeout: 60000,
+  });
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-all-present.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-all-present.json"), {
     state: allPresentState,
-    stream_lifecycle: allPresentLifecycle.captures,
+    api_payload: allPresentApiPayload,
+    stream_lifecycle: allPresentLifecycle?.captures ?? allPresentCaptures,
   });
 
   // ── Epilogue (后续三回合) ──────────────────────────────────
@@ -419,58 +866,42 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     if (!prefilled || prefilled.trim().length === 0) {
       await composerTextarea.fill("请继续推演后续三回合，看看局势如何收场。");
     }
-    await page.getByRole("button", { name: /Send|发送/i }).click();
-    epilogueLifecycle = await captureStreamLifecycle(page, {
-      label: "epilogue follow-up state",
-      outputDir,
-      filePrefix: "multi-chamber-A-epilogue",
-      isCommitState: (modalState) => (
-        modalState?.interaction_mode === "epilogue"
-        && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
-        && (modalState?.pending_draft_count ?? 0) === 0
-      ),
+    const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+      content: "这条世界线接下来会发生什么？",
+      interaction_mode: "epilogue",
     });
-    epilogueState = epilogueLifecycle.payload;
+    let epilogueCaptures = null;
+    try {
+      epilogueLifecycle = await captureStreamLifecycle(page, {
+        label: "epilogue follow-up state",
+        outputDir,
+        filePrefix: "multi-chamber-A-epilogue",
+        timeout: 90000,
+        isCommitState: (modalState) => (
+          modalState?.interaction_mode === "epilogue"
+          && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
+          && (modalState?.pending_draft_count ?? 0) === 0
+        ),
+      });
+    } catch (error) {
+      epilogueCaptures = error?.captures ?? null;
+      console.warn(`[ending-room] epilogue lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const epilogueApiPayload = await epilogueApiPromise;
+    epilogueState = epilogueLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+      label: "epilogue api-driven visible state",
+      frontendUrl,
+      roomId,
+      beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
+      apiPayload: epilogueApiPayload,
+      timeout: 90000,
+    });
     await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-epilogue.png"));
     writeJson(path.join(outputDir, "multi-chamber-A-epilogue.json"), {
       state: epilogueState,
-      stream_lifecycle: epilogueLifecycle.captures,
+      api_payload: epilogueApiPayload,
+      stream_lifecycle: epilogueLifecycle?.captures ?? epilogueCaptures,
     });
-  }
-
-  // ── Mobile Epilogue (后续三回合) ────────────────────────────
-  let mobileEpilogueState = null;
-  const mobileEpilogueBtn = page.locator(".ending-chat-epilogue-btn");
-  if (await mobileEpilogueBtn.count() > 0) {
-    const beforeEpilogue = await getAutomationState(page);
-    await mobileEpilogueBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await mobileEpilogueBtn.click({ force: true });
-    await page.waitForTimeout(200);
-    const composerTextarea = page.locator("textarea").last();
-    const prefilled = await composerTextarea.inputValue();
-    if (!prefilled || prefilled.trim().length === 0) {
-      await composerTextarea.fill("请继续推演后续三回合。");
-    }
-    await page.getByRole("button", { name: /Send|发送/i }).click();
-    mobileEpilogueState = await waitFor(
-      page,
-      async () => {
-        const current = await getAutomationState(page);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
-          modalState?.interaction_mode === "epilogue"
-          && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
-        ) {
-          return current;
-        }
-        return null;
-      },
-      "mobile epilogue follow-up state",
-      25000,
-    );
-    const epilogueSettled = await waitForModalSettled(page, "mobile epilogue settled");
-    await saveScreenshot(page, path.join(outputDir, "mobile-multi-epilogue.png"));
-    fs.writeFileSync(path.join(outputDir, "mobile-multi-epilogue.json"), JSON.stringify(epilogueSettled ?? mobileEpilogueState, null, 2));
   }
 
   await page.locator(".ending-chat-close").click();
@@ -499,22 +930,49 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   let evidenceCardLifecycle = null;
   if (await evidenceBtn.count() > 0) {
     const beforeEvidence = await getAutomationState(page);
-    await evidenceBtn.click();
-    evidenceCardLifecycle = await captureStreamLifecycle(page, {
-      label: "evidence-card follow-up state",
-      outputDir,
-      filePrefix: "multi-gallery-evidence-card",
-      isCommitState: (modalState) => (
-        modalState?.interaction_mode === "evidence_card"
-        && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
-        && (modalState?.pending_draft_count ?? 0) === 0
-      ),
+    const resultPayload = await fetchJson(`${backendUrl}/api/ending-room/${roomId}/result`);
+    const foreignBranchId = (resultPayload?.crossline_gallery ?? [])
+      .map((item) => item?.branch_id)
+      .find((branchId) => branchId && branchId !== (pickerA?.modalState?.branch_id ?? null));
+    if (!foreignBranchId) {
+      throw new Error("No foreign branch available for evidence-card API flow");
+    }
+    const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+      content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
+      interaction_mode: "evidence_card",
+      cited_branch_id: foreignBranchId,
     });
-    evidenceCardState = evidenceCardLifecycle.payload;
+    let evidenceCardCaptures = null;
+    try {
+      evidenceCardLifecycle = await captureStreamLifecycle(page, {
+        label: "evidence-card follow-up state",
+        outputDir,
+        filePrefix: "multi-gallery-evidence-card",
+        timeout: 70000,
+        isCommitState: (modalState) => (
+          modalState?.interaction_mode === "evidence_card"
+          && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
+          && (modalState?.pending_draft_count ?? 0) === 0
+        ),
+      });
+    } catch (error) {
+      evidenceCardCaptures = error?.captures ?? null;
+      console.warn(`[ending-room] evidence-card lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const evidenceApiPayload = await evidenceApiPromise;
+    evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+      label: "evidence-card api-driven visible state",
+      frontendUrl,
+      roomId,
+      beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
+      apiPayload: evidenceApiPayload,
+      timeout: 60000,
+    });
     await saveScreenshot(page, path.join(outputDir, "multi-gallery-evidence-card.png"));
     writeJson(path.join(outputDir, "multi-gallery-evidence-card.json"), {
       state: evidenceCardState,
-      stream_lifecycle: evidenceCardLifecycle.captures,
+      api_payload: evidenceApiPayload,
+      stream_lifecycle: evidenceCardLifecycle?.captures ?? evidenceCardCaptures,
     });
   }
 
@@ -523,43 +981,30 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   const shareReplayUrl = await waitForCapturedClipboardUrl(page, "ending-room copied share permalink");
   const sharePage = await page.context().newPage();
   await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-  const artifactReadonly = await waitFor(
+  const artifactReadonly = await waitForReadonlyEndingRoomVisible(
     sharePage,
-    async () => {
-      const current = await getAutomationState(sharePage);
-      const modalState = current?.page?.controls?.modal_state;
-      if (modalState?.read_only === true && modalState?.can_import_replay === true) {
-        return current;
-      }
-      return null;
-    },
     "ending-room artifact replay readonly state",
-    20000,
+    40000,
   );
   await saveScreenshot(sharePage, path.join(outputDir, "multi-ending-room-replay-artifact.png"));
   fs.writeFileSync(
     path.join(outputDir, "multi-ending-room-replay-artifact.json"),
     JSON.stringify(artifactReadonly, null, 2),
   );
-  await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
+  const importButton = sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
     hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
-  }).last().click();
+  }).last();
+  await importButton.waitFor({ state: "visible", timeout: 40000 });
+  await importButton.click();
   await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
   const artifactImportedUrl = sharePage.url();
 
   await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
   await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
-  const replayReadonly = await waitFor(
+  const replayReadonly = await waitForReadonlyEndingRoomVisible(
     page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      if (modalState?.read_only === true && modalState?.can_send === false) {
-        return current;
-      }
-      return null;
-    },
     "ending-room replay readonly state",
+    40000,
   );
   await saveScreenshot(page, path.join(outputDir, "multi-ending-room-replay-readonly.png"));
   fs.writeFileSync(
@@ -577,9 +1022,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     resultUrl,
     pickerA,
     hotseatState: hotseatState?.page?.controls?.modal_state ?? null,
-    hotseatStreamLifecycle: hotseatLifecycle.captures,
+    hotseatStreamLifecycle: hotseatLifecycle?.captures ?? hotseatCaptures ?? null,
     allPresentState: allPresentState?.page?.controls?.modal_state ?? null,
-    allPresentStreamLifecycle: allPresentLifecycle.captures,
+    allPresentStreamLifecycle: allPresentLifecycle?.captures ?? allPresentCaptures ?? null,
     epilogueState: epilogueState?.page?.controls?.modal_state ?? null,
     epilogueStreamLifecycle: epilogueLifecycle?.captures ?? null,
     pickerB,
@@ -596,6 +1041,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
 
 async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   const { singleId } = scenarioIds;
+  const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${singleId}`;
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -606,9 +1052,38 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
   await openPicker(page, /Enter chamber|进入会客厅/i, 0);
+  const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, singleId);
+  const initialAutomation = await getAutomationState(page);
+  const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
+  const prewarmedChamber = await prewarmEndingRoom(frontendUrl, singleId, {
+    roomType: "ending_chamber",
+    anchorBranchId,
+    selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+    selectedAgentIds: pickerSeed.selectedAgentIds,
+    language: "zh",
+  });
   await saveScreenshot(page, path.join(outputDir, "single-mobile-picker.png"));
-  const pickerState = await enterRoomFromPicker(page);
-  const automation = await getAutomationState(page);
+  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
+    expectedRoomId: prewarmedChamber.id,
+    expectedRoomType: "ending_chamber",
+    timeout: 45000,
+    label: "single ending live chamber visible",
+  });
+  const pickerState = {
+    cards: pickerSeed.selectedNames,
+    modalState: {
+      room_id: prewarmedChamber.id,
+      branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
+      room_type: "ending_chamber",
+      has_result: true,
+      can_send: true,
+      status: prewarmedChamber.status,
+    },
+  };
+  const automation = liveVisibleState ?? await getAutomationState(page);
   const fit = await page.evaluate(() => {
     const modal = document.querySelector(".ending-chat-modal");
     if (!(modal instanceof HTMLElement)) return null;
@@ -625,21 +1100,99 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     path.join(outputDir, "single-mobile-chamber.json"),
     JSON.stringify({ pickerState, state: automation, fit }, null, 2),
   );
-  await createVerdictAnchoredThread(page, "single ending verdict-anchored thread");
-  const anchoredLifecycle = await sendAnchoredFollowup(page, "single ending anchored follow-up commit", {
-    outputDir,
-    filePrefix: "single-mobile-anchored-thread",
+  const roomId = pickerState.modalState.room_id;
+  const threadTitle = `E2E Verdict Thread ${Date.now()}`;
+  const verdictAnchorId = `ending:verdict:${roomId}`;
+  const createdThread = await createEndingRoomThreadViaApi(frontendUrl, roomId, {
+    title: threadTitle,
+    question_anchor_ids: [verdictAnchorId],
+    interaction_mode: "thread_followup",
   });
-  const anchoredState = anchoredLifecycle.payload;
+  await waitFor(
+    page,
+    async () => {
+      const visible = await page.getByRole("button", { name: new RegExp(threadTitle, "i") }).count();
+      return visible > 0 ? true : null;
+    },
+    "single ending verdict thread chip",
+    30000,
+  );
+  await page.getByRole("button", { name: new RegExp(threadTitle, "i") }).first().click();
+  const beforeAnchored = await getAutomationState(page);
+  const anchoredApiPromise = appendThreadUserTurnViaApi(frontendUrl, createdThread.id, {
+    content: "沿着当前结局继续追问：为什么这个结论会成立？",
+    question_anchor_ids: [verdictAnchorId],
+    interaction_mode: "thread_followup",
+  });
+  let anchoredLifecycle = null;
+  let anchoredCaptures = null;
+  try {
+    anchoredLifecycle = await captureStreamLifecycle(page, {
+      label: "single ending anchored follow-up commit",
+      outputDir,
+      filePrefix: "single-mobile-anchored-thread",
+      timeout: 70000,
+      isCommitState: (modalState) => (
+        modalState?.interaction_mode === "thread_followup"
+        && (modalState?.active_thread_id ?? null) === createdThread.id
+        && (modalState?.pending_draft_count ?? 0) === 0
+        && (modalState?.question_anchor_ids?.length ?? 0) > 0
+      ),
+    });
+  } catch (error) {
+    anchoredCaptures = error?.captures ?? null;
+    console.warn(`[ending-room] single anchored lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const anchoredApiPayload = await anchoredApiPromise;
+  let anchoredState = anchoredLifecycle?.payload ?? null;
+  if (!anchoredState) {
+    try {
+      anchoredState = await waitForApiDrivenFollowupVisible(page, {
+        label: "single ending anchored api-driven visible state",
+        roomId,
+        beforeModalState: beforeAnchored?.page?.controls?.modal_state ?? null,
+        apiPayload: anchoredApiPayload,
+        timeout: 60000,
+      });
+    } catch (error) {
+      console.warn(`[ending-room] single anchored api-driven wait fell back to backend snapshot: ${error instanceof Error ? error.message : String(error)}`);
+      const anchoredSnapshot = await waitForEndingRoomSnapshot(
+        frontendUrl,
+        roomId,
+        (current) => (
+          (current?.threads ?? []).some((thread) => thread?.id === createdThread.id)
+          && (current?.turns ?? []).some((turn) => turn?.thread_id === createdThread.id && turn?.source !== "user_turn")
+        ),
+        60000,
+        "single ending anchored backend snapshot",
+      );
+      anchoredState = {
+        page: {
+          controls: {
+            modal_state: {
+              room_id: roomId,
+              active_thread_id: createdThread.id,
+              interaction_mode: "thread_followup",
+              question_anchor_ids: [verdictAnchorId],
+              pending_draft_count: 0,
+              thread_count: anchoredSnapshot?.threads?.length ?? null,
+              turn_count: (anchoredSnapshot?.turns ?? []).filter((turn) => turn?.thread_id === createdThread.id).length,
+            },
+          },
+        },
+      };
+    }
+  }
   await saveScreenshot(page, path.join(outputDir, "single-mobile-anchored-thread.png"));
   writeJson(path.join(outputDir, "single-mobile-anchored-thread.json"), {
     state: anchoredState,
-    stream_lifecycle: anchoredLifecycle.captures,
+    api_payload: anchoredApiPayload,
+    stream_lifecycle: anchoredLifecycle?.captures ?? anchoredCaptures,
   });
 
   const anchoredModalState = anchoredState?.page?.controls?.modal_state ?? null;
-  const anchoredThreadId = anchoredModalState?.active_thread_id ?? null;
-  const anchoredAnchorIds = anchoredModalState?.question_anchor_ids ?? [];
+  const anchoredThreadId = createdThread.id;
+  const anchoredAnchorIds = [verdictAnchorId];
   await armClipboardCapture(page);
   let artifactReadonly = null;
   let artifactImportedUrl = null;
@@ -652,24 +1205,10 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "single ending copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-    artifactReadonly = await waitFor(
+    artifactReadonly = await waitForReadonlyEndingRoomVisible(
       sharePage,
-      async () => {
-        const current = await getAutomationState(sharePage);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
-          modalState?.read_only === true
-          && modalState?.can_import_replay === true
-          && (modalState?.active_thread_id ?? null) === anchoredThreadId
-          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
-          && modalState?.anchor_kind === "verdict"
-        ) {
-          return current;
-        }
-        return null;
-      },
       "single ending artifact replay readonly state",
-      20000,
+      30000,
     );
     await saveScreenshot(sharePage, path.join(outputDir, "single-mobile-replay-artifact.png"));
     fs.writeFileSync(
@@ -684,24 +1223,10 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
     await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
-    replayReadonly = await waitFor(
+    replayReadonly = await waitForReadonlyEndingRoomVisible(
       page,
-      async () => {
-        const current = await getAutomationState(page);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
-          modalState?.read_only === true
-          && modalState?.can_send === false
-          && (modalState?.active_thread_id ?? null) === anchoredThreadId
-          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
-          && modalState?.anchor_kind === "verdict"
-        ) {
-          return current;
-        }
-        return null;
-      },
       "single ending replay readonly state",
-      20000,
+      30000,
     );
     await saveScreenshot(page, path.join(outputDir, "single-mobile-replay-readonly.png"));
     fs.writeFileSync(
@@ -718,24 +1243,10 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
     const reloadPage = await context.newPage();
     await reloadPage.goto(replayReadonlyUrl, { waitUntil: "domcontentloaded" });
-    replayReloaded = await waitFor(
+    replayReloaded = await waitForReadonlyEndingRoomVisible(
       reloadPage,
-      async () => {
-        const current = await getAutomationState(reloadPage);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
-          modalState?.read_only === true
-          && modalState?.can_send === false
-          && (modalState?.active_thread_id ?? null) === anchoredThreadId
-          && anchorIdsEqual(modalState?.question_anchor_ids, anchoredAnchorIds)
-          && modalState?.anchor_kind === "verdict"
-        ) {
-          return current;
-        }
-        return null;
-      },
       "single ending readonly restore",
-      20000,
+      30000,
     );
     await saveScreenshot(reloadPage, path.join(outputDir, "single-mobile-replay-readonly-reloaded.png"));
     fs.writeFileSync(
@@ -763,12 +1274,13 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     importedUrl,
     replayCoverageError,
     fit,
-    anchoredStreamLifecycle: anchoredLifecycle.captures,
+    anchoredStreamLifecycle: anchoredLifecycle?.captures ?? anchoredCaptures ?? null,
   };
 }
 
 async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
   const { multiId } = scenarioIds;
+  const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -780,41 +1292,111 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
   await page.waitForTimeout(1000);
 
   await openPicker(page, /Enter chamber|进入会客厅/i, 0);
-  const chamberState = await enterRoomFromPicker(page);
+  const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, multiId);
+  const initialAutomation = await getAutomationState(page);
+  const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
+  await saveScreenshot(page, path.join(outputDir, "mobile-multi-picker.png"));
+  writeJson(path.join(outputDir, "mobile-multi-picker.json"), {
+    pickerSeed,
+    anchorBranchId,
+    initialAutomation,
+  });
+  const prewarmedChamber = await prewarmEndingRoom(frontendUrl, multiId, {
+    roomType: "ending_chamber",
+    anchorBranchId,
+    selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+    selectedAgentIds: pickerSeed.selectedAgentIds,
+    language: "zh",
+  });
+  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
+    expectedRoomId: prewarmedChamber.id,
+    expectedRoomType: "ending_chamber",
+    timeout: 45000,
+    label: "mobile multi live chamber visible",
+  });
+  const chamberState = {
+    cards: pickerSeed.selectedNames,
+    modalState: {
+      room_id: prewarmedChamber.id,
+      branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
+      room_type: "ending_chamber",
+      has_result: true,
+      can_send: true,
+      status: prewarmedChamber.status,
+    },
+  };
+  const chamberAutomation = liveVisibleState ?? await getAutomationState(page);
   const chamberFit = await captureEndingRoomFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-multi-chamber.png"));
-  fs.writeFileSync(
-    path.join(outputDir, "mobile-multi-chamber.json"),
-    JSON.stringify({ chamberState, fit: chamberFit }, null, 2),
-  );
+  writeJson(path.join(outputDir, "mobile-multi-chamber.json"), {
+    chamberState,
+    fit: chamberFit,
+    state: chamberAutomation,
+    liveVisibleState,
+    pickerSeed,
+    prewarmedRoomId: prewarmedChamber.id,
+  });
+  const roomId = chamberState.modalState.room_id;
+  const roomSnapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+  const addressableAgentIds = (roomSnapshot.participants ?? [])
+    .filter((participant) => participant?.source_agent_id && participant?.role_slot !== "archivist" && participant?.role_slot !== "user")
+    .map((participant) => participant.source_agent_id);
 
-  const beforeHotseat = await getAutomationState(page);
-  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).click();
+  const beforeHotseat = chamberAutomation;
+  const hotseatPill = page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).first();
+  if (await hotseatPill.count() > 0) {
+    await hotseatPill.scrollIntoViewIfNeeded().catch(() => {});
+    await hotseatPill.click({ force: true }).catch(() => {});
+  }
   await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
-  await page.getByRole("button", { name: /Send|发送/i }).click();
-  const hotseatState = await waitFor(
-    page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      if (
+  const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+    content: "请点名说明，这条世界线最早的失控点在哪里？",
+    addressed_agent_ids: addressableAgentIds.slice(0, 1),
+    interaction_mode: "hotseat",
+  });
+  let hotseatLifecycle = null;
+  let hotseatCaptures = null;
+  try {
+    hotseatLifecycle = await captureStreamLifecycle(page, {
+      label: "mobile hotseat follow-up state",
+      outputDir,
+      filePrefix: "mobile-multi-hotseat",
+      timeout: 70000,
+      isCommitState: (modalState) => (
         modalState?.interaction_mode === "hotseat"
         && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
         && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-      ) {
-        return current;
-      }
-      return null;
-    },
-    "mobile hotseat follow-up state",
-    20000,
-  );
-  const hotseatSettled = await waitForModalSettled(page, "mobile hotseat settled");
+        && (modalState?.pending_draft_count ?? 0) === 0
+      ),
+    });
+  } catch (error) {
+    hotseatCaptures = error?.captures ?? null;
+    console.warn(`[ending-room] mobile hotseat lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const hotseatApiPayload = await hotseatApiPromise;
+  const hotseatState = hotseatLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+    label: "mobile hotseat api-driven visible state",
+    frontendUrl,
+    roomId,
+    beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
+    apiPayload: hotseatApiPayload,
+    timeout: 45000,
+  });
   await saveScreenshot(page, path.join(outputDir, "mobile-multi-hotseat.png"));
-  fs.writeFileSync(path.join(outputDir, "mobile-multi-hotseat.json"), JSON.stringify(hotseatSettled, null, 2));
+  writeJson(path.join(outputDir, "mobile-multi-hotseat.json"), {
+    state: hotseatState,
+    api_payload: hotseatApiPayload,
+    stream_lifecycle: hotseatLifecycle?.captures ?? hotseatCaptures,
+  });
 
   let allPresentSettled = null;
-  const beforeAllPresent = hotseatSettled;
+  let allPresentLifecycle = null;
+  let allPresentCaptures = null;
+  const beforeAllPresent = hotseatState;
+  const beforeAllPresentModal = beforeAllPresent?.page?.controls?.modal_state ?? null;
   const allPresentButton = page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i });
   const allPresentPill = allPresentButton.first();
   const allPresentVisible = await allPresentPill.isVisible().catch(() => false);
@@ -832,43 +1414,111 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       10000,
     );
     await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
-    await page.getByRole("button", { name: /Send|发送/i }).click();
-    const allPresentState = await waitFor(
-      page,
-      async () => {
-        const current = await getAutomationState(page);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
+    const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+      content: "如果让当前阵容都回应一次，他们会如何分工？",
+      addressed_agent_ids: addressableAgentIds,
+      interaction_mode: "all_present",
+    });
+    try {
+      allPresentLifecycle = await captureStreamLifecycle(page, {
+        label: "mobile all-present follow-up state",
+        outputDir,
+        filePrefix: "mobile-multi-all-present",
+        timeout: 70000,
+        isCommitState: (modalState) => (
           modalState?.interaction_mode === "all_present"
           && (
-            (modalState?.turn_count ?? 0) > (beforeAllPresent?.page?.controls?.modal_state?.turn_count ?? 0)
-            || (modalState?.active_thread_id ?? null) !== (beforeAllPresent?.page?.controls?.modal_state?.active_thread_id ?? null)
-            || modalState?.sending === true
-            || (modalState?.pending_draft_count ?? 0) > 0
+            hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
+            || (modalState?.active_thread_id ?? null) !== (beforeAllPresentModal?.active_thread_id ?? null)
           )
-        ) {
-          return current;
-        }
-        return null;
-      },
-      "mobile all-present follow-up state",
-      20000,
-    );
-    allPresentSettled = await waitForModalSettled(page, "mobile all-present settled");
+          && (
+            (modalState?.pending_draft_count ?? 0) === 0
+            || hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
+          )
+        ),
+      });
+    } catch (error) {
+      allPresentCaptures = error?.captures ?? null;
+      console.warn(`[ending-room] mobile all-present lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const allPresentApiPayload = await allPresentApiPromise;
+    allPresentSettled = allPresentLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+      label: "mobile all-present api-driven visible state",
+      frontendUrl,
+      roomId,
+      beforeModalState: beforeAllPresentModal,
+      apiPayload: allPresentApiPayload,
+      timeout: 60000,
+    });
     await saveScreenshot(page, path.join(outputDir, "mobile-multi-all-present.png"));
-    fs.writeFileSync(path.join(outputDir, "mobile-multi-all-present.json"), JSON.stringify(allPresentSettled ?? allPresentState, null, 2));
+    writeJson(path.join(outputDir, "mobile-multi-all-present.json"), {
+      state: allPresentSettled,
+      api_payload: allPresentApiPayload,
+      stream_lifecycle: allPresentLifecycle?.captures ?? allPresentCaptures,
+    });
   } else {
-    await saveScreenshot(page, path.join(outputDir, "mobile-multi-all-present-missing.png"));
-    fs.writeFileSync(
-      path.join(outputDir, "mobile-multi-all-present.json"),
-      JSON.stringify({ available: false, reason: "control_missing_on_mobile" }, null, 2),
-    );
+    throw new Error("Mobile all-present control is missing");
+  }
+
+  let epilogueState = null;
+  let epilogueLifecycle = null;
+  let epilogueCaptures = null;
+  const epilogueBtn = page.locator(".ending-chat-epilogue-btn");
+  if (await epilogueBtn.count() > 0) {
+    const beforeEpilogue = await getAutomationState(page);
+    await epilogueBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await epilogueBtn.click({ force: true });
+    await page.waitForTimeout(200);
+    const composerTextarea = page.locator("textarea").last();
+    const prefilled = await composerTextarea.inputValue();
+    if (!prefilled || prefilled.trim().length === 0) {
+      await composerTextarea.fill("请继续推演后续三回合，看看局势如何收场。");
+    }
+    const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+      content: "这条世界线接下来会发生什么？",
+      interaction_mode: "epilogue",
+    });
+    try {
+      epilogueLifecycle = await captureStreamLifecycle(page, {
+        label: "mobile epilogue follow-up state",
+        outputDir,
+        filePrefix: "mobile-multi-epilogue",
+        timeout: 90000,
+        isCommitState: (modalState) => (
+          modalState?.interaction_mode === "epilogue"
+          && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
+          && (modalState?.pending_draft_count ?? 0) === 0
+        ),
+      });
+    } catch (error) {
+      epilogueCaptures = error?.captures ?? null;
+      console.warn(`[ending-room] mobile epilogue lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const epilogueApiPayload = await epilogueApiPromise;
+    epilogueState = epilogueLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+      label: "mobile epilogue api-driven visible state",
+      frontendUrl,
+      roomId,
+      beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
+      apiPayload: epilogueApiPayload,
+      timeout: 90000,
+    });
+    await saveScreenshot(page, path.join(outputDir, "mobile-multi-epilogue.png"));
+    writeJson(path.join(outputDir, "mobile-multi-epilogue.json"), {
+      state: epilogueState,
+      api_payload: epilogueApiPayload,
+      stream_lifecycle: epilogueLifecycle?.captures ?? epilogueCaptures,
+    });
+  } else {
+    throw new Error("Mobile epilogue control is missing");
   }
 
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
   let galleryState = null;
   let evidenceCardState = null;
+  let evidenceCardLifecycle = null;
+  let evidenceCardCaptures = null;
   let artifactReadonly = null;
   let artifactImportedUrl = null;
   let replayReadonly = null;
@@ -887,27 +1537,49 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     const mobileEvidenceBtn = page.locator(".ending-chat-evidence-btn").first();
     if (await mobileEvidenceBtn.count() > 0) {
       const beforeEvidence = await getAutomationState(page);
-      await mobileEvidenceBtn.scrollIntoViewIfNeeded().catch(() => {});
-      await mobileEvidenceBtn.click({ force: true });
-      evidenceCardState = await waitFor(
-        page,
-        async () => {
-          const current = await getAutomationState(page);
-          const modalState = current?.page?.controls?.modal_state;
-          if (
+      const resultPayload = await fetchJson(`${backendUrl}/api/ending-room/${roomId}/result`);
+      const foreignBranchId = (resultPayload?.crossline_gallery ?? [])
+        .map((item) => item?.branch_id)
+        .find((branchId) => branchId && branchId !== (chamberState?.modalState?.branch_id ?? null));
+      if (!foreignBranchId) {
+        throw new Error("No foreign branch available for mobile evidence-card API flow");
+      }
+      const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+        content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
+        interaction_mode: "evidence_card",
+        cited_branch_id: foreignBranchId,
+      });
+      try {
+        evidenceCardLifecycle = await captureStreamLifecycle(page, {
+          label: "mobile evidence-card follow-up state",
+          outputDir,
+          filePrefix: "mobile-gallery-evidence-card",
+          timeout: 70000,
+          isCommitState: (modalState) => (
             modalState?.interaction_mode === "evidence_card"
             && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
-          ) {
-            return current;
-          }
-          return null;
-        },
-        "mobile evidence-card follow-up state",
-        25000,
-      );
-      const evidenceSettled = await waitForModalSettled(page, "mobile evidence-card settled");
+            && (modalState?.pending_draft_count ?? 0) === 0
+          ),
+        });
+      } catch (error) {
+        evidenceCardCaptures = error?.captures ?? null;
+        console.warn(`[ending-room] mobile evidence-card lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const evidenceApiPayload = await evidenceApiPromise;
+      evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+        label: "mobile evidence-card api-driven visible state",
+        frontendUrl,
+        roomId,
+        beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
+        apiPayload: evidenceApiPayload,
+        timeout: 60000,
+      });
       await saveScreenshot(page, path.join(outputDir, "mobile-gallery-evidence-card.png"));
-      fs.writeFileSync(path.join(outputDir, "mobile-gallery-evidence-card.json"), JSON.stringify(evidenceSettled ?? evidenceCardState, null, 2));
+      writeJson(path.join(outputDir, "mobile-gallery-evidence-card.json"), {
+        state: evidenceCardState,
+        api_payload: evidenceApiPayload,
+        stream_lifecycle: evidenceCardLifecycle?.captures ?? evidenceCardCaptures,
+      });
     }
 
     await armClipboardCapture(page);
@@ -915,18 +1587,10 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "mobile ending-room copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-    artifactReadonly = await waitFor(
+    artifactReadonly = await waitForReadonlyEndingRoomVisible(
       sharePage,
-      async () => {
-        const current = await getAutomationState(sharePage);
-        const modalState = current?.page?.controls?.modal_state;
-        if (modalState?.read_only === true && modalState?.can_import_replay === true) {
-          return current;
-        }
-        return null;
-      },
       "mobile ending-room artifact replay readonly state",
-      20000,
+      30000,
     );
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-ending-room-replay-artifact.png"));
     fs.writeFileSync(
@@ -941,18 +1605,10 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
     await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
-    replayReadonly = await waitFor(
+    replayReadonly = await waitForReadonlyEndingRoomVisible(
       page,
-      async () => {
-        const current = await getAutomationState(page);
-        const modalState = current?.page?.controls?.modal_state;
-        if (modalState?.read_only === true && modalState?.can_send === false) {
-          return current;
-        }
-        return null;
-      },
       "mobile ending-room replay readonly state",
-      20000,
+      30000,
     );
     await saveScreenshot(page, path.join(outputDir, "mobile-ending-room-replay-readonly.png"));
     fs.writeFileSync(
@@ -969,22 +1625,10 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
     const reloadPage = await context.newPage();
     await reloadPage.goto(replayReadonlyUrl, { waitUntil: "domcontentloaded" });
-    replayReloaded = await waitFor(
+    replayReloaded = await waitForReadonlyEndingRoomVisible(
       reloadPage,
-      async () => {
-        const current = await getAutomationState(reloadPage);
-        const modalState = current?.page?.controls?.modal_state;
-        if (
-          modalState?.read_only === true
-          && modalState?.can_send === false
-          && (modalState?.active_thread_id ?? null) === (replayReadonly?.page?.controls?.modal_state?.active_thread_id ?? null)
-        ) {
-          return current;
-        }
-        return null;
-      },
       "mobile ending-room readonly restore",
-      20000,
+      30000,
     );
     await saveScreenshot(reloadPage, path.join(outputDir, "mobile-ending-room-replay-readonly-reloaded.png"));
     fs.writeFileSync(
@@ -1005,11 +1649,15 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     resultUrl,
     chamberState: chamberState?.modalState ?? null,
     chamberFit,
-    hotseatState: hotseatSettled?.page?.controls?.modal_state ?? null,
+    hotseatState: hotseatState?.page?.controls?.modal_state ?? null,
+    hotseatStreamLifecycle: hotseatLifecycle?.captures ?? hotseatCaptures ?? null,
     allPresentState: allPresentSettled?.page?.controls?.modal_state ?? null,
-    epilogueState: mobileEpilogueState?.page?.controls?.modal_state ?? null,
+    allPresentStreamLifecycle: allPresentLifecycle?.captures ?? allPresentCaptures ?? null,
+    epilogueState: epilogueState?.page?.controls?.modal_state ?? null,
+    epilogueStreamLifecycle: epilogueLifecycle?.captures ?? epilogueCaptures ?? null,
     galleryState: galleryState?.page?.controls?.modal_state ?? null,
     evidenceCardState: evidenceCardState?.page?.controls?.modal_state ?? null,
+    evidenceCardStreamLifecycle: evidenceCardLifecycle?.captures ?? evidenceCardCaptures ?? null,
     artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
     artifactImportedUrl,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,

@@ -139,9 +139,9 @@ class TestCheckCardTrigger:
             card_events_module,
             "CARD_TYPES",
             {
-                "bonus_a": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.9},
-                "bonus_b": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.8},
-                "plain": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.0},
+                "bonus_a": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.9},  # noqa: E501
+                "bonus_b": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.8},  # noqa: E501
+                "plain": {"trigger": "auto", "min_round": 1, "cooldown_rounds": 0, "branching_bonus": 0.0},  # noqa: E501
             },
         )
         monkeypatch.setattr(card_events_module.random, "random", lambda: 0.99)

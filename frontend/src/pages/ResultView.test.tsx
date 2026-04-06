@@ -558,6 +558,19 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
   });
 
+  it('can auto-open a live chamber from debug query params without using the picker', async () => {
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1?debugEndingRoomBranch=branch-1&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=agent-2']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:ending_chamber');
+    expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
+  });
+
   it('switches an open live chamber into read-only replay immediately after saving a local copy', async () => {
     endingRoomStoreState.snapshot = {
       id: 'room-live',

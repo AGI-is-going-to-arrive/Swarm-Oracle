@@ -189,6 +189,90 @@ describe('EndingChatModal', () => {
     expect(storeState.openRoom).not.toHaveBeenCalled();
   });
 
+  it('strips leaked reasoning prefixes from assistant transcript turns', () => {
+    const leakedContent = '<think>internal only</think>Visible answer';
+    storeState.snapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        { id: 'archivist', room_id: 'room-1', role_slot: 'archivist', display_name: 'Archivist' },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'archivist',
+          content: leakedContent,
+          emotion: 'focused',
+          source: 'assistant_followup',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+      result_ready: true,
+    } as any;
+    storeState.threadsById = {
+      'thread-room': {
+        id: 'thread-room',
+        room_id: 'room-1',
+        title: 'Main Desk',
+        mode: 'room',
+        interaction_mode: 'auto_recap',
+        participant_set_hash: 'hash-room',
+        memory_partition_id: 'room-partition',
+        created_at: '2026-03-29T00:00:00Z',
+        updated_at: '2026-03-29T00:00:01Z',
+        turns: storeState.snapshot.turns,
+      },
+    };
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.result = {
+      summary: 'Visible answer',
+      archivist_note: 'Visible answer',
+    } as any;
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText('Visible answer').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/<think>/)).not.toBeInTheDocument();
+  });
+
   it('applies transcript layout metadata to long replay bubbles', () => {
     const longContent = '沿着这条世界线继续追问：为什么一次调度失误会被包装成秩序本身，同时把原本可逆的代价推成无法回头的分裂？';
 

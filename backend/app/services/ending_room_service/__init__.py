@@ -10,7 +10,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
@@ -30,13 +29,15 @@ from app.models import (
     EndingRoomRoleSlot,
     EndingRoomStatus,
     EndingRoomThread,
-    EndingRoomThreadMode,
     EndingRoomTurn,
     EndingRoomTurnSource,
     EndingRoomType,
     Round,
     Scenario,
     ScenarioStatus,
+)
+from app.models import (
+    EndingRoomThreadMode as EndingRoomThreadMode,
 )
 from app.models.database import _uuid, get_engine
 from app.services.llm_client import (  # noqa: F401 — needed for monkeypatch compatibility
@@ -48,68 +49,6 @@ from app.services.runtime_lock import (
     acquire_runtime_lock,
     ending_room_lock_key,
     release_runtime_lock,
-)
-
-# ── Re-exports from sub-modules ─────────────────────────────────────
-# Every symbol that was previously importable from
-# ``app.services.ending_room_service`` must still be importable.
-
-from ._utils import (  # noqa: F401 — re-exported
-    ENDING_ROOM_RUNTIME_ERROR,
-    EndingRoomBroadcast,
-    EndingRoomDomainError,
-    EndingRoomInputError,
-    EndingRoomServiceError,
-    _OracleFollowupPlan,
-    _BIO_SHORT_MAX_CHARS,
-    _CJK_RE,
-    _ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
-    _ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS,
-    _ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS,
-    _ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
-    _ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
-    _ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
-    _RUNNING_ROOMS,
-    _RUNNING_ROOMS_LOCK,
-    _branch_evidence_hook,
-    _branch_lookup,
-    _broadcast,
-    _build_participant_followup_evidence,
-    _build_worldline_echo_key,
-    _claim_room,
-    _compact_clause,
-    _compact_text,
-    _delta_chunks,
-    _detect_language,
-    _get_room_phase,
-    _impact_score,
-    _latest_row_for_agent,
-    _load_branch_rows,
-    _normalize_branch_ids,
-    _normalize_selected_representatives,
-    _normalize_selected_witness,
-    _now,
-    _oracle_visible_clause,
-    _oracle_visible_text,
-    _parse_key_moments,
-    _phase_insight,
-    _release_room,
-    _room_memory_partition,
-    _room_memory_partition_id,
-    _room_phase_field,
-    _room_user_participant_id,
-    _roundtable_branch_hook,
-    _serialize_participant,
-    _serialize_thread,
-    _serialize_turn,
-    _set_room_phase,
-    _short_persona,
-    _sort_scope_branch_ids,
-    _speaker_lookup,
-    _stable_oracle_choice,
-    _thread_memory_partition_id,
-    _tier_rank,
-    sanitize_untrusted_text,
 )
 
 from ._content import (  # noqa: F401 — re-exported
@@ -140,7 +79,6 @@ from ._content import (  # noqa: F401 — re-exported
     _strip_oracle_reasoning_prefix,
     _strip_oracle_scope_boilerplate,
 )
-
 from ._participants import (  # noqa: F401 — re-exported
     _participant_defs,
     _roundtable_representative_def,
@@ -149,7 +87,6 @@ from ._participants import (  # noqa: F401 — re-exported
     _sort_selected_representatives,
     _visible_branch_agents,
 )
-
 from ._threads import (  # noqa: F401 — re-exported
     _address_reference_for_participant,
     _append_followup_turns_with_retry,
@@ -171,6 +108,67 @@ from ._threads import (  # noqa: F401 — re-exported
     append_thread_user_turn,
     append_thread_user_turn_async,
     create_ending_room_thread,
+)
+
+# ── Re-exports from sub-modules ─────────────────────────────────────
+# Every symbol that was previously importable from
+# ``app.services.ending_room_service`` must still be importable.
+from ._utils import (  # noqa: F401 — re-exported
+    _BIO_SHORT_MAX_CHARS,
+    _CJK_RE,
+    _ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
+    _ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS,
+    _ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS,
+    _ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
+    _ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+    _ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
+    _RUNNING_ROOMS,
+    _RUNNING_ROOMS_LOCK,
+    ENDING_ROOM_RUNTIME_ERROR,
+    EndingRoomBroadcast,
+    EndingRoomDomainError,
+    EndingRoomInputError,
+    EndingRoomServiceError,
+    _branch_evidence_hook,
+    _branch_lookup,
+    _broadcast,
+    _build_participant_followup_evidence,
+    _build_worldline_echo_key,
+    _claim_room,
+    _compact_clause,
+    _compact_text,
+    _delta_chunks,
+    _detect_language,
+    _get_room_phase,
+    _impact_score,
+    _latest_row_for_agent,
+    _load_branch_rows,
+    _normalize_branch_ids,
+    _normalize_selected_representatives,
+    _normalize_selected_witness,
+    _now,
+    _oracle_visible_clause,
+    _oracle_visible_text,
+    _OracleFollowupPlan,
+    _parse_key_moments,
+    _phase_insight,
+    _release_room,
+    _room_memory_partition,
+    _room_memory_partition_id,
+    _room_phase_field,
+    _room_user_participant_id,
+    _roundtable_branch_hook,
+    _serialize_participant,
+    _serialize_thread,
+    _serialize_turn,
+    _set_room_phase,
+    _short_persona,
+    _sort_scope_branch_ids,
+    _speaker_lookup,
+    _stable_oracle_choice,
+    _thread_memory_partition_id,
+    _tier_rank,
+    sanitize_untrusted_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,9 +260,9 @@ def create_ending_room(
     language: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
-        normalized_room_type = room_type if isinstance(room_type, EndingRoomType) else EndingRoomType(str(room_type))
+        normalized_room_type = room_type if isinstance(room_type, EndingRoomType) else EndingRoomType(str(room_type))  # noqa: E501
     except ValueError as exc:
-        raise EndingRoomServiceError(422, "ENDING_ROOM_TYPE_INVALID", "Unsupported room type") from exc
+        raise EndingRoomServiceError(422, "ENDING_ROOM_TYPE_INVALID", "Unsupported room type") from exc  # noqa: E501
 
     normalized_anchor_branch_id = str(anchor_branch_id).strip() if anchor_branch_id else None
     normalized_branch_ids = _normalize_branch_ids(selected_branch_ids)
@@ -272,7 +270,7 @@ def create_ending_room(
     normalized_representatives = _normalize_selected_representatives(selected_representatives)
     normalized_witness = _normalize_selected_witness(selected_witness)
     if not normalized_branch_ids:
-        raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")
+        raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")  # noqa: E501
 
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -287,22 +285,24 @@ def create_ending_room(
         branch_map = _branch_lookup(session, scenario_id)
         missing = [branch_id for branch_id in normalized_branch_ids if branch_id not in branch_map]
         if missing:
-            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")  # noqa: E501
         if normalized_anchor_branch_id and normalized_anchor_branch_id not in branch_map:
-            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Anchor branch not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Anchor branch not found")  # noqa: E501
         if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_agent_ids:
             raise EndingRoomServiceError(
                 422,
                 "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
-                "worldline_roundtable must use selected_representatives instead of selected_agent_ids",
+                "worldline_roundtable must use selected_representatives instead of selected_agent_ids",  # noqa: E501
             )
-        if normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_witness is not None:
+        if (normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE
+                and normalized_witness is not None):
             raise EndingRoomServiceError(
                 422,
                 "ENDING_ROOM_WITNESS_SELECTION_INVALID",
                 "selected_witness is only supported for worldline roundtables",
             )
-        if normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and normalized_representatives:
+        if (normalized_room_type != EndingRoomType.WORLDLINE_ROUNDTABLE
+                and normalized_representatives):
             raise EndingRoomServiceError(
                 422,
                 "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
@@ -310,16 +310,18 @@ def create_ending_room(
             )
         if normalized_room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY}:
             if normalized_anchor_branch_id is None:
-                raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required for single-branch rooms")
+                raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required for single-branch rooms")  # noqa: E501
             if normalized_anchor_branch_id not in normalized_branch_ids:
-                raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "anchor_branch_id must be included in selected_branch_ids")
-            if normalized_room_type == EndingRoomType.ENDING_CHAMBER and len(normalized_agent_ids) > 3:
+                raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "anchor_branch_id must be included in selected_branch_ids")  # noqa: E501
+            if (normalized_room_type == EndingRoomType.ENDING_CHAMBER
+                    and len(normalized_agent_ids) > 3):
                 raise EndingRoomServiceError(
                     422,
                     "ENDING_ROOM_AGENT_SELECTION_INVALID",
                     "ending_chamber supports at most three selected agents",
                 )
-            if normalized_room_type == EndingRoomType.ONE_MOVE_ONLY and len(normalized_agent_ids) > 1:
+            if (normalized_room_type == EndingRoomType.ONE_MOVE_ONLY
+                    and len(normalized_agent_ids) > 1):
                 raise EndingRoomServiceError(
                     422,
                     "ENDING_ROOM_AGENT_SELECTION_INVALID",
@@ -327,7 +329,7 @@ def create_ending_room(
                 )
         branches = [branch_map[branch_id] for branch_id in normalized_branch_ids]
         if any(branch.status != BranchStatus.COMPLETED for branch in branches):
-            raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "Ending rooms require completed branches")
+            raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "Ending rooms require completed branches")  # noqa: E501
         normalized_branch_ids = _sort_scope_branch_ids(branches)
         if normalized_representatives:
             invalid_representative_branch_ids = [
@@ -345,7 +347,8 @@ def create_ending_room(
                 normalized_representatives,
                 normalized_branch_ids,
             )
-        if normalized_witness is not None and normalized_witness["branch_id"] not in normalized_branch_ids:
+        if (normalized_witness is not None
+                and normalized_witness["branch_id"] not in normalized_branch_ids):
             raise EndingRoomServiceError(
                 422,
                 "ENDING_ROOM_WITNESS_SELECTION_INVALID",
@@ -398,10 +401,10 @@ def create_ending_room(
             return load_ending_room_snapshot(existing_room.id), False
 
         title_map = {
-            EndingRoomType.ENDING_CHAMBER: "结局会客厅" if resolved_language == "zh" else "Ending Chamber",
-            EndingRoomType.WORLDLINE_ROUNDTABLE: "世界线圆桌" if resolved_language == "zh" else "Worldline Roundtable",
-            EndingRoomType.ONE_MOVE_ONLY: "只改一步" if resolved_language == "zh" else "One Move Only",
-            EndingRoomType.CROSSLINE_GALLERY: "异线旁听席" if resolved_language == "zh" else "Crossline Gallery",
+            EndingRoomType.ENDING_CHAMBER: "结局会客厅" if resolved_language == "zh" else "Ending Chamber",  # noqa: E501
+            EndingRoomType.WORLDLINE_ROUNDTABLE: "世界线圆桌" if resolved_language == "zh" else "Worldline Roundtable",  # noqa: E501
+            EndingRoomType.ONE_MOVE_ONLY: "只改一步" if resolved_language == "zh" else "One Move Only",  # noqa: E501
+            EndingRoomType.CROSSLINE_GALLERY: "异线旁听席" if resolved_language == "zh" else "Crossline Gallery",  # noqa: E501
         }
         initial_result = None
         initial_status = EndingRoomStatus.DRAFT
@@ -410,13 +413,13 @@ def create_ending_room(
             gallery_note = (
                 "异线旁听席只开放摘要与关键句，不开放全文。"
                 if resolved_language == "zh"
-                else "Crossline Gallery exposes summaries and quoted lines only, never full transcripts."
+                else "Crossline Gallery exposes summaries and quoted lines only, never full transcripts."  # noqa: E501
             )
             initial_result = {
                 "summary": gallery_note,
                 "next_move": None,
                 "archivist_note": gallery_note,
-                "phase_insights": [_phase_insight(resolved_language, EndingRoomPhase.VERDICT, gallery_note)],
+                "phase_insights": [_phase_insight(resolved_language, EndingRoomPhase.VERDICT, gallery_note)],  # noqa: E501
                 "supporting_turns": [],
             }
             initial_status = EndingRoomStatus.DONE
@@ -504,7 +507,7 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         if room is None:
             raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
         participants = session.exec(
-            select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id).order_by(EndingRoomParticipant.id)
+            select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id).order_by(EndingRoomParticipant.id)  # noqa: E501
         ).all()
         threads = _load_room_threads(session, room_id)
         selected_branch_ids = _normalize_branch_ids(
@@ -513,9 +516,11 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         selected_agent_ids = _normalize_branch_ids(
             ((room.config_json or {}).get("selected_agent_ids") or []),
         )
-        participants = _sort_room_participants(participants, selected_branch_ids, selected_agent_ids)
+        participants = _sort_room_participants(
+            participants, selected_branch_ids, selected_agent_ids
+        )
         turns = session.exec(
-            select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id).order_by(EndingRoomTurn.sequence)
+            select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id).order_by(EndingRoomTurn.sequence)  # noqa: E501
         ).all()
         return {
             "id": room.id,
@@ -550,7 +555,7 @@ def load_ending_room_result_payload(room_id: str) -> dict[str, Any]:
         if room is None:
             raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
         if room.result_json is None:
-            raise EndingRoomServiceError(409, "ENDING_ROOM_RESULT_NOT_READY", "Ending room result is not ready")
+            raise EndingRoomServiceError(409, "ENDING_ROOM_RESULT_NOT_READY", "Ending room result is not ready")  # noqa: E501
         return {**snapshot, "result": room.result_json}
 
 
@@ -558,7 +563,7 @@ def load_ending_room_thread_snapshot(thread_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:
         thread = session.get(EndingRoomThread, thread_id)
         if thread is None:
-            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")  # noqa: E501
         room = session.get(EndingRoom, thread.room_id)
         if room is None:
             raise EndingRoomServiceError(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
@@ -603,7 +608,7 @@ def build_thread_memory(thread_id: str) -> list[dict[str, Any]]:
     with Session(get_engine()) as session:
         thread = session.get(EndingRoomThread, thread_id)
         if thread is None:
-            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")  # noqa: E501
         turns = session.exec(
             select(EndingRoomTurn)
             .where(EndingRoomTurn.thread_id == thread_id)
@@ -653,7 +658,7 @@ def _rebuild_room_result(
     base_result: dict[str, Any],
 ) -> dict[str, Any]:
     phase_filter = {
-        EndingRoomType.WORLDLINE_ROUNDTABLE: {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.VERDICT},
+        EndingRoomType.WORLDLINE_ROUNDTABLE: {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.VERDICT},  # noqa: E501
         EndingRoomType.ONE_MOVE_ONLY: {EndingRoomPhase.OPENING, EndingRoomPhase.VERDICT},
     }.get(room.room_type, {turn["phase"] for turn in planned_turns})
     verdict_text = planned_turns[-1]["content"] if planned_turns else ""
@@ -702,9 +707,11 @@ async def _enhance_room_plan_with_llm(
         if participant is None:
             continue
         should_rewrite = turn["phase"] == EndingRoomPhase.VERDICT
-        if room.room_type == EndingRoomType.ONE_MOVE_ONLY and turn["phase"] == EndingRoomPhase.OPENING:
+        if (room.room_type == EndingRoomType.ONE_MOVE_ONLY
+                and turn["phase"] == EndingRoomPhase.OPENING):
             should_rewrite = True
-        if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE}:
+        if (room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE
+                and turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE}):
             should_rewrite = True
         if not should_rewrite:
             continue
@@ -739,7 +746,13 @@ async def _enhance_room_plan_with_llm(
     return enhanced_turns, _rebuild_room_result(room, participants, enhanced_turns, result)
 
 
-def build_branch_scope_context(scenario_id: str, anchor_branch_id: str, *, language: str | None = None, selected_branch_ids: list[str] | None = None) -> dict[str, Any]:
+def build_branch_scope_context(
+    scenario_id: str,
+    anchor_branch_id: str,
+    *,
+    language: str | None = None,
+    selected_branch_ids: list[str] | None = None,
+) -> dict[str, Any]:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         branch = session.get(Branch, anchor_branch_id)
@@ -759,10 +772,10 @@ def build_branch_scope_context(scenario_id: str, anchor_branch_id: str, *, langu
             f"[R{round_number}] {agent_name or unknown_speaker}: {content}"
             for round_number, agent_name, content in rows
         )
-        foreign_branch_ids = [item for item in _normalize_branch_ids(selected_branch_ids or []) if item != anchor_branch_id]
+        foreign_branch_ids = [item for item in _normalize_branch_ids(selected_branch_ids or []) if item != anchor_branch_id]  # noqa: E501
         foreign_branches = [branch_map.get(branch_id) for branch_id in foreign_branch_ids]
         if any(foreign is None for foreign in foreign_branches):
-            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")  # noqa: E501
         return {
             "scenario_id": scenario.id,
             "question": scenario.question,
@@ -789,16 +802,21 @@ def build_branch_scope_context(scenario_id: str, anchor_branch_id: str, *, langu
         }
 
 
-def build_roundtable_scope_context(scenario_id: str, selected_branch_ids: list[str], *, language: str | None = None) -> dict[str, Any]:
+def build_roundtable_scope_context(
+    scenario_id: str,
+    selected_branch_ids: list[str],
+    *,
+    language: str | None = None,
+) -> dict[str, Any]:
     normalized_branch_ids = _normalize_branch_ids(selected_branch_ids)
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             raise EndingRoomServiceError(404, "SCENARIO_NOT_FOUND", "Scenario not found")
         branch_map = _branch_lookup(session, scenario_id)
-        branches = [branch_map[branch_id] for branch_id in normalized_branch_ids if branch_id in branch_map]
+        branches = [branch_map[branch_id] for branch_id in normalized_branch_ids if branch_id in branch_map]  # noqa: E501
         if len(branches) != len(normalized_branch_ids):
-            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")
+            raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Selected branch not found")  # noqa: E501
         resolved_language = _detect_language(scenario.question, language)
         unknown_speaker = "未知角色" if resolved_language == "zh" else "Unknown"
         branches = [branch_map[branch_id] for branch_id in _sort_scope_branch_ids(branches)]
@@ -926,17 +944,25 @@ def _reconcile_auto_recap_progress(
     return []
 
 
-def _build_room_plan(session: Session, room: EndingRoom, participants: list[EndingRoomParticipant]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    selected_branch_ids = _normalize_branch_ids((room.config_json or {}).get("selected_branch_ids") or [])
-    archivist = next(participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST)
+def _build_room_plan(
+    session: Session,
+    room: EndingRoom,
+    participants: list[EndingRoomParticipant],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    selected_branch_ids = _normalize_branch_ids(
+        (room.config_json or {}).get("selected_branch_ids") or []
+    )
+    archivist = next(participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST)  # noqa: E501
 
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
-        context = build_roundtable_scope_context(room.scenario_id, selected_branch_ids, language=room.language)
+        context = build_roundtable_scope_context(
+            room.scenario_id, selected_branch_ids, language=room.language
+        )
         branch_cards_by_id = {
             representative["branch"]["branch_id"]: representative["branch"]
             for representative in context["representatives"]
         }
-        witness = next((participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.CRITIC), None)
+        witness = next((participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.CRITIC), None)  # noqa: E501
         planned_turns = [
             {
                 "participant_id": participant.id,
@@ -961,7 +987,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                   "content": _build_roundtable_witness_content(
                       branch_cards_by_id.get(witness.source_branch_id, {}),
                       witness=witness,
-                      branch_rows=_load_branch_rows(session, witness.source_branch_id, language=room.language),
+                      branch_rows=_load_branch_rows(session, witness.source_branch_id, language=room.language),  # noqa: E501
                       language=room.language,
                   ),
                   "emotion": "measured",
@@ -988,7 +1014,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                     "content": (
                         "圆桌结论：这些世界线可以并排比较，但每条答案仍然得回到各自的结局里看。"
                         if room.language == "zh"
-                        else "Roundtable verdict: these endings can stand side by side, but each answer still belongs to its own ending."
+                        else "Roundtable verdict: these endings can stand side by side, but each answer still belongs to its own ending."  # noqa: E501
                     ),
                     "emotion": "neutral",
                     "cited_branch_id": None,
@@ -1003,7 +1029,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             "phase_insights": [
                 _phase_insight(room.language, turn["phase"], turn["content"])
                 for turn in planned_turns
-                if turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT}
+                if turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT}  # noqa: E501
             ],
             "supporting_turns": [
                 {
@@ -1024,16 +1050,18 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         return planned_turns, result
 
     if room.anchor_branch_id is None:
-        raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required")
-    context = build_branch_scope_context(room.scenario_id, room.anchor_branch_id, language=room.language, selected_branch_ids=selected_branch_ids)
+        raise EndingRoomServiceError(422, "ENDING_ROOM_ANCHOR_REQUIRED", "anchor_branch_id is required")  # noqa: E501
+    context = build_branch_scope_context(room.scenario_id, room.anchor_branch_id, language=room.language, selected_branch_ids=selected_branch_ids)  # noqa: E501
     branch_rows = _load_branch_rows(session, room.anchor_branch_id, language=room.language)
-    primary_speaker = next((item for item in participants if item.role_slot == EndingRoomRoleSlot.AGENT), archivist)
+    primary_speaker = next(
+        (item for item in participants if item.role_slot == EndingRoomRoleSlot.AGENT), archivist
+    )
     agent_speakers = [
         participant
         for participant in participants
         if participant.role_slot == EndingRoomRoleSlot.AGENT
     ]
-    secondary_speaker = next((participant for participant in agent_speakers if participant.id != primary_speaker.id), None)
+    secondary_speaker = next((participant for participant in agent_speakers if participant.id != primary_speaker.id), None)  # noqa: E501
     primary_meta = primary_speaker.persona_snapshot_json or {}
     evidence_hook = (
         (context["anchor_branch"]["key_moments"] or [None])[0]
@@ -1041,7 +1069,9 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         or context["anchor_branch"]["story"]
         or context["anchor_branch"]["title"]
     )
-    evidence_hook_display = _roundtable_branch_hook(context["anchor_branch"], language=room.language)
+    evidence_hook_display = _roundtable_branch_hook(
+        context["anchor_branch"], language=room.language
+    )
     anchor_branch_title = _oracle_visible_text(
         context["anchor_branch"]["title"],
         language=room.language,
@@ -1062,7 +1092,9 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         else None
     )
     role_hint = str(primary_meta.get("agent_role") or "").strip()
-    persona_hint = str(primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip()
+    persona_hint = str(
+        primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip(
+    )
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
         safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
         safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
@@ -1079,9 +1111,11 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         )
         primary_quote = primary_evidence.get("latest_quote")
         primary_round = int(primary_evidence.get("latest_round") or 0)
-        primary_quote_display = _oracle_visible_text(primary_quote, language=room.language, limit=120)
-        primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""
-        primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote_display}'. " if primary_quote_display and primary_round > 0 else ""
+        primary_quote_display = _oracle_visible_text(
+            primary_quote, language=room.language, limit=120
+        )
+        primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
+        primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote_display}'. " if primary_quote_display and primary_round > 0 else ""  # noqa: E501
         planned_turns = [
             {
                 "participant_id": primary_speaker.id,
@@ -1090,15 +1124,15 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                     f"{primary_speaker.display_name}："
                     f"{primary_quote_clause_zh}"
                     f"那一步也把世界线推到了《{anchor_branch_title}》。"
-                    f"{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"
+                    f"{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"  # noqa: E501
                     f"如果只让我改一手，我会先把「{evidence_hook_display}」前的判断慢半拍，再让复核真正跟上。"
                     if room.language == "zh"
                     else (
                         f"{primary_speaker.display_name}: "
                         f"{primary_quote_clause_en}"
                         f"That also pushed the branch toward {anchor_branch_title}. "
-                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{safe_persona_hint or 'I was optimizing for immediate stability.'} "
-                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook_display}' and make the verification loop catch up."
+                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{safe_persona_hint or 'I was optimizing for immediate stability.'} "  # noqa: E501
+                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook_display}' and make the verification loop catch up."  # noqa: E501
                     )
                 ),
                 "emotion": "reflective",
@@ -1118,7 +1152,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             "summary": move_text,
             "next_move": move_text,
             "archivist_note": move_text,
-            "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],
+            "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],  # noqa: E501
             "supporting_turns": [
                 {
                     "turn_id": None,
@@ -1141,7 +1175,8 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         if room.language == "zh"
         else (
             f"Archivist note: this branch held not because fate drifted there on its own, "
-            f"but because '{evidence_hook_display}' was never cut off in time. Keep permissions inside the current branch "
+            f"but because '{evidence_hook_display}' was never cut off in time. "
+            f"Keep permissions inside the current branch "
             f"and the debrief stays causal instead of turning into collage."
         )
     )
@@ -1151,7 +1186,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         limit=120,
     )
     primary_debrief_quote_zh = (
-        f"我在 R{primary_evidence.get('latest_round')} 当时说过「{primary_evidence.get('latest_quote')}」。"
+        f"我在 R{primary_evidence.get('latest_round')} 当时说过「{primary_evidence.get('latest_quote')}」。"  # noqa: E501
         if primary_evidence.get("latest_quote") and primary_evidence.get("latest_round")
         else ""
     )
@@ -1170,9 +1205,9 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                 f"真正的支点是「{evidence_hook_display}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
                 if room.language == "zh"
                 else (
-                    f"{primary_speaker.display_name}: let me put the focus back on {anchor_branch_title}. "
+                    f"{primary_speaker.display_name}: let me put the focus back on {anchor_branch_title}. "  # noqa: E501
                     f"{primary_debrief_quote_en}"
-                    f"The hinge was '{evidence_hook_display}', and once nobody interrupted it, the rest of the ending rolled downhill from there."
+                    f"The hinge was '{evidence_hook_display}', and once nobody interrupted it, the rest of the ending rolled downhill from there."  # noqa: E501
                 )
             ),
             "emotion": "focused",
@@ -1187,13 +1222,13 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
             limit=120,
         )
         secondary_quote_clause_zh = (
-            f"我在 R{secondary_evidence.get('latest_round')} 其实更在意「{secondary_evidence.get('latest_quote')}」。"
-            if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")
+            f"我在 R{secondary_evidence.get('latest_round')} 其实更在意「{secondary_evidence.get('latest_quote')}」。"  # noqa: E501
+            if secondary_evidence and secondary_evidence.get("latest_quote") and secondary_evidence.get("latest_round")  # noqa: E501
             else ""
         )
         secondary_quote_clause_en = (
-            f"In R{secondary_evidence.get('latest_round')} I leaned on '{secondary_quote_display}'. "
-            if secondary_evidence and secondary_quote_display and secondary_evidence.get("latest_round")
+            f"In R{secondary_evidence.get('latest_round')} I leaned on '{secondary_quote_display}'. "  # noqa: E501
+            if secondary_evidence and secondary_quote_display and secondary_evidence.get("latest_round")  # noqa: E501
             else ""
         )
         planned_turns.append(
@@ -1208,7 +1243,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                     else (
                         f"{secondary_speaker.display_name}: my cut of the hinge is more concrete. "
                         f"{secondary_quote_clause_en}"
-                        "I would pin the failure on the moment the order, ledger, or execution chain stopped closing, not on abstract accident."
+                        "I would pin the failure on the moment the order, ledger, or execution chain stopped closing, not on abstract accident."  # noqa: E501
                     )
                 ),
                 "emotion": "measured",
@@ -1224,7 +1259,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
                 "content": (
                     "我把别线只留作背景。这里先看当前世界线里是谁推了一把，又是谁没能踩住刹车。"
                     if room.language == "zh"
-                    else "Other branches stay in the background here. This chamber is about who pushed and who failed to brake inside the current worldline."
+                    else "Other branches stay in the background here. This chamber is about who pushed and who failed to brake inside the current worldline."  # noqa: E501
                 ),
                 "emotion": "measured",
                 "cited_branch_id": None,
@@ -1245,7 +1280,7 @@ def _build_room_plan(session: Session, room: EndingRoom, participants: list[Endi
         "summary": verdict_text,
         "next_move": None,
         "archivist_note": verdict_text,
-        "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],
+        "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],  # noqa: E501
         "supporting_turns": [
             {
                 "turn_id": None,
@@ -1282,7 +1317,11 @@ def _mark_room_error(room_id: str) -> None:
         session.commit()
 
 
-async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBroadcast | None = None) -> None:
+async def run_ending_room_background(
+    room_id: str,
+    *,
+    ws_callback: EndingRoomBroadcast | None = None,
+) -> None:
     if not _claim_room(room_id):
         return
     lock_lease = None
@@ -1357,7 +1396,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                 turn_id=committed_turn["id"],
             )
 
-        current_phase = existing_auto_turn_refs[-1]["phase"] if existing_auto_turn_refs else EndingRoomPhase.OPENING
+        current_phase = existing_auto_turn_refs[-1]["phase"] if existing_auto_turn_refs else EndingRoomPhase.OPENING  # noqa: E501
         for sequence, turn_plan in enumerate(
             planned_turns[len(existing_auto_turn_refs):],
             start=len(existing_auto_turn_refs) + 1,
@@ -1371,7 +1410,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                         room.updated_at = _now()
                         session.add(room)
                         session.commit()
-                await _broadcast(room_id, ws_callback, {"type": "ending_room_phase_change", "data": {"phase": current_phase.value}})
+                await _broadcast(room_id, ws_callback, {"type": "ending_room_phase_change", "data": {"phase": current_phase.value}})  # noqa: E501
 
             turn_id = _uuid()
             await _broadcast(
@@ -1441,7 +1480,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
                 turn_id=committed_turn.id,
             )
 
-            await _broadcast(room_id, ws_callback, {"type": "ending_room_turn_commit", "data": _serialize_turn(committed_turn)})
+            await _broadcast(room_id, ws_callback, {"type": "ending_room_turn_commit", "data": _serialize_turn(committed_turn)})  # noqa: E501
 
         with Session(get_engine()) as session:
             room = session.get(EndingRoom, room_id)
@@ -1454,7 +1493,7 @@ async def run_ending_room_background(room_id: str, *, ws_callback: EndingRoomBro
             session.add(room)
             session.commit()
 
-        await _broadcast(room_id, ws_callback, {"type": "ending_room_result_ready", "data": {"result": result}})
+        await _broadcast(room_id, ws_callback, {"type": "ending_room_result_ready", "data": {"result": result}})  # noqa: E501
         await _broadcast(room_id, ws_callback, {"type": "status", "data": {"status": "done"}})
     except Exception as exc:
         logger.error("Ending room %s failed", room_id, exc_info=exc)

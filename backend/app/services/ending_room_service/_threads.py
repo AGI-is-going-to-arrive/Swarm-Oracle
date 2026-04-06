@@ -17,7 +17,6 @@ from app.models import (
     EndingRoom,
     EndingRoomInteractionMode,
     EndingRoomParticipant,
-    EndingRoomPhase,
     EndingRoomRoleSlot,
     EndingRoomStatus,
     EndingRoomThread,
@@ -36,23 +35,21 @@ from ._utils import (
     _ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS,
     EndingRoomBroadcast,
     EndingRoomServiceError,
-    _OracleFollowupPlan,
+    _branch_evidence_hook,
     _broadcast,
     _build_participant_followup_evidence,
-    _branch_evidence_hook,
     _delta_chunks,
     _get_room_phase,
     _load_branch_rows,
     _normalize_branch_ids,
     _now,
+    _OracleFollowupPlan,
     _room_memory_partition,
     _room_memory_partition_id,
     _room_user_participant_id,
-    _serialize_thread,
+    _sanitize_oracle_visible_text,
     _serialize_turn,
     _thread_memory_partition_id,
-    logger as _parent_logger,
-    sanitize_untrusted_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,7 +160,8 @@ def _ensure_followup_write_allowed(room: EndingRoom) -> None:
             "ENDING_ROOM_RESULT_NOT_READY",
             "Ending room follow-up is only available after the debrief is done",
         )
-    if room.room_type == EndingRoomType.CROSSLINE_GALLERY or (room.config_json or {}).get("read_only"):
+    if (room.room_type == EndingRoomType.CROSSLINE_GALLERY
+            or (room.config_json or {}).get("read_only")):
         raise EndingRoomServiceError(
             409,
             "ENDING_ROOM_READ_ONLY",
@@ -175,7 +173,7 @@ def _resolve_addressed_participants(
     participants: list[EndingRoomParticipant],
     addressed_agent_ids: list[str],
 ) -> list[EndingRoomParticipant]:
-    normalized = [agent_id.strip() for agent_id in addressed_agent_ids if agent_id and agent_id.strip()]
+    normalized = [agent_id.strip() for agent_id in addressed_agent_ids if agent_id and agent_id.strip()]  # noqa: E501
     if not normalized:
         return []
 
@@ -227,7 +225,7 @@ def _pick_followup_responder(
         [
             participant
             for participant in participants
-            if participant.role_slot in {EndingRoomRoleSlot.AGENT, EndingRoomRoleSlot.REPRESENTATIVE}
+            if participant.role_slot in {EndingRoomRoleSlot.AGENT, EndingRoomRoleSlot.REPRESENTATIVE}  # noqa: E501
         ],
         key=priority,
         reverse=True,
@@ -235,15 +233,15 @@ def _pick_followup_responder(
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT and addressed_participants:
         primary = addressed_participants[0]
         archivist = next(
-            (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
+            (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),  # noqa: E501
             None,
         )
-        return [primary] + ([archivist] if archivist is not None and archivist.id != primary.id else [])
+        return [primary] + ([archivist] if archivist is not None and archivist.id != primary.id else [])  # noqa: E501
     if interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
         responders = addressed_participants or agent_participants
         return responders or participants[:1]
     archivist = next(
-        (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),
+        (participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST),  # noqa: E501
         None,
     )
     if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
@@ -318,7 +316,7 @@ def create_ending_room_thread(
                 "hotseat mode requires exactly one addressed agent",
             )
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT and addressed:
-            resolved_title = addressed[0].display_name if title is None else _thread_title_for_request(room.language, title)
+            resolved_title = addressed[0].display_name if title is None else _thread_title_for_request(room.language, title)  # noqa: E501
         else:
             resolved_title = _thread_title_for_request(room.language, title)
         participant_hash = hashlib.sha256(
@@ -544,6 +542,7 @@ def _commit_followup_assistant_turn(
     *,
     content: str,
 ) -> dict[str, Any]:
+    cleaned_content = _sanitize_oracle_visible_text(content).strip() or plan.anchor_copy
     with Session(get_engine()) as session:
         room = session.get(EndingRoom, plan.room_id)
         thread = session.get(EndingRoomThread, plan.thread_id)
@@ -560,7 +559,7 @@ def _commit_followup_assistant_turn(
             sequence=plan.sequence,
             phase=plan.phase,
             participant_id=plan.participant.id,
-            content=content,
+            content=cleaned_content,
             emotion="measured",
             source=EndingRoomTurnSource.ASSISTANT_FOLLOWUP,
             interaction_mode=plan.interaction_mode,
@@ -594,7 +593,7 @@ async def _append_followup_turns_with_retry(
 ) -> list[dict[str, Any]]:
     normalized_content = str(content or "").strip()
     if not normalized_content:
-        raise EndingRoomServiceError(422, "ENDING_ROOM_USER_TURN_EMPTY", "content must not be empty")
+        raise EndingRoomServiceError(422, "ENDING_ROOM_USER_TURN_EMPTY", "content must not be empty")  # noqa: E501
 
     validated_cited_branch_id: str | None = None
     if cited_branch_id:
@@ -606,7 +605,8 @@ async def _append_followup_turns_with_retry(
                     room_for_check = session.get(EndingRoom, thread_for_check.room_id)
                     if room_for_check is not None:
                         cited_branch = session.get(Branch, cleaned)
-                        if cited_branch is not None and cited_branch.scenario_id == room_for_check.scenario_id:
+                        if (cited_branch is not None
+                                and cited_branch.scenario_id == room_for_check.scenario_id):
                             validated_cited_branch_id = cleaned
                         else:
                             logger.warning(
@@ -657,7 +657,8 @@ async def _append_followup_turns_with_retry(
                     participants,
                     effective_addressed_agent_ids,
                 )
-                if interaction_mode == EndingRoomInteractionMode.HOTSEAT and len(addressed_participants) != 1:
+                if (interaction_mode == EndingRoomInteractionMode.HOTSEAT
+                        and len(addressed_participants) != 1):
                     raise EndingRoomServiceError(
                         422,
                         "ENDING_ROOM_HOTSEAT_REQUIRES_SINGLE_TARGET",
@@ -680,7 +681,7 @@ async def _append_followup_turns_with_retry(
                     question_anchor_ids=normalized_question_anchor_ids,
                     interaction_mode=interaction_mode,
                     cited_branch_id=validated_cited_branch_id,
-                    cited_refs_json=cited_refs_json if validated_cited_branch_id or not cited_branch_id else None,
+                    cited_refs_json=cited_refs_json if validated_cited_branch_id or not cited_branch_id else None,  # noqa: E501
                 )
                 prepared_user_turn = _serialize_turn(user_turn)
                 prepared_plans = plans
@@ -780,6 +781,7 @@ async def _append_followup_turns_with_retry(
                 recent_lines=recent_lines,
                 purpose=f"oracle_followup_{plan.interaction_mode.value}",
             )
+            generated_content = _sanitize_oracle_visible_text(generated_content).strip() or plan.anchor_copy
             chunk_index = 0
             for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
                 await _broadcast(
@@ -951,4 +953,3 @@ def append_thread_user_turn(
             cited_refs_json=cited_refs_json,
         )
     )
-

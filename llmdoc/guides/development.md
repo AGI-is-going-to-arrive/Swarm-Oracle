@@ -117,6 +117,10 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 - `e2e-ending-room-followup-suite.mjs full`
   - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
   - 桌面/移动端均覆盖 `epilogue`（后续三回合）和 `evidence_card`（证据投牌）交互模式
+  - ending-room follow-up 当前走 deterministic API-driven 口径：
+    - 先 API 预热 `ending_chamber`
+    - 再通过 `ResultView` 的 `debugEndingRoomBranch / debugEndingRoomMode / debugEndingRoomAgents` 直开 live chamber
+    - `hotseat / all_present / epilogue / evidence_card` 由 API 发起，UI 只负责观测已提交状态和 readonly replay
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
     - `current_speaker_turn_key / current_speaker_participant_id`
@@ -129,6 +133,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 - `e2e-ending-room-followup-suite.mjs mobile`
   - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
   - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / epilogue / crossline gallery / evidence_card / readonly replay / restore / import`
+  - `single-ending` anchored thread 当前会使用唯一 thread title；如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
 - `single-ending`
   - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 当前已进入 CLI summary
   - 桌面 single-ending 与中英语言切换当前仍建议保留真实浏览器复核

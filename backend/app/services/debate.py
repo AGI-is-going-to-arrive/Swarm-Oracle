@@ -162,8 +162,8 @@ def _display_value(language: str, kind: DebatePredictionKind, value: str | None)
     target = value or "unknown"
     if kind == DebatePredictionKind.WINNER:
         if language == "zh":
-            return "正方" if target == "proposition" else "反方" if target == "opposition" else target
-        return "Proposition" if target == "proposition" else "Opposition" if target == "opposition" else target
+            return "正方" if target == "proposition" else "反方" if target == "opposition" else target  # noqa: E501
+        return "Proposition" if target == "proposition" else "Opposition" if target == "opposition" else target  # noqa: E501
 
     if language == "zh":
         return {
@@ -196,11 +196,11 @@ def _dimension_label(language: str, dimension: str) -> str:
     return _DEBATE_DIMENSION_LABELS["zh" if language == "zh" else "en"].get(dimension, dimension)
 
 
-def _extract_breakdown_dimensions(raw_breakdown: dict[str, Any] | None) -> dict[str, dict[str, int]]:
+def _extract_breakdown_dimensions(raw_breakdown: dict[str, Any] | None) -> dict[str, dict[str, int]]:  # noqa: E501
     if not isinstance(raw_breakdown, dict):
         return {}
 
-    source = raw_breakdown.get("dimensions") if isinstance(raw_breakdown.get("dimensions"), dict) else raw_breakdown
+    source = raw_breakdown.get("dimensions") if isinstance(raw_breakdown.get("dimensions"), dict) else raw_breakdown  # noqa: E501
     normalized: dict[str, dict[str, int]] = {}
     for dimension in DEBATE_DIMENSIONS:
         scores = source.get(dimension)
@@ -484,7 +484,7 @@ def _build_hybrid_plan(
             score["proposition"] += 5
 
     winner = "proposition" if score["proposition"] > score["opposition"] else "opposition"
-    verdict_tone = adjudicated_tone if adjudicated_tone in _VALID_VERDICT_TONES else base_plan.verdict_tone
+    verdict_tone = adjudicated_tone if adjudicated_tone in _VALID_VERDICT_TONES else base_plan.verdict_tone  # noqa: E501
 
     return (
         DebatePlan(
@@ -589,20 +589,20 @@ def _build_phase_stakes(
 ) -> str:
     if debate.language == "zh":
         mapping = {
-            DebatePhase.OPENING: f"这一阶段决定哪一边先把“{style['pro_case']}”与“{style['con_case']}”讲成更可信的世界线。",
+            DebatePhase.OPENING: f"这一阶段决定哪一边先把“{style['pro_case']}”与“{style['con_case']}”讲成更可信的世界线。",  # noqa: E501
             DebatePhase.CROSSFIRE: f"这里真正的 stakes 是：{style['challenge']}",
-            DebatePhase.REBUTTAL: f"本轮比的是谁能把补丁补进方案里，而不是只把对手打成漏洞清单。优先看 {style['plan']} 是否站得住。",
-            DebatePhase.CLOSING: f"结辩阶段不再拼铺陈，而是拼谁能把 {style['judge_focus']} 压成一句更能落地的判断。",
-            DebatePhase.VERDICT: "裁决阶段要回答的不是谁更会说，而是谁真正把代价、执行权与责任链说清楚了。",
+            DebatePhase.REBUTTAL: f"本轮比的是谁能把补丁补进方案里，而不是只把对手打成漏洞清单。优先看 {style['plan']} 是否站得住。",  # noqa: E501
+            DebatePhase.CLOSING: f"结辩阶段不再拼铺陈，而是拼谁能把 {style['judge_focus']} 压成一句更能落地的判断。",  # noqa: E501
+            DebatePhase.VERDICT: "裁决阶段要回答的不是谁更会说，而是谁真正把代价、执行权与责任链说清楚了。",  # noqa: E501
         }
         return mapping[phase]
 
     mapping = {
-        DebatePhase.OPENING: f"This phase decides who frames '{style['pro_case']}' versus '{style['con_case']}' as the more credible worldline first.",
+        DebatePhase.OPENING: f"This phase decides who frames '{style['pro_case']}' versus '{style['con_case']}' as the more credible worldline first.",  # noqa: E501
         DebatePhase.CROSSFIRE: f"The stakes here are simple: {style['challenge']}",
-        DebatePhase.REBUTTAL: f"Rebuttal is about whether a side can actually repair the exposed gap. Watch whether {style['plan']} sounds executable instead of decorative.",
-        DebatePhase.CLOSING: f"Closing is no longer about volume. It is about compressing {style['judge_focus']} into the cleaner final judgment.",
-        DebatePhase.VERDICT: "Verdict answers who made consequence, execution, and accountability feel more real than rhetoric.",
+        DebatePhase.REBUTTAL: f"Rebuttal is about whether a side can actually repair the exposed gap. Watch whether {style['plan']} sounds executable instead of decorative.",  # noqa: E501
+        DebatePhase.CLOSING: f"Closing is no longer about volume. It is about compressing {style['judge_focus']} into the cleaner final judgment.",  # noqa: E501
+        DebatePhase.VERDICT: "Verdict answers who made consequence, execution, and accountability feel more real than rhetoric.",  # noqa: E501
     }
     return mapping[phase]
 
@@ -615,20 +615,20 @@ def _build_phase_judge_focus(
 ) -> str:
     if debate.language == "zh":
         mapping = {
-            DebatePhase.OPENING: f"评委先看谁把题面收进 {style['judge_focus']}，而不是只停在立场口号。",
+            DebatePhase.OPENING: f"评委先看谁把题面收进 {style['judge_focus']}，而不是只停在立场口号。",  # noqa: E501
             DebatePhase.CROSSFIRE: f"评委此刻最盯的是：{style['challenge']}",
-            DebatePhase.REBUTTAL: f"评委在看谁能把 {style['pressure']} 真正转回到可执行方案，而不是继续空转。",
-            DebatePhase.CLOSING: f"评委关注的是谁把 {style['judge_focus']} 收束成了更稳的终局语气。",
+            DebatePhase.REBUTTAL: f"评委在看谁能把 {style['pressure']} 真正转回到可执行方案，而不是继续空转。",  # noqa: E501
+            DebatePhase.CLOSING: f"评委关注的是谁把 {style['judge_focus']} 收束成了更稳的终局语气。",  # noqa: E501
             DebatePhase.VERDICT: "评委此刻只保留最后的 consequence chain，不再奖励新的表演性发言。",
         }
         return mapping[phase]
 
     mapping = {
-        DebatePhase.OPENING: f"The judge is checking who grounds the motion in {style['judge_focus']} rather than slogan density.",
+        DebatePhase.OPENING: f"The judge is checking who grounds the motion in {style['judge_focus']} rather than slogan density.",  # noqa: E501
         DebatePhase.CROSSFIRE: f"The judge is now watching one thing: {style['challenge']}",
-        DebatePhase.REBUTTAL: f"The judge wants to see who can turn {style['pressure']} back into a workable answer rather than more theatre.",
-        DebatePhase.CLOSING: f"The judge is looking for who compresses {style['judge_focus']} into the steadier final frame.",
-        DebatePhase.VERDICT: "At verdict the judge only keeps the final consequence chain and stops rewarding fresh performance.",
+        DebatePhase.REBUTTAL: f"The judge wants to see who can turn {style['pressure']} back into a workable answer rather than more theatre.",  # noqa: E501
+        DebatePhase.CLOSING: f"The judge is looking for who compresses {style['judge_focus']} into the steadier final frame.",  # noqa: E501
+        DebatePhase.VERDICT: "At verdict the judge only keeps the final consequence chain and stops rewarding fresh performance.",  # noqa: E501
     }
     return mapping[phase]
 
@@ -653,27 +653,27 @@ def _build_phase_commentary(
 
     if debate.language == "zh":
         if turn_count == 0:
-            return f"这一阶段还没真正展开，但评委已经会按“{style['judge_focus']}”这条轴来预判后面会不会锁盘。"
+            return f"这一阶段还没真正展开，但评委已经会按“{style['judge_focus']}”这条轴来预判后面会不会锁盘。"  # noqa: E501
         if pressure_side == "balanced":
             return (
                 f"{_display_phase(debate.language, phase)}目前还是拉锯，没有哪一边把分差彻底压开。"
                 f"真正的变化取决于后续谁能先把 {style['challenge']} 讲成无法回避的现实代价。"
             )
         return (
-            f"{leader_label}在{_display_phase(debate.language, phase)}这一段先拿到了 {phase_margin} 分优势，"
-            f"累计漂移来到 {abs(cumulative_margin)} 分级别。评委会自然把注意力往“{style['judge_focus']}”更清楚的一边倾斜。"
+            f"{leader_label}在{_display_phase(debate.language, phase)}这一段先拿到了 {phase_margin} 分优势，"  # noqa: E501
+            f"累计漂移来到 {abs(cumulative_margin)} 分级别。评委会自然把注意力往“{style['judge_focus']}”更清楚的一边倾斜。"  # noqa: E501
         )
 
     if turn_count == 0:
-        return f"This phase has not opened yet, but the judge is already primed to read it through {style['judge_focus']}."
+        return f"This phase has not opened yet, but the judge is already primed to read it through {style['judge_focus']}."  # noqa: E501
     if pressure_side == "balanced":
         return (
             f"{_display_phase(debate.language, phase)} is still trading evenly. "
-            f"The next real shift will come from whoever makes {style['challenge']} feel less abstract and more unavoidable."
+            f"The next real shift will come from whoever makes {style['challenge']} feel less abstract and more unavoidable."  # noqa: E501
         )
     return (
-        f"{leader_label} took a {phase_margin}-point edge in {_display_phase(debate.language, phase)}, "
-        f"pushing the cumulative drift to {abs(cumulative_margin)}. That naturally tilts the judge toward the side making {style['judge_focus']} easier to execute."
+        f"{leader_label} took a {phase_margin}-point edge in {_display_phase(debate.language, phase)}, "  # noqa: E501
+        f"pushing the cumulative drift to {abs(cumulative_margin)}. That naturally tilts the judge toward the side making {style['judge_focus']} easier to execute."  # noqa: E501
     )
 
 
@@ -693,14 +693,14 @@ def _build_phase_counterplay_note(
         if outcome == "hit":
             return f"这手反制押注最后命中，说明 {phase_label} 的分歧真的把局势推向了 {target}。"
         if outcome == "miss":
-            return f"这手反制押注最后未中，说明 {phase_label} 的表面波动没有真的把局势翻到 {target}。"
+            return f"这手反制押注最后未中，说明 {phase_label} 的表面波动没有真的把局势翻到 {target}。"  # noqa: E501
         return f"本阶段已经挂出一手押向 {target} 的反制对冲，评委会更敏感地看这条分歧会不会真翻盘。"
 
     if outcome == "hit":
-        return f"The counterplay hedge ultimately landed, which means the fault line in {phase_label} really did push the room toward {target}."
+        return f"The counterplay hedge ultimately landed, which means the fault line in {phase_label} really did push the room toward {target}."  # noqa: E501
     if outcome == "miss":
-        return f"The counterplay hedge ultimately missed, which means the apparent volatility in {phase_label} never truly flipped the room toward {target}."
-    return f"A live counterplay hedge is hanging on {target} in {phase_label}, so the judge is reading this fault line with extra sensitivity."
+        return f"The counterplay hedge ultimately missed, which means the apparent volatility in {phase_label} never truly flipped the room toward {target}."  # noqa: E501
+    return f"A live counterplay hedge is hanging on {target} in {phase_label}, so the judge is reading this fault line with extra sensitivity."  # noqa: E501
 
 
 def _build_phase_insights(
@@ -767,7 +767,7 @@ def _build_phase_insights(
         )
         if counterplay_context and counterplay_context["phase"] == phase:
             insights[-1]["commentary"] = (
-                f"{insights[-1]['commentary']} {_build_phase_counterplay_note(debate=debate, counterplay_context=counterplay_context)}"
+                f"{insights[-1]['commentary']} {_build_phase_counterplay_note(debate=debate, counterplay_context=counterplay_context)}"  # noqa: E501
             )
     return insights
 
@@ -781,7 +781,9 @@ def _build_judge_summary_fallback(
     counterplay_context: dict[str, Any] | None = None,
 ) -> str:
     winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
-    tone_label = _display_value(debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone)
+    tone_label = _display_value(
+        debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone
+    )
     margin = abs(plan.score["proposition"] - plan.score["opposition"])
     if debate.language == "zh":
         base = (
@@ -797,14 +799,14 @@ def _build_judge_summary_fallback(
                 counterplay_context["target_value"],
             )
             hedge_outcome = "命中" if counterplay_context["outcome"] == "hit" else "未中"
-            base += f" 本场反制押注押在 {hedge_target}，最终{hedge_outcome}，说明局势在{_display_phase(debate.language, counterplay_context['phase'])}后的收束方向并没有脱离关键分歧。"
+            base += f" 本场反制押注押在 {hedge_target}，最终{hedge_outcome}，说明局势在{_display_phase(debate.language, counterplay_context['phase'])}后的收束方向并没有脱离关键分歧。"  # noqa: E501
         return base[:900]
 
     base = (
         f"Judge summary: {winner_label} wins by {margin} points with an overall {tone_label} tone. "
         f"The strongest winning point was: {best_argument}. "
         f"The sharpest pushback came from: {best_rebuttal}. "
-        "The edge came from translating argument into concrete execution consequences and accountability."
+        "The edge came from translating argument into concrete execution consequences and accountability."  # noqa: E501
     )
     if counterplay_context:
         hedge_target = _display_value(
@@ -814,7 +816,7 @@ def _build_judge_summary_fallback(
         )
         hedge_outcome = "hit" if counterplay_context["outcome"] == "hit" else "missed"
         base += (
-            f" The counterplay hedge backed {hedge_target} and {hedge_outcome}, which shows how the debate's late direction did or did not break from the visible fault line."
+            f" The counterplay hedge backed {hedge_target} and {hedge_outcome}, which shows how the debate's late direction did or did not break from the visible fault line."  # noqa: E501
     )
     return base[:900]
 
@@ -838,7 +840,7 @@ def _build_dimension_rationales_fallback(
         if debate.language == "zh":
             if winner_score >= loser_score:
                 rationales[dimension] = (
-                    f"{winner_label}在{label}上领先 {lead} 格，关键在于它把论点推进成了更具体的机制和执行后果。"
+                    f"{winner_label}在{label}上领先 {lead} 格，关键在于它把论点推进成了更具体的机制和执行后果。"  # noqa: E501
                 )
             else:
                 rationales[dimension] = (
@@ -847,11 +849,11 @@ def _build_dimension_rationales_fallback(
         else:
             if winner_score >= loser_score:
                 rationales[dimension] = (
-                    f"{winner_label} held the edge on {label} by {lead}, mainly by turning claims into a clearer mechanism and consequence chain."
+                    f"{winner_label} held the edge on {label} by {lead}, mainly by turning claims into a clearer mechanism and consequence chain."  # noqa: E501
                 )
             else:
                 rationales[dimension] = (
-                    f"{loser_label} showed flashes on {label}, but never converted that edge into the final verdict."
+                    f"{loser_label} showed flashes on {label}, but never converted that edge into the final verdict."  # noqa: E501
                 )
     return rationales
 
@@ -867,7 +869,9 @@ def _build_judge_analysis_fallback(
     loser_side = "opposition" if plan.winner == "proposition" else "proposition"
     winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
     loser_label = _display_value(debate.language, DebatePredictionKind.WINNER, loser_side)
-    tone_label = _display_value(debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone)
+    tone_label = _display_value(
+        debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone
+    )
     margin = abs(plan.score["proposition"] - plan.score["opposition"])
     dimension_rationales = _build_dimension_rationales_fallback(debate=debate, plan=plan)
     ranked_dimensions = sorted(
@@ -900,34 +904,34 @@ def _build_judge_analysis_fallback(
         )
         if counterplay_context:
             swing_factor = (
-                f"关键转折出现在{_display_phase(debate.language, counterplay_context['phase'])}之后。"
+                f"关键转折出现在{_display_phase(debate.language, counterplay_context['phase'])}之后。"  # noqa: E501
                 f"局面虽然出现过对冲想象，但最后还是收束到“{tone_label}”这条判词。"
             )
         else:
             swing_factor = (
-                f"真正决定胜负的不是单句气势，而是谁在{decisive_label}上持续把分差拉开，并稳住了 {margin} 分级别的终局。"
+                f"真正决定胜负的不是单句气势，而是谁在{decisive_label}上持续把分差拉开，并稳住了 {margin} 分级别的终局。"  # noqa: E501
             )
         closing_note = (
             f"评委最后选的不是更会喊口号的一边，而是更能把“{tone_label}”落成可执行结果的一边。"
         )
     else:
         winner_reason = (
-            f"{winner_label} won on {decisive_label}: it turned '{best_argument}' into a concrete chain of consequence, ownership, and execution."
+            f"{winner_label} won on {decisive_label}: it turned '{best_argument}' into a concrete chain of consequence, ownership, and execution."  # noqa: E501
         )
         loser_gap = (
-            f"{loser_label} created pressure, but '{best_rebuttal}' never expanded into the kind of accountability or execution gap that could rewrite the verdict."
+            f"{loser_label} created pressure, but '{best_rebuttal}' never expanded into the kind of accountability or execution gap that could rewrite the verdict."  # noqa: E501
         )
         if counterplay_context:
             swing_factor = (
-                f"The decisive turn came after { _display_phase(debate.language, counterplay_context['phase']) }. "
-                f"The room hinted at a hedge, but the debate still closed in a {tone_label} direction."
+                f"The decisive turn came after { _display_phase(debate.language, counterplay_context['phase']) }. "  # noqa: E501
+                f"The room hinted at a hedge, but the debate still closed in a {tone_label} direction."  # noqa: E501
             )
         else:
             swing_factor = (
-                f"The result turned on sustained edge in {decisive_label}, not one loud exchange, and that edge held through a {margin}-point finish."
+                f"The result turned on sustained edge in {decisive_label}, not one loud exchange, and that edge held through a {margin}-point finish."  # noqa: E501
             )
         closing_note = (
-            f"The judge ultimately backed the side that made the {tone_label} outcome feel more executable rather than more theatrical."
+            f"The judge ultimately backed the side that made the {tone_label} outcome feel more executable rather than more theatrical."  # noqa: E501
         )
 
     return {
@@ -948,7 +952,12 @@ def _build_judge_analysis_fallback(
     }
 
 
-def _coerce_judge_analysis_payload(raw: dict[str, Any], fallback: dict[str, Any], *, language: str) -> dict[str, Any]:
+def _coerce_judge_analysis_payload(
+    raw: dict[str, Any],
+    fallback: dict[str, Any],
+    *,
+    language: str,
+) -> dict[str, Any]:
     dimension_rationales: dict[str, str] = {}
     raw_dimension_rationales = raw.get("dimension_rationales")
     if isinstance(raw_dimension_rationales, dict):
@@ -957,7 +966,7 @@ def _coerce_judge_analysis_payload(raw: dict[str, Any], fallback: dict[str, Any]
             if isinstance(value, str) and value.strip():
                 dimension_rationales[dimension] = value.strip()
     for dimension in DEBATE_DIMENSIONS:
-        dimension_rationales.setdefault(dimension, fallback["dimension_rationales"].get(dimension, ""))
+        dimension_rationales.setdefault(dimension, fallback["dimension_rationales"].get(dimension, ""))  # noqa: E501
 
     summary = str(raw.get("summary") or raw.get("content") or "").strip()
     if summary:
@@ -970,7 +979,7 @@ def _coerce_judge_analysis_payload(raw: dict[str, Any], fallback: dict[str, Any]
         "swing_factor": str(raw.get("swing_factor") or "").strip() or fallback["swing_factor"],
         "closing_note": str(raw.get("closing_note") or "").strip() or fallback["closing_note"],
         "dimension_rationales": dimension_rationales,
-        "counterplay_explanation": str(raw.get("counterplay_explanation") or "").strip() or fallback.get("counterplay_explanation"),
+        "counterplay_explanation": str(raw.get("counterplay_explanation") or "").strip() or fallback.get("counterplay_explanation"),  # noqa: E501
         "adjudication": _coerce_llm_adjudication(raw),
     }
 
@@ -1037,7 +1046,9 @@ async def _generate_judge_analysis(
         return fallback
 
     winner_label = _display_value(debate.language, DebatePredictionKind.WINNER, plan.winner)
-    tone_label = _display_value(debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone)
+    tone_label = _display_value(
+        debate.language, DebatePredictionKind.VERDICT_TONE, plan.verdict_tone
+    )
     highlight_turns = turns[-4:] if len(turns) >= 4 else turns
     highlight_block = "\n".join(
         f"- {_display_phase(debate.language, turn.phase)} / {turn.speaker_name}: {turn.content}"
@@ -1047,7 +1058,7 @@ async def _generate_judge_analysis(
         counterplay_block = ""
         if counterplay_context:
             counterplay_block = (
-                f"{format_untrusted_text_block('反制押注', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"
+                f"{format_untrusted_text_block('反制押注', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"  # noqa: E501
             )
         prompt = (
             "你是 SwarmOracle Debate Arena 的终局评委与解说员。\n"
@@ -1056,7 +1067,7 @@ async def _generate_judge_analysis(
             f"{format_untrusted_text_block('正式动议', debate.motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('最佳论点', best_argument, max_chars=500)}\n"
             f"{format_untrusted_text_block('最佳反驳', best_rebuttal, max_chars=500)}\n"
-            f"{format_untrusted_text_block('维度 breakdown', str(plan.breakdown), max_chars=1200)}\n"
+            f"{format_untrusted_text_block('维度 breakdown', str(plan.breakdown), max_chars=1200)}\n"  # noqa: E501
             f"{format_untrusted_text_block('关键回合摘录', highlight_block, max_chars=1400)}\n"
             f"{counterplay_block}"
             f"胜方：{winner_label}\n"
@@ -1085,30 +1096,30 @@ async def _generate_judge_analysis(
         counterplay_block = ""
         if counterplay_context:
             counterplay_block = (
-                f"{format_untrusted_text_block('Counterplay hedge', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"
+                f"{format_untrusted_text_block('Counterplay hedge', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"  # noqa: E501
             )
         prompt = (
             "You are the final judge and color commentator for SwarmOracle Debate Arena.\n"
-            "Return a JSON verdict package that sounds like a human judge who actually watched the debate unfold.\n"
+            "Return a JSON verdict package that sounds like a human judge who actually watched the debate unfold.\n"  # noqa: E501
             f"{format_untrusted_text_block('Debate question', debate.question, max_chars=600)}\n"
             f"{format_untrusted_text_block('Motion', debate.motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('Best argument', best_argument, max_chars=500)}\n"
             f"{format_untrusted_text_block('Best rebuttal', best_rebuttal, max_chars=500)}\n"
-            f"{format_untrusted_text_block('Dimension breakdown', str(plan.breakdown), max_chars=1200)}\n"
-            f"{format_untrusted_text_block('Key turn highlights', highlight_block, max_chars=1400)}\n"
+            f"{format_untrusted_text_block('Dimension breakdown', str(plan.breakdown), max_chars=1200)}\n"  # noqa: E501
+            f"{format_untrusted_text_block('Key turn highlights', highlight_block, max_chars=1400)}\n"  # noqa: E501
             f"{counterplay_block}"
             f"Winner: {winner_label}\n"
             f"Verdict tone: {tone_label}\n"
             "Requirements:\n"
             "- The language should sound like a sharp human judge, not a boilerplate analyst\n"
             "- summary must be 3-4 sentences and explain why the winner actually won\n"
-            "- winner_reason / loser_gap / swing_factor / closing_note should each be 1-2 sentences\n"
+            "- winner_reason / loser_gap / swing_factor / closing_note should each be 1-2 sentences\n"  # noqa: E501
             "- dimension_rationales must cover coherence / evidence / adaptability / impact\n"
             "- adjudication.winner must be proposition or opposition\n"
             "- adjudication.verdict_tone must be one of order / balance / rupture\n"
-            "- adjudication.dimensions must cover all four dimensions with integer scores from 1-5 for both sides\n"
+            "- adjudication.dimensions must cover all four dimensions with integer scores from 1-5 for both sides\n"  # noqa: E501
             "- If no counterplay hedge exists, set counterplay_explanation to an empty string\n"
-            "- Avoid generic praise and point to mechanisms, consequences, or accountability chains\n"
+            "- Avoid generic praise and point to mechanisms, consequences, or accountability chains\n"  # noqa: E501
             "- Output strict JSON only: "
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
             "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
@@ -1179,21 +1190,22 @@ def _build_counterplay_explanation(
         if outcome == "hit":
             return (
                 f"这次反制押注押在 {target_label}，最终与结果一致。"
-                f"{phase_label}阶段场上主导方是 {phase_leader_label}，分差 {swing}，但后续走势仍把判词收束到 {actual_label}。"
+                f"{phase_label}阶段场上主导方是 {phase_leader_label}，"
+                f"分差 {swing}，但后续走势仍把判词收束到 {actual_label}。"
             )
         return (
             f"这次反制押注押在 {target_label}，但最终结果落在 {actual_label}。"
-            f"{phase_label}阶段场上主导方是 {phase_leader_label}，分差 {swing}，说明后续没有出现足够的反转力度。"
+            f"{phase_label}阶段场上主导方是 {phase_leader_label}，分差 {swing}，说明后续没有出现足够的反转力度。"  # noqa: E501
         )
 
     if outcome == "hit":
         return (
             f"The hedge backed {target_label} and the final result landed there. "
-            f"During {phase_label}, the visible leader was {phase_leader_label} with a {swing}-point swing, but the later rounds still pulled the verdict toward {actual_label}."
+            f"During {phase_label}, the visible leader was {phase_leader_label} with a {swing}-point swing, but the later rounds still pulled the verdict toward {actual_label}."  # noqa: E501
         )
     return (
         f"The hedge backed {target_label}, but the final result landed on {actual_label}. "
-        f"During {phase_label}, the visible leader was {phase_leader_label} with a {swing}-point swing, so the expected reversal never became strong enough."
+        f"During {phase_label}, the visible leader was {phase_leader_label} with a {swing}-point swing, so the expected reversal never became strong enough."  # noqa: E501
     )
 
 
@@ -1332,7 +1344,9 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
             turns=turns,
             counterplays=counterplays,
         )
-        plan = _plan_from_persisted_debate(debate) if debate.status == DebateStatus.DONE else build_debate_plan(debate.question)
+        plan = _plan_from_persisted_debate(
+            debate) if debate.status == DebateStatus.DONE else build_debate_plan(debate.question
+        )
         persisted_phase_insights = _extract_persisted_phase_insights(debate.breakdown_json)
         snapshot = _serialize_debate(
             debate,
@@ -1411,7 +1425,7 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
                 plan=plan,
             )
         adjudication_mode = str(
-            _extract_breakdown_metadata(debate.breakdown_json).get("adjudication_mode") or "deterministic"
+            _extract_breakdown_metadata(debate.breakdown_json).get("adjudication_mode") or "deterministic"  # noqa: E501
         )
         snapshot["result"] = {
             "winner": debate.winner,
@@ -1458,7 +1472,7 @@ async def run_debate_background(
             )
             return
 
-        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})
+        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})  # noqa: E501
         engine = get_engine()
         with Session(engine) as session:
             stored_debate = session.get(Debate, debate_id)
@@ -1636,13 +1650,13 @@ async def run_debate_background(
                     }
                     if result_payload is not None
                     else {
-                        **{key: value for key, value in finalized.items() if key != "phase_insights"},
+                        **{key: value for key, value in finalized.items() if key != "phase_insights"},  # noqa: E501
                         "phase_insights": finalized.get("phase_insights", []),
                     }
                 ),
             },
         )
-        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.DONE.value}})
+        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.DONE.value}})  # noqa: E501
     except Exception as exc:
         logger.error("Debate %s failed: %s", debate_id, exc, exc_info=True)
         _mark_debate_error(debate_id)
@@ -1665,7 +1679,7 @@ async def run_debate_background(
 def score_prediction(prediction: DebatePrediction, debate: Debate) -> tuple[float, str]:
     if prediction.kind == DebatePredictionKind.WINNER:
         matched = prediction.target_value == debate.winner
-        score = round(30 + prediction.confidence * 70, 1) if matched else round((1 - prediction.confidence) * 35, 1)
+        score = round(30 + prediction.confidence * 70, 1) if matched else round((1 - prediction.confidence) * 35, 1)  # noqa: E501
         reason = _score_reason(
             debate.language,
             matched=matched,
@@ -1675,7 +1689,7 @@ def score_prediction(prediction: DebatePrediction, debate: Debate) -> tuple[floa
         return score, reason
 
     matched = prediction.target_value == debate.verdict_tone
-    score = round(25 + prediction.confidence * 75, 1) if matched else round((1 - prediction.confidence) * 30, 1)
+    score = round(25 + prediction.confidence * 75, 1) if matched else round((1 - prediction.confidence) * 30, 1)  # noqa: E501
     reason = _score_reason(
         debate.language,
         matched=matched,
@@ -1744,7 +1758,7 @@ def _build_script(
         verdict_tone=plan.verdict_tone,
         winner=plan.winner,
     )
-    sequence.append((next_index, DebatePhase.VERDICT, DebateSide.JUDGE, cast[DebateSide.JUDGE], verdict_content, None))
+    sequence.append((next_index, DebatePhase.VERDICT, DebateSide.JUDGE, cast[DebateSide.JUDGE], verdict_content, None))  # noqa: E501
     return sequence
 
 
@@ -1803,7 +1817,9 @@ def _update_live_score(*, debate_id: str, proposition: int, opposition: int) -> 
             return
         debate.score_proposition = proposition
         debate.score_opposition = opposition
-        debate.audience_meter = _audience_meter({"proposition": proposition, "opposition": opposition})
+        debate.audience_meter = _audience_meter(
+            {"proposition": proposition, "opposition": opposition}
+        )
         debate.updated_at = _now()
         session.add(debate)
         session.commit()
@@ -1863,7 +1879,9 @@ def _finalize_debate(
             if counterplay.kind == DebatePredictionKind.WINNER:
                 counterplay.outcome = "hit" if counterplay.target_value == debate.winner else "miss"
             else:
-                counterplay.outcome = "hit" if counterplay.target_value == debate.verdict_tone else "miss"
+                counterplay.outcome = (
+                    "hit" if counterplay.target_value == debate.verdict_tone else "miss"
+                )
             session.add(counterplay)
         persisted_counterplay_result = _build_counterplay_result(
             predictions,
@@ -1879,7 +1897,7 @@ def _finalize_debate(
         )
         latest_counterplay_explanation = None
         if judge_analysis:
-            latest_counterplay_explanation = str(judge_analysis.get("counterplay_explanation") or "").strip() or None
+            latest_counterplay_explanation = str(judge_analysis.get("counterplay_explanation") or "").strip() or None  # noqa: E501
         debate.breakdown_json = _pack_breakdown_payload(
             dimensions=plan.breakdown,
             judge_rationale=(
@@ -2015,7 +2033,7 @@ def _serialize_prediction(prediction: DebatePrediction) -> dict[str, Any]:
         "user_id": prediction.user_id,
         "user_name": prediction.user_name,
         "is_counterplay": prediction.is_counterplay,
-        "counterplay_phase": prediction.counterplay_phase.value if prediction.counterplay_phase else None,
+        "counterplay_phase": prediction.counterplay_phase.value if prediction.counterplay_phase else None,  # noqa: E501
         "counterplay_variant": prediction.counterplay_variant,
         "score": prediction.score,
         "score_reason": prediction.score_reason,
@@ -2121,13 +2139,15 @@ def _build_replay_digest(
     counterplay_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     digest: list[dict[str, Any]] = []
-    for phase in (DebatePhase.OPENING, DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL, DebatePhase.CLOSING, DebatePhase.VERDICT):
+    for phase in (DebatePhase.OPENING, DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL, DebatePhase.CLOSING, DebatePhase.VERDICT):  # noqa: E501
         phase_turns = [turn for turn in turns if turn.phase == phase]
         if not phase_turns:
             continue
         lead_turn = phase_turns[-1]
         quote = lead_turn.content
-        if counterplay_context and counterplay_context["phase"] == phase and counterplay_context.get("explanation"):
+        if (counterplay_context
+                and counterplay_context["phase"] == phase
+                and counterplay_context.get("explanation")):
             quote = f"{lead_turn.content}\n\n{counterplay_context['explanation']}"
         digest.append(
             {
@@ -2205,12 +2225,12 @@ def _render_counterplay_context(debate: Debate, counterplay_context: dict[str, A
         counterplay_context["target_value"],
     )
     outcome = "命中" if debate.language == "zh" and counterplay_context["outcome"] == "hit" else (
-        "未中" if debate.language == "zh" else "hit" if counterplay_context["outcome"] == "hit" else "missed"
+        "未中" if debate.language == "zh" else "hit" if counterplay_context["outcome"] == "hit" else "missed"  # noqa: E501
     )
     phase_label = _display_phase(debate.language, counterplay_context["phase"])
     if debate.language == "zh":
-        return f"{counterplay_context['user_name']} 在{phase_label}阶段押向 {target}，最终{outcome}。"
-    return f"{counterplay_context['user_name']} hedged toward {target} during {phase_label} and {outcome}."
+        return f"{counterplay_context['user_name']} 在{phase_label}阶段押向 {target}，最终{outcome}。"  # noqa: E501
+    return f"{counterplay_context['user_name']} hedged toward {target} during {phase_label} and {outcome}."  # noqa: E501
 
 
 def _pick_best_turn(
@@ -2263,19 +2283,19 @@ def _supporting_turn_reason(language: str, kind: str, phase: DebatePhase) -> str
     phase_label = _display_phase(language, phase)
     if language == "zh":
         mapping = {
-            "winner": f"这是胜方最能把论点落到机制和执行后果上的一击，真正把局势往 {phase_label} 的方向推实了。",
-            "pressure": "这是败方最有威胁的一次施压，说明它并不是没抓到漏洞，只是没能把压力延续成改判。",
-            "swing": "这一段基本锁住了整场辩论的收束方向，评委后面的判断就是沿着这里的分歧继续放大。",
+            "winner": f"这是胜方最能把论点落到机制和执行后果上的一击，真正把局势往 {phase_label} 的方向推实了。",  # noqa: E501
+            "pressure": "这是败方最有威胁的一次施压，说明它并不是没抓到漏洞，只是没能把压力延续成改判。",  # noqa: E501
+            "swing": "这一段基本锁住了整场辩论的收束方向，评委后面的判断就是沿着这里的分歧继续放大。",  # noqa: E501
             "verdict": "这句裁决把前面所有争点压成了最后的结论，是评委视角下的明确盖棺。",
         }
         return mapping.get(kind, "这是评委在复盘时最值得回看的关键一段。")
     mapping = {
-        "winner": f"This is where the winning side made its clearest mechanism-and-consequence case and pushed the debate firmly through {phase_label}.",
-        "pressure": "This was the losing side's sharpest pressure point, showing it did expose a real weakness even if it failed to flip the verdict.",
-        "swing": "This exchange effectively locked the direction of the debate, and the judge's later reasoning keeps building on it.",
+        "winner": f"This is where the winning side made its clearest mechanism-and-consequence case and pushed the debate firmly through {phase_label}.",  # noqa: E501
+        "pressure": "This was the losing side's sharpest pressure point, showing it did expose a real weakness even if it failed to flip the verdict.",  # noqa: E501
+        "swing": "This exchange effectively locked the direction of the debate, and the judge's later reasoning keeps building on it.",  # noqa: E501
         "verdict": "This line compresses the whole debate into the judge's final call.",
     }
-    return mapping.get(kind, "This is one of the turns that matters most when replaying the verdict logic.")
+    return mapping.get(kind, "This is one of the turns that matters most when replaying the verdict logic.")  # noqa: E501
 
 
 def _build_supporting_turns(
@@ -2302,7 +2322,9 @@ def _build_supporting_turns(
         ),
     )
     swing_turn = _pick_best_turn_record(turns, side=plan.winner, phases={swing_phase})
-    verdict_turn = next((turn for turn in reversed(turns) if turn.phase == DebatePhase.VERDICT), None)
+    verdict_turn = next(
+        (turn for turn in reversed(turns) if turn.phase == DebatePhase.VERDICT), None
+    )
 
     selected: list[tuple[str, DebateTurn | None]] = [
         ("winner", winner_turn),

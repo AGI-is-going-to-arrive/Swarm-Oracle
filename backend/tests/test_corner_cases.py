@@ -603,7 +603,7 @@ class TestEngineManagedSqlitePaths:
         fake_engine = _FakeEngine(fake_connection)
 
         monkeypatch.setattr(simulator_module, "get_engine", lambda: fake_engine)
-        monkeypatch.setattr(simulator_module, "_pending_intervention_db_path", lambda: "/tmp/pending.db")
+        monkeypatch.setattr(simulator_module, "_pending_intervention_db_path", lambda: "/tmp/pending.db")  # noqa: E501
         monkeypatch.setattr(
             sqlite3,
             "connect",
@@ -698,7 +698,7 @@ class TestMemoryBuildContextEdgeCases:
 
     def test_crowd_tier_truncates_long_background(self):
         from app.services.memory import build_agent_context
-        agent = {"name": "Alice", "role": "analyst", "persona": "smart", "stance": "neutral", "tier": "CROWD"}
+        agent = {"name": "Alice", "role": "analyst", "persona": "smart", "stance": "neutral", "tier": "CROWD"}  # noqa: E501
         bg = "x" * 200
         ctx = build_agent_context(
             agent=agent,

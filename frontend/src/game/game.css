@@ -420,15 +420,57 @@
   color: var(--gbc-text-muted, #333355);
 }
 
-/* Rank change animation */
+/* Rank change animation — bounce + glow flash */
 .hud-entry--animate {
-  animation: rank-flash 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: rank-flash 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes rank-flash {
+  0% { transform: scale(1); filter: brightness(1); }
+  15% { transform: scale(0.92); }
+  35% { transform: scale(1.18); filter: brightness(1.5); box-shadow: 0 0 12px currentColor; }
+  55% { transform: scale(0.98); filter: brightness(1.1); }
+  100% { transform: scale(1); filter: brightness(1); box-shadow: none; }
+}
+
+/* Odds value change — subtle tick animation */
+.hud-bet__faction b {
+  display: inline-block;
+  transition: color 0.3s ease;
+}
+
+.hud-bet__faction--left b {
+  animation: odds-tick-left 0.4s ease-out;
+}
+
+.hud-bet__faction--right b {
+  animation: odds-tick-right 0.4s ease-out;
+}
+
+@keyframes odds-tick-left {
   0% { transform: scale(1); }
-  30% { transform: scale(1.15); filter: brightness(1.4); }
-  100% { transform: scale(1); filter: brightness(1); }
+  40% { transform: scale(1.15); color: #ff6b6b; }
+  100% { transform: scale(1); }
+}
+
+@keyframes odds-tick-right {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.15); color: #64b5f6; }
+  100% { transform: scale(1); }
+}
+
+/* Bet action button pulse when window is open */
+.hud-bet__action:not(:disabled) {
+  animation: bet-action-breathe 2.5s ease-in-out infinite;
+}
+
+@keyframes bet-action-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(var(--gbc-accent-rgb), 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(var(--gbc-accent-rgb), 0.15);
+  }
 }
 
 /* ── Bet Panel content ── */
@@ -655,5 +697,20 @@
   .hud-bet__action {
     width: 100%;
     justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phaser-game-container,
+  .game-skeleton::before,
+  .game-skeleton__spinner,
+  .theater-panel,
+  .theater-panel::before,
+  .theater-panel__power-led,
+  .hud-entry--animate,
+  .hud-bet__action:not(:disabled),
+  .hud-bet__bar--left,
+  .hud-bet__bar--right {
+    animation: none !important;
   }
 }

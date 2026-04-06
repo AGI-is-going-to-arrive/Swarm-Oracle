@@ -67,7 +67,6 @@ import {
   getStructuredBetKindLabel,
   parseStructuredPredictionText,
   resolveStructuredBetOutcome,
-  type StructuredBetOutcome,
 } from '../lib/predictionBetting';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
@@ -92,10 +91,7 @@ import {
 import { useEndingRoomStore } from '../stores/endingRoomStore';
 import type {
   AgentInfo,
-  CampaignBadge,
   CampaignFinalizeResult,
-  CampaignMastery,
-  CampaignProfileSummary,
   CampaignScenarioSummary,
   PredictionInfo,
   Scenario,
@@ -128,6 +124,9 @@ export default function ResultView() {
   const replayShareId = searchParams.get('share');
   const roomReplayShareId = searchParams.get('roomShare');
   const roomReplayLocalId = searchParams.get('roomLocal');
+  const debugEndingRoomBranch = searchParams.get('debugEndingRoomBranch');
+  const debugEndingRoomMode = searchParams.get('debugEndingRoomMode');
+  const debugEndingRoomAgents = searchParams.get('debugEndingRoomAgents');
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
@@ -153,6 +152,7 @@ export default function ResultView() {
     maxSelectable: number;
   } | null>(null);
   const endingRoomAutomationRef = useRef<Record<string, unknown> | null>(null);
+  const debugEndingRoomAppliedRef = useRef(false);
   const setEndingRoomAutomation = useCallback((value: Record<string, unknown> | null) => {
     endingRoomAutomationRef.current = value;
   }, []);
@@ -775,6 +775,43 @@ export default function ResultView() {
   }, [activeEndingRoomBranchId, normalizeEndingRoomSelection]);
 
   const branches = storyData?.branches ?? [];
+
+  useEffect(() => {
+    if (debugEndingRoomAppliedRef.current) return;
+    if (isReplayMode) return;
+    if (!debugEndingRoomBranch) return;
+    if (!branches.some((branch) => branch.id === debugEndingRoomBranch)) return;
+
+    const requestedMode = debugEndingRoomMode === 'one_move_only'
+      || debugEndingRoomMode === 'crossline_gallery'
+      ? debugEndingRoomMode
+      : 'ending_chamber';
+    const requestedAgentIds = debugEndingRoomAgents
+      ? debugEndingRoomAgents.split(',').map((item) => item.trim()).filter(Boolean)
+      : [];
+    const normalizedAgentIds = requestedMode === 'crossline_gallery'
+      ? []
+      : normalizeEndingRoomSelection(
+          debugEndingRoomBranch,
+          requestedMode,
+          requestedAgentIds,
+        );
+
+    openEndingRoomDirect(
+      debugEndingRoomBranch,
+      requestedMode,
+      normalizedAgentIds,
+    );
+    debugEndingRoomAppliedRef.current = true;
+  }, [
+    branches,
+    debugEndingRoomAgents,
+    debugEndingRoomBranch,
+    debugEndingRoomMode,
+    isReplayMode,
+    normalizeEndingRoomSelection,
+    openEndingRoomDirect,
+  ]);
   const fallbackScenarioMeta = useMemo(() => {
     if (!id || derivedScenarioMeta || replayPayload?.scenarioMeta) {
       return null;

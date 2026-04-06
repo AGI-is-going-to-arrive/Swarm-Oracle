@@ -1,7 +1,6 @@
 """Regression tests for security audit fixes."""
 
 import importlib
-import os
 from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
@@ -56,9 +55,27 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
         monkeypatch.delenv("LOG_LEVEL", raising=False)
         importlib.reload(config_module)
         importlib.reload(main_module)
-        # Re-bind settings in modules that cache it at import time
-        import app.services.llm_client as llm_module
-        llm_module.settings = config_module.settings
+        # Re-bind settings in all modules that cache it via
+        # ``from app.config import settings`` at import time.
+        import app.api.helpers as _hlp
+        import app.api.scenarios as _scn
+        import app.api.schemas as _sch
+        import app.models.database as _db
+        import app.services.debate as _deb
+        import app.services.ending_room_service as _ers
+        import app.services.ending_room_service._content as _ers_c
+        import app.services.ending_room_service._threads as _ers_t
+        import app.services.llm_client as _llm
+        import app.services.memory as _mem
+        import app.services.runtime_lock as _rl
+        import app.services.simulator as _sim
+        import app.services.vector_store as _vec
+        for _mod in (
+            _llm, _sim, _deb, _mem, _vec, _rl,
+            _ers, _ers_c, _ers_t,
+            _db, _scn, _sch, _hlp,
+        ):
+            _mod.settings = config_module.settings
 
 
 async def _always_exists(_scenario_id: str) -> bool:
@@ -92,6 +109,7 @@ class TestOpaqueStrRegression:
         """Regression: _OpaqueStr must not leak in structured JSON logs."""
         import json as _json
         import logging as _logging
+
         from app.logging_utils import JsonLogFormatter
 
         secret = _OpaqueStr("sk-real-key-12345")
@@ -133,7 +151,9 @@ class TestRetrospectiveInterveneRequestTextValidation:
             RetrospectiveInterveneRequest(branch_id="branch-1", round_number=1, text="x" * 2001)
 
     def test_accepts_text_at_2000_character_limit(self):
-        request = RetrospectiveInterveneRequest(branch_id="branch-1", round_number=1, text="x" * 2000)
+        request = RetrospectiveInterveneRequest(
+            branch_id="branch-1", round_number=1, text="x" * 2000
+        )
         assert request.text == "x" * 2000
 
     def test_strips_valid_text(self):
@@ -162,7 +182,7 @@ class TestCreateScenarioRequestUserIdValidation:
 class TestPredictRequestIdentityValidation:
     @pytest.mark.parametrize("field_name", ["user_id", "user_name"])
     def test_rejects_identity_fields_longer_than_128_characters(self, field_name):
-        with pytest.raises(ValidationError, match="user_id and user_name must be at most 128 characters"):
+        with pytest.raises(ValidationError, match="user_id and user_name must be at most 128 characters"):  # noqa: E501
             PredictRequest(prediction_text="Outcome", **{field_name: "u" * 129})
 
     @pytest.mark.parametrize("field_name", ["user_id", "user_name"])
@@ -229,7 +249,7 @@ class TestOpenAPIDocsVisibility:
 
     def test_debug_log_level_does_not_expose_docs(self, monkeypatch):
         """Regression: LOG_LEVEL=DEBUG must NOT auto-expose API docs."""
-        with _reloaded_main_module(monkeypatch, expose_api_docs="false", log_level="DEBUG") as main_module:
+        with _reloaded_main_module(monkeypatch, expose_api_docs="false", log_level="DEBUG") as main_module:  # noqa: E501
             with TestClient(main_module.app) as client:
                 assert client.get("/docs").status_code == 404
                 assert client.get("/openapi.json").status_code == 404

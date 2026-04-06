@@ -150,6 +150,15 @@ export function trimQuoteSnippet(content: string, maxLength = 120): string {
   return `${normalized.slice(0, maxLength).trimEnd()}…`;
 }
 
+export function stripOracleReasoningText(content: string): string {
+  let cleaned = String(content ?? '');
+  const reasoningPrefix = /^\s*<think>[\s\S]*?(?:<\/think>\s*|$)/i;
+  while (reasoningPrefix.test(cleaned)) {
+    cleaned = cleaned.replace(reasoningPrefix, '');
+  }
+  return cleaned.trimStart();
+}
+
 export function buildEndingQuotePrompt(speaker: string, content: string, isZh: boolean): string {
   const snippet = trimQuoteSnippet(content);
   return isZh

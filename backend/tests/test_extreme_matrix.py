@@ -9,11 +9,7 @@ Run:  .venv/bin/python -m pytest tests/test_extreme_matrix.py -v -s
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass
-
-import pytest
 
 from app.services.blackboard import Blackboard
 from app.services.memory import (
@@ -22,9 +18,9 @@ from app.services.memory import (
     format_messages_for_context,
 )
 
-SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。各方均有雄心壮志。"
+SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。各方均有雄心壮志。"  # noqa: E501
 TOPIC = "如果诸葛亮北伐成功占领长安，三国格局将如何改变？各方将如何应对这一局势？"
-SAMPLE = "若孔明得长安，关中粮道可通，西北人心亦动。魏必倾国来争，吾忧蜀道难守、粮尽援绝。当先据潼关、散关，修渠屯田以续。"
+SAMPLE = "若孔明得长安，关中粮道可通，西北人心亦动。魏必倾国来争，吾忧蜀道难守、粮尽援绝。当先据潼关、散关，修渠屯田以续。"  # noqa: E501
 
 BYTES_PER_TOKEN = 2.99  # validated with GPT 5.2
 
@@ -169,7 +165,9 @@ class TestExtremeMatrix:
                 raw_avg = sum(_ctx_bytes_raw(a, msgs) for a in agents) / len(agents)
                 bb_avg = sum(_ctx_bytes_bb(a, bb) for a in agents) / len(agents)
                 ratio = bb_avg / raw_avg if raw_avg else 0
-                marker = "✅" if ratio < 1.0 else "⛔" if ratio > 2.5 else "⚠️" if ratio > 1.5 else "  "
+                marker = (
+                    "✅" if ratio < 1.0 else "⛔" if ratio > 2.5 else "⚠️" if ratio > 1.5 else "  "
+                )
                 row += f" {raw_avg/1000:>6.1f}k{bb_avg/1000:>6.1f}k{ratio:>5.1f}×{marker}"
             print(row)
 

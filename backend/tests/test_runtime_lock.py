@@ -200,7 +200,7 @@ def test_runtime_lock_caches_schema_ensure_per_sqlite_path(monkeypatch, tmp_path
     assert runtime_lock_is_active(simulation_lock_key("scenario-1")) is False
 
     create_table_calls = [
-        statement for statement in statements if "CREATE TABLE IF NOT EXISTS runtime_lock" in statement
+        statement for statement in statements if "CREATE TABLE IF NOT EXISTS runtime_lock" in statement  # noqa: E501
     ]
     assert len(create_table_calls) == 1
 

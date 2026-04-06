@@ -9,7 +9,7 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
     {
         "id": "daily-ai-governance",
         "question": "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？",
-        "question_en": "What if artificial intelligence ruled the world and every nation were governed directly by algorithms?",
+        "question_en": "What if artificial intelligence ruled the world and every nation were governed directly by algorithms?",  # noqa: E501
         "subtitle_zh": "治理博弈 · 中央算法与地方民意",
         "subtitle_en": "Governance Conflict · Algorithmic Rule vs Local Voice",
         "profile_id": "governance",
@@ -69,7 +69,7 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
     {
         "id": "daily-trade-chokepoint",
         "question": "如果全球最关键的海峡被一个海上商团永久垄断，会发生什么？",
-        "question_en": "What if the world’s most critical strait were permanently monopolized by a maritime trade consortium?",
+        "question_en": "What if the world’s most critical strait were permanently monopolized by a maritime trade consortium?",  # noqa: E501
         "subtitle_zh": "贸易绞盘 · 关税杠杆与港口封锁",
         "subtitle_en": "Trade Leverage · Tariff Pressure and Port Choke Points",
         "profile_id": "trade",
@@ -81,7 +81,7 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
     {
         "id": "daily-legal-veto",
         "question": "如果最高法院拥有暂停所有算法政策的紧急否决权，会发生什么？",
-        "question_en": "What if the supreme court held an emergency veto that could pause every algorithmic policy?",
+        "question_en": "What if the supreme court held an emergency veto that could pause every algorithmic policy?",  # noqa: E501
         "subtitle_zh": "法律红线 · 紧急否决与程序补丁",
         "subtitle_en": "Legal Red Lines · Emergency Vetoes and Procedural Patches",
         "profile_id": "law",
@@ -93,7 +93,7 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
     {
         "id": "daily-faith-order",
         "question": "如果一则神谕成为整个王国唯一合法的统治依据，会发生什么？",
-        "question_en": "What if a single prophecy became the only legitimate basis for ruling an entire kingdom?",
+        "question_en": "What if a single prophecy became the only legitimate basis for ruling an entire kingdom?",  # noqa: E501
         "subtitle_zh": "神权号角 · 圣谕改写与异端审判",
         "subtitle_en": "Sacred Order · Rewritten Prophecy and Heresy Trials",
         "profile_id": "faith",
@@ -141,7 +141,9 @@ DAILY_CHALLENGES: tuple[dict[str, Any], ...] = (
     {
         "id": "daily-generic-shuffle",
         "question": "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？",
-        "question_en": "What if every major organization had to randomly swap its leader once a week?",
+        "question_en": (
+            "What if every major organization had to randomly swap its leader once a week?"
+        ),
         "subtitle_zh": "通用博弈 · 关键分歧与隐藏议程",
         "subtitle_en": "General Tension · Core Frictions and Hidden Agendas",
         "profile_id": "generic",

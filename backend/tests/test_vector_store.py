@@ -42,9 +42,9 @@ class TestVectorStore:
         vs = VectorStore(persist_dir=temp_dir)
         assert vs.available
 
-        vs.store("s1", "曹操", "我要统一天下，征服南方", round_num=1, emotion="determined", branch_id="b-main")
-        vs.store("s1", "刘备", "汉室必须复兴，不能让曹操得逞", round_num=1, emotion="passionate", branch_id="b-main")
-        vs.store("s1", "诸葛亮", "北伐是唯一出路", round_num=2, emotion="thoughtful", branch_id="b-main")
+        vs.store("s1", "曹操", "我要统一天下，征服南方", round_num=1, emotion="determined", branch_id="b-main")  # noqa: E501
+        vs.store("s1", "刘备", "汉室必须复兴，不能让曹操得逞", round_num=1, emotion="passionate", branch_id="b-main")  # noqa: E501
+        vs.store("s1", "诸葛亮", "北伐是唯一出路", round_num=2, emotion="thoughtful", branch_id="b-main")  # noqa: E501
 
         results = vs.retrieve("s1", "关于统一天下的讨论", top_k=3, branch_id="b-main")
         assert len(results) == 3

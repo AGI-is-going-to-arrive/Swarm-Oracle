@@ -446,7 +446,7 @@ async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
         with Session(engine) as session:
             queued = list(
                 session.exec(
-                    select(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
+                    select(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)  # noqa: E501
                 ).all()
             )
             for item in queued:
@@ -549,7 +549,7 @@ def _resolve_hierarchical_agent_sets(
 _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     # ---- Chinese variants ----------------------------------------------------
     ("Chinese", "a"): {
-        "preamble": "你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。",
+        "preamble": "你是一位敏锐的历史分歧分析师。请分析以下讨论，判断是否出现了足以改变走向的根本分歧。",  # noqa: E501
         "criteria": (
             "请判断:\n"
             "1. 这些分歧是根本性的路线之争，还是仅仅是表面争论？\n"
@@ -557,7 +557,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "reason_hint": "一句话说明分歧的核心是什么",
         "title_hint": "简短生动的走向标题（6-12字，如：火星殖民计划启动、地球建立统一防线）",
-        "desc_hint": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",
+        "desc_hint": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",  # noqa: E501
         "postamble": (
             "标题写法要求:\n"
             "- 标题要像新闻标题一样吸引眼球，不要用\"走向A\"这种抽象表达\n"
@@ -573,12 +573,12 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
     },
     ("Chinese", "b"): {
-        "preamble": "你是一位偏积极的世界线分叉分析师。请分析以下讨论，只要已经出现互斥未来、制度分流、审批路径分裂、责任链改写或不可同时满足的目标，就优先判定应该 fork。",
+        "preamble": "你是一位偏积极的世界线分叉分析师。请分析以下讨论，只要已经出现互斥未来、制度分流、审批路径分裂、责任链改写或不可同时满足的目标，就优先判定应该 fork。",  # noqa: E501
         "criteria": (
             "判定标准:\n"
-            "1. 不要把 fork 理解成\u201c必须彻底对骂\u201d。只要分歧会导向两条或更多无法同时成立的未来，就可以 fork。\n"
-            "2. 如果同一事件存在不同审批路径、不同责任归属、不同任务节奏、不同公众叙事，且这些差异会改变后续历史，请倾向于 fork。\n"
-            "3. 只有当所有人实际上已经收敛到同一路线，只剩措辞、证据门槛或执行细节差异时，才返回 should_fork=false。\n"
+            "1. 不要把 fork 理解成\u201c必须彻底对骂\u201d。只要分歧会导向两条或更多无法同时成立的未来，就可以 fork。\n"  # noqa: E501
+            "2. 如果同一事件存在不同审批路径、不同责任归属、不同任务节奏、不同公众叙事，且这些差异会改变后续历史，请倾向于 fork。\n"  # noqa: E501
+            "3. 只有当所有人实际上已经收敛到同一路线，只剩措辞、证据门槛或执行细节差异时，才返回 should_fork=false。\n"  # noqa: E501
             "4. 若 should_fork=true，请尽量压缩成 2-4 条最具代表性的未来路径。"
         ),
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
@@ -589,9 +589,9 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "c"): {
         "preamble": (
             "你是一位世界线分叉分析师。请分析以下讨论。只引入一条更积极的规则：\n"
-            "只要这些分歧已经隐含两条或更多无法同时成立的未来，即使讨论双方在安全原则上部分一致，也可以判定 should_fork=true。"
+            "只要这些分歧已经隐含两条或更多无法同时成立的未来，即使讨论双方在安全原则上部分一致，也可以判定 should_fork=true。"  # noqa: E501
         ),
-        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",
+        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
         "title_hint": "简短生动的走向标题（6-12字）",
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
@@ -600,9 +600,9 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "d"): {
         "preamble": (
             "你是一位制度分叉分析师。请分析以下讨论。只引入一条额外规则：\n"
-            "如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。"
+            "如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。"  # noqa: E501
         ),
-        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",
+        "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
         "title_hint": "简短生动的走向标题（6-12字）",
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
@@ -611,7 +611,8 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "e"): {
         "preamble": (
             "你是一位世界线分叉分析师。请分析以下讨论。只引入一条额外规则：\n"
-            "只有当讨论已经明显收敛到同一路线，剩下的差异只属于措辞、证据门槛或执行细节时，才返回 should_fork=false。若你在\u201c表层分歧\u201d和\u201c互斥未来\u201d之间拿不准，请倾向于 fork。"
+            "只有当讨论已经明显收敛到同一路线，剩下的差异只属于措辞、证据门槛或执行细节时，才返回 should_fork=false。"  # noqa: E501
+            "若你在\u201c表层分歧\u201d和\u201c互斥未来\u201d之间拿不准，请倾向于 fork。"
         ),
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
@@ -622,8 +623,9 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "f"): {
         "preamble": (
             "你是一位世界线压缩分析师。请分析以下讨论，并遵循两条规则：\n"
-            "1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。\n"
-            "2. 但请强制做\u201c主路径压缩\u201d：默认只返回 2 条最具代表性的未来。只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。"
+            "1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。\n"  # noqa: E501
+            "2. 但请强制做\u201c主路径压缩\u201d：默认只返回 2 条最具代表性的未来。"
+            "只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。"  # noqa: E501
         ),
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
@@ -638,91 +640,99 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     },
     # ---- English variants ----------------------------------------------------
     ("English", "a"): {
-        "preamble": "You are a sharp historical divergence analyst. Review the discussion below and decide whether it contains a fundamental disagreement strong enough to split the timeline.",
+        "preamble": "You are a sharp historical divergence analyst. Review the discussion below and decide whether it contains a fundamental disagreement strong enough to split the timeline.",  # noqa: E501
         "criteria": (
             "Decide:\n"
-            "1. Are these disagreements fundamental strategic splits or merely surface-level arguments?\n"
-            "2. If a material split exists, how many genuinely different future paths does it create?"
+            "1. Are these disagreements fundamental strategic splits or merely surface-level arguments?\n"  # noqa: E501
+            "2. If a material split exists, how many genuinely different future paths does it create?"  # noqa: E501
         ),
         "reason_hint": "One sentence describing the core disagreement",
-        "title_hint": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",
+        "title_hint": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",  # noqa: E501
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",  # noqa: E501
         "postamble": (
             "Title requirements:\n"
-            "- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'\n"
+            "- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'\n"  # noqa: E501
             "- Use the most distinctive keywords so the difference is obvious at a glance\n"
-            "- Good examples: \"Total War\", \"Negotiated Peace\", \"Tech Breakthrough\", \"Alliance Collapse\"\n"
-            "- Bad examples: \"Aggressive Development Path\", \"Conservative Response Plan\", \"First Possibility\"\n"
+            "- Good examples: \"Total War\", \"Negotiated Peace\", \"Tech Breakthrough\", \"Alliance Collapse\"\n"  # noqa: E501
+            "- Bad examples: \"Aggressive Development Path\", \"Conservative Response Plan\", \"First Possibility\"\n"  # noqa: E501
             "\n"
             "Description requirements:\n"
             "- Each branch description must be concrete and different from the others\n"
-            "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"
-            "- Good example: \"Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat\"\n"
+            "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"  # noqa: E501
+            "- Good example: \"Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat\"\n"  # noqa: E501
             "- Bad example: \"The core disagreement is whether to expand outward\""
         ),
     },
     ("English", "b"): {
-        "preamble": "You are an aggressive timeline-fork analyst. If the discussion already implies incompatible futures, diverging institutions, different approval paths, distinct responsibility chains, incompatible mission tempos, or mutually exclusive goals, prefer should_fork=true.",
+        "preamble": "You are an aggressive timeline-fork analyst. If the discussion already implies incompatible futures, diverging institutions, different approval paths, distinct responsibility chains, incompatible mission tempos, or mutually exclusive goals, prefer should_fork=true.",  # noqa: E501
         "criteria": (
             "Decision rubric:\n"
-            "1. Do not require open hostility. If the disagreement leads to two or more incompatible futures, that is enough to fork.\n"
-            "2. Prefer forking when the same event can proceed through meaningfully different approval paths, ownership structures, risk postures, public narratives, or downstream institutions.\n"
-            "3. Return should_fork=false only when the discussion has effectively converged on one path and the remaining differences are wording, evidence thresholds, or implementation details.\n"
+            "1. Do not require open hostility. If the disagreement leads to two or more incompatible futures, that is enough to fork.\n"  # noqa: E501
+            "2. Prefer forking when the same event can proceed through meaningfully different approval paths, ownership structures, risk postures, public narratives, or downstream institutions.\n"  # noqa: E501
+            "3. Return should_fork=false only when the discussion has effectively converged on one path and the remaining differences are wording, evidence thresholds, or implementation details.\n"  # noqa: E501
             "4. If should_fork=true, compress the result into the 2-4 most representative futures."
         ),
-        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "reason_hint": (
+            "One sentence on why these disagreements do or do not create incompatible futures"
+        ),
         "title_hint": "A vivid future-path title (3-8 words)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
     ("English", "c"): {
         "preamble": (
-            "You are a timeline-fork analyst. Apply one additional rule beyond the default baseline:\n"
-            "If the disagreement already implies two or more incompatible futures, that alone is enough for should_fork=true, even if the participants still agree on some shared safety or governance principles."
+            "You are a timeline-fork analyst. Apply one additional rule beyond the default baseline:\n"  # noqa: E501
+            "If the disagreement already implies two or more incompatible futures, that alone is enough for should_fork=true, even if the participants still agree on some shared safety or governance principles."  # noqa: E501
         ),
-        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",
-        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",  # noqa: E501
+        "reason_hint": (
+            "One sentence on why these disagreements do or do not create incompatible futures"
+        ),
         "title_hint": "A vivid future-path title (3-8 words)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
     ("English", "d"): {
         "preamble": (
             "You are an institutional fork analyst. Apply one additional rule:\n"
-            "If the same event can proceed through meaningfully different approval paths, responsibility chains, mission tempos, or governance structures, and those differences would change downstream decisions and historical narrative, you may return should_fork=true."
+            "If the same event can proceed through meaningfully different approval paths, responsibility chains, mission tempos, or governance structures, and those differences would change downstream decisions and historical narrative, you may return should_fork=true."  # noqa: E501
         ),
-        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",
-        "reason_hint": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",
+        "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",  # noqa: E501
+        "reason_hint": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",  # noqa: E501
         "title_hint": "A vivid future-path title (3-8 words)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
     ("English", "e"): {
         "preamble": (
             "You are a timeline-fork analyst. Apply one additional rule:\n"
-            "Return should_fork=false only when the discussion has clearly converged on one path and the remaining differences are just wording, evidence thresholds, or implementation details. If you are uncertain between a surface disagreement and incompatible futures, lean toward forking."
+            "Return should_fork=false only when the discussion has clearly converged on one path and the remaining differences are just wording, evidence thresholds, or implementation details. If you are uncertain between a surface disagreement and incompatible futures, lean toward forking."  # noqa: E501
         ),
         "criteria": "",
-        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "reason_hint": (
+            "One sentence on why these disagreements do or do not create incompatible futures"
+        ),
         "title_hint": "A vivid future-path title (3-8 words)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
     ("English", "f"): {
         "preamble": (
             "You are a timeline-compression analyst. Apply two rules:\n"
-            "1. If the discussion already implies incompatible futures, or meaningfully different approval paths, responsibility chains, governance structures, or mission tempos, you may fork.\n"
-            "2. But aggressively compress the result into the fewest representative futures: return 2 branches by default, and only return a 3rd branch when it is clearly independent and cannot be merged into the first two."
+            "1. If the discussion already implies incompatible futures, or meaningfully different approval paths, responsibility chains, governance structures, or mission tempos, you may fork.\n"  # noqa: E501
+            "2. But aggressively compress the result into the fewest representative futures: return 2 branches by default, and only return a 3rd branch when it is clearly independent and cannot be merged into the first two."  # noqa: E501
         ),
         "criteria": "",
-        "reason_hint": "One sentence on why these disagreements do or do not create incompatible futures",
+        "reason_hint": (
+            "One sentence on why these disagreements do or do not create incompatible futures"
+        ),
         "title_hint": "A vivid future-path title (3-8 words)",
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",
+        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": (
             "Additional rules:\n"
             "- If should_fork=true, prefer 2 representative branches\n"
-            "- Only return a 3rd branch when it is clearly independent and cannot be merged into the first two\n"
-            "- Do not create separate branches for wording differences, evidence-threshold differences, or implementation details alone"
+            "- Only return a 3rd branch when it is clearly independent and cannot be merged into the first two\n"  # noqa: E501
+            "- Do not create separate branches for wording differences, evidence-threshold differences, or implementation details alone"  # noqa: E501
         ),
     },
 }
@@ -763,7 +773,7 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
             "[Divergence Signals Marked By Agents]\n"
             "{diverge_signals}\n"
             "\n"
-            "[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)"
+            "[Fork Sensitivity] {sensitivity} (0-1, higher means branching should trigger more easily)"  # noqa: E501
         )
         json_label = "Return strict JSON:"
         should_fork_val = "true or false"
@@ -928,7 +938,7 @@ async def run_simulation(
         for a in agents:
             agent_prev_emotions[a["id"]] = a.get("emotion", "neutral") or "neutral"
 
-        logger.info("V2 Visualization enabled: theme=%s, %d sprites", resolved_theme, len(sprite_assignments))
+        logger.info("V2 Visualization enabled: theme=%s, %d sprites", resolved_theme, len(sprite_assignments))  # noqa: E501
 
     async def viz_push(event: dict):
         """Broadcast viz event (no-op if visualization disabled)."""
@@ -1042,7 +1052,7 @@ async def run_simulation(
                 # V2-P2: Broadcast viz:event_anim for butterfly effect
                 if viz_mapper is not None:
                     viz_interv = viz_mapper.map_intervention(
-                        intervention_text, params={"round": round_num, "branch_id": current_branch_id}
+                        intervention_text, params={"round": round_num, "branch_id": current_branch_id}  # noqa: E501
                     )
                     await viz_push(viz_interv)
 
@@ -1068,7 +1078,7 @@ async def run_simulation(
                 )
             else:
                 messages = await _gather_agent_messages(
-                    engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,
+                    engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
                     intervention_text=intervention_text,
                     push=push,
                     blackboard=bb,
@@ -1101,7 +1111,7 @@ async def run_simulation(
                     last_card_round = round_num
                     card_viz = get_card_viz_event(triggered_card)
                     await viz_push(card_viz)
-                    logger.info("V2 Card event triggered: %s at round %d", triggered_card, round_num)
+                    logger.info("V2 Card event triggered: %s at round %d", triggered_card, round_num)  # noqa: E501
 
             # 3) Compress memory every N rounds
             if round_num % settings.MEMORY_COMPRESS_INTERVAL == 0:
@@ -1132,7 +1142,7 @@ async def run_simulation(
                     "fork_detector_active_branch_limit": fork_detector_active_branch_limit,
                     "detector_branch_rank": detector_budget_ranks.get(current_branch_id),
                     "detector_branch_budget_eligible": (
-                        True if detector_budget_eligible_ids is None else current_branch_id in detector_budget_eligible_ids
+                        True if detector_budget_eligible_ids is None else current_branch_id in detector_budget_eligible_ids  # noqa: E501
                     ),
                     "sim_rounds": sim_rounds,
                     "sensitivity": sensitivity,
@@ -1850,7 +1860,7 @@ async def _narrate_branch_data(
     """Collect branch data and narrate it."""
     branch_info = _get_branch(engine, branch_id)
     all_msgs = _get_recent_messages(engine, branch_id, max_rounds=100)
-    raw_text = "\n".join(f"[R{m.get('round', '?')} {m['agent_name']}]: {m['content']}" for m in all_msgs)
+    raw_text = "\n".join(f"[R{m.get('round', '?')} {m['agent_name']}]: {m['content']}" for m in all_msgs)  # noqa: E501
     agents_summary = ", ".join(f"{a['name']}({a['role']})" for a in agents[:10])
 
     result = await narrate_branch(

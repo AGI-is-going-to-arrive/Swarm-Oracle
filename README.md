@@ -21,16 +21,19 @@
 - 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件位于：
   - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
   - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
+- 最近一轮 Oracle ending-room follow-up deterministic API-driven 工件位于：
+  - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/summary.json`
+  - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven5/summary.json`
 - 单结局结果页当前只保留：
   - `进入会客厅`
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
 - 当前仍在持续收口的增量主要是：
   - follow-up 与经典模式的流式一致性
-  - `pretext` 是否继续扩到 `P3 / P4`
+  - `pretext` 更深的 transcript / runtime 稳定化
   - Oracle 更深的 corner-case hardening
-  - `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 已落地后端 + 前端 UI，待更深的 E2E 专项签收
-  - 新增 11 个主题场景（finance、medical、scholar、tech、entertainment、diplomacy 等），当前复用现有场景图作为占位
+  - ending-room follow-up 专项当前已切到 deterministic API-driven 口径；desktop / mobile / full 都已重新签收，`后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 已纳入同一条链路
+  - 新增 11 个主题场景（finance、medical、scholar、tech、entertainment、diplomacy 等），当前全部 33 个主题场景均已有专属 PNG 素材
 
 ## 文档契约
 

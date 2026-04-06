@@ -152,7 +152,7 @@ async def run_sim_background(
         scope_kwargs: dict[str, object] = {"purpose": "scenario_runtime"}
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, scenario_id)
-            parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}
+            parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}  # noqa: E501
             effective_base_url = (
                 (llm_overrides or {}).get("base_url")
                 or parsed_context.get("llm_base_url")
@@ -263,7 +263,7 @@ async def parse_and_run_background(
         pass
 
     local_provider = is_local_provider_url(llm_base_url)
-    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)
+    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
 
     try:
         with llm_request_scope(
@@ -502,11 +502,11 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             "fork_events": [
                 {
                     "parent_branch_id": parent_id,
-                    "parent_branch_title": branch_by_id.get(parent_id).title if branch_by_id.get(parent_id) else "",
+                    "parent_branch_title": branch_by_id.get(parent_id).title if branch_by_id.get(parent_id) else "",  # noqa: E501
                     "fork_round": max(child.fork_round for child in children),
-                    "fork_reason": next((child.fork_reason for child in children if child.fork_reason), ""),
-                    "child_titles": [child.title for child in sorted(children, key=lambda child: child.title)],
-                    "child_branch_ids": [child.id for child in sorted(children, key=lambda child: child.title)],
+                    "fork_reason": next((child.fork_reason for child in children if child.fork_reason), ""),  # noqa: E501
+                    "child_titles": [child.title for child in sorted(children, key=lambda child: child.title)],  # noqa: E501
+                    "child_branch_ids": [child.id for child in sorted(children, key=lambda child: child.title)],  # noqa: E501
                 }
                 for parent_id, children in sorted(
                     fork_groups.items(),

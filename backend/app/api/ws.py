@@ -192,7 +192,7 @@ async def run_websocket_session(
         while True:
             data = await websocket.receive_text()
             if len(data.encode("utf-8")) > 65536:  # 64KB max inbound message (byte count)
-                logger.warning("WS message too large (%d bytes), closing", len(data.encode("utf-8")))
+                logger.warning("WS message too large (%d bytes), closing", len(data.encode("utf-8")))  # noqa: E501
                 await websocket.close(code=1009)  # 1009 = message too big
                 break
             if log_client_messages:

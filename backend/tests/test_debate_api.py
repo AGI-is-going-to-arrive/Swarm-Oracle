@@ -23,7 +23,10 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_create_debate_returns_immediately_and_schedules_background(client: TestClient, monkeypatch):
+def test_create_debate_returns_immediately_and_schedules_background(
+    client: TestClient,
+    monkeypatch,
+):
     scheduled = {"count": 0}
 
     def _capture_schedule(coro):
@@ -52,7 +55,9 @@ def test_create_debate_returns_immediately_and_schedules_background(client: Test
 
 @pytest.mark.asyncio
 async def test_predict_then_fetch_result(client: TestClient):
-    debate = create_debate_record("Should a rotating external review board re-approve every critical city budget?")
+    debate = create_debate_record(
+        "Should a rotating external review board re-approve every critical city budget?"
+    )
 
     predict = client.post(
         f"/api/debate/{debate.id}/predict",
@@ -93,8 +98,8 @@ async def test_predict_then_fetch_result(client: TestClient):
     assert len(payload["phase_insights"]) == 5
     assert payload["phase_insights"][0]["stakes"]
     assert payload["phase_insights"][0]["judge_focus"]
-    assert payload["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}
-    assert "hedge" in payload["phase_insights"][1]["commentary"].lower() or "反制" in payload["phase_insights"][1]["commentary"]
+    assert payload["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}  # noqa: E501
+    assert "hedge" in payload["phase_insights"][1]["commentary"].lower() or "反制" in payload["phase_insights"][1]["commentary"]  # noqa: E501
     assert payload["predictions"][0]["is_counterplay"] is True
     assert payload["predictions"][0]["counterplay_phase"] == "crossfire"
     assert payload["predictions"][0]["counterplay_variant"] == "reversal"
@@ -137,7 +142,9 @@ def test_predict_rejects_counterplay_without_required_metadata(client: TestClien
 
 
 def test_predict_rejects_when_closing_arguments_have_started(client: TestClient):
-    debate = create_debate_record("Should a wartime cabinet publish every mobilization debt before the next offensive?")
+    debate = create_debate_record(
+        "Should a wartime cabinet publish every mobilization debt before the next offensive?"
+    )
 
     with Session(get_engine()) as session:
         stored = session.get(Debate, debate.id)
@@ -161,7 +168,9 @@ def test_predict_rejects_when_closing_arguments_have_started(client: TestClient)
 
 
 def test_predict_rejects_when_debate_is_in_error_state(client: TestClient):
-    debate = create_debate_record("Should every sanctions council publish its broken escalation ladder?")
+    debate = create_debate_record(
+        "Should every sanctions council publish its broken escalation ladder?"
+    )
 
     with Session(get_engine()) as session:
         stored = session.get(Debate, debate.id)
@@ -315,7 +324,7 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
                     "score_delta": {"proposition": 4, "opposition": 0},
                 },
             ],
-            "available_prediction_options": {"winner": ["proposition", "opposition"], "verdict_tone": ["order", "balance", "rupture"]},
+            "available_prediction_options": {"winner": ["proposition", "opposition"], "verdict_tone": ["order", "balance", "rupture"]},  # noqa: E501
             "phase_insights": [
                 {
                     "phase": "opening",
@@ -768,7 +777,7 @@ def test_import_replay_debate_rejects_invalid_phase_insight_direction(client: Te
     assert "invalid phase_insights.pressure_side" in resp.text
 
 
-def test_import_replay_debate_rejects_invalid_phase_insight_confidence_drift_shape(client: TestClient):
+def test_import_replay_debate_rejects_invalid_phase_insight_confidence_drift_shape(client: TestClient):  # noqa: E501
     resp = client.post("/api/debate/import-replay", json={
         "debate": {
             "question": "Should AI run every city?",
@@ -813,7 +822,7 @@ def test_empty_turn_fallbacks_are_readable():
     ) == best_argument
 
     summary = debate_service._build_judge_summary_fallback(
-        debate=Debate(question="Should the council centralize trade?", motion="Motion", language="en"),
+        debate=Debate(question="Should the council centralize trade?", motion="Motion", language="en"),  # noqa: E501
         plan=build_debate_plan("Should the council centralize trade?"),
         best_argument=best_argument,
         best_rebuttal=best_rebuttal,

@@ -198,6 +198,12 @@
   border-radius: 999px;
   outline: none;
   cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+/* Slider glow when actively dragging */
+.pred-slider:active {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 10%, transparent);
 }
 
 .pred-slider::-webkit-slider-thumb {
@@ -235,6 +241,13 @@
   font-size: var(--text-xs);
   color: var(--color-primary-dim);
   transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  animation: pred-badge-pop 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes pred-badge-pop {
+  0% { transform: scale(0.85); opacity: 0.6; }
+  60% { transform: scale(1.06); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .pred-confidence-badge--high {
@@ -277,6 +290,15 @@
   font-size: var(--text-sm);
   color: var(--color-danger);
   margin: 0;
+  animation: modal-error-shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@keyframes modal-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
 }
 
 .modal-success {
@@ -452,6 +474,8 @@
 @media (prefers-reduced-motion: reduce) {
   .prediction-modal,
   .modal-success,
+  .modal-error,
+  .pred-confidence-badge,
   .prediction-modal .btn-primary[disabled]::after {
     animation: none;
   }

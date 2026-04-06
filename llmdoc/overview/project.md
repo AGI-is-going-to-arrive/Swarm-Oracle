@@ -107,6 +107,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件位于：
   - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
   - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
+- 最近一轮 Oracle ending-room follow-up deterministic API-driven 工件位于：
+  - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/summary.json`
+  - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven5/summary.json`
 - 最近一轮经典模式流式 hardening 工件位于：
   - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
 - 当前仍在继续收口的内容：
@@ -119,7 +122,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - `P4 (Canvas/Theater)` 预测模块已封装（`canvasTextPredict.ts`），已正式接入 WorldScene——预测可用时跳过 Phaser `getBounds()` DOM 调用，不可用时自动回退
   - Oracle 更深的回归与 corner-case hardening
     - `corners` 当前已能稳定落 `result.json`，但尾部仍可能打印一次 teardown warning
-  - `epilogue / evidence_card` 两种新交互模式已落地，E2E 专项已补：`e2e-ending-room-followup-suite.mjs` 当前在 desktop / mobile 链路下覆盖两种模式的完整交互 + 状态验证 + 截图留档
+  - `epilogue / evidence_card` 两种新交互模式已落地，`e2e-ending-room-followup-suite.mjs` 当前已按 API-driven 口径重新签收：
+    - multi-ending desktop / mobile 会先预热 room，再通过 ResultView 调试参数直开 live chamber
+    - `hotseat / all_present / epilogue / evidence_card / readonly replay / restore / import` 当前都已进入 `full` summary
   - 新增 11 个主题场景与 6 个 gameplay profiles，全部 33 个主题场景已有专属 PNG 素材
   - `ResultView` Summary-First 优化已完成：默认只显标题 + 概率 + 引言，故事按需展开；桌面端 2 列网格；关键时刻 timeline 视觉化
   - `EndingChatModal` 对话可读性优化已完成：speaker 左侧色标、verdict 高亮、58ch 行宽、16px 间距

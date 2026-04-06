@@ -185,13 +185,13 @@ class TestSelectScene:
             ("如果人工智能统治世界？", "scifi_base"),
             ("algorithmic government", "scifi_base"),
             ("如果火星殖民地在补给断裂后必须决定是否强制撤离，会发生什么？", "space_station"),
-            ("What if a Mars colony lost life support and had to choose an evacuation route?", "space_station"),
+            ("What if a Mars colony lost life support and had to choose an evacuation route?", "space_station"),  # noqa: E501
             ("如果所有大型组织都必须每周随机交换一次负责人，会发生什么？", "switchboard_forum"),
             ("rotating review chamber for procedural oversight", "switchboard_forum_variant"),
-            ("What if every major institution had to swap leaders at random every week?", "switchboard_forum"),
-            ("如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？", "switchboard_forum"),
-            ("What if every high-stakes decision had to be re-approved by a rotating external review board?", "switchboard_forum"),
-            ("如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？", "switchboard_forum"),
+            ("What if every major institution had to swap leaders at random every week?", "switchboard_forum"),  # noqa: E501
+            ("如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？", "switchboard_forum"),  # noqa: E501
+            ("What if every high-stakes decision had to be re-approved by a rotating external review board?", "switchboard_forum"),  # noqa: E501
+            ("如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？", "switchboard_forum"),  # noqa: E501
         ],
     )
     def test_scene_keywords(self, keyword, expected):
@@ -273,7 +273,7 @@ class TestAvailableScenes:
 
     def test_all_scene_map_values_in_available(self):
         for keyword, scene_id in SCENE_MAP.items():
-            assert scene_id in AVAILABLE_SCENES, f"SCENE_MAP['{keyword}'] = '{scene_id}' not in AVAILABLE_SCENES"
+            assert scene_id in AVAILABLE_SCENES, f"SCENE_MAP['{keyword}'] = '{scene_id}' not in AVAILABLE_SCENES"  # noqa: E501
 
     def test_default_scene_in_available(self):
         assert DEFAULT_SCENE in AVAILABLE_SCENES

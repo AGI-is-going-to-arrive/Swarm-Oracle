@@ -5,8 +5,8 @@ Covers all 7 map_* methods with normal, boundary, and corner-case inputs.
 
 import pytest
 
+from app.visualization.events import VizEventType
 from app.visualization.mapper import (
-    ANIMATION_MAP,
     DEFAULT_HALO,
     EMOTION_COLORS,
     GENERIC_ANIMATION,
@@ -14,7 +14,6 @@ from app.visualization.mapper import (
     _resolve_animation,
     _summarize,
 )
-from app.visualization.events import VizEventType
 
 
 @pytest.fixture
@@ -314,7 +313,9 @@ class TestMapSceneChange:
 
 class TestMapEnding:
     def test_basic(self, mapper):
-        result = mapper.map_ending("b1", title="Victory", story="Kingdom thrived", ending_type="positive")
+        result = mapper.map_ending(
+            "b1", title="Victory", story="Kingdom thrived", ending_type="positive"
+        )
         assert result["type"] == VizEventType.ENDING_PLAY
         assert result["branch_id"] == "b1"
         assert result["title"] == "Victory"

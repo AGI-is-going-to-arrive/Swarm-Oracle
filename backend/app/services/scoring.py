@@ -56,7 +56,9 @@ SCORING_PROMPTS = {
 
 {language_directive}
 """,
-    "English": """You are a precise prediction evaluator. Compare the user's prediction against the actual simulation outcome and assign an accuracy score.
+    "English": """You are a precise prediction evaluator. Compare \
+the user's prediction against the actual simulation outcome \
+and assign an accuracy score.
 
 {untrusted_input_guardrail}
 

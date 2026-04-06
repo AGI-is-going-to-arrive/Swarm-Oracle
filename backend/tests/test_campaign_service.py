@@ -506,7 +506,8 @@ def test_daily_challenge_summary_pushes_utc_window_into_sql(monkeypatch):
 
     def tracking_exec(self, statement, *args, **kwargs):
         nonlocal captured_statement
-        if "scenario_campaign_log" in str(statement) and "completed_daily_challenge" in str(statement):
+        if ("scenario_campaign_log" in str(statement)
+                and "completed_daily_challenge" in str(statement)):
             captured_statement = statement
         return original_exec(self, statement, *args, **kwargs)
 
@@ -602,7 +603,8 @@ def test_weekly_campaign_summary_pushes_utc_window_into_sql(monkeypatch):
 
     def tracking_exec(self, statement, *args, **kwargs):
         nonlocal captured_statement
-        if "scenario_campaign_log" in str(statement) and "ORDER BY scenario_campaign_log.created_at" in str(statement):
+        if ("scenario_campaign_log" in str(statement)
+                and "ORDER BY scenario_campaign_log.created_at" in str(statement)):
             captured_statement = statement
         return original_exec(self, statement, *args, **kwargs)
 

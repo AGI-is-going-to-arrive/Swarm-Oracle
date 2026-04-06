@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from .events import VizEventType, make_viz_event
-from .persona_mapper import assign_position, assign_sprite
+from .persona_mapper import assign_position
 
 logger = logging.getLogger(__name__)
 

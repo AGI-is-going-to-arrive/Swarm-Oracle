@@ -69,9 +69,9 @@ class TestParseQuestion:
             "key_variable": "自治城邦",
             "initial_title": "边疆风暴",
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
-                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -101,16 +101,19 @@ class TestParseQuestion:
         assert result["agents"][-1]["tier"] == "IMPORTANT"
 
     @pytest.mark.asyncio
-    async def test_tops_up_large_requested_agent_count_after_retry_still_underfills(self, monkeypatch):
+    async def test_tops_up_large_requested_agent_count_after_retry_still_underfills(
+        self,
+        monkeypatch,
+    ):
         """Large target agent counts should still be fulfilled after a short retry."""
         underfilled = {
             "setting": {"time_period": "未来", "location": "边疆星域", "background": "测试背景"},
             "key_variable": "自治城邦",
             "initial_title": "边疆风暴",
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
-                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -139,9 +142,9 @@ class TestParseQuestion:
             "key_variable": "自治城邦",
             "initial_title": "边疆风暴",
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
-                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -150,9 +153,9 @@ class TestParseQuestion:
             **first_result,
             "setting": {"time_period": "未来", "location": "", "background": ""},
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "张启航", "role": "", "persona": "", "stance": "支持", "tier": "IMPORTANT"},
-                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "张启航", "role": "", "persona": "", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
                 {"name": "路人甲", "role": "", "persona": "", "stance": "", "tier": ""},
             ],
         }
@@ -181,8 +184,8 @@ class TestParseQuestion:
             "key_variable": "自治城邦",
             "initial_title": "边疆风暴",
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -191,7 +194,7 @@ class TestParseQuestion:
             **first_result,
             "agents": [
                 *first_result["agents"],
-                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
+                {"name": "德米特里·霍尔", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
             ],
         }
 
@@ -214,7 +217,7 @@ class TestParseQuestion:
     @pytest.mark.asyncio
     async def test_dedupes_duplicate_agent_names_and_resyncs_groups(self, monkeypatch):
         duplicate_payload = {
-            "setting": {"time_period": "Future", "location": "Forum", "background": "Shared chamber"},
+            "setting": {"time_period": "Future", "location": "Forum", "background": "Shared chamber"},  # noqa: E501
             "key_variable": "Rotating review board",
             "initial_title": "Forum Split",
             "groups": [
@@ -226,9 +229,9 @@ class TestParseQuestion:
                 },
             ],
             "agents": [
-                {"name": "Alex Ray", "role": "Mayor", "persona": "Direct", "stance": "support", "tier": "CORE", "group": "Reform Bloc"},
-                {"name": "Alex Ray", "role": "Auditor", "persona": "Exacting", "stance": "support", "tier": "IMPORTANT", "group": "Reform Bloc"},
-                {"name": "June Vale", "role": "Broker", "persona": "Measured", "stance": "neutral", "tier": "IMPORTANT", "group": "Reform Bloc"},
+                {"name": "Alex Ray", "role": "Mayor", "persona": "Direct", "stance": "support", "tier": "CORE", "group": "Reform Bloc"},  # noqa: E501
+                {"name": "Alex Ray", "role": "Auditor", "persona": "Exacting", "stance": "support", "tier": "IMPORTANT", "group": "Reform Bloc"},  # noqa: E501
+                {"name": "June Vale", "role": "Broker", "persona": "Measured", "stance": "neutral", "tier": "IMPORTANT", "group": "Reform Bloc"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -259,9 +262,9 @@ class TestParseQuestion:
             "key_variable": "自治城邦",
             "initial_title": "边疆风暴",
             "agents": [
-                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},
-                {"name": "张启航", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},
-                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},
+                {"name": "张启航", "role": "舰队总指挥", "persona": "谨慎果断", "stance": "支持", "tier": "CORE"},  # noqa: E501
+                {"name": "张启航", "role": "监察官", "persona": "坚持合规", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
+                {"name": "露丝·马丁", "role": "制度顾问", "persona": "重视自治", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
             ],
             "simulation_rounds": 5,
             "branch_sensitivity": 0.7,
@@ -286,9 +289,9 @@ class TestParseQuestion:
 
     def test_generate_fallback_groups_does_not_mutate_input_agents(self):
         agents = [
-            {"name": "顾闻", "role": "边境联络官", "persona": "谨慎", "stance": "支持", "tier": "CORE"},
-            {"name": "林铎", "role": "资源调度员", "persona": "务实", "stance": "支持", "tier": "IMPORTANT"},
-            {"name": "周汐", "role": "民生观察员", "persona": "细致", "stance": "观望", "tier": "IMPORTANT"},
+            {"name": "顾闻", "role": "边境联络官", "persona": "谨慎", "stance": "支持", "tier": "CORE"},  # noqa: E501
+            {"name": "林铎", "role": "资源调度员", "persona": "务实", "stance": "支持", "tier": "IMPORTANT"},  # noqa: E501
+            {"name": "周汐", "role": "民生观察员", "persona": "细致", "stance": "观望", "tier": "IMPORTANT"},  # noqa: E501
         ]
         original = deepcopy(agents)
 

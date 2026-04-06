@@ -56,19 +56,19 @@ class TestDetectLanguage:
     # -- Common Latin-script languages ----------------------------
 
     def test_french(self):
-        assert detect_language("Le monde est en crise et la justice doit répondre vite.") == "French"
+        assert detect_language("Le monde est en crise et la justice doit répondre vite.") == "French"  # noqa: E501
 
     def test_spanish(self):
-        assert detect_language("La ciudad está en crisis y el tribunal debe responder rápido.") == "Spanish"
+        assert detect_language("La ciudad está en crisis y el tribunal debe responder rápido.") == "Spanish"  # noqa: E501
 
     def test_portuguese(self):
-        assert detect_language("A cidade está em crise e o tribunal deve responder rápido.") == "Portuguese"
+        assert detect_language("A cidade está em crise e o tribunal deve responder rápido.") == "Portuguese"  # noqa: E501
 
     def test_german(self):
-        assert detect_language("Die Stadt ist in Krise und das Gericht muss schnell handeln.") == "German"
+        assert detect_language("Die Stadt ist in Krise und das Gericht muss schnell handeln.") == "German"  # noqa: E501
 
     def test_italian(self):
-        assert detect_language("La città è in crisi e il tribunale deve rispondere subito.") == "Italian"
+        assert detect_language("La città è in crisi e il tribunale deve rispondere subito.") == "Italian"  # noqa: E501
 
     # -- Edge cases ------------------------------------------------
 
@@ -138,7 +138,7 @@ class TestGetLanguageDirective:
 
     def test_returns_string(self):
         """All directives must be strings."""
-        for lang in ("Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Italian"):
+        for lang in ("Chinese", "English", "Japanese", "Korean", "French", "German", "Spanish", "Portuguese", "Italian"):  # noqa: E501
             assert isinstance(get_language_directive(lang), str)
 
     def test_unknown_language_fallback(self):

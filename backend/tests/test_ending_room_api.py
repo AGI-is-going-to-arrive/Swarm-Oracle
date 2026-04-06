@@ -105,7 +105,7 @@ def _append_completed_branch(scenario_id: str, *, title: str, story: str, insigh
 def _seed_roundtable_reselection_scenario() -> dict[str, str]:
     engine = get_engine()
     with Session(engine) as session:
-        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)
+        scenario = Scenario(question="如果两条世界线都重新争夺同一位代言人？", status=ScenarioStatus.DONE)  # noqa: E501
         session.add(scenario)
         session.flush()
 
@@ -449,13 +449,13 @@ def test_worldline_roundtable_api_accepts_selected_witness(client):
 
     assert create_resp.status_code == 200
     snapshot = create_resp.json()
-    witnesses = [participant for participant in snapshot["participants"] if participant["role_slot"] == "critic"]
+    witnesses = [participant for participant in snapshot["participants"] if participant["role_slot"] == "critic"]  # noqa: E501
     assert len(witnesses) == 1
     assert witnesses[0]["source_branch_id"] == fixture["branch_a_id"]
     assert witnesses[0]["source_agent_id"] == witness_agent.id
 
 
-def test_worldline_roundtable_api_rejects_selected_witness_when_it_matches_the_representative(client):
+def test_worldline_roundtable_api_rejects_selected_witness_when_it_matches_the_representative(client):  # noqa: E501
     fixture = _seed_roundtable_reselection_scenario()
 
     create_resp = client.post(
@@ -467,7 +467,7 @@ def test_worldline_roundtable_api_rejects_selected_witness_when_it_matches_the_r
                 {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
                 {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
             ],
-            "selected_witness": {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+            "selected_witness": {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},  # noqa: E501
             "language": "zh",
         },
     )
@@ -573,11 +573,11 @@ def test_create_thread_and_append_thread_user_turn(client):
     assert followup_payload["thread_id"] == thread_payload["id"]
     assert len(followup_payload["turns"]) == 2
     assert all(turn["thread_id"] == thread_payload["id"] for turn in followup_payload["turns"])
-    assert all(turn["memory_partition_id"] == thread_payload["memory_partition_id"] for turn in followup_payload["turns"])
+    assert all(turn["memory_partition_id"] == thread_payload["memory_partition_id"] for turn in followup_payload["turns"])  # noqa: E501
 
     get_thread_resp = client.get(f"/api/ending-room/thread/{thread_payload['id']}")
     assert get_thread_resp.status_code == 200
-    assert any(turn["content"] == "只在这个线程里继续说。" for turn in get_thread_resp.json()["turns"])
+    assert any(turn["content"] == "只在这个线程里继续说。" for turn in get_thread_resp.json()["turns"])  # noqa: E501
 
 
 def test_room_user_turn_rejects_invalid_addressed_agent(client):

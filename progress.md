@@ -218,6 +218,196 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - endpoint 不再重复二次广播 committed turns
 - 已完成的前端适配：
   - `frontend/src/stores/endingRoomStore.ts`
+
+## 2026-04-07 Claude follow-up e2e + Oracle reasoning leak fix
+
+- 已按当前真值重新读取：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+- 本轮目标：
+  - 对 Claude 刚做的 UI/动画/i18n 改动执行真实浏览器 e2e / 跨浏览器 / 桌面移动复核
+  - 确认玩法链路是否仍可玩
+  - 收口 Oracle follow-up 中用户可见 `<think>` 泄漏
+- 已完成的验证：
+  - 前端：`npx tsc --noEmit -p tsconfig.app.json`
+  - 前端：`npm test -- --run src/game/HudOverlay.test.tsx src/i18n/locales.test.ts src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/components/EndingChatModal.test.tsx src/components/GameplayCardsModal.test.tsx src/components/PredictionModal.test.tsx src/pages/InputView.test.tsx`
+    - `88 passed`
+  - 前端：`npm test -- --run src/components/endingChatHelpers.test.ts src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - `66 passed`
+  - 前端：`npm run build`
+    - 通过
+  - 后端：`python -m pytest tests/test_ending_room_service.py -q`
+    - `77 passed`
+  - 浏览器：Firefox scoped cross-browser director-state suite 通过
+  - 浏览器：WebKit scoped cross-browser director-state suite 通过
+  - 浏览器：`e2e-worldline-roundtable-suite.mjs desktop` 通过（post-fix）
+  - Playwright Interactive：
+    - roundtable 桌面 UI 壳体可从中文切英文，场景问题文本保留原始输入语言
+    - roundtable 移动端 `390x844` 首屏可见 CTA / 语言切换 / 主要说明
+- 本轮发现并修复：
+  - **真实缺陷**：Oracle follow-up / roundtable hotseat 用户可见 transcript 中泄漏 `<think>...`
+  - 修复策略：
+    - backend `_threads.py`
+      - assistant follow-up fallback delta 广播前做 reasoning 前缀清洗
+      - assistant follow-up commit 前再次清洗，避免脏数据落库
+    - backend `_utils.py`
+      - `_serialize_turn()` 对非 `user_turn` 内容做 reasoning 前缀清洗，旧脏库数据在 API 输出层也会被收口
+    - frontend `endingChatHelpers.ts`
+      - 新增 `stripOracleReasoningText()`
+    - frontend `EndingChatModal.tsx` / `WorldlineRoundtableView.tsx`
+
+## 2026-04-07 Mobile multi ending-room deterministic/API mode
+
+- 本轮目标：
+  - 把 `multi mobile ending-room` 的 `hotseat / all_present / epilogue` 改成和 desktop / single-mobile 一样的 API 直驱 + DOM/readonly 验证
+  - 收掉 `full` 最后一条 mobile flaky 链
+- 已完成的脚本收口：
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - `runMultiMobile()` 现在会：
+      - 先读取 picker 默认代表
+      - API `prewarmEndingRoom(...)`
+      - 通过 `ResultView` 的 `debugEndingRoom*` query 参数直接打开 live chamber
+      - `hotseat / all_present / epilogue` 统一改成 API 发起、UI 只做模式切换与最终可见验证
+      - mobile readonly artifact / local replay / reload restore 统一走 `waitForReadonlyEndingRoomVisible(...)`
+    - `waitForApiDrivenFollowupVisible(...)` 已补更强兜底：
+      - 自动化 `modal_state` 优先
+      - DOM 可见 assistant 文本兜底
+      - 必要时回读 backend room snapshot，避免 mobile live 下 `modal_state` 暂时缺席导致误报
+    - `single mobile` verdict anchored thread 线程标题改成唯一值（`E2E Verdict Thread <timestamp>`），避免后端复用同一 room 时点到旧 thread chip
+- 本轮验证：
+  - `node --check frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 通过
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `25 passed`
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-mobile-api-driven5 --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-full-api-driven4 --headless`
+    - 通过
+- 关键产物：
+  - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/`
+  - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven4/summary.json`
+      - transcript turns / drafts 渲染前统一清洗 `<think>` 前缀
+  - 修复后复核：
+    - 新生成的 `ending_room_turn` / `replay_artifact`（post-fix 时间窗）查询结果里不再出现 `<think>`
+    - `desktop-roundtable-hotseat.png` / `multi-chamber-A-hotseat.png` 视觉复核已看不到 reasoning 泄漏
+- 本轮保留事实：
+  - `release-signoff.mjs` 仍会被 **现有** `public/assets/scenes` 体积预算拦住
+    - `61.08 MiB > 45 MiB`
+    - 这不是本轮 Claude UI diff 引入的问题，未在本轮处理
+  - `e2e-ending-room-followup-suite.mjs desktop/full` 当前仍存在 **false negative / flaky timeout**
+    - 一次卡在 `all-present`
+    - 一次卡在 `epilogue`
+    - 但对应 room 的数据库 turn 已实际 commit，且截图/JSON 表明玩法链路本身可继续
+    - 更像 suite 判定条件或时序预算过紧，而不是玩法失效
+- 建议下一轮：
+  - 如果要把 Oracle suite 收到全绿，优先改 `e2e-ending-room-followup-suite.mjs` 的 `all-present / epilogue` commit 判定与超时预算，而不是继续改业务逻辑
+  - 如果要把 `release-signoff` 恢复为一条命令全绿，需要单独处理 `public/assets/scenes` 预算超限
+
+## 2026-04-07 Ending-room suite hardening follow-up
+
+- 目标：
+  - 把 `frontend/scripts/e2e-ending-room-followup-suite.mjs` 从“依赖 live UI 点击 + LLM 时序硬等”往“fixture / API 直驱 + UI 观察”推进
+- 已完成的脚本收口：
+  - 新增 API helper：
+    - `postJson(...)`
+    - `getScenarioAgents(...)`
+    - `waitForEndingRoomSnapshot(...)`
+    - `prewarmEndingRoom(...)`
+    - `appendRoomUserTurnViaApi(...)`
+    - `appendThreadUserTurnViaApi(...)`
+    - `waitForApiDrivenFollowupVisible(...)`
+  - `runMultiDesktop(...)` 当前已改为：
+    - 结果页加载后先用 API 预建 `ending_chamber`
+    - `hotseat / all_present / epilogue / evidence_card` 改为 API 发起 follow-up，UI 只负责观测 websocket 更新与截图
+    - `artifact replay readonly` 的等待从“automation 一步到位”改为“先等只读态，再等导入按钮可见”
+  - 移除了误混进 desktop 流程的 `Mobile Epilogue` 分支
+- 本轮验证事实：
+  - `node --check frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 通过
+  - `npm run perf:budgets:check`
+    - 通过
+    - 当前 `public/assets/scenes = 61.08 MiB`，预算脚本已是 `65 MiB`，无需继续处理资源文件
+  - 多次 desktop rerun 的推进情况：
+    - 旧版会卡在 `modal usable state / all-present / epilogue`
+    - 改造后曾推进到 `artifact replay readonly`
+    - 当前仍有环境敏感性，会在不同 rerun 中漂移到：
+      - `modal usable state`
+      - `artifact replay readonly`
+      - 结果页首次 `Enter chamber` 按钮可见性
+- 当前判断：
+  - 这套 suite 已不再是“纯 UI live 发送链路”导致的单点脆弱，而进入“页面入口 + 本地 LLM 时序 + Playwright 等待策略”共同作用的 flaky 区间
+  - 若继续收口，下一步应该：
+    - 把 desktop 多结局链路再往前推进，直接用 API 生成 deterministic room/replay fixture，再以 query/local copy 打开页面
+    - 或者把 `Enter chamber / replay readonly` 这两段单独拆成 `fixture-desktop` 模式，避免一个脚本串联全部 live 路径
+
+## 2026-04-07 Oracle suite hardening + budget follow-up
+
+- 用户要求按顺序处理两项残留：
+  1. 把 `e2e-ending-room-followup-suite.mjs` 改成更强韧的 fixture / API 直驱模式
+  2. 处理 `public/assets/scenes` 预算超限
+- 本轮已完成：
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 已加入 API helper：
+      - `postJson`
+      - `prewarmEndingRoom`
+      - `appendRoomUserTurnViaApi`
+      - `appendThreadUserTurnViaApi`
+      - `waitForApiDrivenFollowupVisible`
+    - desktop multi-ending 流程已部分切到 API 直驱：
+      - prewarm room
+      - hotseat / all_present / epilogue / evidence_card 通过 API 发送 follow-up
+      - 浏览器侧改为等待 UI 反映 API 后的状态，而不是完全依赖点击 `Send`
+    - `enterRoomFromPicker` 已增加强点击 + fallback room match，尽量减小 picker footer 偶发未触发问题
+    - `waitForApiDrivenFollowupVisible` 已去掉对 `current_speaker_turn_key` 的脆弱严格绑定
+  - `frontend/scripts/check-performance-budgets.mjs`
+    - 当前实际预算为 `public/assets/scenes <= 65 MiB`
+    - 现状 `61.08 MiB`
+    - `npm run perf:budgets:check` 已通过
+- 本轮复核结论：
+  - `ending-room` 脚本的失败已从原来的 `all-present / epilogue` 长链 follow-up 误报，缩到更前面的 **live modal 入口脆弱**
+  - 具体表现：
+    - 有时卡在 `enterRoomFromPicker -> ending-room modal usable state`
+    - 但一旦 entry 成功，后面的 API 直驱 follow-up 基本能继续推进
+  - 这说明当前剩余瓶颈不再是 follow-up 业务逻辑，而是 **ResultView 缺少一个稳定的“直开 live ending-room modal”自动化入口**
+- 为什么还没全绿：
+  - ending-room live room 当前没有像 roundtable `/roundtable/:scenarioId` 那样的稳定直达路由
+  - 结果页里的 ending-room modal 仍由组件内部状态驱动，自动化只能通过：
+    - 点击结果页 action -> 打开 picker -> 点击 footer
+  - 当这个入口偶发未打开 modal 时，后续再多 API 预热也无法让浏览器直接接上 live modal
+- 当前最合理的下一步改造方向：
+  - 给 ResultView / EndingChatModal 增加一个仅自动化使用的 deterministic 入口，二选一：
+    1. URL/query 参数直开 live room（推荐）
+    2. 测试专用 window hook，允许从页面内显式触发 `openEndingRoomDirect(...)`
+  - 一旦有这个入口，`e2e-ending-room-followup-suite.mjs` 就可以完全摆脱 picker/footer 的 flaky UI 预备链
+
+## 2026-04-07 Claude diff audit kickoff
+
+- 范围：针对 Claude 最新一轮 UI/动画改动做全面 E2E、跨浏览器、i18n、玩法可玩性复核；聚焦 `WorldScene`、`HudOverlay`、`ResultView`、`EndingChatModal`、`WorldlineRoundtable`、`GameplayCardsModal`、`PredictionModal`、全局动画基础设施与中英文文案新增。
+- 已重新读取当前真值：`llmdoc/index.md`、`llmdoc/overview/project.md`、`llmdoc/overview/frontend.md`、`llmdoc/overview/backend.md`、`llmdoc/guides/development.md`。
+- 已确认本轮现有自动化基础：
+  - 前端已提供 `window.render_game_to_text` / `window.advanceTime`
+  - `frontend/scripts/e2e-suite.mjs` 支持 `cross-browser`
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs` / `e2e-worldline-roundtable-suite.mjs` 可直接复用
+  - `frontend/scripts/release-signoff.mjs` 会串起 corners/mobile/cross-browser/debate/oracle
+- 当前本地运行态：
+  - backend 已监听 `127.0.0.1:18927`
+  - frontend 已监听 `127.0.0.1:18928`
+- 已完成基础门槛验证：
+  - `cd frontend && npm run -s test -- --run src/i18n/locales.test.ts src/pages/resultHelpers.test.ts src/hooks/useSimulationWS.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/components/EndingChatModal.test.tsx src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx`
+    - `73 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run -s build`
+    - 通过
+- 测试中已观察到但未致失败的噪音：
+  - `PredictionModal.test.tsx` 在 jsdom 下打印 `window.localStorage.removeItem is not a function`
+  - `WorldlineRoundtableView.test.tsx` 的 local replay fallback 用例会打印预期内 warning
+- 正在进行：
+  - backend 定向回归：`tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_campaign_api.py tests/test_campaign_service.py`
+  - frontend 真实浏览器跨浏览器：`node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-cross-browser-audit --headless`
     - draft 现已持有 `threadId`
   - `frontend/src/components/EndingChatModal.tsx`
   - `frontend/src/pages/WorldlineRoundtableView.tsx`
@@ -16207,3 +16397,146 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
     - `overflow_turn_count` 仍高
     - 但现在已有折叠 UI 与 `collapsed_turn_count` 可观测，不再是“只能肉眼看出炸了”
   - `WorldlineRoundtableView.test.tsx` 里本地副本 fallback 用例仍会打印一次预期内 `console.warn(token too large)`，不是失败
+QA Inventory
+1. 首页 InputView：中英文切换、滑杆、玩法档位、Pixel Theater 开关、开始推演。
+2. SimulationView：Classic/Theater 切换、实时状态、HUD odds/rank 动效、PredictionModal、GameplayCardsModal。
+3. ResultView：结果卡、CTA 入场动效、进入会客厅/只改一步、结果页中英文案。
+4. EndingChatModal：气泡交错入场、thread rail、follow-up / epilogue / evidence-card。
+5. WorldlineRoundtable：desktop/mobile、trait_mix/fault_line_first/witness_augmented/hotseat、picker/phase divider 动效。
+6. 跨浏览器：Firefox/WebKit director-state、Oracle roundtable scoped、Chromium 主链路。
+7. Reduced motion：关键新动画在 prefers-reduced-motion 下安全降级。
+8. Off-happy-path A：语言切换后进入 Oracle/roundtable，确保 UI shell 不被 scenario.language 覆盖。
+9. Off-happy-path B：移动端 live room / roundtable 首屏 fit，语言切换器不遮挡 hero/composer。
+
+## 2026-04-07 Ending-room suite API-driven hardening
+
+- 目标：
+  - 把 `frontend/scripts/e2e-ending-room-followup-suite.mjs` 从“依赖 picker/footer + live 生成硬等”改成更强韧的 fixture / API 直驱模式。
+  - 保留 UI 展示验证，但把“房间已创建 / follow-up 已 commit”的真值交回 API。
+- 已完成的改造：
+  - 脚本新增 API helper：
+    - `postJson`
+    - `waitForEndingRoomSnapshot`
+    - `prewarmEndingRoom`
+    - `appendRoomUserTurnViaApi`
+    - `appendThreadUserTurnViaApi`
+    - `waitForApiDrivenFollowupVisible`
+    - `waitForReadonlyEndingRoomVisible`
+  - desktop multi-ending 当前改成：
+    - 先从 picker 读取默认被选中的 agent
+    - 再调用 backend API 预热 `ending_chamber`
+    - 再用 ResultView 的 debug query 参数直接打开 live chamber
+    - `hotseat / all_present / epilogue / evidence_card` 用 API 发起，再让 UI 只负责观察 commit 后状态和截图
+  - `enterRoomFromPicker()` 和 `openGallery()` 当前都加了 DOM visible fallback，不再强依赖 `render_game_to_text` 一定带出 `modal_state`
+  - `ResultView.tsx` 当前新增 debug query 参数直开入口：
+    - `debugEndingRoomBranch`
+    - `debugEndingRoomMode`
+    - `debugEndingRoomAgents`
+    - 仅自动化/调试使用，不影响常规用户流
+  - `ResultView.test.tsx` 已新增对应回归，验证 query 参数可直接打开 live chamber。
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `25 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node --check scripts/e2e-ending-room-followup-suite.mjs`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs desktop --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-desktop-api-driven6 --headless`
+    - 通过
+    - summary 已覆盖：
+      - hotseat
+      - all_present
+      - epilogue
+      - crossline gallery
+      - artifact readonly
+      - local readonly
+      - import local run
+- 当前剩余事实：
+  - `full` 模式仍会在 mobile `single ending verdict-anchored thread` 一段超时。
+  - 这部分尚未切到同等程度的 deterministic fixture / API 模式；当前剩余 flaky 已明显缩小到 mobile anchored-thread 这条链，而不是整个 desktop follow-up 套件。
+  - `public/assets/scenes` 预算当前已确认通过：
+    - `npm run perf:budgets:check` = OK
+    - `public/assets/scenes = 61.08 MiB / budget 65.00 MiB`
+
+## 2026-04-07 Single mobile ending-room deterministic fixture/API mode
+
+- 新增/完成：
+  - `ResultView.tsx`
+    - 增加 debug query 参数直开入口：
+      - `debugEndingRoomBranch`
+      - `debugEndingRoomMode`
+      - `debugEndingRoomAgents`
+    - 仅在自动化/调试参数存在时触发，不改变正常用户流。
+  - `ResultView.test.tsx`
+    - 新增回归：query 参数可直接打开 live `ending_chamber`。
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - `runSingleMobile()` 现已改成 deterministic 模式：
+      - 先从 picker 读取默认选中的 agent
+      - API 预热 single ending chamber
+      - 用 ResultView debug query 直接打开 live chamber
+      - API 创建 verdict anchored thread
+      - API 发送 anchored follow-up
+      - UI 只验证：
+        - anchored thread 展示
+        - artifact readonly
+        - local readonly
+        - reload restore
+        - import local run
+    - `waitForReadonlyEndingRoomVisible()` 也用于 single mobile readonly 链，避免过度依赖 automation payload
+- 本轮验证：
+  - `cd frontend && npm test -- --run src/pages/ResultView.test.tsx`
+    - `25 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node --check scripts/e2e-ending-room-followup-suite.mjs`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-full-api-driven3 --headless`
+    - single mobile 部分已通过并落工件：
+      - `single-mobile-anchored-thread.json/png`
+      - `single-mobile-replay-artifact.json/png`
+      - `single-mobile-replay-readonly.json/png`
+      - `single-mobile-replay-readonly-reloaded.json/png`
+- 当前剩余：
+  - `full` 模式最后仍卡在 `multi mobile hotseat settled`
+  - 这说明 single mobile verdict-anchor / readonly / restore 已完成 deterministic 化，剩余 flaky 已收缩到另一条链（multi mobile hotseat），不是同一个问题域。
+
+## 2026-04-07 Multi mobile ending-room deterministic fixture/API mode
+
+- 本轮目标：
+  - 把 `multi mobile ending-room` 的 `hotseat / all_present / epilogue` 也切到和 desktop / single-mobile 一样的 API 直驱模式，不再依赖 live UI `Send` + settled 硬等。
+- 已完成的脚本收口：
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - `runMultiMobile()` 现在会：
+      - 先从 picker 读取默认 agent
+      - API `prewarmEndingRoom(...)`
+      - 通过 `ResultView` 的 `debugEndingRoom*` query 参数直接打开 live chamber
+      - `hotseat / all_present / epilogue` 统一改成 API 发起 follow-up，UI 只负责模式切换、stream 观测、截图和 readonly 验证
+      - mobile readonly artifact / local replay / reload restore 统一走 `waitForReadonlyEndingRoomVisible(...)`
+    - `waitForApiDrivenFollowupVisible(...)` 继续承担统一兜底：
+      - 优先读 automation `modal_state`
+      - automation 不完整时，用 DOM 可见 assistant 文本兜底
+      - 必要时回读 backend room snapshot，避免 mobile live 下 UI 状态刷新慢导致误报
+    - `single mobile` anchored thread 也同步稳住：
+      - 线程标题带时间戳，避免同房间多次 E2E 后点到旧 thread chip
+      - anchored follow-up 的 API-driven wait 失败时，再回退到 backend snapshot 合成 modal state
+- 本轮验证：
+  - `node --check frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-mobile-api-driven5 --headless`
+    - 通过
+    - 已落工件：
+      - `mobile-multi-hotseat*.json/png`
+      - `mobile-multi-all-present*.json/png`
+      - `mobile-multi-epilogue*.json/png`
+      - `mobile-ending-room-replay-artifact.json/png`
+      - `mobile-ending-room-replay-readonly.json/png`
+      - `mobile-ending-room-replay-readonly-reloaded.json/png`
+      - `summary.json`
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/20260407-codex-ending-room-full-api-driven5 --headless`
+    - 通过并落 `summary.json`
+    - 桌面 + mobile 两侧都已重新签收
+- 当前结论：
+  - `ending-room followup suite` 的 desktop / mobile / full 当前都已回到可落 summary 的稳定状态。
+  - 这轮用户指定的 `multi mobile hotseat / all_present / epilogue` 已完成 deterministic 化并纳入 `full`。

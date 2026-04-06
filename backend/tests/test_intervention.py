@@ -264,7 +264,7 @@ class TestRetrospectiveIntervention:
             cloned_messages = list(
                 session.exec(
                     select(AgentMessage)
-                    .where(AgentMessage.round_id.in_([round_item.id for round_item in cloned_rounds]))
+                    .where(AgentMessage.round_id.in_([round_item.id for round_item in cloned_rounds]))  # noqa: E501
                     .order_by(AgentMessage.content)
                 ).all()
             )
@@ -311,7 +311,7 @@ class TestRetrospectiveIntervention:
 class TestBatchIntervention:
     def test_batch_two_branches(self, client, monkeypatch):
         """Should inject into 2 branches simultaneously."""
-        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")
+        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")  # noqa: E501
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid1 = _seed_branch(engine, sid, title="分支1")
@@ -354,7 +354,7 @@ class TestBatchIntervention:
 
     def test_batch_partial_invalid(self, client, monkeypatch):
         """If one branch is invalid, entire batch should be rejected."""
-        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")
+        monkeypatch.setattr("app.api.interventions._pending_intervention_db_path", lambda: "/tmp/pending.db")  # noqa: E501
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid)
@@ -428,7 +428,7 @@ class TestBatchIntervention:
         assert resp.json()["count"] == 1
 
     def test_batch_rejects_gameplay_card_cooldown_bypass(self, client):
-        """Batch intervene should honor the same gameplay card cooldown checks as single intervene."""
+        """Batch intervene should honor the same gameplay card cooldown checks as single intervene."""  # noqa: E501
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
         bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)

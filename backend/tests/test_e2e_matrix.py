@@ -26,13 +26,13 @@ import pytest
 
 from app.config import settings
 from app.services.blackboard import Blackboard
+from app.services.llm_client import _resolve_llm_api_url
 from app.services.memory import (
     build_agent_context,
     format_briefing_for_context,
     format_messages_for_context,
 )
 
-from app.services.llm_client import _resolve_llm_api_url
 LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 8
 
@@ -51,26 +51,26 @@ AGENT_PROMPT = """你是{name}，{role}。性格：{persona}。
 
 # Agent pool — enough for 20 agents
 _AGENT_POOL = [
-    {"name": "曹操", "role": "魏国丞相", "persona": "雄才大略，多疑善变", "emotion": "冷静", "tier": "CORE"},
-    {"name": "刘备", "role": "蜀汉之主", "persona": "仁德宽厚，善用贤才", "emotion": "忧虑", "tier": "CORE"},
-    {"name": "孙权", "role": "东吴大帝", "persona": "审时度势，擅长平衡", "emotion": "冷静", "tier": "IMPORTANT"},
-    {"name": "诸葛亮", "role": "蜀汉丞相", "persona": "谨慎多谋，鞠躬尽瘁", "emotion": "坚定", "tier": "CORE"},
-    {"name": "司马懿", "role": "魏国重臣", "persona": "城府极深，善于忍耐", "emotion": "冷静", "tier": "IMPORTANT"},
-    {"name": "周瑜", "role": "东吴大都督", "persona": "英姿勃发，心高气傲", "emotion": "激动", "tier": "IMPORTANT"},
-    {"name": "关羽", "role": "蜀汉大将", "persona": "义薄云天，骄傲自负", "emotion": "坚定", "tier": "IMPORTANT"},
-    {"name": "荀彧", "role": "魏国谋士", "persona": "王佐之才，忠汉心切", "emotion": "忧虑", "tier": "MOB"},
-    {"name": "鲁肃", "role": "东吴谋士", "persona": "淳厚务实，主张联蜀", "emotion": "冷静", "tier": "MOB"},
-    {"name": "姜维", "role": "蜀汉将领", "persona": "继承北伐遗志，英勇善战", "emotion": "坚定", "tier": "MOB"},
-    {"name": "赵云", "role": "蜀汉将军", "persona": "忠勇双全，冷静果敢", "emotion": "冷静", "tier": "CORE"},
-    {"name": "张飞", "role": "蜀汉猛将", "persona": "粗中有细，暴烈直率", "emotion": "激动", "tier": "IMPORTANT"},
-    {"name": "陆逊", "role": "东吴都督", "persona": "少年英才，沉着冷静", "emotion": "冷静", "tier": "IMPORTANT"},
-    {"name": "贾诩", "role": "魏国谋士", "persona": "明哲保身，算无遗策", "emotion": "冷静", "tier": "MOB"},
-    {"name": "黄忠", "role": "蜀汉老将", "persona": "老当益壮，不甘示弱", "emotion": "激动", "tier": "MOB"},
-    {"name": "马超", "role": "蜀汉将军", "persona": "西凉勇士，桀骜不驯", "emotion": "坚定", "tier": "MOB"},
-    {"name": "甘宁", "role": "东吴将领", "persona": "豪放不羁，勇猛善战", "emotion": "激动", "tier": "MOB"},
-    {"name": "徐庶", "role": "流浪谋士", "persona": "才华横溢，身在曹营心在汉", "emotion": "忧虑", "tier": "MOB"},
-    {"name": "庞统", "role": "蜀汉谋士", "persona": "凤雏之才，不拘小节", "emotion": "冷静", "tier": "MOB"},
-    {"name": "法正", "role": "蜀汉谋士", "persona": "睚眦必报，善出奇谋", "emotion": "冷静", "tier": "MOB"},
+    {"name": "曹操", "role": "魏国丞相", "persona": "雄才大略，多疑善变", "emotion": "冷静", "tier": "CORE"},  # noqa: E501
+    {"name": "刘备", "role": "蜀汉之主", "persona": "仁德宽厚，善用贤才", "emotion": "忧虑", "tier": "CORE"},  # noqa: E501
+    {"name": "孙权", "role": "东吴大帝", "persona": "审时度势，擅长平衡", "emotion": "冷静", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "诸葛亮", "role": "蜀汉丞相", "persona": "谨慎多谋，鞠躬尽瘁", "emotion": "坚定", "tier": "CORE"},  # noqa: E501
+    {"name": "司马懿", "role": "魏国重臣", "persona": "城府极深，善于忍耐", "emotion": "冷静", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "周瑜", "role": "东吴大都督", "persona": "英姿勃发，心高气傲", "emotion": "激动", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "关羽", "role": "蜀汉大将", "persona": "义薄云天，骄傲自负", "emotion": "坚定", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "荀彧", "role": "魏国谋士", "persona": "王佐之才，忠汉心切", "emotion": "忧虑", "tier": "MOB"},  # noqa: E501
+    {"name": "鲁肃", "role": "东吴谋士", "persona": "淳厚务实，主张联蜀", "emotion": "冷静", "tier": "MOB"},  # noqa: E501
+    {"name": "姜维", "role": "蜀汉将领", "persona": "继承北伐遗志，英勇善战", "emotion": "坚定", "tier": "MOB"},  # noqa: E501
+    {"name": "赵云", "role": "蜀汉将军", "persona": "忠勇双全，冷静果敢", "emotion": "冷静", "tier": "CORE"},  # noqa: E501
+    {"name": "张飞", "role": "蜀汉猛将", "persona": "粗中有细，暴烈直率", "emotion": "激动", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "陆逊", "role": "东吴都督", "persona": "少年英才，沉着冷静", "emotion": "冷静", "tier": "IMPORTANT"},  # noqa: E501
+    {"name": "贾诩", "role": "魏国谋士", "persona": "明哲保身，算无遗策", "emotion": "冷静", "tier": "MOB"},  # noqa: E501
+    {"name": "黄忠", "role": "蜀汉老将", "persona": "老当益壮，不甘示弱", "emotion": "激动", "tier": "MOB"},  # noqa: E501
+    {"name": "马超", "role": "蜀汉将军", "persona": "西凉勇士，桀骜不驯", "emotion": "坚定", "tier": "MOB"},  # noqa: E501
+    {"name": "甘宁", "role": "东吴将领", "persona": "豪放不羁，勇猛善战", "emotion": "激动", "tier": "MOB"},  # noqa: E501
+    {"name": "徐庶", "role": "流浪谋士", "persona": "才华横溢，身在曹营心在汉", "emotion": "忧虑", "tier": "MOB"},  # noqa: E501
+    {"name": "庞统", "role": "蜀汉谋士", "persona": "凤雏之才，不拘小节", "emotion": "冷静", "tier": "MOB"},  # noqa: E501
+    {"name": "法正", "role": "蜀汉谋士", "persona": "睚眦必报，善出奇谋", "emotion": "冷静", "tier": "MOB"},  # noqa: E501
 ]
 
 
@@ -298,7 +298,7 @@ class TestE2EMatrix:
         #  Summary tables
         # ════════════════════════════════════════════
         print(f"\n{'=' * 90}")
-        print(f"  MATRIX SUMMARY")
+        print("  MATRIX SUMMARY")
         print(f"{'=' * 90}")
 
         # Table 1: Overview
@@ -317,7 +317,7 @@ class TestE2EMatrix:
                   f"{ratio:>7.2f}× ${raw_cost:>6.4f} ${bb_cost:>6.4f}")
 
         # Table 2: Agent sweep analysis
-        print(f"\n  ── AGENT SWEEP (fixed 3 rounds) ──")
+        print("\n  ── AGENT SWEEP (fixed 3 rounds) ──")
         print(f"  {'Agents':>8} {'RAW/round':>12} {'BB/round':>12} "
               f"{'BB/RAW':>8} {'BB growth':>12}")
 
@@ -334,7 +334,7 @@ class TestE2EMatrix:
                   f"{ratio:>7.2f}× {growth:>12}")
 
         # Table 3: Round sweep analysis
-        print(f"\n  ── ROUND SWEEP (fixed 10 agents) ──")
+        print("\n  ── ROUND SWEEP (fixed 10 agents) ──")
         print(f"  {'Rounds':>8} {'RAW total':>12} {'BB total':>12} "
               f"{'BB/RAW':>8} {'RAW/call':>10} {'BB/call':>10}")
 
@@ -349,12 +349,12 @@ class TestE2EMatrix:
                   f"{ratio:>7.2f}× {raw_per:>10,.0f} {bb_per:>10,.0f}")
 
         # Table 4: Bytes/token ratio validation
-        print(f"\n  ── BYTES/TOKEN RATIO ──")
+        print("\n  ── BYTES/TOKEN RATIO ──")
         print(f"  {'Config':<12} {'RAW b/t':>10} {'BB b/t':>10}")
         for raw, bb in all_results:
             raw_ratio = raw.total_context_bytes / raw.total_prompt if raw.total_prompt else 0
             bb_ratio = bb.total_context_bytes / bb.total_prompt if bb.total_prompt else 0
-            print(f"  {raw.num_agents:>2}A×{raw.num_rounds:<2}R      {raw_ratio:>10.2f} {bb_ratio:>10.2f}")
+            print(f"  {raw.num_agents:>2}A×{raw.num_rounds:<2}R      {raw_ratio:>10.2f} {bb_ratio:>10.2f}")  # noqa: E501
 
         print(f"\n{'=' * 90}")
         print(f"  All {len(MATRIX_CONFIGS)} configs completed successfully")

@@ -677,7 +677,7 @@ class TestScoringService(unittest.TestCase):
                 )
                 session.commit()
 
-            with patch("app.services.scoring.score_prediction", new_callable=AsyncMock) as mock_score:
+            with patch("app.services.scoring.score_prediction", new_callable=AsyncMock) as mock_score:  # noqa: E501
                 mock_score.side_effect = [None, RuntimeError("boom")]
                 result = asyncio.run(score_all_for_scenario(scenario_id))
 
@@ -787,7 +787,7 @@ class TestScoringService(unittest.TestCase):
                         session.commit()
                     return {"score": 88, "reason": "命中主线"}
 
-                with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:
+                with patch("app.services.scoring.llm_call_json", new_callable=AsyncMock) as mock_llm:  # noqa: E501
                     mock_llm.side_effect = _delete_scenario_then_score
                     result = await score_prediction(pred_id)
 
@@ -1022,7 +1022,7 @@ def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
             session.refresh(scenario)
             scenario_id = scenario.id
 
-        with patch("app.services.scoring.score_all_for_scenario", new_callable=AsyncMock) as mock_score_all:
+        with patch("app.services.scoring.score_all_for_scenario", new_callable=AsyncMock) as mock_score_all:  # noqa: E501
             mock_score_all.return_value = {
                 "attempted": 3,
                 "scored": 1,

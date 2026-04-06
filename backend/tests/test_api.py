@@ -345,7 +345,11 @@ class TestReplayArtifactEndpoints:
         })
         assert resp.status_code in (200, 500)
 
-    def test_create_scenario_returns_immediately_and_schedules_background_parse(self, client, monkeypatch):
+    def test_create_scenario_returns_immediately_and_schedules_background_parse(
+        self,
+        client,
+        monkeypatch,
+    ):
         """POST /api/scenario should not await the expensive parse step inline."""
         scheduled = {"count": 0}
 
@@ -1039,7 +1043,10 @@ class TestPredictionLeaderboardEndpoints:
         assert second.status_code == 409
         assert _detail_code(second) == "PREDICTION_ALREADY_SUBMITTED"
 
-    def test_submit_prediction_rejects_duplicate_anonymous_prediction_for_same_scenario(self, client):
+    def test_submit_prediction_rejects_duplicate_anonymous_prediction_for_same_scenario(
+        self,
+        client,
+    ):
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
 
@@ -1086,7 +1093,7 @@ class TestPredictionLeaderboardEndpoints:
                 raise IntegrityError("INSERT", {}, Exception("duplicate key"))
             return original_commit(session)
 
-        with patch("app.api.predictions.Session.commit", autospec=True, side_effect=_commit_with_race):
+        with patch("app.api.predictions.Session.commit", autospec=True, side_effect=_commit_with_race):  # noqa: E501
             response = client.post(
                 f"/api/scenario/{sid}/predict",
                 json={
@@ -1117,7 +1124,7 @@ class TestPredictionLeaderboardEndpoints:
         assert "Confidence must be between 0.0 and 1.0" in resp.text
 
     def test_list_predictions_nonexistent_scenario_returns_404(self, client):
-        """Prediction listing should now come from predictions.py and validate scenario existence."""
+        """Prediction listing should now come from predictions.py and validate scenario existence."""  # noqa: E501
         resp = client.get("/api/scenario/nonexistent/predictions")
         assert resp.status_code == 404
 
@@ -1127,9 +1134,9 @@ class TestPredictionLeaderboardEndpoints:
         with Session(engine) as session:
             session.add_all(
                 [
-                    Prediction(scenario_id=sid, prediction_text="预测 1", user_id="user-a", user_name="A"),
-                    Prediction(scenario_id=sid, prediction_text="预测 2", user_id="user-b", user_name="B"),
-                    Prediction(scenario_id=sid, prediction_text="预测 3", user_id="user-c", user_name="C"),
+                    Prediction(scenario_id=sid, prediction_text="预测 1", user_id="user-a", user_name="A"),  # noqa: E501
+                    Prediction(scenario_id=sid, prediction_text="预测 2", user_id="user-b", user_name="B"),  # noqa: E501
+                    Prediction(scenario_id=sid, prediction_text="预测 3", user_id="user-c", user_name="C"),  # noqa: E501
                 ]
             )
             session.commit()
@@ -2036,8 +2043,8 @@ class TestDeleteScenario:
         round_id = _seed_round(engine, bid, 1)
         _seed_message(engine, round_id, agent_id, content="待删除消息")
         with Session(engine) as session:
-            session.add(PendingIntervention(scenario_id=sid, branch_id=bid, user_input="待处理干预"))
-            session.add(InterventionLog(scenario_id=sid, branch_id=bid, round_number=1, user_input="已处理干预"))
+            session.add(PendingIntervention(scenario_id=sid, branch_id=bid, user_input="待处理干预"))  # noqa: E501
+            session.add(InterventionLog(scenario_id=sid, branch_id=bid, round_number=1, user_input="已处理干预"))  # noqa: E501
             session.add(
                 Prediction(
                     scenario_id=sid,
@@ -2047,7 +2054,9 @@ class TestDeleteScenario:
                     confidence=0.6,
                 )
             )
-            group = AgentGroup(scenario_id=sid, name="删除验证组", leader_agent_id=agent_id, member_count=1)
+            group = AgentGroup(
+                scenario_id=sid, name="删除验证组", leader_agent_id=agent_id, member_count=1
+            )
             session.add(group)
             session.flush()
             session.add(AgentGroupMember(group_id=group.id, agent_id=agent_id, is_leader=True))
@@ -2106,7 +2115,7 @@ class TestDeleteScenario:
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is None
             assert session.exec(select(Agent).where(Agent.scenario_id == sid)).first() is None
             assert session.exec(select(Round).where(Round.branch_id == bid)).first() is None
-            assert session.exec(select(AgentMessage).where(AgentMessage.round_id == round_id)).first() is None
+            assert session.exec(select(AgentMessage).where(AgentMessage.round_id == round_id)).first() is None  # noqa: E501
             assert session.exec(
                 select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
             ).first() is None
@@ -2246,7 +2255,7 @@ class TestDeleteScenario:
             assert session.get(EndingRoom, room_id) is None
             assert session.get(EndingRoomThread, thread_id) is None
             assert session.get(EndingRoomParticipant, participant_id) is None
-            assert session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first() is None
+            assert session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first() is None  # noqa: E501
 
     def test_delete_removes_ending_room_domain_records(self, client):
         engine = get_engine()
@@ -2296,7 +2305,7 @@ class TestDeleteScenario:
         assert resp.status_code == 200
 
         with Session(engine) as session:
-            assert session.exec(select(EndingRoom).where(EndingRoom.scenario_id == sid)).first() is None
+            assert session.exec(select(EndingRoom).where(EndingRoom.scenario_id == sid)).first() is None  # noqa: E501
             assert (
                 session.exec(
                     select(EndingRoomParticipant).where(EndingRoomParticipant.room_id == room_id)
@@ -2304,7 +2313,7 @@ class TestDeleteScenario:
                 is None
             )
             assert (
-                session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first()
+                session.exec(select(EndingRoomTurn).where(EndingRoomTurn.room_id == room_id)).first()  # noqa: E501
                 is None
             )
 
@@ -2387,7 +2396,7 @@ class TestExportScenario:
         resp = client.get(f"/api/scenario/{sid}/export")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/markdown")
-        assert resp.headers["content-disposition"] == f'attachment; filename="swarmoracle-{sid[:8]}.md"'
+        assert resp.headers["content-disposition"] == f'attachment; filename="swarmoracle-{sid[:8]}.md"'  # noqa: E501
 
         text = resp.text
         assert "如果诸葛亮多活10年？" in text
@@ -2577,7 +2586,11 @@ class TestSocialCopy:
         assert resp.status_code == 200
         assert resp.json()["copy"] == "中文 Reddit 文案"
 
-    def test_social_copy_non_english_scenario_adds_explicit_output_language(self, client, monkeypatch):
+    def test_social_copy_non_english_scenario_adds_explicit_output_language(
+        self,
+        client,
+        monkeypatch,
+    ):
         engine = get_engine()
         scenario = Scenario(
             question="Et si Rome ne s'était jamais effondrée ?",
@@ -2615,7 +2628,9 @@ class TestSocialCopy:
 
     def test_social_copy_get_openapi_does_not_advertise_provider_query_params(self, client):
         app.openapi_schema = None
-        params = app.openapi()["paths"]["/api/scenario/{scenario_id}/social/{platform}"]["get"].get("parameters", [])
+        params = app.openapi(
+            )["paths"]["/api/scenario/{scenario_id}/social/{platform}"]["get"].get("parameters", []
+        )
         names = {param["name"] for param in params}
 
         assert "llm_api_key" not in names
@@ -2656,7 +2671,7 @@ class TestSocialCopy:
         original_limit = social_api.SOCIAL_COPY_MAX_CHARS["x"]
         social_api.SOCIAL_COPY_MAX_CHARS["x"] = 0
         try:
-            assert social_api._trim_social_copy("x", "Long text that should not leak past the limit") == "…"
+            assert social_api._trim_social_copy("x", "Long text that should not leak past the limit") == "…"  # noqa: E501
         finally:
             social_api.SOCIAL_COPY_MAX_CHARS["x"] = original_limit
 

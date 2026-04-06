@@ -22,7 +22,6 @@ from app.services.memory import (
     format_messages_for_context,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────
 
 
@@ -90,7 +89,7 @@ class TestContextSizeCharacteristics:
         - activity_log capped at 20 entries
         - positions dict grows with UNIQUE agents only (typically 8-15)
         """
-        agent = _make_agent("曹操", "CORE")
+        _agent = _make_agent("曹操", "CORE")
         msgs = _make_messages(n_msgs)
 
         # BB approach
@@ -141,7 +140,7 @@ class TestContextSizeCharacteristics:
         - All agents have posted (positions dict full)
         - Activity log hits window cap
         """
-        agent = _make_agent("曹操", "CORE")
+        _agent = _make_agent("曹操", "CORE")
         sizes = []
         bb = Blackboard()
 
@@ -262,7 +261,7 @@ class TestForkCost:
         iterations = 1000
         start = time.perf_counter()
         for _ in range(iterations):
-            child = bb.fork()
+            _child = bb.fork()
         elapsed = time.perf_counter() - start
 
         per_fork_us = (elapsed / iterations) * 1_000_000
@@ -368,7 +367,7 @@ class TestTokenBudget:
             per_round_bb.append(round_bb_total)
 
         # Report
-        print(f"\n  === 100 agents × 10 rounds ===")
+        print("\n  === 100 agents × 10 rounds ===")
         print(f"  Total raw(tier-limited): {total_raw_bytes:,} bytes")
         print(f"  Total BB context:        {total_bb_bytes:,} bytes")
         print(f"  Activity log:            {len(bb.activity_log)} entries")

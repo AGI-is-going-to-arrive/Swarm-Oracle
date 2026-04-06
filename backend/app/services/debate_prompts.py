@@ -10,23 +10,23 @@ from __future__ import annotations
 import re
 
 from app.models import DebatePhase, DebateSide
-from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block
 from app.services.lang_detect import detect_language
+from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
 _PROFILE_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "law": ("law", "legal", "court", "judge", "constitution", "regulation", "ban", "veto", "审判", "法律", "法庭", "合宪", "禁令", "否决权"),
-    "governance": ("governance", "democracy", "vote", "election", "state", "senate", "policy", "committee", "board", "budget", "政府", "治理", "民主", "选举", "议会", "委员会", "预算"),
-    "war": ("war", "military", "army", "navy", "invasion", "battle", "战争", "军事", "入侵", "战役"),
-    "empire": ("empire", "dynasty", "emperor", "imperial", "colonial", "帝国", "王朝", "皇帝", "殖民"),
-    "industry": ("factory", "industry", "industrial", "automation", "energy", "工厂", "工业", "自动化", "电网"),
+    "law": ("law", "legal", "court", "judge", "constitution", "regulation", "ban", "veto", "审判", "法律", "法庭", "合宪", "禁令", "否决权"),  # noqa: E501
+    "governance": ("governance", "democracy", "vote", "election", "state", "senate", "policy", "committee", "board", "budget", "政府", "治理", "民主", "选举", "议会", "委员会", "预算"),  # noqa: E501
+    "war": ("war", "military", "army", "navy", "invasion", "battle", "战争", "军事", "入侵", "战役"),  # noqa: E501
+    "empire": ("empire", "dynasty", "emperor", "imperial", "colonial", "帝国", "王朝", "皇帝", "殖民"),  # noqa: E501
+    "industry": ("factory", "industry", "industrial", "automation", "energy", "工厂", "工业", "自动化", "电网"),  # noqa: E501
     "trade": ("trade", "market", "port", "tariff", "supply chain", "贸易", "市场", "关税", "物流"),
     "faith": ("faith", "religion", "church", "temple", "god", "宗教", "信仰", "神殿", "教会"),
-    "ecology": ("climate", "forest", "river", "ecology", "pollution", "生态", "气候", "森林", "污染"),
-    "frontier": ("frontier", "colony", "settlement", "mars", "expansion", "边疆", "殖民地", "拓荒", "火星"),
+    "ecology": ("climate", "forest", "river", "ecology", "pollution", "生态", "气候", "森林", "污染"),  # noqa: E501
+    "frontier": ("frontier", "colony", "settlement", "mars", "expansion", "边疆", "殖民地", "拓荒", "火星"),  # noqa: E501
     "mythic": ("magic", "myth", "oracle", "curse", "dragon", "神话", "魔法", "预言", "禁术"),
-    "survival": ("survival", "plague", "famine", "collapse", "refuge", "生存", "瘟疫", "饥荒", "避难"),
+    "survival": ("survival", "plague", "famine", "collapse", "refuge", "生存", "瘟疫", "饥荒", "避难"),  # noqa: E501
 }
 
 _PROFILE_SCENES = {
@@ -141,48 +141,60 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "pressure": "discretion drift and rule vacuums",
         "challenge": "Which clause, review layer, or burden-of-proof threshold fails first?",
         "plan": "sunset clauses, appeal windows, and a higher evidentiary threshold",
-        "close_pro": "The real reform case is not improvisation but a pathway that survives repeated procedural review.",
-        "close_con": "If legality and proof standards are still shaky, restraint remains the more defensible legal answer.",
+        "close_pro": "The real reform case is not improvisation but a pathway that survives repeated procedural review.",  # noqa: E501
+        "close_con": "If legality and proof standards are still shaky, restraint remains the more defensible legal answer.",  # noqa: E501
         "judge_focus": "procedural legitimacy and evidence discipline",
     },
     "governance": {
         "pro_case": "converting scattered pressure into a governable coordination rhythm",
         "con_case": "governance overload, accountability drift, and execution fragmentation",
         "pressure": "runaway coordination costs and policy dead zones",
-        "challenge": "Who keeps committees, budgets, and operators aligned after the opening slogans fade?",
+        "challenge": (
+            "Who keeps committees, budgets, and operators aligned after the opening slogans fade?"
+        ),
         "plan": "phased accountability, committee cadence, and reversible authority",
-        "close_pro": "The value of the motion is that it makes chaotic pressure governable and correctable.",
-        "close_con": "If the governing skeleton is not ready, acceleration only magnifies coordination failure.",
+        "close_pro": (
+            "The value of the motion is that it makes chaotic pressure governable and correctable."
+        ),
+        "close_con": "If the governing skeleton is not ready, acceleration only magnifies coordination failure.",  # noqa: E501
         "judge_focus": "coordination capacity and institutional resilience",
     },
     "trade": {
         "pro_case": "converting friction into incentive realignment and supply-chain leverage",
         "con_case": "cost pass-through, arbitrage imbalance, and brittle links",
         "pressure": "deferred supply shocks and price backlash",
-        "challenge": "When freight, tariffs, and settlement rails tighten, who absorbs the first cost wave?",
+        "challenge": (
+            "When freight, tariffs, and settlement rails tighten, who absorbs the first cost wave?"
+        ),
         "plan": "tiered settlement, price buffers, and backup nodes",
-        "close_pro": "Trade upside is not rhetoric. It is the ability to convert cost into liquidity and bargaining power.",
-        "close_con": "If spillover cost is not contained, the growth curve is just a delayed invoice.",
+        "close_pro": "Trade upside is not rhetoric. It is the ability to convert cost into liquidity and bargaining power.",  # noqa: E501
+        "close_con": (
+            "If spillover cost is not contained, the growth curve is just a delayed invoice."
+        ),
         "judge_focus": "incentive design and cost allocation",
     },
     "faith": {
         "pro_case": "turning shared belief into durable legitimacy and collective mobilization",
         "con_case": "sacred backlash, trust fractures, and order splitting along belief lines",
         "pressure": "uncontained legitimacy competition and social fracture",
-        "challenge": "When ritual promises clash with material costs, who protects the community's trust floor?",
+        "challenge": "When ritual promises clash with material costs, who protects the community's trust floor?",  # noqa: E501
         "plan": "ritual boundaries, shared covenant, and gradual authorization",
-        "close_pro": "Faith-driven motions are not only about passion. They are about whether meaning can be made durable.",
-        "close_con": "Once legitimacy is overdrawn, the later fracture will compound rather than settle.",
+        "close_pro": "Faith-driven motions are not only about passion. They are about whether meaning can be made durable.",  # noqa: E501
+        "close_con": (
+            "Once legitimacy is overdrawn, the later fracture will compound rather than settle."
+        ),
         "judge_focus": "legitimacy and communal stability",
     },
     "ecology": {
         "pro_case": "correcting thresholds early enough to buy a larger ecological buffer",
         "con_case": "irreversible loss, intergenerational debt, and threshold misreads",
         "pressure": "delayed ecological thresholds and cascading cost",
-        "challenge": "Once a river, forest, or climate threshold is crossed, who carries the irreversible cost?",
+        "challenge": "Once a river, forest, or climate threshold is crossed, who carries the irreversible cost?",  # noqa: E501
         "plan": "zoned thresholds, monitoring loops, and intergenerational cost accounting",
-        "close_pro": "Ecological upside comes from preserving a repair window, not from optimistic branding.",
-        "close_con": "If the damage is irreversible, even moderate promises cannot hide the debt of this worldline.",
+        "close_pro": (
+            "Ecological upside comes from preserving a repair window, not from optimistic branding."
+        ),
+        "close_con": "If the damage is irreversible, even moderate promises cannot hide the debt of this worldline.",  # noqa: E501
         "judge_focus": "threshold judgment and long-horizon cost",
     },
     "war": {
@@ -191,8 +203,10 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "pressure": "widening fronts and mobilization debt",
         "challenge": "When logistics, fronts, and allies strain together, which link breaks first?",
         "plan": "logistics redundancy, escalation thresholds, and front-tempo control",
-        "close_pro": "War-adjacent upside comes from shaping the tempo before the worse option arrives.",
-        "close_con": "If the escalation ladder is not constrained, decisive-looking moves can become costlier disorder.",
+        "close_pro": (
+            "War-adjacent upside comes from shaping the tempo before the worse option arrives."
+        ),
+        "close_con": "If the escalation ladder is not constrained, decisive-looking moves can become costlier disorder.",  # noqa: E501
         "judge_focus": "escalation control and strategic sustainability",
     },
     "generic": {
@@ -202,7 +216,9 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "challenge": "If this worldline breaks, who pays the first cost?",
         "plan": "guardrails first, then expansion, then correction",
         "close_pro": "The motion matters because it converts uncertainty into a manageable choice.",
-        "close_con": "When the core premises are still open, restraint remains the more credible answer.",
+        "close_con": (
+            "When the core premises are still open, restraint remains the more credible answer."
+        ),
         "judge_focus": "executability and consequence clarity",
     },
 }
@@ -235,11 +251,13 @@ def phase_argument_goal(language: str, phase: DebatePhase, side: DebateSide) -> 
         return "以裁决者口吻点出胜负关键，至少引用两类具体优势或漏洞。"
 
     if phase == DebatePhase.OPENING:
-        return "Plant a clear thesis, then tie it to institutions, execution, or who absorbs the cost."
+        return (
+            "Plant a clear thesis, then tie it to institutions, execution, or who absorbs the cost."
+        )
     if phase == DebatePhase.CROSSFIRE:
-        return "Hit the weakest point in the other side's latest case and ask where it breaks first in reality."
+        return "Hit the weakest point in the other side's latest case and ask where it breaks first in reality."  # noqa: E501
     if phase == DebatePhase.REBUTTAL:
-        return "Answer the strongest criticism directly, repair the exposed gap, and make your path more executable."
+        return "Answer the strongest criticism directly, repair the exposed gap, and make your path more executable."  # noqa: E501
     if phase == DebatePhase.CLOSING:
         return "Compress the dispute into one larger judgment instead of repeating earlier lines."
     return "Sound like a judge, naming at least two concrete reasons why one side wins."
@@ -251,7 +269,7 @@ def stock_opening_guard(language: str, phase: DebatePhase) -> str:
         return ""
     if language == "zh":
         return "避免使用这些开头：我方支持、我方反对、正方认为、反方认为、所谓、显然。"
-    return "Avoid stock openings like: We support the motion, We oppose the motion, Proposition says, Opposition says, Obviously."
+    return "Avoid stock openings like: We support the motion, We oppose the motion, Proposition says, Opposition says, Obviously."  # noqa: E501
 
 
 def resolve_debate_language(question: str) -> str:
@@ -348,17 +366,17 @@ def _build_turn_copy_zh(
     profile_label = _PROFILE_LABELS_ZH.get(profile_id, "议场")
     style = _get_profile_style("zh", profile_id)
     if phase == DebatePhase.OPENING and side == DebateSide.PROPOSITION:
-        return f"我方支持这项动议。若围绕“{compact_question}”主动布局，就能{style['pro_case']}，让{profile_label} 体系把不确定性压进更可治理的秩序。"
+        return f"我方支持这项动议。若围绕“{compact_question}”主动布局，就能{style['pro_case']}，让{profile_label} 体系把不确定性压进更可治理的秩序。"  # noqa: E501
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
         return f"我方反对。动议把收益叙事说得过于轻松，却低估了{style['con_case']}。"
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
-        return f"反方不断强调风险，却没有说明在不推动这条世界线时，如何处理已经暴露的{style['pressure']}。"
+        return f"反方不断强调风险，却没有说明在不推动这条世界线时，如何处理已经暴露的{style['pressure']}。"  # noqa: E501
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.OPPOSITION:
         return f"正方把愿景当成证据。请正面回答：{style['challenge']}"
     if phase == DebatePhase.REBUTTAL and side == DebateSide.PROPOSITION:
-        return f"我方并非否认代价，而是主张分阶段落地：先布置{style['plan']}，再释放增量，这比长期犹豫更稳。"
+        return f"我方并非否认代价，而是主张分阶段落地：先布置{style['plan']}，再释放增量，这比长期犹豫更稳。"  # noqa: E501
     if phase == DebatePhase.REBUTTAL and side == DebateSide.OPPOSITION:
-        return f"所谓分阶段落地并没有消除根本漏洞，只是把{style['con_case']}从显性冲突延后成更难收拾的系统债。"
+        return f"所谓分阶段落地并没有消除根本漏洞，只是把{style['con_case']}从显性冲突延后成更难收拾的系统债。"  # noqa: E501
     if phase == DebatePhase.CLOSING and side == DebateSide.PROPOSITION:
         return style["close_pro"]
     if phase == DebatePhase.CLOSING and side == DebateSide.OPPOSITION:
@@ -370,7 +388,7 @@ def _build_turn_copy_zh(
             "balance": "均衡",
             "rupture": "断裂",
         }.get(verdict_tone or "", "均衡")
-        return f"裁决：{outcome}获胜。本场主导判词是“{tone_label}”。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"
+        return f"裁决：{outcome}获胜。本场主导判词是“{tone_label}”。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"  # noqa: E501
     return motion
 
 
@@ -429,7 +447,7 @@ def build_turn_generation_prompt(
             f"{format_untrusted_text_block('辩题问题', question, max_chars=600)}\n"
             f"{format_untrusted_text_block('正式动议', motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('最近辩论记录', recent_block, max_chars=1200)}\n"
-            f"{format_untrusted_text_block('上一条对手发言', latest_opponent_turn or '(none)', max_chars=500)}\n"
+            f"{format_untrusted_text_block('上一条对手发言', latest_opponent_turn or '(none)', max_chars=500)}\n"  # noqa: E501
             f"{format_untrusted_text_block('语义锚点', anchor_copy, max_chars=500)}\n"
             "任务：保留同样的立场、阶段目标和结论方向，但不要复读锚点文案本身，要写成更像真人现场辩论的即时回应。\n"
             "要求：\n"
@@ -458,17 +476,17 @@ def build_turn_generation_prompt(
         f"{format_untrusted_text_block('Debate question', question, max_chars=600)}\n"
         f"{format_untrusted_text_block('Motion', motion, max_chars=600)}\n"
         f"{format_untrusted_text_block('Recent debate turns', recent_block, max_chars=1200)}\n"
-        f"{format_untrusted_text_block('Latest opposing turn', latest_opponent_turn or '(none)', max_chars=500)}\n"
+        f"{format_untrusted_text_block('Latest opposing turn', latest_opponent_turn or '(none)', max_chars=500)}\n"  # noqa: E501
         f"{format_untrusted_text_block('Semantic anchor', anchor_copy, max_chars=500)}\n"
-        "Task: keep the same stance, phase objective, and conclusion direction, but do not paraphrase the anchor line. Write it like a live response in an actual debate.\n"
+        "Task: keep the same stance, phase objective, and conclusion direction, but do not paraphrase the anchor line. Write it like a live response in an actual debate.\n"  # noqa: E501
         "Requirements:\n"
-        "- 2-4 sentences with at least one concrete mechanism, execution consequence, or accountability chain\n"
+        "- 2-4 sentences with at least one concrete mechanism, execution consequence, or accountability chain\n"  # noqa: E501
         "- If there is a latest opposing turn, answer one specific point from it directly\n"
         "- Avoid stock openings and do not recycle anchor wording\n"
-        "- Let the tone feel human: sharp, under pressure, and willing to press a contradiction instead of sounding like a report\n"
-        "- Vary the rhythm so at least one sentence lands like a real challenge, counterpunch, or closing hit\n"
-        "- Include at least one short sentence (about 3-8 words) that lands like a jab, pivot, or hammer blow\n"
-        "- Do not let every sentence run long; avoid piling up more than three parallel clauses in one line\n"
+        "- Let the tone feel human: sharp, under pressure, and willing to press a contradiction instead of sounding like a report\n"  # noqa: E501
+        "- Vary the rhythm so at least one sentence lands like a real challenge, counterpunch, or closing hit\n"  # noqa: E501
+        "- Include at least one short sentence (about 3-8 words) that lands like a jab, pivot, or hammer blow\n"  # noqa: E501
+        "- Do not let every sentence run long; avoid piling up more than three parallel clauses in one line\n"  # noqa: E501
         "- Do not invent unrelated world details\n"
         "- If this is the verdict, explicitly state winner and tone\n"
         "- Output strict JSON only: {\"content\": \"...\"}\n"
@@ -487,17 +505,17 @@ def _build_turn_copy_en(
 ) -> str:
     style = _get_profile_style("en", profile_id)
     if phase == DebatePhase.OPENING and side == DebateSide.PROPOSITION:
-        return f"We support the motion. Around '{compact_question}', we can pursue {style['pro_case']} and convert uncertainty into governable leverage."
+        return f"We support the motion. Around '{compact_question}', we can pursue {style['pro_case']} and convert uncertainty into governable leverage."  # noqa: E501
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
-        return f"We oppose the motion. The upside story is overstated, while {style['con_case']} are being understated."
+        return f"We oppose the motion. The upside story is overstated, while {style['con_case']} are being understated."  # noqa: E501
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
-        return f"Opposition keeps naming risks without explaining how the status quo handles {style['pressure']}."
+        return f"Opposition keeps naming risks without explaining how the status quo handles {style['pressure']}."  # noqa: E501
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.OPPOSITION:
         return f"Proposition is treating aspiration as evidence. {style['challenge']}"
     if phase == DebatePhase.REBUTTAL and side == DebateSide.PROPOSITION:
-        return f"We are not denying trade-offs. We are sequencing them through {style['plan']} before unlocking upside."
+        return f"We are not denying trade-offs. We are sequencing them through {style['plan']} before unlocking upside."  # noqa: E501
     if phase == DebatePhase.REBUTTAL and side == DebateSide.OPPOSITION:
-        return f"Sequencing does not remove the core flaw. It merely delays {style['con_case']} until the system is more exposed."
+        return f"Sequencing does not remove the core flaw. It merely delays {style['con_case']} until the system is more exposed."  # noqa: E501
     if phase == DebatePhase.CLOSING and side == DebateSide.PROPOSITION:
         return style["close_pro"]
     if phase == DebatePhase.CLOSING and side == DebateSide.OPPOSITION:
@@ -509,5 +527,5 @@ def _build_turn_copy_en(
             "rupture": "rupture",
         }.get(verdict_tone or "", "balance")
         winner_label = "Proposition" if winner == "proposition" else "Opposition"
-        return f"Verdict: {winner_label} wins. The dominant tone is {tone_label}. Both sides produced tension, but the winner was stronger on {style['judge_focus']}."
+        return f"Verdict: {winner_label} wins. The dominant tone is {tone_label}. Both sides produced tension, but the winner was stronger on {style['judge_focus']}."  # noqa: E501
     return motion

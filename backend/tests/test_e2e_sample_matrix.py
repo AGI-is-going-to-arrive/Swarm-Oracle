@@ -7,7 +7,6 @@ from pathlib import Path
 
 from app.visualization.scene_selector import select_scene
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 E2E_OUTPUT_ROOT = REPO_ROOT / "frontend" / "output" / "e2e"
 

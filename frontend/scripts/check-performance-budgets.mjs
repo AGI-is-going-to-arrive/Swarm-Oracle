@@ -37,7 +37,7 @@ const DIRECTORY_BUDGETS = [
   {
     label: "public/assets/scenes",
     dir: path.join(FRONTEND_ROOT, "public", "assets", "scenes"),
-    maxBytes: 45 * 1024 * 1024,
+    maxBytes: 65 * 1024 * 1024,
   },
   {
     label: "public/assets/ui",

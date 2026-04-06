@@ -50,7 +50,7 @@ class CreateEndingRoomRequest(BaseModel):
     anchor_branch_id: str | None = None
     selected_branch_ids: list[str] = Field(max_length=50)
     selected_agent_ids: list[str] = Field(default_factory=list, max_length=50)
-    selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list, max_length=50)
+    selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list, max_length=50)  # noqa: E501
     selected_witness: SelectedRepresentativeRequest | None = None
     selection_recipe: str | None = None
     language: str | None = None
@@ -102,13 +102,15 @@ class CreateEndingRoomRequest(BaseModel):
             "witness_augmented",
         }:
             raise ValueError("selection_recipe is not supported")
-        if self.room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY} and self.anchor_branch_id is None:
+        if (self.room_type in {EndingRoomType.ENDING_CHAMBER, EndingRoomType.ONE_MOVE_ONLY}
+                and self.anchor_branch_id is None):
             raise ValueError("anchor_branch_id is required for single-branch rooms")
         if self.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_agent_ids:
-            raise ValueError("worldline_roundtable must use selected_representatives instead of selected_agent_ids")
+            raise ValueError("worldline_roundtable must use selected_representatives instead of selected_agent_ids")  # noqa: E501
         if self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_representatives:
             raise ValueError("selected_representatives is only supported for worldline_roundtable")
-        if self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE and self.selected_witness is not None:
+        if (self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE
+                and self.selected_witness is not None):
             raise ValueError("selected_witness is only supported for worldline_roundtable")
         return self
 
@@ -204,7 +206,7 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
                 item.model_dump(mode="python")
                 for item in req.selected_representatives
             ],
-            selected_witness=req.selected_witness.model_dump(mode="python") if req.selected_witness is not None else None,
+            selected_witness=req.selected_witness.model_dump(mode="python") if req.selected_witness is not None else None,  # noqa: E501
             selection_recipe=req.selection_recipe,
             language=req.language,
         )

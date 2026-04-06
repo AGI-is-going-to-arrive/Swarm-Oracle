@@ -11,6 +11,7 @@ import {
   getInteractionModeNote,
   roleLabel,
   scopeText,
+  stripOracleReasoningText,
   threadLabel,
   trimQuoteSnippet,
 } from './endingChatHelpers';
@@ -106,6 +107,16 @@ describe('endingChatHelpers', () => {
     it('truncates long text', () => {
       const result = trimQuoteSnippet('A'.repeat(200), 50);
       expect(result.length).toBeLessThanOrEqual(52);
+    });
+  });
+
+  describe('stripOracleReasoningText', () => {
+    it('removes closed think blocks from the prefix', () => {
+      expect(stripOracleReasoningText('<think>hidden</think>Visible answer')).toBe('Visible answer');
+    });
+
+    it('drops unfinished think prefixes', () => {
+      expect(stripOracleReasoningText('<think>hidden only')).toBe('');
     });
   });
 

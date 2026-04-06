@@ -1,4 +1,4 @@
-import { type CSSProperties, type UIEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -13,7 +13,6 @@ import {
 import { copyText } from '../lib/copyText';
 import {
   buildBranchEndingRoomCandidates,
-  type EndingRoomCandidate,
 } from '../lib/endingRoomCandidates';
 import {
   chooseRepresentativeDefaults,
@@ -81,11 +80,10 @@ import {
   chooseWitnessAugmentedSelection,
   buildReplayThreads,
 } from './roundtableHelpers';
+import { stripOracleReasoningText } from '../components/endingChatHelpers';
 import type {
   AgentInfo,
-  EndingRoomParticipant,
   RoundtableRepresentativeSelection,
-  RoundtableSelectionRecipe,
   RoundtableWitnessSelection,
   EndingRoomThreadSnapshot,
   Scenario,
@@ -520,10 +518,10 @@ export default function WorldlineRoundtableView() {
       const participant = participantsById.get(turn.participant_id);
       return {
         key: turn.id,
-        content: turn.content,
+        content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
         phase: getEndingRoomPhaseLabel(turn.phase, t),
         participantId: turn.participant_id,
-        roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
+        roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : undefined),
         speaker: participant?.display_name
           ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : (isZh ? '未知角色' : 'Unknown')),
       };
@@ -553,28 +551,31 @@ export default function WorldlineRoundtableView() {
   const displayedDrafts = useMemo(
     () => {
       if (visibleDrafts.length > 0) {
-        return visibleDrafts.map((draft) => ({
-          key: draft.turnId,
-          participantId: draft.participantId,
-          phase: draft.phase,
-          content: draft.content.trim()
-            ? draft.content
-            : (
-              interactionMode === 'hotseat'
-                ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
-                : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…')
-            ),
-          variant: draft.content.trim() ? ('stream' as const) : ('placeholder' as const),
-        }));
+        return visibleDrafts.map((draft) => {
+          const sanitizedContent = stripOracleReasoningText(draft.content);
+          return {
+            key: draft.turnId,
+            participantId: draft.participantId,
+            phase: draft.phase,
+            content: sanitizedContent.trim()
+              ? sanitizedContent
+              : (
+                interactionMode === 'hotseat'
+                  ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
+                  : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…')
+              ),
+            variant: sanitizedContent.trim() ? ('stream' as const) : ('placeholder' as const),
+          };
+        });
       }
       if (replayPayload || !sending || !composerEnabled) {
         return [];
       }
       const placeholderParticipantId = interactionMode === 'hotseat'
-        ? (selectedRepresentativeId ?? null)
+        ? (selectedRepresentativeId ?? undefined)
         : participants.find((participant) => participant.role_slot === 'archivist')?.id
           ?? representatives[0]?.id
-          ?? null;
+          ?? undefined;
       const placeholderContent = interactionMode === 'hotseat'
         ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
         : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…');
@@ -1234,9 +1235,11 @@ export default function WorldlineRoundtableView() {
     threadList,
   ]);
 
-  const handleTranscriptScroll = (event: UIEvent<HTMLDivElement>) => {
-    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(event.currentTarget);
-  };
+  const handleTranscriptScroll = useCallback(() => {
+    if (transcriptListRef.current) {
+      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptListRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const win = window as AutomationWindow & {

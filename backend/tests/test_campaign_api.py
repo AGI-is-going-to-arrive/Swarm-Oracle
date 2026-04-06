@@ -470,9 +470,9 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
     scenario = client.get(f"/api/scenario/{scenario_id}")
     assert scenario.status_code == 200
     scenario_data = scenario.json()
-    assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"
-    assert scenario_data["gameplay_state"]["betting"]["bets"][0]["target_label"] == "Judicial Review"
-    assert scenario_data["gameplay_state"]["archive"]["branch_snapshots"][0]["branch_id"] == "branch-1"
+    assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"  # noqa: E501
+    assert scenario_data["gameplay_state"]["betting"]["bets"][0]["target_label"] == "Judicial Review"  # noqa: E501
+    assert scenario_data["gameplay_state"]["archive"]["branch_snapshots"][0]["branch_id"] == "branch-1"  # noqa: E501
 
 
 def test_director_state_endpoint_rejects_stale_revision_conflict(client: TestClient):

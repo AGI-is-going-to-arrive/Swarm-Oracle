@@ -424,7 +424,7 @@ async def create_scenario(req: CreateScenarioRequest):
 
         # Create a provisional root branch so Theater can expose an active worldline
         # before the LLM-backed parse finishes.
-        session.add(Branch(scenario_id=scenario_id, title=_placeholder_root_title(question), probability=1.0))
+        session.add(Branch(scenario_id=scenario_id, title=_placeholder_root_title(question), probability=1.0))  # noqa: E501
         session.commit()
 
     # 2) Parse + simulate in the background. This keeps the request responsive
@@ -457,7 +457,7 @@ async def create_scenario(req: CreateScenarioRequest):
     # populated once the background parse finishes.
     result = load_scenario_response(engine, scenario_id)
     if not result:
-        raise api_error(500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario")
+        raise api_error(500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario")  # noqa: E501
     result.mode = mode
     result.hierarchical = use_hierarchical
     result.visualization_enabled = viz_enabled
@@ -470,26 +470,26 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
     snapshot = req.scenario if isinstance(req.scenario, dict) else {}
     question = str(snapshot.get("question", "")).strip()
     if not question:
-        raise api_error(422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question")
+        raise api_error(422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question")  # noqa: E501
     if len(question) > 500:
-        raise api_error(422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long")
+        raise api_error(422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long")  # noqa: E501
 
     engine = get_engine()
-    parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}
+    parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}  # noqa: E501
     groups = snapshot.get("groups") if isinstance(snapshot.get("groups"), list) else []
     agents = snapshot.get("agents") if isinstance(snapshot.get("agents"), list) else []
     branches = snapshot.get("branches") if isinstance(snapshot.get("branches"), list) else []
     messages = snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
     if len(groups) > MAX_IMPORT_REPLAY_SCENARIO_GROUPS:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_GROUPS", "Replay scenario has too many groups")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_GROUPS", "Replay scenario has too many groups")  # noqa: E501
     if len(agents) > MAX_IMPORT_REPLAY_SCENARIO_AGENTS:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_AGENTS", "Replay scenario has too many agents")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_AGENTS", "Replay scenario has too many agents")  # noqa: E501
     if len(branches) > MAX_IMPORT_REPLAY_SCENARIO_BRANCHES:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_BRANCHES", "Replay scenario has too many branches")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_BRANCHES", "Replay scenario has too many branches")  # noqa: E501
     if len(messages) > MAX_IMPORT_REPLAY_SCENARIO_MESSAGES:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_MESSAGES", "Replay scenario has too many messages")
+        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_MESSAGES", "Replay scenario has too many messages")  # noqa: E501
     if not parsed_context.get("simulation_rounds"):
-        max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)
+        max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)  # noqa: E501
         if max_round > 0:
             parsed_context = {
                 **parsed_context,
@@ -500,8 +500,8 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
         scenario = Scenario(
             question=question,
             parsed_context=parsed_context or None,
-            director_state_json=snapshot.get("director_state") if isinstance(snapshot.get("director_state"), dict) else None,
-            gameplay_state_json=snapshot.get("gameplay_state") if isinstance(snapshot.get("gameplay_state"), dict) else None,
+            director_state_json=snapshot.get("director_state") if isinstance(snapshot.get("director_state"), dict) else None,  # noqa: E501
+            gameplay_state_json=snapshot.get("gameplay_state") if isinstance(snapshot.get("gameplay_state"), dict) else None,  # noqa: E501
             status=_coerce_scenario_status(snapshot.get("status")),
             user_id=str(snapshot.get("user_id", "")).strip() or None,
             visualization_enabled=bool(snapshot.get("visualization_enabled")),
@@ -647,7 +647,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 
     result = load_scenario_response(engine, scenario_id)
     if not result:
-        raise api_error(500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario")
+        raise api_error(500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario")  # noqa: E501
     return result
 
 
@@ -668,7 +668,7 @@ async def create_replay_artifact(req: CreateReplayArtifactRequest):
 
     payload_size = len(encoded_payload.encode("utf-8"))
     if payload_size > MAX_REPLAY_ARTIFACT_BYTES:
-        raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")
+        raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")  # noqa: E501
 
     engine = get_engine()
     with Session(engine) as session:
@@ -811,7 +811,7 @@ async def get_agents(scenario_id: str):
                 "stance": a.stance,
                 "emotion": a.emotion,
                 "group_id": a.group_id,
-                "group_name": group_lookup.get(a.group_id, {}).get("group_name") if a.group_id else None,
+                "group_name": group_lookup.get(a.group_id, {}).get("group_name") if a.group_id else None,  # noqa: E501
             }
             for a in agents
         ]
@@ -834,7 +834,7 @@ async def get_groups(scenario_id: str):
         memberships = session.exec(
             select(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids))
         ).all()
-        memberships_by_group: dict[str, list[AgentGroupMember]] = {group_id: [] for group_id in group_ids}
+        memberships_by_group: dict[str, list[AgentGroupMember]] = {group_id: [] for group_id in group_ids}  # noqa: E501
         agent_ids = {
             membership.agent_id
             for membership in memberships
@@ -868,7 +868,7 @@ async def get_groups(scenario_id: str):
                 "id": g.id,
                 "name": g.name,
                 "parent_group_id": g.parent_group_id,
-                "leader": {"id": leader.id, "name": leader.name, "role": leader.role} if leader else None,
+                "leader": {"id": leader.id, "name": leader.name, "role": leader.role} if leader else None,  # noqa: E501
                 "members": members,
                 "member_count": g.member_count,
             })
@@ -921,7 +921,7 @@ async def list_scenarios(
                 raise api_error(
                     422,
                     "SCENARIO_STATUS_FILTER_INVALID",
-                    f"Invalid status: '{status}'. Valid values: {[s.value for s in ScenarioStatus]}",
+                    f"Invalid status: '{status}'. Valid values: {[s.value for s in ScenarioStatus]}",  # noqa: E501
                 )
 
         rows = session.exec(query.offset(offset).limit(limit)).all()
@@ -962,7 +962,7 @@ async def delete_scenario(scenario_id: str):
             raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
         # M-7 fix: Allow deleting PARSING/ERROR/DONE scenarios
-        if scenario.status not in (ScenarioStatus.DONE, ScenarioStatus.ERROR, ScenarioStatus.PARSING):
+        if scenario.status not in (ScenarioStatus.DONE, ScenarioStatus.ERROR, ScenarioStatus.PARSING):  # noqa: E501
             raise api_error(
                 400,
                 "SCENARIO_DELETE_STATUS_INVALID",
@@ -1014,7 +1014,7 @@ async def delete_scenario(scenario_id: str):
         session.exec(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
 
         # 5. Predictions — collect affected users so leaderboard rows can be rebuilt
-        preds = list(session.exec(select(Prediction).where(Prediction.scenario_id == scenario_id)).all())
+        preds = list(session.exec(select(Prediction).where(Prediction.scenario_id == scenario_id)).all())  # noqa: E501
         affected_prediction_users: dict[str, str] = {}
         for p in preds:
             if p.score is not None:

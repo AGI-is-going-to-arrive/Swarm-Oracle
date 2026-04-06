@@ -198,7 +198,7 @@ export default function HistoryView() {
               >
                 <div className="history-card__top">
                   <span className={`badge ${STATUS_BADGE_MAP[s.status] || 'badge-active'}`}>
-                    {s.status}
+                    {t(`history.status_${s.status}`)}
                   </span>
                   <button
                     className="history-card__delete"

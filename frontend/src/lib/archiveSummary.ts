@@ -67,6 +67,12 @@ const PROFILE_RESONANCE_KEYWORDS: Record<GameplayProfileId, string[]> = {
   frontier: ['边疆', '殖民', '轨道', '撤离', 'frontier', 'colony', 'orbital', 'evac'],
   mythic: ['神谕', '魔法', '王国', '禁术', 'prophecy', 'magic', 'kingdom', 'ritual'],
   survival: ['末日', '饥荒', '瘟疫', '避难', 'survival', 'collapse', 'plague', 'refuge'],
+  finance: ['金融', '信用', '做空', '挤兑', 'finance', 'credit', 'short', 'liquidity'],
+  scholar: ['学术', '学派', '范式', '论证', 'academic', 'paradigm', 'thesis', 'faculty'],
+  medical: ['医疗', '诊疗', '疫情', '病患', 'medical', 'triage', 'pandemic', 'clinical'],
+  technology: ['技术', '算力', '架构', '迭代', 'technology', 'compute', 'architecture', 'iteration'],
+  entertainment: ['娱乐', '舆论', '流量', '叙事', 'entertainment', 'narrative', 'audience', 'viral'],
+  diplomacy: ['外交', '条约', '谈判', '使节', 'diplomacy', 'treaty', 'negotiation', 'envoy'],
   generic: ['冲突', '分歧', '转向', '证据', 'conflict', 'tension', 'pivot', 'evidence'],
 };
 

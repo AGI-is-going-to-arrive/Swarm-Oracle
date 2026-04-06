@@ -93,7 +93,7 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
                 "You are a Weibo-style microblog writer. Based on the simulation results "
                 "below, write a concise Weibo post in English.\n"
                 "Requirements:\n"
-                "- Keep the main post within 140 Chinese-style characters worth of brevity, roughly tweet-length in English\n"
+                "- Keep the main post within 140 Chinese-style characters worth of brevity, roughly tweet-length in English\n"  # noqa: E501
                 "- Open with a hook question or exclamation\n"
                 "- Keep the information density high\n"
                 "- End with 2-3 topic tags in the format #topic\n"
@@ -140,7 +140,7 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
                 "- 可附 subreddit 提示，如 [r/whatif] 或 [r/alternatehistory]\n"
             ),
             "English": (
-                "You are a Reddit power user. Based on the simulation results below, write a Reddit post.\n"
+                "You are a Reddit power user. Based on the simulation results below, write a Reddit post.\n"  # noqa: E501
                 "Requirements:\n"
                 "- Title: Engaging, concise, under 300 characters\n"
                 "- Body: 200-500 words, conversational and engaging\n"
@@ -167,7 +167,7 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
                 "- 格式：🧵 1/N, 2/N ...\n"
             ),
             "English": (
-                "You are a viral tweet writer. Based on the simulation results below, write a tweet thread.\n"
+                "You are a viral tweet writer. Based on the simulation results below, write a tweet thread.\n"  # noqa: E501
                 "Requirements:\n"
                 "- Main tweet: ≤280 characters, punchy and attention-grabbing\n"
                 "- Write in English\n"
@@ -429,7 +429,7 @@ async def export_scenario(scenario_id: str):
         "name": "名称" if language == "Chinese" else "Name",
         "stance": "定位" if language == "Chinese" else "Stance",
         "tier": "层级" if language == "Chinese" else "Tier",
-        "no_branches": "尚无已完成的分支。" if language == "Chinese" else "No completed branches yet.",
+        "no_branches": "尚无已完成的分支。" if language == "Chinese" else "No completed branches yet.",  # noqa: E501
         "ending": "结局" if language == "Chinese" else "Ending",
         "probability": "概率" if language == "Chinese" else "Probability",
         "fork_reason": "分歧原因" if language == "Chinese" else "Fork Reason",
@@ -442,7 +442,7 @@ async def export_scenario(scenario_id: str):
     lines = [
         f"# SwarmOracle — {scenario.question}",
         "",
-        f"> {labels['status']}: {scenario.status.value} | {labels['created_at']}: {scenario.created_at.isoformat()}",
+        f"> {labels['status']}: {scenario.status.value} | {labels['created_at']}: {scenario.created_at.isoformat()}",  # noqa: E501
         "",
         f"## {labels['participants']}",
         "",

@@ -1414,7 +1414,7 @@ def get_weekly_campaign_summary(
             week_end=week_end,
             timezone_offset_minutes=timezone_offset_minutes,
             total_runs=len(matching_logs),
-            completed_daily_challenges=sum(1 for log in matching_logs if log.completed_daily_challenge),
+            completed_daily_challenges=sum(1 for log in matching_logs if log.completed_daily_challenge),  # noqa: E501
             hit_bets=sum(1 for log in matching_logs if log.betting_hit is True),
             campaign_score_delta=sum(log.campaign_score_delta for log in matching_logs),
             best_archive_grade=best_archive_grade,

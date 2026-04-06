@@ -191,8 +191,11 @@ const TIME_TINTS: Record<string, { color: number; alpha: number }> = {
 
 // ── Phase 4: Performance Constants ──────────────────────
 const WEATHER_POOL_SIZE = 120;   // Max recycled weather particle Graphics
+const WEATHER_POOL_SIZE_DEGRADED = 60; // Reduced pool when FPS is low
 const AMBIENT_MOTE_POOL_SIZE = 24;
 const VIEWPORT_MARGIN = 40;     // px outside viewport before culling agent
+const MAX_CONCURRENT_TWEENS = 24;
+const BUBBLE_FADE_OUT_MS = 200;
 
 // ── Idle-Wander Constants ───────────────────────────────
 const WANDER_RADIUS = 50;        // Max pixels from spawn origin
@@ -238,6 +241,10 @@ export class WorldScene extends Phaser.Scene {
   private ambientTimer: Phaser.Time.TimerEvent | null = null;
   private cloudGraphics: Phaser.GameObjects.Graphics[] = [];
   private terrainLayers: Phaser.GameObjects.Graphics[] = [];
+
+  // FPS-based weather degradation
+  private fpsHistory: number[] = [];
+  private effectiveWeatherPoolSize: number = WEATHER_POOL_SIZE;
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -1019,6 +1026,12 @@ export class WorldScene extends Phaser.Scene {
         const a = this.agentSprites.get(agentId);
         if (!a?.gameObject) return;
 
+        // Skip new wander if too many concurrent tweens are active
+        if (this.tweens.getTweens().length >= MAX_CONCURRENT_TWEENS) {
+          scheduleNext();
+          return;
+        }
+
         const { width, height } = this.scale;
 
         // Pick a random offset within the wander radius, constrained to canvas
@@ -1060,7 +1073,7 @@ export class WorldScene extends Phaser.Scene {
 
   // ── Dialogue Bubbles ──────────────────────────────────
 
-  private dismissBubble(spriteId: string, bubble: Phaser.GameObjects.Container, duration = 220): void {
+  private dismissBubble(spriteId: string, bubble: Phaser.GameObjects.Container, duration = BUBBLE_FADE_OUT_MS): void {
     if (!bubble.active) return;
     if (this.bubbles.get(spriteId) === bubble) {
       this.bubbles.delete(spriteId);
@@ -1068,7 +1081,7 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({
       targets: bubble,
       alpha: 0,
-      y: bubble.y - 10,
+      y: bubble.y - 4,
       duration,
       onComplete: () => bubble.destroy(),
     });
@@ -1231,20 +1244,20 @@ export class WorldScene extends Phaser.Scene {
     const bg = this.add.graphics();
     bg.fillStyle(bubbleBgColor, bubbleBgAlpha);
     bg.fillRoundedRect(
-      -(bounds.width / 2 + pad), -(bounds.height / 2 + pad),
-      bounds.width + pad * 2, bounds.height + pad * 2, 4,
+      -(bubbleWidth / 2), -(bubbleHeight / 2),
+      bubbleWidth, bubbleHeight, 4,
     );
     // Emotion-specific border
     bg.lineStyle(emotion === 'anxious' || emotion === 'fearful' ? 1 : 1.5, bubbleBorderColor, 0.9);
     bg.strokeRoundedRect(
-      -(bounds.width / 2 + pad), -(bounds.height / 2 + pad),
-      bounds.width + pad * 2, bounds.height + pad * 2, 4,
+      -(bubbleWidth / 2), -(bubbleHeight / 2),
+      bubbleWidth, bubbleHeight, 4,
     );
 
     // Emotion indicator badge (! or ?)
     if (!isCompactViewport && style.indicator) {
       const badge = this.add.text(
-        bounds.width / 2 + pad + 2, -(bounds.height / 2 + pad) - 2,
+        bubbleWidth / 2 + 2, -(bubbleHeight / 2) - 2,
         style.indicator,
         {
           fontSize: '12px',
@@ -1257,7 +1270,7 @@ export class WorldScene extends Phaser.Scene {
     } else if (!isCompactViewport && emotion && emotion !== 'neutral') {
       const emotionDot = this.add.graphics();
       emotionDot.fillStyle(bubbleBorderColor, 1);
-      emotionDot.fillCircle(bounds.width / 2 + pad + 4, -(bounds.height / 2 + pad) + 4, 3);
+      emotionDot.fillCircle(bubbleWidth / 2 + 4, -(bubbleHeight / 2) + 4, 3);
       bubbleContainer.add(emotionDot);
     }
 
@@ -1791,7 +1804,7 @@ export class WorldScene extends Phaser.Scene {
     if (!dot.scene) return; // already destroyed externally
     dot.setVisible(false);
     dot.setPosition(-100, -100);
-    if (this.weatherPool.length < WEATHER_POOL_SIZE) {
+    if (this.weatherPool.length < this.effectiveWeatherPoolSize) {
       this.weatherPool.push(dot);
     } else {
       dot.destroy();
@@ -1938,6 +1951,23 @@ export class WorldScene extends Phaser.Scene {
     console.log(`[WorldScene] Time of day set to: ${phase}`);
   }
 
+  // ── FPS Sampling & Weather Degradation ─────────────────
+
+  update(): void {
+    // Sample actual FPS for weather particle density degradation
+    const fps = this.game.loop.actualFps;
+    this.fpsHistory.push(fps);
+    if (this.fpsHistory.length > 60) {
+      this.fpsHistory.shift();
+    }
+    if (this.fpsHistory.length === 60) {
+      const avgFps = this.fpsHistory.reduce((sum, f) => sum + f, 0) / 60;
+      this.effectiveWeatherPoolSize = avgFps < 30
+        ? WEATHER_POOL_SIZE_DEGRADED
+        : WEATHER_POOL_SIZE;
+    }
+  }
+
   // ── Cleanup ───────────────────────────────────────────
 
   shutdown(): void {
@@ -1978,11 +2008,13 @@ export class WorldScene extends Phaser.Scene {
       this.endingOverlay = null;
     }
 
-    // 5b. Phase 4: Destroy object pools
+    // 5b. Phase 4: Destroy object pools & reset FPS tracking
     for (const p of this.weatherPool) { if (p.scene) p.destroy(); }
     this.weatherPool = [];
     for (const m of this.ambientMotePool) { if (m.scene) m.destroy(); }
     this.ambientMotePool = [];
+    this.fpsHistory = [];
+    this.effectiveWeatherPoolSize = WEATHER_POOL_SIZE;
 
     // 5c. V3: Cleanup ambient motes
     if (this.ambientTimer) {

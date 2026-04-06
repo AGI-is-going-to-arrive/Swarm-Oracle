@@ -95,9 +95,9 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert snapshot["phase_insights"][0]["stakes"]
     assert snapshot["phase_insights"][0]["judge_focus"]
     assert snapshot["phase_insights"][0]["commentary"]
-    assert snapshot["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}
+    assert snapshot["phase_insights"][0]["confidence_drift"]["direction"] in {"balanced", "proposition", "opposition"}  # noqa: E501
     assert snapshot["phase_insights"][1]["commentary"]
-    assert "hedge" in snapshot["phase_insights"][1]["commentary"].lower() or "反制" in snapshot["phase_insights"][1]["commentary"]
+    assert "hedge" in snapshot["phase_insights"][1]["commentary"].lower() or "反制" in snapshot["phase_insights"][1]["commentary"]  # noqa: E501
     assert result["result"]["winner"] in {"proposition", "opposition"}
     assert result["result"]["verdict_tone"] in {"order", "balance", "rupture"}
     assert result["counterplay"]["debate_id"] == debate.id
@@ -122,15 +122,17 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert result["result"]["judge_rationale"]["dimension_rationales"]["coherence"]
     assert result["result"]["judge_rationale"]["supporting_turns"]
     assert result["result"]["judge_rationale"]["supporting_turns"][0]["quote"]
-    assert "hedge" in result["phase_insights"][1]["commentary"].lower() or "反制" in result["phase_insights"][1]["commentary"]
+    assert "hedge" in result["phase_insights"][1]["commentary"].lower() or "反制" in result["phase_insights"][1]["commentary"]  # noqa: E501
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
     assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
 
 
 @pytest.mark.asyncio
-async def test_run_debate_background_emits_finalize_fallback_when_result_reload_is_missing(monkeypatch):
-    debate = create_debate_record("Should every emergency council publish its failed fallback ladder?")
+async def test_run_debate_background_emits_finalize_fallback_when_result_reload_is_missing(monkeypatch):  # noqa: E501
+    debate = create_debate_record(
+        "Should every emergency council publish its failed fallback ladder?"
+    )
     pushed_events: list[dict] = []
 
     async def _push(_debate_id: str, event: dict) -> None:
@@ -226,7 +228,9 @@ async def test_run_debate_background_sends_generic_error_to_clients(monkeypatch)
 
 
 def test_create_debate_record_uses_english_defaults_for_non_chinese_questions():
-    debate = create_debate_record("Should a permanent moon tribunal be allowed to veto Earth treaties?")
+    debate = create_debate_record(
+        "Should a permanent moon tribunal be allowed to veto Earth treaties?"
+    )
     snapshot = load_debate_snapshot(debate.id)
 
     assert snapshot is not None

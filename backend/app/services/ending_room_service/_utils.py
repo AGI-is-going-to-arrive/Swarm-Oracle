@@ -22,7 +22,6 @@ from app.models import (
     EndingRoomInteractionMode,
     EndingRoomParticipant,
     EndingRoomPhase,
-    EndingRoomRoleSlot,
     EndingRoomThread,
     EndingRoomThreadMode,
     EndingRoomTurn,
@@ -47,6 +46,10 @@ _ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS = 20.0
 _ORACLE_FOLLOWUP_FIRST_VISIBLE_DELTA_TIMEOUT_SECONDS = 6.0
 _ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS = 0.18
 _BIO_SHORT_MAX_CHARS = 80
+_ORACLE_REASONING_PREFIX_RE = re.compile(
+    r"^\s*<think>[\s\S]*?(?:</think>\s*|$)",
+    re.IGNORECASE,
+)
 
 
 class EndingRoomServiceError(Exception):
@@ -273,11 +276,16 @@ def _serialize_participant(participant: EndingRoomParticipant) -> dict[str, Any]
 
 
 def _serialize_turn(turn: EndingRoomTurn) -> dict[str, Any]:
-    source = turn.source.value if isinstance(turn.source, EndingRoomTurnSource) else str(turn.source or EndingRoomTurnSource.AUTO_RECAP.value)
+    source = turn.source.value if isinstance(turn.source, EndingRoomTurnSource) else str(turn.source or EndingRoomTurnSource.AUTO_RECAP.value)  # noqa: E501
     interaction_mode = (
         turn.interaction_mode.value
         if isinstance(turn.interaction_mode, EndingRoomInteractionMode)
         else str(turn.interaction_mode or EndingRoomInteractionMode.AUTO_RECAP.value)
+    )
+    content = (
+        turn.content
+        if source == EndingRoomTurnSource.USER_TURN.value
+        else _sanitize_oracle_visible_text(turn.content)
     )
     return {
         "id": turn.id,
@@ -286,7 +294,7 @@ def _serialize_turn(turn: EndingRoomTurn) -> dict[str, Any]:
         "sequence": turn.sequence,
         "phase": turn.phase.value,
         "participant_id": turn.participant_id,
-        "content": turn.content,
+        "content": content,
         "emotion": turn.emotion,
         "source": source,
         "interaction_mode": interaction_mode,
@@ -297,6 +305,16 @@ def _serialize_turn(turn: EndingRoomTurn) -> dict[str, Any]:
         "cited_refs_json": turn.cited_refs_json,
         "created_at": turn.created_at.isoformat(),
     }
+
+
+def _sanitize_oracle_visible_text(value: str | None) -> str:
+    cleaned = str(value or "")
+    while True:
+        next_cleaned = _ORACLE_REASONING_PREFIX_RE.sub("", cleaned, count=1)
+        if next_cleaned == cleaned:
+            break
+        cleaned = next_cleaned
+    return cleaned.lstrip()
 
 
 def _branch_lookup(session: Session, scenario_id: str) -> dict[str, Branch]:
@@ -370,7 +388,7 @@ def _oracle_visible_text(value: str | None, *, language: str, limit: int = 96) -
 
 def _roundtable_branch_hook(branch_card: dict[str, Any], *, language: str) -> str:
     return (
-        _oracle_visible_clause((branch_card.get("key_moments") or [None])[0], language=language, limit=48)
+        _oracle_visible_clause((branch_card.get("key_moments") or [None])[0], language=language, limit=48)  # noqa: E501
         or _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
         or _oracle_visible_clause(branch_card.get("story"), language=language, limit=72)
         or _oracle_visible_text(branch_card.get("title"), language=language, limit=40)
@@ -425,7 +443,9 @@ def _build_participant_followup_evidence(
 ) -> dict[str, Any]:
     snapshot = participant.persona_snapshot_json or {}
     latest_row = _latest_row_for_agent(branch_rows, participant.source_agent_id)
-    latest_round = int(latest_row["round_number"]) if latest_row else int(snapshot.get("last_round_spoken") or 0)
+    latest_round = int(
+        latest_row["round_number"]) if latest_row else int(snapshot.get("last_round_spoken") or 0
+    )
     latest_quote = _compact_text(latest_row["content"] if latest_row else None)
     bio_hint = _compact_text(snapshot.get("bio_short") or snapshot.get("agent_persona"), limit=72)
     role_hint = _compact_text(snapshot.get("agent_role") or snapshot.get("role"), limit=40)
@@ -477,13 +497,15 @@ def _phase_insight(language: str, phase: EndingRoomPhase, commentary: str) -> di
     else:
         labels = {
             EndingRoomPhase.OPENING: ("Causal entry point", "Lock the hinge first"),
-            EndingRoomPhase.CROSSFIRE: ("Points of divergence", "Compare only outcome-shaping differences"),
+            EndingRoomPhase.CROSSFIRE: ("Points of divergence", "Compare only outcome-shaping differences"),  # noqa: E501
             EndingRoomPhase.REBUTTAL: ("One move back", "Reduce the fix to one move"),
             EndingRoomPhase.CLOSING: ("Director note", "Keep only executable advice"),
-            EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),
+            EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),  # noqa: E501
         }
     stakes, focus = labels[phase]
-    return {"phase": phase.value, "stakes": stakes, "moderator_focus": focus, "commentary": commentary}
+    return (
+        {"phase": phase.value, "stakes": stakes, "moderator_focus": focus, "commentary": commentary}
+    )
 
 
 def _delta_chunks(content: str) -> list[str]:
@@ -496,7 +518,11 @@ def _stable_oracle_choice(seed: str, options: list[str]) -> str:
     return options[index]
 
 
-async def _broadcast(room_id: str, callback: EndingRoomBroadcast | None, payload: dict[str, Any]) -> None:
+async def _broadcast(
+    room_id: str,
+    callback: EndingRoomBroadcast | None,
+    payload: dict[str, Any],
+) -> None:
     if callback is not None:
         await callback(room_id, payload)
 

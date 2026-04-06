@@ -1,6 +1,6 @@
 import { type RefObject, Fragment, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { EndingRoomParticipant, EndingRoomThreadSnapshot } from '../types';
+import type { EndingRoomParticipant, EndingRoomPhase, EndingRoomRoleSlot } from '../types';
 import type { OracleTranscriptBubbleLayout } from '../lib/textLayout/oracleTranscriptLayout';
 import { getEndingRoomPhaseLabel } from '../lib/endingRoomLabels';
 import { buildRoundtableAnchorId, ROUNDTABLE_COLLAPSED_TURN_MAX_LINES } from './roundtableHelpers';
@@ -10,14 +10,14 @@ interface FormattedTurn {
   speaker: string;
   content: string;
   phase: string;
-  roleSlot: string;
+  roleSlot?: EndingRoomRoleSlot | 'user';
   participantId: string;
 }
 
 interface DisplayedDraft {
   key: string;
   content: string;
-  phase: string;
+  phase: EndingRoomPhase;
   participantId?: string;
   variant?: string;
 }

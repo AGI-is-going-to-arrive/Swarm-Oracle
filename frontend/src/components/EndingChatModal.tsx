@@ -32,9 +32,11 @@ import {
   buildEndingAnchorId,
   buildEndingQuotePrompt,
   describeEndingAnchor,
+  stripOracleReasoningText,
 } from './endingChatHelpers';
 import type {
   AgentMessage,
+  EndingRoomInteractionMode,
   EndingRoomParticipant,
   EndingRoomPhase,
   EndingRoomResult,
@@ -407,7 +409,7 @@ export default function EndingChatModal({
           speaker: participant?.display_name
             ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : t('ending_room.participant_unknown')),
           phase: getEndingRoomPhaseLabel(turn.phase, t),
-          content: turn.content,
+          content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
           participantId: turn.participant_id,
           roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
         };
@@ -418,7 +420,7 @@ export default function EndingChatModal({
         key: `${message.branch}-${message.round}-${message.agent_id}-${index}`,
         speaker: message.agent,
         phase: `R${message.round}`,
-        content: message.message,
+        content: stripOracleReasoningText(message.message),
         participantId: null,
         roleSlot: null,
       }));
@@ -445,7 +447,7 @@ export default function EndingChatModal({
         speaker: participant?.display_name
           ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : t('ending_room.participant_unknown')),
         phase: getEndingRoomPhaseLabel(turn.phase, t),
-        content: turn.content,
+        content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
         participantId: turn.participant_id,
         roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
       };
@@ -479,21 +481,24 @@ export default function EndingChatModal({
   const displayedDrafts = useMemo<EndingChatRenderDraft[]>(
     () => {
       if (visibleDrafts.length > 0) {
-        return visibleDrafts.map((draft) => ({
-          key: draft.turnId,
-          participantId: draft.participantId,
-          phase: draft.phase,
-          content: draft.content.trim()
-            ? draft.content
-            : (
-              effectiveInteractionMode === 'hotseat'
-                ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
-                : effectiveInteractionMode === 'all_present'
-                  ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
-                  : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…')
-            ),
-          variant: draft.content.trim() ? 'stream' : 'placeholder',
-        }));
+        return visibleDrafts.map((draft) => {
+          const sanitizedContent = stripOracleReasoningText(draft.content);
+          return {
+            key: draft.turnId,
+            participantId: draft.participantId,
+            phase: draft.phase,
+            content: sanitizedContent.trim()
+              ? sanitizedContent
+              : (
+                effectiveInteractionMode === 'hotseat'
+                  ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
+                  : effectiveInteractionMode === 'all_present'
+                    ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
+                    : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…')
+              ),
+            variant: sanitizedContent.trim() ? 'stream' : 'placeholder',
+          };
+        });
       }
       if (readOnly || !sending || !composerEnabled) {
         return [];

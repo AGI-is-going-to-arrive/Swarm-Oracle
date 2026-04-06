@@ -114,10 +114,10 @@ except ImportError:
     async def metrics_fallback():
         return PlainTextResponse(
             "\n".join([
-                "# HELP swarmoracle_metrics_enabled Whether full Prometheus instrumentation is enabled.",
+                "# HELP swarmoracle_metrics_enabled Whether full Prometheus instrumentation is enabled.",  # noqa: E501
                 "# TYPE swarmoracle_metrics_enabled gauge",
                 "swarmoracle_metrics_enabled 0",
-                "# HELP swarmoracle_metrics_dependency_missing Whether the optional metrics dependency is unavailable.",
+                "# HELP swarmoracle_metrics_dependency_missing Whether the optional metrics dependency is unavailable.",  # noqa: E501
                 "# TYPE swarmoracle_metrics_dependency_missing gauge",
                 "swarmoracle_metrics_dependency_missing 1",
                 "",

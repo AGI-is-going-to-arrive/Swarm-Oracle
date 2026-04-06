@@ -28,7 +28,8 @@ def _build_narration_prompt(
     language: str,
 ) -> str:
     if _is_chinese(language):
-        return f"""你是一位出色的故事讲述者。请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
+        return f"""你是一位出色的故事讲述者。\
+请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 
@@ -54,7 +55,8 @@ def _build_narration_prompt(
 {get_language_directive(language)}
 """
 
-    return f"""You are an excellent narrative writer. Rewrite the following raw simulation transcript into an engaging story.
+    return f"""You are an excellent narrative writer. Rewrite the \
+following raw simulation transcript into an engaging story.
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 
@@ -75,7 +77,8 @@ Writing requirements:
 5. Keep the total length around 300-500 words
 
 Output strict JSON:
-{{"story": "narrative body", "insight": "one-sentence takeaway", "key_moments": ["turning point 1", "turning point 2"]}}
+{{"story": "narrative body", "insight": "one-sentence takeaway", \
+"key_moments": ["turning point 1", "turning point 2"]}}
 
 {get_language_directive(language)}
 """
@@ -94,7 +97,7 @@ def _normalize_narration_result(raw: object) -> dict:
 
         string_items = [str(item).strip() for item in raw if str(item).strip()]
         if string_items:
-            logger.warning("Narrator returned list payload without mappings; coercing into fallback story")
+            logger.warning("Narrator returned list payload without mappings; coercing into fallback story")  # noqa: E501
             return {
                 "story": string_items[0],
                 "insight": string_items[1] if len(string_items) > 1 else "",
@@ -119,20 +122,20 @@ def _build_fallback_narration(
     key_moments = lines[:2]
     if language == "Chinese":
         story_lines = [
-            f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",
+            f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",  # noqa: E501
         ]
     else:
         story_lines = [
-            f"Branch '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}.",
+            f"Branch '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}.",  # noqa: E501
         ]
     if key_moments:
-        story_lines.append("关键交互包括：" if language == "Chinese" else "Key interactions included:")
+        story_lines.append("关键交互包括：" if language == "Chinese" else "Key interactions included:")  # noqa: E501
         story_lines.extend(key_moments)
     else:
         story_lines.append(
             "当前轮次没有留下足够的原始交互，系统仅保留了分支标题与概率。"
             if language == "Chinese"
-            else "The current rounds did not retain enough raw interaction data, so only the branch title and probability remain."
+            else "The current rounds did not retain enough raw interaction data, so only the branch title and probability remain."  # noqa: E501
         )
 
     return {
@@ -140,7 +143,7 @@ def _build_fallback_narration(
         "insight": (
             "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。"
             if language == "Chinese"
-            else "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records."
+            else "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records."  # noqa: E501
         ),
         "key_moments": key_moments,
     }

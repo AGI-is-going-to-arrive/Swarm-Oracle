@@ -211,7 +211,10 @@ def _build_phase_deltas(
     return phase_deltas
 
 
-def pick_best_turn(sequence: list[tuple[DebatePhase, DebateSide, str, dict[str, int] | None]], side: DebateSide) -> str:
+def pick_best_turn(
+    sequence: list[tuple[DebatePhase, DebateSide, str, dict[str, int] | None]],
+    side: DebateSide,
+) -> str:
     ranked = [
         (turn[2], (turn[3] or {}).get(side.value, 0))
         for turn in sequence

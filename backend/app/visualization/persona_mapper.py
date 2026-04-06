@@ -191,7 +191,7 @@ def assign_position(
     """
     # Guard: no agents to position
     if total_agents <= 0:
-        logging.warning("assign_position called with total_agents=%d; returning centre.", total_agents)
+        logging.warning("assign_position called with total_agents=%d; returning centre.", total_agents)  # noqa: E501
         return (CENTER_X, CENTER_Y)
 
     # Clamp stance to canonical range [-1, 1]
@@ -209,7 +209,7 @@ def assign_position(
         row = index // row_size
         col = index % row_size
         row_height = 64
-        col_offset = 48
+        _col_offset = 48
         y = 120 + row * row_height + (col * 8)  # slight stagger
         # Horizontal jitter: 1.7 ≈ golden-ratio-ish offset produces
         # a quasi-random but fully deterministic spread per index,

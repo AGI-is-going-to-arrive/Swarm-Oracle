@@ -25,7 +25,9 @@ _COMPRESS_ROUNDS_TIMEOUT_SECONDS = 20.0
 _COMPRESS_MAX_RAW_WINDOW_CHARS = settings.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS
 _COMPRESS_RECENT_RAW_WINDOW_CHARS = settings.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS
 _COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS = settings.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS
-_COMPRESS_ELLIPSIS_MARKER = "\n\n[... earlier routine discussion omitted here and summarized separately ...]\n\n"
+_COMPRESS_ELLIPSIS_MARKER = (
+    "\n\n[... earlier routine discussion omitted here and summarized separately ...]\n\n"
+)
 _COMPRESS_PRIORITY_MAX_LINES = 18
 _COMPRESS_PRIORITY_KEYWORDS = (
     "intervention",
@@ -88,7 +90,8 @@ def _build_compress_prompt(
 {get_language_directive(language)}
 """
 
-    return f"""Compress the following discussion into a compact situation briefing, preserving disagreements and turning points:
+    return f"""Compress the following discussion into a compact \
+situation briefing, preserving disagreements and turning points:
 
 [Previous Rolling Briefing]
 {previous_briefing_block}
@@ -99,15 +102,18 @@ Output strict JSON:
 {{
   "situation": "one-sentence overview of the current situation",
   "active_debates": ["current debate focus 1", "focus 2"],
-  "key_quotes": ["[speaker]: the most consequential quote, keep the speaker name"],
+  "key_quotes": ["[speaker]: most consequential quote, keep speaker name"],
   "tension_points": ["fault lines that could split the worldline"],
-  "consensus": "summary of the current consensus, or an empty string"
+  "consensus": "summary of current consensus, or empty string"
 }}
 
 Requirements:
-- Prioritize concrete quotes, fresh stance shifts, and newly emerging disagreements from the current window
-- If the previous rolling briefing still contains relevant long-term context, unresolved conflicts, or durable consensus, carry it forward
-- Do not repeat the old briefing mechanically; merge it with the current raw dialogue into one updated situation briefing
+- Prioritize concrete quotes, fresh stance shifts, and newly \
+emerging disagreements from the current window
+- If the previous rolling briefing still contains relevant \
+long-term context or unresolved conflicts, carry it forward
+- Do not repeat the old briefing mechanically; merge it with \
+the current raw dialogue into one updated situation briefing
 
 {get_language_directive(language)}
 """
@@ -147,20 +153,24 @@ def _memory_copy(language: str) -> dict[str, str]:
                 "1. 用角色真实的口吻说话",
                 "2. 发言控制在 1-2 句话",
                 "3. 可以附和、反驳、提问",
-                "4. 如果你感知到关键分歧，请在回复末尾标注 [DIVERGE: 分歧描述]{intervention_instruction}",
+                "4. 如果你感知到关键分歧，请在回复末尾标注 [DIVERGE: 分歧描述]{intervention_instruction}",  # noqa: E501
             ]),
             "full_instructions": "\n".join([
                 "1. 用角色真实的口吻说话，像真人对话而不是写论文",
                 "2. 说具体的事、举具体的例子，避免空泛的抽象论述",
                 "3. 可以附和、反驳、提问、或提出全新视角",
                 "4. 发言控制在 2-4 句话，自然流畅",
-                "5. 如果你感知到讨论中出现了可能导致历史走向分裂的关键分歧，请在回复末尾标注 [DIVERGE: 分歧点的具体描述]{intervention_instruction}",
+                "5. 如果你感知到讨论中出现了可能导致历史走向分裂的关键分歧，请在回复末尾标注 [DIVERGE: 分歧点的具体描述]{intervention_instruction}",  # noqa: E501
             ]),
-            "json_format": '回复格式 (严格 JSON):\n{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}',
-            "intervention_note_crowd": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）",
-            "intervention_note_full": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）",
-            "intervention_instruction_crowd": "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策",
-            "intervention_instruction_full": "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响",
+            "json_format": '回复格式 (严格 JSON):\n{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}',  # noqa: E501
+            "intervention_note_crowd": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）",  # noqa: E501
+            "intervention_note_full": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）",  # noqa: E501
+            "intervention_instruction_crowd": (
+                "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策"  # noqa: E501
+            ),
+            "intervention_instruction_full": (
+                "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响"  # noqa: E501
+            ),
         }
 
     return {
@@ -195,20 +205,20 @@ def _memory_copy(language: str) -> dict[str, str]:
             "1. Speak in the character's natural voice",
             "2. Keep the reply to 1-2 sentences",
             "3. You may agree, challenge, or ask a question",
-            "4. If you detect a key split in the discussion, end with [DIVERGE: concrete split description]{intervention_instruction}",
+            "4. If you detect a key split in the discussion, end with [DIVERGE: concrete split description]{intervention_instruction}",  # noqa: E501
         ]),
         "full_instructions": "\n".join([
-            "1. Speak in the character's natural voice, like a real conversation instead of an essay",
+            "1. Speak in the character's natural voice, like a real conversation instead of an essay",  # noqa: E501
             "2. Stay concrete and specific; avoid vague abstractions",
             "3. You may agree, challenge, ask a question, or introduce a new angle",
             "4. Keep the reply to 2-4 natural sentences",
-            "5. If you detect a key split that could fracture the worldline, end with [DIVERGE: concrete split description]{intervention_instruction}",
+            "5. If you detect a key split that could fracture the worldline, end with [DIVERGE: concrete split description]{intervention_instruction}",  # noqa: E501
         ]),
-        "json_format": 'Reply format (strict JSON):\n{{"content": "your in-character reply", "emotion": "current emotion (for example: excited / worried / calm / angry / hopeful / relieved)", "diverge": "split description or null"}}',
-        "intervention_note_crowd": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. You must not treat it as background noise; respond to how it changes your stance, alliances, or action plan, and treat it as part of the current worldline.)",
-        "intervention_note_full": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. Treat it as a real state change already written into the worldline, not as optional side context. Respond to it first, then explain how it changes your judgment, stance, alliances, or risk assessment.)",
-        "intervention_instruction_crowd": "\n5. This round includes a high-priority event. Address it first, state how it affects you, and keep that effect visible in your follow-up decisions.",
-        "intervention_instruction_full": "\n6. This round includes a high-priority event. Address it first and explain, in character, what it changes for your judgment, stance, alliances, or risk assessment.",
+        "json_format": 'Reply format (strict JSON):\n{{"content": "your in-character reply", "emotion": "current emotion (for example: excited / worried / calm / angry / hopeful / relieved)", "diverge": "split description or null"}}',  # noqa: E501
+        "intervention_note_crowd": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. You must not treat it as background noise; respond to how it changes your stance, alliances, or action plan, and treat it as part of the current worldline.)",  # noqa: E501
+        "intervention_note_full": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. Treat it as a real state change already written into the worldline, not as optional side context. Respond to it first, then explain how it changes your judgment, stance, alliances, or risk assessment.)",  # noqa: E501
+        "intervention_instruction_crowd": "\n5. This round includes a high-priority event. Address it first, state how it affects you, and keep that effect visible in your follow-up decisions.",  # noqa: E501
+        "intervention_instruction_full": "\n6. This round includes a high-priority event. Address it first and explain, in character, what it changes for your judgment, stance, alliances, or risk assessment.",  # noqa: E501
     }
 
 # Fields and their defaults for structured compression result
@@ -284,16 +294,16 @@ def _format_previous_briefing(previous_briefing: dict | None, language: str = "C
     active_debates = previous_briefing.get("active_debates", [])
     if isinstance(active_debates, list) and active_debates:
         separator = "；" if _is_chinese(language) else "; "
-        parts.append(f'{copy["debates"]}: ' + separator.join(str(item) for item in active_debates if str(item).strip()))
+        parts.append(f'{copy["debates"]}: ' + separator.join(str(item) for item in active_debates if str(item).strip()))  # noqa: E501
 
     key_quotes = previous_briefing.get("key_quotes", [])
     if isinstance(key_quotes, list) and key_quotes:
-        parts.append(f'{copy["quotes"]}:\n- ' + "\n- ".join(str(item) for item in key_quotes if str(item).strip()))
+        parts.append(f'{copy["quotes"]}:\n- ' + "\n- ".join(str(item) for item in key_quotes if str(item).strip()))  # noqa: E501
 
     tension_points = previous_briefing.get("tension_points", [])
     if isinstance(tension_points, list) and tension_points:
         separator = "；" if _is_chinese(language) else "; "
-        parts.append(f'{copy["tensions"]}: ' + separator.join(str(item) for item in tension_points if str(item).strip()))
+        parts.append(f'{copy["tensions"]}: ' + separator.join(str(item) for item in tension_points if str(item).strip()))  # noqa: E501
 
     consensus = str(previous_briefing.get("consensus", "") or "").strip()
     if consensus:
@@ -335,7 +345,7 @@ async def compress_rounds(
             max_chars=_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,
         )
         logger.debug(
-            "Compressing %d chars via overflow summary + recent raw window (overflow=%d, recent=%d)",
+            "Compressing %d chars via overflow summary + recent raw window (overflow=%d, recent=%d)",  # noqa: E501
             total_chars,
             len(overflow_source),
             len(recent_window),

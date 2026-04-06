@@ -11,31 +11,28 @@ Run:  .venv/bin/python -m pytest tests/test_token_matrix.py -v -s
 
 from __future__ import annotations
 
-import asyncio
-import json
 import subprocess
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 import pytest
 
 from app.config import settings
 from app.services.blackboard import Blackboard
+from app.services.llm_client import _resolve_llm_api_url
 from app.services.memory import (
     build_agent_context,
     format_briefing_for_context,
     format_messages_for_context,
 )
 
-from app.services.llm_client import _resolve_llm_api_url
 LLM_API_URL = _resolve_llm_api_url()
 
 SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。"
 TOPIC = "如果诸葛亮北伐成功占领长安，三国格局将如何改变？"
 
 # Simulated agent utterance (~60 Chinese chars, realistic)
-SAMPLE_UTTERANCE = "若孔明得长安，关中粮道可通，西北人心亦动。魏必倾国来争，吾忧蜀道难守、粮尽援绝。当先据潼关、散关，修渠屯田以续。"
+SAMPLE_UTTERANCE = "若孔明得长安，关中粮道可通，西北人心亦动。魏必倾国来争，吾忧蜀道难守、粮尽援绝。当先据潼关、散关，修渠屯田以续。"  # noqa: E501
 
 
 def _make_agents(n: int) -> list[dict]:
@@ -131,7 +128,7 @@ def _decompose_bb_context(agent: dict, bb: Blackboard) -> ContextDecomposition:
     d.summary_bytes = len(f"【全局态势】{summary}".encode("utf-8")) if summary else 0
 
     debates = briefing.get("debates", [])
-    d.debates_bytes = len(("【当前争论焦点】" + "；".join(debates)).encode("utf-8")) if debates else 0
+    d.debates_bytes = len(("【当前争论焦点】" + "；".join(debates)).encode("utf-8")) if debates else 0  # noqa: E501
 
     tensions = briefing.get("tensions", [])
     d.tensions_bytes = len(("【紧张点】" + "；".join(tensions)).encode("utf-8")) if tensions else 0
@@ -287,7 +284,7 @@ class TestSyntheticMatrix:
             print(f"\n  {ac} agents:")
             print(f"    {'Round':<8} {'RAW avg':>10} {'BB avg':>10} "
                   f"{'RAW Δ/rnd':>10} {'BB Δ/rnd':>10} {'BB/RAW':>8}")
-            print(f"    " + "-" * 58)
+            print("    " + "-" * 58)
 
             prev_raw, prev_bb = 0, 0
             for rc in range(1, 13):
@@ -451,5 +448,5 @@ class TestLLMValidation:
 
         avg_ratio = sum(ratios) / len(ratios) if ratios else 0
         print(f"\n  Average bytes/token ratio: {avg_ratio:.2f}")
-        print(f"  (Chinese text is typically ~3-4 bytes per token)")
+        print("  (Chinese text is typically ~3-4 bytes per token)")
         assert len(ratios) == 8  # 4 configs × 2 modes

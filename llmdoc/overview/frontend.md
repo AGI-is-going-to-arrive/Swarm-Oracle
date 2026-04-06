@@ -179,19 +179,27 @@
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
 - 当前 Oracle mobile 专项脚本已覆盖：
-  - ending-room：`mobile single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`，以及 `multi-ending hotseat / all_present / crossline gallery / artifact readonly / local readonly / reload restore / import`
+  - ending-room：`mobile single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`，以及 `multi-ending hotseat / all_present / epilogue / crossline gallery / evidence_card / artifact readonly / local readonly / reload restore / import`
   - roundtable：`trait_mix / fault_line_first / witness_augmented / hotseat thread switch / quote-anchor thread / artifact readonly / local readonly / reload restore / import`
-- `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前也已补 mobile `all_present` 的 mode-arm / settled wait，原先 timeout 阻塞已解除。
+- `ResultView` 当前支持自动化专用的 query 参数直开 live ending-room：
+  - `debugEndingRoomBranch`
+  - `debugEndingRoomMode`
+  - `debugEndingRoomAgents`
+  - 仅用于脚本/调试稳定打开 live chamber，正常用户流仍走结果页按钮 + picker。
+- `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前已把 ending-room follow-up 主链改成 API-driven 口径，不再靠 mobile `all_present` 的 mode-arm / settled wait 硬等。
 - `e2e-ending-room-followup-suite.mjs full` 当前已重新可稳定落 `summary.json`。
 - `e2e-ending-room-followup-suite.mjs` 当前也会在 multi-ending 桌面/移动端链路下额外覆盖：
-  - `epilogue`：点击后续三回合按钮 → 预填文案 → 发送 → 等待 `interaction_mode === "epilogue"` settle
-  - `evidence_card`：在 gallery 中点击证据卡按钮 → 等待 `interaction_mode === "evidence_card"` settle
+  - 先 API 预热 `ending_chamber`，再通过 ResultView 调试参数直开 live chamber
+  - `hotseat / all_present / epilogue / evidence_card` 统一改成 API 发起，UI 只负责模式切换、stream 观测、截图和 readonly 验证
   - 两种模式均有截图 + JSON artifact 留档
 - `e2e-ending-room-followup-suite.mjs` 当前也会在命中的 follow-up 场景下额外落：
   - `turn-start`
   - `turn-delta`
   - `turn-commit`
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
+- `single-ending` 的 mobile verdict-anchor thread 当前也走 deterministic 兜底：
+  - thread title 每次唯一，避免复用同一 room 时点到旧 thread
+  - 如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
 - `e2e-worldline-roundtable-suite.mjs` 当前已补：
   - 更稳的 quote-anchor thread 交互链
   - hotseat settle / anchored send 的慢路径等待

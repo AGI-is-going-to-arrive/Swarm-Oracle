@@ -7,11 +7,8 @@ from typing import Any
 from sqlmodel import Session, select
 
 from app.models import (
-    Agent,
     AgentMessage,
     Branch,
-    EndingRoom,
-    EndingRoomInteractionMode,
     EndingRoomParticipant,
     EndingRoomRoleSlot,
     EndingRoomType,
@@ -28,6 +25,7 @@ from ._utils import (
     _speaker_lookup,
     _tier_rank,
 )
+
 
 def _visible_branch_agents(
     session: Session,
@@ -100,10 +98,12 @@ def _visible_branch_agents(
     else:
         fallback_agents = sorted(
             speakers.values(),
-            key=lambda item: (-_tier_rank(getattr(item.tier, "value", item.tier)), item.name.lower(), item.id),
+            key=lambda item: (-_tier_rank(getattr(item.tier, "value", item.tier)), item.name.lower(), item.id),  # noqa: E501
         )
         for index, agent in enumerate(fallback_agents):
-            raw_score = float(_tier_rank(getattr(agent.tier, "value", agent.tier))) + max(0.0, 0.2 - index * 0.03)
+            raw_score = float(
+                _tier_rank(getattr(agent.tier, "value", agent.tier))) + max(0.0, 0.2 - index * 0.03
+            )
             raw_scores.append(raw_score)
             candidates.append(
                 {
@@ -256,7 +256,7 @@ def _roundtable_witness_def(
         raise EndingRoomServiceError(
             422,
             "ENDING_ROOM_WITNESS_SELECTION_INVALID",
-            "selected_witness must be different from the seated representative on the same worldline",
+            "selected_witness must be different from the seated representative on the same worldline",  # noqa: E501
         )
     return {
         "role_slot": EndingRoomRoleSlot.CRITIC.value,
@@ -420,7 +420,7 @@ def _participant_defs(
             "source_agent_id": None,
             "persona_snapshot_json": {"role": "archivist"},
             "visibility_scope_json": {
-                "fulltext_branch_ids": [anchor_branch_id] if room_type == EndingRoomType.ENDING_CHAMBER and anchor_branch_id else [],
+                "fulltext_branch_ids": [anchor_branch_id] if room_type == EndingRoomType.ENDING_CHAMBER and anchor_branch_id else [],  # noqa: E501
                 "summary_branch_ids": selected_branch_ids,
             },
         }
