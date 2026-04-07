@@ -121,12 +121,12 @@ cd backend && alembic upgrade head
 - WebSocket 用于实时模拟推送，每个场景最多 50 个连接
 - Web 搜索增强：用户可在 InputView 开启搜索增强，推演前自动搜索真实世界背景注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层），结果在 ResultView 展示来源卡片
 - `GET /api/capabilities` 是轻量配置端点（无 LLM 调用），前端 mount 时用它检测服务端功能开关
-- BYOK 安全：所有 API 入口 (scenario/debate/predictions/social) 统一要求 `base_url` 必须同时带 `api_key`，allowlist 校验 hostname + http(s) scheme
+- BYOK 安全：业务入口 (scenario/debate/predictions/social) 统一要求 `base_url` 必须同时带 `api_key`，前移 400 拒绝；`/api/health/test` 是连通性探测，不做前移拒绝，返回 `200 + llm.status=error`。allowlist 校验 hostname + http(s) scheme
 - 不可信文本（搜索结果、用户输入）通过 `format_untrusted_text_block()` 包装进 fenced block，三反引号已做转义防 fence-breakout
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、搜索增强 toggle、ResultView 来源卡片、`/api/capabilities`、BYOK 校验统一、fence-breakout 修复、20 条边界回归测试 |
+| 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、搜索增强 toggle、ResultView 来源卡片、`/api/capabilities`、BYOK 业务入口校验统一、fence-breakout 修复、累计 21 条边界回归测试 |
 | 2026-04-02 | 初始生成 | 全仓扫描，生成根级 + 模块级 CLAUDE.md 及 index.json |

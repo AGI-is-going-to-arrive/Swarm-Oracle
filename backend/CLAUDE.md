@@ -242,6 +242,6 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、`/api/capabilities`、migration 013、BYOK 校验统一 (scenario/debate/predictions/social)、fence-breakout 修复、`_sanitize_url` 协议白名单、malformed JSON shape 防御、20 条边界回归测试 |
+| 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、`/api/capabilities`、migration 013、BYOK 业务入口校验统一 (scenario/debate/predictions/social，不含探测端点 `/api/health/test`)、fence-breakout 修复、`_sanitize_url` 协议白名单、malformed JSON shape 防御、累计 21 条边界回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 simulator.py 模拟流程 + database.py 完整 ORM schema |
 | 2026-04-02 | 初始生成 | 模块扫描完成 |
