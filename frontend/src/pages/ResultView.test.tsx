@@ -2418,6 +2418,106 @@ describe('ResultView campaign summary', () => {
       ]);
     });
   });
+
+  describe('web search sources card', () => {
+    it('renders web search snippets when web_search_context is present', async () => {
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'What if AI could predict weather?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'AI weather prediction',
+          snippets: [
+            { text: 'AI models now forecast weather.', source_url: 'https://example.com/weather' },
+            { text: 'Deep learning improves accuracy.', source_url: 'https://example.com/dl' },
+          ],
+          provider: 'tavily',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('AI models now forecast weather.')).toBeInTheDocument();
+      expect(screen.getByText('Deep learning improves accuracy.')).toBeInTheDocument();
+      const links = screen.getAllByRole('link').filter(
+        el => el.getAttribute('href')?.includes('example.com'),
+      );
+      expect(links.length).toBe(2);
+      expect(links[0]).toHaveAttribute('target', '_blank');
+      expect(links[0]).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+
+    it('blocks javascript: protocol URLs in web source snippets', async () => {
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'XSS test scenario',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'test',
+          snippets: [
+            { text: 'Safe snippet', source_url: 'javascript:alert(1)' },
+            { text: 'Good snippet', source_url: 'https://safe.example.com' },
+          ],
+          provider: 'tavily',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('Safe snippet')).toBeInTheDocument();
+      const allLinks = screen.getAllByRole('link');
+      const jsLinks = allLinks.filter(el => el.getAttribute('href')?.startsWith('javascript'));
+      expect(jsLinks.length).toBe(0);
+      expect(allLinks.some(el => el.getAttribute('href') === 'https://safe.example.com')).toBe(true);
+    });
+
+    it('does not render web sources when web_search_context is null', async () => {
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('result.title')).toBeInTheDocument();
+      expect(screen.queryByText('result.web_sources_title')).not.toBeInTheDocument();
+    });
+  });
 });
 
 describe('ResultView text layout contracts', () => {

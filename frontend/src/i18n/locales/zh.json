@@ -340,7 +340,12 @@
       "campaign_next": "下次解锁",
       "campaign_badges": "总徽章数",
       "campaign_badges_none": "本局没有新增徽章，但生涯进展已写入。",
-      "runtime_preset_title": "本局神谕档位"
+      "runtime_preset_title": "本局神谕档位",
+      "web_sources_title": "真实世界来源",
+      "web_sources_query": "搜索词",
+      "web_sources_provider": "来源",
+      "web_sources_cached": "缓存",
+      "web_sources_visit": "访问来源"
     },
     "share": {
       "title": "📱 一键生成文案",

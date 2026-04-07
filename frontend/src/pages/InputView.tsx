@@ -442,6 +442,7 @@ export function InputView() {
       }
       navigate(`/sim/${id}`);
     } catch {
+      setWebSearchStatus('idle');
       setIsSubmitting(false);
     }
   };

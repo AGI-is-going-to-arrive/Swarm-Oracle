@@ -1686,6 +1686,7 @@ class TestNarrateBranchData:
             base_url=None,
             temperature=None,
             model=None,
+            web_context_block="",
         ):
             captured["api_key"] = api_key
             captured["base_url"] = base_url

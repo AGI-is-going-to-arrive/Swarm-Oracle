@@ -29,6 +29,48 @@ from app.models.database import get_engine
 logger = logging.getLogger(__name__)
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 
+# ── SSRF protection: URL allowlist for BYOK base_url ────────────
+_LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
+    "api.openai.com",
+    "api.minimax.chat",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.deepseek.com",
+    "api.moonshot.cn",
+    "api.zhipuai.cn",
+    "dashscope.aliyuncs.com",
+    "api.siliconflow.cn",
+    "api.together.xyz",
+    "api.groq.com",
+    "api.mistral.ai",
+    "api.cohere.com",
+    "openrouter.ai",
+    "api.perplexity.ai",
+    "localhost",
+    "127.0.0.1",
+})
+
+
+def validate_llm_base_url(url: str | None) -> str | None:
+    """Validate that a BYOK llm_base_url is in the allowlist.
+
+    Returns the cleaned URL if allowed, or None if disallowed/invalid.
+    Silently rejects URLs whose hostname is not in _LLM_URL_ALLOWLIST.
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        if hostname not in _LLM_URL_ALLOWLIST:
+            logger.warning(
+                "BYOK base_url rejected by allowlist: hostname=%s", hostname
+            )
+            return None
+        return url
+    except Exception:
+        return None
+
 # C-3 fix: pattern to detect API keys in error messages
 _PREFIXED_SECRET_PATTERN = re.compile(
     r"\b((?:sk|pk|rk|pat|key|tok|token)[-_])[A-Za-z0-9._-]{4,}\b",
@@ -121,6 +163,8 @@ def sanitize_untrusted_text(text: str, *, max_chars: int = 4000) -> str:
     normalized = str(text or "")
     normalized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", normalized)
     normalized = normalized.replace("\r\n", "\n").replace("\r", "\n").strip()
+    # Escape triple backticks to prevent fence-breakout in code blocks
+    normalized = normalized.replace("```", "` ` `")
     if len(normalized) > max_chars:
         normalized = normalized[:max_chars] + "…"
     return normalized
@@ -416,6 +460,9 @@ async def _probe_provider_request(
 ) -> tuple[bool, str | None]:
     """Issue one raw provider request without runtime-guard quotas for probe purposes."""
     target_url = _resolve_llm_api_url(base_url)
+    # SSRF + key-exfil guard: never send server key to a user-specified URL.
+    if base_url and not api_key:
+        return False, "BYOK mode requires an api_key when a custom base_url is provided"
     target_key = api_key or settings.LLM_API_KEY
     payload, _ = _build_llm_payload(
         input_text="Respond with exactly: OK",
@@ -1287,6 +1334,13 @@ async def llm_call(
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
     target_url = _resolve_llm_api_url(base_url)
+    # SSRF + key-exfil guard: when the caller provides a custom base_url
+    # (BYOK mode), they MUST also supply their own api_key. Never send the
+    # server's default LLM_API_KEY to an arbitrary third-party URL.
+    if base_url and not api_key:
+        raise LLMError(
+            "BYOK mode requires an api_key when a custom base_url is provided"
+        )
     target_key = api_key or settings.LLM_API_KEY
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
@@ -1660,6 +1714,11 @@ async def llm_call_stream(
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
     target_url = _resolve_llm_api_url(base_url)
+    # SSRF + key-exfil guard: BYOK base_url requires a matching api_key.
+    if base_url and not api_key:
+        raise LLMError(
+            "BYOK mode requires an api_key when a custom base_url is provided"
+        )
     target_key = api_key or settings.LLM_API_KEY
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)

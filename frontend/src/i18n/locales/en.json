@@ -340,7 +340,12 @@
       "campaign_next": "Next Unlock",
       "campaign_badges": "Total Badges",
       "campaign_badges_none": "No new badges unlocked this run, but the campaign log was saved.",
-      "runtime_preset_title": "Oracle Profile"
+      "runtime_preset_title": "Oracle Profile",
+      "web_sources_title": "Real-World Sources",
+      "web_sources_query": "Query",
+      "web_sources_provider": "Provider",
+      "web_sources_cached": "Cached",
+      "web_sources_visit": "Visit source"
     },
     "share": {
       "title": "📱 Generate Social Copy",
