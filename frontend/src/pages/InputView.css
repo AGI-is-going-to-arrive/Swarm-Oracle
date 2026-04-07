@@ -590,6 +590,102 @@
   transition: opacity 0.2s ease;
 }
 
+/* ── Web Search Enhancement ── */
+.web-search-section {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.web-search-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 16px;
+  border: 1px solid var(--border-default, #e0ddd8);
+  border-radius: 12px;
+  background: var(--bg-surface, #faf9f7);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.web-search-toggle:hover {
+  border-color: var(--border-emphasis, #c8c3bb);
+}
+
+.web-search-toggle:has(input:checked) {
+  border-color: oklch(55% 0.14 145);
+  box-shadow: 0 0 0 1px oklch(55% 0.14 145 / 0.2);
+}
+
+.web-search-toggle input[type="checkbox"] {
+  margin-top: 3px;
+  accent-color: oklch(55% 0.14 145);
+}
+
+.web-search-toggle__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.web-search-toggle__copy strong {
+  color: var(--text-primary, #1a1916);
+  font-weight: 600;
+}
+
+.web-search-toggle__copy > span {
+  color: var(--text-muted, #8a857d);
+  font-size: 0.76rem;
+}
+
+.web-search-status {
+  font-size: 0.75rem;
+  padding: 2px 10px;
+  border-radius: 8px;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.web-search-status--searching {
+  color: oklch(50% 0.12 250);
+  background: oklch(95% 0.04 250);
+  animation: web-search-pulse 1.2s ease-in-out infinite;
+}
+
+.web-search-status--success {
+  color: oklch(42% 0.14 145);
+  background: oklch(95% 0.04 145);
+}
+
+.web-search-status--error {
+  color: oklch(50% 0.14 25);
+  background: oklch(95% 0.04 25);
+}
+
+.web-search-status--skipped {
+  color: var(--text-muted, #8a857d);
+  background: oklch(96% 0.01 80);
+}
+
+@keyframes web-search-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.web-search-toggle:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-search-status--searching { animation: none; }
+}
+
 /* ── BYOK (Bring Your Own Key) ── */
 .byok-section {
   width: 100%;

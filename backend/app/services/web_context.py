@@ -261,11 +261,19 @@ async def fetch_web_context(question: str) -> WebSearchResult | None:
     return result
 
 
+def _sanitize_url(url: str, max_chars: int = 300) -> str:
+    """Strip control characters and truncate URL to prevent prompt injection."""
+    # Remove newlines, carriage returns, and other control chars
+    cleaned = "".join(ch for ch in url if ch >= " " or ch == "\t")
+    return cleaned[:max_chars]
+
+
 def format_context_block(result: WebSearchResult | None) -> str:
     """Render a [REAL_WORLD_CONTEXT] prompt block from search results.
 
     Returns empty string if result is None or has no snippets.
     All snippet text is wrapped via format_untrusted_text_block() guardrail.
+    Source URLs are sanitized (control chars stripped + length capped).
     """
     if result is None or not result.snippets:
         return ""
@@ -281,8 +289,9 @@ def format_context_block(result: WebSearchResult | None) -> str:
             snippet.text,
             max_chars=800,
         )
+        safe_url = _sanitize_url(snippet.source_url)
         lines.append(f"{i}. {sanitized}")
-        lines.append(f"   Source: {snippet.source_url}")
+        lines.append(f"   Source: {safe_url}")
         lines.append("")
 
     lines.append(

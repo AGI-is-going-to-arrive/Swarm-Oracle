@@ -26,12 +26,15 @@ def _build_narration_prompt(
     agents_summary_block: str,
     raw_rounds_block: str,
     language: str,
+    web_context_block: str = "",
 ) -> str:
+    web_block = f"\n{web_context_block}\n" if web_context_block else ""
     if _is_chinese(language):
         return f"""你是一位出色的故事讲述者。\
 请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
 
 {UNTRUSTED_INPUT_GUARDRAIL}
+{web_block}
 
 【分支标题】
 {branch_title_block}
@@ -59,6 +62,7 @@ def _build_narration_prompt(
 following raw simulation transcript into an engaging story.
 
 {UNTRUSTED_INPUT_GUARDRAIL}
+{web_block}
 
 [Branch Title]
 {branch_title_block}
@@ -160,6 +164,7 @@ async def narrate_branch(
     base_url: str | None = None,
     temperature: float | None = None,
     model: str | None = None,
+    web_context_block: str = "",
 ) -> dict:
     """Generate a narrative story for a completed branch.
 
@@ -184,6 +189,7 @@ async def narrate_branch(
             max_chars=3200,
         ),
         language=language,
+        web_context_block=web_context_block,
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)

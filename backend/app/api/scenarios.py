@@ -340,11 +340,38 @@ def _collect_scenario_delete_integrity_issues(
 # ── Health Endpoints ─────────────────────────────────────
 
 
+def _build_web_search_server_hint() -> dict:
+    """Build the web_search server-level config hint (shared by all health endpoints)."""
+    from app.config import settings as _cfg
+    from app.services.web_context import _PROVIDER_MAP
+    info: dict = {"scope": "server", "server_enabled": False, "method": "none", "provider": None}
+    if not _cfg.ENABLE_WEB_SEARCH:
+        return info
+    provider = _cfg.WEB_SEARCH_PROVIDER
+    if provider == "native":
+        return {**info, "method": "native", "provider": "native"}
+    if provider in _PROVIDER_MAP:
+        has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
+        return {"scope": "server", "server_enabled": has_key, "method": "external", "provider": provider}
+    # Configured but not yet implemented (exa, brave, etc.)
+    return {**info, "method": "external", "provider": provider}
+
+
+@router.get("/capabilities")
+async def api_capabilities():
+    """Lightweight server capability hints — no LLM calls.
+
+    Use this for feature-flag checks on page mount instead of /api/health
+    which triggers an actual LLM connectivity test.
+    """
+    return {"web_search": _build_web_search_server_hint()}
+
+
 @router.post("/health")
 async def api_health():
     """Health check + LLM connectivity test (server defaults)."""
     llm_status = await health_check()
-    return {"server": "ok", "llm": llm_status}
+    return {"server": "ok", "llm": llm_status, "web_search": _build_web_search_server_hint()}
 
 
 @router.post("/health/test")
@@ -370,47 +397,7 @@ async def api_health_test(req: TestLlmRequest):
             requests_per_minute=req.llm_requests_per_minute,
             tokens_per_minute=req.llm_tokens_per_minute,
         )
-    # Web Search: server-level configuration hint.
-    # This reports whether the SERVER has web search configured, NOT whether
-    # the tested BYOK provider natively supports search. Per-provider capability
-    # detection is V2 scope (design doc §1.3 layer 2).
-    from app.config import settings as _cfg
-    web_search_info: dict = {
-        "scope": "server",
-        "server_enabled": False,
-        "method": "none",
-        "provider": None,
-    }
-    if _cfg.ENABLE_WEB_SEARCH:
-        from app.services.web_context import _PROVIDER_MAP
-        provider = _cfg.WEB_SEARCH_PROVIDER
-        if provider == "native":
-            # Native provider detection is V2 — report as not yet available
-            web_search_info = {
-                "scope": "server",
-                "server_enabled": False,
-                "method": "native",
-                "provider": "native",
-            }
-        elif provider in _PROVIDER_MAP:
-            # Only report enabled for providers that have a real implementation
-            has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
-            web_search_info = {
-                "scope": "server",
-                "server_enabled": has_key,
-                "method": "external",
-                "provider": provider,
-            }
-        else:
-            # Configured but not yet implemented (exa, brave, etc.)
-            web_search_info = {
-                "scope": "server",
-                "server_enabled": False,
-                "method": "external",
-                "provider": provider,
-            }
-
-    return {"server": "ok", "llm": llm_status, "probe": probe, "web_search": web_search_info}
+    return {"server": "ok", "llm": llm_status, "probe": probe, "web_search": _build_web_search_server_hint()}
 
 
 # ── Scenario CRUD ────────────────────────────────────────

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  getCapabilities,
   getCampaignBadges,
   getCampaignChallengeRotation,
   getCampaignDailyChallengeStatus,
@@ -91,6 +92,37 @@ export function useInputByokSettings(t: TranslateFn) {
   const [reasoningEffort, setReasoningEffort] = useState('');
   const providerPolicyHydrated = useRef(false);
 
+  // Web Search Enhancement: opt-in toggle
+  // Visibility = compile-time flag (VITE_ENABLE_WEB_SEARCH) + server hint
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchServerEnabled, setWebSearchServerEnabled] = useState(false);
+  const [webSearchStatus, setWebSearchStatus] = useState<
+    'idle' | 'searching' | 'success' | 'skipped' | 'error'
+  >('idle');
+  const viteFlagEnabled = (import.meta.env?.VITE_ENABLE_WEB_SEARCH as string | undefined) === 'true';
+
+  // On mount: check server web search capability via lightweight GET /api/capabilities
+  // (no LLM call — pure config check). Retries once after 3s on failure.
+  useEffect(() => {
+    if (!viteFlagEnabled) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const fetchHint = () =>
+      getCapabilities()
+        .then((res) => {
+          if (!cancelled) setWebSearchServerEnabled(res.web_search?.server_enabled === true);
+        });
+    fetchHint().catch(() => {
+      retryTimer = setTimeout(() => {
+        if (!cancelled) fetchHint().catch(() => {});
+      }, 3000);
+    });
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [viteFlagEnabled]);
+
   const currentConfigKey = useMemo(
     () => JSON.stringify({
       apiKey: llmApiKey.trim(),
@@ -159,6 +191,9 @@ export function useInputByokSettings(t: TranslateFn) {
         parseOptionalIntegerInput(llmRequestsPerMinute) ?? undefined,
         parseOptionalIntegerInput(llmTokensPerMinute) ?? undefined,
       );
+      // Capture server-level web search hint (scope: server, NOT per-provider)
+      setWebSearchServerEnabled(res.web_search?.server_enabled === true);
+
       if (res.llm.status === 'ok') {
         setTestStatus('ok');
         setProbeResult(res.probe ?? null);
@@ -208,6 +243,12 @@ export function useInputByokSettings(t: TranslateFn) {
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
+    webSearchEnabled,
+    setWebSearchEnabled,
+    webSearchServerEnabled,
+    webSearchStatus,
+    setWebSearchStatus,
+    webSearchAvailable: viteFlagEnabled && webSearchServerEnabled,
   };
 }
 

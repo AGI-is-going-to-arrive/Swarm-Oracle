@@ -835,6 +835,13 @@ async def run_simulation(
         ctx = scenario.parsed_context or {}
         detected_language = ctx.get("_language", "Chinese")
         setting_bg = _format_setting(ctx.get("setting", {}), language=detected_language)
+
+        # Web Search Enhancement: build [REAL_WORLD_CONTEXT] block if available
+        web_context_block = ""
+        if scenario.web_context_json:
+            from app.services.web_context import WebSearchResult, format_context_block
+            ws_result = WebSearchResult.from_json(scenario.web_context_json)
+            web_context_block = format_context_block(ws_result)
         sim_rounds = ctx.get("simulation_rounds", 10)
         sensitivity = ctx.get("branch_sensitivity", 0.7)
         fork_prompt_variant = str(ctx.get("fork_prompt_variant", "a") or "a").strip().lower()
@@ -1075,6 +1082,7 @@ async def run_simulation(
                     language=detected_language,
                     viz_mapper=viz_mapper,
                     agent_prev_emotions=agent_prev_emotions,
+                    web_context_block=web_context_block,
                 )
             else:
                 messages = await _gather_agent_messages(
@@ -1086,6 +1094,7 @@ async def run_simulation(
                     language=detected_language,
                     viz_mapper=viz_mapper,
                     agent_prev_emotions=agent_prev_emotions,
+                    web_context_block=web_context_block,
                 )
 
             # 2) Round summary
@@ -1293,6 +1302,7 @@ async def run_simulation(
                 agents,
                 language=detected_language,
                 llm_overrides=llm_overrides,
+                web_context_block=web_context_block,
             )
             _save_narration(engine, b["id"], narration)
             await push({
@@ -1362,6 +1372,7 @@ async def _gather_agent_messages(
     language: str = "Chinese",
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
+    web_context_block: str = "",
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -1421,6 +1432,7 @@ async def _gather_agent_messages(
                     shared_briefing=agent_briefing,
                     intervention_text=intervention_text or "",
                     language=language,
+                    web_context_block=web_context_block,
                 )
             else:
                 # Fallback: format DB messages per-tier (first round or no blackboard)
@@ -1435,6 +1447,7 @@ async def _gather_agent_messages(
                     tier=agent_tier,
                     intervention_text=intervention_text or "",
                     language=language,
+                    web_context_block=web_context_block,
                 )
 
             # Choose reasoning effort based on tier
@@ -1582,6 +1595,7 @@ async def _gather_hierarchical_messages(
     language: str = "Chinese",
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
+    web_context_block: str = "",
 ) -> list[dict]:
     """P3-A: Hierarchical message gathering.
 
@@ -1600,6 +1614,7 @@ async def _gather_hierarchical_messages(
         language=language,
         viz_mapper=viz_mapper,
         agent_prev_emotions=agent_prev_emotions,
+        web_context_block=web_context_block,
     )
 
     # Build leader name → message lookup
@@ -1856,6 +1871,7 @@ async def _narrate_branch_data(
     *,
     language: str = "Chinese",
     llm_overrides: dict | None = None,
+    web_context_block: str = "",
 ) -> dict:
     """Collect branch data and narrate it."""
     branch_info = _get_branch(engine, branch_id)
@@ -1873,6 +1889,7 @@ async def _narrate_branch_data(
         base_url=(llm_overrides or {}).get("base_url"),
         temperature=(llm_overrides or {}).get("temperature"),
         model=(llm_overrides or {}).get("model"),
+        web_context_block=web_context_block,
     )
     result["title"] = branch_info.get("title", "未命名")
     return result

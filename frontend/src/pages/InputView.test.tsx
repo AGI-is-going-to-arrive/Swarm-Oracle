@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { InputView } from './InputView';
 
 const {
+  getCapabilitiesMock,
   testLlmConnectionMock,
   startSimulationMock,
   getCampaignProfileMock,
@@ -112,6 +113,7 @@ const {
     return translations[currentLanguage]?.[key] ?? key;
   };
   return {
+    getCapabilitiesMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
     startSimulationMock: vi.fn(async () => 'scenario-1'),
     getCampaignProfileMock: vi.fn(),
@@ -162,6 +164,7 @@ vi.mock('../stores/simulationStore', () => ({
 }));
 
 vi.mock('../api/client', () => ({
+  getCapabilities: getCapabilitiesMock,
   testLlmConnection: testLlmConnectionMock,
   getCampaignProfile: getCampaignProfileMock,
   getCampaignMastery: getCampaignMasteryMock,
@@ -282,6 +285,11 @@ describe('InputView campaign progress', () => {
     setMockLanguage('en');
     startSimulationMock.mockClear();
     testLlmConnectionMock.mockReset();
+    getCapabilitiesMock.mockReset();
+    // Default: server web search disabled (tests that need it override)
+    getCapabilitiesMock.mockResolvedValue({});
+    // Enable compile-time flag for web search tests
+    import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
     getCampaignBadgesMock.mockResolvedValue(campaignBadges);
@@ -793,5 +801,125 @@ describe('InputView campaign progress', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // ── Web Search Enhancement toggle ──────────────────
+
+  it('shows web search toggle on mount when VITE flag + server hint both enabled (no BYOK needed)', async () => {
+    // Server returns web_search.server_enabled=true via GET /api/capabilities (no LLM call)
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Toggle should appear without any BYOK interaction
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+  });
+
+  it('hides web search toggle when server hint says server_enabled=false', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: false, method: 'none', provider: null },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Give time for healthCheck to resolve
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(screen.queryByText('home.web_search_toggle')).not.toBeInTheDocument();
+  });
+
+  it('hides web search toggle when VITE flag is disabled', async () => {
+    import.meta.env.VITE_ENABLE_WEB_SEARCH = 'false';
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(screen.queryByText('home.web_search_toggle')).not.toBeInTheDocument();
+    // healthCheck should not even be called when VITE flag is off
+    expect(getCapabilitiesMock).not.toHaveBeenCalled();
+  });
+
+  it('sends webSearchEnabled=true when toggle is checked', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Wait for toggle to appear (from healthCheck, no BYOK needed)
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    // Check the toggle
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+
+    // Submit
+    await user.type(screen.getAllByRole('textbox')[0], 'What if with search?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if with search?',
+          webSearchEnabled: true,
+        }),
+      );
+    });
+  });
+
+  it('sends webSearchEnabled=false when toggle is unchecked', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    // Submit without checking toggle
+    await user.type(screen.getAllByRole('textbox')[0], 'What if no search?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if no search?',
+          webSearchEnabled: false,
+        }),
+      );
+    });
   });
 });

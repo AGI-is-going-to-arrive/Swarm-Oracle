@@ -115,6 +115,11 @@ export function InputView() {
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
+    webSearchEnabled,
+    setWebSearchEnabled,
+    webSearchAvailable,
+    webSearchStatus,
+    setWebSearchStatus,
   } = useInputByokSettings(t);
   const {
     campaignProfile,
@@ -409,6 +414,9 @@ export function InputView() {
     }
 
     setIsSubmitting(true);
+    const wantsSearch = webSearchEnabled && webSearchAvailable;
+    if (wantsSearch) setWebSearchStatus('searching');
+    else setWebSearchStatus('skipped');
     try {
       const id = await startSimulation({
         question: trimmed,
@@ -424,8 +432,11 @@ export function InputView() {
         visualizationEnabled: nextVisualization,
         userId: directorIdentity.userId,
         disableUserQuota,
+        webSearchEnabled: wantsSearch,
         ...buildScenarioRuntimePresetOptions(runtimePreset),
       });
+      // Note: search result is already in store (scenario.web_search_context).
+      // No point setting success/error status here — navigate() follows immediately.
       if (challengeId) {
         markChallengeStarted(challengeId, id);
       }
@@ -1103,6 +1114,33 @@ export function InputView() {
             <span className="mode-desc">{runtimePresetDescription}</span>
             <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
           </div>
+
+          {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
+          {webSearchAvailable && (
+            <div className="web-search-section">
+              <label className="web-search-toggle">
+                <input
+                  type="checkbox"
+                  checked={webSearchEnabled}
+                  onChange={(e) => setWebSearchEnabled(e.target.checked)}
+                  disabled={isSubmitting}
+                />
+                <span className="web-search-toggle__copy">
+                  <strong>{t('home.web_search_toggle')}</strong>
+                  <span>{t('home.web_search_hint')}</span>
+                </span>
+              </label>
+              {webSearchStatus !== 'idle' && (
+                <span
+                  className={`web-search-status web-search-status--${webSearchStatus}`}
+                  aria-live="polite"
+                  role="status"
+                >
+                  {t(`home.web_search_status_${webSearchStatus}`)}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* P4-E: BYOK — Bring Your Own Key */}
           <div className="byok-section">

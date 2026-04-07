@@ -267,8 +267,19 @@ async function requestText(path: string): Promise<string> {
 }
 
 /** POST /api/health — server + LLM connectivity test */
-export async function healthCheck(): Promise<{ server: string; llm: Record<string, unknown> }> {
+export async function healthCheck(): Promise<{
+  server: string;
+  llm: Record<string, unknown>;
+  web_search?: { scope: 'server'; server_enabled: boolean; method: string; provider: string | null };
+}> {
   return request('/health', { method: 'POST' });
+}
+
+/** GET /api/capabilities — lightweight server capability hints (no LLM calls) */
+export async function getCapabilities(): Promise<{
+  web_search?: { scope: 'server'; server_enabled: boolean; method: string; provider: string | null };
+}> {
+  return safeGet('/capabilities');
 }
 
 /** POST /api/health/test — test LLM connectivity with optional BYOK credentials */

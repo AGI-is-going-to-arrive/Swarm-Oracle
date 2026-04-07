@@ -429,6 +429,7 @@ def _build_crowd_context(
     conversation_label: str = "刚才的对话",
     intervention_text: str = "",
     language: str = "Chinese",
+    web_context_block: str = "",
 ) -> str:
     """Build a slim context for CROWD tier agents.
 
@@ -458,11 +459,13 @@ def _build_crowd_context(
         max_chars=2500,
     )
 
+    web_block = f"\n{web_context_block}\n" if web_context_block else ""
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
 {copy["identity"]}{agent.get('role', '')}
 {copy["emotion"]}{agent.get('emotion', 'neutral')}
-{copy["background_brief"]}{bg_brief}
+{web_block}{copy["background_brief"]}{bg_brief}
 
 {copy["topic_label"]}
 {topic_block}{intervention_block}
@@ -531,6 +534,7 @@ def build_agent_context(
     shared_briefing: str = "",
     intervention_text: str = "",
     language: str = "Chinese",
+    web_context_block: str = "",
 ) -> str:
     """Build the L0 context window for an agent's turn.
 
@@ -554,6 +558,7 @@ def build_agent_context(
             conversation_label=copy["shared_label"] if shared_briefing else copy["dialogue_label"],
             intervention_text=intervention_text,
             language=language,
+            web_context_block=web_context_block,
         )
 
     lang_directive = get_language_directive(language)
@@ -577,12 +582,14 @@ def build_agent_context(
         max_chars=conversation_max_chars,
     )
 
+    web_block = f"\n{web_context_block}\n" if web_context_block else ""
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
 {copy["identity"]}{agent.get('role', '')}
 {copy["persona"]}{agent.get('persona', '')}
 {copy["emotion"]}{agent.get('emotion', 'neutral')}
-
+{web_block}
 {copy["world_background"]}
 {setting_background}
 
