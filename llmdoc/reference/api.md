@@ -115,6 +115,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检 |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 `web_search.server_enabled` 等功能开关 |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 

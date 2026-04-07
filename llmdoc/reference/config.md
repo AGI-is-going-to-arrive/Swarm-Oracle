@@ -40,6 +40,7 @@
 说明：
 
 - 这些覆盖项只作用于当前请求，不会改写服务端默认值。
+- `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验；业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400 `BYOK_API_KEY_REQUIRED`。`/api/health/test` 是连通性探测，不做此前移拒绝。
 - `llm_requests_per_minute / llm_tokens_per_minute` 会覆盖服务端默认 RPM/TPM。触发限流后请求会排队等待下一个窗口（最多等 2 个 rate window），不会立即拒绝。
 - `disable_user_quota` 只对本地或 self-hosted provider 生效。
 
@@ -168,7 +169,7 @@
 
 - 搜索在场景创建时执行一次（Round 1 之前），结果存入 `Scenario.web_context_json`。
 - 搜索失败不阻断推演（graceful degradation）。
-- 前端 toggle 为 opt-in（默认关闭），仅当后端 `ENABLE_WEB_SEARCH=true` 且 `POST /api/health/test` 返回 `web_search.server_enabled=true` 时显示。注意：该字段报告的是服务端全局配置（`scope: "server"`），不是当前 BYOK provider 的搜索能力。Per-provider 探测属于 V2。
+- 前端 toggle 为 opt-in（默认关闭），仅当后端 `ENABLE_WEB_SEARCH=true` 且 `GET /api/capabilities` 返回 `web_search.server_enabled=true` 时显示。注意：该字段报告的是服务端全局配置（`scope: "server"`），不是当前 BYOK provider 的搜索能力。Per-provider 探测属于 V2。
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## 相关文件
