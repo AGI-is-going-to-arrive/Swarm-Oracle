@@ -255,6 +255,70 @@ class TestScenarioEndpoints:
         assert resp.status_code in (200, 500)
 
 
+class TestByokValidation:
+    """Regression tests for BYOK boundary checks across all endpoints."""
+
+    def test_scenario_base_url_without_key_rejected(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "https://api.openai.com/v1",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    def test_scenario_whitespace_key_normalized_to_none(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_api_key": "   ",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    def test_scenario_javascript_scheme_rejected(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "javascript://api.openai.com/foo",
+            "llm_api_key": "sk-test",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    def test_scenario_docker_host_accepted(self, client):
+        """host.docker.internal must remain in allowlist."""
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "http://host.docker.internal:8080/v1",
+            "llm_api_key": "sk-test",
+        })
+        # 200 or 500 (LLM unreachable) — not 400
+        assert resp.status_code != 400
+
+    def test_scenario_ipv6_localhost_accepted(self, client):
+        """::1 must remain in allowlist."""
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "http://[::1]:8080/v1",
+            "llm_api_key": "sk-test",
+        })
+        assert resp.status_code != 400
+
+    def test_debate_base_url_without_key_rejected(self, client):
+        resp = client.post("/api/debate", json={
+            "question": "test debate?",
+            "llm_base_url": "https://api.openai.com/v1",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    def test_social_base_url_without_key_rejected(self, client):
+        resp = client.post("/api/scenario/fake-id/social/twitter", json={
+            "llm_base_url": "https://api.openai.com/v1",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
 class TestReplayArtifactEndpoints:
     def test_create_replay_artifact_returns_structured_payload_too_large_error(self, client):
         resp = client.post(
@@ -2494,7 +2558,7 @@ class TestSocialCopy:
 
         async def _fake_llm_call(*args, **kwargs):
             assert kwargs["api_key"] == "sk-test"
-            assert kwargs["base_url"] == "https://example.com/v1/chat/completions"
+            assert kwargs["base_url"] == "https://api.openai.com/v1/chat/completions"
             assert kwargs["model"] == "gpt-test"
             return "生成好的文案"
 
@@ -2504,7 +2568,7 @@ class TestSocialCopy:
             f"/api/scenario/{sid}/social/xiaohongshu",
             json={
                 "llm_api_key": "sk-test",
-                "llm_base_url": "https://example.com/v1/chat/completions",
+                "llm_base_url": "https://api.openai.com/v1/chat/completions",
                 "llm_model": "gpt-test",
                 "user_id": "director-1",
             },
