@@ -18,6 +18,7 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_request_scope,
+    validate_llm_base_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,14 @@ class SocialCopyRequest(BaseModel):
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
     user_id: str | None = None
+
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod
@@ -281,6 +290,15 @@ async def _generate_social_copy(
         LLMError,
         llm_call,
     )
+
+    # SSRF protection: validate BYOK base_url against allowlist
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        if not req.llm_api_key:
+            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+        req.llm_base_url = validated_url
 
     if platform not in SOCIAL_PLATFORM_PROMPTS:
         raise api_error(

@@ -34,6 +34,7 @@ from app.services.debate import (
     run_debate_background,
 )
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
+from app.services.llm_client import validate_llm_base_url
 
 router = APIRouter(tags=["debate"])
 debate_ws_manager = WSManager()
@@ -482,6 +483,14 @@ def _extract_replay_import_fingerprint(debate: Debate) -> str | None:
 
 @router.post("/api/debate")
 async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
+    # SSRF protection: validate BYOK base_url against allowlist
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        if not req.llm_api_key:
+            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+        req.llm_base_url = validated_url
     debate = create_debate_record(req.question, profile_hint=req.profile_hint)
     llm_overrides = None
     if (

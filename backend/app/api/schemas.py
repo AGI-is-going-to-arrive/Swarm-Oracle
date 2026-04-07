@@ -43,6 +43,14 @@ class CreateScenarioRequest(BaseModel):
             raise ValueError("question too long (max 1000 chars)")
         return normalized
 
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
+
     @field_validator("user_id")
     @classmethod
     def validate_user_id(cls, v: str | None) -> str | None:

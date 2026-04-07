@@ -20,6 +20,7 @@ from app.api.errors import api_error
 from app.models import Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
+from app.services.llm_client import validate_llm_base_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["predictions"])
@@ -92,6 +93,14 @@ class ScorePredictionsRequest(BaseModel):
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
     user_id: str | None = None
+
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod
@@ -229,6 +238,13 @@ async def trigger_scoring(
     from app.services.scoring import score_all_for_scenario
 
     req = req or ScorePredictionsRequest()
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        if not req.llm_api_key:
+            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+        req.llm_base_url = validated_url
     llm_overrides = None
     if (
         req.llm_api_key

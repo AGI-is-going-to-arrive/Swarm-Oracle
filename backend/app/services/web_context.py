@@ -51,11 +51,17 @@ class WebSearchResult:
             data = json.loads(raw)
             if not isinstance(data, dict):
                 return None
-            snippets = [
-                WebSearchSnippet(text=s.get("text", ""), source_url=s.get("source_url", ""))
-                for s in data.get("snippets", [])
-                if isinstance(s, dict)
-            ]
+            snippets = []
+            for s in data.get("snippets", []):
+                if not isinstance(s, dict):
+                    continue
+                raw_text = s.get("text", "")
+                raw_url = s.get("source_url", "")
+                text = str(raw_text) if raw_text is not None else ""
+                url = str(raw_url) if raw_url is not None else ""
+                if not text:
+                    continue  # skip snippets with no usable text
+                snippets.append(WebSearchSnippet(text=text, source_url=url))
             return cls(
                 query=data.get("query", ""),
                 snippets=snippets,
