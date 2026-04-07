@@ -1692,18 +1692,26 @@ export default function ResultView() {
       )}
 
       {/* Web Sources Section */}
-      {scenario?.web_search_context && (scenario.web_search_context.snippets?.length ?? 0) > 0 && (
+      {scenario?.web_search_context
+        && typeof scenario.web_search_context.query === 'string'
+        && Array.isArray(scenario.web_search_context.snippets)
+        && scenario.web_search_context.snippets.length > 0 && (
         <section className="result-web-sources">
           <h2 className="result-web-sources__title">{t('result.web_sources_title')}</h2>
           <div className="result-web-sources__meta">
             <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
-            <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
+            {typeof scenario.web_search_context.provider === 'string' && (
+              <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
+            )}
             {scenario.web_search_context.cached && (
               <span>{t('result.web_sources_cached')}</span>
             )}
           </div>
           <div className="result-web-sources__list">
-            {scenario.web_search_context.snippets.map((snippet, idx) => (
+            {scenario.web_search_context.snippets
+              .filter((s): s is { text: string; source_url: string } =>
+                s != null && typeof s.text === 'string')
+              .map((snippet, idx) => (
               <article key={idx} className="result-web-sources__item">
                 <p className="result-web-sources__item-text">{snippet.text}</p>
                 {snippet.source_url && /^https?:\/\//i.test(snippet.source_url) && (

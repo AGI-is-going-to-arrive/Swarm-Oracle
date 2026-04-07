@@ -446,12 +446,41 @@ async def parse_and_run_background(
 
 
 def _parse_web_context_json(raw: str | None) -> dict | None:
-    """Deserialize Scenario.web_context_json into a response-safe dict."""
+    """Deserialize Scenario.web_context_json into a response-safe dict.
+
+    Validates the payload shape: query/provider must be strings,
+    snippets must be a list of dicts with string text/source_url.
+    Malformed data → None (graceful degradation).
+    """
     if not raw:
         return None
     try:
         parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict):
+            return None
+        # Validate required fields are strings
+        if not isinstance(parsed.get("query"), str):
+            return None
+        if not isinstance(parsed.get("provider"), str):
+            return None
+        # Validate snippets is a list of well-formed dicts
+        snippets = parsed.get("snippets")
+        if not isinstance(snippets, list):
+            return None
+        safe_snippets = []
+        for s in snippets:
+            if not isinstance(s, dict):
+                continue
+            text = s.get("text")
+            url = s.get("source_url")
+            if not isinstance(text, str):
+                continue
+            safe_snippets.append({
+                "text": text,
+                "source_url": url if isinstance(url, str) else "",
+            })
+        parsed["snippets"] = safe_snippets
+        return parsed
     except (json.JSONDecodeError, TypeError):
         return None
 

@@ -46,21 +46,27 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
     "api.cohere.com",
     "openrouter.ai",
     "api.perplexity.ai",
-    "localhost",
-    "127.0.0.1",
-})
+}) | _LOCAL_LLM_HOSTS  # include all local hosts (localhost, 127.0.0.1, 0.0.0.0, ::1, host.docker.internal)
+
+_ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 
 
 def validate_llm_base_url(url: str | None) -> str | None:
     """Validate that a BYOK llm_base_url is in the allowlist.
 
     Returns the cleaned URL if allowed, or None if disallowed/invalid.
-    Silently rejects URLs whose hostname is not in _LLM_URL_ALLOWLIST.
+    Rejects URLs with non-http(s) schemes or unknown hostnames.
     """
     if not url:
         return None
     try:
         parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in _ALLOWED_URL_SCHEMES:
+            logger.warning(
+                "BYOK base_url rejected: scheme=%s not in %s", scheme, _ALLOWED_URL_SCHEMES
+            )
+            return None
         hostname = (parsed.hostname or "").lower()
         if hostname not in _LLM_URL_ALLOWLIST:
             logger.warning(

@@ -261,11 +261,21 @@ async def fetch_web_context(question: str) -> WebSearchResult | None:
     return result
 
 
-def _sanitize_url(url: str, max_chars: int = 300) -> str:
-    """Strip control characters and truncate URL to prevent prompt injection."""
-    # Remove newlines, carriage returns, and other control chars
+def _sanitize_url(url: str | None, max_chars: int = 300) -> str:
+    """Sanitize a source URL for safe prompt embedding.
+
+    - None / empty → empty string
+    - Non-http(s) schemes → empty string
+    - Control characters stripped, length capped
+    """
+    if not url:
+        return ""
     cleaned = "".join(ch for ch in url if ch >= " " or ch == "\t")
-    return cleaned[:max_chars]
+    cleaned = cleaned[:max_chars]
+    # Only allow http/https schemes
+    if not cleaned.lower().startswith(("http://", "https://")):
+        return ""
+    return cleaned
 
 
 def format_context_block(result: WebSearchResult | None) -> str:
@@ -284,14 +294,14 @@ def format_context_block(result: WebSearchResult | None) -> str:
         "",
     ]
     for i, snippet in enumerate(result.snippets, 1):
+        safe_url = _sanitize_url(snippet.source_url)
+        url_suffix = f"\n   Source: {safe_url}" if safe_url else ""
         sanitized = format_untrusted_text_block(
             f"Source #{i}",
-            snippet.text,
+            snippet.text + url_suffix,
             max_chars=800,
         )
-        safe_url = _sanitize_url(snippet.source_url)
         lines.append(f"{i}. {sanitized}")
-        lines.append(f"   Source: {safe_url}")
         lines.append("")
 
     lines.append(
