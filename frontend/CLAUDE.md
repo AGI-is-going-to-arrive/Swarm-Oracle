@@ -52,7 +52,7 @@ npm run test:watch # vitest (watch mode)
 |------|------|
 | `InputView.tsx` | 首页输入，含搜索增强 toggle |
 | `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
-| `ResultView.tsx` | 结果展示 (Summary-First 布局，含真实世界来源卡片) |
+| `ResultView.tsx` | 结果展示 (Summary-First 布局，含真实世界来源卡片，畸形数据防御) |
 | `DebateArenaView.tsx` | 辩论竞技场 |
 | `DebateResultView.tsx` | 辩论结果 |
 | `WorldlineRoundtableView.tsx` | 世界线圆桌 (~1848 行) |
@@ -347,6 +347,6 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-04-07 | Web 搜索增强 | InputView 搜索增强 toggle + ResultView 真实世界来源卡片 + `getCapabilities()` API |
+| 2026-04-07 | Web 搜索增强 + 安全加固 | InputView 搜索增强 toggle、ResultView 来源卡片 (含 XSS 防护 + 畸形数据防御 + 长文本溢出保护)、`getCapabilities()` API、3 条来源卡片回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 types.ts 全局类型定义 + WorldScene.ts 场景系统详解 |
 | 2026-04-02 | 初始生成 | 模块扫描完成 |

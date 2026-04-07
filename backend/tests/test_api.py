@@ -311,6 +311,16 @@ class TestByokValidation:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
+    def test_predictions_normalize_whitespace_key(self):
+        """ScorePredictionsRequest must normalize whitespace-only BYOK fields to None."""
+        from app.api.predictions import ScorePredictionsRequest
+        req = ScorePredictionsRequest(
+            llm_api_key="   ",
+            llm_base_url="  https://api.openai.com/v1  ",
+        )
+        assert req.llm_api_key is None
+        assert req.llm_base_url == "https://api.openai.com/v1"
+
     def test_social_base_url_without_key_rejected(self, client):
         resp = client.post("/api/scenario/fake-id/social/twitter", json={
             "llm_base_url": "https://api.openai.com/v1",

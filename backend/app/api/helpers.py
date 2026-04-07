@@ -479,8 +479,14 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                 "text": text,
                 "source_url": url if isinstance(url, str) else "",
             })
-        parsed["snippets"] = safe_snippets
-        return parsed
+        # Return strict whitelist object — no extra keys leak through
+        return {
+            "query": parsed["query"],
+            "provider": parsed["provider"],
+            "snippets": safe_snippets,
+            "timestamp": parsed.get("timestamp", "") if isinstance(parsed.get("timestamp"), str) else "",
+            "cached": parsed.get("cached") is True,
+        }
     except (json.JSONDecodeError, TypeError):
         return None
 

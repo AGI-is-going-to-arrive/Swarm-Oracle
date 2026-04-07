@@ -101,7 +101,7 @@ docker compose up backend
 | ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content |
 | simulator | `simulator.py` | 多代理模拟引擎 |
 | debate | `debate.py` | 辩论引擎 |
-| llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测) |
+| llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail |
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
 | blackboard | `blackboard.py` | 黑板模式通信 |
@@ -242,6 +242,6 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-04-07 | Web 搜索增强 | 新增 web_context 服务、`/api/capabilities` 端点、migration 013、scenario 表 web_context_json 列 |
+| 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、`/api/capabilities`、migration 013、BYOK 校验统一 (scenario/debate/predictions/social)、fence-breakout 修复、`_sanitize_url` 协议白名单、malformed JSON shape 防御、20 条边界回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 simulator.py 模拟流程 + database.py 完整 ORM schema |
 | 2026-04-02 | 初始生成 | 模块扫描完成 |
