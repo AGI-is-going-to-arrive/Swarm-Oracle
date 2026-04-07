@@ -180,6 +180,9 @@ class Scenario(SQLModel, table=True):
     visualization_enabled: bool = Field(default=False)
     scene_theme: Optional[str] = None
 
+    # Web Search Enhancement: JSON string of WebSearchResult
+    web_context_json: Optional[str] = None
+
     # relationships (defined after Agent/Branch so forward refs resolve)
     agents: list[Agent] = Relationship(back_populates="scenario")
     branches: list[Branch] = Relationship(back_populates="scenario")
@@ -268,6 +271,7 @@ def init_db():
                 # V2: Visualization fields
                 _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
                 _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
+                _migrate_add_column(conn, "scenario", "web_context_json", "TEXT")
                 _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
                 _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
                 _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")

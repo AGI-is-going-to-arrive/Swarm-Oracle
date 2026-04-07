@@ -2,6 +2,14 @@
    SwarmOracle — TypeScript Interfaces
    ═══════════════════════════════════════════════════════════ */
 
+export interface WebSearchContext {
+  query: string;
+  snippets: Array<{ text: string; source_url: string }>;
+  provider: string;
+  timestamp: string;
+  cached: boolean;
+}
+
 export interface Scenario {
   id: string;
   question: string;
@@ -12,6 +20,7 @@ export interface Scenario {
   mode?: 'raw' | 'blackboard' | null;
   visualization_enabled?: boolean;
   scene_theme?: string | null;
+  web_search_context?: WebSearchContext | null;
   agents: AgentInfo[];
   branches: BranchInfo[];
   groups: GroupInfo[];  // P3-A

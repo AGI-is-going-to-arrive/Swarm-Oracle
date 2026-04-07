@@ -133,8 +133,47 @@
 - `MEMORY_CORE_CONTEXT_MAX_CHARS`
 - `MEMORY_IMPORTANT_CONTEXT_MAX_CHARS`
 
+## Security — Session Gate
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求 `?token=` query param。未通过则返回 401/4001。 |
+
+说明：
+
+- **这是临时开发态的全局门禁 hardening，不是 owner-aware authorization。**
+- 空值时完全跳过鉴权，本地开发零影响。
+- 前端通过 `localStorage.swarmoracle_session_token` 存取 token，REST 自动注入 `X-Session-Token` header，WS 自动附带 `?token=` query param。
+- 不是最终 auth 设计。最终方案需要 JWT/OAuth2 + per-resource ownership + httpOnly cookie。
+
+## Web Search Enhancement (搜索增强推演)
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ENABLE_WEB_SEARCH` | `false` | 总开关，opt-in |
+| `WEB_SEARCH_PROVIDER` | `tavily` | 搜索提供商：`tavily` / `exa` / `searxng` / `brave` / `native` |
+| `WEB_SEARCH_API_KEY` | `""` | 搜索 API Key（`searxng` 和 `native` 模式不需要） |
+| `SEARXNG_URL` | `http://localhost:8888` | SearXNG 实例地址（仅 `WEB_SEARCH_PROVIDER=searxng` 时使用） |
+| `WEB_SEARCH_MAX_RESULTS` | `5` | 每次搜索最大 snippet 数 |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | `8` | 单次搜索超时 |
+| `WEB_SEARCH_CACHE_TTL_SECONDS` | `300` | 搜索结果缓存 TTL（5 分钟） |
+
+前端环境变量：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `VITE_ENABLE_WEB_SEARCH` | `false` | 控制 InputView 搜索增强 toggle 显示 |
+
+说明：
+
+- 搜索在场景创建时执行一次（Round 1 之前），结果存入 `Scenario.web_context_json`。
+- 搜索失败不阻断推演（graceful degradation）。
+- 前端 toggle 为 opt-in（默认关闭），仅当后端 `ENABLE_WEB_SEARCH=true` 且 `POST /api/health/test` 返回 `web_search.server_enabled=true` 时显示。注意：该字段报告的是服务端全局配置（`scope: "server"`），不是当前 BYOK provider 的搜索能力。Per-provider 探测属于 V2。
+- 详细设计见 `implement/web_search_augmentation_design.md`。
+
 ## 相关文件
 
-- 模板：`.env.example`
+- 模板：`.env.example`（根目录）
 - Docker 模板：`.env.docker`
 - 后端配置实现：`backend/app/config.py`
+- Web Search 设计稿：`implement/web_search_augmentation_design.md`

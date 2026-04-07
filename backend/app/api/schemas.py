@@ -30,6 +30,8 @@ class CreateScenarioRequest(BaseModel):
     disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run  # noqa: E501
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
+    # Web Search Enhancement: opt-in per-scenario
+    web_search_enabled: bool = False  # Request web search before simulation (default off)
 
     @field_validator("question")
     @classmethod
@@ -225,6 +227,8 @@ class ScenarioResponse(BaseModel):
     # V2: Pixel visualization
     visualization_enabled: bool = False
     scene_theme: str | None = None
+    # Web Search Enhancement
+    web_search_context: dict | None = None
     director_state: dict | None = None
     gameplay_state: dict | None = None
     fork_debug: dict | None = None

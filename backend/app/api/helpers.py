@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 
+from fastapi import HTTPException, Request
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
@@ -36,6 +37,20 @@ from app.services.runtime_lock import (
 from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
 
 logger = logging.getLogger(__name__)
+
+
+async def verify_session(request: Request) -> str | None:
+    """Lightweight auth: if SESSION_SECRET is configured, verify the request token.
+
+    Returns the token on success or None when auth is disabled (empty secret).
+    Raises HTTP 401 if the token is missing or invalid.
+    """
+    if not settings.SESSION_SECRET:
+        return None  # Auth not enabled — backwards compatible
+    token = request.headers.get("X-Session-Token", "")
+    if not token or token != settings.SESSION_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return token
 
 
 class _OpaqueStr(str):
@@ -430,6 +445,17 @@ async def parse_and_run_background(
         )
 
 
+def _parse_web_context_json(raw: str | None) -> dict | None:
+    """Deserialize Scenario.web_context_json into a response-safe dict."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
     """Load scenario data from DB and return a ScenarioResponse.
 
@@ -550,6 +576,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             mode=ctx.get("mode"),
             visualization_enabled=s.visualization_enabled,
             scene_theme=s.scene_theme,
+            web_search_context=_parse_web_context_json(s.web_context_json),
             director_state=normalize_scenario_director_state(s.director_state_json),
             gameplay_state=normalize_scenario_gameplay_state(s.gameplay_state_json),
             fork_debug=fork_debug,

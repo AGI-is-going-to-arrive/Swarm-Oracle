@@ -15,6 +15,28 @@ import type {
 
 const BASE = '/api';
 
+/**
+ * Session token for optional server-side auth gate (SESSION_SECRET).
+ * Read from localStorage; empty string means auth is disabled.
+ */
+export function getSessionToken(): string {
+  try {
+    return localStorage.getItem('swarmoracle_session_token') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setSessionToken(token: string): void {
+  try {
+    if (token) {
+      localStorage.setItem('swarmoracle_session_token', token);
+    } else {
+      localStorage.removeItem('swarmoracle_session_token');
+    }
+  } catch { /* ignore */ }
+}
+
 function sanitizeErrorText(text: string): string {
   if (!text || text.length > 200) return 'Server error';
   if (/Traceback|at\s+\S+\s+\(|<html|<\/div>/i.test(text)) return 'Server error';
@@ -119,6 +141,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   mode?: 'raw' | 'blackboard';
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
+  webSearchEnabled?: boolean;
 }
 
 export interface LlmProbeResponse {
@@ -190,6 +213,10 @@ async function request<T>(
   if (init?.body) {
     headers['Content-Type'] = 'application/json';
   }
+  const sessionToken = getSessionToken();
+  if (sessionToken) {
+    headers['X-Session-Token'] = sessionToken;
+  }
   const retryTransient = retryOptions?.retryTransient ?? false;
   const retryAttempts = retryOptions?.retryAttempts ?? 0;
 
@@ -251,7 +278,18 @@ export async function testLlmConnection(
   model?: string,
   requestsPerMinute?: number,
   tokensPerMinute?: number,
-): Promise<{ server: string; llm: { status: string; model: string; response?: string; error?: string }; probe?: LlmProbeResponse | null }> {
+): Promise<{
+  server: string;
+  llm: { status: string; model: string; response?: string; error?: string };
+  probe?: LlmProbeResponse | null;
+  /** Server-level web search config hint (NOT per-provider capability). */
+  web_search?: {
+    scope: 'server';
+    server_enabled: boolean;
+    method: string;
+    provider: string | null;
+  } | null;
+}> {
   return request('/health/test', {
     method: 'POST',
     body: JSON.stringify({
@@ -285,6 +323,7 @@ export async function createScenario(
     forkPromptVariant,
     forkDetectorActiveBranchLimit,
     visualizationEnabled,
+    webSearchEnabled,
     userId,
     disableUserQuota,
   } = options;
@@ -307,6 +346,7 @@ export async function createScenario(
       ...(forkPromptVariant && { fork_prompt_variant: forkPromptVariant }),
       ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
       ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
+      ...(webSearchEnabled && { web_search_enabled: true }),
       ...(userId && { user_id: userId }),
       ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
     }),

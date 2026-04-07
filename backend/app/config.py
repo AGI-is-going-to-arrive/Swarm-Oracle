@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite:///{(BACKEND_ROOT / 'swarmoracle.db').resolve()}"
     CHROMA_PERSIST_DIR: str = str((BACKEND_ROOT / "chroma_data").resolve())
 
+    # ── Web Search Enhancement ────────────────────────────
+    ENABLE_WEB_SEARCH: bool = False
+    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | searxng | brave | native
+    WEB_SEARCH_API_KEY: str = ""
+    WEB_SEARCH_MAX_RESULTS: int = 5
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
+    WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
+    SEARXNG_URL: str = "http://localhost:8888"
+
+    # ── Auth ─────────────────────────────────────────────
+    SESSION_SECRET: str = ""  # If set, enables lightweight session-token auth
+
     # ── Server ───────────────────────────────────────────
     HOST: str = "0.0.0.0"
     PORT: int = 18927

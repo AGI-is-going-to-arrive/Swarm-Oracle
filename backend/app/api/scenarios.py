@@ -58,7 +58,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.campaign import remove_scenario_campaign_artifacts
-from app.services.llm_client import health_check, measure_provider_parallelism
+from app.services.llm_client import health_check, measure_provider_parallelism, validate_llm_base_url
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.vector_store import get_vector_store
 
@@ -353,21 +353,64 @@ async def api_health_test(req: TestLlmRequest):
 
     If all fields are empty, tests the server default configuration.
     """
+    validated_base_url = validate_llm_base_url(req.llm_base_url)
+    if req.llm_base_url and validated_base_url is None:
+        raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
     llm_status = await health_check(
         api_key=req.llm_api_key or None,
-        base_url=req.llm_base_url or None,
+        base_url=validated_base_url,
         model=req.llm_model or None,
     )
     probe = None
     if llm_status.get("status") == "ok":
         probe = await measure_provider_parallelism(
             api_key=req.llm_api_key or None,
-            base_url=req.llm_base_url or None,
+            base_url=validated_base_url,
             model=req.llm_model or None,
             requests_per_minute=req.llm_requests_per_minute,
             tokens_per_minute=req.llm_tokens_per_minute,
         )
-    return {"server": "ok", "llm": llm_status, "probe": probe}
+    # Web Search: server-level configuration hint.
+    # This reports whether the SERVER has web search configured, NOT whether
+    # the tested BYOK provider natively supports search. Per-provider capability
+    # detection is V2 scope (design doc §1.3 layer 2).
+    from app.config import settings as _cfg
+    web_search_info: dict = {
+        "scope": "server",
+        "server_enabled": False,
+        "method": "none",
+        "provider": None,
+    }
+    if _cfg.ENABLE_WEB_SEARCH:
+        from app.services.web_context import _PROVIDER_MAP
+        provider = _cfg.WEB_SEARCH_PROVIDER
+        if provider == "native":
+            # Native provider detection is V2 — report as not yet available
+            web_search_info = {
+                "scope": "server",
+                "server_enabled": False,
+                "method": "native",
+                "provider": "native",
+            }
+        elif provider in _PROVIDER_MAP:
+            # Only report enabled for providers that have a real implementation
+            has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
+            web_search_info = {
+                "scope": "server",
+                "server_enabled": has_key,
+                "method": "external",
+                "provider": provider,
+            }
+        else:
+            # Configured but not yet implemented (exa, brave, etc.)
+            web_search_info = {
+                "scope": "server",
+                "server_enabled": False,
+                "method": "external",
+                "provider": provider,
+            }
+
+    return {"server": "ok", "llm": llm_status, "probe": probe, "web_search": web_search_info}
 
 
 # ── Scenario CRUD ────────────────────────────────────────
@@ -378,6 +421,13 @@ async def create_scenario(req: CreateScenarioRequest):
     """Create a new scenario and offload parsing to a background task."""
     if not req.question.strip():
         raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
+
+    # SSRF protection: validate BYOK base_url against allowlist
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        req.llm_base_url = validated_url
 
     engine = get_engine()
     question = req.question.strip()
@@ -416,6 +466,23 @@ async def create_scenario(req: CreateScenarioRequest):
             "simulation_rounds": sim_rounds,
         },
     )
+    # Web Search Enhancement: fetch context synchronously before response.
+    # Bounded by WEB_SEARCH_TIMEOUT_SECONDS (default 8s). Failure never blocks.
+    web_context_json: str | None = None
+    if req.web_search_enabled:
+        try:
+            from app.services.web_context import fetch_web_context
+            web_result = await fetch_web_context(question)
+            if web_result is not None:
+                web_context_json = web_result.to_json()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Web search failed for scenario (non-blocking): %s", exc,
+            )
+
+    scenario.web_context_json = web_context_json  # None if search disabled/failed
+
     with Session(engine) as session:
         session.add(scenario)
         session.commit()

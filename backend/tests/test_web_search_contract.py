@@ -1,0 +1,355 @@
+"""Tests for Web Search Enhancement — Phase 1 contract landing.
+
+Covers:
+- CreateScenarioRequest.web_search_enabled schema field
+- Scenario.web_context_json model column
+- ScenarioResponse.web_search_context response serialization
+- POST /api/health/test web_search capability response
+- Alembic migration 013 (fallback migration via init_db)
+"""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, inspect, text
+from sqlmodel import Session, SQLModel
+
+import app.api.scenarios as scenarios_api
+from app.api.helpers import _parse_web_context_json
+from app.api.schemas import CreateScenarioRequest, ScenarioResponse
+from app.main import app
+from app.models import Scenario, ScenarioStatus
+from app.models.database import get_engine
+
+
+@pytest.fixture()
+def client():
+    return TestClient(app)
+
+
+# ── Schema Tests ────────────────────────────────────────
+
+
+class TestCreateScenarioRequestWebSearch:
+    def test_web_search_enabled_defaults_false(self):
+        req = CreateScenarioRequest(question="What if AI takes over?")
+        assert req.web_search_enabled is False
+
+    def test_web_search_enabled_true(self):
+        req = CreateScenarioRequest(question="What if AI takes over?", web_search_enabled=True)
+        assert req.web_search_enabled is True
+
+    def test_web_search_enabled_false_explicit(self):
+        req = CreateScenarioRequest(question="What if AI takes over?", web_search_enabled=False)
+        assert req.web_search_enabled is False
+
+    def test_web_search_enabled_accepted_in_api_payload(self, client):
+        """POST /api/scenario should accept web_search_enabled without 422."""
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": True,
+        })
+        # 200 if LLM reachable, 500 if not — either acceptable; NOT 422
+        assert resp.status_code in (200, 500)
+
+
+# ── Model Tests ─────────────────────────────────────────
+
+
+class TestScenarioWebContextJson:
+    def test_scenario_has_web_context_json_field(self):
+        s = Scenario(question="test?")
+        assert s.web_context_json is None
+
+    def test_scenario_stores_web_context_json(self):
+        engine = get_engine()
+        s = Scenario(question="test?", web_context_json='{"query":"test","snippets":[]}')
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            session.refresh(s)
+            assert s.web_context_json == '{"query":"test","snippets":[]}'
+
+    def test_scenario_web_context_json_nullable(self):
+        engine = get_engine()
+        s = Scenario(question="test?")
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            session.refresh(s)
+            assert s.web_context_json is None
+
+    def test_existing_scenarios_unaffected(self):
+        """Old scenarios without web_context_json should load normally."""
+        engine = get_engine()
+        s = Scenario(question="legacy scenario")
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            session.refresh(s)
+            assert s.question == "legacy scenario"
+            assert s.web_context_json is None
+            assert s.status == ScenarioStatus.PARSING
+
+
+# ── Migration Tests ─────────────────────────────────────
+
+
+class TestFallbackMigration:
+    def test_web_context_json_column_exists_after_init_db(self):
+        """init_db() fallback migration should add web_context_json column."""
+        engine = get_engine()
+        inspector = inspect(engine)
+        columns = {col["name"] for col in inspector.get_columns("scenario")}
+        assert "web_context_json" in columns
+
+
+# ── Health/Test Web Search Capability ───────────────────
+
+
+class TestHealthTestWebSearchServerHint:
+    """web_search field is a server-level configuration hint (scope=server),
+    NOT a per-provider capability detection. See design doc §3.5."""
+
+    _FAKE_PROBE = {
+        "status": "ok", "model": "test-model", "local_provider": True,
+        "allow_disable_user_quota": True, "estimated_parallelism": 1,
+        "tested_parallelism": 1,
+        "recommended": {"agents_min": 3, "agents_max": 10, "rounds_min": 3, "rounds_max": 8},
+        "failure": None,
+    }
+    _TEST_PAYLOAD = {
+        "llm_api_key": "sk-test",
+        "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
+        "llm_model": "test-model",
+    }
+
+    def _patch_llm(self, monkeypatch):
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+        async def _fake_probe(**kwargs):
+            return dict(self._FAKE_PROBE)
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
+
+    def test_scope_is_always_server(self, client, monkeypatch):
+        """All responses must include scope='server' to prevent misinterpretation."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", False)
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        assert data["web_search"]["scope"] == "server"
+
+    def test_server_disabled(self, client, monkeypatch):
+        """When ENABLE_WEB_SEARCH=false, server_enabled=False."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", False)
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is False
+        assert ws["method"] == "none"
+        assert ws["provider"] is None
+
+    def test_server_enabled_tavily_with_key(self, client, monkeypatch):
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "tvly-test-key")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is True
+        assert ws["method"] == "external"
+        assert ws["provider"] == "tavily"
+
+    def test_server_enabled_tavily_no_key(self, client, monkeypatch):
+        """Tavily without API key: server reports not ready."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is False
+        assert ws["provider"] == "tavily"
+
+    def test_server_enabled_searxng_no_key_needed(self, client, monkeypatch):
+        """SearXNG does not require an API key."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "searxng")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is True
+        assert ws["method"] == "external"
+        assert ws["provider"] == "searxng"
+
+    def test_server_enabled_native_not_yet_implemented(self, client, monkeypatch):
+        """Native provider is V2 — server_enabled must be False."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "native")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is False
+        assert ws["method"] == "native"
+        assert ws["provider"] == "native"
+
+    def test_unimplemented_provider_exa(self, client, monkeypatch):
+        """Exa is configured but not yet in _PROVIDER_MAP — server_enabled=False."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "exa")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "exa-key")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is False
+        assert ws["provider"] == "exa"
+
+    def test_unimplemented_provider_brave(self, client, monkeypatch):
+        """Brave is configured but not yet in _PROVIDER_MAP — server_enabled=False."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "brave")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "brave-key")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is False
+        assert ws["provider"] == "brave"
+
+    def test_hint_independent_of_byok_provider(self, client, monkeypatch):
+        """web_search hint stays the same regardless of which BYOK provider is tested.
+        This proves it is server config, not provider capability."""
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "tvly-key")
+
+        # Test with a completely different BYOK provider
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-openai-key",
+            "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
+            "llm_model": "gpt-4o",
+        }).json()
+        ws = data["web_search"]
+        # Server hint is still tavily — NOT openai
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is True
+        assert ws["provider"] == "tavily"
+
+
+# ── Response Serialization Tests ────────────────────────
+
+
+class TestScenarioResponseWebSearchContext:
+    def test_parse_web_context_json_none(self):
+        assert _parse_web_context_json(None) is None
+
+    def test_parse_web_context_json_empty_string(self):
+        assert _parse_web_context_json("") is None
+
+    def test_parse_web_context_json_valid(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [{"text": "snippet", "source_url": "https://example.com"}],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+        })
+        result = _parse_web_context_json(raw)
+        assert result is not None
+        assert result["query"] == "AI trends 2026"
+        assert len(result["snippets"]) == 1
+        assert result["provider"] == "tavily"
+
+    def test_parse_web_context_json_invalid_json(self):
+        assert _parse_web_context_json("not json") is None
+
+    def test_parse_web_context_json_non_dict(self):
+        """JSON array should be rejected (only dict accepted)."""
+        assert _parse_web_context_json("[1,2,3]") is None
+
+    def test_scenario_response_includes_web_search_context_field(self):
+        """ScenarioResponse should have web_search_context field."""
+        resp = ScenarioResponse(
+            id="test-id",
+            question="What if?",
+            status="done",
+            created_at="2026-04-07T00:00:00Z",
+            web_search_context={"query": "test", "snippets": [], "provider": "tavily",
+                                "timestamp": "2026-04-07T00:00:00Z", "cached": False},
+        )
+        assert resp.web_search_context is not None
+        assert resp.web_search_context["query"] == "test"
+
+    def test_scenario_response_web_search_context_defaults_none(self):
+        resp = ScenarioResponse(
+            id="test-id",
+            question="What if?",
+            status="done",
+            created_at="2026-04-07T00:00:00Z",
+        )
+        assert resp.web_search_context is None
+
+    def test_load_scenario_response_includes_web_search_context(self):
+        """GET /api/scenario/{id} should include web_search_context in response."""
+        engine = get_engine()
+        web_ctx = json.dumps({
+            "query": "climate 2026",
+            "snippets": [{"text": "warming accelerates", "source_url": "https://example.com"}],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T12:00:00Z",
+            "cached": False,
+        })
+        s = Scenario(question="What if climate?", web_context_json=web_ctx)
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            session.refresh(s)
+            scenario_id = s.id
+
+        from app.api.helpers import load_scenario_response
+        result = load_scenario_response(engine, scenario_id)
+        assert result is not None
+        assert result.web_search_context is not None
+        assert result.web_search_context["query"] == "climate 2026"
+        assert len(result.web_search_context["snippets"]) == 1
+
+    def test_load_scenario_response_null_web_context(self):
+        """Scenario without web_context_json should return web_search_context=None."""
+        engine = get_engine()
+        s = Scenario(question="What if no search?")
+        with Session(engine) as session:
+            session.add(s)
+            session.commit()
+            session.refresh(s)
+            scenario_id = s.id
+
+        from app.api.helpers import load_scenario_response
+        result = load_scenario_response(engine, scenario_id)
+        assert result is not None
+        assert result.web_search_context is None

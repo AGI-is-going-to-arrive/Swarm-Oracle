@@ -1,0 +1,389 @@
+# Web Search Augmented Simulation — Design Document (Final)
+
+> Status: **Aligned — pending implementation approval**
+> Date: 2026-04-07
+> Scope: Batch 2 小批交付（设计对齐 + 契约 + migration + tests + 配置）
+
+---
+
+## 0. Security Posture Declaration
+
+### Session Token (dev-only coarse gate)
+
+当前 `SESSION_SECRET` + `X-Session-Token` / `?token=` 方案是**临时开发态的全局门禁 hardening**，不是最终安全设计：
+
+- **不是 owner-aware authorization** — 所有持有同一 token 的客户端共享完整访问权限
+- **不是 IDOR 修复** — 无资源级所有权检查
+- **localStorage 存储不安全** — 对 XSS 攻击暴露
+- **WS query param token 不安全** — 会出现在服务器日志和浏览器历史中
+
+**最终 auth 方案需要**：JWT/OAuth2 + per-resource ownership + httpOnly cookie。当前方案仅用于开发/演示阶段的粗粒度访问控制。
+
+---
+
+## 1. Provider Capability Matrix
+
+### 1.1 Native Web Search Providers
+
+| Provider | Search Mechanism | BYOK Compatible |
+|----------|-----------------|-----------------|
+| **Perplexity** (pplx-api) | 内建实时搜索，返回内联引用 | Yes |
+| **Google Gemini** (with grounding) | `google_search_retrieval` tool | Yes |
+| **OpenAI** (web browsing) | `web_search` tool (仅特定 model) | Yes |
+| ~~**xAI Grok**~~ | ~~Native live-web grounding~~ | **V2** — 当前 SSRF allowlist 未包含 `api.x.ai`，V1 不实现 |
+
+### 1.2 External Search API Providers (Model-Agnostic)
+
+| Provider | Free Tier | Latency | 推荐度 |
+|----------|-----------|---------|--------|
+| **Tavily** (推荐默认) | 1000 req/mo | ~1-2s | P0 |
+| **Exa** | 1000 req/mo | ~1-3s | P1 fallback |
+| **SearXNG** (self-hosted) | 无限 | ~2-5s | P2 |
+
+**Fallback chain:** Tavily → Exa → skip (graceful degradation)
+
+### 1.3 Provider 能力探测（三层）
+
+1. **静态注册表** — `web_context.py` 中维护已知 hostname → 能力映射
+2. **运行时探测** — 对 OpenAI 等按 model 验证搜索支持
+3. **前端通告** — 后端返回 `web_search.available` 控制 toggle 显示
+
+探测失败 → toggle 隐藏，不阻断正常推演。
+
+---
+
+## 2. Architecture
+
+### 2.1 新增模块
+
+```
+backend/app/services/
+  web_context.py          # NEW — 搜索编排 + 结果格式化
+  llm_client.py           # 不改动（安全区）
+  narrator.py             # 读取 [REAL_WORLD_CONTEXT]
+  simulator.py            # 读取 [REAL_WORLD_CONTEXT]
+```
+
+### 2.2 数据流
+
+```
+InputView                    POST /api/scenario           web_context.py         External Search
+   |                              |                            |                      |
+   |-- { question,                |                            |                      |
+   |    web_search_enabled: true }|                            |                      |
+   |                              |-- fetch_web_context() ---->|                      |
+   |                              |                            |-- search(query) ---->|
+   |                              |                            |<-- WebSearchResult --|
+   |                              |<-- context block ----------|                      |
+   |                              |                            |                      |
+   |                              |-- Store: Scenario.web_context_json               |
+   |                              |-- Inject into simulator/narrator prompts          |
+   |<-- 201 scenario -------------|                            |                      |
+```
+
+> **注意**: API 路由是 `/api/scenario`（单数），不是 `/api/scenarios`。
+
+### 2.3 搜索触发逻辑
+
+搜索在场景创建时执行**一次**（Round 1 之前），不按轮次重复搜索。
+
+- Feature flag `ENABLE_WEB_SEARCH=false` 默认关闭
+- 前端 toggle **opt-in**（默认关闭），用户主动开启才搜索
+- V1 简化：开启即搜索，不做问题分类
+
+### 2.4 Prompt 注入格式
+
+```
+[REAL_WORLD_CONTEXT]
+The following real-world information was retrieved on {timestamp}:
+
+1. {snippet_1}
+   Source: {url_1}
+2. {snippet_2}
+   Source: {url_2}
+
+IMPORTANT: Use this factual context to inform your reasoning.
+If the context contradicts your prior knowledge, prefer the context.
+[/REAL_WORLD_CONTEXT]
+```
+
+注入点：
+- `narrator.py` — `_build_narration_prompt()` 前置
+- `simulator.py` — agent system prompt 前置
+
+搜索结果通过 `format_untrusted_text_block()` 包装（复用现有 guardrail）。
+
+### 2.5 错误处理
+
+搜索失败**永不阻断**推演。所有失败模式（timeout/4xx/5xx/空结果/限流）→ log warning → 正常推演。
+
+---
+
+## 3. Contract Diff
+
+### 3.1 后端 Schema (`backend/app/api/schemas.py`)
+
+```python
+# 新增字段到 CreateScenarioRequest
+class CreateScenarioRequest(BaseModel):
+    # ... existing fields ...
+    web_search_enabled: bool = False   # NEW — opt-in, 默认关闭
+```
+
+### 3.2 后端 Model (`backend/app/models/database.py`)
+
+```python
+class Scenario(SQLModel, table=True):
+    # ... existing columns ...
+    web_context_json: str | None = Field(default=None)  # NEW — JSON string of WebSearchResult
+```
+
+### 3.3 前端 Types (`frontend/src/types.ts`)
+
+```typescript
+// 新增类型
+export interface WebSearchContext {
+  query: string;
+  snippets: Array<{ text: string; source_url: string }>;
+  provider: string;
+  timestamp: string;
+  cached: boolean;
+}
+
+// 扩展 Scenario 接口
+export interface Scenario {
+  // ... existing fields ...
+  web_search_context?: WebSearchContext | null;
+}
+```
+
+### 3.4 前端 API Client (`frontend/src/api/client.ts`)
+
+```typescript
+// launchSimulation 请求体新增
+{
+  // ... existing fields ...
+  web_search_enabled?: boolean;   // opt-in, 默认 undefined/false
+}
+```
+
+### 3.5 后端 Capabilities 响应 — Server Configuration Hint
+
+**复用现有 `POST /api/health/test` 端点**（`backend/app/api/scenarios.py:350`），在其返回值中扩展 `web_search` 字段。不新增 endpoint。
+
+> **重要语义约束**: `web_search` 字段报告的是**服务端全局配置状态**（`ENABLE_WEB_SEARCH` + provider + API key 是否配齐），**不是**当前被测试的 BYOK `llm_base_url / model` 的真实搜索能力。字段名 `scope: "server"` 显式标记此限制。
+>
+> Per-provider 能力探测（例如检测 Perplexity/Gemini 是否原生支持搜索）属于 V2 范围（§1.3 layer 2: 运行时探测）。
+
+```python
+# scenarios.py api_health_test 返回值扩展
+return {
+    "server": "ok",
+    "llm": llm_status,
+    "probe": probe,
+    "web_search": {                          # NEW — server config hint
+        "scope": "server",                   # ⚠️ server-level, NOT per-provider
+        "server_enabled": True,              # ENABLE_WEB_SEARCH && (native || key configured)
+        "method": "native" | "external" | "none",
+        "provider": "tavily" | "searxng" | None,
+    },
+}
+```
+
+前端消费路径：`InputView.tsx` 中现有的 `handleTestLlm()` 已解析 `/api/health/test` 响应，从 `web_search.server_enabled` 控制 toggle 显示。前端应理解这仅表示"服务端已配置搜索"，不保证当前 BYOK provider 支持搜索——搜索实际会走服务端配置的 external provider（如 Tavily），与 LLM provider 无关。
+
+---
+
+## 4. Migration Plan
+
+### 4.1 Alembic Migration
+
+```python
+# backend/alembic/versions/013_add_web_context_json.py
+
+def upgrade():
+    op.add_column('scenario', sa.Column('web_context_json', sa.Text(), nullable=True))
+
+def downgrade():
+    op.drop_column('scenario', 'web_context_json')
+```
+
+### 4.2 Fallback Migration (database.py)
+
+在 `init_db()` 的轻量迁移列表中添加：
+
+```python
+("scenario", "web_context_json", "TEXT"),
+```
+
+### 4.3 Config 新增 (`backend/app/config.py`)
+
+```python
+class Settings(BaseSettings):
+    # ... existing ...
+    
+    # Web Search Enhancement
+    ENABLE_WEB_SEARCH: bool = False
+    WEB_SEARCH_PROVIDER: str = "tavily"
+    WEB_SEARCH_API_KEY: str = ""
+    WEB_SEARCH_MAX_RESULTS: int = 5
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
+    WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
+    SEARXNG_URL: str = "http://localhost:8888"
+```
+
+---
+
+## 5. Configuration Reference
+
+### 5.1 后端 `.env` 模板更新
+
+以下变量需要添加到 `.env.example`:
+
+```bash
+# ═══════════════════════════════════════════════════════
+# Security — Session Gate (开发态粗粒度门禁)
+# ═══════════════════════════════════════════════════════
+# 为空时跳过鉴权（本地开发默认行为）。
+# 设置后所有 REST 端点要求 X-Session-Token header，
+# WebSocket 连接要求 ?token= query param。
+# ⚠️ 这是临时开发态方案，不是最终 auth 设计。
+SESSION_SECRET=
+
+# ═══════════════════════════════════════════════════════
+# Web Search Enhancement (搜索增强推演)
+# ═══════════════════════════════════════════════════════
+# 总开关（默认关闭）
+ENABLE_WEB_SEARCH=false
+
+# 搜索提供商: tavily | exa | searxng | brave | native
+WEB_SEARCH_PROVIDER=tavily
+
+# 搜索 API Key（searxng 和 native 模式不需要）
+WEB_SEARCH_API_KEY=
+
+# SearXNG 实例地址（仅 WEB_SEARCH_PROVIDER=searxng 时使用）
+SEARXNG_URL=http://localhost:8888
+
+# 调优参数
+WEB_SEARCH_MAX_RESULTS=5
+WEB_SEARCH_TIMEOUT_SECONDS=8
+WEB_SEARCH_CACHE_TTL_SECONDS=300
+```
+
+### 5.2 前端 `.env` 模板更新
+
+```bash
+# Web Search UI toggle（默认隐藏）
+VITE_ENABLE_WEB_SEARCH=false
+```
+
+---
+
+## 6. Frontend Integration
+
+### 6.1 InputView Toggle
+
+- 放置位置：Runtime Preset 和 BYOK 之间
+- **默认关闭 (opt-in)**
+- 仅当 `VITE_ENABLE_WEB_SEARCH=true` 且后端 capabilities 返回 `available: true` 时显示
+- 探测失败/provider 不支持 → toggle 隐藏
+
+### 6.2 搜索状态指示
+
+| 状态 | 视觉 |
+|------|------|
+| `idle` | 仅 toggle，无指示 |
+| `searching` | Spinner + "正在搜索真实世界背景..." |
+| `success` | 绿色 ✓ + "{N} 条来源" |
+| `skipped` | 灰色 — + "未启用" |
+| `error` | 橙色 ⚠ + "搜索不可用，继续推演" |
+
+### 6.3 ResultView 展示
+
+`scenario.web_search_context` 非空时显示可折叠"真实世界来源"卡片。
+
+---
+
+## 7. Targeted Test Matrix
+
+### 7.1 后端单元测试 (`tests/test_web_context.py`)
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_tavily_formats_results` | Mock Tavily → WebSearchResult 字段正确 |
+| `test_format_context_block` | [REAL_WORLD_CONTEXT] 块结构正确 |
+| `test_format_context_empty` | 空 snippets → 返回空字符串 |
+| `test_format_context_sanitizes_injection` | 搜索结果含 prompt injection → 被 guardrail 包装 |
+| `test_fetch_timeout` | 8s 超时 → 返回 None |
+| `test_fetch_api_error` | 500 → 返回 None |
+| `test_cache_hit` | 相同 query 命中缓存 |
+| `test_provider_detection_perplexity` | perplexity URL → NativeSearchProvider |
+| `test_fallback_chain` | 主 provider 失败 → fallback → 返回结果 |
+
+### 7.2 后端集成测试 (`tests/test_web_context_integration.py`)
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_create_scenario_with_search` | POST `/api/scenario` + `web_search_enabled=true` → `web_context_json` 存储 |
+| `test_create_scenario_search_failure` | Mock 超时 → 场景正常创建，无 context |
+| `test_create_scenario_search_disabled` | `web_search_enabled=false` → 不调用搜索 |
+| `test_narrator_includes_context` | narrator prompt 含 `[REAL_WORLD_CONTEXT]` |
+| `test_simulator_includes_context` | agent prompt 含 `[REAL_WORLD_CONTEXT]` |
+
+### 7.3 前端单元测试
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_toggle_hidden_flag_off` | `VITE_ENABLE_WEB_SEARCH=false` → 不渲染 |
+| `test_toggle_opt_in_default_off` | toggle 默认关闭状态 |
+| `test_toggle_sends_flag` | 开启 → 请求含 `web_search_enabled: true` |
+| `test_result_shows_sources` | `web_search_context` 非空 → 显示来源卡 |
+
+### 7.4 回归测试
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_existing_scenarios_unaffected` | 旧场景无 `web_context_json` → 正常加载 |
+| `test_search_disabled_no_side_effects` | 关闭状态 → 零搜索 API 调用 |
+| `test_session_token_compat` | SESSION_SECRET 启用 → 搜索请求携带 token |
+
+---
+
+## 8. Implementation Order
+
+**Batch 2 实施顺序（需逐步审批）：**
+
+1. **契约落地**（本小批）
+   - Alembic migration `013_add_web_context_json`
+   - `schemas.py` + `types.ts` 同步
+   - `config.py` 新增 web search 配置项
+   - `.env.example` 更新
+   
+2. **后端模块**
+   - `web_context.py` + Tavily provider
+   - `narrator.py` / `simulator.py` context 注入
+   - 单元 + 集成测试
+
+3. **前端 toggle + 状态 UI**
+   - InputView toggle (opt-in)
+   - 搜索状态指示
+   - API client 扩展
+   - 前端单元测试
+
+4. **ResultView 展示**
+   - "真实世界来源" 卡片
+   - E2E 测试
+
+5. **Multi-provider + 能力探测**（V2）
+   - Exa / SearXNG provider
+   - Native search (Perplexity/Gemini/OpenAI)
+   - 探测 API
+
+---
+
+## 9. Open Questions
+
+1. 搜索结果是否跨分支共享？当前设计：是（scenario 级存储）
+2. 用户是否能在推演前预览搜索结果？当前设计：否（V2 考虑）
+3. 缓存范围：in-memory `cachetools.TTLCache`（V1）vs Redis（V2）
