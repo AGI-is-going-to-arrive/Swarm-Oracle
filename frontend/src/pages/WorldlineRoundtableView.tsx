@@ -119,6 +119,21 @@ export default function WorldlineRoundtableView() {
   const [selectedWitness, setSelectedWitness] = useState<RoundtableWitnessSelection | null>(null);
   const [editingRepresentatives, setEditingRepresentatives] = useState(false);
   const [launchingRoom, setLaunchingRoom] = useState(false);
+  const [showMobileRoster, setShowMobileRoster] = useState(false);
+  const mobileRosterTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileRosterDialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMobileRoster) return;
+    const dialog = mobileRosterDialogRef.current;
+    if (dialog) dialog.focus();
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowMobileRoster(false); };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      mobileRosterTriggerRef.current?.focus();
+    };
+  }, [showMobileRoster]);
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
   const [briefCopied, setBriefCopied] = useState(false);
@@ -527,6 +542,18 @@ export default function WorldlineRoundtableView() {
       };
     });
   }, [activeThread, defaultThreadId, effectiveSnapshot?.memory_partition_id, effectiveSnapshot?.turns, isZh, participantsById, t]);
+
+  const phaseList = useMemo(() => {
+    const seen = new Set<string>();
+    const phases: string[] = [];
+    for (const turn of currentTurns) {
+      if (turn.phase && !seen.has(turn.phase)) {
+        seen.add(turn.phase);
+        phases.push(turn.phase);
+      }
+    }
+    return phases;
+  }, [currentTurns]);
 
   const sortedDrafts = useMemo(
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
@@ -1503,6 +1530,10 @@ export default function WorldlineRoundtableView() {
       {!loading && !error && effectiveSnapshot && !showRepresentativePicker && (
         <div className="worldline-roundtable-shell">
           <aside className="worldline-roundtable-sidebar">
+            <details className="worldline-roundtable-sidebar__collapsible" aria-label={isZh ? '参与者详情' : 'Participant details'}>
+              <summary className="worldline-roundtable-sidebar__summary">
+                <span>{isZh ? `${representatives.length} 位代表 · 展开详情` : `${representatives.length} reps · Expand details`}</span>
+              </summary>
             <section
               className="worldline-roundtable-card worldline-roundtable-card--summary"
               style={{ backgroundImage: `url(${ORACLE_UI_ASSETS.roundtablePanel})` }}
@@ -1675,9 +1706,21 @@ export default function WorldlineRoundtableView() {
                 </div>
               </section>
             ) : null}
+            </details>
           </aside>
 
           <section className="worldline-roundtable-main">
+            {effectiveResult?.summary && (
+              <section className="worldline-roundtable-synthesis">
+                <h2 className="worldline-roundtable-synthesis__title">{effectiveResult.summary}</h2>
+                {effectiveResult.next_move && (
+                  <p className="worldline-roundtable-synthesis__next-move">{effectiveResult.next_move}</p>
+                )}
+                {effectiveResult.archivist_note && (
+                  <p className="worldline-roundtable-synthesis__note">{effectiveResult.archivist_note}</p>
+                )}
+              </section>
+            )}
             <div className="ending-chat-transcript-header worldline-roundtable-transcript-header">
               <div>
                 <h3>{isZh ? '圆桌记录' : 'Roundtable transcript'}</h3>
@@ -1695,6 +1738,25 @@ export default function WorldlineRoundtableView() {
                 )}
               </div>
             </div>
+
+            {phaseList.length > 1 && (
+              <nav className="roundtable-phase-nav" aria-label={isZh ? '阶段导航' : 'Phase navigation'}>
+                {phaseList.map((phase) => (
+                  <button
+                    key={phase}
+                    type="button"
+                    className="roundtable-phase-nav__pill"
+                    onClick={() => {
+                      const slug = phase.replace(/\s+/g, '-').toLowerCase();
+                      const target = transcriptListRef.current?.querySelector(`#phase-${CSS.escape(slug)}`);
+                      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                  >
+                    {phase}
+                  </button>
+                ))}
+              </nav>
+            )}
 
             {threadList.length > 0 && (
               <div className="ending-chat-thread-rail" role="tablist" aria-label={isZh ? '圆桌线程' : 'Roundtable threads'}>
@@ -1749,6 +1811,17 @@ export default function WorldlineRoundtableView() {
                 onFollowQuote={handleFollowQuote}
                 onQuoteThread={handleQuoteThread}
               />
+
+            <button
+              ref={mobileRosterTriggerRef}
+              type="button"
+              className="roundtable-mobile-roster-trigger"
+              aria-expanded={showMobileRoster}
+              aria-controls="mobile-roster-dialog"
+              onClick={() => setShowMobileRoster(true)}
+            >
+              {isZh ? `${participants.length} 位参与者` : `${participants.length} participants`}
+            </button>
 
             <div className="ending-chat-composer worldline-roundtable-composer">
               <div className="ending-chat-composer__row">
@@ -1855,6 +1928,48 @@ export default function WorldlineRoundtableView() {
               </div>
             </div>
           </section>
+        </div>
+      )}
+
+      {showMobileRoster && (
+        <div
+          className="roundtable-mobile-roster-overlay"
+          onClick={() => setShowMobileRoster(false)}
+        >
+          <div
+            ref={mobileRosterDialogRef}
+            id="mobile-roster-dialog"
+            className="roundtable-mobile-roster-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-roster-title"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="roundtable-mobile-roster-modal__header">
+              <h3 id="mobile-roster-title">{isZh ? '参与者' : 'Participants'}</h3>
+              <button type="button" onClick={() => setShowMobileRoster(false)} aria-label={isZh ? '关闭' : 'Close'}>✕</button>
+            </div>
+            <div className="worldline-roundtable-roster">
+              {participants.map((participant) => {
+                const branch = participant.source_branch_id ? branchesById.get(participant.source_branch_id) : null;
+                return (
+                  <div key={participant.id} className={`worldline-roundtable-seat ${participant.role_slot === 'archivist' ? 'is-archivist' : ''}`}>
+                    <img src={getParticipantSprite(participant)} alt="" aria-hidden="true" />
+                    <div className="worldline-roundtable-seat__copy">
+                      <strong>{participant.display_name}</strong>
+                      <span>
+                        {participant.role_slot === 'archivist'
+                          ? t('roundtable.role_archivist')
+                          : (branch?.title ?? t('roundtable.role_representative'))}
+                      </span>
+                      {branch && <small>{Math.round((branch.probability ?? 0) * 100)}%</small>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
     </div>

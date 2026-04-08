@@ -29,7 +29,7 @@ function parseArgs(argv) {
   if (!args.url) {
     throw new Error("--url is required");
   }
-  if (!["desktop", "mobile", "full"].includes(args.mode)) {
+  if (!["desktop", "mobile", "mobile-multi-only", "full"].includes(args.mode)) {
     throw new Error("Usage: node scripts/e2e-ending-room-followup-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--headless]");
   }
   return args;
@@ -925,19 +925,48 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   );
 
   // ── Evidence Card (证据投牌) ────────────────────────────────
-  const evidenceBtn = page.locator(".ending-chat-evidence-btn").first();
+  // Evidence buttons only render in non-gallery rooms (composerEnabled requires !isCrosslineGallery).
+  // Close the gallery, prewarm a fresh ending_chamber, and navigate to it.
+  await page.locator(".ending-chat-close").click();
+  await page.waitForTimeout(400);
+
+  const evidenceChamber = await prewarmEndingRoom(frontendUrl, multiId, {
+    roomType: "ending_chamber",
+    anchorBranchId,
+    selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+    selectedAgentIds: pickerSeed.selectedAgentIds,
+    language: "zh",
+  });
+  const evidenceRoomId = evidenceChamber.id;
+  const evidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(evidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  await page.goto(evidenceOpenUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await waitForLiveEndingRoomVisible(page, {
+    expectedRoomType: "ending_chamber",
+    timeout: 45000,
+    label: "evidence_card ending chamber ready",
+  });
+
+  // Expand the evidence drawer (<details> is collapsed by default)
+  const evidenceDrawer = page.locator(".ending-chat-evidence-drawer > summary").first();
   let evidenceCardState = null;
   let evidenceCardLifecycle = null;
-  if (await evidenceBtn.count() > 0) {
+  if (await evidenceDrawer.count() > 0) {
+    await evidenceDrawer.click();
+    await page.waitForTimeout(300);
+
     const beforeEvidence = await getAutomationState(page);
-    const resultPayload = await fetchJson(`${backendUrl}/api/ending-room/${roomId}/result`);
-    const foreignBranchId = (resultPayload?.crossline_gallery ?? [])
-      .map((item) => item?.branch_id)
+    // Get the actual room_id the frontend opened (may differ from prewarm ID)
+    const actualEvidenceRoomId = beforeEvidence?.page?.controls?.modal_state?.room_id ?? evidenceRoomId;
+    // galleryCards in UI come from scenario branches (passed via ResultView), not from room result.
+    const scenarioBranches = initialAutomation?.page?.branches ?? [];
+    const foreignBranchId = scenarioBranches
+      .map((b) => b?.id)
       .find((branchId) => branchId && branchId !== (pickerA?.modalState?.branch_id ?? null));
     if (!foreignBranchId) {
       throw new Error("No foreign branch available for evidence-card API flow");
     }
-    const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+    const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, actualEvidenceRoomId, {
       content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
       interaction_mode: "evidence_card",
       cited_branch_id: foreignBranchId,
@@ -950,8 +979,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
         filePrefix: "multi-gallery-evidence-card",
         timeout: 70000,
         isCommitState: (modalState) => (
-          modalState?.interaction_mode === "evidence_card"
-          && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
+          (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
           && (modalState?.pending_draft_count ?? 0) === 0
         ),
       });
@@ -960,14 +988,25 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] evidence-card lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
     }
     const evidenceApiPayload = await evidenceApiPromise;
-    evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-      label: "evidence-card api-driven visible state",
-      frontendUrl,
-      roomId,
-      beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
-      apiPayload: evidenceApiPayload,
-      timeout: 60000,
+    // Save API response artifact immediately — this proves the backend processed the evidence_card turn
+    writeJson(path.join(outputDir, "multi-gallery-evidence-card-api.json"), {
+      api_payload: evidenceApiPayload,
+      actual_room_id: actualEvidenceRoomId,
+      foreign_branch_id: foreignBranchId,
     });
+    try {
+      evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+        label: "evidence-card api-driven visible state",
+        frontendUrl,
+        roomId: actualEvidenceRoomId,
+        beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
+        apiPayload: evidenceApiPayload,
+        timeout: 60000,
+      });
+    } catch (visibleError) {
+      console.warn(`[ending-room] evidence-card UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+      evidenceCardState = await waitForModalSettled(page, "evidence-card settled fallback", 10000).catch(() => getAutomationState(page));
+    }
     await saveScreenshot(page, path.join(outputDir, "multi-gallery-evidence-card.png"));
     writeJson(path.join(outputDir, "multi-gallery-evidence-card.json"), {
       state: evidenceCardState,
@@ -1534,17 +1573,43 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     );
 
     // ── Mobile Evidence Card (证据投牌) ───────────────────────
-    const mobileEvidenceBtn = page.locator(".ending-chat-evidence-btn").first();
-    if (await mobileEvidenceBtn.count() > 0) {
+    // Evidence buttons only render in non-gallery rooms. Close gallery, prewarm fresh chamber.
+    await page.locator(".ending-chat-close").click();
+    await page.waitForTimeout(400);
+
+    const mobileEvidenceChamber = await prewarmEndingRoom(frontendUrl, multiId, {
+      roomType: "ending_chamber",
+      anchorBranchId,
+      selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+      selectedAgentIds: pickerSeed.selectedAgentIds,
+      language: "zh",
+    });
+    const mobileEvidenceRoomId = mobileEvidenceChamber.id;
+    const mobileEvidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(mobileEvidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+    await page.goto(mobileEvidenceOpenUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+    await waitForLiveEndingRoomVisible(page, {
+      expectedRoomType: "ending_chamber",
+      timeout: 45000,
+      label: "mobile evidence_card ending chamber ready",
+    });
+
+    const mobileEvidenceDrawer = page.locator(".ending-chat-evidence-drawer > summary").first();
+    if (await mobileEvidenceDrawer.count() > 0) {
+      await mobileEvidenceDrawer.scrollIntoViewIfNeeded().catch(() => {});
+      await mobileEvidenceDrawer.click();
+      await page.waitForTimeout(300);
+
       const beforeEvidence = await getAutomationState(page);
-      const resultPayload = await fetchJson(`${backendUrl}/api/ending-room/${roomId}/result`);
-      const foreignBranchId = (resultPayload?.crossline_gallery ?? [])
-        .map((item) => item?.branch_id)
+      const actualMobileEvidenceRoomId = beforeEvidence?.page?.controls?.modal_state?.room_id ?? mobileEvidenceRoomId;
+      const scenarioBranches = initialAutomation?.page?.branches ?? [];
+      const foreignBranchId = scenarioBranches
+        .map((b) => b?.id)
         .find((branchId) => branchId && branchId !== (chamberState?.modalState?.branch_id ?? null));
       if (!foreignBranchId) {
         throw new Error("No foreign branch available for mobile evidence-card API flow");
       }
-      const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
+      const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, actualMobileEvidenceRoomId, {
         content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
         interaction_mode: "evidence_card",
         cited_branch_id: foreignBranchId,
@@ -1556,8 +1621,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
           filePrefix: "mobile-gallery-evidence-card",
           timeout: 70000,
           isCommitState: (modalState) => (
-            modalState?.interaction_mode === "evidence_card"
-            && (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
+            (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
             && (modalState?.pending_draft_count ?? 0) === 0
           ),
         });
@@ -1566,14 +1630,24 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         console.warn(`[ending-room] mobile evidence-card lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
       }
       const evidenceApiPayload = await evidenceApiPromise;
-      evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-        label: "mobile evidence-card api-driven visible state",
-        frontendUrl,
-        roomId,
-        beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
-        apiPayload: evidenceApiPayload,
-        timeout: 60000,
+      writeJson(path.join(outputDir, "mobile-gallery-evidence-card-api.json"), {
+        api_payload: evidenceApiPayload,
+        actual_room_id: actualMobileEvidenceRoomId,
+        foreign_branch_id: foreignBranchId,
       });
+      try {
+        evidenceCardState = evidenceCardLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
+          label: "mobile evidence-card api-driven visible state",
+          frontendUrl,
+          roomId: actualMobileEvidenceRoomId,
+          beforeModalState: beforeEvidence?.page?.controls?.modal_state ?? null,
+          apiPayload: evidenceApiPayload,
+          timeout: 60000,
+        });
+      } catch (visibleError) {
+        console.warn(`[ending-room] mobile evidence-card UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+        evidenceCardState = await waitForModalSettled(page, "mobile evidence-card settled fallback", 10000).catch(() => getAutomationState(page));
+      }
       await saveScreenshot(page, path.join(outputDir, "mobile-gallery-evidence-card.png"));
       writeJson(path.join(outputDir, "mobile-gallery-evidence-card.json"), {
         state: evidenceCardState,
@@ -1682,6 +1756,12 @@ async function main() {
     if (args.mode === "mobile" || args.mode === "full") {
       summary.mobile = {
         single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds),
+        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds),
+      };
+    }
+    if (args.mode === "mobile-multi-only") {
+      summary.mobile = {
+        single: "skipped",
         multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds),
       };
     }

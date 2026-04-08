@@ -1,82 +1,98 @@
-.oracle-skin {
-  --oracle-accent: rgba(217, 181, 108, 0.92);
-  --oracle-accent-soft: rgba(217, 181, 108, 0.14);
-  --oracle-aura: rgba(196, 160, 88, 0.12);
+/* Oracle skin tokens: bare selectors removed (dead code — EndingChatModal.css owns the unscoped definitions).
+   Roundtable uses scoped overrides below for light-mode editorial palette. */
+.worldline-roundtable-view.oracle-skin {
+  --oracle-accent: oklch(55% 0.12 60);
+  --oracle-accent-soft: oklch(55% 0.12 60 / 0.08);
+  --oracle-aura: oklch(55% 0.12 60 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--law {
+  --oracle-accent: oklch(50% 0.14 250);
+  --oracle-accent-soft: oklch(50% 0.14 250 / 0.08);
+  --oracle-aura: oklch(50% 0.14 250 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--governance {
+  --oracle-accent: oklch(52% 0.12 225);
+  --oracle-accent-soft: oklch(52% 0.12 225 / 0.08);
+  --oracle-aura: oklch(52% 0.12 225 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--faith {
+  --oracle-accent: oklch(58% 0.14 85);
+  --oracle-accent-soft: oklch(58% 0.14 85 / 0.08);
+  --oracle-aura: oklch(58% 0.14 85 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--empire {
+  --oracle-accent: oklch(55% 0.16 35);
+  --oracle-accent-soft: oklch(55% 0.16 35 / 0.08);
+  --oracle-aura: oklch(55% 0.16 35 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--war {
+  --oracle-accent: oklch(52% 0.16 20);
+  --oracle-accent-soft: oklch(52% 0.16 20 / 0.08);
+  --oracle-aura: oklch(52% 0.16 20 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--industry {
+  --oracle-accent: oklch(58% 0.12 72);
+  --oracle-accent-soft: oklch(58% 0.12 72 / 0.08);
+  --oracle-aura: oklch(58% 0.12 72 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--trade {
+  --oracle-accent: oklch(50% 0.14 150);
+  --oracle-accent-soft: oklch(50% 0.14 150 / 0.08);
+  --oracle-aura: oklch(50% 0.14 150 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--frontier {
+  --oracle-accent: oklch(50% 0.12 190);
+  --oracle-accent-soft: oklch(50% 0.12 190 / 0.08);
+  --oracle-aura: oklch(50% 0.12 190 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--ecology {
+  --oracle-accent: oklch(48% 0.14 145);
+  --oracle-accent-soft: oklch(48% 0.14 145 / 0.08);
+  --oracle-aura: oklch(48% 0.14 145 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--survival {
+  --oracle-accent: oklch(52% 0.12 120);
+  --oracle-accent-soft: oklch(52% 0.12 120 / 0.08);
+  --oracle-aura: oklch(52% 0.12 120 / 0.04);
+}
+.worldline-roundtable-view.oracle-skin--mythic {
+  --oracle-accent: oklch(52% 0.10 285);
+  --oracle-accent-soft: oklch(52% 0.10 285 / 0.08);
+  --oracle-aura: oklch(52% 0.10 285 / 0.04);
 }
 
-.oracle-skin--law {
-  --oracle-accent: rgba(124, 166, 255, 0.94);
-  --oracle-accent-soft: rgba(124, 166, 255, 0.16);
-  --oracle-aura: rgba(124, 166, 255, 0.14);
+/* Hotseat + overflow badge tokens */
+.worldline-roundtable-view {
+  --hotseat-border: oklch(65% 0.16 350);
+  --hotseat-border-soft: oklch(75% 0.12 350);
+  --hotseat-text: oklch(50% 0.16 350);
+  --badge-overflow-border: oklch(70% 0.08 80 / 0.3);
+  --badge-overflow-text: oklch(45% 0.08 80);
 }
 
-.oracle-skin--governance {
-  --oracle-accent: rgba(114, 191, 223, 0.94);
-  --oracle-accent-soft: rgba(114, 191, 223, 0.16);
-  --oracle-aura: rgba(114, 191, 223, 0.14);
+/* Localized archive-chip base — independent of ResultView.css */
+.worldline-roundtable-view .archive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
 }
-
-.oracle-skin--faith {
-  --oracle-accent: rgba(230, 204, 122, 0.94);
-  --oracle-accent-soft: rgba(230, 204, 122, 0.16);
-  --oracle-aura: rgba(230, 204, 122, 0.14);
-}
-
-.oracle-skin--empire {
-  --oracle-accent: rgba(221, 132, 98, 0.94);
-  --oracle-accent-soft: rgba(221, 132, 98, 0.16);
-  --oracle-aura: rgba(221, 132, 98, 0.14);
-}
-
-.oracle-skin--war {
-  --oracle-accent: rgba(214, 104, 88, 0.94);
-  --oracle-accent-soft: rgba(214, 104, 88, 0.16);
-  --oracle-aura: rgba(214, 104, 88, 0.15);
-}
-
-.oracle-skin--industry {
-  --oracle-accent: rgba(215, 162, 92, 0.94);
-  --oracle-accent-soft: rgba(215, 162, 92, 0.16);
-  --oracle-aura: rgba(215, 162, 92, 0.14);
-}
-
-.oracle-skin--trade {
-  --oracle-accent: rgba(108, 205, 168, 0.92);
-  --oracle-accent-soft: rgba(108, 205, 168, 0.15);
-  --oracle-aura: rgba(108, 205, 168, 0.13);
-}
-
-.oracle-skin--frontier {
-  --oracle-accent: rgba(110, 214, 212, 0.92);
-  --oracle-accent-soft: rgba(110, 214, 212, 0.15);
-  --oracle-aura: rgba(110, 214, 212, 0.13);
-}
-
-.oracle-skin--ecology {
-  --oracle-accent: rgba(124, 198, 118, 0.92);
-  --oracle-accent-soft: rgba(124, 198, 118, 0.14);
-  --oracle-aura: rgba(124, 198, 118, 0.13);
-}
-
-.oracle-skin--survival {
-  --oracle-accent: rgba(176, 198, 108, 0.92);
-  --oracle-accent-soft: rgba(176, 198, 108, 0.14);
-  --oracle-aura: rgba(176, 198, 108, 0.13);
-}
-
-.oracle-skin--mythic {
-  --oracle-accent: rgba(160, 174, 208, 0.94);
-  --oracle-accent-soft: rgba(160, 174, 208, 0.16);
-  --oracle-aura: rgba(160, 174, 208, 0.15);
+.worldline-roundtable-view .archive-chip img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
 }
 
 .worldline-roundtable-view {
   box-sizing: border-box;
   min-height: 100vh;
   padding: 24px;
-  background:
-    radial-gradient(circle at top, var(--oracle-aura), transparent 38%),
-    linear-gradient(180deg, rgba(17, 22, 32, 0.98), rgba(12, 15, 22, 1));
+  background: var(--bg-base);
   transition: background 0.6s ease-in-out;
 }
 
@@ -88,14 +104,12 @@
   gap: 16px;
   margin-bottom: 24px;
   padding: 20px 22px;
-  border: 1px solid rgba(217, 181, 108, 0.28);
+  border: 1px solid var(--border-default);
   border-radius: 24px;
-  background:
-    linear-gradient(180deg, rgba(14, 18, 28, 0.94), rgba(14, 18, 28, 0.92)),
-    var(--oracle-profile-frame);
-  background-size: auto, 100% 100%;
+  background: radial-gradient(circle at top left, var(--oracle-aura), transparent 34%), var(--bg-surface);
+  background-size: auto, auto;
   background-position: center, center;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
@@ -108,8 +122,8 @@
     radial-gradient(circle at 16% 18%, color-mix(in srgb, var(--oracle-accent-soft) 90%, transparent), transparent 26%),
     radial-gradient(circle at 86% 14%, color-mix(in srgb, var(--oracle-aura) 92%, transparent), transparent 24%),
     linear-gradient(128deg, transparent 0 42%, color-mix(in srgb, var(--oracle-accent-soft) 42%, transparent) 52%, transparent 64% 100%);
-  mix-blend-mode: screen;
-  opacity: 0.42;
+  mix-blend-mode: multiply;
+  opacity: 0.06;
   animation: oracle-atmosphere-drift 18s ease-in-out infinite;
 }
 
@@ -136,12 +150,12 @@
 .worldline-roundtable-hero__copy h1 {
   margin: 0 0 6px;
   font-size: clamp(2rem, 3vw, 3rem);
-  color: rgba(236, 233, 227, 0.96);
+  color: var(--text-primary);
 }
 
 .worldline-roundtable-hero__copy p {
   margin: 0;
-  color: rgba(236, 233, 227, 0.78);
+  color: var(--text-secondary);
 }
 
 .worldline-roundtable-hero__kicker {
@@ -152,10 +166,10 @@
   color: var(--oracle-accent);
 }
 
-.archive-chip--profile {
-  border-color: color-mix(in oklab, var(--oracle-accent) 34%, rgba(217, 181, 108, 0.22));
-  background: color-mix(in srgb, var(--oracle-accent-soft) 88%, rgba(12, 16, 24, 0.62));
-  color: rgba(244, 240, 231, 0.94);
+.worldline-roundtable-view .archive-chip--profile {
+  border-color: color-mix(in oklab, var(--oracle-accent) 28%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent) 10%, var(--bg-surface));
+  color: var(--text-primary);
 }
 
 .worldline-roundtable-theme-strip {
@@ -170,9 +184,9 @@
   align-items: center;
   padding: 7px 11px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--oracle-accent) 32%, rgba(217, 181, 108, 0.18));
-  background: color-mix(in srgb, var(--oracle-accent-soft) 78%, rgba(10, 13, 20, 0.72));
-  color: rgba(244, 240, 231, 0.92);
+  border: 1px solid color-mix(in oklab, var(--oracle-accent) 24%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent) 8%, var(--bg-surface));
+  color: var(--text-secondary);
   font-size: 0.74rem;
   line-height: 1.2;
   animation: oracle-chip-float 5.8s ease-in-out infinite;
@@ -199,12 +213,10 @@
   gap: 14px;
   min-height: 100%;
   padding: 18px;
-  border: 1px solid rgba(217, 181, 108, 0.26);
+  border: 1px solid var(--border-default);
   border-radius: 22px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--oracle-accent-soft) 40%, transparent), transparent 34%),
-    linear-gradient(180deg, rgba(10, 13, 20, 0.28), rgba(10, 13, 20, 0.9)),
-    rgba(18, 22, 31, 0.92);
+  background: color-mix(in oklab, var(--oracle-accent) 3%, var(--bg-surface)) !important;
+  background-image: none !important;
   background-position: center;
   background-size: cover;
   overflow: hidden;
@@ -215,8 +227,8 @@
   position: absolute;
   inset: auto 18px 0;
   height: 16px;
-  background: linear-gradient(90deg, transparent, var(--oracle-accent-soft), transparent);
-  opacity: 0.6;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--oracle-accent) 18%, transparent), transparent);
+  opacity: 0.4;
 }
 
 .worldline-roundtable-hero__stage > * {
@@ -234,16 +246,18 @@
 .worldline-roundtable-hero__stage-head > div,
 .worldline-roundtable-hero__stage-note {
   padding: 10px 12px;
-  border-radius: 16px;
-  background: rgba(11, 14, 21, 0.7);
-  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  backdrop-filter: none;
+  border: 1px solid var(--border-subtle);
 }
 
 .worldline-roundtable-hero__stage-badge {
   width: 58px;
   height: 58px;
   object-fit: contain;
-  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.24));
+  filter: drop-shadow(0 4px 8px oklch(0% 0 0 / 0.08));
+  opacity: 0.7;
 }
 
 .worldline-roundtable-hero__stage-kicker {
@@ -251,12 +265,12 @@
   font-size: 0.72rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(217, 181, 108, 0.86);
+  color: var(--oracle-accent);
 }
 
 .worldline-roundtable-hero__stage-head strong {
   display: block;
-  color: rgba(244, 240, 231, 0.98);
+  color: var(--text-primary);
   font-size: 1.02rem;
   line-height: 1.45;
 }
@@ -270,28 +284,17 @@
 .worldline-roundtable-hero__stage-metrics span {
   padding: 7px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(217, 181, 108, 0.18);
-  background: rgba(12, 16, 24, 0.56);
-  color: rgba(236, 233, 227, 0.74);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
   font-size: 0.76rem;
 }
 
 .worldline-roundtable-hero__stage-note {
   margin: 0 0 8px;
   max-width: 56ch;
-  color: rgba(236, 233, 227, 0.78);
+  color: var(--text-secondary);
   line-height: 1.6;
-}
-
-.worldline-roundtable-hero .btn {
-  border-color: rgba(217, 181, 108, 0.28);
-  background: rgba(20, 26, 37, 0.88);
-  color: rgba(236, 233, 227, 0.92);
-}
-
-.worldline-roundtable-hero .btn:hover {
-  border-color: rgba(217, 181, 108, 0.48);
-  background: rgba(28, 35, 48, 0.96);
 }
 
 .worldline-roundtable-shell {
@@ -309,10 +312,10 @@
 
 .worldline-roundtable-card {
   padding: 18px;
-  border: 1px solid rgba(217, 181, 108, 0.2);
+  border: 1px solid var(--border-default);
   border-radius: 20px;
-  background: rgba(18, 22, 31, 0.9);
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
 }
 
 .worldline-roundtable-card--summary {
@@ -320,6 +323,7 @@
   background-position: center;
   background-size: cover;
   overflow: hidden;
+  background-image: none !important;
 }
 
 .worldline-roundtable-view.is-live-room .worldline-roundtable-card--summary {
@@ -334,8 +338,7 @@
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    linear-gradient(180deg, rgba(9, 12, 19, 0.2), rgba(9, 12, 19, 0.86) 44%, rgba(9, 12, 19, 0.96));
+  background: radial-gradient(circle at top left, var(--oracle-aura), transparent 40%);
 }
 
 .worldline-roundtable-card--summary > * {
@@ -344,17 +347,16 @@
 }
 
 .worldline-roundtable-card__banner {
-  display: block;
-  width: min(280px, 100%);
-  margin: -4px auto 14px;
+  display: none;
 }
 
 .worldline-roundtable-card--summary h2,
 .worldline-roundtable-card--summary p {
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(14, 18, 28, 0.76);
-  backdrop-filter: blur(8px);
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  color: var(--text-primary);
 }
 
 .worldline-roundtable-summary__top {
@@ -371,7 +373,7 @@
   font-size: 0.72rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: rgba(217, 181, 108, 0.82);
+  color: var(--oracle-accent);
 }
 
 .worldline-roundtable-summary__actions {
@@ -383,13 +385,13 @@
 
 .worldline-roundtable-card--summary h2 {
   margin: 0 0 10px;
-  color: rgba(236, 233, 227, 0.96);
+  color: var(--text-primary);
   line-height: 1.25;
 }
 
 .worldline-roundtable-card--summary p {
   margin: 0;
-  color: rgba(236, 233, 227, 0.8);
+  color: var(--text-secondary);
 }
 
 .worldline-roundtable-view.is-live-room .worldline-roundtable-card--summary p {
@@ -424,7 +426,7 @@
 
 .worldline-roundtable-picker__hint {
   margin: 8px 0 0;
-  color: rgba(236, 233, 227, 0.72);
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
@@ -438,10 +440,10 @@
 
 .worldline-roundtable-picker__mode-pill,
 .worldline-roundtable-picker-branch__toggle {
-  border: 1px solid rgba(217, 181, 108, 0.18);
+  border: 1px solid var(--border-default);
   border-radius: 999px;
-  background: rgba(12, 16, 24, 0.56);
-  color: rgba(236, 233, 227, 0.82);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   padding: 7px 11px;
   font-size: 0.78rem;
   line-height: 1.1;
@@ -449,9 +451,9 @@
 
 .worldline-roundtable-picker__mode-pill.is-active,
 .worldline-roundtable-picker-branch__toggle.is-active {
-  border-color: rgba(217, 181, 108, 0.48);
-  background: rgba(217, 181, 108, 0.12);
-  color: rgba(244, 240, 231, 0.94);
+  border-color: var(--oracle-accent);
+  background: color-mix(in oklab, var(--oracle-accent) 10%, var(--bg-surface));
+  color: var(--text-primary);
 }
 
 .worldline-roundtable-picker-witness {
@@ -459,8 +461,8 @@
   gap: 10px;
   padding: 14px;
   border-radius: 18px;
-  border: 1px solid rgba(217, 181, 108, 0.14);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .worldline-roundtable-picker-witness__options {
@@ -470,7 +472,7 @@
 }
 
 .worldline-roundtable-picker__count {
-  color: rgba(236, 233, 227, 0.72);
+  color: var(--text-muted);
   font-size: 0.76rem;
 }
 
@@ -497,8 +499,8 @@
   gap: 12px;
   padding: 14px;
   border-radius: 18px;
-  border: 1px solid rgba(217, 181, 108, 0.14);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .worldline-roundtable-picker-branch.is-muted {
@@ -513,12 +515,12 @@
 }
 
 .worldline-roundtable-picker-branch__header strong {
-  color: rgba(236, 233, 227, 0.94);
+  color: var(--text-primary);
 }
 
 .worldline-roundtable-picker-branch__header span,
 .worldline-roundtable-picker-branch__header p {
-  color: rgba(236, 233, 227, 0.72);
+  color: var(--text-secondary);
 }
 
 .worldline-roundtable-picker-branch__header p {
@@ -541,8 +543,8 @@
   gap: 8px;
   padding: 12px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(217, 181, 108, 0.16);
-  background: rgba(13, 17, 25, 0.68);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
   color: inherit;
   text-align: left;
 }
@@ -553,9 +555,9 @@
 }
 
 .worldline-roundtable-picker-card.is-selected {
-  border-color: rgba(217, 181, 108, 0.6);
-  box-shadow: 0 0 0 1px rgba(217, 181, 108, 0.26);
-  background: radial-gradient(circle at top right, rgba(217, 181, 108, 0.16), transparent 45%), rgba(13, 17, 25, 0.76);
+  border-color: var(--oracle-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 22%, transparent);
+  background: color-mix(in oklab, var(--oracle-accent) 5%, var(--bg-elevated));
 }
 
 .worldline-roundtable-picker-card__title {
@@ -568,15 +570,15 @@
 .worldline-roundtable-picker-card__title span {
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(217, 181, 108, 0.14);
-  color: rgba(236, 233, 227, 0.82);
+  background: color-mix(in oklab, var(--oracle-accent) 12%, var(--bg-hover));
+  color: var(--text-secondary);
   font-size: 0.72rem;
 }
 
 .worldline-roundtable-picker-card > span,
 .worldline-roundtable-picker-card > small,
 .worldline-roundtable-picker-card > em {
-  color: rgba(236, 233, 227, 0.72);
+  color: var(--text-muted);
 }
 
 .worldline-roundtable-picker-card > em {
@@ -598,9 +600,9 @@
   align-items: start;
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid rgba(217, 181, 108, 0.16);
+  border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-surface);
   color: inherit;
   text-align: left;
   position: relative;
@@ -627,10 +629,10 @@
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 45%);
-  border: 1px solid rgba(217, 181, 108, 0.12);
+    linear-gradient(180deg, oklch(0% 0 0 / 0.02), transparent 45%);
+  border: 1px solid var(--border-subtle);
   border-radius: inherit;
-  opacity: 0.28;
+  opacity: 0.2;
   pointer-events: none;
 }
 
@@ -663,7 +665,7 @@
 .worldline-roundtable-seat span,
 .worldline-roundtable-seat small,
 .worldline-roundtable-insight p {
-  color: rgba(236, 233, 227, 0.72);
+  color: var(--text-muted);
 }
 
 .worldline-roundtable-insight__actions {
@@ -674,16 +676,14 @@
 }
 
 .worldline-roundtable-seat.is-selected {
-  border-color: rgba(217, 181, 108, 0.72);
-  box-shadow: 0 0 0 1px rgba(217, 181, 108, 0.32);
+  border-color: var(--oracle-accent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 22%, transparent);
 }
 
 .worldline-roundtable-seat.is-current-speaker {
-  border-color: rgba(233, 205, 143, 0.72);
-  background:
-    radial-gradient(circle at top right, rgba(233, 205, 143, 0.22), transparent 38%),
-    rgba(255, 255, 255, 0.05);
-  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.22);
+  border-color: var(--oracle-accent);
+  background: color-mix(in oklab, var(--oracle-accent) 6%, var(--bg-surface));
+  box-shadow: var(--shadow-card);
   transform: translateY(-1px);
   animation: oracle-speaker-pulse 2.2s ease-in-out infinite;
 }
@@ -693,13 +693,13 @@
 }
 
 .worldline-roundtable-seat.is-hotseat-target {
-  border-color: rgba(214, 120, 165, 0.6);
+  border-color: var(--hotseat-border);
   animation: oracle-speaker-pulse 2.8s ease-in-out infinite;
   animation-delay: 0.35s;
 }
 
 .worldline-roundtable-seat.is-archivist {
-  background: rgba(205, 179, 120, 0.08);
+  background: color-mix(in oklab, var(--oracle-accent) 4%, var(--bg-surface));
 }
 
 .worldline-roundtable-seat__status,
@@ -709,9 +709,9 @@
   gap: 6px;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(217, 181, 108, 0.24);
-  background: rgba(18, 22, 31, 0.72);
-  color: rgba(236, 233, 227, 0.82);
+  border: 1px solid color-mix(in oklab, var(--oracle-accent) 18%, var(--border-default));
+  background: color-mix(in oklab, var(--oracle-accent) 6%, var(--bg-surface));
+  color: var(--text-secondary);
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -719,8 +719,8 @@
 
 .worldline-roundtable-seat__status--hotseat,
 .worldline-roundtable-transcript-badge--hotseat {
-  border-color: rgba(214, 120, 165, 0.34);
-  color: rgba(244, 186, 214, 0.92);
+  border-color: var(--hotseat-border-soft);
+  color: var(--hotseat-text);
 }
 
 .worldline-roundtable-seat__metrics {
@@ -736,8 +736,8 @@
   gap: 4px;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(12, 16, 24, 0.56);
-  color: rgba(236, 233, 227, 0.72);
+  background: var(--bg-hover);
+  color: var(--text-muted);
   font-size: 0.72rem;
 }
 
@@ -745,11 +745,71 @@
   min-width: 0;
 }
 
+/* ── Synthesis-First: verdict above transcript ─────────── */
+.worldline-roundtable-synthesis {
+  padding: 20px 24px;
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  background: var(--bg-surface);
+  border-left: 3px solid var(--oracle-accent, oklch(70% 0.12 60));
+}
+
+.worldline-roundtable-synthesis__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.worldline-roundtable-synthesis__next-move {
+  margin: 8px 0 0;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.worldline-roundtable-synthesis__note {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-tertiary, rgba(0, 0, 0, 0.5));
+  font-style: italic;
+  line-height: 1.45;
+}
+
+/* ── Phase nav pill bar ─────────────────────────────────── */
+.roundtable-phase-nav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+  scrollbar-width: none;
+}
+
+.roundtable-phase-nav::-webkit-scrollbar { display: none; }
+
+.roundtable-phase-nav__pill {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 100px;
+  background: var(--bg-surface);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.15s), color var(--transition-fast, 0.15s);
+}
+
+.roundtable-phase-nav__pill:hover {
+  background: var(--oracle-accent-soft, oklch(92% 0.04 60));
+  color: var(--text-primary);
+}
+
 .worldline-roundtable-transcript-header {
   padding: 18px;
-  border: 1px solid rgba(217, 181, 108, 0.18);
+  border: 1px solid var(--border-default);
   border-radius: 18px;
-  background: rgba(18, 22, 31, 0.92);
+  background: var(--bg-surface);
 }
 
 .worldline-roundtable-transcript-list {
@@ -763,12 +823,15 @@
   border-left: 3px solid var(--speaker-color, rgba(180, 170, 155, 0.5));
 }
 
-/* Speaker color palette — matches EndingChatModal 5-hue rotation */
+/* Speaker color palette — 8-hue rotation for roundtables with 6+ agents */
 .worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="0"] { --speaker-color: oklch(65% 0.18 350); }
 .worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="1"] { --speaker-color: oklch(65% 0.15 220); }
 .worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="2"] { --speaker-color: oklch(65% 0.15 150); }
 .worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="3"] { --speaker-color: oklch(65% 0.15 80); }
 .worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="4"] { --speaker-color: oklch(65% 0.15 280); }
+.worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="5"] { --speaker-color: oklch(65% 0.15 30); }
+.worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="6"] { --speaker-color: oklch(65% 0.15 185); }
+.worldline-roundtable-transcript-list .ending-chat-bubble[data-speaker="7"] { --speaker-color: oklch(65% 0.15 315); }
 .worldline-roundtable-transcript-list .ending-chat-bubble.is-archivist { --speaker-color: var(--oracle-accent, oklch(70% 0.12 60)); }
 
 /* ── Phase dividers ────────────────────────────────────── */
@@ -845,8 +908,8 @@ h3.roundtable-phase-divider {
 }
 
 .worldline-roundtable-transcript-badge--overflow {
-  border-color: rgba(123, 98, 42, 0.22);
-  color: rgba(96, 76, 33, 0.82);
+  border-color: var(--badge-overflow-border);
+  color: var(--badge-overflow-text);
 }
 
 .worldline-roundtable-transcript-copy.is-collapsed {
@@ -857,7 +920,7 @@ h3.roundtable-phase-divider {
 }
 
 .worldline-roundtable-transcript-toggle {
-  color: rgba(96, 76, 33, 0.88);
+  color: var(--oracle-accent);
 }
 
 .worldline-roundtable-composer {
@@ -866,14 +929,24 @@ h3.roundtable-phase-divider {
 
 .worldline-roundtable-empty {
   padding: 32px;
-  border: 1px solid rgba(217, 181, 108, 0.18);
+  border: 1px solid var(--border-default);
   border-radius: 20px;
-  background: rgba(18, 22, 31, 0.9);
+  background: var(--bg-surface);
   text-align: center;
+  color: var(--text-muted);
 }
 
 .worldline-roundtable-empty--error {
-  color: #ffb3b3;
+  color: var(--color-danger);
+}
+
+/* Desktop: details wrapper is transparent, summary hidden */
+.worldline-roundtable-sidebar__collapsible {
+  display: contents;
+}
+
+.worldline-roundtable-sidebar__summary {
+  display: none;
 }
 
 @media (max-width: 980px) {
@@ -891,6 +964,33 @@ h3.roundtable-phase-divider {
 
   .worldline-roundtable-sidebar {
     order: 2;
+  }
+
+  /* Tablet: sidebar collapses to a single summary row */
+  .worldline-roundtable-sidebar__collapsible {
+    display: block;
+  }
+
+  .worldline-roundtable-sidebar__collapsible:not([open]) > :not(summary) {
+    display: none;
+  }
+
+  .worldline-roundtable-sidebar__summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    border: 1px dashed var(--border-default);
+    border-radius: 12px;
+    background: var(--bg-surface);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .worldline-roundtable-sidebar__summary::-webkit-details-marker {
+    display: none;
   }
 }
 
@@ -1019,19 +1119,19 @@ h3.roundtable-phase-divider {
     gap: 6px;
     padding: 6px 8px;
     border-radius: 14px;
-    background: rgba(11, 14, 21, 0.66);
-    border: 1px solid rgba(217, 181, 108, 0.14);
-    backdrop-filter: blur(10px);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    backdrop-filter: none;
   }
 
   .worldline-roundtable-hero__meta .archive-chip {
     padding: 4px 8px;
     font-size: 0.68rem;
-    border: 1px solid rgba(217, 181, 108, 0.18);
-    background: rgba(18, 22, 31, 0.9);
-    color: rgba(244, 240, 231, 0.92);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.36);
+    border: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    box-shadow: none;
+    text-shadow: none;
   }
 
   .worldline-roundtable-hero__meta .archive-chip:last-child {
@@ -1039,8 +1139,8 @@ h3.roundtable-phase-divider {
   }
 
   .worldline-roundtable-hero__meta .archive-chip--profile {
-    border-color: color-mix(in srgb, var(--oracle-accent) 48%, rgba(217, 181, 108, 0.22));
-    background: color-mix(in srgb, var(--oracle-accent-soft) 72%, rgba(14, 19, 28, 0.84));
+    border-color: color-mix(in oklab, var(--oracle-accent) 28%, var(--border-default));
+    background: color-mix(in oklab, var(--oracle-accent) 10%, var(--bg-surface));
   }
 
   .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__meta {
@@ -1307,9 +1407,9 @@ h3.roundtable-phase-divider {
     position: sticky;
     bottom: 0;
     z-index: 2;
-    background: linear-gradient(180deg, rgba(18, 22, 31, 0.92), rgba(18, 22, 31, 0.98));
-    border-top: 1px solid rgba(217, 181, 108, 0.16);
-    backdrop-filter: blur(12px);
+    background: linear-gradient(180deg, oklch(99% 0.002 80 / 0.92), oklch(99% 0.002 80 / 0.98));
+    border-top: 1px solid var(--border-default);
+    backdrop-filter: blur(8px);
   }
 
   .worldline-roundtable-view.is-live-room .ending-chat-mode-note {
@@ -1371,7 +1471,7 @@ h3.roundtable-phase-divider {
     radial-gradient(1.5px 1.5px at 58% 18%, var(--oracle-accent-soft), transparent),
     radial-gradient(1px 1px at 78% 45%, var(--oracle-accent-soft), transparent),
     radial-gradient(1.5px 1.5px at 92% 72%, var(--oracle-accent-soft), transparent);
-  opacity: 0.38;
+  opacity: 0.12;
   animation: oracle-idle-particles 24s ease-in-out infinite alternate;
 }
 
@@ -1399,4 +1499,68 @@ h3.roundtable-phase-divider {
   .worldline-roundtable-view::after {
     animation: none;
   }
+}
+
+/* ── Mobile roster trigger (hidden by default, shown ≤640px live-room) ── */
+.roundtable-mobile-roster-trigger {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .worldline-roundtable-view.is-live-room .roundtable-mobile-roster-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px dashed var(--border-default);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+}
+
+/* ── Mobile roster modal overlay ──────────────────────────── */
+.roundtable-mobile-roster-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.roundtable-mobile-roster-modal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-base, #fff);
+  border-radius: 18px 18px 0 0;
+  padding: 16px;
+}
+
+.roundtable-mobile-roster-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.roundtable-mobile-roster-modal__header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.roundtable-mobile-roster-modal__header button {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px 8px;
 }

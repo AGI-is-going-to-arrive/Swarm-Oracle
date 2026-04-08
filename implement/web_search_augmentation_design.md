@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Aligned — pending implementation approval**
-> Date: 2026-04-07
-> Scope: Batch 2 小批交付（设计对齐 + 契约 + migration + tests + 配置）
+> Status: **Implemented — Phase 1-5 完成，V2 未启动**
+> Date: 2026-04-07 (re-baselined)
+> Scope: Batch 2 已交付 — Tavily/SearXNG providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities
 
 ---
 

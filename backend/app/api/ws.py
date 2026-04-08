@@ -40,8 +40,13 @@ class WSManager:
 
     def __init__(self):
         self._connections: dict[str, list[WebSocket]] = defaultdict(list)
+        self._pending_auth: dict[str, int] = defaultdict(int)
         self._sequence_by_stream: dict[str, int] = defaultdict(int)
         self._manager_instance_id = uuid.uuid4().hex
+
+    def active_count(self, scenario_id: str) -> int:
+        """Count registered + pending-auth connections for limit enforcement."""
+        return len(self._connections[scenario_id]) + self._pending_auth[scenario_id]
 
     def _wrap_event(self, stream_id: str, event: dict) -> dict:
         if event.get("type") == "heartbeat":
@@ -193,7 +198,7 @@ async def run_websocket_session(
         )
         return
 
-    if len(manager._connections[scenario_id]) >= MAX_WS_PER_SCENARIO:
+    if manager.active_count(scenario_id) >= MAX_WS_PER_SCENARIO:
         logger.warning("WS rejected: scenario=%s (limit=%d reached)",
                        scenario_id, MAX_WS_PER_SCENARIO)
         await websocket.close(code=1013, reason="Too many connections")
@@ -201,10 +206,12 @@ async def run_websocket_session(
 
     # Accept the WebSocket upgrade (before auth — so we can exchange frames)
     await websocket.accept()
-    logger.info("WS accepted: scenario=%s", scenario_id)
+    manager._pending_auth[scenario_id] += 1
+    logger.info("WS accepted (pending): scenario=%s", scenario_id)
 
     # First-frame auth (when SESSION_SECRET is configured)
     if settings.SESSION_SECRET:
+        auth_passed = False
         try:
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
             if len(raw.encode("utf-8")) > 65536:
@@ -219,6 +226,7 @@ async def run_websocket_session(
             if frame.get("type") != "auth" or not token or token != settings.SESSION_SECRET:
                 await websocket.close(code=4001, reason="Unauthorized")
                 return
+            auth_passed = True
         except asyncio.TimeoutError:
             logger.info("WS auth timeout: scenario=%s", scenario_id)
             await websocket.close(code=4001, reason="Auth timeout")
@@ -229,9 +237,31 @@ async def run_websocket_session(
         except WebSocketDisconnect:
             # Client disconnected before sending auth frame — nothing to close
             return
-        await websocket.send_text(json.dumps({"type": "auth_ok"}))
+        finally:
+            if not auth_passed:
+                manager._pending_auth[scenario_id] -= 1
+                if manager._pending_auth[scenario_id] <= 0:
+                    manager._pending_auth.pop(scenario_id, None)
+        try:
+            await websocket.send_text(json.dumps({"type": "auth_ok"}))
+        except WebSocketDisconnect:
+            manager._pending_auth[scenario_id] -= 1
+            if manager._pending_auth[scenario_id] <= 0:
+                manager._pending_auth.pop(scenario_id, None)
+            return
+        except Exception as exc:
+            logger.warning("WS auth_ok send failed: scenario=%s error=%s", scenario_id, exc)
+            manager._pending_auth[scenario_id] -= 1
+            if manager._pending_auth[scenario_id] <= 0:
+                manager._pending_auth.pop(scenario_id, None)
+            with suppress(Exception):
+                await websocket.close(code=1011, reason="auth_ok delivery failed")
+            return
 
-    # Register connection AFTER auth succeeds (or when auth is disabled)
+    # Move from pending to registered
+    manager._pending_auth[scenario_id] = max(0, manager._pending_auth[scenario_id] - 1)
+    if manager._pending_auth[scenario_id] == 0:
+        manager._pending_auth.pop(scenario_id, None)
     manager._connections[scenario_id].append(websocket)
     logger.info("WS registered: scenario=%s (total=%d)",
                 scenario_id, len(manager._connections[scenario_id]))

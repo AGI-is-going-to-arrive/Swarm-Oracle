@@ -134,7 +134,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Theater Agent sprite 改为动态缩放（基于 `Math.min(width, height)`，保持 2:3 宽高比），气泡统一 16px 字号 / 220-300px 换行宽度
   - 圆桌 transcript 补充按 phase 分组的视觉分隔线和 5-hue speaker 左侧色标
   - `EndingChatModal` 修复 "Maximum update depth exceeded" 循环渲染（`onAutomationStateChange` 改用 `useRef` 稳定引用）
-  - Oracle 改写 prompt 补充双层角色化词汇提示：领域调色板（10 variants × 中英双语）+ 身份层（从 `persona_snapshot_json` 动态生成）
+  - Oracle 改写 prompt 补充双层角色化词汇提示：领域调色板（13 variants × 中英双语：imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science）+ 身份层（从 `persona_snapshot_json` 动态生成）
   - 交互动效补齐：PredictionModal / GameplayCardsModal / InterventionModal / EndingChatModal / WorldlineRoundtable 均有入场动画和微交互，全部覆盖 `prefers-reduced-motion`
 
 ## 文档入口

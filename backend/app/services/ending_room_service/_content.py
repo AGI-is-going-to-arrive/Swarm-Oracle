@@ -48,166 +48,130 @@ logger = logging.getLogger(__name__)
 
 def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> str:
     normalized = f"{role_hint or ''} {bio_hint or ''}".strip().lower()
-    if any(token in normalized for token in ("皇", "king", "queen", "emperor", "crown", "court")):
+    if any(
+        token in normalized
+        for token in (
+            "皇", "贵族", "公爵", "亲王", "王储",
+            "king", "queen", "emperor", "crown", "court",
+            "noble", "duke", "lord", "baron", "prince", "princess",
+            "regent", "viceroy",
+        )
+    ):
         return "imperial"
     if any(
         token in normalized
         for token in (
-            "将",
-            "统帅",
-            "指挥官",
-            "舰队",
-            "commander",
-            "captain",
-            "marshal",
-            "fleet",
-            "guard",
+            "将", "统帅", "指挥官", "舰队", "参谋", "军师", "元帅",
+            "commander", "captain", "marshal", "fleet", "guard",
+            "general", "warlord", "chieftain", "warrior", "admiral",
+            "colonel", "sergeant", "lieutenant",
         )
     ):
         return "field"
     if any(
         token in normalized
         for token in (
-            "银行",
-            "行长",
-            "财政",
-            "金融",
-            "清算",
-            "流动性",
-            "bank",
-            "banker",
-            "finance",
-            "treasury",
-            "settlement",
-            "liquidity",
+            "银行", "行长", "财政", "金融", "清算", "流动性",
+            "审计", "会计", "投资",
+            "bank", "banker", "finance", "treasury", "settlement", "liquidity",
+            "accountant", "auditor", "investor", "broker",
         )
     ):
         return "finance"
     if any(
         token in normalized
         for token in (
-            "摊主",
-            "商户",
-            "商贩",
-            "市场",
-            "港口",
-            "贸易",
-            "货运",
-            "vendor",
-            "merchant",
-            "market",
-            "port",
-            "trade",
-            "freight",
+            "摊主", "商户", "商贩", "市场", "港口", "贸易", "货运",
+            "店主", "掌柜", "酒馆", "农夫", "工匠", "手艺人",
+            "vendor", "merchant", "market", "port", "trade", "freight",
+            "shopkeeper", "innkeeper", "tavern", "farmer", "craftsman", "artisan",
         )
     ):
         return "market"
     if any(
         token in normalized
         for token in (
-            "祭司",
-            "祭坛",
-            "神官",
-            "修士",
-            "神谕",
-            "priest",
-            "cleric",
-            "oracle",
-            "temple",
-            "faith",
-            "ritual",
-            "covenant",
+            "祭司", "祭坛", "神官", "修士", "神谕", "僧", "和尚", "主教", "教会",
+            "priest", "cleric", "oracle", "temple", "faith", "ritual", "covenant",
+            "monk", "bishop", "cardinal", "church", "monastery", "abbey",
         )
     ):
         return "faith"
     if any(
         token in normalized
         for token in (
-            "工程",
-            "工厂",
-            "电网",
-            "产能",
-            "后勤",
-            "调度",
-            "engineer",
-            "factory",
-            "industrial",
-            "grid",
-            "throughput",
-            "logistics",
-            "plant",
+            "工程", "工厂", "电网", "产能", "后勤", "调度",
+            "技师", "矿", "工头",
+            "engineer", "factory", "industrial", "grid", "throughput",
+            "logistics", "plant",
+            "technician", "mechanic", "foreman", "miner", "mining",
         )
     ):
         return "industry"
     if any(
         token in normalized
         for token in (
-            "边疆",
-            "拓荒",
-            "殖民",
-            "轨道",
-            "补给舱",
-            "生命维持",
-            "pilot",
-            "orbital",
-            "frontier",
-            "colony",
-            "expedition",
-            "convoy",
-            "airlock",
-            "life support",
+            "边疆", "拓荒", "殖民", "轨道", "补给舱", "生命维持",
+            "宇航", "航天", "探险",
+            "pilot", "orbital", "frontier", "colony", "expedition", "convoy",
+            "airlock", "life support",
+            "astronaut", "navigator", "explorer",
         )
     ):
         return "frontier"
     if any(
         token in normalized
         for token in (
-            "避难",
-            "药品",
-            "口粮",
-            "撤离",
-            "医疗",
-            "scout",
-            "medic",
-            "refuge",
-            "ration",
-            "evacuation",
-            "shelter",
-            "survival",
+            "避难", "药品", "口粮", "撤离", "医疗",
+            "医生", "大夫", "护士",
+            "scout", "medic", "refuge", "ration", "evacuation",
+            "shelter", "survival",
+            "doctor", "physician", "surgeon", "nurse", "paramedic",
         )
     ):
         return "survival"
     if any(
         token in normalized
         for token in (
-            "史官",
-            "书记官",
-            "学者",
-            "档案",
-            "证人",
-            "scribe",
-            "scholar",
-            "historian",
-            "witness",
-            "record",
-            "ledger",
-            "clerk",
+            "史官", "书记官", "学者", "档案", "证人",
+            "scribe", "scholar", "historian", "witness", "record", "ledger", "clerk",
         )
     ):
         return "scholar"
     if any(
         token in normalized
         for token in (
-            "议长",
-            "speaker",
-            "minister",
-            "scribe",
-            "文书",
-            "ledger",
-            "council",
+            "议长", "文书", "总督", "知府", "太守", "官员", "大臣", "县令",
+            "speaker", "minister", "council",
+            "governor", "mayor", "senator", "representative",
+            "magistrate", "congressman", "alderman", "prefect",
         )
     ):
         return "civic"
+    if any(
+        token in normalized
+        for token in (
+            "外交", "大使", "使节", "使者", "领事",
+            "diplomat", "ambassador", "envoy", "consul", "emissary", "negotiator",
+        )
+    ):
+        return "diplomat"
+    if any(
+        token in normalized
+        for token in (
+            "顾问", "谋士", "谋臣", "幕僚", "参赞",
+            "advisor", "strategist", "counselor", "aide", "consultant",
+        )
+    ):
+        return "advisor"
+    if any(
+        token in normalized
+        for token in (
+            "科学", "研究员", "实验", "分析师",
+            "scientist", "researcher", "analyst", "laboratory",
+        )
+    ):
+        return "science"
     return "plain"
 
 # ── Persona Vocabulary Hints ──────────────────────────────────────
@@ -252,6 +216,18 @@ _VOCABULARY_HINTS: dict[str, dict[str, str]] = {
     "civic": {
         "zh": "用词偏好：议程、动议、记录在案、职权范围、审计、问责。程序化措辞。情绪基调：冷淡的程序正义。",  # noqa: E501
         "en": "Vocabulary: agenda, motion, on record, jurisdiction, audit, accountability. Procedural phrasing. Tone: cold due process.",  # noqa: E501
+    },
+    "diplomat": {
+        "zh": "用词偏好：照会、斡旋、条款、利害方、退让底线、立场分歧。句式迂回但精确。情绪基调：克制的压力。",  # noqa: E501
+        "en": "Vocabulary: memorandum, mediation, terms, stakeholder, red line, leverage, concession. Circuitous but precise phrasing. Tone: measured pressure.",  # noqa: E501
+    },
+    "advisor": {
+        "zh": "用词偏好：局势研判、可选项、代价、风险敞口、窗口期、变量。先摆选项再给倾向。情绪基调：冷静抽离。",  # noqa: E501
+        "en": "Vocabulary: assessment, options, cost, risk exposure, window, variable, trade-off. Options-first framing. Tone: detached clarity.",  # noqa: E501
+    },
+    "science": {
+        "zh": "用词偏好：样本量、置信区间、控制变量、复现、偏差、模型假设。数据驱动表达。情绪基调：审慎的好奇。",  # noqa: E501
+        "en": "Vocabulary: sample size, confidence interval, control variable, reproducibility, bias, model assumption. Data-driven expression. Tone: cautious curiosity.",  # noqa: E501
     },
 }
 

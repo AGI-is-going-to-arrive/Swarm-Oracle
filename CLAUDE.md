@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~55 | 46 |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~120+ | 71 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~55 | 50 文件 / 1584 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~120+ | 71 文件 / 686 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -124,11 +124,16 @@ cd backend && alembic upgrade head
 - BYOK 安全：业务入口 (scenario/debate/predictions/social) 统一要求 `base_url` 必须同时带 `api_key`，前移 400 拒绝；`/api/health/test` 是连通性探测，不做前移拒绝，返回 `200 + llm.status=error`。allowlist 校验 hostname + http(s) scheme
 - 不可信文本（搜索结果、用户输入）通过 `format_untrusted_text_block()` 包装进 fenced block，三反引号已做转义防 fence-breakout
 - WS 认证已从 query string `?token=` 迁移到首帧 auth 协议（`{"type":"auth","token":"..."}` → `{"type":"auth_ok"}`），token 不再出现在 URL 中。前端对 4001/4404 不自动重连
+- WS 连接上限 `MAX_WS_PER_SCENARIO=50` 同时计入已认证连接和 pending_auth 连接，防止未认证 socket 绕过限制
+- Oracle 角色化词汇 13 种 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science），基于 role_hint + bio_hint 子串匹配分类
+- campaign / ending-room REST 路由的 session gate 以 router 级 `dependencies` 统一注入，不再逐端点声明
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | 遗留项收口 + 文档同步 | m1/m2 WS 异常处理加固、s1 session gate 提升 router 级、s2 CSS token 提取、s3 tween guard 测试、s4/s5 a11y + 死代码清理、llmdoc 10→13 variants 同步 |
+| 2026-04-08 | WS pending_auth + Track B2 + E4/E5 | pending_auth 计入连接上限 + auth_ok 发送失败释放；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复；Codex+Claude 交叉审查 E4 + 签收 E5 PASS |
 | 2026-04-08 | WS 首帧 auth + session gate 测试 | WS 认证从 query string 迁移到首帧 auth 协议，4001/4404 不重连，15 backend + 3 frontend 测试，auth_ok 类型定义 |
 | 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、搜索增强 toggle、ResultView 来源卡片、`/api/capabilities`、BYOK 业务入口校验统一、fence-breakout 修复、累计 21 条边界回归测试 |
 | 2026-04-02 | 初始生成 | 全仓扫描，生成根级 + 模块级 CLAUDE.md 及 index.json |

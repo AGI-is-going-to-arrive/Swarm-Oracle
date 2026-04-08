@@ -151,14 +151,14 @@ async def _call_llm(
     m.completion_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
 
     try:
-        text = data["choices"][0]["message"]["content"].strip()
+        text = (data["choices"][0]["message"]["content"] or "").strip()
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:])
         result = json.loads(text)
         m.content = result.get("content", "")
     except Exception:
-        m.content = data.get("choices", [{}])[0].get("message", {}).get("content", "")[:60]
+        m.content = (data.get("choices", [{}])[0].get("message", {}).get("content") or "")[:60]
 
     return m
 

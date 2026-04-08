@@ -347,6 +347,8 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | 遗留项收口 | mobile roster dialog 焦点管理 (打开聚焦 + 关闭回触发按钮)；sidebar `<details>` 加 aria-label；hotseat/overflow CSS 颜色提取为 token；e2e 脚本死代码清理；reducedMotion tween guard 结构测试 ×5 |
+| 2026-04-08 | 圆桌 UI 升级 (Track D) | Synthesis-First section (verdict 主区顶部)；phase nav pill bar + scrollIntoView；mobile roster modal (dialog 语义 + Escape 关闭)；tablet sidebar `<details>` 折叠；8-hue speaker 色条；transcript role="log"；280 行新增测试 |
 | 2026-04-08 | WS 首帧 auth + 重连策略 | 三个 WS hooks 从 URL query token 迁移到首帧 auth 协议，auth_ok 加入事件联合类型，4001/4404 不重连，3 条 M1 测试 |
 | 2026-04-07 | Web 搜索增强 + 安全加固 | InputView 搜索增强 toggle、ResultView 来源卡片 (含 XSS 防护 + 畸形数据防御 + 长文本溢出保护)、`getCapabilities()` API、3 条来源卡片回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 types.ts 全局类型定义 + WorldScene.ts 场景系统详解 |

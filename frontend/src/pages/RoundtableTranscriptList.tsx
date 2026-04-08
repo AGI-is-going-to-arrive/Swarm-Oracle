@@ -82,6 +82,8 @@ export default function RoundtableTranscriptList({
   return (
     <div
       ref={listRef}
+      role="log"
+      aria-label={isZh ? '圆桌讨论记录' : 'Roundtable discussion log'}
       className="ending-chat-transcript-list worldline-roundtable-transcript-list"
       onScroll={onScroll}
     >

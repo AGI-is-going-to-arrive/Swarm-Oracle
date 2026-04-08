@@ -80,7 +80,7 @@
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
 - Oracle 改写 prompt 当前包含双层角色化词汇提示（`_oracle_vocabulary_hints()`）：
-  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic）提供领域专属术语、句式风格和情绪基调。
+  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
   - 高影响力 agent（impact_score ≥ 7）措辞更自信有分量；低影响力 agent（≤ 3）措辞更谨慎。
   - 档案官有独立的词汇提示，不受 variant 影响。

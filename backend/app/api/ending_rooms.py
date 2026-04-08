@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Depends, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.errors import api_error
-from app.api.helpers import schedule_background_task
+from app.api.helpers import schedule_background_task, verify_session
 from app.api.ws import WSManager, run_websocket_session
 from app.models import EndingRoomInteractionMode, EndingRoomType
 from app.services.ending_room_service import (
@@ -25,7 +25,7 @@ from app.services.ending_room_service import (
     run_ending_room_background,
 )
 
-router = APIRouter(prefix="/api", tags=["ending-room"])
+router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["ending-room"])
 ending_room_ws_manager = WSManager()
 ENDING_ROOM_START_DELAY_SECONDS = 0.05

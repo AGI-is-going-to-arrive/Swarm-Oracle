@@ -2444,3 +2444,283 @@ describe('WorldlineRoundtableView text layout contracts', () => {
     expect(turnText).toHaveClass('is-collapsed');
   });
 });
+
+describe('WorldlineRoundtableView synthesis section', () => {
+  const setupFullMocks = () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire forked?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.6, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.4, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+  };
+
+  it('renders verdict summary in the main area above transcript', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as any;
+    storeState.result = {
+      summary: 'Synthesis verdict text here',
+      next_move: 'Consider the second hinge',
+      archivist_note: 'Archivist note for context',
+      phase_insights: [],
+    } as any;
+    storeState.threadsById = baseState.threadsById as any;
+    storeState.threadOrder = baseState.threadOrder as any;
+    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.pendingDrafts = {};
+    setupFullMocks();
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Wait for shell to render (sidebar has the same summary text)
+    await screen.findByText('The first hinge was delayed too long.');
+    const synthesisSection = document.querySelector('.worldline-roundtable-synthesis');
+    expect(synthesisSection).toBeTruthy();
+    expect(synthesisSection!.querySelector('.worldline-roundtable-synthesis__title')!.textContent)
+      .toBe('Synthesis verdict text here');
+    expect(screen.getByText('Consider the second hinge')).toBeInTheDocument();
+    expect(screen.getAllByText('Archivist note for context').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hides synthesis section when result has no summary', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as any;
+    storeState.result = { summary: '', phase_insights: [] } as any;
+    storeState.threadsById = baseState.threadsById as any;
+    storeState.threadOrder = baseState.threadOrder as any;
+    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.pendingDrafts = {};
+    setupFullMocks();
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The first hinge was delayed too long.');
+    expect(document.querySelector('.worldline-roundtable-synthesis')).toBeNull();
+  });
+});
+
+describe('WorldlineRoundtableView phase nav', () => {
+  it('renders phase pills when transcript has multiple phases and scrolls on click', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        { id: 'turn-open', room_id: 'room-1', thread_id: 'thread-room', sequence: 1, phase: 'opening', participant_id: 'rep-a', content: 'Opening remark.', emotion: 'focused', created_at: '2026-03-29T00:00:00Z' },
+        { id: 'turn-cross', room_id: 'room-1', thread_id: 'thread-room', sequence: 2, phase: 'crossfire', participant_id: 'rep-a', content: 'Crossfire point.', emotion: 'focused', created_at: '2026-03-29T00:00:01Z' },
+        { id: 'turn-verdict', room_id: 'room-1', thread_id: 'thread-room', sequence: 3, phase: 'verdict', participant_id: 'archivist', content: 'Final verdict.', emotion: 'calm', created_at: '2026-03-29T00:00:02Z' },
+      ],
+    } as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = {
+      'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns },
+    } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Opening remark.');
+    const nav = document.querySelector('.roundtable-phase-nav');
+    expect(nav).toBeTruthy();
+    const pills = nav!.querySelectorAll('.roundtable-phase-nav__pill');
+    expect(pills.length).toBe(3);
+
+    // Verify pill labels — phases go through getEndingRoomPhaseLabel → i18n mock keys
+    const labels = [...pills].map((pill) => pill.textContent);
+    expect(labels.length).toBe(3);
+    expect(labels.every((l) => l && l.length > 0)).toBe(true);
+  });
+
+  it('hides phase nav when only one phase exists', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = baseState.threadsById as any;
+    storeState.threadOrder = baseState.threadOrder as any;
+    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The first hinge was delayed too long.');
+    expect(document.querySelector('.roundtable-phase-nav')).toBeNull();
+  });
+
+  it('calls scrollIntoView on the target phase divider when a pill is clicked', async () => {
+    const user = userEvent.setup({ delay: null });
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        { id: 'turn-open', room_id: 'room-1', thread_id: 'thread-room', sequence: 1, phase: 'opening', participant_id: 'rep-a', content: 'Opening.', emotion: 'focused', created_at: '2026-03-29T00:00:00Z' },
+        { id: 'turn-cross', room_id: 'room-1', thread_id: 'thread-room', sequence: 2, phase: 'crossfire', participant_id: 'rep-a', content: 'Crossfire.', emotion: 'focused', created_at: '2026-03-29T00:00:01Z' },
+      ],
+    } as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = { 'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns } } as any;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Opening.');
+    const pills = document.querySelectorAll('.roundtable-phase-nav__pill');
+    expect(pills.length).toBe(2);
+
+    // Mock scrollIntoView on the target divider
+    const divider = document.querySelector('[id^="phase-"]');
+    expect(divider).toBeTruthy();
+    const scrollSpy = vi.fn();
+    divider!.scrollIntoView = scrollSpy;
+
+    await user.click(pills[0]);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+describe('WorldlineRoundtableView mobile roster modal', () => {
+  it('renders a mobile roster trigger button and opens the modal on click', async () => {
+    const user = userEvent.setup({ delay: null });
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = baseState.threadsById as any;
+    storeState.threadOrder = baseState.threadOrder as any;
+    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The first hinge was delayed too long.');
+
+    // Trigger button exists (hidden via CSS on desktop, but present in DOM)
+    const trigger = document.querySelector('.roundtable-mobile-roster-trigger');
+    expect(trigger).toBeTruthy();
+    // Count should match participants (including archivist), not just representatives
+    expect(trigger!.textContent).toContain('2 participant');
+    expect(trigger!.getAttribute('aria-controls')).toBe('mobile-roster-dialog');
+
+    // Modal initially hidden
+    expect(document.querySelector('.roundtable-mobile-roster-overlay')).toBeNull();
+
+    // Trigger has aria-expanded="false" before open
+    expect(trigger!.getAttribute('aria-expanded')).toBe('false');
+
+    // Click opens modal
+    await user.click(trigger as HTMLElement);
+    const modal = document.querySelector('.roundtable-mobile-roster-modal');
+    expect(modal).toBeTruthy();
+    expect(modal!.textContent).toContain('Representative A');
+
+    // Dialog semantics
+    expect(modal!.getAttribute('role')).toBe('dialog');
+    expect(modal!.getAttribute('aria-modal')).toBe('true');
+    expect(modal!.getAttribute('aria-labelledby')).toBe('mobile-roster-title');
+    expect(modal!.getAttribute('id')).toBe('mobile-roster-dialog');
+    expect(document.getElementById('mobile-roster-title')!.textContent).toBe('Participants');
+
+    // Trigger aria-expanded="true" while open
+    expect(trigger!.getAttribute('aria-expanded')).toBe('true');
+
+    // Escape closes modal
+    await user.keyboard('{Escape}');
+    expect(document.querySelector('.roundtable-mobile-roster-overlay')).toBeNull();
+    expect(trigger!.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('WorldlineRoundtableView tablet sidebar collapsible', () => {
+  it('wraps sidebar content in a details element with a summary toggle', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as any;
+    storeState.result = baseState.result as any;
+    storeState.threadsById = baseState.threadsById as any;
+    storeState.threadOrder = baseState.threadOrder as any;
+    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('The first hinge was delayed too long.');
+
+    const details = document.querySelector('.worldline-roundtable-sidebar__collapsible');
+    expect(details).toBeTruthy();
+    expect(details!.tagName).toBe('DETAILS');
+
+    const summary = details!.querySelector('.worldline-roundtable-sidebar__summary');
+    expect(summary).toBeTruthy();
+    expect(summary!.textContent).toContain('rep');
+  });
+});

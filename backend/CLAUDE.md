@@ -101,7 +101,7 @@ docker compose up backend
 | ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content |
 | simulator | `simulator.py` | 多代理模拟引擎 |
 | debate | `debate.py` | 辩论引擎 |
-| llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail |
+| llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
 | blackboard | `blackboard.py` | 黑板模式通信 |
@@ -125,10 +125,11 @@ docker compose up backend
 
 ## 测试与质量
 
-- **46 个测试文件**，位于 `tests/`
+- **50 个测试文件 / 1584 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
+- 注意: 5 条 test_llm_client 集成测试在 LLM 代理返回 content=null 时自动 skip (probe 机制)
 - 含基准测试: `benchmark_compression.py`, `test_blackboard_bench.py`
 
 ## 相关文件清单
@@ -144,7 +145,7 @@ backend/
     services/            # 业务逻辑 (15 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (13 个版本)
-  tests/                 # 测试 (46 个文件)
+  tests/                 # 测试 (50 个文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -242,7 +243,9 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-04-08 | WS 首帧 auth + session gate 测试 | `run_websocket_session` accept/register 分离 + 首帧 auth 协议 (10s timeout, 64KB limit)，`test_session_auth.py` 新增 15 条测试 (4 REST + 11 WS) |
+| 2026-04-09 | 遗留项收口 | auth_ok 发送异常区分 WebSocketDisconnect/其他 + 日志 + close(1011)；pending_auth 归零清理 key；campaign/ending-room session gate 提升 router 级 dependencies；llm_client content=null `or ""` 防御；pyproject.toml 显式声明 sqlalchemy/pydantic 直依赖；test_llm_client 5 条 probe skip |
+| 2026-04-08 | WS pending_auth + Track B2 | pending_auth 计入 MAX_WS_PER_SCENARIO + auth_ok 发送失败释放 (25 测试)；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复 (154 测试 + live LLM 验证) |
+| 2026-04-08 | WS 首帧 auth + session gate 测试 | `run_websocket_session` accept/register 分离 + 首帧 auth 协议 (10s timeout, 64KB limit)，`test_session_auth.py` 初始新增 16 条测试 (4 REST + 12 WS)，后经 pending_auth 扩展至 25 条 |
 | 2026-04-07 | Web 搜索增强 + 安全加固 | web_context 服务、`/api/capabilities`、migration 013、BYOK 业务入口校验统一 (scenario/debate/predictions/social，不含探测端点 `/api/health/test`)、fence-breakout 修复、`_sanitize_url` 协议白名单、malformed JSON shape 防御、累计 21 条边界回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 simulator.py 模拟流程 + database.py 完整 ORM schema |
 | 2026-04-02 | 初始生成 | 模块扫描完成 |

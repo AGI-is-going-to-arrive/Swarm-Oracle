@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.errors import api_error_from_exception
+from app.api.helpers import verify_session
 from app.services.campaign import (
     CampaignConflictError,
     CampaignError,
@@ -27,7 +28,7 @@ from app.services.campaign import (
 )
 from app.services.daily_challenges import get_challenge_rotation
 
-router = APIRouter(prefix="/api/campaign", tags=["campaign"])
+router = APIRouter(prefix="/api/campaign", tags=["campaign"], dependencies=[Depends(verify_session)])
 
 VALID_ARCHIVE_GRADES = {"S", "A", "B", "C"}
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}

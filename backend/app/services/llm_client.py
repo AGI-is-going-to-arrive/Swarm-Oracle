@@ -176,8 +176,10 @@ def sanitize_untrusted_text(text: str, *, max_chars: int = 4000) -> str:
     return normalized
 
 
-def _strip_reasoning_blocks(text: str) -> str:
+def _strip_reasoning_blocks(text: str | None) -> str:
     """Remove provider-emitted reasoning blocks from user-visible text output."""
+    if not text:
+        return ""
     cleaned = text
     pattern = re.compile(r"^\s*<think>[\s\S]*?</think>\s*", re.IGNORECASE)
     while True:
@@ -1455,8 +1457,8 @@ async def llm_call(
 
     try:
         if is_chat:
-            # choices[0].message.content
-            text = data["choices"][0]["message"]["content"]
+            # choices[0].message.content (may be None for reasoning-only models)
+            text = data["choices"][0]["message"]["content"] or ""
         else:
             # output[].type=="message" -> content[0].text
             outputs = data.get("output", [])

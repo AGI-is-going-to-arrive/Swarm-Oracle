@@ -236,6 +236,9 @@ export class WorldScene extends Phaser.Scene {
   private minimapSceneImg: Phaser.GameObjects.Image | null = null;
   private minimapGradient: Phaser.GameObjects.Graphics | null = null;
 
+  // Accessibility: skip decorative motion when user prefers reduced motion
+  private reducedMotion = false;
+
   // V3: Ambient particle system
   private ambientMotes: Phaser.GameObjects.Graphics[] = [];
   private ambientTimer: Phaser.Time.TimerEvent | null = null;
@@ -276,11 +279,14 @@ export class WorldScene extends Phaser.Scene {
       agents,
       displayed_bubble_count: activeBubbles.length,
       is_transitioning: this.isThemeTransitioning,
+      reduced_motion: this.reducedMotion,
       bubbles: activeBubbles,
     };
   }
 
   create(): void {
+    this.reducedMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
     const { width, height } = this.scale;
     const registryTheme = this.registry.get('initialSceneTheme') as string | undefined;
     if (registryTheme) {
@@ -479,22 +485,25 @@ export class WorldScene extends Phaser.Scene {
       cloud.setPosition(cloudX, cloudY);
       cloud.setDepth(0);
 
-      // Slow horizontal drift
-      this.tweens.add({
-        targets: cloud,
-        x: cloudX + 30 + Math.random() * 40,
-        duration: 15000 + Math.random() * 10000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
+      // Slow horizontal drift (decorative — skip under reduced motion)
+      if (!this.reducedMotion) {
+        this.tweens.add({
+          targets: cloud,
+          x: cloudX + 30 + Math.random() * 40,
+          duration: 15000 + Math.random() * 10000,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      }
 
       this.cloudGraphics.push(cloud);
     }
   }
 
-  /** V3: Ambient floating motes for atmosphere. */
+  /** V3: Ambient floating motes for atmosphere (decorative — skip under reduced motion). */
   private startAmbientMotes(w: number, h: number, palette: typeof DEFAULT_PALETTE): void {
+    if (this.reducedMotion) return;
     // Spawn initial motes
     for (let i = 0; i < 15; i++) {
       this.spawnAmbientMote(w, h, palette.accent);
@@ -865,7 +874,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Dynamic sprite sizing — uniform scale preserves 2:3 aspect ratio of original 32×48
     const baseScale = Math.min(width, height);
-    const spriteW = Math.max(40, Math.round(baseScale * 0.055));
+    const spriteW = Math.max(48, Math.round(baseScale * 0.07));
     const spriteH = Math.round(spriteW * 1.5);
 
     // V3: Drop shadow (ellipse under sprite, scales with sprite)
@@ -901,7 +910,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Name label with rounded style
     const label = this.add.text(0, -Math.round(spriteH * 0.5) - 8, agent.name, {
-      fontSize: '9px',
+      fontSize: '11px',
       color: '#ffffff',
       fontFamily: 'monospace',
       backgroundColor: 'rgba(0,0,0,0.55)',
@@ -915,41 +924,48 @@ export class WorldScene extends Phaser.Scene {
     factionBar.fillRoundedRect(-8, Math.round(spriteH * 0.5) + 2, 16, 3, 1);
     container.add(factionBar);
 
-    // Idle breathing animation
-    this.tweens.add({
-      targets: sprite,
-      y: -2,
-      duration: 1500 + Math.random() * 500,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
+    // Idle breathing animation (decorative — skip under reduced motion)
+    if (!this.reducedMotion) {
+      this.tweens.add({
+        targets: sprite,
+        y: -2,
+        duration: 1500 + Math.random() * 500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
 
-    // V3: Shadow breathing sync
-    this.tweens.add({
-      targets: shadow,
-      scaleX: 0.9,
-      scaleY: 0.85,
-      duration: 1500 + Math.random() * 500,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
+      // V3: Shadow breathing sync
+      this.tweens.add({
+        targets: shadow,
+        scaleX: 0.9,
+        scaleY: 0.85,
+        duration: 1500 + Math.random() * 500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
 
     // V3: Enhanced spawn — drop from above with bounce
-    container.setScale(0.5);
-    container.setAlpha(0);
-    container.y = y - 30;
-    this.tweens.add({
-      targets: container,
-      scaleX: 1,
-      scaleY: 1,
-      alpha: 1,
-      y: y,
-      duration: 500,
-      ease: 'Bounce.easeOut',
-      delay: Math.random() * 400,
-    });
+    if (this.reducedMotion) {
+      container.setScale(1);
+      container.setAlpha(1);
+    } else {
+      container.setScale(0.5);
+      container.setAlpha(0);
+      container.y = y - 30;
+      this.tweens.add({
+        targets: container,
+        scaleX: 1,
+        scaleY: 1,
+        alpha: 1,
+        y: y,
+        duration: 500,
+        ease: 'Bounce.easeOut',
+        delay: Math.random() * 400,
+      });
+    }
 
     const agentData: AgentSpriteData = {
       agent_id: agent.agent_id,
@@ -1016,6 +1032,7 @@ export class WorldScene extends Phaser.Scene {
    * Each agent drifts within WANDER_RADIUS of its spawn origin.
    */
   private startIdleWander(agentId: string): void {
+    if (this.reducedMotion) return;
     const scheduleNext = () => {
       const agent = this.agentSprites.get(agentId);
       if (!agent?.gameObject) return;
@@ -1082,7 +1099,7 @@ export class WorldScene extends Phaser.Scene {
       targets: bubble,
       alpha: 0,
       y: bubble.y - 4,
-      duration,
+      duration: this.reducedMotion ? 0 : duration,
       onComplete: () => bubble.destroy(),
     });
   }
@@ -1287,13 +1304,13 @@ export class WorldScene extends Phaser.Scene {
       agent.gameObject.add(bubbleContainer);
     }
 
-    // Animate in
+    // Animate in (instant under reduced motion)
     this.tweens.add({
       targets: bubbleContainer,
       alpha: 1,
       x: bubbleOffsetX,
       y: bubbleOffsetY - 5,
-      duration: 300,
+      duration: this.reducedMotion ? 0 : 300,
       ease: 'Back.easeOut',
     });
 
@@ -1366,17 +1383,19 @@ export class WorldScene extends Phaser.Scene {
     const targetX = (x / 800) * width;
     const targetY = height * 0.6 + (y / 600) * (height * 0.35);
 
-    // Trail particle effect with faction color
+    // Trail particle effect with faction color (decorative — skip under reduced motion)
     const factionColor = FACTION_COLORS[faction || 'unknown'] ?? FACTION_COLORS.unknown;
-    const trail = this.add.graphics();
-    trail.fillStyle(factionColor, 0.4);
-    trail.fillCircle(agent.gameObject.x, agent.gameObject.y, 4);
-    this.tweens.add({
-      targets: trail,
-      alpha: 0,
-      duration: 1000,
-      onComplete: () => trail.destroy(),
-    });
+    if (!this.reducedMotion) {
+      const trail = this.add.graphics();
+      trail.fillStyle(factionColor, 0.4);
+      trail.fillCircle(agent.gameObject.x, agent.gameObject.y, 4);
+      this.tweens.add({
+        targets: trail,
+        alpha: 0,
+        duration: 1000,
+        onComplete: () => trail.destroy(),
+      });
+    }
 
     // Update faction color bar on agent
     if (agent.factionBar && faction) {
@@ -1438,46 +1457,53 @@ export class WorldScene extends Phaser.Scene {
       haloGfx.strokeCircle(0, 0, 22);
       haloGfx.setAlpha(1);
 
-      // Pulsing animation
-      agent.haloTween = this.tweens.add({
-        targets: haloGfx,
-        scaleX: 1.15,
-        scaleY: 1.15,
-        alpha: 0.6,
-        duration: 800,
-        yoyo: true,
-        repeat: 3,
-        ease: 'Sine.easeInOut',
-        onComplete: () => {
-          haloGfx.setAlpha(0.4);
-          haloGfx.setScale(1);
-        },
-      });
+      // Pulsing animation (decorative — skip under reduced motion)
+      if (!this.reducedMotion) {
+        agent.haloTween = this.tweens.add({
+          targets: haloGfx,
+          scaleX: 1.15,
+          scaleY: 1.15,
+          alpha: 0.6,
+          duration: 800,
+          yoyo: true,
+          repeat: 3,
+          ease: 'Sine.easeInOut',
+          onComplete: () => {
+            haloGfx.setAlpha(0.4);
+            haloGfx.setScale(1);
+          },
+        });
+      } else {
+        haloGfx.setAlpha(0.4);
+      }
     }
 
-    // Emotion burst particles
-    const burstCount = 6;
-    for (let i = 0; i < burstCount; i++) {
-      const angle = (Math.PI * 2 * i) / burstCount;
-      const dot = this.add.graphics();
-      dot.fillStyle(color, 0.8);
-      dot.fillCircle(0, 0, 2);
-      dot.setPosition(agent.gameObject.x, agent.gameObject.y);
-      this.tweens.add({
-        targets: dot,
-        x: agent.gameObject.x + Math.cos(angle) * 30,
-        y: agent.gameObject.y + Math.sin(angle) * 30,
-        alpha: 0,
-        duration: 600,
-        ease: 'Power2',
-        onComplete: () => dot.destroy(),
-      });
+    // Emotion burst particles (decorative — skip under reduced motion)
+    if (!this.reducedMotion) {
+      const burstCount = 6;
+      for (let i = 0; i < burstCount; i++) {
+        const angle = (Math.PI * 2 * i) / burstCount;
+        const dot = this.add.graphics();
+        dot.fillStyle(color, 0.8);
+        dot.fillCircle(0, 0, 2);
+        dot.setPosition(agent.gameObject.x, agent.gameObject.y);
+        this.tweens.add({
+          targets: dot,
+          x: agent.gameObject.x + Math.cos(angle) * 30,
+          y: agent.gameObject.y + Math.sin(angle) * 30,
+          alpha: 0,
+          duration: 600,
+          ease: 'Power2',
+          onComplete: () => dot.destroy(),
+        });
+      }
     }
   }
 
   // ── World Split Animation ─────────────────────────────
 
   private playSplitAnimation(direction: string, reason?: string): void {
+    if (this.reducedMotion) return;
     const { width, height } = this.scale;
 
     // Screen shake
@@ -1576,6 +1602,7 @@ export class WorldScene extends Phaser.Scene {
   // ── Event Animations ──────────────────────────────────
 
   private playEventAnimation(animation: string, cardLabel?: string): void {
+    if (this.reducedMotion) return;
     const { width, height } = this.scale;
     const cx = width / 2;
     const cy = height / 2;
@@ -1815,6 +1842,8 @@ export class WorldScene extends Phaser.Scene {
     if (weatherType === this.currentWeather) return;
     // Clear previous weather
     this.clearWeather();
+    // Weather particles are decorative — skip under reduced motion
+    if (this.reducedMotion) { this.currentWeather = weatherType; return; }
     this.currentWeather = weatherType;
     if (weatherType === 'clear') return;
 
