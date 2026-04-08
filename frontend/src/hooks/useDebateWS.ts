@@ -64,11 +64,29 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
 
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
-      const reconnectAttempts = reconnectCount.current;
-      const shouldResync = reconnectAttempts > 0;
-      const messageVersionAtOpen = stateMessageVersionRef.current;
 
-      if (shouldResync) {
+      // First-frame auth: send token (or empty string) and wait for auth_ok
+      let token = '';
+      try { token = localStorage.getItem('swarmoracle_session_token') ?? ''; } catch { /* */ }
+
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+        const authFallbackTimer = window.setTimeout(() => {
+          if (wsRef.current !== ws) return;
+          const ra = reconnectCount.current;
+          if (ra > 0) {
+            requestDebateResync(debateId, ws, stateMessageVersionRef.current);
+          }
+          reconnectCount.current = 0;
+        }, 3000);
+        (ws as unknown as Record<string, unknown>).__authFallbackTimer = authFallbackTimer;
+        return;
+      }
+
+      // No token stored: resync on reconnect only (server auth likely disabled)
+      const reconnectAttempts = reconnectCount.current;
+      if (reconnectAttempts > 0) {
+        const messageVersionAtOpen = stateMessageVersionRef.current;
         logWsDebug('DebateWS', 'resync_on_reconnect', {
           streamId: debateId,
           reconnectCount: reconnectAttempts,
@@ -83,6 +101,18 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
       if (cleanedUp.current || wsRef.current !== ws) return;
       try {
         const payload = JSON.parse(event.data) as DebateWSEvent;
+
+        // First-frame auth: auth_ok signals connection is established
+        if (payload.type === 'auth_ok') {
+          const timer = (ws as unknown as Record<string, unknown>).__authFallbackTimer;
+          if (typeof timer === 'number') window.clearTimeout(timer);
+          const messageVersionAtOpen = stateMessageVersionRef.current;
+          logWsDebug('DebateWS', 'auth_ok', { streamId: debateId });
+          requestDebateResync(debateId, ws, messageVersionAtOpen);
+          reconnectCount.current = 0;
+          return;
+        }
+
         const meta = payload.meta;
         if (meta) {
           logWsDebug('DebateWS', 'receive', {
@@ -205,7 +235,9 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
         code: event.code,
       });
       wsRef.current = null;
-      if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
+      // 4001 = auth failure (permanent), 4404 = resource not found — do not reconnect
+      const permanentClose = event.code === 4001 || event.code === 4404;
+      if (!cleanedUp.current && event.code !== 1000 && !permanentClose && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
         const delay = Math.min(
           BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1),

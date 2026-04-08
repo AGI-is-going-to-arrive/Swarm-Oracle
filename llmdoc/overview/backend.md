@@ -131,6 +131,7 @@
 - 空闲期会发送轻量 `heartbeat`，便于更快暴露半断开连接。
 - `ending_room` 也有独立 WS 通道，不复用 scenario/debate stream。
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
+- 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
 
 ## 源码入口建议
 

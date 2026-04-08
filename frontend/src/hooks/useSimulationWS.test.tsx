@@ -47,6 +47,10 @@ class MockWebSocket {
     MockWebSocket.instances.push(this);
   }
 
+  send(_data: string) {
+    // no-op: captures auth frames without side effects
+  }
+
   close(code = 1000) {
     this.readyState = MockWebSocket.CLOSED;
     this.onclose?.({ code } as CloseEvent);
@@ -343,5 +347,44 @@ describe('useSimulationWS', () => {
       }),
     );
     debugSpy.mockRestore();
+  });
+
+  it('does not reconnect on 4001 auth failure close', () => {
+    render(<Harness scenarioId="scenario-auth" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.(new Event('open'));
+      MockWebSocket.instances[0]?.emitClose(4001);
+      vi.advanceTimersByTime(30000);
+    });
+
+    // Should NOT have created a second WebSocket
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('does not reconnect on 4404 not-found close', () => {
+    render(<Harness scenarioId="scenario-404" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.emitClose(4404);
+      vi.advanceTimersByTime(30000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('still reconnects on 1006 abnormal close', () => {
+    render(<Harness scenarioId="scenario-1006" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.(new Event('open'));
+      MockWebSocket.instances[0]?.emitClose(1006);
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(2);
   });
 });

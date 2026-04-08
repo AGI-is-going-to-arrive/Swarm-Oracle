@@ -259,9 +259,9 @@ frontend/
 
 | 类型 | 事件列表 |
 |------|---------|
-| `WSEvent` | heartbeat, status, agent_speak_start/delta/speak, round_summary, branch_init/fork/prune/update, narration, intervention_applied/injected, retrospective_start, batch_intervention_applied, simulation_done/error |
-| `DebateWSEvent` | heartbeat, status, agent_speak, debate_phase_change, debate_score_update, debate_counterplay, debate_verdict |
-| `EndingRoomWSEvent` | heartbeat, status, ending_room_turn_start/delta/commit/error, ending_room_phase_change, ending_room_result_ready, ending_room_thread_created, ending_room_scope_notice |
+| `WSEvent` | auth_ok, heartbeat, status, agent_speak_start/delta/speak, round_summary, branch_init/fork/prune/update, narration, intervention_applied/injected, retrospective_start, batch_intervention_applied, simulation_done/error |
+| `DebateWSEvent` | auth_ok, heartbeat, status, agent_speak, debate_phase_change, debate_score_update, debate_counterplay, debate_verdict |
+| `EndingRoomWSEvent` | auth_ok, heartbeat, status, ending_room_turn_start/delta/commit/error, ending_room_phase_change, ending_room_result_ready, ending_room_thread_created, ending_room_scope_notice |
 
 #### 关键枚举 / 联合类型
 
@@ -347,6 +347,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-08 | WS 首帧 auth + 重连策略 | 三个 WS hooks 从 URL query token 迁移到首帧 auth 协议，auth_ok 加入事件联合类型，4001/4404 不重连，3 条 M1 测试 |
 | 2026-04-07 | Web 搜索增强 + 安全加固 | InputView 搜索增强 toggle、ResultView 来源卡片 (含 XSS 防护 + 畸形数据防御 + 长文本溢出保护)、`getCapabilities()` API、3 条来源卡片回归测试 |
 | 2026-04-02 | 深度补扫 | 补充 types.ts 全局类型定义 + WorldScene.ts 场景系统详解 |
 | 2026-04-02 | 初始生成 | 模块扫描完成 |

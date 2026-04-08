@@ -138,13 +138,15 @@
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求 `?token=` query param。未通过则返回 401/4001。 |
+| `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求首帧 auth。未通过则返回 401/4001。 |
 
 说明：
 
 - **这是临时开发态的全局门禁 hardening，不是 owner-aware authorization。**
 - 空值时完全跳过鉴权，本地开发零影响。
-- 前端通过 `localStorage.swarmoracle_session_token` 存取 token，REST 自动注入 `X-Session-Token` header，WS 自动附带 `?token=` query param。
+- 前端通过 `localStorage.swarmoracle_session_token` 存取 token，REST 自动注入 `X-Session-Token` header，WS 在连接建立后发送首帧 `{"type":"auth","token":"..."}` 进行认证。
+- WS 首帧 auth 协议：服务端 accept 后等待客户端首帧（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，再注册连接并启动 heartbeat。认证失败或超时返回 `close(4001)`。
+- 前端对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连。
 - 不是最终 auth 设计。最终方案需要 JWT/OAuth2 + per-resource ownership + httpOnly cookie。
 
 ## Web Search Enhancement (搜索增强推演)

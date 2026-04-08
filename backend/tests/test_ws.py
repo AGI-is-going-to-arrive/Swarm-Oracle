@@ -349,16 +349,14 @@ class TestScenarioWebSocketEndpoint:
 
         websocket = AsyncMock()
         websocket.receive_text.side_effect = RuntimeError("boom")
-        connect = AsyncMock(return_value=True)
         disconnect = MagicMock()
 
-        monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
         monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
 
         with pytest.raises(RuntimeError, match="boom"):
             await ws_api.websocket_endpoint(websocket, scenario_id)
 
-        connect.assert_awaited_once_with(scenario_id, websocket)
+        websocket.accept.assert_awaited_once()
         disconnect.assert_called_once_with(scenario_id, websocket)
 
     @pytest.mark.asyncio
@@ -371,15 +369,13 @@ class TestScenarioWebSocketEndpoint:
 
         websocket = AsyncMock()
         websocket.receive_text.side_effect = WebSocketDisconnect()
-        connect = AsyncMock(return_value=True)
         disconnect = MagicMock()
 
-        monkeypatch.setattr(ws_api.ws_manager, "connect", connect)
         monkeypatch.setattr(ws_api.ws_manager, "disconnect", disconnect)
 
         await ws_api.websocket_endpoint(websocket, scenario_id)
 
-        connect.assert_awaited_once_with(scenario_id, websocket)
+        websocket.accept.assert_awaited_once()
         disconnect.assert_called_once_with(scenario_id, websocket)
 
 
@@ -406,16 +402,14 @@ class TestDebateWebSocketEndpoint:
 
         websocket = AsyncMock()
         websocket.receive_text.side_effect = RuntimeError("boom")
-        connect = AsyncMock(return_value=True)
         disconnect = MagicMock()
 
-        monkeypatch.setattr(debate_api.debate_ws_manager, "connect", connect)
         monkeypatch.setattr(debate_api.debate_ws_manager, "disconnect", disconnect)
 
         with pytest.raises(RuntimeError, match="boom"):
             await debate_api.debate_websocket_endpoint(websocket, debate_id)
 
-        connect.assert_awaited_once_with(debate_id, websocket)
+        websocket.accept.assert_awaited_once()
         disconnect.assert_called_once_with(debate_id, websocket)
 
 

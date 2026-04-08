@@ -91,15 +91,13 @@ async def test_ending_room_websocket_disconnects_on_normal_close(monkeypatch):
     )
     websocket = AsyncMock()
     websocket.receive_text.side_effect = WebSocketDisconnect()
-    connect = AsyncMock(return_value=True)
     disconnect = MagicMock()
 
-    monkeypatch.setattr(ending_rooms_api.ending_room_ws_manager, "connect", connect)
     monkeypatch.setattr(ending_rooms_api.ending_room_ws_manager, "disconnect", disconnect)
 
     await ending_rooms_api.ending_room_websocket_endpoint(websocket, snapshot["id"])
 
-    connect.assert_awaited_once_with(snapshot["id"], websocket)
+    websocket.accept.assert_awaited_once()
     disconnect.assert_called_once_with(snapshot["id"], websocket)
 
 
@@ -115,16 +113,14 @@ async def test_ending_room_websocket_disconnects_on_generic_exception(monkeypatc
     )
     websocket = AsyncMock()
     websocket.receive_text.side_effect = RuntimeError("boom")
-    connect = AsyncMock(return_value=True)
     disconnect = MagicMock()
 
-    monkeypatch.setattr(ending_rooms_api.ending_room_ws_manager, "connect", connect)
     monkeypatch.setattr(ending_rooms_api.ending_room_ws_manager, "disconnect", disconnect)
 
     with pytest.raises(RuntimeError, match="boom"):
         await ending_rooms_api.ending_room_websocket_endpoint(websocket, snapshot["id"])
 
-    connect.assert_awaited_once_with(snapshot["id"], websocket)
+    websocket.accept.assert_awaited_once()
     disconnect.assert_called_once_with(snapshot["id"], websocket)
 
 

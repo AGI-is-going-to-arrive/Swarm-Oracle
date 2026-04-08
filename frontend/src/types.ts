@@ -780,6 +780,7 @@ export interface WsEventMeta {
 
 export type DebateWSEvent =
   (
+    | { type: 'auth_ok' }
     | { type: 'heartbeat'; data: { ts: string } }
     | {
       type: 'status';
@@ -797,6 +798,7 @@ export type DebateWSEvent =
 
 export type EndingRoomWSEvent =
   (
+    | { type: 'auth_ok' }
     | { type: 'heartbeat'; data: { ts: string } }
     | { type: 'status'; data: { status: EndingRoomStatus; error?: string | StructuredWsError } }
     | { type: 'ending_room_turn_start'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
@@ -813,6 +815,7 @@ export type EndingRoomWSEvent =
 
 export type WSEvent =
   (
+    | { type: 'auth_ok' }
     | { type: 'heartbeat'; data: { ts: string } }
     | { type: 'status'; data: { status: string; hierarchical?: boolean } }
     | { type: 'agent_speak_start'; data: { agent: string; agent_id: string; branch: string; round: number } }

@@ -79,13 +79,32 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
       console.log(`[WS] Connected to scenario ${currentScenarioId}`);
-      const reconnectAttempts = reconnectCount.current;
-      const messageVersionAtOpen = stateMessageVersionRef.current;
 
-      console.log('[WS] Connected — polling backend for current state...');
+      // First-frame auth: send token (or empty string) and wait for auth_ok
+      let token = '';
+      try { token = localStorage.getItem('swarmoracle_session_token') ?? ''; } catch { /* */ }
+
+      if (token) {
+        ws.send(JSON.stringify({ type: 'auth', token }));
+        // Fallback: if auth_ok never arrives (server auth disabled + stale token),
+        // resync after 3s so the hook doesn't stall.
+        const authFallbackTimer = window.setTimeout(() => {
+          if (wsRef.current !== ws) return;
+          console.log('[WS] auth_ok timeout — assuming auth disabled, resyncing');
+          const mv = stateMessageVersionRef.current;
+          requestScenarioResync(currentScenarioId, ws, mv);
+          reconnectCount.current = 0;
+        }, 3000);
+        // Store timer so auth_ok handler can cancel it
+        (ws as unknown as Record<string, unknown>).__authFallbackTimer = authFallbackTimer;
+        return; // resync deferred to auth_ok handler in onmessage
+      }
+
+      // No token stored: resync immediately (server auth likely disabled)
+      const messageVersionAtOpen = stateMessageVersionRef.current;
       logWsDebug('SimulationWS', 'resync_on_connect', {
         streamId: currentScenarioId,
-        reconnectCount: reconnectAttempts,
+        reconnectCount: reconnectCount.current,
         messageVersionAtOpen,
       });
       requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
@@ -99,6 +118,18 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
           type: string;
           data?: Record<string, unknown>;
         };
+
+        // First-frame auth: auth_ok signals connection is established
+        if (raw.type === 'auth_ok') {
+          // Cancel the stale-token fallback timer
+          const timer = (ws as unknown as Record<string, unknown>).__authFallbackTimer;
+          if (typeof timer === 'number') window.clearTimeout(timer);
+          const messageVersionAtOpen = stateMessageVersionRef.current;
+          logWsDebug('SimulationWS', 'auth_ok', { streamId: currentScenarioId });
+          requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
+          reconnectCount.current = 0;
+          return;
+        }
         const meta = raw.meta;
         if (meta) {
           logWsDebug('SimulationWS', 'receive', {
@@ -188,7 +219,9 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
       });
       wsRef.current = null;
 
-      if (!cleanedUp.current && event.code !== 1000 && reconnectCount.current < MAX_RECONNECTS) {
+      // 4001 = auth failure (permanent), 4404 = resource not found — do not reconnect
+      const permanentClose = event.code === 4001 || event.code === 4404;
+      if (!cleanedUp.current && event.code !== 1000 && !permanentClose && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
         const delay = Math.min(
           BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1),
