@@ -821,6 +821,8 @@ async def get_story(scenario_id: str):
             select(Branch).where(
                 Branch.scenario_id == scenario_id,
                 Branch.status == BranchStatus.COMPLETED,
+            ).order_by(
+                Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc(),
             )
         ).all()
         using_fallback_branches = False
@@ -828,7 +830,11 @@ async def get_story(scenario_id: str):
         if not branches:
             using_fallback_branches = True
             branches = session.exec(
-                select(Branch).where(Branch.scenario_id == scenario_id)
+                select(Branch).where(
+                    Branch.scenario_id == scenario_id,
+                ).order_by(
+                    Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc(),
+                )
             ).all()
 
         return {

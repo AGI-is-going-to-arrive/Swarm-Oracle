@@ -16540,3 +16540,42 @@ QA Inventory
 - 当前结论：
   - `ending-room followup suite` 的 desktop / mobile / full 当前都已回到可落 summary 的稳定状态。
   - 这轮用户指定的 `multi mobile hotseat / all_present / epilogue` 已完成 deterministic 化并纳入 `full`。
+
+## 2026-04-09 Phase 3 comprehensive QA / E2E review
+
+- 当前结论不是“全部无条件 PASS”，而是“基础功能大面可用，但仍有明确阻塞项与发布阻塞项”。
+- 本轮真实验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_blackboard_e2e.py tests/test_token_matrix.py tests/test_e2e_matrix.py -v`
+    - `8 passed in 216.53s`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && npm run release:signoff -- --headless`
+    - 在进入 E2E 前失败，阻塞于 `npm run assets:provenance:check`
+  - `cd frontend && node scripts/e2e-suite.mjs cross-browser --url http://127.0.0.1:5174 --output-dir output/e2e/2026-04-09-manual-cross-browser --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:5174 --output-dir output/e2e/2026-04-09-ending-room-full --headless true`
+    - 通过，但带多处 fallback
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:5174 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-09-roundtable-full --headless`
+    - 失败：`Mobile roundtable composer overlaps the transcript list`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:5174 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-09-roundtable-desktop --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:5174 --output-dir output/e2e/2026-04-09-debate-full --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:5174 --output-dir output/e2e/2026-04-09-corners --headless`
+    - 通过
+- 发布阻塞：
+  - `frontend/public/assets/ui/generated/*.png` 与 `frontend/public/assets/scenes/*.png` 当前存在多份缺少 `.meta.json` 的资源，导致 `assets:provenance:check` 失败，连带 `release:signoff` 无法完成。
+  - 可见修复路径是 `frontend/scripts/backfill-asset-provenance.mjs`，但本轮未直接改动仓库资源 sidecar。
+- 玩法 / E2E 结论：
+  - `debate full` 当前桌面/移动端都可过。
+  - `cross-browser` 当前 Firefox / WebKit smoke 可过。
+  - `ending-room full` 当前可过，但 `all-present / epilogue / evidence-card` 以及部分 mobile follow-up lifecycle 会退化为 fallback wait；summary 中多处 `turn_start / turn_delta` 为空，不能宣称流式生命周期稳定。
+  - `roundtable` 当前是 desktop pass / mobile fail；mobile `full` 的失败点是 composer 覆盖 transcript list，属于确定性布局 blocker。
+- 手工 Playwright 复核：
+  - `/agents`、`/agents/new` 中文壳与知识领域翻译正常。
+  - 自定义 Agent 创建/删除链路走通。
+  - `/sim/:id -> /result/:id` 主链路可走通，但过程中会出现 `409 DIRECTOR_STATE_CONFLICT` 警告；结果页会暴露 `叙事服务暂时不可用，已回退为基于原始记录的简化摘要。`
+  - `/sim/:id/causal-map` 页面壳可正常显示中文，但真实 API `/api/scenario/:id/causal-graph` 对多个已完成场景均返回 `0 nodes / 0 edges`。
+- 代码检查补充：
+  - `backend/app/services/causal_graph.py` 的 `append_round_nodes()` 当前只有测试在调用，运行时代码里没有接线点；空图问题更像功能未接入而非单条数据异常。
+  - `frontend` 的功能性 E2E 更适合走 `vite dev`（本轮使用 `http://127.0.0.1:5174`）；`vite preview` 不代理 `/api` 和 `/ws`，不适合作为真实功能验收入口。

@@ -406,7 +406,8 @@ async def parse_and_run_background(
                 logger.debug("custom agent injection failed (non-blocking)", exc_info=True)
 
         parsed_agents = list(parsed.get("agents", []))
-        # Replace CROWD slots with custom agents
+        # Replace CROWD slots with custom agents, tracking name changes
+        crowd_name_remap: dict[str, str] = {}
         if custom_agents_to_inject:
             crowd_indices = [
                 i for i, a in enumerate(parsed_agents)
@@ -414,6 +415,10 @@ async def parse_and_run_background(
             ]
             for j, custom in enumerate(custom_agents_to_inject):
                 if j < len(crowd_indices):
+                    old_name = parsed_agents[crowd_indices[j]].get("name", "")
+                    new_name = custom.get("name", "")
+                    if old_name and old_name != new_name:
+                        crowd_name_remap[old_name] = new_name
                     parsed_agents[crowd_indices[j]] = custom
                 else:
                     parsed_agents.append(custom)
@@ -452,38 +457,54 @@ async def parse_and_run_background(
         # Phase 3: Sync parsed_context.agents with actual injected list (lossless)
         if custom_agents_to_inject:
             parsed["agents"] = parsed_agents
+            # Also remap names inside groups so simulator reads correct names
+            if crowd_name_remap and parsed.get("groups"):
+                for g in parsed["groups"]:
+                    leader = g.get("leader", "")
+                    if leader in crowd_name_remap:
+                        g["leader"] = crowd_name_remap[leader]
+                    g["members"] = [
+                        crowd_name_remap.get(m, m) for m in g.get("members", [])
+                    ]
             scenario.parsed_context = parsed
             session.add(scenario)
 
         if hierarchical and parsed.get("groups"):
             for group_data in parsed["groups"]:
                 leader_name = group_data.get("leader", "")
-                leader_id = agent_name_to_id.get(leader_name)
+                resolved_leader = crowd_name_remap.get(leader_name, leader_name)
+                leader_id = agent_name_to_id.get(resolved_leader)
                 members = group_data.get("members", [])
 
                 group = AgentGroup(
                     scenario_id=scenario_id,
                     name=group_data["name"],
                     leader_agent_id=leader_id,
-                    member_count=len(members),
+                    member_count=0,  # updated after matching
                 )
                 session.add(group)
                 session.flush()
 
+                matched_count = 0
                 for member_name in members:
-                    member_agent_id = agent_name_to_id.get(member_name)
+                    resolved_name = crowd_name_remap.get(member_name, member_name)
+                    member_agent_id = agent_name_to_id.get(resolved_name)
                     if not member_agent_id:
                         continue
+                    matched_count += 1
                     membership = AgentGroupMember(
                         group_id=group.id,
                         agent_id=member_agent_id,
-                        is_leader=(member_name == leader_name),
+                        is_leader=(resolved_name == resolved_leader),
                     )
                     session.add(membership)
                     agent_obj = session.get(Agent, member_agent_id)
                     if agent_obj:
                         agent_obj.group_id = group.id
                         session.add(agent_obj)
+
+                group.member_count = matched_count
+                session.add(group)
 
         session.commit()
 
