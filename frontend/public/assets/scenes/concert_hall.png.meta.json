@@ -1,0 +1,13 @@
+{
+  "preset": "legacy_backfill/concert_hall",
+  "model": "unknown",
+  "provider": "unknown",
+  "source": "Legacy repository scene asset with missing original generation record",
+  "source_url": null,
+  "generated_at": null,
+  "output": "public/assets/scenes/concert_hall.png",
+  "prompt": null,
+  "provenance_status": "backfilled_legacy",
+  "backfilled_at": "2026-04-09T01:08:32.819Z",
+  "notes": "Original generation preset/model/timestamp were not fully preserved in repository history; this sidecar was backfilled from an on-repo asset audit."
+}

@@ -769,6 +769,23 @@ async def _append_followup_turns_with_retry(
                 streamed = True
             except Exception as exc:
                 logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
+                if chunk_index > 0:
+                    # Partial deltas already sent — emit error instead of duplicating
+                    await _broadcast(
+                        plan.room_id,
+                        ws_callback,
+                        {
+                            "type": "ending_room_turn_error",
+                            "data": {
+                                "room_id": plan.room_id,
+                                "turn_id": plan.turn_id,
+                                "error": "stream_interrupted",
+                            },
+                        },
+                    )
+                    # Use anchor_copy as final content since stream was partial
+                    generated_content = plan.anchor_copy
+                    streamed = True  # skip fallback re-emission
         if not streamed:
             generated_content = await _pkg._maybe_rewrite_oracle_copy(
                 room=prepared_room,

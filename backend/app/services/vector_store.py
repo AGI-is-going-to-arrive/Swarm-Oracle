@@ -484,3 +484,156 @@ def reset_vector_store() -> None:
 def collection_name_for_scenario(scenario_id: str) -> str:
     """Return the canonical Chroma collection name for a scenario."""
     return VectorStore._collection_name(scenario_id)
+
+
+# ── Identity Memory (cross-scenario) ──────────────────────
+
+
+_IDENTITY_MEMORY_MAX = 200
+
+
+def _identity_collection_name(user_id: str) -> str:
+    """Build the canonical Chroma collection name for identity memories."""
+    name = f"identity_{user_id.replace('-', '_')}"
+    return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
+
+
+def store_identity_memory(
+    user_id: str,
+    identity_id: str,
+    scenario_id: str,
+    summary: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Store a cross-scenario memory for an agent identity.
+
+    Collection name: identity_{user_id}
+    After storing, enforces FIFO eviction if count > 200 for this identity.
+    """
+    if not summary or not summary.strip():
+        return
+
+    store = get_vector_store()
+    if not store.available:
+        return
+
+    col_name = _identity_collection_name(user_id)
+    try:
+        collection = store._client.get_or_create_collection(
+            name=col_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+    except Exception as exc:
+        logger.warning("Failed to get/create identity collection for %s: %s", user_id, exc)
+        return
+
+    import uuid
+    from datetime import datetime, timezone
+
+    doc_id = str(uuid.uuid4())
+    meta = {
+        "identity_id": identity_id,
+        "scenario_id": scenario_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if metadata:
+        meta.update(metadata)
+
+    try:
+        collection.add(
+            documents=[summary],
+            metadatas=[meta],
+            ids=[doc_id],
+        )
+    except Exception as exc:
+        logger.warning("Identity memory store failed (non-fatal): %s", exc)
+        return
+
+    # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX per identity
+    try:
+        results = collection.get(
+            where={"identity_id": identity_id},
+        )
+        if results and results.get("ids") and len(results["ids"]) > _IDENTITY_MEMORY_MAX:
+            metas = results.get("metadatas", [])
+            ids = results["ids"]
+            # Sort by created_at ascending, delete oldest
+            paired = list(zip(ids, metas))
+            paired.sort(key=lambda p: p[1].get("created_at", ""))
+            excess = len(paired) - _IDENTITY_MEMORY_MAX
+            if excess > 0:
+                to_delete = [p[0] for p in paired[:excess]]
+                collection.delete(ids=to_delete)
+                logger.debug(
+                    "Evicted %d oldest identity memories for identity=%s",
+                    excess, identity_id,
+                )
+    except Exception as exc:
+        logger.warning("Identity memory eviction check failed (non-fatal): %s", exc)
+
+
+def retrieve_identity_memories(
+    user_id: str,
+    identity_id: str,
+    query_text: str,
+    n_results: int = 5,
+) -> list[dict[str, Any]]:
+    """Retrieve semantically similar cross-scenario memories for an identity.
+
+    Returns list of {summary, scenario_id, distance}.
+    Returns empty list on any failure or missing collection.
+    """
+    if not query_text or not query_text.strip():
+        return []
+
+    store = get_vector_store()
+    if not store.available:
+        return []
+
+    col_name = _identity_collection_name(user_id)
+    try:
+        collection = store._client.get_collection(name=col_name)
+    except Exception:
+        # Collection doesn't exist yet
+        return []
+
+    try:
+        count = collection.count()
+        if count == 0:
+            return []
+
+        results = collection.query(
+            query_texts=[query_text],
+            n_results=min(n_results, count),
+            where={"identity_id": identity_id},
+        )
+
+        memories = []
+        if results and results.get("documents"):
+            docs = results["documents"][0]
+            metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
+            distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
+            for doc, meta, dist in zip(docs, metas, distances):
+                memories.append({
+                    "summary": doc,
+                    "scenario_id": meta.get("scenario_id", ""),
+                    "distance": dist,
+                })
+        return memories[:n_results]
+    except Exception as exc:
+        logger.warning("Identity memory retrieval failed (non-fatal): %s", exc)
+        return []
+
+
+def purge_identity_memories(user_id: str) -> None:
+    """Delete the entire identity memory collection for a user."""
+    store = get_vector_store()
+    if not store.available:
+        return
+
+    col_name = _identity_collection_name(user_id)
+    try:
+        store._client.delete_collection(col_name)
+        logger.info("Purged identity memory collection %s", col_name)
+    except Exception as exc:
+        logger.warning("Failed to purge identity collection for %s: %s", user_id, exc)

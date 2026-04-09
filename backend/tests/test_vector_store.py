@@ -13,7 +13,10 @@ from app.services.vector_store import (
     VectorStore,
     _store_ready,
     collection_name_for_scenario,
+    purge_identity_memories,
     reset_vector_store,
+    retrieve_identity_memories,
+    store_identity_memory,
 )
 
 
@@ -771,3 +774,140 @@ class TestVectorStoreSingleton:
         assert second.available is True
         assert second._client is fake_client
         assert create_calls == 2
+
+
+# ── TestIdentityMemory: Cross-scenario identity store ─────────
+
+
+class TestIdentityMemory:
+    def test_store_and_retrieve_roundtrip(self, temp_dir, monkeypatch):
+        """store_identity_memory + retrieve_identity_memories should round-trip."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-1",
+            identity_id="id-alpha",
+            scenario_id="scenario-100",
+            summary="Shifted from hawkish to dovish stance on trade policy",
+        )
+        store_identity_memory(
+            user_id="user-1",
+            identity_id="id-alpha",
+            scenario_id="scenario-101",
+            summary="Formed alliance with the diplomat faction",
+        )
+
+        results = retrieve_identity_memories(
+            user_id="user-1",
+            identity_id="id-alpha",
+            query_text="trade policy stance change",
+            n_results=5,
+        )
+
+        assert len(results) >= 1
+        assert all("summary" in r for r in results)
+        assert all("scenario_id" in r for r in results)
+        assert all("distance" in r for r in results)
+
+    def test_retrieve_returns_empty_for_missing_collection(self, temp_dir, monkeypatch):
+        """Retrieve should return [] when identity collection doesn't exist."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        results = retrieve_identity_memories(
+            user_id="user-nonexistent",
+            identity_id="id-nope",
+            query_text="anything",
+        )
+        assert results == []
+
+    def test_purge_clears_collection(self, temp_dir, monkeypatch):
+        """purge_identity_memories should remove the collection entirely."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-2",
+            identity_id="id-beta",
+            scenario_id="scenario-200",
+            summary="Important memory about global warming debate",
+        )
+
+        # Verify memory exists
+        results = retrieve_identity_memories(
+            user_id="user-2",
+            identity_id="id-beta",
+            query_text="global warming",
+        )
+        assert len(results) == 1
+
+        # Purge
+        purge_identity_memories(user_id="user-2")
+
+        # Verify gone
+        results = retrieve_identity_memories(
+            user_id="user-2",
+            identity_id="id-beta",
+            query_text="global warming",
+        )
+        assert results == []
+
+    def test_identity_isolation_between_users(self, temp_dir, monkeypatch):
+        """Different users' identity memories should be isolated."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-A",
+            identity_id="id-1",
+            scenario_id="s-1",
+            summary="User A's private memory",
+        )
+        store_identity_memory(
+            user_id="user-B",
+            identity_id="id-2",
+            scenario_id="s-2",
+            summary="User B's private memory",
+        )
+
+        results_a = retrieve_identity_memories(
+            user_id="user-A",
+            identity_id="id-1",
+            query_text="private memory",
+        )
+        results_b = retrieve_identity_memories(
+            user_id="user-B",
+            identity_id="id-2",
+            query_text="private memory",
+        )
+
+        assert len(results_a) == 1
+        assert len(results_b) == 1
+        assert results_a[0]["scenario_id"] == "s-1"
+        assert results_b[0]["scenario_id"] == "s-2"
+
+    def test_empty_summary_ignored(self, temp_dir, monkeypatch):
+        """store_identity_memory should silently skip empty summaries."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-3",
+            identity_id="id-gamma",
+            scenario_id="s-3",
+            summary="",
+        )
+        store_identity_memory(
+            user_id="user-3",
+            identity_id="id-gamma",
+            scenario_id="s-4",
+            summary="   ",
+        )
+
+        results = retrieve_identity_memories(
+            user_id="user-3",
+            identity_id="id-gamma",
+            query_text="anything",
+        )
+        assert results == []

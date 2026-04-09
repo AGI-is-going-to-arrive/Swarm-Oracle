@@ -37,6 +37,13 @@ from app.services.memory import (
 from app.services.narrator import narrate_branch
 from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
 
+# Phase 3 F2: Causal graph hook (non-blocking, fire-and-forget)
+try:
+    from app.services.causal_graph import append_round_nodes as _causal_append
+    _CAUSAL_AVAILABLE = True
+except ImportError:
+    _CAUSAL_AVAILABLE = False
+
 # V2: Visualization layer (lazy-loaded only when enabled)
 try:
     from app.visualization import (
@@ -1108,6 +1115,13 @@ async def run_simulation(
                          "summary": summary_text},
             })
 
+            # Phase 3 F2: Causal graph — record round nodes (non-blocking)
+            if _CAUSAL_AVAILABLE:
+                try:
+                    _causal_append(scenario_id, current_branch_id, round_num, messages)
+                except Exception:
+                    logger.debug("causal_graph append failed (non-blocking)", exc_info=True)
+
             # V2-P2: Check for card event triggers
             if viz_mapper is not None and _VIZ_AVAILABLE:
                 active_count_for_card = len([b for b in all_branches if b["status"] == "ACTIVE"])
@@ -1245,6 +1259,20 @@ async def run_simulation(
                                 "reason": fork_result["reason"],
                             }
                         })
+
+                        # Phase 3 F2: Record fork in causal graph
+                        if _CAUSAL_AVAILABLE:
+                            try:
+                                _causal_append(
+                                    scenario_id, current_branch_id, round_num, [],
+                                    fork_event={
+                                        "branch_id": current_branch_id,
+                                        "reason": fork_result.get("reason", ""),
+                                        "children": [b["id"] for b in new_branch_infos],
+                                    },
+                                )
+                            except Exception:
+                                logger.debug("causal_graph fork append failed", exc_info=True)
 
                         # V2: Broadcast viz:world_split
                         if viz_mapper is not None:

@@ -32,6 +32,15 @@ class CreateScenarioRequest(BaseModel):
     visualization_enabled: bool | None = None  # Enable pixel theater mode
     # Web Search Enhancement: opt-in per-scenario
     web_search_enabled: bool = False  # Request web search before simulation (default off)
+    # Phase 3 F3: Custom agent identities to include in simulation
+    custom_agent_identity_ids: list[str] | None = None
+
+    @field_validator("custom_agent_identity_ids")
+    @classmethod
+    def validate_custom_agent_identity_ids(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None and len(v) > 5:
+            raise ValueError("custom_agent_identity_ids must contain at most 5 items")
+        return v
 
     @field_validator("question")
     @classmethod
@@ -240,6 +249,10 @@ class ScenarioResponse(BaseModel):
     director_state: dict | None = None
     gameplay_state: dict | None = None
     fork_debug: dict | None = None
+    # Phase 3: additive fields
+    causal_graph_id: str | None = None
+    checkpoints: list | None = None
+    faction_timeline_id: str | None = None
 
 
 class StoryBranch(BaseModel):

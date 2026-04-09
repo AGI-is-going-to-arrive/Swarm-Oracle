@@ -1,0 +1,13 @@
+{
+  "preset": "legacy_backfill/gameplay_card_frame_entertainment",
+  "model": "unknown",
+  "provider": "unknown",
+  "source": "Legacy repository generated UI asset with missing original generation record",
+  "source_url": null,
+  "generated_at": null,
+  "output": "public/assets/ui/generated/gameplay_card_frame_entertainment.png",
+  "prompt": null,
+  "provenance_status": "backfilled_legacy",
+  "backfilled_at": "2026-04-09T01:08:32.814Z",
+  "notes": "Original generation preset/model/timestamp were not fully preserved in repository history; this sidecar was backfilled from an on-repo asset audit."
+}

@@ -1189,7 +1189,8 @@ h3.roundtable-phase-divider {
     gap: 6px;
     height: calc(100dvh - 266px);
     max-height: calc(100dvh - 266px);
-    overflow: hidden;
+    overflow-y: auto;  /* was hidden — sticky composer needs scrollable parent */
+    overflow-x: hidden;
   }
 
   .worldline-roundtable-view.is-live-room .worldline-roundtable-sidebar {
@@ -1354,6 +1355,7 @@ h3.roundtable-phase-divider {
     min-height: 148px;
     max-height: none;
     padding-top: 10px;
+    overflow-y: auto; /* transcript scrolls independently of composer */
   }
 
   .worldline-roundtable-view.is-live-room .worldline-roundtable-transcript-header {
@@ -1401,11 +1403,9 @@ h3.roundtable-phase-divider {
 
   .worldline-roundtable-view.is-live-room .worldline-roundtable-main .ending-chat-composer {
     gap: 8px;
-    margin-top: auto;
+    flex-shrink: 0; /* fixed at bottom via flex, not sticky */
     padding-inline: 0;
     padding-bottom: max(6px, env(safe-area-inset-bottom));
-    position: sticky;
-    bottom: 0;
     z-index: 2;
     background: linear-gradient(180deg, oklch(99% 0.002 80 / 0.92), oklch(99% 0.002 80 / 0.98));
     border-top: 1px solid var(--border-default);

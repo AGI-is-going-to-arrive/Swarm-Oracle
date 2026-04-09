@@ -43,4 +43,18 @@ describe('i18n locale resources', () => {
     expect(en.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
     expect(zh.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
   });
+
+  it('provides localized labels for Phase 3 agent, causal, and compare pages', () => {
+    expect(en.translation.agents.library_title).toBe('Agent Library');
+    expect(zh.translation.agents.library_title).toBe('Agent 库');
+    expect(en.translation.agents.attach_title).toBe('Attach Custom Agents');
+    expect(zh.translation.agents.attach_title).toBe('附加自定义 Agent');
+
+    expect(en.translation.causal.title).toBe('Causal Graph');
+    expect(zh.translation.causal.title).toBe('因果图谱');
+    expect(en.translation.compare.title).toBe('Counterfactual Compare');
+    expect(zh.translation.compare.title).toBe('反事实对比');
+    expect(en.translation.compare.round).toBe('Round {{round}}');
+    expect(zh.translation.compare.round).toBe('第 {{round}} 轮');
+  });
 });

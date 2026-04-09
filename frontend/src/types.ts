@@ -41,6 +41,10 @@ export interface AgentInfo {
   emotion: string;
   group_id?: string;  // P3-A
   group_name?: string;  // P3-A
+  // Phase 3 F1: identity + memory
+  agent_identity_id?: string | null;
+  source_type?: 'generated' | 'custom' | 'replay' | null;
+  is_returning?: boolean;
 }
 
 // P3-A: Agent group info
@@ -837,6 +841,27 @@ export type WSEvent =
       data: { error: string | StructuredWsError };
       }
   ) & { meta?: WsEventMeta };
+
+// ── Phase 3: Agent Identity (F1/F3) ─────────────────────
+
+export interface AgentIdentityInfo {
+  id: string;
+  user_id: string;
+  kind: 'generated' | 'custom';
+  display_name: string;
+  role: string;
+  persona?: string | null;
+  decision_bias_json?: string | null;
+  knowledge_domain_json?: string | null;
+  continuity_key: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type KnowledgeDomain =
+  | 'economics' | 'politics' | 'technology' | 'science' | 'military'
+  | 'culture' | 'environment' | 'health' | 'education' | 'law'
+  | 'philosophy' | 'history' | 'psychology' | 'sociology' | 'religion';
 
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';

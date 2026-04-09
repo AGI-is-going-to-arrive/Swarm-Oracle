@@ -38,6 +38,10 @@ from .ending_room import (
     EndingRoomType,
 )
 from .predictions import Leaderboard, Prediction
+# Phase 3: new model modules
+from .agent_identity import AgentGrowthEvent, AgentIdentity, AgentIdentityCampaign, AgentIdentityCampaignMember
+from .checkpoint import AgentRelationEdge, DebateArgumentUnit, FactionEvent, FactionSnapshot, ScenarioCheckpoint
+from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 
 __all__ = [
     "Scenario", "Agent", "Branch", "Round", "AgentMessage", "InterventionLog", "PendingIntervention", "ReplayArtifact",  # noqa: E501
@@ -47,5 +51,9 @@ __all__ = [
     "Debate", "DebateCounterplay", "DebatePhase", "DebatePrediction", "DebatePredictionKind", "DebateSide", "DebateStatus", "DebateTurn",  # noqa: E501
     "EndingRoom", "EndingRoomInteractionMode", "EndingRoomParticipant", "EndingRoomPhase", "EndingRoomRoleSlot", "EndingRoomStatus", "EndingRoomThread", "EndingRoomThreadMode", "EndingRoomTurn", "EndingRoomTurnSource", "EndingRoomType",  # noqa: E501
     "Prediction", "Leaderboard",
+    # Phase 3
+    "AgentIdentity", "AgentIdentityCampaign", "AgentIdentityCampaignMember", "AgentGrowthEvent",
+    "GraphSnapshot", "GraphNode", "GraphEdge", "AgentStateFrame",
+    "ScenarioCheckpoint", "AgentRelationEdge", "FactionSnapshot", "FactionEvent", "DebateArgumentUnit",
     "init_db",
 ]

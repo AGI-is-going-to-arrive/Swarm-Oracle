@@ -275,10 +275,27 @@ export async function healthCheck(): Promise<{
   return request('/health', { method: 'POST' });
 }
 
+/** Phase 3: per-capability entry in the registry */
+export interface CapabilityEntry {
+  enabled: boolean;
+  version: string;
+  server_only: boolean;
+  degraded_mode: string | null;
+}
+
+/** Phase 3: full capabilities registry response */
+export interface CapabilitiesResponse {
+  web_search: CapabilityEntry & { scope: 'server'; server_enabled: boolean; method: string; provider: string | null };
+  custom_agents: CapabilityEntry;
+  agent_identity: CapabilityEntry;
+  causal_graph: CapabilityEntry;
+  counterfactual_replay: CapabilityEntry;
+  factions: CapabilityEntry;
+  argument_map: CapabilityEntry;
+}
+
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */
-export async function getCapabilities(): Promise<{
-  web_search?: { scope: 'server'; server_enabled: boolean; method: string; provider: string | null };
-}> {
+export async function getCapabilities(): Promise<CapabilitiesResponse> {
   return safeGet('/capabilities');
 }
 

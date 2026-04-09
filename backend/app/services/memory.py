@@ -535,6 +535,7 @@ def build_agent_context(
     intervention_text: str = "",
     language: str = "Chinese",
     web_context_block: str = "",
+    cross_scenario_hint: str = "",
 ) -> str:
     """Build the L0 context window for an agent's turn.
 
@@ -584,6 +585,12 @@ def build_agent_context(
 
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
 
+    cross_scenario_block = ""
+    if cross_scenario_hint and cross_scenario_hint.strip():
+        cross_scenario_block = (
+            f"\n\n--- Cross-Scenario Memory ---\n{cross_scenario_hint}"
+        )
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
 {copy["identity"]}{agent.get('role', '')}
@@ -597,7 +604,7 @@ def build_agent_context(
 {topic_block}{intervention_block}
 
 {copy["dialogue_label"] if not shared_briefing else copy["shared_label"]}
-{conversation_block}{memories_block}
+{conversation_block}{memories_block}{cross_scenario_block}
 
 {copy["full_instruction_title"]}
 {copy["full_instructions"].format(intervention_instruction=intervention_instruction)}

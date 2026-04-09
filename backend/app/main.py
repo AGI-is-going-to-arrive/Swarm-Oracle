@@ -22,6 +22,9 @@ from app.api.predictions import router as predictions_router
 from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
 from app.api.ws import router as ws_router
+# Phase 3: new API routers
+from app.api.agents import router as agents_router
+from app.api.graphs import router as graphs_router
 from app.config import settings
 from app.logging_utils import configure_logging
 from app.models import init_db
@@ -100,6 +103,9 @@ app.include_router(ending_rooms_router)
 app.include_router(ending_rooms_ws_router)
 app.include_router(predictions_router)
 app.include_router(ws_router)
+# Phase 3
+app.include_router(agents_router)
+app.include_router(graphs_router)
 
 # P3-9: Prometheus metrics (GET /metrics)
 try:

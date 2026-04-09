@@ -357,14 +357,29 @@ def _build_web_search_server_hint() -> dict:
     return {**info, "method": "external", "provider": provider}
 
 
+def _capability_entry(enabled: bool = False, version: str = "0.0",
+                      server_only: bool = False, degraded_mode: str | None = None) -> dict:
+    return {"enabled": enabled, "version": version, "server_only": server_only, "degraded_mode": degraded_mode}
+
+
 @router.get("/capabilities")
 async def api_capabilities():
     """Lightweight server capability hints — no LLM calls.
 
     Use this for feature-flag checks on page mount instead of /api/health
-    which triggers an actual LLM connectivity test.
+    which triggers an actual LLM connectivity test.  Returns a capability
+    registry where each key has {enabled, version, server_only, degraded_mode}.
     """
-    return {"web_search": _build_web_search_server_hint()}
+    ws_hint = _build_web_search_server_hint()
+    return {
+        "web_search": {**_capability_entry(enabled=ws_hint.get("server_enabled", False), version="1.0"), **ws_hint},
+        "custom_agents": _capability_entry(),
+        "agent_identity": _capability_entry(),
+        "causal_graph": _capability_entry(),
+        "counterfactual_replay": _capability_entry(),
+        "factions": _capability_entry(),
+        "argument_map": _capability_entry(degraded_mode="rule_based_only"),
+    }
 
 
 @router.post("/health")

@@ -97,6 +97,9 @@ class Agent(SQLModel, table=True):
     stance: str = ""
     emotion: str = "neutral"
     group_id: Optional[str] = None  # P3-A: quick lookup for group membership
+    # Phase 3 F1: cross-scenario identity link
+    agent_identity_id: Optional[str] = Field(default=None, index=True)
+    source_type: Optional[str] = None  # "generated" | "custom" | "replay"
 
     scenario: Optional["Scenario"] = Relationship(back_populates="agents")
 
@@ -117,6 +120,11 @@ class Branch(SQLModel, table=True):
     key_moments: Optional[str] = None  # JSON list of key moment strings
     probability: float = 1.0
     status: BranchStatus = BranchStatus.ACTIVE
+    # Phase 3 F4: counterfactual replay provenance
+    replay_kind: Optional[str] = None  # "retrospective" | "counterfactual"
+    replay_source_branch_id: Optional[str] = None
+    replay_source_round: Optional[int] = None
+    replay_source_agent_id: Optional[str] = None
 
     scenario: Optional["Scenario"] = Relationship(back_populates="branches")
     rounds: list[Round] = Relationship(back_populates="branch")
@@ -267,7 +275,13 @@ def init_db():
             with engine.begin() as conn:
                 # Check and add missing columns
                 _migrate_add_column(conn, "branch", "key_moments", "TEXT")
+                _migrate_add_column(conn, "branch", "replay_kind", "TEXT")
+                _migrate_add_column(conn, "branch", "replay_source_branch_id", "TEXT")
+                _migrate_add_column(conn, "branch", "replay_source_round", "INTEGER")
+                _migrate_add_column(conn, "branch", "replay_source_agent_id", "TEXT")
                 _migrate_add_column(conn, "agent", "group_id", "TEXT")
+                _migrate_add_column(conn, "agent", "agent_identity_id", "TEXT")
+                _migrate_add_column(conn, "agent", "source_type", "TEXT")
                 # V2: Visualization fields
                 _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
                 _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
@@ -324,6 +338,7 @@ def init_db():
                 _migrate_create_index(
                     conn, "agent_message", "ix_agent_message_agent_id", ["agent_id"]
                 )
+                _migrate_create_index(conn, "agent", "ix_agent_identity_id", ["agent_identity_id"])
                 _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
                 _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
                 _migrate_create_index(
