@@ -25,6 +25,8 @@
   后端模块地图、authority、运行时约束。
 - [overview/frontend.md](overview/frontend.md)
   前端页面、状态边界、加载与自动化入口。
+- [overview/backlog.md](overview/backlog.md)
+  Phase 3 剩余工作真值清单。完成后删除对应行，不追加历史。
 - [guides/development.md](guides/development.md)
   本地开发、验证、签收命令。
 - [reference/api.md](reference/api.md)
