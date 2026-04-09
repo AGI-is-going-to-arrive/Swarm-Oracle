@@ -464,6 +464,7 @@ async def create_scenario(req: CreateScenarioRequest):
         status=ScenarioStatus.SIMULATING,
         visualization_enabled=viz_enabled,
         scene_theme=initial_scene_theme,
+        user_id=req.user_id or None,
         parsed_context={
             "mode": mode,
             "hierarchical": use_hierarchical,

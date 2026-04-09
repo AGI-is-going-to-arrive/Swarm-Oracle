@@ -21,7 +21,9 @@ export type VizEventType =
   | 'viz:weather_change'
   | 'viz:clear_bubbles'
   | 'viz:bet_update'
-  | 'viz:leaderboard_update';
+  | 'viz:leaderboard_update'
+  | 'viz:faction_cluster'
+  | 'viz:faction_event';
 
 export type VizHandler = (data: Record<string, unknown>) => void;
 

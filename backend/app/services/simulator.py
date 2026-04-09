@@ -1136,10 +1136,31 @@ async def run_simulation(
                 except Exception:
                     logger.debug("causal_graph append failed (non-blocking)", exc_info=True)
 
-            # Phase 3 F5: Faction detection (non-blocking)
+            # Phase 3 F5: Faction detection + WS broadcast (non-blocking)
             if _FACTIONS_AVAILABLE and settings.FEATURE_FACTIONS:
                 try:
-                    _factions_process(scenario_id, current_branch_id, round_num, messages)
+                    _faction_result = _factions_process(
+                        scenario_id, current_branch_id, round_num, messages,
+                    )
+                    if _faction_result:
+                        if _faction_result.get("factions"):
+                            await push({
+                                "type": "viz:faction_cluster",
+                                "data": {
+                                    "factions": _faction_result["factions"],
+                                    "round": round_num,
+                                    "branch_id": current_branch_id,
+                                },
+                            })
+                        if _faction_result.get("events"):
+                            await push({
+                                "type": "viz:faction_event",
+                                "data": {
+                                    "events": _faction_result["events"],
+                                    "round": round_num,
+                                    "branch_id": current_branch_id,
+                                },
+                            })
                 except Exception:
                     logger.debug("factions process_round failed (non-blocking)", exc_info=True)
 
@@ -1405,6 +1426,79 @@ async def run_simulation(
                 ending_type=ending_type,
             )
             await viz_push(viz_end)
+
+    # Phase 3 F1: Record growth events + identity memories at scenario end
+    # Runs in thread pool to avoid blocking the async event loop (sync DB + ChromaDB I/O).
+    if scenario_finished and settings.FEATURE_AGENT_IDENTITY:
+        import asyncio
+
+        def _run_identity_lifecycle() -> None:
+            from app.services.agent_identity import record_growth_event
+            from app.services.vector_store import store_identity_memory
+            with Session(engine) as _id_sess:
+                _sc = _id_sess.get(Scenario, scenario_id)
+                # Prefer Scenario.user_id; fall back to parsed_context for older rows
+                _sc_user_id = None
+                if _sc:
+                    _sc_user_id = _sc.user_id or (_sc.parsed_context or {}).get("user_id")
+                _id_agents = _id_sess.exec(
+                    select(Agent).where(
+                        Agent.scenario_id == scenario_id,
+                        Agent.agent_identity_id.isnot(None),  # type: ignore[union-attr]
+                    )
+                ).all()
+                # Pick best branch for summary context
+                _best_branch = max(
+                    narrated_branch_payloads,
+                    key=lambda b: b.get("probability", 0),
+                    default=None,
+                ) if narrated_branch_payloads else None
+                _branch_summary = (
+                    _best_branch.get("story", "") or _best_branch.get("insight", "")
+                    if _best_branch else "Scenario completed."
+                )
+                _best_branch_id = _best_branch["id"] if _best_branch else ""
+                _failed = 0
+                for _ag in _id_agents:
+                    try:
+                        # Growth event: structured record (200 char summary)
+                        record_growth_event(
+                            identity_id=_ag.agent_identity_id,
+                            scenario_id=scenario_id,
+                            branch_id=_best_branch_id,
+                            round_number=sim_rounds,
+                            event_type="scenario_complete",
+                            summary=f"{_ag.name} ({_ag.role}): {_branch_summary[:200]}",
+                        )
+                        # Identity memory: semantic/vector record (300 char for future prompts)
+                        if _sc_user_id:
+                            store_identity_memory(
+                                user_id=_sc_user_id,
+                                identity_id=_ag.agent_identity_id,
+                                scenario_id=scenario_id,
+                                summary=f"{_ag.name} ({_ag.role}): {_branch_summary[:300]}",
+                            )
+                    except Exception:
+                        _failed += 1
+                        logger.warning(
+                            "identity hook failed for agent %s in scenario %s",
+                            _ag.agent_identity_id, scenario_id,
+                            exc_info=True,
+                        )
+                if _failed:
+                    logger.warning(
+                        "identity lifecycle: %d/%d agents failed for scenario %s",
+                        _failed, len(_id_agents), scenario_id,
+                    )
+
+        try:
+            await asyncio.to_thread(_run_identity_lifecycle)
+        except Exception:
+            logger.warning(
+                "identity lifecycle hooks failed for scenario %s (non-blocking)",
+                scenario_id,
+                exc_info=True,
+            )
 
     if scenario_finished:
         await push({"type": "simulation_done"})

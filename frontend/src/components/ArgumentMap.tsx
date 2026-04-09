@@ -29,11 +29,12 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: '#e74c3c',
 };
 
-const TYPE_LABELS: Record<string, string> = {
-  claim: 'Claim',
-  evidence: 'Evidence',
-  rebuttal: 'Rebuttal',
-  counter: 'Counter',
+// Labels resolved via i18n in render — key → [i18n_key, fallback]
+const TYPE_LABEL_I18N: Record<string, [string, string]> = {
+  claim: ['argument.claim', 'Claim'],
+  evidence: ['argument.evidence', 'Evidence'],
+  rebuttal: ['argument.rebuttal', 'Rebuttal'],
+  counter: ['argument.counter', 'Counter'],
 };
 
 interface Props {
@@ -88,7 +89,7 @@ export function ArgumentMap({ debateId, visible }: Props) {
         return (
           <div key={type} style={{ marginBottom: '0.75rem' }}>
             <h4 role="treeitem" aria-expanded="true" style={{ margin: '0 0 0.25rem', fontSize: '0.85rem', color: '#aaa' }}>
-              {TYPE_LABELS[type]} ({units.length})
+              {t(TYPE_LABEL_I18N[type][0], TYPE_LABEL_I18N[type][1])} ({units.length})
             </h4>
             {units.map(u => (
               <div

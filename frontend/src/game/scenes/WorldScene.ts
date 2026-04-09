@@ -32,6 +32,7 @@ interface AgentSpriteData {
   y: number;
   originX: number;  // initial spawn X — wander anchor
   originY: number;  // initial spawn Y — wander anchor
+  spriteH: number;  // sprite height (for faction bar Y-offset consistency)
   gameObject?: Phaser.GameObjects.Container;
   haloGraphics?: Phaser.GameObjects.Graphics;
   haloTween?: Phaser.Tweens.Tween;
@@ -204,6 +205,15 @@ const WANDER_MAX_DELAY = 7000;   // Max ms between wander moves
 const WANDER_DURATION_MIN = 1500;
 const WANDER_DURATION_MAX = 3500;
 
+// ── Faction Clustering Constants ────────────────────────
+const FACTION_CLUSTER_SPREAD = 30;       // px between members in a cluster
+const FACTION_CLUSTER_JITTER = 40;       // px vertical randomness
+const FACTION_CLUSTER_DURATION = 600;    // base tween ms
+const FACTION_CLUSTER_STAGGER = 80;      // ms delay per member index
+const FACTION_FLASH_RADIUS = 24;         // px flash circle for events
+const FACTION_FLASH_DURATION = 800;      // ms flash fade-out
+const FACTION_FLASH_POOL_SIZE = 8;       // pre-allocated flash Graphics
+
 export class WorldScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSpriteData> = new Map();
   private bubbles: Map<string, Phaser.GameObjects.Container> = new Map();
@@ -248,6 +258,9 @@ export class WorldScene extends Phaser.Scene {
   // FPS-based weather degradation
   private fpsHistory: number[] = [];
   private effectiveWeatherPoolSize: number = WEATHER_POOL_SIZE;
+
+  // Phase 3 F5: Faction flash object pool (avoid GC churn)
+  private factionFlashPool: Phaser.GameObjects.Graphics[] = [];
 
   constructor() {
     super({ key: 'WorldScene' });
@@ -859,6 +872,110 @@ export class WorldScene extends Phaser.Scene {
       })
     );
 
+    // Phase 3 F5: Faction cluster assignment — animate agents into faction groups
+    this.unsubscribers.push(
+      EventBridge.on('viz:faction_cluster', (data) => {
+        const factions = data.factions as Array<{
+          key: string; members: string[]; stance_center: number;
+        }> | undefined;
+        if (!factions || factions.length === 0) return;
+        const { width, height } = this.scale;
+        // Use the scene's ground-plane coordinate system (consistent with moveAgent)
+        const usableW = width * 0.8;
+        const offsetX = width * 0.1;
+        const groundTop = height * 0.6;
+        const groundSpan = height * 0.35;
+        const baseY = groundTop + groundSpan * 0.4; // centered in walkable area
+        const factionColorKeys = Object.keys(FACTION_COLORS);
+        let tweenCount = 0;
+        factions.forEach((faction, fi) => {
+          const colorKey = factionColorKeys[fi % factionColorKeys.length];
+          const color = FACTION_COLORS[colorKey] ?? FACTION_COLORS.unknown;
+          const clusterCenterX = offsetX + (usableW / (factions.length + 1)) * (fi + 1);
+          faction.members.forEach((agentId, mi) => {
+            const agentData = this.agentSprites.get(agentId);
+            if (!agentData?.gameObject) return;
+            // Update faction bar color (Y-offset matches spawnAgent: spriteH/2 + 2)
+            if (agentData.factionBar) {
+              const barY = Math.round(agentData.spriteH * 0.5) + 2;
+              agentData.factionBar.clear();
+              agentData.factionBar.fillStyle(color, 0.8);
+              agentData.factionBar.fillRoundedRect(-8, barY, 16, 3, 1);
+            }
+            const targetX = clusterCenterX + (mi - (faction.members.length - 1) / 2) * FACTION_CLUSTER_SPREAD;
+            const targetY = baseY + (Math.random() - 0.5) * FACTION_CLUSTER_JITTER;
+            // Animate to cluster position (staggered, respecting tween budget)
+            if (!this.reducedMotion && tweenCount < MAX_CONCURRENT_TWEENS) {
+              tweenCount++;
+              this.tweens.add({
+                targets: agentData.gameObject,
+                x: targetX,
+                y: targetY,
+                duration: FACTION_CLUSTER_DURATION + mi * FACTION_CLUSTER_STAGGER,
+                ease: 'Cubic.easeOut',
+                onUpdate: () => this.cullAgent(agentData, width, height),
+              });
+            } else {
+              // Reduced motion or tween budget exceeded — snap position
+              agentData.gameObject.setPosition(targetX, targetY);
+            }
+            // Update wander origin so idle wander stays within cluster
+            agentData.originX = targetX;
+            agentData.originY = targetY;
+            agentData.x = targetX;
+            agentData.y = targetY;
+            // Update minimap with target (post-animation) coordinates
+            this.updateMinimapDot(agentId, targetX, targetY, colorKey);
+          });
+        });
+      })
+    );
+
+    // Phase 3 F5: Faction events (alliance/betrayal) — pooled visual flash
+    this.unsubscribers.push(
+      EventBridge.on('viz:faction_event', (data) => {
+        const events = data.events as Array<{
+          type: string; agent_id: string; faction_key: string;
+        }> | undefined;
+        if (!events || this.reducedMotion) return;
+        let flashTweenCount = 0;
+        for (const evt of events) {
+          if (flashTweenCount >= MAX_CONCURRENT_TWEENS) break;
+          const agentData = this.agentSprites.get(evt.agent_id);
+          if (!agentData?.gameObject) continue;
+          flashTweenCount++;
+          // Acquire flash from pool or create if pool empty
+          let flash = this.factionFlashPool.pop();
+          if (!flash) {
+            flash = this.add.graphics();
+          }
+          flash.clear();
+          flash.setAlpha(1);
+          flash.setVisible(true);
+          const flashColor = evt.type === 'betrayal' ? 0xff0000 : 0x00ff00;
+          flash.fillStyle(flashColor, 0.3);
+          flash.fillCircle(0, 0, FACTION_FLASH_RADIUS);
+          agentData.gameObject.add(flash);
+          const poolRef = this.factionFlashPool; // stable ref for callback
+          this.tweens.add({
+            targets: flash,
+            alpha: 0,
+            duration: FACTION_FLASH_DURATION,
+            ease: 'Sine.easeOut',
+            onComplete: () => {
+              flash!.setVisible(false);
+              agentData.gameObject?.remove(flash!, false); // detach but don't destroy
+              if (poolRef.length < FACTION_FLASH_POOL_SIZE) {
+                poolRef.push(flash!);
+              } else {
+                flash!.destroy(); // pool full, discard
+              }
+            },
+          });
+        }
+      })
+    );
+
     // Phase 3 Batch 2: Bet & Leaderboard updates — handled by React HudOverlay
   }
 
@@ -974,6 +1091,7 @@ export class WorldScene extends Phaser.Scene {
       x, y,
       originX: x,
       originY: y,
+      spriteH,
       gameObject: container,
       haloGraphics: haloGfx,
       factionBar,
@@ -1397,11 +1515,12 @@ export class WorldScene extends Phaser.Scene {
       });
     }
 
-    // Update faction color bar on agent
+    // Update faction color bar on agent (Y-offset matches spawnAgent: spriteH/2 + 2)
     if (agent.factionBar && faction) {
+      const barY = Math.round(agent.spriteH * 0.5) + 2;
       agent.factionBar.clear();
       agent.factionBar.fillStyle(factionColor, 0.8);
-      agent.factionBar.fillRoundedRect(-8, 10, 16, 3, 1);
+      agent.factionBar.fillRoundedRect(-8, barY, 16, 3, 1);
     }
 
     // Smooth movement with ease-out
@@ -2044,6 +2163,8 @@ export class WorldScene extends Phaser.Scene {
     this.ambientMotePool = [];
     this.fpsHistory = [];
     this.effectiveWeatherPoolSize = WEATHER_POOL_SIZE;
+    for (const f of this.factionFlashPool) { if (f.scene) f.destroy(); }
+    this.factionFlashPool = [];
 
     // 5c. V3: Cleanup ambient motes
     if (this.ambientTimer) {

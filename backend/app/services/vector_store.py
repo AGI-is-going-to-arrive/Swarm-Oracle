@@ -509,6 +509,10 @@ def store_identity_memory(
 
     Collection name: identity_{user_id}
     After storing, enforces FIFO eviction if count > 200 for this identity.
+
+    Uses the same two-layer serialization as scenario memory writes:
+    1. Cross-worker lease keyed by ``identity:{user_id}``
+    2. In-process ``_CHROMA_WRITE_LOCK``
     """
     if not summary or not summary.strip():
         return
@@ -517,6 +521,39 @@ def store_identity_memory(
     if not store.available:
         return
 
+    # Acquire cross-worker lease (identity-scoped, not scenario-scoped)
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = acquire_runtime_lock(
+            lock_key,
+            lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("Identity memory lock acquisition failed for %s: %s", user_id, exc)
+        return
+    if lease is None:
+        logger.warning("Identity memory skipped for %s: Chroma write lock busy", user_id)
+        return
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            _store_identity_memory_inner(store, user_id, identity_id, scenario_id, summary, metadata)
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.warning("Identity memory lock release failed for %s: %s", user_id, exc)
+
+
+def _store_identity_memory_inner(
+    store: "VectorStore",
+    user_id: str,
+    identity_id: str,
+    scenario_id: str,
+    summary: str,
+    metadata: dict[str, Any] | None,
+) -> None:
+    """Actual write logic, called inside the serialization lock."""
     col_name = _identity_collection_name(user_id)
     try:
         collection = store._client.get_or_create_collection(

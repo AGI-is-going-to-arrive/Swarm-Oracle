@@ -857,14 +857,16 @@
       },
       "returning": "回归",
       "returning_label": "回归 Agent",
-      "returning_tooltip": "{{name}} 带着跨场景记忆回来了。"
+      "returning_tooltip": "{{name}} 带着跨场景记忆回来了。",
+      "feature_disabled": "自定义 Agent 功能未启用。"
     },
     "causal": {
       "title": "因果图谱",
       "nodes": "节点",
       "edges": "连线",
       "empty": "当前场景暂无可用的因果图数据。",
-      "a11y_list": "因果事件列表"
+      "a11y_list": "因果事件列表",
+      "feature_disabled": "因果图谱功能未启用。"
     },
     "compare": {
       "title": "反事实对比",
@@ -873,10 +875,20 @@
       "round": "第 {{round}} 轮",
       "divergence_label": "分歧度",
       "branch_a_label": "分支 A（原始）",
-      "branch_b_label": "分支 B（反事实）"
+      "branch_b_label": "分支 B（反事实）",
+      "feature_disabled": "反事实重演功能未启用。"
+    },
+    "argument": {
+      "empty": "暂无论证图谱数据。",
+      "claim": "论点",
+      "evidence": "证据",
+      "rebuttal": "反驳",
+      "counter": "反击",
+      "a11y_label": "辩论论证图谱"
     },
     "common": {
       "loading": "加载中…",
+      "back_home": "返回首页",
       "cancel": "取消",
       "close": "关闭",
       "saving": "保存中...",

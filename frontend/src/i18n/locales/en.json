@@ -857,14 +857,16 @@
       },
       "returning": "Returning",
       "returning_label": "Returning agent",
-      "returning_tooltip": "{{name}} has prior cross-scenario memory."
+      "returning_tooltip": "{{name}} has prior cross-scenario memory.",
+      "feature_disabled": "Custom agents feature is not enabled."
     },
     "causal": {
       "title": "Causal Graph",
       "nodes": "nodes",
       "edges": "edges",
       "empty": "No causal graph data available for this scenario.",
-      "a11y_list": "Causal events list"
+      "a11y_list": "Causal events list",
+      "feature_disabled": "Causal graph feature is not enabled."
     },
     "compare": {
       "title": "Counterfactual Compare",
@@ -873,10 +875,20 @@
       "round": "Round {{round}}",
       "divergence_label": "Divergence",
       "branch_a_label": "Branch A (Original)",
-      "branch_b_label": "Branch B (Counterfactual)"
+      "branch_b_label": "Branch B (Counterfactual)",
+      "feature_disabled": "Counterfactual replay feature is not enabled."
+    },
+    "argument": {
+      "empty": "No argument map available.",
+      "claim": "Claim",
+      "evidence": "Evidence",
+      "rebuttal": "Rebuttal",
+      "counter": "Counter",
+      "a11y_label": "Debate argument map"
     },
     "common": {
       "loading": "Loading…",
+      "back_home": "Back to Home",
       "cancel": "Cancel",
       "close": "Close",
       "saving": "Saving...",

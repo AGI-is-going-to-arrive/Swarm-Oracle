@@ -116,6 +116,7 @@ import './ResultView.css';
 import { CounterfactualPanel } from '../components/CounterfactualPanel';
 import { FactionTimeline } from '../components/FactionTimeline';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { ReturningBadge } from '../components/ReturningBadge';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 
@@ -2067,6 +2068,9 @@ export default function ResultView() {
                   <span className={`tier-badge tier-${agent.tier.toLowerCase()}`}>
                     {agent.tier}
                   </span>
+                )}
+                {capabilities?.agent_identity?.enabled && (
+                  <ReturningBadge isReturning={!!agent.is_returning} displayName={agent.name} />
                 )}
               </div>
             ))}

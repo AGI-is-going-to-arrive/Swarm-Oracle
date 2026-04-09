@@ -394,7 +394,8 @@ async def parse_and_run_background(
                 from app.models.agent_identity import AgentIdentity
                 for cid in custom_agent_identity_ids[:5]:
                     identity = session.get(AgentIdentity, cid)
-                    if identity and identity.kind == "custom":
+                    if (identity and identity.kind == "custom"
+                            and user_id is not None and identity.user_id == user_id):
                         custom_agents_to_inject.append({
                             "name": identity.display_name,
                             "role": identity.role,
