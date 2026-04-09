@@ -46,6 +46,8 @@ import type {
   StoryData,
 } from '../types';
 
+import { FactionBadge } from './FactionBadge';
+import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import './EndingChatModal.css';
 
 const EMPTY_SELECTED_BRANCH_IDS: string[] = [];
@@ -385,6 +387,9 @@ export default function EndingChatModal({
     () => new Map((effectiveSnapshot?.participants ?? []).map((participant) => [participant.id, participant])),
     [effectiveSnapshot?.participants],
   );
+
+  // P1-8: Faction overlay — call hook internally with branch from props
+  const factionMap = useFactionOverlay(scenarioId, branch?.id, participantsById);
 
   const currentTurns = useMemo(() => {
     if (readOnly && replayState?.snapshot) {
@@ -1384,6 +1389,7 @@ export default function EndingChatModal({
                   <header>
                     {message.roleSlot === 'archivist' && <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />}
                     <strong>{message.speaker}</strong>
+                    {message.participantId && <FactionBadge faction={factionMap?.get(message.participantId)} />}
                     <span>{message.phase}</span>
                   </header>
                   <p>{message.content}</p>

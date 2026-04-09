@@ -863,6 +863,25 @@ export type KnowledgeDomain =
   | 'culture' | 'environment' | 'health' | 'education' | 'law'
   | 'philosophy' | 'history' | 'psychology' | 'sociology' | 'religion';
 
+// ── Phase 3: Agent Memory & Growth (P1-1/P1-2) ─────────
+
+export interface AgentMemoryEntry {
+  summary: string;
+  scenario_id: string | null;
+  created_at: string | null;
+}
+
+export interface AgentGrowthEvent {
+  id: string;
+  scenario_id: string | null;
+  branch_id: string | null;
+  round_number: number | null;
+  event_type: string; // stance_shift | alliance | betrayal | alliance_formed | alliance_broken
+  summary: string;
+  metrics_json: string | null;
+  created_at: string | null;
+}
+
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';
 export type Branch = BranchInfo;

@@ -139,12 +139,19 @@ class TestWorkshopCRUD:
 
 
 class TestMemoryEndpoint:
-    async def test_memory_returns_200_with_empty_list(self, client: AsyncClient):
-        resp = await client.get("/api/agents/identities/nonexistent-id/memory")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["identity_id"] == "nonexistent-id"
-        assert isinstance(data["memories"], list)
+    async def test_memory_requires_user_id(self, client: AsyncClient):
+        resp = await client.get("/api/agents/identities/any-id/memory")
+        assert resp.status_code == 400
+        assert "user_id" in resp.json()["detail"]
+
+    async def test_memory_returns_404_for_nonexistent_identity(
+        self, client: AsyncClient,
+    ):
+        resp = await client.get(
+            "/api/agents/identities/nonexistent-id/memory",
+            params={"user_id": "test-user"},
+        )
+        assert resp.status_code == 404
 
 
 class TestFullLifecycle:

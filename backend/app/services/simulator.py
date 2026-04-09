@@ -1132,14 +1132,17 @@ async def run_simulation(
             # Phase 3 F2: Causal graph — record round nodes (non-blocking)
             if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                 try:
-                    _causal_append(scenario_id, current_branch_id, round_num, messages)
+                    await asyncio.to_thread(
+                        _causal_append, scenario_id, current_branch_id, round_num, messages,
+                    )
                 except Exception:
                     logger.debug("causal_graph append failed (non-blocking)", exc_info=True)
 
             # Phase 3 F5: Faction detection + WS broadcast (non-blocking)
             if _FACTIONS_AVAILABLE and settings.FEATURE_FACTIONS:
                 try:
-                    _faction_result = _factions_process(
+                    _faction_result = await asyncio.to_thread(
+                        _factions_process,
                         scenario_id, current_branch_id, round_num, messages,
                     )
                     if _faction_result:
@@ -1171,7 +1174,10 @@ async def run_simulation(
                     _cp_bb = blackboards.get(current_branch_id)
                     if _cp_bb is not None:
                         bb_snapshot = {"summary": _cp_bb.get_global_summary()}
-                    _checkpoint_write(scenario_id, current_branch_id, round_num, agents, bb_snapshot)
+                    await asyncio.to_thread(
+                        _checkpoint_write,
+                        scenario_id, current_branch_id, round_num, agents, bb_snapshot,
+                    )
                 except Exception:
                     logger.debug("checkpoint write failed (non-blocking)", exc_info=True)
 
@@ -1316,7 +1322,8 @@ async def run_simulation(
                         # Phase 3 F2: Record fork in causal graph
                         if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                             try:
-                                _causal_append(
+                                await asyncio.to_thread(
+                                    _causal_append,
                                     scenario_id, current_branch_id, round_num, [],
                                     fork_event={
                                         "branch_id": current_branch_id,
@@ -1430,8 +1437,6 @@ async def run_simulation(
     # Phase 3 F1: Record growth events + identity memories at scenario end
     # Runs in thread pool to avoid blocking the async event loop (sync DB + ChromaDB I/O).
     if scenario_finished and settings.FEATURE_AGENT_IDENTITY:
-        import asyncio
-
         def _run_identity_lifecycle() -> None:
             from app.services.agent_identity import record_growth_event
             from app.services.vector_store import store_identity_memory

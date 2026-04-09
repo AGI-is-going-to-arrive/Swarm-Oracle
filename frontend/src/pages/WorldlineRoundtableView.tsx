@@ -91,6 +91,7 @@ import type {
 } from '../types';
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
+import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
 
@@ -381,6 +382,8 @@ export default function WorldlineRoundtableView() {
     () => new Map(participants.map((participant) => [participant.id, participant])),
     [participants],
   );
+  // P1-8: faction overlay — hook discovers branches from participants
+  const factionMap = useFactionOverlay(scenario?.id, undefined, participantsById);
   const speakerIndexMap = useMemo(() => {
     const seen = new Map<string, number>();
     let idx = 0;
@@ -1807,6 +1810,7 @@ export default function WorldlineRoundtableView() {
                 transcriptDraftLayouts={transcriptDraftLayouts}
                 participantsById={participantsById}
                 speakerIndexMap={speakerIndexMap}
+                factionMap={factionMap}
                 onHotseatQuote={handleHotseatQuote}
                 onFollowQuote={handleFollowQuote}
                 onQuoteThread={handleQuoteThread}

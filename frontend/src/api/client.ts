@@ -868,3 +868,39 @@ export interface InterventionTemplate {
 export async function getInterventionTemplates(): Promise<InterventionTemplate[]> {
   return safeGet('/intervention-templates');
 }
+
+// ── Phase 3 P1-1/P1-2: Agent Identity Memory & Growth ──
+
+import type { AgentMemoryEntry, AgentGrowthEvent } from '../types';
+
+/** GET /api/agents/identities/:id/memory */
+export async function getIdentityMemory(
+  identityId: string,
+  userId?: string,
+): Promise<{ identity_id: string; memories: AgentMemoryEntry[] }> {
+  const uid = userId || localStorage.getItem('swarmoracle_user_id') || 'default_user';
+  return safeGet(
+    `/agents/identities/${encodeURIComponent(identityId)}/memory?user_id=${encodeURIComponent(uid)}`,
+  );
+}
+
+/** GET /api/agents/identities/:id/growth-events */
+export async function getIdentityGrowthEvents(
+  identityId: string,
+  userId?: string,
+): Promise<{ identity_id: string; events: AgentGrowthEvent[] }> {
+  const uid = userId || localStorage.getItem('swarmoracle_user_id') || 'default_user';
+  return safeGet(
+    `/agents/identities/${encodeURIComponent(identityId)}/growth-events?user_id=${encodeURIComponent(uid)}`,
+  );
+}
+
+/** GET /api/scenario/:id/faction-timeline — P1-8 faction overlay data */
+export async function getFactionTimeline(
+  scenarioId: string,
+  branchId: string,
+): Promise<Array<{ round: number; factions: Array<{ key: string; label: string | null; members: string[] }>; events: unknown[] }>> {
+  return safeGet(
+    `/scenario/${encodeURIComponent(scenarioId)}/faction-timeline?branch_id=${encodeURIComponent(branchId)}`,
+  );
+}

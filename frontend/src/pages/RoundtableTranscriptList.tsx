@@ -4,6 +4,8 @@ import type { EndingRoomParticipant, EndingRoomPhase, EndingRoomRoleSlot } from 
 import type { OracleTranscriptBubbleLayout } from '../lib/textLayout/oracleTranscriptLayout';
 import { getEndingRoomPhaseLabel } from '../lib/endingRoomLabels';
 import { buildRoundtableAnchorId, ROUNDTABLE_COLLAPSED_TURN_MAX_LINES } from './roundtableHelpers';
+import { FactionBadge } from '../components/FactionBadge';
+import type { ParticipantFaction } from '../hooks/useFactionOverlay';
 
 interface FormattedTurn {
   key: string;
@@ -39,6 +41,7 @@ interface Props {
   transcriptDraftLayouts: Record<string, OracleTranscriptBubbleLayout>;
   participantsById: Map<string, EndingRoomParticipant>;
   speakerIndexMap: Map<string, number>;
+  factionMap?: Map<string, ParticipantFaction>;
   onHotseatQuote: (participantId: string, speaker: string, content: string, anchorId: string) => void;
   onFollowQuote: (anchorId: string, speaker: string, content: string) => void;
   onQuoteThread: (anchorId: string, speaker: string, content: string) => void;
@@ -61,6 +64,7 @@ export default function RoundtableTranscriptList({
   transcriptDraftLayouts,
   participantsById,
   speakerIndexMap,
+  factionMap,
   onHotseatQuote,
   onFollowQuote,
   onQuoteThread,
@@ -114,6 +118,7 @@ export default function RoundtableTranscriptList({
                 <span className="ending-chat-bubble__icon ending-chat-bubble__icon--archivist" aria-hidden="true" />
               )}
               <strong>{turn.speaker}</strong>
+              <FactionBadge faction={factionMap?.get(turn.participantId)} />
               {turn.key === activeSpeakerTurnKey && (
                 <span className="worldline-roundtable-transcript-badge">
                   {isZh ? '当前发言' : 'Speaking'}

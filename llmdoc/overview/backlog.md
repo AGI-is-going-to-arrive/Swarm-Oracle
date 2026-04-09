@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-10 (af5ba40 + cfd2d44 后)
+> 最后更新：2026-04-10 (Batch 2 完成后)
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -12,28 +12,15 @@
 - X-5：ownership 校验（局部改进，非完整 IDOR）
 - X-2 + P1-13：i18n gate 消息补全
 - X-1：Campaign API endpoints（已成型，有完整路由 + 测试）
+- M-2：factions/causal_graph/checkpoint hooks 已迁移到 asyncio.to_thread (20 tests)
+- M-4：WorldScene tween budget 已改用全局 getTweens().length
+- P1-1/P1-2：AgentProfileModal + MemoryTimeline (dialog + timeline + 新 growth-events 端点)
+- P1-5：LiveArgumentMap (DebateArenaView collapsible sidebar, auto-refresh on turn)
+- P1-6：ArgumentMap 升级为 @xyflow/react DAG (ReactFlow + dagre layout)
+- P1-7：ArgumentStrengthMeter (status distribution stacked bar)
+- P1-8：TranscriptFactionOverlay (FactionBadge + useFactionOverlay hook, integrated in RoundtableTranscriptList + EndingChatModal)
 
 ## 剩余项
-
-### Review follow-up
-
-| # | 问题 | 风险 | 现状 |
-|---|------|------|------|
-| M-2 | `factions.process_round()` 同步 DB I/O 在 async event loop 中 | 中 | 预存问题，`simulator.py:1140` → `factions.py:32`。应移到 `asyncio.to_thread` 或拆异步持久化 |
-| M-4 | WorldScene faction tween budget 用局部计数 | 低 | `WorldScene.ts:890` 局部 `tweenCount`，非全局 `getTweens().length`。每轮只触发一次，实际低风险 |
-
-### 缺 UX/可视化壳（底层已有实现）
-
-这些功能的后端服务和数据模型已就绪，缺的是前端 UX 壳或可视化增强。
-
-| # | 项目 | 已有底座 | 缺什么 |
-|---|------|---------|--------|
-| P1-1 | AgentProfileModal | `agent_identity.py` 服务 + `/api/agents/identities/{id}/memory` 端点 + `agentStore` | 弹窗组件（展示单个 agent 跨场景记忆时间线） |
-| P1-2 | MemoryTimeline | 同 P1-1 底座 | 按场景分段的垂直时间线组件 |
-| P1-5 | LiveArgumentMap | `debate_argument_map.py` 服务 + ArgumentMap 组件 + rule-based extraction | DebateArenaView 实时侧边面板（当前仅在 DebateResultView 展示） |
-| P1-6 | @xyflow/react 替代 ArgumentMap | ArgumentMap HTML tree 已可用 | 用 @xyflow DAG 可视化替代当前 HTML tree 渲染 |
-| P1-7 | ArgumentStrengthMeter | argument unit 有 status 字段 | 节点内进度条组件 |
-| P1-8 | TranscriptFactionOverlay | FactionTimeline 组件 + `factions.py` 服务 + WS 事件 | Roundtable/密室发言旁阵营色标叠加 |
 
 ### 缺 Playwright E2E
 

@@ -887,7 +887,6 @@ export class WorldScene extends Phaser.Scene {
         const groundSpan = height * 0.35;
         const baseY = groundTop + groundSpan * 0.4; // centered in walkable area
         const factionColorKeys = Object.keys(FACTION_COLORS);
-        let tweenCount = 0;
         factions.forEach((faction, fi) => {
           const colorKey = factionColorKeys[fi % factionColorKeys.length];
           const color = FACTION_COLORS[colorKey] ?? FACTION_COLORS.unknown;
@@ -904,9 +903,8 @@ export class WorldScene extends Phaser.Scene {
             }
             const targetX = clusterCenterX + (mi - (faction.members.length - 1) / 2) * FACTION_CLUSTER_SPREAD;
             const targetY = baseY + (Math.random() - 0.5) * FACTION_CLUSTER_JITTER;
-            // Animate to cluster position (staggered, respecting tween budget)
-            if (!this.reducedMotion && tweenCount < MAX_CONCURRENT_TWEENS) {
-              tweenCount++;
+            // Animate to cluster position (staggered, respecting global tween budget)
+            if (!this.reducedMotion && this.tweens.getTweens().length < MAX_CONCURRENT_TWEENS) {
               this.tweens.add({
                 targets: agentData.gameObject,
                 x: targetX,
@@ -938,12 +936,10 @@ export class WorldScene extends Phaser.Scene {
           type: string; agent_id: string; faction_key: string;
         }> | undefined;
         if (!events || this.reducedMotion) return;
-        let flashTweenCount = 0;
         for (const evt of events) {
-          if (flashTweenCount >= MAX_CONCURRENT_TWEENS) break;
+          if (this.tweens.getTweens().length >= MAX_CONCURRENT_TWEENS) break;
           const agentData = this.agentSprites.get(evt.agent_id);
           if (!agentData?.gameObject) continue;
-          flashTweenCount++;
           // Acquire flash from pool or create if pool empty
           let flash = this.factionFlashPool.pop();
           if (!flash) {

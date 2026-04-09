@@ -6,10 +6,12 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
+from sqlmodel import Session, select
 
 from app.config import settings
-from pydantic import BaseModel, field_validator
-
+from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
+from app.models.database import get_engine
 from app.services.persona_workshop import (
     ALLOWED_KNOWLEDGE_DOMAINS,
     create_custom_agent,
@@ -160,11 +162,29 @@ async def list_identities(user_id: str | None = None):
 
 
 @router.get("/identities/{identity_id}/memory")
-async def get_identity_memory(identity_id: str):
+async def get_identity_memory(
+    identity_id: str,
+    user_id: str | None = None,
+):
     """Get cross-scenario memory for an agent identity (B2)."""
     if not settings.FEATURE_AGENT_IDENTITY:
-        return JSONResponse(status_code=404, content={"detail": "Agent identity feature not enabled"})
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Agent identity feature not enabled"},
+        )
+    if not user_id:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "user_id query parameter is required"},
+        )
     try:
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            if not identity or identity.user_id != user_id:
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "Identity not found"},
+                )
         from app.services.agent_identity import get_identity_memories
         memories = get_identity_memories(identity_id)
         return {"identity_id": identity_id, "memories": memories}
@@ -173,6 +193,69 @@ async def get_identity_memory(identity_id: str):
         return JSONResponse(
             status_code=500,
             content={"detail": "Failed to retrieve identity memories"},
+        )
+
+
+@router.get("/identities/{identity_id}/growth-events")
+async def get_identity_growth_events(
+    identity_id: str,
+    user_id: str | None = None,
+):
+    """Get growth events for an agent identity across scenarios."""
+    if not settings.FEATURE_AGENT_IDENTITY:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Agent identity feature not enabled"},
+        )
+    if not user_id:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "user_id query parameter is required"},
+        )
+    try:
+        with Session(get_engine()) as session:
+            # Verify identity belongs to the requesting user
+            identity = session.get(AgentIdentity, identity_id)
+            if not identity or identity.user_id != user_id:
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "Identity not found"},
+                )
+            events = session.exec(
+                select(AgentGrowthEvent)
+                .where(
+                    AgentGrowthEvent.identity_id == identity_id
+                )
+                .order_by(AgentGrowthEvent.created_at)
+            ).all()
+        return {
+            "identity_id": identity_id,
+            "events": [
+                {
+                    "id": str(e.id),
+                    "scenario_id": (
+                        str(e.scenario_id) if e.scenario_id else None
+                    ),
+                    "branch_id": (
+                        str(e.branch_id) if e.branch_id else None
+                    ),
+                    "round_number": e.round_number,
+                    "event_type": e.event_type,
+                    "summary": e.summary,
+                    "metrics_json": e.metrics_json,
+                    "created_at": (
+                        e.created_at.isoformat()
+                        if e.created_at else None
+                    ),
+                }
+                for e in events
+            ],
+        }
+    except Exception as exc:
+        logger.warning("Failed to fetch growth events: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Failed to retrieve growth events"},
         )
 
 

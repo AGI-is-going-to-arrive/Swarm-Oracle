@@ -2,11 +2,13 @@
    Phase 3 F3 — Agent Library (Grid View)
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAgentStore } from '../stores/agentStore';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { AgentProfileModal } from '../components/AgentProfileModal';
+import type { AgentIdentityInfo } from '../types';
 
 const KNOWLEDGE_DOMAIN_KEYS = {
   economics: 'agents.domains.economics',
@@ -30,6 +32,7 @@ export function AgentLibrary() {
   const { t } = useTranslation();
   const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
   const { identities, loading, error, fetchIdentities } = useAgentStore();
+  const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -77,10 +80,16 @@ export function AgentLibrary() {
         {customAgents.map(agent => (
           <div
             key={agent.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => setProfileAgent(agent)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setProfileAgent(agent); } }}
             style={{
               border: '1px solid var(--color-border, #555)',
               borderRadius: 8, padding: '1rem',
               background: 'var(--color-surface, #1a1a2e)',
+              cursor: 'pointer',
+              transition: 'border-color 0.15s',
             }}
           >
             <h3 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>{agent.display_name}</h3>
@@ -101,7 +110,8 @@ export function AgentLibrary() {
             )}
             <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
               <button
-                onClick={async () => {
+                onClick={async (e) => {
+                  e.stopPropagation();
                   if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
                   await fetch(`/api/agents/workshop/${agent.id}`, { method: 'DELETE' });
                   const userId = localStorage.getItem('swarmoracle_user_id') || 'default_user';
@@ -115,6 +125,11 @@ export function AgentLibrary() {
           </div>
         ))}
       </div>
+      <AgentProfileModal
+        identity={profileAgent}
+        open={profileAgent !== null}
+        onClose={() => setProfileAgent(null)}
+      />
     </div>
   );
 }

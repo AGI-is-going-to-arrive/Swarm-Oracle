@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -35,6 +35,8 @@ import { useDebateWS } from '../hooks/useDebateWS';
 import { useDebateStore } from '../stores/debateStore';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import type { DebatePhase } from '../types';
+import { ArgumentMap } from '../components/ArgumentMap';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import './DebateArena.css';
 
 const REVEAL_INTERVAL_MS = 1400;
@@ -89,6 +91,10 @@ export function DebateArenaView() {
   const error = useDebateStore((state) => state.error);
   const errorCode = useDebateStore((state) => state.errorCode);
   const loadDebate = useDebateStore((state) => state.loadDebate);
+
+  const { enabled: argMapEnabled } = useCapabilityCheck('argument_map');
+  const [argMapOpen, setArgMapOpen] = useState(false);
+  const [argMapRefreshKey, setArgMapRefreshKey] = useState(0);
 
   const [revealCount, setRevealCount] = useState(0);
   const [selectedPhase, setSelectedPhase] = useState<string>('opening');
@@ -167,6 +173,13 @@ export function DebateArenaView() {
     }, REVEAL_INTERVAL_MS);
     return () => window.clearTimeout(timer);
   }, [autoReveal, debate?.turns.length, revealCount]);
+
+  // P1-5: Refresh argument map when new turns are revealed
+  useEffect(() => {
+    if (argMapOpen && argMapEnabled) {
+      setArgMapRefreshKey(k => k + 1);
+    }
+  }, [revealCount, argMapOpen, argMapEnabled]);
 
   const visibleTurns = useMemo(
     () => debate?.turns.slice(0, revealCount) ?? [],
@@ -1107,6 +1120,36 @@ export function DebateArenaView() {
                 </div>
               </div>
             </section>
+            {/* P1-5: Live Argument Map */}
+            {argMapEnabled && id && (
+              <section className="debate-panel">
+                <div className="debate-panel__header">
+                  <h3>{t('argument.live_title', 'Argument Map')}</h3>
+                  <button
+                    type="button"
+                    onClick={() => setArgMapOpen(o => !o)}
+                    style={{
+                      background: 'none', border: '1px solid #555',
+                      borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+                      fontSize: '0.7rem', color: '#8ab4f8',
+                    }}
+                  >
+                    {argMapOpen
+                      ? t('argument.live_collapse', 'Collapse')
+                      : t('argument.live_expand', 'Expand')}
+                  </button>
+                </div>
+                {argMapOpen && (
+                  <div className="debate-panel__body">
+                    <ArgumentMap
+                      debateId={id}
+                      visible={argMapOpen}
+                      refreshTrigger={argMapRefreshKey}
+                    />
+                  </div>
+                )}
+              </section>
+            )}
           </aside>
         </div>
       </div>
