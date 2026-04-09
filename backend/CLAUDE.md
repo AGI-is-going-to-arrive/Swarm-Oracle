@@ -111,7 +111,7 @@ docker compose up backend
 | 服务 | 文件 | 职责 |
 |------|------|------|
 | ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content |
-| simulator | `simulator.py` | 多代理模拟引擎，含 causal/factions/checkpoint 3 个 Phase 3 hook (均受 `FEATURE_*` gate) |
+| simulator | `simulator.py` | 多代理模拟引擎，含 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
 | debate | `debate.py` | 辩论引擎，含 argument map 抽取+verdict linking hook (受 `FEATURE_ARGUMENT_MAP` gate) |
 | llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
@@ -120,7 +120,7 @@ docker compose up backend
 | web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG 提供商, TTL 缓存, 上下文格式化) |
 | narrator | `narrator.py` | 叙事生成 |
 | scoring | `scoring.py` | 预测评分 |
-| vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储) |
+| vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储，identity memory 写入经 `identity:{user_id}` 粒度串行化锁保护) |
 | persona_workshop | `persona_workshop.py` | 用户自建 Agent CRUD + persona 防注入 (Phase 3 F3) |
 | agent_identity | `agent_identity.py` | 跨场景身份解析 + 成长事件 (Phase 3 F1) |
 | causal_graph | `causal_graph.py` | 因果 DAG 构建 + stance 推导 (Phase 3 F2) |
@@ -143,7 +143,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **60 个测试文件 / 1717 tests**，位于 `tests/`
+- **61 个测试文件 / 1732 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -163,7 +163,7 @@ backend/
     services/            # 业务逻辑 (21 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (16 个版本)
-  tests/                 # 测试 (60 个文件)
+  tests/                 # 测试 (61 个文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -261,6 +261,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | P0 接线 + 安全修复 | X-5 ownership 校验 (`user_id is not None` + match)；`Scenario.user_id` 创建时持久化 + `parsed_context` 兜底；simulator identity lifecycle hook (`asyncio.to_thread` + per-agent 异常隔离)；simulator faction WS 事件发射 (`viz:faction_cluster`/`viz:faction_event`)；`store_identity_memory` 加 Chroma 串行化锁 (`identity:{user_id}` 粒度)；16 新测试 (`test_p0_wiring.py`：ownership 校验 6 + lifecycle 5 + faction WS 5) |
 | 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 加 FEATURE_* server-side 404 gate (11 条回归测试)；simulator 补 factions+checkpoint hook；debate 补 argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 无损同步；argument-map + faction-timeline 2 个新 endpoint |
 | 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities 7-key registry、ChromaDB 双层 memory、125+ 新测试 |
 | 2026-04-09 | 遗留项收口 | auth_ok 发送异常区分 WebSocketDisconnect/其他 + 日志 + close(1011)；pending_auth 归零清理 key；campaign/ending-room session gate 提升 router 级 dependencies；llm_client content=null `or ""` 防御；pyproject.toml 显式声明 sqlalchemy/pydantic 直依赖；test_llm_client 5 条 probe skip |

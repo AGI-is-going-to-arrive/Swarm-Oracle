@@ -50,7 +50,7 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 60 文件 / 1717 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 61 文件 / 1732 tests |
 | frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 77 文件 / 716 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
@@ -132,22 +132,25 @@ cd backend && alembic upgrade head
 - 6 个新后端服务：`persona_workshop`、`agent_identity`、`causal_graph`、`replay`、`factions`、`debate_argument_map`
 - 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 升级为 7-key 通用 capability registry
 - 4 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`
-- 5 个新前端组件：`AgentAttachPanel`、`ArgumentMap`、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`
-- `simulator.py` 新增 3 个非阻塞 hook：因果图谱、阵营检测、检查点写入，均受 `FEATURE_*` 环境变量控制
+- 5 个新前端组件：`AgentAttachPanel`、`ArgumentMap`（已 i18n 化）、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`（已集成到 ResultView + capability gate）
+- `simulator.py` 新增 4 个非阻塞 hook：因果图谱、阵营检测+WS 事件发射、检查点写入、身份生命周期（场景结束时写入 growth_event + identity_memory，`asyncio.to_thread` 包装），均受 `FEATURE_*` 环境变量控制
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
-- `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`
+- `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
 - 6 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关
 - 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate，disabled 时不发 API 请求
 - `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
-- ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO)
+- ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO，写入经 `identity:{user_id}` 粒度串行化锁保护)
 - Agent continuity key：SHA-256(role+persona[:30])[:16]，跨场景身份匹配
 - 自定义 Agent persona 通过 `format_untrusted_text_block()` 防注入
 - `ScenarioResponse` 新增 3 个 additive 字段，`custom_agent_identity_ids` 最多 5 个
+- `Scenario.user_id` 在创建时持久化（`scenarios.py`），场景结束 hook 优先读取该列，旧数据兜底从 `parsed_context["user_id"]` 取值
+- `EventBridge` 新增 `viz:faction_cluster` / `viz:faction_event` 事件类型，`WorldScene` 消费这两个事件驱动阵营聚拢动画（对象池 + 命名常量 + `spriteH` 一致性 + `prefers-reduced-motion` snap）
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | P0 接线 + 安全修复 | X-5 ownership 校验 (user_id is not None + match) + Scenario.user_id 持久化；P0-2/P0-3 identity lifecycle hooks (asyncio.to_thread + per-agent 异常隔离)；P0-4 faction WS 事件发射 (viz:faction_cluster/event)；P0-5 Phaser 阵营聚拢动画 (对象池 + spriteH 一致性)；P0-1 ReturningBadge 集成 ResultView + capability gate；X-2 i18n keys 补全 (feature_disabled + argument.* + a11y_label)；M-3 identity memory Chroma 串行化锁 (identity:{user_id})；ArgumentMap TYPE_LABELS i18n 化；16 新测试 (test_p0_wiring.py) |
 | 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 全部加 server-side FEATURE_* gate + 404 测试；simulator 3 hook 接线 (causal+factions+checkpoint)；debate argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 同步；前端 capability gate + useCapabilityCheck hook + InputView/ResultView/DebateResultView 集成 |
 | 2026-04-09 | Phase 3 六大功能增强 | F1 Agent身份+记忆、F2 因果图谱、F3 自建Agent、F4 蝴蝶效应回溯、F5 涌现阵营、F6 论证图谱；13 新模型、6 新服务、3 迁移、4 新页面、5 新组件、171 新测试 |
 | 2026-04-09 | 遗留项收口 + 文档同步 | m1/m2 WS 异常处理加固、s1 session gate 提升 router 级、s2 CSS token 提取、s3 tween guard 测试、s4/s5 a11y + 死代码清理、llmdoc 10→13 variants 同步 |

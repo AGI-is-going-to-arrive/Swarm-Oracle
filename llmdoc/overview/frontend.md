@@ -98,7 +98,8 @@
   - compact 模式下文字增加了描边（`strokeThickness: 1.5`）和阴影（`blur: 2`）以提升暗色背景上的可读性
 - Theater Agent sprite 当前采用动态缩放：
   - 尺寸 = `max(40, Math.min(width, height) * 0.055)` 宽，保持 2:3 宽高比
-  - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算
+  - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算（`spriteH` 存储在 `AgentSpriteData` 中，各处统一使用 `spriteH * 0.5 + 2` 作 Y 偏移）
+  - 阵营聚拢动画：`viz:faction_cluster` 事件驱动，对象池 flash、命名常量、tween 预算限制、reduced-motion snap
   - 原始 640×640 PNG 素材的宽高比不会因为 canvas 比例变化而拉伸
 
 ## 关键模块

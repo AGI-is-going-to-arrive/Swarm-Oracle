@@ -32,10 +32,10 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断 |
-| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 |
+| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease，防重入 |

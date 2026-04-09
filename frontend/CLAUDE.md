@@ -87,10 +87,10 @@ npm run test:watch # vitest (watch mode)
 | `LanguageSwitcher.tsx` | 语言切换器 |
 | `endingChatHelpers.ts` | 密室聊天辅助函数 |
 | `AgentAttachPanel.tsx` | Agent 勾选面板 (tab+space 键盘可达, Phase 3 F3) |
-| `ArgumentMap.tsx` | 辩论论证树 (role="tree", Phase 3 F6) |
+| `ArgumentMap.tsx` | 辩论论证树 (role="tree", i18n 化 TYPE_LABELS, Phase 3 F6) |
 | `CounterfactualPanel.tsx` | 反事实种子选择器 (Phase 3 F4) |
 | `FactionTimeline.tsx` | 阵营时间线 (逐轮色条, Phase 3 F5) |
-| `ReturningBadge.tsx` | 跨场景回归标记 (Phase 3 F1) |
+| `ReturningBadge.tsx` | 跨场景回归标记 (已集成到 ResultView + capability gate, Phase 3 F1) |
 
 ### `src/game/` -- Phaser 游戏引擎
 
@@ -99,11 +99,11 @@ npm run test:watch # vitest (watch mode)
 | `index.ts` | Phaser 游戏配置 |
 | `PhaserGameLoader.tsx` | React-Phaser 桥接组件 |
 | `HudOverlay.tsx` | HUD 浮层 |
-| `scenes/WorldScene.ts` | 主剧场场景 (代理气泡、精灵) |
+| `scenes/WorldScene.ts` | 主剧场场景 (代理气泡、精灵、阵营聚拢动画) |
 | `scenes/BootScene.ts` | 启动场景 |
 | `scenes/TitleScene.ts` | 标题场景 |
 | `scenes/EndingScene.ts` | 结局场景 |
-| `managers/EventBridge.ts` | 事件桥 (React <-> Phaser) |
+| `managers/EventBridge.ts` | 事件桥 (React <-> Phaser, 含 viz:faction_cluster/event 类型) |
 | `managers/VizSynthesizer.ts` | 可视化合成器 |
 | `worldSceneBootstrap.ts` | WorldScene 初始化 |
 | `sceneAssetPlan.ts` | 场景资源规划 |
@@ -362,6 +362,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | P0 接线 + i18n 补全 | ResultView 集成 ReturningBadge + capability gate (agent_identity)；EventBridge 新增 `viz:faction_cluster`/`viz:faction_event` 类型；WorldScene 阵营聚拢动画 (对象池 + 命名常量 + spriteH 一致性 + 居中修复 + reduced-motion snap + viewport culling)；ArgumentMap TYPE_LABELS i18n 化 (`TYPE_LABEL_I18N` 元组 + fallback)；en.json/zh.json 新增 agents/causal/compare.feature_disabled + argument.* + argument.a11y_label + common.back_home |
 | 2026-04-09 | Phase 3 接线补全 | useCapabilityCheck hook + 4 新页面 capability gate (disabled 时不发 API)；InputView 集成 AgentAttachPanel；ResultView 集成因果图谱链接+CounterfactualPanel+FactionTimeline；DebateResultView 集成 ArgumentMap；CounterfactualPanel branchId prop 修复；client.ts 新增 customAgentIdentityIds；gate 测试 1 条 |
 | 2026-04-09 | Phase 3 六大功能 | 4 新页面 (AgentWorkshop/Library/CausalReview/CompareDigest)、5 新组件 (AgentAttach/ArgumentMap/Counterfactual/FactionTimeline/ReturningBadge)、agentStore、i18n Phase 3 keys、4 新路由、contract-freeze 测试、29+ 新测试 |
 | 2026-04-09 | 遗留项收口 | mobile roster dialog 焦点管理 (打开聚焦 + 关闭回触发按钮)；sidebar `<details>` 加 aria-label；hotseat/overflow CSS 颜色提取为 token；e2e 脚本死代码清理；reducedMotion tween guard 结构测试 ×5 |
