@@ -105,17 +105,21 @@ export function CausalReviewView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchGraph = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/scenario/${id}/causal-graph`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setGraphData(data);
+    } catch (err) { setError((err as Error).message); }
+    setLoading(false);
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
-    setLoading(true);
-    fetch(`/api/scenario/${id}/causal-graph`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => { setGraphData(data); setLoading(false); })
-      .catch(err => { setError((err as Error).message); setLoading(false); });
-  }, [id]);
+    fetchGraph();
+  }, [id, fetchGraph]);
 
   const { nodes, edges } = useMemo(() => {
     if (!graphData || graphData.nodes.length === 0) return { nodes: [], edges: [] };

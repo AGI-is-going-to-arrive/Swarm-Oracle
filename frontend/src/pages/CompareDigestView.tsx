@@ -3,7 +3,7 @@
    Side-by-side text comparison of two branches (per-round diff).
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -32,21 +32,25 @@ export function CompareDigestView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchCompare = useCallback(async () => {
     if (!id || !branchA || !branchB) {
       setLoading(false);
       setError(t('compare.missing_params', 'Missing branch parameters'));
       return;
     }
     setLoading(true);
-    fetch(`/api/scenario/${id}/compare?branch_a=${branchA}&branch_b=${branchB}`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(d => { setData(d); setLoading(false); })
-      .catch(err => { setError((err as Error).message); setLoading(false); });
+    try {
+      const res = await fetch(`/api/scenario/${id}/compare?branch_a=${branchA}&branch_b=${branchB}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      setData(d);
+    } catch (err) { setError((err as Error).message); }
+    setLoading(false);
   }, [id, branchA, branchB, t]);
+
+  useEffect(() => {
+    fetchCompare();
+  }, [fetchCompare]);
 
   if (loading) {
     return <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;

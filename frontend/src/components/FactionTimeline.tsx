@@ -3,7 +3,7 @@
    Displays faction evolution across rounds as colored rows.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface FactionInfo {
@@ -39,18 +39,22 @@ export function FactionTimeline({ scenarioId, branchId, visible }: Props) {
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const fetchTimeline = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/scenario/${scenarioId}/faction-timeline?branch_id=${branchId}`);
+      if (res.status === 501) { setTimeline([]); setLoading(false); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setTimeline(data);
+    } catch { setTimeline([]); }
+    setLoading(false);
+  }, [scenarioId, branchId]);
+
   useEffect(() => {
     if (!visible || !scenarioId) return;
-    setLoading(true);
-    fetch(`/api/scenario/${scenarioId}/faction-timeline?branch_id=${branchId}`)
-      .then(res => {
-        if (res.status === 501) return [];
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => { setTimeline(data); setLoading(false); })
-      .catch(() => { setTimeline([]); setLoading(false); });
-  }, [scenarioId, branchId, visible]);
+    fetchTimeline();
+  }, [scenarioId, branchId, visible, fetchTimeline]);
 
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;

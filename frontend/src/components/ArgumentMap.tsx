@@ -3,7 +3,7 @@
    Displays argument units as a simple tree/list with status colors.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface ArgumentUnit {
@@ -46,18 +46,22 @@ export function ArgumentMap({ debateId, visible }: Props) {
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/debate/${debateId}/argument-map`);
+      if (res.status === 501) { setData(null); setLoading(false); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      setData(d);
+    } catch { setData(null); }
+    setLoading(false);
+  }, [debateId]);
+
   useEffect(() => {
     if (!visible || !debateId) return;
-    setLoading(true);
-    fetch(`/api/debate/${debateId}/argument-map`)
-      .then(res => {
-        if (res.status === 501) return null; // not yet implemented
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(d => { setData(d); setLoading(false); })
-      .catch(() => { setData(null); setLoading(false); });
-  }, [debateId, visible]);
+    fetchData();
+  }, [debateId, visible, fetchData]);
 
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;

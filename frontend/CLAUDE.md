@@ -43,6 +43,10 @@ npm run test:watch # vitest (watch mode)
 | `/roundtable/replay` | `WorldlineRoundtableView` | 圆桌 Replay |
 | `/history` | `HistoryView` | 历史记录 |
 | `/leaderboard` | `LeaderboardView` | 排行榜 |
+| `/agents` | `AgentLibrary` | Agent 身份库 (Phase 3 F1) |
+| `/agents/new` | `AgentWorkshopView` | 自建 Agent 工坊 (Phase 3 F3) |
+| `/sim/:id/causal-map` | `CausalReviewView` | 因果图谱 DAG (Phase 3 F2) |
+| `/result/:id/compare` | `CompareDigestView` | 反事实分支对比 (Phase 3 F4) |
 
 ## 目录结构
 
@@ -63,6 +67,10 @@ npm run test:watch # vitest (watch mode)
 | `roundtableHelpers.ts` | 圆桌辅助函数 |
 | `resultHelpers.ts` | 结果辅助函数 |
 | `simulationHelpers.ts` | 模拟辅助函数 |
+| `AgentWorkshopView.tsx` | 自建 Agent 表单 (Phase 3 F3) |
+| `AgentLibrary.tsx` | Agent 身份网格 + 删除 (Phase 3 F1) |
+| `CausalReviewView.tsx` | @xyflow/react DAG + dagre 布局 (Phase 3 F2) |
+| `CompareDigestView.tsx` | 逐轮分支对比 + 发散度条 (Phase 3 F4) |
 
 ### `src/components/` -- 共享组件
 
@@ -78,6 +86,11 @@ npm run test:watch # vitest (watch mode)
 | `AppErrorBoundary.tsx` | 全局错误边界 |
 | `LanguageSwitcher.tsx` | 语言切换器 |
 | `endingChatHelpers.ts` | 密室聊天辅助函数 |
+| `AgentAttachPanel.tsx` | Agent 勾选面板 (tab+space 键盘可达, Phase 3 F3) |
+| `ArgumentMap.tsx` | 辩论论证树 (role="tree", Phase 3 F6) |
+| `CounterfactualPanel.tsx` | 反事实种子选择器 (Phase 3 F4) |
+| `FactionTimeline.tsx` | 阵营时间线 (逐轮色条, Phase 3 F5) |
+| `ReturningBadge.tsx` | 跨场景回归标记 (Phase 3 F1) |
 
 ### `src/game/` -- Phaser 游戏引擎
 
@@ -106,6 +119,7 @@ npm run test:watch # vitest (watch mode)
 | `debateStore.ts` | 辩论状态 |
 | `endingRoomStore.ts` | 密室/圆桌状态 |
 | `worldlineRoundtableStore.ts` | endingRoomStore 的 re-export |
+| `agentStore.ts` | Agent 身份选择 (max 5, Phase 3 F1/F3) |
 
 ### `src/hooks/` -- 自定义 Hooks
 
@@ -157,7 +171,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **71 个测试文件** (`.test.ts` / `.test.tsx`)
+- **77 个测试文件** (`.test.ts` / `.test.tsx`) / **715 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -347,6 +361,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | Phase 3 六大功能 | 4 新页面 (AgentWorkshop/Library/CausalReview/CompareDigest)、5 新组件 (AgentAttach/ArgumentMap/Counterfactual/FactionTimeline/ReturningBadge)、agentStore、i18n Phase 3 keys、4 新路由、contract-freeze 测试、29+ 新测试 |
 | 2026-04-09 | 遗留项收口 | mobile roster dialog 焦点管理 (打开聚焦 + 关闭回触发按钮)；sidebar `<details>` 加 aria-label；hotseat/overflow CSS 颜色提取为 token；e2e 脚本死代码清理；reducedMotion tween guard 结构测试 ×5 |
 | 2026-04-08 | 圆桌 UI 升级 (Track D) | Synthesis-First section (verdict 主区顶部)；phase nav pill bar + scrollIntoView；mobile roster modal (dialog 语义 + Escape 关闭)；tablet sidebar `<details>` 折叠；8-hue speaker 色条；transcript role="log"；280 行新增测试 |
 | 2026-04-08 | WS 首帧 auth + 重连策略 | 三个 WS hooks 从 URL query token 迁移到首帧 auth 协议，auth_ok 加入事件联合类型，4001/4404 不重连，3 条 M1 测试 |

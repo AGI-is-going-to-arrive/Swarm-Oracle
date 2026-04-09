@@ -28,7 +28,7 @@ docker compose up backend
 | 路由前缀 | 文件 | 功能 |
 |----------|------|------|
 | `/api/scenario` | `api/scenarios.py` | 场景 CRUD、模拟启动、导入/导出 Replay、Web 搜索增强 |
-| `/api/capabilities` | `api/scenarios.py` | 轻量配置端点（无 LLM 调用），返回服务端功能开关 |
+| `/api/capabilities` | `api/scenarios.py` | 7-key 通用 capability registry（无 LLM 调用） |
 | `/api/debate` | `api/debate.py` | 辩论竞技场创建、快照、结果、预测投注 |
 | `/api/scenario/{id}/ending-room` | `api/ending_rooms.py` | 神谕密室 / 世界线圆桌创建、follow-up threads |
 | `/api/ending-room/{id}` | `api/ending_rooms.py` | 密室快照、结果、用户回合追加 |
@@ -36,6 +36,8 @@ docker compose up backend
 | `/api/scenario/{id}/predict` | `api/predictions.py` | 预测提交、评分、排行榜 |
 | `/api/scenario/{id}/intervene` | `api/interventions.py` | 蝴蝶效应干预（单次/回溯/批量） |
 | `/api/scenario/{id}/social` | `api/social.py` | 社交媒体文案生成 |
+| `/api/agents` | `api/agents.py` | Agent 身份查询、记忆查询、自建 Agent CRUD (Phase 3 F1/F3) |
+| `/api/graphs` | `api/graphs.py` | 因果图谱、反事实比较、检查点 (Phase 3 F2/F4) |
 | `/` | `app/main.py` | 健康检查 |
 | `/metrics` | Prometheus | Prometheus 指标 |
 
@@ -89,10 +91,13 @@ docker compose up backend
 | EndingRoom, EndingRoomParticipant, EndingRoomThread, EndingRoomTurn | `ending_room.py` | 神谕密室 / 世界线圆桌 |
 | DirectorProfile, ProfileMastery, DirectorBadgeUnlock, ScenarioCampaignLog | `campaign.py` | Campaign 系统 |
 | Prediction, Leaderboard | `predictions.py` | 预测与排行榜 |
+| AgentIdentity, AgentIdentityCampaign, AgentIdentityCampaignMember, AgentGrowthEvent | `agent_identity.py` | Agent 持久身份 + 跨场景记忆 (Phase 3 F1/F3) |
+| GraphSnapshot, GraphNode, GraphEdge, AgentStateFrame | `graph.py` | 因果图谱 + 论证图谱 DAG (Phase 3 F2/F6) |
+| ScenarioCheckpoint, AgentRelationEdge, FactionSnapshot, FactionEvent, DebateArgumentUnit | `checkpoint.py` | 反事实回溯 + 阵营系统 + 论证单元 (Phase 3 F4/F5/F6) |
 
 ### 数据库迁移 (Alembic)
 
-13 个迁移版本，从 `001_initial` 到 `013_add_web_context_json`。
+16 个迁移版本，从 `001_initial` 到 `016_checkpoint_faction_argument_tables`。
 
 ## 服务层 (`app/services/`)
 
@@ -108,7 +113,13 @@ docker compose up backend
 | web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG 提供商, TTL 缓存, 上下文格式化) |
 | narrator | `narrator.py` | 叙事生成 |
 | scoring | `scoring.py` | 预测评分 |
-| vector_store | `vector_store.py` | ChromaDB 向量检索 |
+| vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储) |
+| persona_workshop | `persona_workshop.py` | 用户自建 Agent CRUD + persona 防注入 (Phase 3 F3) |
+| agent_identity | `agent_identity.py` | 跨场景身份解析 + 成长事件 (Phase 3 F1) |
+| causal_graph | `causal_graph.py` | 因果 DAG 构建 + stance 推导 (Phase 3 F2) |
+| replay | `replay.py` | 反事实检查点/克隆/种子/比较 (Phase 3 F4) |
+| factions | `factions.py` | 阵营检测 + 聚类 + 背叛事件 (Phase 3 F5) |
+| debate_argument_map | `debate_argument_map.py` | 规则抽取 + 判决关联 (Phase 3 F6) |
 | runtime_lock | `runtime_lock.py` | 运行时互斥锁 |
 | parser | `parser.py` | LLM 输出解析 |
 | lang_detect | `lang_detect.py` | 语言检测 |
@@ -125,7 +136,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **50 个测试文件 / 1584 tests**，位于 `tests/`
+- **62 个测试文件 / 1709 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -140,12 +151,12 @@ backend/
     main.py              # FastAPI 入口
     config.py            # 配置
     logging_utils.py     # 日志配置
-    api/                 # REST/WS 路由 (8 个路由模块)
-    models/              # ORM 模型 (5 个模型模块)
-    services/            # 业务逻辑 (15 个服务)
+    api/                 # REST/WS 路由 (10 个路由模块)
+    models/              # ORM 模型 (8 个模型模块)
+    services/            # 业务逻辑 (21 个服务)
     visualization/       # 可视化映射 (5 个文件)
-  alembic/               # 数据库迁移 (13 个版本)
-  tests/                 # 测试 (50 个文件)
+  alembic/               # 数据库迁移 (16 个版本)
+  tests/                 # 测试 (62 个文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -243,6 +254,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities 7-key registry、ChromaDB 双层 memory、125+ 新测试 |
 | 2026-04-09 | 遗留项收口 | auth_ok 发送异常区分 WebSocketDisconnect/其他 + 日志 + close(1011)；pending_auth 归零清理 key；campaign/ending-room session gate 提升 router 级 dependencies；llm_client content=null `or ""` 防御；pyproject.toml 显式声明 sqlalchemy/pydantic 直依赖；test_llm_client 5 条 probe skip |
 | 2026-04-08 | WS pending_auth + Track B2 | pending_auth 计入 MAX_WS_PER_SCENARIO + auth_ok 发送失败释放 (25 测试)；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复 (154 测试 + live LLM 验证) |
 | 2026-04-08 | WS 首帧 auth + session gate 测试 | `run_websocket_session` accept/register 分离 + 首帧 auth 协议 (10s timeout, 64KB limit)，`test_session_auth.py` 初始新增 16 条测试 (4 REST + 12 WS)，后经 pending_auth 扩展至 25 条 |
