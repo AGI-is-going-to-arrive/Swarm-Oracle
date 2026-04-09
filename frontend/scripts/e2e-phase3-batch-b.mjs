@@ -34,6 +34,7 @@ const FIXTURE_SCENARIO_ID = "sc-e2e-batch-b";
 const FIXTURE_DEBATE_ID = "debate-e2e-batch-b";
 const FIXTURE_BRANCH_A = "branch-a";
 const FIXTURE_BRANCH_B = "branch-b";
+const FIXTURE_DIRECTOR_ID = "director-1";
 
 const CAPABILITIES_FIXTURE = {
   causal_graph: { enabled: true },
@@ -82,18 +83,134 @@ const FACTION_TIMELINE_FIXTURE = [
   },
 ];
 
-const COMPARE_FIXTURE = [
-  {
-    round: 1,
-    branch_a: { agents: [{ name: "Analyst A", stance: 0.5, emotion: "calm" }] },
-    branch_b: { agents: [{ name: "Analyst A", stance: -0.3, emotion: "anxious" }] },
-    divergence: 0.4,
+const COMPARE_FIXTURE = {
+  scenario_id: FIXTURE_SCENARIO_ID,
+  branch_a: FIXTURE_BRANCH_A,
+  branch_b: FIXTURE_BRANCH_B,
+  rounds: [
+    {
+      round: 1,
+      branch_a_summary: "Port ledgers calm markets before tariffs escalate.",
+      branch_b_summary: "Opaque ledgers fuel rumors and price spikes.",
+      divergence_score: 0.4,
+    },
+    {
+      round: 2,
+      branch_a_summary: "Analysts cohere around a negotiated settlement.",
+      branch_b_summary: "Negotiations fracture and hawks dominate the chamber.",
+      divergence_score: 0.8,
+    },
+  ],
+};
+
+const STORY_FIXTURE = {
+  scenario_id: FIXTURE_SCENARIO_ID,
+  question: "What if trade ports published tariff ledgers?",
+  status: "done",
+  branches: [
+    {
+      id: FIXTURE_BRANCH_A,
+      title: "Ledger Branch",
+      probability: 0.58,
+      status: "COMPLETED",
+      story: "Transparent ledgers stabilize commodity pricing.",
+      insight: "Transparency reduces rumor-driven volatility.",
+      key_moments: ["Ledger published"],
+      parent_branch_id: null,
+      fork_reason: "",
+    },
+    {
+      id: FIXTURE_BRANCH_B,
+      title: "Opaque Branch",
+      probability: 0.42,
+      status: "COMPLETED",
+      story: "Opaque ledgers amplify mistrust and retaliation.",
+      insight: "Opacity compounds coalition fractures.",
+      key_moments: ["Ledger hidden"],
+      parent_branch_id: null,
+      fork_reason: "",
+    },
+  ],
+};
+
+const SCENARIO_FIXTURE = {
+  id: FIXTURE_SCENARIO_ID,
+  question: "What if trade ports published tariff ledgers?",
+  status: "done",
+  created_at: "2026-04-10T00:00:00Z",
+  scene_theme: "law_court",
+  total_rounds: 5,
+  mode: "blackboard",
+  visualization_enabled: false,
+  agents: [],
+  branches: [],
+  messages: [],
+  groups: [],
+  hierarchical: false,
+  director_state: {
+    objectives: {
+      generated_for_question: null,
+      generated_for_profile: null,
+      goals: [],
+      last_updated_at: null,
+    },
+    commitment: {
+      active: false,
+      branch_id: null,
+      branch_title: null,
+      committed_at_round: null,
+      committed_at: null,
+      outcome: null,
+    },
   },
+  gameplay_state: null,
+};
+
+const RESULT_AGENTS_FIXTURE = [
+  { id: "agent-1", name: "Trade Hawk", role: "Negotiator", tier: "CORE", emotion: "focused" },
+  { id: "agent-2", name: "Free Trader", role: "Analyst", tier: "IMPORTANT", emotion: "calm" },
+];
+
+const CAMPAIGN_SUMMARY_FIXTURE = {
+  scenario_id: FIXTURE_SCENARIO_ID,
+  profile_id: "law",
+  archive_grade: "A",
+  profile_resonance: "aligned",
+  betting_hit: null,
+  most_used_card: null,
+  completed_daily_challenge: false,
+  objective_completed_count: 0,
+  objective_total_count: 0,
+  commitment_outcome: null,
+  campaign_score_delta: 5,
+  finalized_at: "2026-04-10T00:00:00Z",
+};
+
+const CAMPAIGN_PROFILE_FIXTURE = {
+  user_id: FIXTURE_DIRECTOR_ID,
+  user_name: "Local Director",
+  total_runs: 3,
+  completed_challenges: 1,
+  total_bets: 2,
+  hit_bets: 1,
+  highest_archive_grade: "A",
+  created_at: "2026-04-10T00:00:00Z",
+  updated_at: "2026-04-10T00:00:00Z",
+};
+
+const CAMPAIGN_MASTERY_FIXTURE = [
   {
-    round: 2,
-    branch_a: { agents: [{ name: "Analyst A", stance: 0.6, emotion: "confident" }] },
-    branch_b: { agents: [{ name: "Analyst A", stance: -0.7, emotion: "fearful" }] },
-    divergence: 0.8,
+    profile_id: "law",
+    runs: 3,
+    challenge_completions: 1,
+    signature_hits: 0,
+    aligned_hits: 2,
+    campaign_score: 12,
+    level: 2,
+    best_archive_grade: "A",
+    favorite_card_id: null,
+    next_level_score: 20,
+    score_to_next_level: 8,
   },
 ];
 
@@ -115,12 +232,97 @@ const DEBATE_SNAPSHOT_FIXTURE = {
 };
 
 const DEBATE_RESULT_FIXTURE = {
-  winner: "proposition",
-  verdict_tone: "decisive",
-  score: { proposition: 58, opposition: 42 },
-  breakdown: {},
-  judge_rationale: "Transparency arguments were better supported.",
-  best_argument: "Open markets require transparency for efficient price discovery.",
+  id: FIXTURE_DEBATE_ID,
+  question: "Should trade ports publish tariff ledgers?",
+  motion: "Ports should publish tariff ledgers.",
+  language: "en",
+  profile_id: "law",
+  scene_theme: "civic_chamber",
+  status: "done",
+  current_phase: "verdict",
+  created_at: "2026-04-10T00:00:00Z",
+  updated_at: "2026-04-10T00:00:00Z",
+  participants: [
+    { side: "proposition", name: "ProBot", role: "proposition" },
+    { side: "opposition", name: "ConBot", role: "opposition" },
+    { side: "judge", name: "Judge", role: "judge" },
+  ],
+  score: { proposition: 58, opposition: 42, audience_meter: 16 },
+  turns: [
+    {
+      id: "turn-1",
+      phase: "opening",
+      speaker_side: "proposition",
+      speaker_name: "ProBot",
+      content: "Open markets require transparency.",
+      quote: "Open markets require transparency.",
+      why_it_matters: "Sets the transparency frame.",
+    },
+    {
+      id: "turn-2",
+      phase: "opening",
+      speaker_side: "opposition",
+      speaker_name: "ConBot",
+      content: "Over-disclosure harms competitive advantage.",
+      quote: "Over-disclosure harms competitive advantage.",
+      why_it_matters: "Sets the secrecy frame.",
+    },
+  ],
+  available_prediction_options: {
+    winner: ["proposition", "opposition"],
+    verdict_tone: ["order", "balance", "rupture"],
+  },
+  phase_insights: [
+    {
+      phase: "opening",
+      stakes: "Transparency versus secrecy.",
+      judge_focus: "Whether ledgers improve accountability.",
+      commentary: "Transparency carried the opening.",
+      pressure_side: "proposition",
+      pressure_margin: 6,
+      turn_count: 2,
+      confidence_drift: {
+        direction: "proposition",
+        phase_margin: 6,
+        cumulative_margin: 6,
+      },
+    },
+  ],
+  result_ready: true,
+  result: {
+    winner: "proposition",
+    verdict_tone: "order",
+    score: { proposition: 58, opposition: 42, audience_meter: 16 },
+    breakdown: {
+      coherence: { proposition: 4, opposition: 3 },
+    },
+    adjudication_mode: "llm_hybrid",
+    best_argument: "Open markets require transparency for efficient price discovery.",
+    best_rebuttal: "Over-disclosure harms competitive advantage.",
+    judge_summary: "Transparency arguments were better supported.",
+    judge_rationale: {
+      winner_reason: "The transparency case stayed executable from claim to consequence.",
+      loser_gap: "The secrecy case never overcame the accountability challenge.",
+      swing_factor: "The opening frame held through verdict.",
+      closing_note: "The judge preferred the more auditable policy path.",
+      dimension_rationales: {
+        coherence: "The proposition maintained the cleaner institutional chain.",
+      },
+      supporting_turns: [
+        {
+          id: "turn-1",
+          phase: "opening",
+          speaker_side: "proposition",
+          speaker_name: "ProBot",
+          quote: "Open markets require transparency.",
+          why_it_matters: "This established the winning executable hinge.",
+        },
+      ],
+    },
+    replay: [],
+  },
+  counterplay: null,
+  predictions: [],
 };
 
 // ── Route Interceptor Setup ──────────────────────────────
@@ -128,6 +330,33 @@ const DEBATE_RESULT_FIXTURE = {
 async function installFixtures(page) {
   await page.route("**/api/capabilities", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAPABILITIES_FIXTURE) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/story`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(STORY_FIXTURE) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/agents`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(RESULT_AGENTS_FIXTURE) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/predictions`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) => {
+    if (route.request().url().includes("/story") || route.request().url().includes("/agents")) {
+      return route.continue();
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SCENARIO_FIXTURE) });
+  });
+  await page.route(`**/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/summary`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_SUMMARY_FIXTURE) }),
+  );
+  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) }),
+  );
+  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/mastery`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_MASTERY_FIXTURE) }),
+  );
+  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/badges`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
   );
   await page.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FIXTURE) }),
@@ -190,21 +419,24 @@ async function testFactionTimeline(page, baseUrl, outputDir) {
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
 
-  // FactionTimeline is rendered in ResultView, we need a result page
-  // We'll test the component directly by navigating and checking
-  // For now, test the standalone FactionTimeline empty state via fixture
+  await page.goto(`${baseUrl}/result/${FIXTURE_SCENARIO_ID}`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2000);
+  await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
 
-  // Navigate to a mock result page — this requires more setup
-  // Instead, verify the component renders correctly via the fixture
-  // by checking the faction timeline API fixture returns correct data
-  results.steps.push({ name: "faction-timeline-fixture-valid", passed: true });
+  const title = page.getByText(/Faction Timeline|阵营时间线/).first();
+  results.steps.push({ name: "faction-timeline-title-visible", passed: await title.isVisible().catch(() => false) });
 
-  // Test faction data structure
-  const hasRound1 = FACTION_TIMELINE_FIXTURE[0].factions.length === 2;
-  results.steps.push({ name: "fixture-round1-has-2-factions", passed: hasRound1 });
+  const roundOne = page.getByText("Round 1").first();
+  results.steps.push({ name: "round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
 
-  const hasBetrayal = FACTION_TIMELINE_FIXTURE[1].events.some((e) => e.event_type === "betrayal");
-  results.steps.push({ name: "fixture-round2-has-betrayal-event", passed: hasBetrayal });
+  const hawksChip = page.getByText("Trade Hawks (2)").first();
+  results.steps.push({ name: "trade-hawks-chip-visible", passed: await hawksChip.isVisible().catch(() => false) });
+
+  const betrayalText = page.getByText(/betrayal/i).first();
+  results.steps.push({ name: "betrayal-event-visible", passed: await betrayalText.isVisible().catch(() => false) });
+
+  const emptyMsg = page.getByText(/No faction data available|暂无阵营数据/).first();
+  results.steps.push({ name: "no-faction-empty-state", passed: !(await emptyMsg.isVisible().catch(() => false)) });
 
   return results;
 }
@@ -224,6 +456,15 @@ async function testCompareDigest(page, baseUrl, outputDir) {
   const title = page.getByText(/Counterfactual|反事实/).first();
   const hasTitle = await title.isVisible().catch(() => false);
   results.steps.push({ name: "compare-title-visible", passed: hasTitle });
+
+  const roundOne = page.getByText("Round 1").first();
+  results.steps.push({ name: "compare-round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
+
+  const divergence = page.getByText("40%").first();
+  results.steps.push({ name: "divergence-percentage-visible", passed: await divergence.isVisible().catch(() => false) });
+
+  const branchSummary = page.getByText("Port ledgers calm markets before tariffs escalate.").first();
+  results.steps.push({ name: "branch-summary-visible", passed: await branchSummary.isVisible().catch(() => false) });
 
   // Check that it doesn't show feature disabled (since capability is enabled)
   const disabled = page.getByText(/not enabled|未启用/).first();

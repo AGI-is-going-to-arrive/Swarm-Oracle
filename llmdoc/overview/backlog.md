@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-10 (Batch 2 完成后)
+> 最后更新：2026-04-10 (Batch 3 测试收口完成后)
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -19,15 +19,10 @@
 - P1-6：ArgumentMap 升级为 @xyflow/react DAG (ReactFlow + dagre layout)
 - P1-7：ArgumentStrengthMeter (status distribution stacked bar)
 - P1-8：TranscriptFactionOverlay (FactionBadge + useFactionOverlay hook, integrated in RoundtableTranscriptList + EndingChatModal)
+- X-3：Phase 3 六大功能 Playwright E2E（Batch A/B 脚本）
+- X-4：旧 replay import 空状态回归测试
 
 ## 剩余项
-
-### 缺 Playwright E2E
-
-| # | 项目 | 现状 |
-|---|------|------|
-| X-3 | Phase 3 六大功能缺 Playwright E2E | 已有单测 + 契约测试覆盖，但无端到端浏览器级场景脚本 |
-| X-4 | 旧 replay import 空状态 | 旧 replay 无 graph/faction/argument 数据时前端 empty state 需人工验证 |
 
 ### 长期增强（零代码）
 

@@ -103,12 +103,15 @@ async function installFixtures(page) {
   await page.route(`**/api/agents/identities/${FIXTURE_IDENTITY_ID}/growth-events?*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(GROWTH_EVENTS_FIXTURE) }),
   );
-  await page.route("**/api/agents/workshop", (route) => {
+  await page.route("**/api/agents/workshop*", (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill({
         status: 200, contentType: "application/json",
         body: JSON.stringify({ ...IDENTITY_FIXTURE, id: "ident-e2e-new" }),
       });
+    }
+    if (route.request().method() === "DELETE") {
+      return route.fulfill({ status: 204, body: "" });
     }
     return route.continue();
   });
@@ -130,8 +133,8 @@ async function testAgentWorkshop(page, baseUrl, outputDir) {
   await saveScreenshot(page, path.join(stepDir, "01-workshop-loaded.png"));
 
   // Check form elements exist
-  const nameInput = page.locator('input[name="display_name"], input[placeholder*="name" i]').first();
-  const roleInput = page.locator('input[name="role"], input[placeholder*="role" i]').first();
+  const nameInput = page.locator('#agent-name').first();
+  const roleInput = page.locator('#agent-role').first();
   const hasForm = await nameInput.isVisible().catch(() => false);
   results.steps.push({ name: "workshop-form-visible", passed: hasForm });
   if (!hasForm) { results.passed = false; return results; }
@@ -139,7 +142,7 @@ async function testAgentWorkshop(page, baseUrl, outputDir) {
   // Fill form
   await nameInput.fill("E2E Test Economist");
   await roleInput.fill("Senior Economist");
-  const personaInput = page.locator('textarea').first();
+  const personaInput = page.locator('#agent-persona').first();
   if (await personaInput.isVisible()) {
     await personaInput.fill("A methodical researcher focused on fiscal policy impacts.");
   }
@@ -215,6 +218,13 @@ async function testAgentLibraryAndProfile(page, baseUrl, outputDir) {
   const deleteBtn = page.locator('button').filter({ hasText: /Delete|删除/ }).first();
   const hasDelete = await deleteBtn.isVisible().catch(() => false);
   results.steps.push({ name: "delete-button-exists", passed: hasDelete });
+  if (hasDelete) {
+    page.once("dialog", (dialog) => dialog.accept().catch(() => {}));
+    await deleteBtn.click();
+    await page.waitForTimeout(500);
+    const openDialogCount = await page.locator("dialog[open]").count();
+    results.steps.push({ name: "delete-click-does-not-reopen-profile-modal", passed: openDialogCount === 0 });
+  }
 
   return results;
 }

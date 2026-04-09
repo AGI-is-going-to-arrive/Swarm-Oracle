@@ -5,7 +5,6 @@
  * render correct empty states and do not crash.
  */
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -149,29 +148,4 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
     });
   });
 
-  // ── Replay mode gate: Phase 3 section hidden ──
-  describe('ResultView Phase 3 gate (conceptual)', () => {
-    it('isReplayMode=true prevents Phase 3 section rendering', () => {
-      // This test verifies the gate logic used in ResultView:
-      // {id && !isReplayMode && (<Phase3Section />)}
-      const id = 'scenario-123';
-      const isReplayMode = true;
-      const shouldRenderPhase3 = Boolean(id) && !isReplayMode;
-      expect(shouldRenderPhase3).toBe(false);
-    });
-
-    it('isReplayMode=false allows Phase 3 section rendering', () => {
-      const id = 'scenario-123';
-      const isReplayMode = false;
-      const shouldRenderPhase3 = Boolean(id) && !isReplayMode;
-      expect(shouldRenderPhase3).toBe(true);
-    });
-
-    it('missing id prevents Phase 3 section rendering', () => {
-      const id = undefined;
-      const isReplayMode = false;
-      const shouldRenderPhase3 = Boolean(id) && !isReplayMode;
-      expect(shouldRenderPhase3).toBe(false);
-    });
-  });
 });

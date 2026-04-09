@@ -84,6 +84,24 @@ const {
   };
 });
 
+const {
+  getMockCapabilities,
+  setMockCapabilities,
+} = vi.hoisted(() => {
+  let currentCapabilities = {
+    agent_identity: { enabled: false },
+    causal_graph: { enabled: false },
+    counterfactual_replay: { enabled: false },
+    factions: { enabled: false },
+  };
+  return {
+    getMockCapabilities: () => currentCapabilities,
+    setMockCapabilities: (nextCapabilities: typeof currentCapabilities) => {
+      currentCapabilities = nextCapabilities;
+    },
+  };
+});
+
 const { endingRoomStoreState } = vi.hoisted(() => ({
   endingRoomStoreState: {
     snapshot: null as unknown,
@@ -106,6 +124,17 @@ vi.mock('react-i18next', () => ({
       changeLanguage: changeLanguageMock,
     },
   }),
+}));
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => {
+    const capabilities = getMockCapabilities();
+    return {
+      loading: false,
+      enabled: capabilities.causal_graph.enabled,
+      capabilities,
+    };
+  },
 }));
 
 vi.mock('../components/EndingChatModal', () => ({
@@ -389,6 +418,12 @@ vi.mock('../components/ShareModal', () => ({
 beforeEach(() => {
   setMockLanguage('en');
   changeLanguageMock.mockClear();
+  setMockCapabilities({
+    agent_identity: { enabled: false },
+    causal_graph: { enabled: false },
+    counterfactual_replay: { enabled: false },
+    factions: { enabled: false },
+  });
   endingRoomStoreState.snapshot = null;
   endingRoomStoreState.result = null;
   endingRoomStoreState.activeThreadId = null;
@@ -1236,6 +1271,117 @@ describe('ResultView campaign summary', () => {
     await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
+  });
+
+  it('keeps Phase 3 panels hidden in replay mode even when capabilities are enabled', async () => {
+    setMockCapabilities({
+      agent_identity: { enabled: true },
+      causal_graph: { enabled: true },
+      counterfactual_replay: { enabled: true },
+      factions: { enabled: true },
+    });
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: ['Moment 1'],
+          profileId: 'law',
+          dominantBranchTitle: 'Archive Branch',
+          dominantTone: 'order',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'A',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      },
+      campaignScenarioSummary: {
+        scenario_id: 'scenario-1',
+        profile_id: 'law',
+        archive_grade: 'A',
+        profile_resonance: 'aligned',
+        betting_hit: null,
+        most_used_card: null,
+        completed_daily_challenge: false,
+        campaign_score_delta: 5,
+        finalized_at: null,
+      },
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(screen.queryByText('result.causal_graph_link')).not.toBeInTheDocument();
+    expect(screen.queryByText('counterfactual.title')).not.toBeInTheDocument();
+    expect(screen.queryByText('factions.title')).not.toBeInTheDocument();
   });
 
   it('shows an inline error when replay import fails', async () => {
