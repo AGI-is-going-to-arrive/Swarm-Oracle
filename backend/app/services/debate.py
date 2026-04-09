@@ -42,6 +42,16 @@ from app.services.debate_scoring import (
 from app.services.llm_client import format_untrusted_text_block, llm_call_json, llm_request_scope
 from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
 
+# Phase 3 F6: Argument map extraction (non-blocking)
+try:
+    from app.services.debate_argument_map import (
+        extract_argument_units as _argmap_extract,
+        link_verdict as _argmap_link_verdict,
+    )
+    _ARGMAP_AVAILABLE = True
+except ImportError:
+    _ARGMAP_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 GENERIC_DEBATE_ERROR_MESSAGE = "Debate failed unexpectedly. Please retry."
@@ -1520,6 +1530,12 @@ async def run_debate_background(
                     content=content,
                     score_delta=score_delta,
                 )
+                # Phase 3 F6: Extract argument units (non-blocking)
+                if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
+                    try:
+                        _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+                    except Exception:
+                        logger.debug("argmap extract failed (non-blocking)", exc_info=True)
                 recent_turns.append(
                     {
                         "phase": phase.value,
@@ -1609,6 +1625,12 @@ async def run_debate_background(
             content=content,
             score_delta=score_delta,
         )
+        # Phase 3 F6: Extract argument units (non-blocking)
+        if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
+            try:
+                _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+            except Exception:
+                logger.debug("argmap extract failed (non-blocking)", exc_info=True)
         recent_turns.append(
             {
                 "phase": phase.value,
@@ -1940,6 +1962,13 @@ def _finalize_debate(
         }
 
         session.commit()
+
+    # Phase 3 F6: Link verdict to argument map (non-blocking)
+    if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
+        try:
+            _argmap_link_verdict(debate_id, finalized_summary)
+        except Exception:
+            logger.debug("argmap link_verdict failed (non-blocking)", exc_info=True)
 
     score_existing_predictions(debate_id)
     return finalized_summary

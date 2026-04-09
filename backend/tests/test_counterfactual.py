@@ -15,8 +15,16 @@ from app.models.database import (
     ScenarioStatus,
     get_engine,
 )
+from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.services.replay import write_checkpoint
+
+
+@pytest.fixture(autouse=True)
+def _enable_feature():
+    settings.FEATURE_COUNTERFACTUAL_REPLAY = True
+    yield
+    settings.FEATURE_COUNTERFACTUAL_REPLAY = False
 
 
 @pytest.fixture

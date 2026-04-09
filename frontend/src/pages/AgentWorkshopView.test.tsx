@@ -7,6 +7,10 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { AgentWorkshopView } from './AgentWorkshopView';
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
+}));
+
 // Suppress i18next missing key warnings
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({

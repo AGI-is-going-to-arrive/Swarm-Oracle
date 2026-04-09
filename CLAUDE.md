@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 62 文件 / 1709 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 77 文件 / 715 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 60 文件 / 1717 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 77 文件 / 716 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -133,7 +133,12 @@ cd backend && alembic upgrade head
 - 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 升级为 7-key 通用 capability registry
 - 4 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`
 - 5 个新前端组件：`AgentAttachPanel`、`ArgumentMap`、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`
-- `simulator.py` 新增因果图谱 hook (非阻塞 try/except)，在 round_summary 和 branch_fork 后触发
+- `simulator.py` 新增 3 个非阻塞 hook：因果图谱、阵营检测、检查点写入，均受 `FEATURE_*` 环境变量控制
+- `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
+- `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`
+- 6 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关
+- 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate，disabled 时不发 API 请求
+- `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
 - ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO)
 - Agent continuity key：SHA-256(role+persona[:30])[:16]，跨场景身份匹配
 - 自定义 Agent persona 通过 `format_untrusted_text_block()` 防注入
@@ -143,6 +148,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 全部加 server-side FEATURE_* gate + 404 测试；simulator 3 hook 接线 (causal+factions+checkpoint)；debate argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 同步；前端 capability gate + useCapabilityCheck hook + InputView/ResultView/DebateResultView 集成 |
 | 2026-04-09 | Phase 3 六大功能增强 | F1 Agent身份+记忆、F2 因果图谱、F3 自建Agent、F4 蝴蝶效应回溯、F5 涌现阵营、F6 论证图谱；13 新模型、6 新服务、3 迁移、4 新页面、5 新组件、171 新测试 |
 | 2026-04-09 | 遗留项收口 + 文档同步 | m1/m2 WS 异常处理加固、s1 session gate 提升 router 级、s2 CSS token 提取、s3 tween guard 测试、s4/s5 a11y + 死代码清理、llmdoc 10→13 variants 同步 |
 | 2026-04-08 | WS pending_auth + Track B2 + E4/E5 | pending_auth 计入连接上限 + auth_ok 发送失败释放；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复；Codex+Claude 交叉审查 E4 + 签收 E5 PASS |

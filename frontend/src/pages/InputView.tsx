@@ -11,6 +11,9 @@ import {
   createDebate,
 } from '../api/client';
 import { getDirectorIdentity } from '../lib/directorIdentity';
+import { useAgentStore } from '../stores/agentStore';
+import { AgentAttachPanel } from '../components/AgentAttachPanel';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   markChallengeStarted,
 } from '../lib/dailyChallenge';
@@ -86,6 +89,8 @@ export function InputView() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
+  const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  const agentSelectedIds = useAgentStore((s) => s.selectedIds);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
@@ -434,6 +439,7 @@ export function InputView() {
         disableUserQuota,
         webSearchEnabled: wantsSearch,
         ...buildScenarioRuntimePresetOptions(runtimePreset),
+        ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
       });
       // Note: search result is already in store (scenario.web_search_context).
       // No point setting success/error status here — navigate() follows immediately.
@@ -1141,6 +1147,11 @@ export function InputView() {
                 </span>
               )}
             </div>
+          )}
+
+          {/* Phase 3 F3: Custom Agent Attach Panel */}
+          {caps?.custom_agents?.enabled && (
+            <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
           )}
 
           {/* P4-E: BYOK — Bring Your Own Key */}

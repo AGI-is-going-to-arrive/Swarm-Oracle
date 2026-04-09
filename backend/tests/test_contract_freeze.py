@@ -198,3 +198,86 @@ class TestNamingFreeze:
         """Explicit guard: agent_identity_id, NOT profile_id."""
         assert "agent.profile_id" not in self.FROZEN_NEW_COLUMNS
         assert "agent.agent_identity_id" in self.FROZEN_NEW_COLUMNS
+
+
+# ─── Server-Side Feature Gate Tests ────────────────────────
+
+
+class TestServerSideGates:
+    """Verify FEATURE_* flags block API endpoints, not just UI hints."""
+
+    @pytest.fixture(autouse=True)
+    async def client(self):
+        from httpx import ASGITransport, AsyncClient
+        from app.main import app
+        from app.config import settings
+
+        # Ensure all feature flags are off (default)
+        settings.FEATURE_CUSTOM_AGENTS = False
+        settings.FEATURE_AGENT_IDENTITY = False
+        settings.FEATURE_CAUSAL_GRAPH = False
+        settings.FEATURE_COUNTERFACTUAL_REPLAY = False
+        settings.FEATURE_FACTIONS = False
+        settings.FEATURE_ARGUMENT_MAP = False
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as c:
+            yield c
+
+        # Reset
+        settings.FEATURE_CUSTOM_AGENTS = False
+        settings.FEATURE_AGENT_IDENTITY = False
+
+    async def test_causal_graph_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/scenario/fake-id/causal-graph")
+        assert resp.status_code == 404
+        assert "not enabled" in resp.json()["detail"]
+
+    async def test_counterfactual_returns_404_when_disabled(self, client):
+        resp = await client.post("/api/scenario/fake-id/counterfactual", json={
+            "source_branch_id": "b1", "round_number": 1,
+            "agent_id": "a1", "replacement_content": "test",
+        })
+        assert resp.status_code == 404
+
+    async def test_faction_timeline_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/scenario/fake-id/faction-timeline", params={"branch_id": "b1"})
+        assert resp.status_code == 404
+
+    async def test_argument_map_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/debate/fake-id/argument-map")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["detail"]["code"] == "FEATURE_DISABLED"
+
+    async def test_agent_workshop_returns_404_when_disabled(self, client):
+        resp = await client.post("/api/agents/workshop", json={
+            "user_id": "u1", "display_name": "Test", "role": "Tester",
+        })
+        assert resp.status_code == 404
+
+    async def test_identity_memory_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/agents/identities/fake-id/memory")
+        assert resp.status_code == 404
+
+    async def test_identities_list_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/agents/identities", params={"user_id": "u1"})
+        assert resp.status_code == 404
+
+    async def test_update_workshop_returns_404_when_disabled(self, client):
+        resp = await client.put("/api/agents/workshop/fake-id", json={"display_name": "X"})
+        assert resp.status_code == 404
+
+    async def test_delete_workshop_returns_404_when_disabled(self, client):
+        resp = await client.delete("/api/agents/workshop/fake-id")
+        assert resp.status_code == 404
+
+    async def test_compare_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/scenario/fake-id/compare", params={"branch_a": "a", "branch_b": "b"})
+        assert resp.status_code == 404
+
+    async def test_checkpoints_returns_404_when_disabled(self, client):
+        resp = await client.get("/api/scenario/fake-id/checkpoints")
+        assert resp.status_code == 404

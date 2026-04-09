@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 
 interface RoundDiff {
   round: number;
@@ -23,6 +24,7 @@ interface CompareData {
 
 export function CompareDigestView() {
   const { t } = useTranslation();
+  const { loading: capLoading, enabled } = useCapabilityCheck('counterfactual_replay');
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const branchA = searchParams.get('branch_a') ?? '';
@@ -49,8 +51,17 @@ export function CompareDigestView() {
   }, [id, branchA, branchB, t]);
 
   useEffect(() => {
+    if (!enabled) return;
     fetchCompare();
-  }, [fetchCompare]);
+  }, [fetchCompare, enabled]);
+
+  if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (!enabled) return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
+      <p style={{ color: '#888' }}>{t('compare.feature_disabled', 'Counterfactual replay feature is not enabled.')}</p>
+      <Link to={id ? `/result/${id}` : '/'} style={{ color: '#8ab4f8' }}>{t('common.back_to_result', 'Back to Result')}</Link>
+    </div>
+  );
 
   if (loading) {
     return <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;

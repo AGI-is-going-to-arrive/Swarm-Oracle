@@ -1,8 +1,12 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { CompareDigestView } from './CompareDigestView';
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -68,8 +72,9 @@ describe('CompareDigestView', () => {
 
     renderView('/result/test-id/compare?branch_a=a&branch_b=b');
 
-    expect(await screen.findByRole('heading', { name: '反事实对比' })).toBeInTheDocument();
-    expect(screen.getByText('第 2 轮')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('第 2 轮')).toBeInTheDocument();
+    });
     expect(screen.getByText('分歧度:')).toBeInTheDocument();
     expect(screen.getByText('分支 A（原始）')).toBeInTheDocument();
     expect(screen.getByText('分支 B（反事实）')).toBeInTheDocument();

@@ -174,6 +174,23 @@
 - 前端 toggle 为 opt-in（默认关闭），仅当后端 `ENABLE_WEB_SEARCH=true` 且 `GET /api/capabilities` 返回 `web_search.server_enabled=true` 时显示。注意：该字段报告的是服务端全局配置（`scope: "server"`），不是当前 BYOK provider 的搜索能力。Per-provider 探测属于 V2。
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
+## Phase 3 功能开关
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD |
+| `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆查询 |
+| `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator 逐轮写入 |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 分支比较 + 检查点 |
+| `FEATURE_FACTIONS` | `false` | 启用阵营检测 + 时间线 API |
+| `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱抽取 + API |
+
+说明：
+
+- 所有 Phase 3 功能默认关闭，通过环境变量逐个启用。
+- `FEATURE_*=false` 时：对应后端 API 返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。
+- 6 个开关互相独立，可单独开启任意功能。
+
 ## 相关文件
 
 - 模板：`.env.example`（根目录）

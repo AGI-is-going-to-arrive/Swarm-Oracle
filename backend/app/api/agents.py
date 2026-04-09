@@ -6,6 +6,8 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+
+from app.config import settings
 from pydantic import BaseModel, field_validator
 
 from app.services.persona_workshop import (
@@ -146,6 +148,8 @@ class UpdateAgentRequest(BaseModel):
 @router.get("/identities")
 async def list_identities(user_id: str | None = None):
     """List agent identities (custom + generated) for a user."""
+    if not settings.FEATURE_CUSTOM_AGENTS and not settings.FEATURE_AGENT_IDENTITY:
+        return JSONResponse(status_code=404, content={"detail": "Agent features not enabled"})
     if not user_id:
         return JSONResponse(
             status_code=400,
@@ -158,12 +162,25 @@ async def list_identities(user_id: str | None = None):
 @router.get("/identities/{identity_id}/memory")
 async def get_identity_memory(identity_id: str):
     """Get cross-scenario memory for an agent identity (B2)."""
-    return JSONResponse(status_code=501, content={"detail": "Not implemented — Phase B2"})
+    if not settings.FEATURE_AGENT_IDENTITY:
+        return JSONResponse(status_code=404, content={"detail": "Agent identity feature not enabled"})
+    try:
+        from app.services.agent_identity import get_identity_memories
+        memories = get_identity_memories(identity_id)
+        return {"identity_id": identity_id, "memories": memories}
+    except Exception as exc:
+        logger.warning("Failed to fetch identity memories: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Failed to retrieve identity memories"},
+        )
 
 
 @router.post("/workshop", status_code=201)
 async def create_workshop_agent(body: CreateAgentRequest):
     """Create a custom agent identity via the Persona Workshop."""
+    if not settings.FEATURE_CUSTOM_AGENTS:
+        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
     try:
         identity_id = create_custom_agent(
             user_id=body.user_id,
@@ -181,6 +198,8 @@ async def create_workshop_agent(body: CreateAgentRequest):
 @router.put("/workshop/{identity_id}")
 async def update_workshop_agent(identity_id: str, body: UpdateAgentRequest):
     """Update fields on an existing custom agent identity."""
+    if not settings.FEATURE_CUSTOM_AGENTS:
+        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
     kwargs = body.model_dump(exclude_unset=True)
     if not kwargs:
         return JSONResponse(
@@ -199,6 +218,8 @@ async def update_workshop_agent(identity_id: str, body: UpdateAgentRequest):
 @router.delete("/workshop/{identity_id}", status_code=204)
 async def delete_workshop_agent(identity_id: str):
     """Delete a custom agent identity."""
+    if not settings.FEATURE_CUSTOM_AGENTS:
+        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
     try:
         delete_custom_agent(identity_id)
     except LookupError:

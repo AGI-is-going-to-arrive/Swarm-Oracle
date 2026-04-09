@@ -9,12 +9,13 @@ import type { AgentInfo } from '../types';
 
 interface Props {
   scenarioId: string;
+  branchId: string;
   agents: AgentInfo[];
   totalRounds: number;
   onCreated?: (branchId: string) => void;
 }
 
-export function CounterfactualPanel({ scenarioId, agents, totalRounds, onCreated }: Props) {
+export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds, onCreated }: Props) {
   const { t } = useTranslation();
   const [selectedAgent, setSelectedAgent] = useState('');
   const [selectedRound, setSelectedRound] = useState(1);
@@ -34,7 +35,7 @@ export function CounterfactualPanel({ scenarioId, agents, totalRounds, onCreated
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          source_branch_id: agents[0]?.id ? undefined : undefined, // Will use default branch
+          source_branch_id: branchId,
           round_number: selectedRound,
           agent_id: selectedAgent,
           replacement_content: replacement.trim(),

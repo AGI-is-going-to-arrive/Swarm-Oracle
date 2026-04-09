@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAgentStore } from '../stores/agentStore';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 
 const KNOWLEDGE_DOMAIN_KEYS = {
   economics: 'agents.domains.economics',
@@ -27,14 +28,24 @@ const KNOWLEDGE_DOMAIN_KEYS = {
 
 export function AgentLibrary() {
   const { t } = useTranslation();
+  const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
   const { identities, loading, error, fetchIdentities } = useAgentStore();
 
   useEffect(() => {
+    if (!enabled) return;
     const userId = localStorage.getItem('swarmoracle_user_id') || 'default_user';
     fetchIdentities(userId);
-  }, [fetchIdentities]);
+  }, [fetchIdentities, enabled]);
 
   const customAgents = identities.filter(a => a.kind === 'custom');
+
+  if (capLoading) return <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (!enabled) return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
+      <p style={{ color: '#888' }}>{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>
+      <Link to="/" style={{ color: '#8ab4f8' }}>{t('common.back_home', 'Back to Home')}</Link>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1rem' }}>

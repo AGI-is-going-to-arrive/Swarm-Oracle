@@ -10,12 +10,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import Branch, Scenario, get_engine
 from app.services.causal_graph import build_snapshot
+from app.services.factions import get_faction_timeline
 from app.services.replay import clone_until_round, compare_branches, seed_counterfactual
 
 logger = logging.getLogger(__name__)
+
+def _feature_disabled(name: str):
+    return JSONResponse(status_code=404, content={"detail": f"Feature '{name}' is not enabled"})
 router = APIRouter(prefix="/api", tags=["graphs"])
 
 
@@ -32,6 +37,8 @@ async def get_causal_graph(
     branch_id: Optional[str] = Query(default=None),
 ):
     """Return the causal graph for a scenario."""
+    if not settings.FEATURE_CAUSAL_GRAPH:
+        return _feature_disabled("causal_graph")
     # Verify scenario exists
     with Session(get_engine()) as session:
         scenario = session.exec(
@@ -50,6 +57,8 @@ async def get_causal_graph(
 @router.post("/scenario/{scenario_id}/counterfactual")
 async def create_counterfactual(scenario_id: str, body: CounterfactualRequest):
     """Create a counterfactual branch by cloning + seeding a replacement."""
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        return _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
         # Validate scenario exists
         scenario = session.exec(
@@ -119,6 +128,8 @@ async def compare_branches_endpoint(
     branch_b: str = Query(...),
 ):
     """Compare two branches and return per-round diff."""
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        return _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
         scenario = session.exec(
             select(Scenario).where(Scenario.id == scenario_id)
@@ -133,12 +144,35 @@ async def compare_branches_endpoint(
     return result
 
 
+@router.get("/scenario/{scenario_id}/faction-timeline")
+async def get_faction_timeline_endpoint(
+    scenario_id: str,
+    branch_id: str = Query(...),
+):
+    """Return faction evolution timeline for a scenario branch."""
+    if not settings.FEATURE_FACTIONS:
+        return _feature_disabled("factions")
+    with Session(get_engine()) as session:
+        scenario = session.exec(
+            select(Scenario).where(Scenario.id == scenario_id)
+        ).first()
+        if scenario is None:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Scenario {scenario_id} not found"},
+            )
+    timeline = get_faction_timeline(scenario_id, branch_id)
+    return timeline
+
+
 @router.get("/scenario/{scenario_id}/checkpoints")
 async def list_checkpoints(
     scenario_id: str,
     branch_id: Optional[str] = Query(default=None),
 ):
     """List checkpoints for a scenario, optionally filtered by branch."""
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        return _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
         stmt = select(ScenarioCheckpoint).where(
             ScenarioCheckpoint.scenario_id == scenario_id

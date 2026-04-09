@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   ReactFlow,
   Background,
@@ -100,6 +101,7 @@ function layoutDagre(nodes: GraphNodeData[], edges: GraphEdgeData[]): { nodes: N
 
 export function CausalReviewView() {
   const { t } = useTranslation();
+  const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,9 +119,9 @@ export function CausalReviewView() {
   }, [id]);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id || !enabled) return;
     fetchGraph();
-  }, [id, fetchGraph]);
+  }, [id, fetchGraph, enabled]);
 
   const { nodes, edges } = useMemo(() => {
     if (!graphData || graphData.nodes.length === 0) return { nodes: [], edges: [] };
@@ -128,6 +130,14 @@ export function CausalReviewView() {
 
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
+
+  if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (!enabled) return (
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
+      <p style={{ color: '#888' }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>
+      <Link to={id ? `/result/${id}` : '/'} style={{ color: '#8ab4f8' }}>{t('common.back_to_result', 'Back to Result')}</Link>
+    </div>
+  );
 
   if (loading) {
     return (

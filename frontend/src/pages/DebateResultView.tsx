@@ -3,6 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { getDebateResult, importReplayDebate, isApiError } from '../api/client';
+import { ArgumentMap } from '../components/ArgumentMap';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { DebateShareModal } from '../components/DebateShareModal';
 import { DebateScoreCard } from '../components/DebateScoreCard';
@@ -44,6 +46,7 @@ export function DebateResultView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
+  const { capabilities } = useCapabilityCheck('argument_map');
   const [payload, setPayload] = useState<DebateResultPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -702,6 +705,14 @@ export function DebateResultView() {
           </div>
         </div>
       </div>
+
+      {/* Phase 3 F6: Argument Map */}
+      {id && capabilities?.argument_map?.enabled && (
+        <section style={{ marginTop: '1.5rem', padding: '0 1rem' }}>
+          <h2 style={{ fontSize: '1.1rem', marginBottom: '0.75rem' }}>{t('argument.section_title', 'Argument Map')}</h2>
+          <ArgumentMap debateId={id} visible={true} />
+        </section>
+      )}
 
       {showShare && shareContext && (
         <DebateShareModal

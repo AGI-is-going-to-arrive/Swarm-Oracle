@@ -142,6 +142,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
+  customAgentIdentityIds?: string[];
 }
 
 export interface LlmProbeResponse {
@@ -377,6 +378,7 @@ export async function createScenario(
       ...(webSearchEnabled && { web_search_enabled: true }),
       ...(userId && { user_id: userId }),
       ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
+      ...(options.customAgentIdentityIds?.length && { custom_agent_identity_ids: options.customAgentIdentityIds }),
     }),
   });
 }

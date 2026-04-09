@@ -131,6 +131,39 @@ def test_link_verdict_no_supporting_turns_marks_all_unaddressed():
     assert all(u["status"] == "unaddressed" for u in result["units"])
 
 
+def test_link_verdict_with_finalized_summary_dict_shape():
+    """Verdict linking works when called with finalized_summary (dict objects in supporting_turns)."""
+    extract_argument_units(
+        debate_id="d-vdict", turn_id="t10",
+        content="AI improves productivity.",
+        speaker_side="proposition",
+    )
+    extract_argument_units(
+        debate_id="d-vdict", turn_id="t20",
+        content="However, job losses are real.",
+        speaker_side="opposition",
+    )
+
+    # Simulate the finalized_summary shape from _finalize_debate
+    finalized_summary = {
+        "winner": "proposition",
+        "judge_rationale": {
+            "winner_reason": "stronger evidence",
+            "supporting_turns": [
+                {"id": "t10", "phase": "opening", "speaker_side": "proposition",
+                 "speaker_name": "Alice", "quote": "AI improves productivity.",
+                 "why_it_matters": "key argument"},
+            ],
+        },
+    }
+    link_verdict("d-vdict", finalized_summary)
+
+    result = get_argument_map("d-vdict")
+    statuses = {u["turn_id"]: u["status"] for u in result["units"]}
+    assert statuses["t10"] == "accepted"
+    assert statuses["t20"] == "unaddressed"
+
+
 # ── get_argument_map ────────────────────────────────────────
 
 

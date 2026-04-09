@@ -3,8 +3,9 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { KnowledgeDomain } from '../types';
 
 const KNOWLEDGE_DOMAINS: KnowledgeDomain[] = [
@@ -40,6 +41,7 @@ interface FormState {
 
 export function AgentWorkshopView() {
   const { t } = useTranslation();
+  const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
   const navigate = useNavigate();
   const [form, setForm] = useState<FormState>({
     displayName: '',
@@ -91,6 +93,14 @@ export function AgentWorkshopView() {
   }, [form, navigate]);
 
   const canSubmit = form.displayName.trim().length > 0 && form.role.trim().length > 0 && !saving;
+
+  if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (!enabled) return (
+    <div style={{ maxWidth: 600, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
+      <p style={{ color: '#888' }}>{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>
+      <Link to="/" style={{ color: '#8ab4f8' }}>{t('common.back_home', 'Back to Home')}</Link>
+    </div>
+  );
 
   return (
     <div className="workshop-view" style={{ maxWidth: 640, margin: '0 auto', padding: '2rem 1rem' }}>

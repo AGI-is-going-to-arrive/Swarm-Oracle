@@ -113,6 +113,9 @@ import {
   writeCachedCampaignFinalizeResult,
 } from './resultHelpers';
 import './ResultView.css';
+import { CounterfactualPanel } from '../components/CounterfactualPanel';
+import { FactionTimeline } from '../components/FactionTimeline';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 
@@ -131,6 +134,8 @@ export default function ResultView() {
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
 
+  const { capabilities } = useCapabilityCheck('causal_graph');
+  const [cfBranchId, setCfBranchId] = useState<string | null>(null);
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -2066,6 +2071,50 @@ export default function ResultView() {
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* ── Phase 3 Integration ──────────────────────────── */}
+      {id && !isReplayMode && (
+        <section style={{ marginTop: '1.5rem' }}>
+          {capabilities?.causal_graph?.enabled && (
+            <div style={{ marginBottom: '1rem' }}>
+              <a
+                href={`/sim/${id}/causal-map`}
+                style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem' }}
+              >
+                {t('result.causal_graph_link', 'View Causal Graph →')}
+              </a>
+            </div>
+          )}
+          {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
+            <>
+              <CounterfactualPanel
+                scenarioId={id}
+                branchId={branches[0]?.id ?? ''}
+                agents={agents}
+                totalRounds={scenario?.total_rounds ?? 10}
+                onCreated={(branchId) => setCfBranchId(branchId)}
+              />
+              {cfBranchId && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <a
+                    href={`/result/${id}/compare?branch_a=${branches[0]?.id ?? ''}&branch_b=${cfBranchId}`}
+                    style={{ color: '#8ab4f8', fontSize: '0.85rem' }}
+                  >
+                    {t('result.compare_link', 'Compare branches →')}
+                  </a>
+                </div>
+              )}
+            </>
+          )}
+          {capabilities?.factions?.enabled && branches.length > 0 && (
+            <FactionTimeline
+              scenarioId={id}
+              branchId={branches[0]?.id ?? ''}
+              visible={true}
+            />
+          )}
         </section>
       )}
 

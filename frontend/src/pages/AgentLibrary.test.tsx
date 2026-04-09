@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
 import { AgentLibrary } from './AgentLibrary';
@@ -16,18 +16,35 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+let mockCapEnabled = true;
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ loading: false, enabled: mockCapEnabled, capabilities: null }),
+}));
+
+const mockFetchIdentities = vi.fn();
 vi.mock('../stores/agentStore', () => ({
   useAgentStore: () => ({
     identities: [],
     loading: false,
     error: null,
-    fetchIdentities: vi.fn(),
+    fetchIdentities: mockFetchIdentities,
   }),
 }));
 
-afterEach(cleanup);
-
 describe('AgentLibrary', () => {
+  beforeEach(() => {
+    mockCapEnabled = true;
+    mockFetchIdentities.mockClear();
+    Object.defineProperty(window, 'localStorage', {
+      value: { getItem: vi.fn().mockReturnValue('test_user'), setItem: vi.fn(), removeItem: vi.fn() },
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
   it('renders localized empty state copy', () => {
     render(
       <MemoryRouter initialEntries={['/agents']}>
@@ -39,5 +56,16 @@ describe('AgentLibrary', () => {
     expect(screen.getByRole('link', { name: /\+ 创建 Agent/ })).toBeInTheDocument();
     expect(screen.getByText('还没有自定义 Agent。')).toBeInTheDocument();
     expect(screen.getByText('创建你的第一个自定义 Agent 并在推演中使用。')).toBeInTheDocument();
+  });
+
+  it('does not fetch identities when capability is disabled', () => {
+    mockCapEnabled = false;
+    render(
+      <MemoryRouter initialEntries={['/agents']}>
+        <AgentLibrary />
+      </MemoryRouter>,
+    );
+    expect(mockFetchIdentities).not.toHaveBeenCalled();
+    expect(screen.getByText('Custom agents feature is not enabled.')).toBeInTheDocument();
   });
 });

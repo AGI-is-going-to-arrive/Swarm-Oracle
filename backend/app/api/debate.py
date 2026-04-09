@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from app.api.errors import api_error
 from app.api.helpers import schedule_background_task
+from app.config import settings
 from app.api.ws import WSManager, run_websocket_session
 from app.models import (
     Debate,
@@ -747,6 +748,23 @@ async def get_debate_result(debate_id: str) -> dict[str, Any]:
     if payload is None:
         raise api_error(500, "DEBATE_RESULT_RESPONSE_MISSING", "Failed to load debate result")
     return payload
+
+
+@router.get("/api/debate/{debate_id}/argument-map")
+async def get_debate_argument_map(debate_id: str) -> dict[str, Any]:
+    """Return the argument map for a debate (Phase 3 F6)."""
+    if not settings.FEATURE_ARGUMENT_MAP:
+        raise api_error(404, "FEATURE_DISABLED", "Argument map feature is not enabled")
+    engine = get_engine()
+    with Session(engine) as session:
+        debate = session.get(Debate, debate_id)
+        if debate is None:
+            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+    try:
+        from app.services.debate_argument_map import get_argument_map
+        return get_argument_map(debate_id)
+    except Exception:
+        return {"snapshot_id": None, "nodes": [], "edges": [], "units": []}
 
 
 @router.post("/api/debate/{debate_id}/predict")

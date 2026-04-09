@@ -149,7 +149,17 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
     those turns are marked ``accepted``; remaining ``standing`` units become
     ``unaddressed``.
     """
-    supporting_turns: list[str] = verdict_data.get("supporting_turns", [])
+    # Extract supporting turn IDs from judge_rationale.
+    # verdict_data may be finalized_summary (with nested judge_rationale)
+    # or judge_rationale directly. supporting_turns may be list[str] or list[dict].
+    rationale = verdict_data.get("judge_rationale") or verdict_data
+    raw_turns = rationale.get("supporting_turns", [])
+    supporting_turn_ids: set[str] = set()
+    for item in raw_turns:
+        if isinstance(item, dict):
+            supporting_turn_ids.add(item.get("id", ""))
+        elif isinstance(item, str):
+            supporting_turn_ids.add(item)
 
     with Session(get_engine()) as session:
         stmt = select(DebateArgumentUnit).where(
@@ -159,7 +169,7 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
         standing_units = session.exec(stmt).all()
 
         for unit in standing_units:
-            if unit.turn_id in supporting_turns:
+            if unit.turn_id in supporting_turn_ids:
                 unit.status = "accepted"
             else:
                 unit.status = "unaddressed"
@@ -168,8 +178,8 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
         session.commit()
 
     logger.info(
-        "link_verdict debate=%s supporting_turns=%s standing=%d",
-        debate_id, supporting_turns, len(standing_units),
+        "link_verdict debate=%s supporting_turn_ids=%s standing=%d",
+        debate_id, supporting_turn_ids, len(standing_units),
     )
 
 

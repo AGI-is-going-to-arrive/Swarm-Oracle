@@ -133,6 +133,7 @@ npm run test:watch # vitest (watch mode)
 | `useInputViewState.ts` | 输入页状态，含搜索增强开关与服务端能力检测 |
 | `useSimulationViewState.ts` | 模拟页状态 |
 | `useTranscriptScroll.test.ts` | 对话滚动 (密室/圆桌共享) |
+| `useCapabilityCheck.ts` | Phase 3 capability gate hook，mount 时检查 `/api/capabilities` 对应 key，disabled 时阻止 API 请求 |
 
 ### `src/lib/` -- 工具函数库
 
@@ -171,7 +172,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **77 个测试文件** (`.test.ts` / `.test.tsx`) / **715 tests**
+- **77 个测试文件** (`.test.ts` / `.test.tsx`) / **716 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -361,6 +362,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | Phase 3 接线补全 | useCapabilityCheck hook + 4 新页面 capability gate (disabled 时不发 API)；InputView 集成 AgentAttachPanel；ResultView 集成因果图谱链接+CounterfactualPanel+FactionTimeline；DebateResultView 集成 ArgumentMap；CounterfactualPanel branchId prop 修复；client.ts 新增 customAgentIdentityIds；gate 测试 1 条 |
 | 2026-04-09 | Phase 3 六大功能 | 4 新页面 (AgentWorkshop/Library/CausalReview/CompareDigest)、5 新组件 (AgentAttach/ArgumentMap/Counterfactual/FactionTimeline/ReturningBadge)、agentStore、i18n Phase 3 keys、4 新路由、contract-freeze 测试、29+ 新测试 |
 | 2026-04-09 | 遗留项收口 | mobile roster dialog 焦点管理 (打开聚焦 + 关闭回触发按钮)；sidebar `<details>` 加 aria-label；hotseat/overflow CSS 颜色提取为 token；e2e 脚本死代码清理；reducedMotion tween guard 结构测试 ×5 |
 | 2026-04-08 | 圆桌 UI 升级 (Track D) | Synthesis-First section (verdict 主区顶部)；phase nav pill bar + scrollIntoView；mobile roster modal (dialog 语义 + Escape 关闭)；tablet sidebar `<details>` 折叠；8-hue speaker 色条；transcript role="log"；280 行新增测试 |

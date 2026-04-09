@@ -115,7 +115,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检 |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 `web_search.server_enabled` 等功能开关 |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 7-key capability registry (web_search + 6 Phase 3 功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -133,11 +133,32 @@
 | `GET` | `/api/debate/{debate_id}/result` | result payload |
 | `POST` | `/api/debate/{debate_id}/predict` | 提交 counterplay/prediction |
 | `POST` | `/api/debate/import-replay` | 导入 replay 为本地 debate |
+| `GET` | `/api/debate/{debate_id}/argument-map` | 论证图谱 (Phase 3 F6)，受 `FEATURE_ARGUMENT_MAP` gate |
 
 说明：
 
 - Debate 是独立域，不与主模式复用 scenario authority。
 - replay import 会保留 imported `phase_insights` 与 `adjudication_mode`。
+
+## Phase 3 — Agents / Graphs
+
+| 方法 | 路径 | 说明 | 开关 |
+|------|------|------|------|
+| `GET` | `/api/agents/identities` | Agent 身份列表 | `FEATURE_CUSTOM_AGENTS` 或 `FEATURE_AGENT_IDENTITY` |
+| `GET` | `/api/agents/identities/{id}/memory` | 跨场景记忆 | `FEATURE_AGENT_IDENTITY` |
+| `POST` | `/api/agents/workshop` | 创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `PUT` | `/api/agents/workshop/{id}` | 更新自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
+| `POST` | `/api/scenario/{id}/counterfactual` | 创建反事实分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `GET` | `/api/scenario/{id}/checkpoints` | 检查点列表 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `GET` | `/api/scenario/{id}/faction-timeline` | 阵营时间线 | `FEATURE_FACTIONS` |
+
+说明：
+
+- 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
+- 前端通过 `GET /api/capabilities` 检测 `enabled` 字段，disabled 时隐藏入口且不发请求。
 
 ## Ending Room / Worldline Roundtable
 

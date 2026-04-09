@@ -373,12 +373,12 @@ async def api_capabilities():
     ws_hint = _build_web_search_server_hint()
     return {
         "web_search": {**_capability_entry(enabled=ws_hint.get("server_enabled", False), version="1.0"), **ws_hint},
-        "custom_agents": _capability_entry(),
-        "agent_identity": _capability_entry(),
-        "causal_graph": _capability_entry(),
-        "counterfactual_replay": _capability_entry(),
-        "factions": _capability_entry(),
-        "argument_map": _capability_entry(degraded_mode="rule_based_only"),
+        "custom_agents": _capability_entry(enabled=settings.FEATURE_CUSTOM_AGENTS, version="1.0" if settings.FEATURE_CUSTOM_AGENTS else "0.0"),
+        "agent_identity": _capability_entry(enabled=settings.FEATURE_AGENT_IDENTITY, version="1.0" if settings.FEATURE_AGENT_IDENTITY else "0.0"),
+        "causal_graph": _capability_entry(enabled=settings.FEATURE_CAUSAL_GRAPH, version="1.0" if settings.FEATURE_CAUSAL_GRAPH else "0.0"),
+        "counterfactual_replay": _capability_entry(enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY, version="1.0" if settings.FEATURE_COUNTERFACTUAL_REPLAY else "0.0"),
+        "factions": _capability_entry(enabled=settings.FEATURE_FACTIONS, version="1.0" if settings.FEATURE_FACTIONS else "0.0"),
+        "argument_map": _capability_entry(enabled=settings.FEATURE_ARGUMENT_MAP, version="1.0" if settings.FEATURE_ARGUMENT_MAP else "0.0", degraded_mode="rule_based_only"),
     }
 
 
@@ -521,6 +521,7 @@ async def create_scenario(req: CreateScenarioRequest):
             llm_requests_per_minute=req.llm_requests_per_minute,
             llm_tokens_per_minute=req.llm_tokens_per_minute,
             disable_user_quota=req.disable_user_quota,
+            custom_agent_identity_ids=req.custom_agent_identity_ids,
         )
     )
 

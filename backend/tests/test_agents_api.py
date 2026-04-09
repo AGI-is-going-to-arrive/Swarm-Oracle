@@ -3,6 +3,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.config import settings
 from app.main import app
 from app.models.database import init_db
 
@@ -10,6 +11,12 @@ from app.models.database import init_db
 @pytest.fixture(autouse=True)
 def _init():
     init_db()
+    # Enable Phase 3 feature flags for agent tests
+    settings.FEATURE_CUSTOM_AGENTS = True
+    settings.FEATURE_AGENT_IDENTITY = True
+    yield
+    settings.FEATURE_CUSTOM_AGENTS = False
+    settings.FEATURE_AGENT_IDENTITY = False
 
 
 @pytest.fixture
@@ -132,9 +139,12 @@ class TestWorkshopCRUD:
 
 
 class TestMemoryEndpoint:
-    async def test_memory_returns_501(self, client: AsyncClient):
-        resp = await client.get("/api/agents/identities/some-id/memory")
-        assert resp.status_code == 501
+    async def test_memory_returns_200_with_empty_list(self, client: AsyncClient):
+        resp = await client.get("/api/agents/identities/nonexistent-id/memory")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["identity_id"] == "nonexistent-id"
+        assert isinstance(data["memories"], list)
 
 
 class TestFullLifecycle:

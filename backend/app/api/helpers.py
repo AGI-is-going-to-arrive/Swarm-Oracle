@@ -253,6 +253,7 @@ async def parse_and_run_background(
     llm_requests_per_minute: int | None,
     llm_tokens_per_minute: int | None,
     disable_user_quota: bool | None,
+    custom_agent_identity_ids: list[str] | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -378,8 +379,47 @@ async def parse_and_run_background(
 
         session.add(scenario)
 
+        # Phase 3 F1: Identity resolution helper (non-blocking, gated)
+        _resolve_id = None
+        if settings.FEATURE_AGENT_IDENTITY:
+            try:
+                from app.services.agent_identity import resolve_identity as _resolve_id
+            except ImportError:
+                pass
+
+        # Phase 3 F3: Inject custom agents into CROWD slots (gated)
+        custom_agents_to_inject: list[dict] = []
+        if custom_agent_identity_ids and settings.FEATURE_CUSTOM_AGENTS:
+            try:
+                from app.models.agent_identity import AgentIdentity
+                for cid in custom_agent_identity_ids[:5]:
+                    identity = session.get(AgentIdentity, cid)
+                    if identity and identity.kind == "custom":
+                        custom_agents_to_inject.append({
+                            "name": identity.display_name,
+                            "role": identity.role,
+                            "persona": identity.persona or "",
+                            "tier": "CROWD",
+                            "identity_id": identity.id,
+                        })
+            except Exception:
+                logger.debug("custom agent injection failed (non-blocking)", exc_info=True)
+
+        parsed_agents = list(parsed.get("agents", []))
+        # Replace CROWD slots with custom agents
+        if custom_agents_to_inject:
+            crowd_indices = [
+                i for i, a in enumerate(parsed_agents)
+                if a.get("tier", "IMPORTANT") == "CROWD"
+            ]
+            for j, custom in enumerate(custom_agents_to_inject):
+                if j < len(crowd_indices):
+                    parsed_agents[crowd_indices[j]] = custom
+                else:
+                    parsed_agents.append(custom)
+
         agent_name_to_id: dict[str, str] = {}
-        for agent_data in parsed.get("agents", []):
+        for agent_data in parsed_agents:
             agent = Agent(
                 scenario_id=scenario_id,
                 name=agent_data.get("name", "Unknown"),
@@ -388,9 +428,32 @@ async def parse_and_run_background(
                 tier=AgentTier(agent_data.get("tier", "IMPORTANT")),
                 stance=agent_data.get("stance", ""),
             )
+            # Phase 3 F1: Resolve identity for each agent
+            if _resolve_id and user_id:
+                try:
+                    pre_assigned_id = agent_data.get("identity_id")
+                    if pre_assigned_id:
+                        agent.agent_identity_id = pre_assigned_id
+                        agent.source_type = "custom"
+                    else:
+                        identity_id = _resolve_id(
+                            user_id, agent_data.get("name", ""),
+                            agent_data.get("role", ""),
+                            agent_data.get("persona"),
+                        )
+                        agent.agent_identity_id = identity_id
+                        agent.source_type = "generated"
+                except Exception:
+                    logger.debug("resolve_identity failed for %s", agent_data.get("name"), exc_info=True)
             session.add(agent)
             session.flush()
             agent_name_to_id[agent.name] = agent.id
+
+        # Phase 3: Sync parsed_context.agents with actual injected list (lossless)
+        if custom_agents_to_inject:
+            parsed["agents"] = parsed_agents
+            scenario.parsed_context = parsed
+            session.add(scenario)
 
         if hierarchical and parsed.get("groups"):
             for group_data in parsed["groups"]:

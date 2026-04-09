@@ -44,6 +44,20 @@ try:
 except ImportError:
     _CAUSAL_AVAILABLE = False
 
+# Phase 3 F5: Faction detection hook (non-blocking)
+try:
+    from app.services.factions import process_round as _factions_process
+    _FACTIONS_AVAILABLE = True
+except ImportError:
+    _FACTIONS_AVAILABLE = False
+
+# Phase 3 F4: Checkpoint hook (non-blocking)
+try:
+    from app.services.replay import write_checkpoint as _checkpoint_write
+    _CHECKPOINT_AVAILABLE = True
+except ImportError:
+    _CHECKPOINT_AVAILABLE = False
+
 # V2: Visualization layer (lazy-loaded only when enabled)
 try:
     from app.visualization import (
@@ -1116,11 +1130,29 @@ async def run_simulation(
             })
 
             # Phase 3 F2: Causal graph — record round nodes (non-blocking)
-            if _CAUSAL_AVAILABLE:
+            if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                 try:
                     _causal_append(scenario_id, current_branch_id, round_num, messages)
                 except Exception:
                     logger.debug("causal_graph append failed (non-blocking)", exc_info=True)
+
+            # Phase 3 F5: Faction detection (non-blocking)
+            if _FACTIONS_AVAILABLE and settings.FEATURE_FACTIONS:
+                try:
+                    _factions_process(scenario_id, current_branch_id, round_num, messages)
+                except Exception:
+                    logger.debug("factions process_round failed (non-blocking)", exc_info=True)
+
+            # Phase 3 F4: Checkpoint snapshot (non-blocking)
+            if _CHECKPOINT_AVAILABLE and settings.FEATURE_COUNTERFACTUAL_REPLAY:
+                try:
+                    bb_snapshot = None
+                    _cp_bb = blackboards.get(current_branch_id)
+                    if _cp_bb is not None:
+                        bb_snapshot = {"summary": _cp_bb.get_global_summary()}
+                    _checkpoint_write(scenario_id, current_branch_id, round_num, agents, bb_snapshot)
+                except Exception:
+                    logger.debug("checkpoint write failed (non-blocking)", exc_info=True)
 
             # V2-P2: Check for card event triggers
             if viz_mapper is not None and _VIZ_AVAILABLE:
@@ -1261,7 +1293,7 @@ async def run_simulation(
                         })
 
                         # Phase 3 F2: Record fork in causal graph
-                        if _CAUSAL_AVAILABLE:
+                        if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                             try:
                                 _causal_append(
                                     scenario_id, current_branch_id, round_num, [],

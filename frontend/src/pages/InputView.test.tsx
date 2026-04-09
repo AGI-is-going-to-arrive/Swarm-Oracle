@@ -853,8 +853,8 @@ describe('InputView campaign progress', () => {
 
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(screen.queryByText('home.web_search_toggle')).not.toBeInTheDocument();
-    // healthCheck should not even be called when VITE flag is off
-    expect(getCapabilitiesMock).not.toHaveBeenCalled();
+    // Note: getCapabilities is now also called by useCapabilityCheck for Phase 3,
+    // so we only verify the web search toggle is hidden, not the call count.
   });
 
   it('sends webSearchEnabled=true when toggle is checked', async () => {

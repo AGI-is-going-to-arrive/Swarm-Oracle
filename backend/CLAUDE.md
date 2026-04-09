@@ -36,8 +36,9 @@ docker compose up backend
 | `/api/scenario/{id}/predict` | `api/predictions.py` | 预测提交、评分、排行榜 |
 | `/api/scenario/{id}/intervene` | `api/interventions.py` | 蝴蝶效应干预（单次/回溯/批量） |
 | `/api/scenario/{id}/social` | `api/social.py` | 社交媒体文案生成 |
-| `/api/agents` | `api/agents.py` | Agent 身份查询、记忆查询、自建 Agent CRUD (Phase 3 F1/F3) |
-| `/api/graphs` | `api/graphs.py` | 因果图谱、反事实比较、检查点 (Phase 3 F2/F4) |
+| `/api/agents` | `api/agents.py` | Agent 身份查询、记忆查询、自建 Agent CRUD (Phase 3 F1/F3)，受 `FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY` gate |
+| `/api/graphs` | `api/graphs.py` | 因果图谱、阵营时间线、反事实比较、检查点 (Phase 3 F2/F4/F5)，受对应 `FEATURE_*` gate |
+| `/api/debate/{id}/argument-map` | `api/debate.py` | 辩论论证图谱 (Phase 3 F6)，受 `FEATURE_ARGUMENT_MAP` gate |
 | `/` | `app/main.py` | 健康检查 |
 | `/metrics` | Prometheus | Prometheus 指标 |
 
@@ -76,6 +77,12 @@ docker compose up backend
 | `MAX_ROUNDS` | `40` | 最大模拟轮次 |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `LOG_FORMAT` | `json` | 日志格式 (json/plain) |
+| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent CRUD + workshop API |
+| `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆 API |
+| `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator hook |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 比较 + 检查点 API |
+| `FEATURE_FACTIONS` | `false` | 启用阵营检测 API + simulator hook |
+| `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱 API + debate hook |
 
 ## 数据模型
 
@@ -104,8 +111,8 @@ docker compose up backend
 | 服务 | 文件 | 职责 |
 |------|------|------|
 | ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content |
-| simulator | `simulator.py` | 多代理模拟引擎 |
-| debate | `debate.py` | 辩论引擎 |
+| simulator | `simulator.py` | 多代理模拟引擎，含 causal/factions/checkpoint 3 个 Phase 3 hook (均受 `FEATURE_*` gate) |
+| debate | `debate.py` | 辩论引擎，含 argument map 抽取+verdict linking hook (受 `FEATURE_ARGUMENT_MAP` gate) |
 | llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
@@ -136,7 +143,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **62 个测试文件 / 1709 tests**，位于 `tests/`
+- **60 个测试文件 / 1717 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -156,7 +163,7 @@ backend/
     services/            # 业务逻辑 (21 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (16 个版本)
-  tests/                 # 测试 (62 个文件)
+  tests/                 # 测试 (60 个文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -254,6 +261,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 加 FEATURE_* server-side 404 gate (11 条回归测试)；simulator 补 factions+checkpoint hook；debate 补 argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 无损同步；argument-map + faction-timeline 2 个新 endpoint |
 | 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities 7-key registry、ChromaDB 双层 memory、125+ 新测试 |
 | 2026-04-09 | 遗留项收口 | auth_ok 发送异常区分 WebSocketDisconnect/其他 + 日志 + close(1011)；pending_auth 归零清理 key；campaign/ending-room session gate 提升 router 级 dependencies；llm_client content=null `or ""` 防御；pyproject.toml 显式声明 sqlalchemy/pydantic 直依赖；test_llm_client 5 条 probe skip |
 | 2026-04-08 | WS pending_auth + Track B2 | pending_auth 计入 MAX_WS_PER_SCENARIO + auth_ok 发送失败释放 (25 测试)；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复 (154 测试 + live LLM 验证) |
