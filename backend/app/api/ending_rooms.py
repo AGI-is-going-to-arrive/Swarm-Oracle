@@ -350,7 +350,7 @@ async def _run_ending_room_websocket_session(websocket: WebSocket, room_id: str)
     )
 
 
-@router.websocket("/ws/ending-room/{room_id}")
+@ws_router.websocket("/api/ws/ending-room/{room_id}")
 async def ending_room_websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
     await _run_ending_room_websocket_session(websocket, room_id)
 

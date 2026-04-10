@@ -85,7 +85,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 主闭环已达到 `release-candidate` 级别。
 - 最近一次稳定总链签收工件位于：
-  - `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`
+  - `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`
 - 最近一次 Oracle 专项签收工件位于：
   - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
@@ -110,6 +110,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近一轮 Oracle ending-room follow-up deterministic API-driven 工件位于：
   - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/summary.json`
   - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven5/summary.json`
+- 最近一轮默认本地全链签收当前已覆盖：
+  - `corners / mobile / cross_browser / ending_room_followup / roundtable_full / debate_full`
 - 最近一轮经典模式流式 hardening 工件位于：
   - `frontend/output/e2e/20260331-codex-classic-stream-hardening-rerun3/result.json`
 - 当前仍在继续收口的内容：

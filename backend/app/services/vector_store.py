@@ -500,6 +500,40 @@ def _identity_collection_name(user_id: str) -> str:
     return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
 
 
+def _identity_profile_collection_name(user_id: str) -> str:
+    """Build the canonical Chroma collection name for identity profiles."""
+    name = f"identity_profile_{user_id.replace('-', '_')}"
+    return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
+
+
+def _list_identity_profile_doc_ids(collection: Any, identity_id: str) -> list[str]:
+    """Return all profile doc ids for an identity inside a collection."""
+    try:
+        results = collection.get(where={"identity_id": identity_id})
+    except Exception:
+        return []
+
+    if not results or not results.get("ids"):
+        return []
+
+    ids = results["ids"]
+    metas = results.get("metadatas") or [{}] * len(ids)
+    return [
+        doc_id
+        for doc_id, meta in zip(ids, metas)
+        if meta.get("doc_type") == "identity_profile"
+    ]
+
+
+def _delete_identity_profile_docs_from_collection(collection: Any, identity_id: str) -> int:
+    """Delete all profile docs for an identity from one collection."""
+    ids = _list_identity_profile_doc_ids(collection, identity_id)
+    if not ids:
+        return 0
+    collection.delete(ids=ids)
+    return len(ids)
+
+
 def store_identity_memory(
     user_id: str,
     identity_id: str,
@@ -596,18 +630,22 @@ def _store_identity_memory_inner(
         results = collection.get(
             where={"identity_id": identity_id},
         )
-        if results and results.get("ids") and len(results["ids"]) > _IDENTITY_MEMORY_MAX:
+        if results and results.get("ids"):
             metas = results.get("metadatas", [])
             ids = results["ids"]
+            memory_entries = [
+                (doc_id, meta)
+                for doc_id, meta in zip(ids, metas)
+                if meta.get("doc_type") != "identity_profile"
+            ]
             # Sort key: (is_compacted, created_at) — raw first (0), compacted last (1)
-            paired = list(zip(ids, metas))
-            paired.sort(key=lambda p: (
+            memory_entries.sort(key=lambda p: (
                 0 if p[1].get("compacted") != "true" else 1,
                 p[1].get("created_at", ""),
             ))
-            excess = len(paired) - _IDENTITY_MEMORY_MAX
+            excess = len(memory_entries) - _IDENTITY_MEMORY_MAX
             if excess > 0:
-                to_delete = [p[0] for p in paired[:excess]]
+                to_delete = [p[0] for p in memory_entries[:excess]]
                 collection.delete(ids=to_delete)
                 logger.debug(
                     "Evicted %d identity memories for identity=%s (raw-first priority)",
@@ -659,6 +697,8 @@ def retrieve_identity_memories(
             metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
             distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
             for doc, meta, dist in zip(docs, metas, distances):
+                if meta.get("doc_type") == "identity_profile":
+                    continue
                 memories.append({
                     "summary": doc,
                     "scenario_id": meta.get("scenario_id", ""),
@@ -671,17 +711,269 @@ def retrieve_identity_memories(
 
 
 def purge_identity_memories(user_id: str) -> None:
-    """Delete the entire identity memory collection for a user."""
+    """Delete the identity memory and profile collections for a user."""
     store = get_vector_store()
     if not store.available:
         return
 
-    col_name = _identity_collection_name(user_id)
+    collection_names = (
+        _identity_collection_name(user_id),
+        _identity_profile_collection_name(user_id),
+    )
+    for col_name in collection_names:
+        try:
+            store._client.delete_collection(col_name)
+            logger.info("Purged identity collection %s", col_name)
+        except Exception as exc:
+            logger.warning(
+                "Failed to purge identity collection %s for %s: %s",
+                col_name,
+                user_id,
+                exc,
+            )
+
+
+# ── Identity Profile Embedding (L2 matching) ────────────────
+
+
+_L2_COSINE_DISTANCE_THRESHOLD = 0.15  # cosine distance < 0.15 ≈ similarity > 0.85
+
+
+def store_identity_profile(
+    user_id: str,
+    identity_id: str,
+    role: str,
+    persona: str | None,
+    *,
+    replace_existing: bool = False,
+) -> None:
+    """Store role+persona text as an embedding for L2 fuzzy matching.
+
+    Stores profiles in a dedicated ``identity_profile_{user_id}`` collection.
+    Legacy profile docs inside ``identity_{user_id}`` are cleaned up on write.
+
+    When ``replace_existing`` is true, removes any existing profile docs before
+    writing the replacement profile.
+    """
+    profile_text = f"{role} — {(persona or '')[:200]}".strip()
+    if not profile_text:
+        return
+
+    store = get_vector_store()
+    if not store.available:
+        return
+
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
     try:
-        store._client.delete_collection(col_name)
-        logger.info("Purged identity memory collection %s", col_name)
+        lease = acquire_runtime_lock(
+            lock_key,
+            lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )
     except Exception as exc:
-        logger.warning("Failed to purge identity collection for %s: %s", user_id, exc)
+        logger.warning("L2 profile lock acquisition failed for %s: %s", user_id, exc)
+        return
+    if lease is None:
+        logger.warning("L2 profile store skipped for %s: Chroma write lock busy", user_id)
+        return
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            profile_collection_name = _identity_profile_collection_name(user_id)
+            try:
+                collection = store._client.get_or_create_collection(
+                    name=profile_collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            except Exception as exc:
+                logger.warning("L2 profile store: collection error for %s: %s", user_id, exc)
+                return
+
+            existing_ids = _list_identity_profile_doc_ids(collection, identity_id)
+            if replace_existing and existing_ids:
+                collection.delete(ids=existing_ids)
+            elif existing_ids:
+                if len(existing_ids) > 1:
+                    collection.delete(ids=existing_ids[1:])
+                _cleanup_legacy_identity_profile_docs(store, user_id, identity_id)
+                return
+
+            import uuid
+
+            doc_id = str(uuid.uuid4())
+            try:
+                collection.add(
+                    documents=[profile_text],
+                    metadatas=[{
+                        "identity_id": identity_id,
+                        "doc_type": "identity_profile",
+                        "role": role[:100],
+                    }],
+                    ids=[doc_id],
+                )
+                logger.debug("Stored L2 identity profile for identity=%s", identity_id)
+            except Exception as exc:
+                logger.warning("L2 profile store failed (non-fatal): %s", exc)
+                return
+
+            _cleanup_legacy_identity_profile_docs(store, user_id, identity_id)
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.warning("L2 profile lock release failed for %s: %s", user_id, exc)
+
+
+def _cleanup_legacy_identity_profile_docs(
+    store: "VectorStore",
+    user_id: str,
+    identity_id: str,
+) -> None:
+    """Delete legacy profile docs from the shared identity memory collection."""
+    legacy_collection_name = _identity_collection_name(user_id)
+    try:
+        legacy_collection = store._client.get_collection(name=legacy_collection_name)
+    except Exception:
+        return
+
+    try:
+        deleted = _delete_identity_profile_docs_from_collection(legacy_collection, identity_id)
+        if deleted:
+            logger.info(
+                "Cleaned up %d legacy identity profile docs for identity=%s",
+                deleted,
+                identity_id,
+            )
+    except Exception as exc:
+        logger.warning("Legacy identity profile cleanup failed (non-fatal): %s", exc)
+
+
+def delete_identity_profile(user_id: str, identity_id: str) -> None:
+    """Delete all profile docs for an identity from dedicated and legacy collections."""
+    store = get_vector_store()
+    if not store.available:
+        return
+
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = acquire_runtime_lock(
+            lock_key,
+            lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("L2 profile delete lock acquisition failed for %s: %s", user_id, exc)
+        return
+    if lease is None:
+        logger.warning("L2 profile delete skipped for %s: Chroma write lock busy", user_id)
+        return
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            for col_name in (
+                _identity_profile_collection_name(user_id),
+                _identity_collection_name(user_id),
+            ):
+                try:
+                    collection = store._client.get_collection(name=col_name)
+                except Exception:
+                    continue
+                try:
+                    _delete_identity_profile_docs_from_collection(collection, identity_id)
+                except Exception as exc:
+                    logger.warning("L2 profile delete failed in %s: %s", col_name, exc)
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.warning("L2 profile delete lock release failed for %s: %s", user_id, exc)
+
+
+def search_identity_candidates(
+    user_id: str,
+    role: str,
+    persona: str | None,
+    threshold: float = _L2_COSINE_DISTANCE_THRESHOLD,
+    max_candidates: int = 5,
+) -> list[dict[str, Any]]:
+    """Search for identity candidates via L2 cosine similarity.
+
+    Queries all ``doc_type=identity_profile`` docs in the user's identity
+    collection, aggregates by ``identity_id``, and returns candidates whose
+    best cosine distance < threshold.
+
+    Returns list of ``{identity_id, distance, similarity, role}`` sorted by
+    distance ascending (best match first). Empty list on failure.
+    """
+    query_text = f"{role} — {(persona or '')[:200]}".strip()
+    if not query_text:
+        return []
+
+    store = get_vector_store()
+    if not store.available:
+        return []
+
+    candidate_sets: list[dict[str, Any]] = []
+    collection_names = (
+        _identity_profile_collection_name(user_id),
+        _identity_collection_name(user_id),  # legacy compatibility for pre-fix profile docs
+    )
+    for col_name in collection_names:
+        try:
+            collection = store._client.get_collection(name=col_name)
+        except Exception:
+            continue
+
+        try:
+            all_docs = collection.get(where={"doc_type": "identity_profile"})
+            if not all_docs or not all_docs.get("ids"):
+                continue
+            profile_count = len(all_docs["ids"])
+            if profile_count == 0:
+                continue
+
+            results = collection.query(
+                query_texts=[query_text],
+                n_results=min(max_candidates * 2, profile_count),
+                where={"doc_type": "identity_profile"},
+            )
+
+            if not results or not results.get("documents"):
+                continue
+
+            metas = results["metadatas"][0] if results.get("metadatas") else []
+            distances = results["distances"][0] if results.get("distances") else []
+            for meta, dist in zip(metas, distances):
+                iid = meta.get("identity_id", "")
+                if not iid:
+                    continue
+                candidate_sets.append({
+                    "identity_id": iid,
+                    "distance": dist,
+                    "similarity": round(1.0 - dist, 4),
+                    "role": meta.get("role", ""),
+                })
+        except Exception as exc:
+            logger.warning(
+                "L2 identity candidate search failed in %s (non-fatal): %s",
+                col_name,
+                exc,
+            )
+
+    if not candidate_sets:
+        return []
+
+    # Aggregate by identity_id — keep best (lowest) distance per identity
+    best_by_identity: dict[str, dict[str, Any]] = {}
+    for candidate in candidate_sets:
+        iid = candidate["identity_id"]
+        if iid not in best_by_identity or candidate["distance"] < best_by_identity[iid]["distance"]:
+            best_by_identity[iid] = candidate
+
+    candidates = [
+        c for c in best_by_identity.values()
+        if c["distance"] < threshold
+    ]
+    candidates.sort(key=lambda c: c["distance"])
+    return candidates[:max_candidates]
 
 
 # ── Identity Memory Compaction ──────────────────────────────
@@ -722,7 +1014,7 @@ def check_identity_compaction_needed(user_id: str, identity_id: str) -> bool:
             return False
         raw_count = sum(
             1 for m in (results.get("metadatas") or [])
-            if m.get("compacted") != "true"
+            if m.get("compacted") != "true" and m.get("doc_type") != "identity_profile"
         )
         return raw_count >= settings.IDENTITY_COMPACT_THRESHOLD
     except Exception:
@@ -782,7 +1074,7 @@ def _prepare_compaction_groups_inner(
     metas = results.get("metadatas", [])
     ids = results["ids"]
     for doc_id, doc, meta in zip(ids, docs, metas):
-        if meta.get("compacted") != "true":
+        if meta.get("compacted") != "true" and meta.get("doc_type") != "identity_profile":
             raw_entries.append((doc_id, doc, meta))
 
     if len(raw_entries) < settings.IDENTITY_COMPACT_THRESHOLD:

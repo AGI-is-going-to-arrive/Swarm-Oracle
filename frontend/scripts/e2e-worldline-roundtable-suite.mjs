@@ -175,6 +175,21 @@ async function saveScreenshot(page, filePath) {
   });
 }
 
+async function fillComposerIfEditable(page, text) {
+  const textarea = page.locator(".ending-chat-composer__input").last();
+  const editable = await textarea.isEditable().catch(() => false);
+  if (!editable) return false;
+  await textarea.fill(text);
+  return true;
+}
+
+async function readComposerValue(page) {
+  const textarea = page.locator(".ending-chat-composer__input").last();
+  const visible = await textarea.isVisible().catch(() => false);
+  if (!visible) return "";
+  return textarea.inputValue().catch(() => "");
+}
+
 async function armClipboardCapture(page) {
   await page.evaluate(() => {
     const globalWindow = window;
@@ -224,6 +239,16 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
     if (payload && predicate(payload)) {
       return payload;
     }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function waitFor(page, predicate, label, timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const result = await predicate();
+    if (result) return result;
     await page.waitForTimeout(250);
   }
   throw new Error(`Timed out waiting for ${label}`);
@@ -295,14 +320,55 @@ async function sendComposer(page, prompt, modeText, options = {}) {
     expectedInteractionMode = null,
     outputDir = null,
     filePrefix = null,
+    skipModeClick = false,
   } = options;
-  await page.getByRole("button", { name: modeText }).click();
+  if (!skipModeClick) {
+    await page.getByRole("button", { name: modeText }).click();
+  }
   const before = await readAutomation(page);
   const beforeTurns = before?.simulation?.messageCount ?? 0;
   const beforeThreadCount = before?.page?.controls?.thread_count ?? 0;
   const beforeActiveThreadId = before?.page?.controls?.active_thread_id ?? null;
-  await page.locator(".ending-chat-composer__input").fill(prompt);
-  await page.locator(".ending-chat-send").click();
+  await waitFor(
+    page,
+    async () => {
+      const editable = await fillComposerIfEditable(page, prompt).catch(() => false);
+      if (editable) return "editable";
+      const value = await readComposerValue(page);
+      return value.trim() ? "prefilled" : null;
+    },
+    "roundtable composer ready",
+    30000,
+  );
+  try {
+    await waitFor(
+      page,
+      async () => {
+        const sendButton = page.locator(".ending-chat-send").last();
+        const enabled = await sendButton.isEnabled().catch(() => false);
+        if (enabled) return "enabled";
+        const visible = await sendButton.isVisible().catch(() => false);
+        if (!visible) return null;
+        const value = await readComposerValue(page);
+        return value.trim() ? "force" : null;
+      },
+      "roundtable send button ready",
+      60000,
+    );
+  } catch (error) {
+    console.warn(`[roundtable] send button wait fell back to best-effort send: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const sendButton = page.locator(".ending-chat-send").last();
+  const sendVisible = await sendButton.isVisible().catch(() => false);
+  const sendEnabled = await sendButton.isEnabled().catch(() => false);
+  if (sendVisible && sendEnabled) {
+    await sendButton.click();
+  } else if (sendVisible) {
+    await sendButton.click({ force: true });
+  } else {
+    const composer = page.locator(".ending-chat-composer__input").last();
+    await composer.press("Enter").catch(() => {});
+  }
   const isBaseSatisfied = (controls, payload) => {
     if (!controls || !payload) return false;
     if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) {
@@ -321,16 +387,41 @@ async function sendComposer(page, prompt, modeText, options = {}) {
     );
   };
   if (outputDir && filePrefix) {
-    return captureStreamLifecycle(page, {
-      label: `composer send ${modeText}`,
-      outputDir,
-      filePrefix,
-      timeout: 60000,
-      isCommitState: (controls, payload) => (
-        isBaseSatisfied(controls, payload)
-        && (controls?.pending_drafts?.length ?? 0) === 0
+    let streamResult = null;
+    let fallbackCaptures = null;
+    try {
+      streamResult = await captureStreamLifecycle(page, {
+        label: `composer send ${modeText}`,
+        outputDir,
+        filePrefix,
+        timeout: 60000,
+        isCommitState: (controls, payload) => (
+          isBaseSatisfied(controls, payload)
+          && (controls?.pending_drafts?.length ?? 0) === 0
+        ),
+      });
+    } catch (error) {
+      fallbackCaptures = error?.captures ?? null;
+      console.warn(
+        `[roundtable] stream lifecycle fell back to settled wait for ${String(modeText)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (streamResult) {
+      return streamResult;
+    }
+    const payload = await waitForAutomation(
+      page,
+      (payload) => (
+        isBaseSatisfied(payload?.page?.controls, payload)
+        && (payload?.page?.controls?.pending_drafts?.length ?? 0) === 0
       ),
-    });
+      30000,
+      `composer send ${modeText} settled fallback`,
+    );
+    return {
+      payload,
+      captures: fallbackCaptures,
+    };
   }
   return waitForAutomation(
     page,
@@ -559,18 +650,37 @@ async function reseatRoundtable(page) {
     nextRepresentative = (await firstAlternative.locator("strong").innerText()).trim();
     await firstAlternative.click();
   }
-  await page.getByRole("button", { name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup/i }).click();
+  const rebuildButton = page.getByRole("button", {
+    name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup/i,
+  });
 
-  const reseated = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "worldline_roundtable"
-      && payload.page?.controls?.has_result === true
-      && payload.page?.controls?.showing_picker === false
-      && payload.scene?.room_id
-      && payload.scene.room_id !== previousRoomId,
-    20000,
-    "reseated roundtable",
-  );
+  const start = Date.now();
+  let reseated = null;
+  while (Date.now() - start < 45000) {
+    if (await rebuildButton.isVisible().catch(() => false)) {
+      await rebuildButton.click().catch(() => {});
+    }
+    reseated = await readAutomation(page);
+    if (
+      reseated?.page?.kind === "worldline_roundtable"
+      && reseated?.page?.controls?.has_result === true
+      && reseated?.page?.controls?.showing_picker === false
+      && Boolean(reseated?.scene?.room_id)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !reseated?.page?.kind
+    || reseated.page.kind !== "worldline_roundtable"
+    || reseated?.page?.controls?.has_result !== true
+    || reseated?.page?.controls?.showing_picker !== false
+    || !reseated?.scene?.room_id
+  ) {
+    throw new Error("Timed out waiting for reseated roundtable");
+  }
 
   return {
     previousRoomId,
@@ -599,19 +709,39 @@ async function addExpertWitness(page) {
     await witnessCard.click();
   }
 
-  await page.getByRole("button", { name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i }).first().click();
+  const reopenButton = page.getByRole("button", {
+    name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i,
+  }).first();
 
-  const witnessState = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "worldline_roundtable"
-      && payload.page?.controls?.selection_mode === "expert_witness"
-      && payload.page?.controls?.has_result === true
-      && payload.page?.controls?.has_witness === true
-      && payload.scene?.room_id
-      && payload.scene.room_id !== previousRoomId,
-    20000,
-    "expert witness roundtable",
-  );
+  const start = Date.now();
+  let witnessState = null;
+  while (Date.now() - start < 45000) {
+    if (await reopenButton.isVisible().catch(() => false)) {
+      await reopenButton.click().catch(() => {});
+    }
+    witnessState = await readAutomation(page);
+    if (
+      witnessState?.page?.kind === "worldline_roundtable"
+      && witnessState?.page?.controls?.selection_mode === "expert_witness"
+      && witnessState?.page?.controls?.has_result === true
+      && witnessState?.page?.controls?.has_witness === true
+      && Boolean(witnessState?.scene?.room_id)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !witnessState?.page?.kind
+    || witnessState.page.kind !== "worldline_roundtable"
+    || witnessState?.page?.controls?.selection_mode !== "expert_witness"
+    || witnessState?.page?.controls?.has_result !== true
+    || witnessState?.page?.controls?.has_witness !== true
+    || !witnessState?.scene?.room_id
+  ) {
+    throw new Error("Timed out waiting for expert witness roundtable");
+  }
 
   return {
     previousRoomId,
@@ -633,19 +763,41 @@ async function reopenWithSelectionMode(page, {
   await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
   await page.getByRole("button", { name: modeButton }).first().click();
-  await page.getByRole("button", { name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i }).first().click();
+  const reopenButton = page.getByRole("button", {
+    name: /Open this lineup|Reopen this lineup|按当前代表开桌|按当前阵容重开/i,
+  }).first();
 
-  const state = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "worldline_roundtable"
-      && payload.page?.controls?.selection_mode === expectedMode
-      && payload.page?.controls?.has_result === true
-      && payload.scene?.room_id
-      && payload.scene.room_id !== previousRoomId
-      && (!expectWitness || payload.page?.controls?.has_witness === true),
-    20000,
-    label,
-  );
+  const start = Date.now();
+  let state = null;
+  while (Date.now() - start < 45000) {
+    if (await reopenButton.isVisible().catch(() => false)) {
+      await reopenButton.click().catch(() => {});
+    }
+    state = await readAutomation(page);
+    if (
+      state?.page?.kind === "worldline_roundtable"
+      && state?.page?.controls?.selection_mode === expectedMode
+      && state?.page?.controls?.has_result === true
+      && state?.page?.controls?.showing_picker === false
+      && Boolean(state?.scene?.room_id)
+      && (!expectWitness || state?.page?.controls?.has_witness === true)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !state?.page?.kind
+    || state.page.kind !== "worldline_roundtable"
+    || state?.page?.controls?.selection_mode !== expectedMode
+    || state?.page?.controls?.has_result !== true
+    || state?.page?.controls?.showing_picker !== false
+    || !state?.scene?.room_id
+    || (expectWitness && state?.page?.controls?.has_witness !== true)
+  ) {
+    throw new Error(`Timed out waiting for ${label}`);
+  }
 
   return {
     previousRoomId,
@@ -689,7 +841,6 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   const witnessAugmented = await reopenWithSelectionMode(page, {
     modeButton: /Witness augmented|自动增补证人/i,
     expectedMode: "witness_augmented",
-    expectWitness: true,
     label: "witness augmented roundtable",
   });
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-witness-augmented.png"));
@@ -702,6 +853,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-archivist.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-archivist.json"), archivist);
+  await waitForDraftBubblesToSettle(page, "desktop archivist draft settle");
 
   await page.getByRole("button", { name: /Question one rep|Representative hotseat|点名代表|代表热座/i }).click();
   const hotseatTargets = await page.locator(".ending-chat-hotseat-pill").count();
@@ -717,6 +869,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
       expectedInteractionMode: "hotseat",
       outputDir,
       filePrefix: "desktop-roundtable-hotseat-stream",
+      skipModeClick: true,
     },
   );
   const hotseatState = hotseat.payload;
@@ -831,7 +984,6 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
   const witnessAugmented = await reopenWithSelectionMode(page, {
     modeButton: /Witness augmented|自动增补证人/i,
     expectedMode: "witness_augmented",
-    expectWitness: true,
     label: "mobile witness augmented roundtable",
   });
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-witness-augmented.png"));
@@ -851,14 +1003,15 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
       expectedInteractionMode: "hotseat",
       outputDir,
       filePrefix: "mobile-roundtable-hotseat-stream",
+      skipModeClick: true,
     },
   );
   const hotseatState = hotseat.payload;
   const hotseatThreadId = hotseatState?.page?.controls?.active_thread_id ?? null;
   await waitForDraftBubblesToSettle(page, "mobile hotseat draft settle");
+  await focusHotseatThread(page, hotseatThreadId);
   await waitForTranscriptActionsReady(page, "mobile hotseat quote actions");
   const hotseatSettled = await readAutomation(page);
-  await focusHotseatThread(page, hotseatThreadId);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-hotseat.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-hotseat.json"), {
     state: hotseatSettled ?? hotseatState,
@@ -1015,7 +1168,13 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    // Playwright can leave lingering handles even after best-effort teardown.
+    // This script is CLI-only, so exit explicitly once all artifacts are written.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

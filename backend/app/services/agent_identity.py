@@ -13,7 +13,11 @@ from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
-from app.services.vector_store import get_vector_store
+from app.services.vector_store import (
+    get_vector_store,
+    search_identity_candidates,
+    store_identity_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +35,42 @@ def resolve_identity(
 ) -> str:
     """Resolve or create an AgentIdentity, return identity_id.
 
-    Uses Layer 1 continuity key matching: hash(role + persona[:30]).
+    Layer 1: exact hash match on continuity_key.
+    Layer 2: ChromaDB cosine similarity fallback (> 0.85) when L1 misses.
+    On create, stores L2 profile embedding for future fuzzy matching.
     """
     key = _continuity_key(role, persona)
     engine = get_engine()
 
     with Session(engine) as session:
+        # ── L1: exact hash match ──
         stmt = select(AgentIdentity).where(
             AgentIdentity.user_id == user_id,
             AgentIdentity.continuity_key == key,
         )
         existing = session.exec(stmt).first()
         if existing is not None:
+            # Ensure L2 profile exists (backfill for pre-L2 identities)
+            store_identity_profile(user_id, existing.id, role, persona)
             logger.debug(
-                "Resolved existing identity %s for user=%s key=%s",
+                "L1 resolved identity %s for user=%s key=%s",
                 existing.id, user_id, key,
             )
             return existing.id
 
+        # ── L2: cosine similarity fallback ──
+        candidates = search_identity_candidates(user_id, role, persona)
+        for candidate in candidates:
+            # Verify L2 candidate still exists in DB (ChromaDB may be stale)
+            db_identity = session.get(AgentIdentity, candidate["identity_id"])
+            if db_identity is not None:
+                logger.info(
+                    "L2 resolved identity %s for user=%s (similarity=%.4f)",
+                    candidate["identity_id"], user_id, candidate["similarity"],
+                )
+                return candidate["identity_id"]
+
+        # ── No match: create new identity + store L2 profile ──
         identity = AgentIdentity(
             user_id=user_id,
             kind="generated",
@@ -60,6 +82,8 @@ def resolve_identity(
         session.add(identity)
         session.commit()
         session.refresh(identity)
+
+        store_identity_profile(user_id, identity.id, role, persona)
         logger.info(
             "Created new identity %s for user=%s key=%s",
             identity.id, user_id, key,
@@ -112,9 +136,10 @@ def get_identity_memories(identity_id: str, limit: int = 10) -> list[dict]:
             docs = results["documents"]
             metas = results.get("metadatas", [{}] * len(docs))
             for doc, meta in zip(docs, metas):
-                # Exclude compacted summaries from the timeline list.
-                # Compacted docs participate in semantic retrieval only.
+                # Exclude compacted summaries and L2 profile embeddings.
                 if meta.get("compacted") == "true":
+                    continue
+                if meta.get("doc_type") == "identity_profile":
                     continue
                 memories.append({
                     "summary": doc,

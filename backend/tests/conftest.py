@@ -22,19 +22,25 @@ os.environ.setdefault("ORACLE_CHAMBERS_USE_LLM", "false")
 
 @pytest.fixture(autouse=True)
 def setup_test_db(tmp_path, monkeypatch):
-    """Create an isolated SQLite database for each test."""
+    """Create isolated SQLite + Chroma state for each test."""
     from app.config import settings
     from app.models.database import dispose_engine, init_db
+    from app.services.vector_store import reset_vector_store
 
     db_path = tmp_path / "test_swarmoracle.db"
     db_url = f"sqlite:///{db_path}"
+    chroma_dir = tmp_path / "test_chroma"
 
     monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(chroma_dir))
     settings.DATABASE_URL = db_url
+    settings.CHROMA_PERSIST_DIR = str(chroma_dir)
 
-    # Reset the singleton engine so each test points at a fresh temp DB.
+    # Reset singletons so each test points at a fresh temp DB and Chroma dir.
     dispose_engine()
+    reset_vector_store()
 
     init_db()
     yield
     dispose_engine()
+    reset_vector_store()

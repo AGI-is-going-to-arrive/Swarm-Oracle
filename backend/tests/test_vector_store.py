@@ -11,12 +11,17 @@ import pytest
 from app.services import vector_store as vector_store_module
 from app.services.vector_store import (
     VectorStore,
+    _identity_collection_name,
+    _identity_profile_collection_name,
     _store_ready,
     collection_name_for_scenario,
+    delete_identity_profile,
     purge_identity_memories,
     reset_vector_store,
     retrieve_identity_memories,
+    search_identity_candidates,
     store_identity_memory,
+    store_identity_profile,
 )
 
 
@@ -911,3 +916,87 @@ class TestIdentityMemory:
             query_text="anything",
         )
         assert results == []
+
+    def test_profiles_live_in_dedicated_collection(self, temp_dir, monkeypatch):
+        """Identity profiles should not be stored in the memory collection."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_profile(
+            user_id="user-profile",
+            identity_id="id-profile",
+            role="Diplomat",
+            persona="Careful coalition builder",
+        )
+
+        profile_collection = vs._client.get_collection(
+            name=_identity_profile_collection_name("user-profile"),
+        )
+        stored = profile_collection.get(where={"identity_id": "id-profile"})
+        assert len(stored["ids"]) == 1
+
+        with pytest.raises(Exception):
+            vs._client.get_collection(name=_identity_collection_name("user-profile"))
+
+    def test_retrieve_ignores_legacy_profile_docs(self, temp_dir, monkeypatch):
+        """Legacy profile docs in the memory collection must not leak into retrieval."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        memory_collection = vs._client.get_or_create_collection(
+            name=_identity_collection_name("user-legacy"),
+            metadata={"hnsw:space": "cosine"},
+        )
+        memory_collection.add(
+            documents=["Diplomat — Legacy profile text"],
+            metadatas=[{
+                "identity_id": "id-legacy",
+                "doc_type": "identity_profile",
+                "role": "Diplomat",
+            }],
+            ids=["legacy-profile-doc"],
+        )
+
+        results = retrieve_identity_memories(
+            user_id="user-legacy",
+            identity_id="id-legacy",
+            query_text="Legacy profile text",
+            n_results=5,
+        )
+
+        assert results == []
+
+    def test_delete_identity_profile_removes_candidates_only(self, temp_dir, monkeypatch):
+        """Deleting a profile should not delete regular identity memories."""
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-delete-profile",
+            identity_id="id-delete-profile",
+            scenario_id="scenario-1",
+            summary="A durable cross-scenario memory",
+        )
+        store_identity_profile(
+            user_id="user-delete-profile",
+            identity_id="id-delete-profile",
+            role="Analyst",
+            persona="Tracks systemic risk carefully",
+        )
+
+        delete_identity_profile("user-delete-profile", "id-delete-profile")
+
+        candidates = search_identity_candidates(
+            "user-delete-profile",
+            "Analyst",
+            "Tracks systemic risk carefully",
+        )
+        assert candidates == []
+
+        memories = retrieve_identity_memories(
+            user_id="user-delete-profile",
+            identity_id="id-delete-profile",
+            query_text="durable memory",
+            n_results=5,
+        )
+        assert len(memories) == 1

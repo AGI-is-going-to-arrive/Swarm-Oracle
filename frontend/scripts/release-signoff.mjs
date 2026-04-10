@@ -445,6 +445,7 @@ function main() {
       nodeCommand,
       [
         "scripts/e2e-ending-room-followup-suite.mjs",
+        "full",
         "--url",
         args.baseUrl,
         "--output-dir",

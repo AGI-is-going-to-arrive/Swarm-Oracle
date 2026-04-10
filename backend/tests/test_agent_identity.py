@@ -1,5 +1,7 @@
 """Tests for app.services.agent_identity — cross-scenario identity & memory."""
 
+from unittest.mock import patch
+
 from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
@@ -9,6 +11,13 @@ from app.services.agent_identity import (
     get_identity_memories,
     record_growth_event,
     resolve_identity,
+)
+from app.services.vector_store import (
+    _identity_profile_collection_name,
+    get_vector_store,
+    purge_identity_memories,
+    search_identity_candidates,
+    store_identity_profile,
 )
 
 
@@ -204,3 +213,159 @@ class TestGetIdentityMemories:
         """get_identity_memories should return [] for non-existent identity."""
         memories = get_identity_memories("nonexistent-id-xyz")
         assert memories == []
+
+
+class TestL2CosineMatching:
+    """P1-10: Layer 2 fuzzy matching via ChromaDB cosine similarity."""
+
+    def test_l2_fallback_matches_similar_persona(self):
+        """L2 should match when L1 hash misses but persona is semantically similar."""
+        # Create identity with L1 + L2 profile
+        id_1 = resolve_identity(
+            user_id="user-l2-1",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Ancient Chinese general who wrote The Art of War",
+        )
+
+        # Different persona wording but same meaning — L1 hash will miss
+        id_2 = resolve_identity(
+            user_id="user-l2-1",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Legendary Chinese warfare tactician, author of Art of War",
+        )
+
+        # L2 should find the match (if ChromaDB is available)
+        # If ChromaDB unavailable, L2 gracefully degrades and creates new
+        vs_available = __import__(
+            "app.services.vector_store", fromlist=["get_vector_store"]
+        ).get_vector_store().available
+        if vs_available:
+            assert id_1 == id_2, "L2 should resolve to same identity for similar persona"
+        else:
+            # Graceful degradation: creates new identity
+            assert id_2 is not None
+
+    def test_l2_no_match_for_unrelated_persona(self):
+        """L2 should NOT match unrelated personas."""
+        id_1 = resolve_identity(
+            user_id="user-l2-2",
+            name="Chef Mario",
+            role="Head Chef",
+            persona="Italian cuisine expert specializing in pasta and risotto",
+        )
+        id_2 = resolve_identity(
+            user_id="user-l2-2",
+            name="Dr. Smith",
+            role="Neurosurgeon",
+            persona="Brain surgery specialist at Johns Hopkins Hospital",
+        )
+
+        assert id_1 != id_2, "Unrelated personas should create separate identities"
+
+    def test_store_and_search_identity_profile(self):
+        """store_identity_profile + search_identity_candidates round-trip."""
+        import uuid as _uuid
+
+        if not get_vector_store().available:
+            return  # skip when ChromaDB unavailable
+
+        uid = f"user-l2-profile-{_uuid.uuid4().hex[:8]}"
+        purge_identity_memories(uid)  # clean slate
+
+        iid = resolve_identity(
+            user_id=uid, name="Test", role="Economist",
+            persona="Macroeconomic policy analyst",
+        )
+
+        candidates = search_identity_candidates(uid, "Economist", "Macroeconomic policy analyst")
+        assert len(candidates) >= 1
+        assert candidates[0]["identity_id"] == iid
+        assert candidates[0]["similarity"] > 0.85
+
+    def test_search_returns_empty_for_no_profiles(self):
+        """search_identity_candidates returns [] when no profiles exist."""
+        candidates = search_identity_candidates(
+            "user-l2-no-profiles", "NoRole", "NoPerson",
+        )
+        assert candidates == []
+
+    def test_store_identity_profile_idempotent(self):
+        """Storing same profile twice should not duplicate."""
+        if not get_vector_store().available:
+            return
+
+        uid = "user-l2-idempotent"
+        purge_identity_memories(uid)
+        iid = resolve_identity(
+            user_id=uid, name="Test", role="Pilot",
+            persona="Commercial airline pilot",
+        )
+
+        # Store again explicitly
+        store_identity_profile(uid, iid, "Pilot", "Commercial airline pilot")
+
+        collection = get_vector_store()._client.get_collection(
+            name=_identity_profile_collection_name(uid),
+        )
+        stored = collection.get(where={"identity_id": iid})
+        assert len(stored["ids"]) == 1
+        assert stored["metadatas"][0]["doc_type"] == "identity_profile"
+
+    def test_l1_still_takes_priority(self):
+        """L1 exact match should still win over L2 when hash matches."""
+        id_1 = resolve_identity(
+            user_id="user-l2-priority",
+            name="Agent Prime",
+            role="Diplomat",
+            persona="Senior peace negotiator",
+        )
+        # Same exact role+persona → L1 should match
+        id_2 = resolve_identity(
+            user_id="user-l2-priority",
+            name="Agent Prime v2",
+            role="Diplomat",
+            persona="Senior peace negotiator",
+        )
+        assert id_1 == id_2
+
+    def test_l2_cross_user_isolation(self):
+        """L2 should not match identities from different users."""
+        id_1 = resolve_identity(
+            user_id="user-l2-iso-A",
+            name="Judge",
+            role="Supreme Court Justice",
+            persona="Constitutional law expert",
+        )
+        id_2 = resolve_identity(
+            user_id="user-l2-iso-B",
+            name="Judge",
+            role="Supreme Court Justice",
+            persona="Constitutional law expert and legal scholar",
+        )
+        assert id_1 != id_2, "Different users should never share identities via L2"
+
+    def test_resolve_with_mock_l2_candidates(self):
+        """L2 fallback uses search_identity_candidates when L1 misses."""
+        # First create a real identity in DB so the staleness check passes
+        real_id = resolve_identity(
+            user_id="user-l2-mock",
+            name="RealAgent",
+            role="RealRole",
+            persona="Real persona for DB entry",
+        )
+        fake_candidates = [
+            {"identity_id": real_id, "distance": 0.05, "similarity": 0.95, "role": "Test"},
+        ]
+        with patch(
+            "app.services.agent_identity.search_identity_candidates",
+            return_value=fake_candidates,
+        ):
+            result = resolve_identity(
+                user_id="user-l2-mock",
+                name="MockAgent",
+                role="UniqueRoleThatWontHashMatch_XYZ123",
+                persona="Unique persona for mock test",
+            )
+        assert result == real_id

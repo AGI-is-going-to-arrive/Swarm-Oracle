@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
 from app.services.llm_client import format_untrusted_text_block
+from app.services.vector_store import delete_identity_profile, store_identity_profile
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,12 @@ def create_custom_agent(
         session.add(identity)
         session.commit()
         session.refresh(identity)
+        store_identity_profile(
+            user_id=user_id,
+            identity_id=identity.id,
+            role=identity.role,
+            persona=identity.persona,
+        )
         logger.info("Created custom agent %s for user %s", identity.id, user_id)
         return identity.id
 
@@ -132,6 +139,14 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
 
         session.add(identity)
         session.commit()
+        if role_changed or persona_changed:
+            store_identity_profile(
+                user_id=identity.user_id,
+                identity_id=identity_id,
+                role=identity.role,
+                persona=identity.persona,
+                replace_existing=True,
+            )
         logger.info("Updated custom agent %s", identity_id)
 
 
@@ -141,8 +156,10 @@ def delete_custom_agent(identity_id: str) -> None:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None:
             raise LookupError(f"AgentIdentity {identity_id} not found")
+        user_id = identity.user_id
         session.delete(identity)
         session.commit()
+        delete_identity_profile(user_id, identity_id)
         logger.info("Deleted custom agent %s", identity_id)
 
 

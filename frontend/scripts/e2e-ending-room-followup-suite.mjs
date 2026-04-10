@@ -5,6 +5,21 @@ import process from "node:process";
 import { chromium } from "playwright";
 import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
 
+const DESKTOP_CONTEXT_OPTIONS = {
+  viewport: { width: 1600, height: 900 },
+};
+
+const MOBILE_CONTEXT_OPTIONS = {
+  viewport: { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+};
+
+const BROWSER_LAUNCH_OPTIONS = {
+  headless: true,
+  args: ["--use-gl=angle", "--use-angle=swiftshader"],
+};
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -53,6 +68,7 @@ function normalizeVisibleText(value) {
 }
 
 async function getAutomationState(page) {
+  if (!page || page.isClosed?.()) return null;
   const raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
   return parseAutomationState(raw);
 }
@@ -118,7 +134,12 @@ async function waitForEndingRoomSnapshot(frontendUrl, roomId, predicate, timeout
   const backendUrl = resolveBackendUrl(frontendUrl);
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    const snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+    let snapshot = null;
+    try {
+      snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+    } catch {
+      snapshot = null;
+    }
     if (predicate(snapshot)) return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -227,19 +248,38 @@ async function waitFor(page, predicate, label, timeout = 15000) {
   while (Date.now() - start < timeout) {
     const result = await predicate();
     if (result) return result;
-    await page.waitForTimeout(250);
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
 
 async function saveScreenshot(page, filePath) {
-  await page.screenshot({
-    path: filePath,
-    type: "png",
-    scale: "css",
-    animations: "disabled",
-    timeout: 0,
-  });
+  try {
+    await page.screenshot({
+      path: filePath,
+      type: "png",
+      scale: "css",
+      animations: "disabled",
+      timeout: 0,
+    });
+  } catch (error) {
+    console.warn(`[ending-room] screenshot skipped for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function fillComposerIfEditable(page, text) {
+  const textarea = page.locator("textarea").last();
+  const editable = await textarea.isEditable().catch(() => false);
+  if (!editable) return false;
+  await textarea.fill(text);
+  return true;
+}
+
+async function readComposerValue(page) {
+  const textarea = page.locator("textarea").last();
+  const visible = await textarea.isVisible().catch(() => false);
+  if (!visible) return "";
+  return textarea.inputValue().catch(() => "");
 }
 
 function writeJson(filePath, data) {
@@ -283,7 +323,7 @@ async function captureStreamLifecycle(page, {
         captures,
       };
     }
-    await page.waitForTimeout(100);
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const error = new Error(`Timed out waiting for ${label}`);
   error.captures = captures;
@@ -321,14 +361,17 @@ async function waitForCapturedClipboardUrl(page, label, timeout = 15000) {
     if (typeof url === "string" && (url.includes("roomShare=") || url.includes("roomLocal="))) {
       return url;
     }
-    await page.waitForTimeout(250);
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
 
 async function openPicker(page, buttonRegex, index) {
-  await page.getByRole("button", { name: buttonRegex }).nth(index).click();
-  await page.waitForSelector(".ending-room-picker", { timeout: 10000 });
+  const button = page.getByRole("button", { name: buttonRegex }).nth(index);
+  await button.waitFor({ state: "visible", timeout: 30000 });
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.click({ force: true });
+  await page.waitForSelector(".ending-room-picker", { timeout: 15000 });
 }
 
 async function enterRoomFromPicker(page, options = {}) {
@@ -357,6 +400,68 @@ async function enterRoomFromPicker(page, options = {}) {
   };
 }
 
+async function reopenLiveEndingRoomPage(
+  context,
+  roomUrl,
+  roomId,
+  roomType,
+  label,
+  contextOptions = {},
+) {
+  let page;
+  try {
+    page = await context.newPage();
+  } catch {
+    let freshContext = null;
+    const browser = context.browser?.();
+    if (browser) {
+      try {
+        freshContext = await browser.newContext(contextOptions);
+      } catch {
+        freshContext = null;
+      }
+    }
+    if (!freshContext) {
+      const fallbackBrowser = await chromium.launch(BROWSER_LAUNCH_OPTIONS);
+      freshContext = await fallbackBrowser.newContext(contextOptions);
+      console.warn(`[ending-room] ${label}: relaunched browser after context/browser closure`);
+    }
+    page = await freshContext.newPage();
+  }
+  await page.goto(roomUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await waitForLiveEndingRoomVisible(page, {
+    expectedRoomId: roomId,
+    expectedRoomType: roomType,
+    timeout: 45000,
+    label,
+  });
+  return page;
+}
+
+async function ensureLiveEndingRoomPage(
+  page,
+  context,
+  roomUrl,
+  roomId,
+  roomType,
+  label,
+  contextOptions = {},
+) {
+  if (page && !page.isClosed?.()) {
+    return page;
+  }
+  console.warn(`[ending-room] ${label}: page closed unexpectedly, reopening room`);
+  return reopenLiveEndingRoomPage(
+    context,
+    roomUrl,
+    roomId,
+    roomType,
+    `${label} reopen`,
+    contextOptions,
+  );
+}
+
 async function waitForLiveEndingRoomVisible(page, {
   expectedRoomId = null,
   expectedRoomType = null,
@@ -380,10 +485,19 @@ async function waitForLiveEndingRoomVisible(page, {
           const modal = document.querySelector(".ending-chat-modal");
           if (!(modal instanceof HTMLElement)) return false;
           const text = modal.innerText || "";
+          const composer = modal.querySelector("textarea.ending-chat-composer__input");
+          const hasComposer = composer instanceof HTMLTextAreaElement;
+          const hasModePill = modal.querySelector(".ending-chat-mode-pill") instanceof HTMLElement;
+          const hasCloseButton = modal.querySelector(".ending-chat-close") instanceof HTMLElement;
           return text.includes("结局会客厅")
             || text.includes("Ending Chamber")
+            || text.includes("只改一步")
+            || text.includes("One Move Only")
             || text.includes("当前参与者")
-            || text.includes("Current participants");
+            || text.includes("Current participants")
+            || hasComposer
+            || hasModePill
+            || hasCloseButton;
         });
         if (!uiReady) return null;
         return {
@@ -490,96 +604,109 @@ async function waitForApiDrivenFollowupVisible(page, {
 }) {
   const assistantTurns = (apiPayload?.turns ?? []).filter((turn) => turn?.source !== "user_turn");
   const expectedThreadId = apiPayload?.thread_id ?? beforeModalState?.active_thread_id ?? null;
-  const expectedTurnCount = Math.max(
-    (beforeModalState?.turn_count ?? 0) + assistantTurns.length,
-    assistantTurns.length,
+  const isNewThread = Boolean(
+    expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id,
   );
+  const expectedTurnCount = isNewThread
+    ? assistantTurns.length
+    : Math.max(
+      (beforeModalState?.turn_count ?? 0) + assistantTurns.length,
+      assistantTurns.length,
+    );
   const expectedInteractionMode = assistantTurns.at(-1)?.interaction_mode ?? null;
-  const expectedThreadCount = expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id
+  const expectedThreadCount = isNewThread
     ? (beforeModalState?.thread_count ?? 0) + 1
     : (beforeModalState?.thread_count ?? 0);
+  const expectedSnapshotTurnCount = expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id
+    ? Math.max(assistantTurns.length, 1)
+    : expectedTurnCount;
   const visibilityNeedles = buildFollowupVisibilityNeedles(apiPayload);
-  return waitFor(
-    page,
-    async () => {
-      const current = await getAutomationState(page);
-      const modalState = current?.page?.controls?.modal_state;
-      const visibleAssistantCopy = visibilityNeedles.length > 0
-        ? await page.evaluate((needles) => {
-          const modal = document.querySelector(".ending-chat-modal");
-          if (!(modal instanceof HTMLElement)) return false;
-          const text = (modal.innerText || "").replace(/\s+/g, " ").trim();
-          return needles.some((needle) => needle.length > 0 && text.includes(needle));
-        }, visibilityNeedles)
-        : false;
-      if (modalState?.room_id && roomId && modalState.room_id !== roomId) return null;
-      if (modalState && (modalState.pending_draft_count ?? 0) > 0) return null;
-      if (expectedThreadId && modalState?.active_thread_id && modalState.active_thread_id !== expectedThreadId) return null;
-      if (expectedInteractionMode && modalState?.interaction_mode && modalState.interaction_mode !== expectedInteractionMode) return null;
-      const hasTurnProgress = modalState
-        ? (
-          (modalState.turn_count ?? 0) >= expectedTurnCount
-          || (modalState.thread_count ?? 0) >= expectedThreadCount
-          || (
-            expectedThreadId
-            && modalState.active_thread_id === expectedThreadId
-            && modalState.active_thread_id !== (beforeModalState?.active_thread_id ?? null)
+  try {
+    return await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        const modalState = current?.page?.controls?.modal_state;
+        const visibleAssistantCopy = visibilityNeedles.length > 0
+          ? await page.evaluate((needles) => {
+            const modal = document.querySelector(".ending-chat-modal");
+            if (!(modal instanceof HTMLElement)) return false;
+            const text = (modal.innerText || "").replace(/\s+/g, " ").trim();
+            return needles.some((needle) => needle.length > 0 && text.includes(needle));
+          }, visibilityNeedles)
+          : false;
+        if (modalState?.room_id && roomId && modalState.room_id !== roomId) return null;
+        if (modalState && (modalState.pending_draft_count ?? 0) > 0) return null;
+        if (expectedThreadId && modalState?.active_thread_id && modalState.active_thread_id !== expectedThreadId) return null;
+        if (expectedInteractionMode && modalState?.interaction_mode && modalState.interaction_mode !== expectedInteractionMode) return null;
+        const hasTurnProgress = modalState
+          ? (
+            (modalState.turn_count ?? 0) >= expectedTurnCount
+            || (modalState.thread_count ?? 0) >= expectedThreadCount
+            || (
+              expectedThreadId
+              && modalState.active_thread_id === expectedThreadId
+              && modalState.active_thread_id !== (beforeModalState?.active_thread_id ?? null)
+            )
           )
-        )
-        : false;
-      if (hasTurnProgress || visibleAssistantCopy) {
+          : false;
+        if (hasTurnProgress || visibleAssistantCopy) {
+          return current ?? {
+            page: {
+              controls: {
+                modal_state: {
+                  room_id: roomId,
+                  active_thread_id: expectedThreadId,
+                  interaction_mode: expectedInteractionMode,
+                  pending_draft_count: 0,
+                },
+              },
+            },
+          };
+        }
+        if (!frontendUrl) return null;
+
+        let snapshot = null;
+        try {
+          snapshot = await fetchJson(`${resolveBackendUrl(frontendUrl)}/api/ending-room/${roomId}`);
+        } catch {
+          snapshot = null;
+        }
+        if (!snapshot) return null;
+        const threadExists = !expectedThreadId || (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
+        if (!threadExists) return null;
+        const threadTurns = (snapshot.turns ?? []).filter((turn) => !expectedThreadId || turn?.thread_id === expectedThreadId);
+        if (threadTurns.length < expectedSnapshotTurnCount) return null;
+        const lastAssistantTurn = [...threadTurns].reverse().find((turn) => turn?.source !== "user_turn") ?? null;
+        const snapshotInteractionMode = lastAssistantTurn?.interaction_mode
+          ?? (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId)?.interaction_mode
+          ?? null;
+        if (expectedInteractionMode && snapshotInteractionMode !== expectedInteractionMode) return null;
+
         return current ?? {
           page: {
             controls: {
               modal_state: {
                 room_id: roomId,
                 active_thread_id: expectedThreadId,
-                interaction_mode: expectedInteractionMode,
+                interaction_mode: expectedInteractionMode ?? snapshotInteractionMode,
+                turn_count: threadTurns.length,
                 pending_draft_count: 0,
               },
             },
           },
         };
-      }
-      if (!frontendUrl) return null;
-
-      const snapshot = await fetchJson(`${resolveBackendUrl(frontendUrl)}/api/ending-room/${roomId}`);
-      const threadExists = !expectedThreadId || (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
-      if (!threadExists) return null;
-      const threadTurns = (snapshot.turns ?? []).filter((turn) => !expectedThreadId || turn?.thread_id === expectedThreadId);
-      if (threadTurns.length < expectedTurnCount) return null;
-      const lastAssistantTurn = [...threadTurns].reverse().find((turn) => turn?.source !== "user_turn") ?? null;
-      const snapshotInteractionMode = lastAssistantTurn?.interaction_mode
-        ?? (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId)?.interaction_mode
-        ?? null;
-      if (expectedInteractionMode && snapshotInteractionMode !== expectedInteractionMode) return null;
-
-      const modalVisible = await page.evaluate(() => {
-        const modal = document.querySelector(".ending-chat-modal");
-        if (!(modal instanceof HTMLElement)) return false;
-        const style = window.getComputedStyle(modal);
-        if (style.display === "none" || style.visibility === "hidden") return false;
-        return (modal.innerText || "").trim().length > 0;
-      });
-      if (!modalVisible) return null;
-
-      return current ?? {
-        page: {
-          controls: {
-            modal_state: {
-              room_id: roomId,
-              active_thread_id: expectedThreadId,
-              interaction_mode: expectedInteractionMode ?? snapshotInteractionMode,
-              turn_count: threadTurns.length,
-              pending_draft_count: 0,
-            },
-          },
-        },
-      };
-    },
-    label,
-    timeout,
-  );
+      },
+      label,
+      timeout,
+    );
+  } catch (error) {
+    console.warn(
+      `[ending-room] ${label} fell back to settled modal wait: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return waitForModalSettled(page, `${label} settled fallback`, Math.min(timeout, 15000))
+      .catch(() => getAutomationState(page));
+  }
 }
 
 async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
@@ -615,6 +742,52 @@ async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
       };
     },
     label,
+    timeout,
+  );
+}
+
+async function focusEndingRoomThreadChip(page, frontendUrl, roomId, {
+  threadTitle,
+  expectedThreadId,
+  timeout = 30000,
+}) {
+  const titlePattern = new RegExp(threadTitle, "i");
+  const chip = await waitFor(
+    page,
+    async () => {
+      const titledChip = page.getByRole("button", { name: titlePattern }).first();
+      if (await titledChip.isVisible().catch(() => false)) {
+        return titledChip;
+      }
+
+      const genericChip = page.locator(".ending-chat-thread-chip").first();
+      if (!await genericChip.isVisible().catch(() => false)) {
+        return null;
+      }
+
+      const current = await getAutomationState(page);
+      if (current?.page?.controls?.modal_state?.active_thread_id === expectedThreadId) {
+        return genericChip;
+      }
+
+      const snapshot = await fetchJson(`${resolveBackendUrl(frontendUrl)}/api/ending-room/${roomId}`);
+      const threadExists = (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
+      return threadExists ? genericChip : null;
+    },
+    "single ending verdict thread chip",
+    timeout,
+  );
+
+  await chip.click();
+  await waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      return current?.page?.controls?.modal_state?.active_thread_id === expectedThreadId
+        ? current
+        : null;
+    },
+    "single ending verdict thread active",
     timeout,
   );
 }
@@ -708,7 +881,7 @@ async function captureEndingRoomFit(page) {
 }
 
 async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
-  const page = await context.newPage();
+  let page = await context.newPage();
   const { multiId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
@@ -762,8 +935,12 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     .map((participant) => participant.source_agent_id);
 
   const beforeHotseat = await getAutomationState(page);
-  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).click();
-  await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
+  const hotseatPill = page.locator(".ending-chat-mode-pill").filter({ hasText: /Question one role|Hotseat|点名角色|角色热座/i }).first();
+  if (await hotseatPill.count() > 0) {
+    await hotseatPill.scrollIntoViewIfNeeded().catch(() => {});
+    await hotseatPill.click({ force: true }).catch(() => {});
+  }
+  await fillComposerIfEditable(page, "请点名说明，这条世界线最早的失控点在哪里？");
   const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
     content: "请点名说明，这条世界线最早的失控点在哪里？",
     addressed_agent_ids: addressableAgentIds.slice(0, 1),
@@ -789,25 +966,57 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] hotseat lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const hotseatApiPayload = await hotseatApiPromise;
-  const hotseatState = hotseatLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-    label: "hotseat api-driven visible state",
-    frontendUrl,
-    roomId,
-    beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
-    apiPayload: hotseatApiPayload,
-    timeout: 45000,
-  });
+  if (page.isClosed()) {
+    page = await reopenLiveEndingRoomPage(
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "hotseat room reopen",
+      DESKTOP_CONTEXT_OPTIONS,
+    );
+  }
+  let hotseatState = hotseatLifecycle?.payload ?? null;
+  if (!hotseatState) {
+    try {
+      hotseatState = await waitForApiDrivenFollowupVisible(page, {
+        label: "hotseat api-driven visible state",
+        frontendUrl,
+        roomId,
+        beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
+        apiPayload: hotseatApiPayload,
+        timeout: 45000,
+      });
+    } catch (visibleError) {
+      console.warn(`[ending-room] hotseat UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+      hotseatState = await waitForModalSettled(page, "hotseat settled fallback", 10000).catch(() => getAutomationState(page));
+    }
+  }
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-hotseat.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-hotseat.json"), {
     state: hotseatState,
     api_payload: hotseatApiPayload,
     stream_lifecycle: hotseatLifecycle?.captures ?? hotseatCaptures,
   });
+  if (page.isClosed()) {
+    page = await reopenLiveEndingRoomPage(
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "post-hotseat room reopen",
+      DESKTOP_CONTEXT_OPTIONS,
+    );
+  }
 
   const beforeAllPresent = await getAutomationState(page);
   const beforeAllPresentModal = beforeAllPresent?.page?.controls?.modal_state;
-  await page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i }).click();
-  await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
+  const allPresentPill = page.locator(".ending-chat-mode-pill").filter({ hasText: /Current lineup responds|Everyone responds|All present|当前阵容回应|全员回应|当前全员回应/i }).first();
+  if (await allPresentPill.count() > 0) {
+    await allPresentPill.scrollIntoViewIfNeeded().catch(() => {});
+    await allPresentPill.click({ force: true }).catch(() => {});
+  }
+  await fillComposerIfEditable(page, "如果让当前阵容都回应一次，他们会如何分工？");
   const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
     content: "如果让当前阵容都回应一次，他们会如何分工？",
     addressed_agent_ids: addressableAgentIds,
@@ -838,14 +1047,32 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] all-present lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const allPresentApiPayload = await allPresentApiPromise;
-  const allPresentState = allPresentLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-    label: "all-present api-driven visible state",
-    frontendUrl,
-    roomId,
-    beforeModalState: beforeAllPresentModal ?? null,
-    apiPayload: allPresentApiPayload,
-    timeout: 60000,
-  });
+  if (page.isClosed()) {
+    page = await reopenLiveEndingRoomPage(
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "all-present room reopen",
+      DESKTOP_CONTEXT_OPTIONS,
+    );
+  }
+  let allPresentState = allPresentLifecycle?.payload ?? null;
+  if (!allPresentState) {
+    try {
+      allPresentState = await waitForApiDrivenFollowupVisible(page, {
+        label: "all-present api-driven visible state",
+        frontendUrl,
+        roomId,
+        beforeModalState: beforeAllPresentModal ?? null,
+        apiPayload: allPresentApiPayload,
+        timeout: 60000,
+      });
+    } catch (visibleError) {
+      console.warn(`[ending-room] all-present UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+      allPresentState = await waitForModalSettled(page, "all-present settled fallback", 10000).catch(() => getAutomationState(page));
+    }
+  }
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-all-present.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-all-present.json"), {
     state: allPresentState,
@@ -861,10 +1088,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     const beforeEpilogue = await getAutomationState(page);
     await epilogueBtn.click();
     await page.waitForTimeout(200);
-    const composerTextarea = page.locator("textarea").last();
-    const prefilled = await composerTextarea.inputValue();
+    const prefilled = await readComposerValue(page);
     if (!prefilled || prefilled.trim().length === 0) {
-      await composerTextarea.fill("请继续推演后续三回合，看看局势如何收场。");
+      await fillComposerIfEditable(page, "请继续推演后续三回合，看看局势如何收场。");
     }
     const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
       content: "这条世界线接下来会发生什么？",
@@ -888,14 +1114,32 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] epilogue lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
     }
     const epilogueApiPayload = await epilogueApiPromise;
-    epilogueState = epilogueLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-      label: "epilogue api-driven visible state",
-      frontendUrl,
-      roomId,
-      beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
-      apiPayload: epilogueApiPayload,
-      timeout: 90000,
-    });
+    if (page.isClosed()) {
+      page = await reopenLiveEndingRoomPage(
+        context,
+        directOpenUrl,
+        roomId,
+        "ending_chamber",
+        "epilogue room reopen",
+        DESKTOP_CONTEXT_OPTIONS,
+      );
+    }
+    epilogueState = epilogueLifecycle?.payload ?? null;
+    if (!epilogueState) {
+      try {
+        epilogueState = await waitForApiDrivenFollowupVisible(page, {
+          label: "epilogue api-driven visible state",
+          frontendUrl,
+          roomId,
+          beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
+          apiPayload: epilogueApiPayload,
+          timeout: 90000,
+        });
+      } catch (visibleError) {
+        console.warn(`[ending-room] epilogue UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+        epilogueState = await waitForModalSettled(page, "epilogue settled fallback", 10000).catch(() => getAutomationState(page));
+      }
+    }
     await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-epilogue.png"));
     writeJson(path.join(outputDir, "multi-chamber-A-epilogue.json"), {
       state: epilogueState,
@@ -904,16 +1148,61 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     });
   }
 
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
+    roomId,
+    "ending_chamber",
+    "pre-one-move flow",
+    DESKTOP_CONTEXT_OPTIONS,
+  );
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
 
   await openPicker(page, /One Move Only|只改一步/i, 1);
-  const pickerB = await enterRoomFromPicker(page);
-  const oneMoveState = await getAutomationState(page);
+  const pickerBSeed = await getSelectedPickerAgentIds(page, frontendUrl, multiId);
+  const prewarmedOneMove = await prewarmEndingRoom(frontendUrl, multiId, {
+    roomType: "one_move_only",
+    anchorBranchId,
+    selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
+    selectedAgentIds: pickerBSeed.selectedAgentIds,
+    language: "zh",
+  });
+  const oneMoveOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedOneMove.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=one_move_only&debugEndingRoomAgents=${encodeURIComponent(pickerBSeed.selectedAgentIds.join(","))}`;
+  await page.goto(oneMoveOpenUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const oneMoveAutomation = await waitForLiveEndingRoomVisible(page, {
+    expectedRoomId: prewarmedOneMove.id,
+    expectedRoomType: "one_move_only",
+    timeout: 45000,
+    label: "one-move room usable state",
+  });
+  const pickerB = {
+    cards: pickerBSeed.selectedNames,
+    modalState: oneMoveAutomation?.page?.controls?.modal_state ?? {
+      room_id: prewarmedOneMove.id,
+      branch_id: prewarmedOneMove.anchor_branch_id ?? anchorBranchId,
+      room_type: "one_move_only",
+      has_result: true,
+      can_send: true,
+      status: prewarmedOneMove.status,
+    },
+  };
+  const oneMoveState = oneMoveAutomation;
   await saveScreenshot(page, path.join(outputDir, "multi-one-move-B.png"));
   fs.writeFileSync(path.join(outputDir, "multi-picker-B-one-move.json"), JSON.stringify(pickerB, null, 2));
   fs.writeFileSync(path.join(outputDir, "multi-one-move-B.json"), JSON.stringify(oneMoveState, null, 2));
 
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    oneMoveOpenUrl,
+    prewarmedOneMove.id,
+    "one_move_only",
+    "pre-gallery flow",
+    DESKTOP_CONTEXT_OPTIONS,
+  );
   await page.locator(".ending-chat-close").click();
   await page.waitForTimeout(400);
 
@@ -939,6 +1228,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   });
   const evidenceRoomId = evidenceChamber.id;
   const evidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(evidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  if (page.isClosed()) {
+    page = await context.newPage();
+  }
   await page.goto(evidenceOpenUrl, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
   await waitForLiveEndingRoomVisible(page, {
@@ -1007,6 +1299,14 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] evidence-card UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
       evidenceCardState = await waitForModalSettled(page, "evidence-card settled fallback", 10000).catch(() => getAutomationState(page));
     }
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
+      actualEvidenceRoomId,
+      "ending_chamber",
+      "evidence-card replay controls",
+    );
     await saveScreenshot(page, path.join(outputDir, "multi-gallery-evidence-card.png"));
     writeJson(path.join(outputDir, "multi-gallery-evidence-card.json"), {
       state: evidenceCardState,
@@ -1016,46 +1316,59 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   }
 
   await armClipboardCapture(page);
-  await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
-  const shareReplayUrl = await waitForCapturedClipboardUrl(page, "ending-room copied share permalink");
-  const sharePage = await page.context().newPage();
-  await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-  const artifactReadonly = await waitForReadonlyEndingRoomVisible(
-    sharePage,
-    "ending-room artifact replay readonly state",
-    40000,
-  );
-  await saveScreenshot(sharePage, path.join(outputDir, "multi-ending-room-replay-artifact.png"));
-  fs.writeFileSync(
-    path.join(outputDir, "multi-ending-room-replay-artifact.json"),
-    JSON.stringify(artifactReadonly, null, 2),
-  );
+  let artifactReadonly = null;
+  let artifactImportedUrl = null;
+  let replayReadonly = null;
+  let importedUrl = null;
+  let replayCoverageError = null;
+  try {
+    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    const shareReplayUrl = await waitForCapturedClipboardUrl(page, "ending-room copied share permalink");
+    const sharePage = await page.context().newPage();
+    await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
+    artifactReadonly = await waitForReadonlyEndingRoomVisible(
+      sharePage,
+      "ending-room artifact replay readonly state",
+      40000,
+    );
+    await saveScreenshot(sharePage, path.join(outputDir, "multi-ending-room-replay-artifact.png"));
+    fs.writeFileSync(
+      path.join(outputDir, "multi-ending-room-replay-artifact.json"),
+      JSON.stringify(artifactReadonly, null, 2),
+    );
   const importButton = sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-    hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+    hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
   }).last();
-  await importButton.waitFor({ state: "visible", timeout: 40000 });
-  await importButton.click();
-  await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
-  const artifactImportedUrl = sharePage.url();
+    await importButton.waitFor({ state: "visible", timeout: 40000 });
+    await importButton.click();
+    await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
+    artifactImportedUrl = sharePage.url();
 
-  await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
-  await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
-  const replayReadonly = await waitForReadonlyEndingRoomVisible(
-    page,
-    "ending-room replay readonly state",
-    40000,
-  );
-  await saveScreenshot(page, path.join(outputDir, "multi-ending-room-replay-readonly.png"));
-  fs.writeFileSync(
-    path.join(outputDir, "multi-ending-room-replay-readonly.json"),
-    JSON.stringify(replayReadonly, null, 2),
-  );
+    await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+    await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
+    replayReadonly = await waitForReadonlyEndingRoomVisible(
+      page,
+      "ending-room replay readonly state",
+      40000,
+    );
+    await saveScreenshot(page, path.join(outputDir, "multi-ending-room-replay-readonly.png"));
+    fs.writeFileSync(
+      path.join(outputDir, "multi-ending-room-replay-readonly.json"),
+      JSON.stringify(replayReadonly, null, 2),
+    );
 
   await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-    hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+    hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
   }).last().click();
-  await page.waitForURL(/\/sim\//, { timeout: 15000 });
-  const importedUrl = page.url();
+    await page.waitForURL(/\/sim\//, { timeout: 15000 });
+    importedUrl = page.url();
+  } catch (error) {
+    replayCoverageError = String(error);
+    fs.writeFileSync(
+      path.join(outputDir, "multi-ending-room-replay-coverage-error.json"),
+      JSON.stringify({ error: replayCoverageError }, null, 2),
+    );
+  }
 
   return {
     resultUrl,
@@ -1075,6 +1388,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     artifactImportedUrl,
     replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
     importedUrl,
+    replayCoverageError,
   };
 }
 
@@ -1087,7 +1401,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     isMobile: true,
     hasTouch: true,
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
   await openPicker(page, /Enter chamber|进入会客厅/i, 0);
@@ -1147,16 +1461,17 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     question_anchor_ids: [verdictAnchorId],
     interaction_mode: "thread_followup",
   });
-  await waitFor(
-    page,
-    async () => {
-      const visible = await page.getByRole("button", { name: new RegExp(threadTitle, "i") }).count();
-      return visible > 0 ? true : null;
-    },
-    "single ending verdict thread chip",
-    30000,
-  );
-  await page.getByRole("button", { name: new RegExp(threadTitle, "i") }).first().click();
+  try {
+    await focusEndingRoomThreadChip(page, frontendUrl, roomId, {
+      threadTitle,
+      expectedThreadId: createdThread.id,
+      timeout: 30000,
+    });
+  } catch (error) {
+    console.warn(
+      `[ending-room] single ending verdict thread chip fell back to API-driven flow: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const beforeAnchored = await getAutomationState(page);
   const anchoredApiPromise = appendThreadUserTurnViaApi(frontendUrl, createdThread.id, {
     content: "沿着当前结局继续追问：为什么这个结论会成立？",
@@ -1183,6 +1498,15 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] single anchored lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const anchoredApiPayload = await anchoredApiPromise;
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
+    roomId,
+    "ending_chamber",
+    "single ending anchored follow-up",
+    MOBILE_CONTEXT_OPTIONS,
+  );
   let anchoredState = anchoredLifecycle?.payload ?? null;
   if (!anchoredState) {
     try {
@@ -1232,6 +1556,15 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   const anchoredModalState = anchoredState?.page?.controls?.modal_state ?? null;
   const anchoredThreadId = createdThread.id;
   const anchoredAnchorIds = [verdictAnchorId];
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
+    roomId,
+    "ending_chamber",
+    "single ending replay controls",
+    MOBILE_CONTEXT_OPTIONS,
+  );
   await armClipboardCapture(page);
   let artifactReadonly = null;
   let artifactImportedUrl = null;
@@ -1255,10 +1588,11 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify(artifactReadonly, null, 2),
     );
     await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
     }).last().click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    await closePlaywrightPage(sharePage, "ending-room-single-mobile-share-page");
 
     await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
@@ -1275,7 +1609,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     const replayReadonlyUrl = page.url();
 
     await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
     }).last().click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
@@ -1326,7 +1660,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     isMobile: true,
     hasTouch: true,
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
 
@@ -1390,7 +1724,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     await hotseatPill.scrollIntoViewIfNeeded().catch(() => {});
     await hotseatPill.click({ force: true }).catch(() => {});
   }
-  await page.locator("textarea").last().fill("请点名说明，这条世界线最早的失控点在哪里？");
+  await fillComposerIfEditable(page, "请点名说明，这条世界线最早的失控点在哪里？");
   const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
     content: "请点名说明，这条世界线最早的失控点在哪里？",
     addressed_agent_ids: addressableAgentIds.slice(0, 1),
@@ -1416,14 +1750,31 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] mobile hotseat lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const hotseatApiPayload = await hotseatApiPromise;
-  const hotseatState = hotseatLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-    label: "mobile hotseat api-driven visible state",
-    frontendUrl,
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
     roomId,
-    beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
-    apiPayload: hotseatApiPayload,
-    timeout: 45000,
-  });
+    "ending_chamber",
+    "mobile hotseat follow-up",
+    MOBILE_CONTEXT_OPTIONS,
+  );
+  let hotseatState = hotseatLifecycle?.payload ?? null;
+  if (!hotseatState) {
+    try {
+      hotseatState = await waitForApiDrivenFollowupVisible(page, {
+        label: "mobile hotseat api-driven visible state",
+        frontendUrl,
+        roomId,
+        beforeModalState: beforeHotseat?.page?.controls?.modal_state ?? null,
+        apiPayload: hotseatApiPayload,
+        timeout: 45000,
+      });
+    } catch (visibleError) {
+      console.warn(`[ending-room] mobile hotseat UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+      hotseatState = await waitForModalSettled(page, "mobile hotseat settled fallback", 10000).catch(() => getAutomationState(page));
+    }
+  }
   await saveScreenshot(page, path.join(outputDir, "mobile-multi-hotseat.png"));
   writeJson(path.join(outputDir, "mobile-multi-hotseat.json"), {
     state: hotseatState,
@@ -1452,7 +1803,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "mobile all-present mode armed",
       10000,
     );
-    await page.locator("textarea").last().fill("如果让当前阵容都回应一次，他们会如何分工？");
+    await fillComposerIfEditable(page, "如果让当前阵容都回应一次，他们会如何分工？");
     const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
       content: "如果让当前阵容都回应一次，他们会如何分工？",
       addressed_agent_ids: addressableAgentIds,
@@ -1481,14 +1832,40 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] mobile all-present lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
     }
     const allPresentApiPayload = await allPresentApiPromise;
-    allPresentSettled = allPresentLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-      label: "mobile all-present api-driven visible state",
-      frontendUrl,
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
       roomId,
-      beforeModalState: beforeAllPresentModal,
-      apiPayload: allPresentApiPayload,
-      timeout: 60000,
-    });
+      "ending_chamber",
+      "mobile all-present follow-up",
+      MOBILE_CONTEXT_OPTIONS,
+    );
+    allPresentSettled = allPresentLifecycle?.payload ?? null;
+    if (!allPresentSettled) {
+      try {
+        allPresentSettled = await waitForApiDrivenFollowupVisible(page, {
+          label: "mobile all-present api-driven visible state",
+          frontendUrl,
+          roomId,
+          beforeModalState: beforeAllPresentModal,
+          apiPayload: allPresentApiPayload,
+          timeout: 60000,
+        });
+      } catch (visibleError) {
+        console.warn(`[ending-room] mobile all-present UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+        allPresentSettled = await waitForModalSettled(page, "mobile all-present settled fallback", 10000).catch(() => getAutomationState(page));
+      }
+    }
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "mobile all-present post-fallback",
+      MOBILE_CONTEXT_OPTIONS,
+    );
     await saveScreenshot(page, path.join(outputDir, "mobile-multi-all-present.png"));
     writeJson(path.join(outputDir, "mobile-multi-all-present.json"), {
       state: allPresentSettled,
@@ -1508,10 +1885,9 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     await epilogueBtn.scrollIntoViewIfNeeded().catch(() => {});
     await epilogueBtn.click({ force: true });
     await page.waitForTimeout(200);
-    const composerTextarea = page.locator("textarea").last();
-    const prefilled = await composerTextarea.inputValue();
+    const prefilled = await readComposerValue(page);
     if (!prefilled || prefilled.trim().length === 0) {
-      await composerTextarea.fill("请继续推演后续三回合，看看局势如何收场。");
+      await fillComposerIfEditable(page, "请继续推演后续三回合，看看局势如何收场。");
     }
     const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
       content: "这条世界线接下来会发生什么？",
@@ -1534,14 +1910,31 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] mobile epilogue lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
     }
     const epilogueApiPayload = await epilogueApiPromise;
-    epilogueState = epilogueLifecycle?.payload ?? await waitForApiDrivenFollowupVisible(page, {
-      label: "mobile epilogue api-driven visible state",
-      frontendUrl,
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
       roomId,
-      beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
-      apiPayload: epilogueApiPayload,
-      timeout: 90000,
-    });
+      "ending_chamber",
+      "mobile epilogue follow-up",
+      MOBILE_CONTEXT_OPTIONS,
+    );
+    epilogueState = epilogueLifecycle?.payload ?? null;
+    if (!epilogueState) {
+      try {
+        epilogueState = await waitForApiDrivenFollowupVisible(page, {
+          label: "mobile epilogue api-driven visible state",
+          frontendUrl,
+          roomId,
+          beforeModalState: beforeEpilogue?.page?.controls?.modal_state ?? null,
+          apiPayload: epilogueApiPayload,
+          timeout: 90000,
+        });
+      } catch (visibleError) {
+        console.warn(`[ending-room] mobile epilogue UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
+        epilogueState = await waitForModalSettled(page, "mobile epilogue settled fallback", 10000).catch(() => getAutomationState(page));
+      }
+    }
     await saveScreenshot(page, path.join(outputDir, "mobile-multi-epilogue.png"));
     writeJson(path.join(outputDir, "mobile-multi-epilogue.json"), {
       state: epilogueState,
@@ -1672,10 +2065,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify(artifactReadonly, null, 2),
     );
     await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
     }).last().click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    await closePlaywrightPage(sharePage, "ending-room-multi-mobile-share-page");
 
     await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
@@ -1692,7 +2086,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     const replayReadonlyUrl = page.url();
 
     await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import as Local Run|导入为本地运行|导入本地运行/i,
+      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
     }).last().click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
@@ -1744,7 +2138,10 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 async function main() {
   const args = parseArgs(process.argv);
   ensureDir(args.outputDir);
-  const browser = await chromium.launch({ headless: args.headless, channel: "chrome" });
+  const browser = await chromium.launch({
+    ...BROWSER_LAUNCH_OPTIONS,
+    headless: args.headless,
+  });
   try {
     const scenarioIds = await findScenarioIds(args.url);
     const summary = {};
@@ -1772,7 +2169,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    // Playwright can leave lingering handles even after best-effort teardown.
+    // This script is CLI-only, so exit explicitly once all artifacts are written.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

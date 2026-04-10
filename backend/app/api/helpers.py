@@ -47,6 +47,7 @@ async def verify_session(request: Request) -> str | None:
     """
     if not settings.SESSION_SECRET:
         return None  # Auth not enabled — backwards compatible
+
     token = request.headers.get("X-Session-Token", "")
     if not token or token != settings.SESSION_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized")

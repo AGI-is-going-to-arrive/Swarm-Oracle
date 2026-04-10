@@ -208,9 +208,24 @@ curl -sS -X POST http://127.0.0.1:18927/api/health
 默认全链入口：
 
 ```bash
+cd backend
+source .venv/bin/activate
+uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
+
+cd frontend
+npm run preview -- --host 127.0.0.1 --port 18928
+
 cd frontend
 npm run release:signoff -- --headless
 ```
+
+说明：
+
+- `release:signoff` 当前不会自己拉起 backend / preview。
+- 默认口径固定读取：
+  - frontend `http://127.0.0.1:18928`
+  - backend `http://127.0.0.1:18927`
+- 如果本地预览端口不同，显式传 `--url http://127.0.0.1:<port>`。
 
 如果需要强制 Debate 使用 `llm_hybrid` 裁决模式：
 
@@ -232,7 +247,7 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最近一次稳定总链工件：
 
-- `frontend/output/e2e/20260330-full-release-signoff-stable/summary.json`
+- `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`
 
 最近一次 Oracle 专项签收工件：
 

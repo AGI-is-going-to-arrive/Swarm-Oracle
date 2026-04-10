@@ -3,16 +3,20 @@
 import json
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine, init_db
 from app.services.persona_workshop import (
-    ALLOWED_KNOWLEDGE_DOMAINS,
     create_custom_agent,
     delete_custom_agent,
     list_custom_agents,
     update_custom_agent,
+)
+from app.services.vector_store import (
+    _identity_profile_collection_name,
+    get_vector_store,
+    search_identity_candidates,
 )
 
 
@@ -87,6 +91,26 @@ class TestCreateCustomAgent:
                 knowledge_domains=["economics", "astrology"],
             )
 
+    def test_create_stores_l2_profile(self):
+        if not get_vector_store().available:
+            pytest.skip("ChromaDB unavailable")
+
+        identity_id = create_custom_agent(
+            user_id="u4-profile",
+            display_name="Profile Agent",
+            role="economist",
+            persona="Studies inflation expectations",
+            decision_bias=None,
+            knowledge_domains=None,
+        )
+
+        collection = get_vector_store()._client.get_collection(
+            name=_identity_profile_collection_name("u4-profile"),
+        )
+        stored = collection.get(where={"identity_id": identity_id})
+        assert len(stored["ids"]) == 1
+        assert stored["metadatas"][0]["doc_type"] == "identity_profile"
+
 
 class TestListCustomAgents:
     def test_list_filters_by_user_id(self):
@@ -137,6 +161,33 @@ class TestUpdateCustomAgent:
         with pytest.raises(ValueError, match="Invalid knowledge domains"):
             update_custom_agent(identity_id, knowledge_domains=["alchemy"])
 
+    def test_update_role_and_persona_refreshes_profile(self):
+        if not get_vector_store().available:
+            pytest.skip("ChromaDB unavailable")
+
+        identity_id = create_custom_agent(
+            "u7-profile",
+            "Agent",
+            "analyst",
+            "Focuses on sovereign debt",
+            None,
+            None,
+        )
+
+        update_custom_agent(
+            identity_id,
+            role="strategist",
+            persona="Focuses on coalition risk and debt markets",
+        )
+
+        collection = get_vector_store()._client.get_collection(
+            name=_identity_profile_collection_name("u7-profile"),
+        )
+        stored = collection.get(where={"identity_id": identity_id})
+        assert len(stored["ids"]) == 1
+        assert stored["documents"][0].startswith("strategist — ")
+        assert "Focuses on coalition risk and debt markets" in stored["documents"][0]
+
 
 class TestDeleteCustomAgent:
     def test_delete_removes_from_db(self):
@@ -153,3 +204,25 @@ class TestDeleteCustomAgent:
     def test_delete_not_found_raises(self):
         with pytest.raises(LookupError, match="not found"):
             delete_custom_agent("nonexistent_id")
+
+    def test_delete_removes_l2_profile(self):
+        if not get_vector_store().available:
+            pytest.skip("ChromaDB unavailable")
+
+        identity_id = create_custom_agent(
+            "u8-profile",
+            "ToDeleteProfile",
+            "observer",
+            "Tracks sanctions coalitions",
+            None,
+            None,
+        )
+
+        delete_custom_agent(identity_id)
+
+        candidates = search_identity_candidates(
+            "u8-profile",
+            "observer",
+            "Tracks sanctions coalitions",
+        )
+        assert identity_id not in [c["identity_id"] for c in candidates]

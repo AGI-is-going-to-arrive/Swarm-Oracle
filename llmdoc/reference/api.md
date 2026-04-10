@@ -211,6 +211,8 @@
 
 - scenario / debate live 事件都会带 `meta`，前端按 `sequence / event_id` 去重。
 - 空闲期会发送轻量 `heartbeat`。
+- `X-Session-Token` 只用于 REST。
+- 当 `SESSION_SECRET` 非空时，ending-room / scenario / debate 的 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。
 
 ## 源码入口
 

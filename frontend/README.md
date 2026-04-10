@@ -38,6 +38,8 @@ React + TypeScript frontend for SwarmOracle.
   Oracle replay share now falls back to a local read-only link when artifact storage is unavailable and URL-token sharing is too large to ship
 - `WorldlineRoundtableView.tsx`
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
+- `e2e-ending-room-followup-suite.mjs`
+  current API-driven followup flow now tolerates page/context reopen, keeps replay/import coverage as best-effort artifacts, and no longer blocks the full signoff contract on a single replay-control timeout
 - `useEndingRoomWS.ts`
   Oracle WS reconnect now reuses the latest connect callback instead of holding a stale self-reference
 - `scenarioMeta`
@@ -119,7 +121,7 @@ npm run build:spike:phaser-custom
   - `Enter Chamber / One Move Only` both open correctly
   - single-ending chamber readonly replay still imports back into `/sim/:id`
   - English live-room copy no longer mixes raw Chinese hinge text into English sentences
-- Current `e2e-ending-room-followup-suite.mjs` CLI entry still writes the multi-ending desktop/mobile summary path; single-ending Oracle verification is currently a separate manual browser pass.
+- Current `e2e-ending-room-followup-suite.mjs` full run now writes one `summary.json` per invocation and is already part of the default full signoff contract.
 - Current default build shrinks the `phaser` chunk from about `1202.19 kB` to `718.11 kB` (`328.41 kB` → `202.34 kB` gzip).
 - Default signoff contract:
   - targeted backend checks
@@ -131,11 +133,13 @@ npm run build:spike:phaser-custom
   - `corners`
   - `mobile`
   - `cross-browser`
+  - `ending-room-followup`
+  - `roundtable-full`
   - `debate-full`
 - Safari is optional and not part of the default full signoff.
 - CI now also includes `release-signoff-fixture`, a no-secrets deterministic full-flow signoff lane that runs the main scenario path against an isolated mock LLM on `18318` and forces deterministic Debate adjudication. The real LLM path still follows the configured `LLM_RESPONSES_URL`.
-- Latest clean real full signoff artifact: `output/e2e/post-commit-signoff-clean/summary.json`.
-- That artifact is bound to commit `421f6d6c37980a5fb1b79cf6ddd664f5ecda3473` with `passed` status, `dirty=false`, and `llm_hybrid` debate adjudication enforced.
+- Latest clean real full signoff artifact: `output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`.
+- That artifact currently records commit `7d643772888e88457fc14b678d837b087678e78b`, `passed` status, and a dirty worktree; always read the artifact's embedded git metadata as the source of truth.
 - `corners` share generation and share retry waits now follow the longer frontend social-copy timeout, reducing false negatives under normal LLM latency.
 - Treat `summary.json` git metadata as the source of truth for whether a specific checkout has been signed off.
 - Current signoff script now re-reads `director_state / gameplay_state` revisions before roundtrip PUT, so `corners` no longer depends on historical samples staying at revision `0`.

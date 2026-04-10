@@ -1007,7 +1007,13 @@ async function main() {
   console.log(`artifacts: ${outputDir}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Playwright can leave lingering handles even after best-effort teardown.
+    // This script is CLI-only, so exit explicitly once all artifacts are written.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

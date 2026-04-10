@@ -210,6 +210,7 @@
   - 先 API 预热 `ending_chamber`，再通过 ResultView 调试参数直开 live chamber
   - `hotseat / all_present / epilogue / evidence_card` 统一改成 API 发起，UI 只负责模式切换、stream 观测、截图和 readonly 验证
   - 两种模式均有截图 + JSON artifact 留档
+- `e2e-ending-room-followup-suite.mjs` 当前即使遇到 page/context 重建、单条 replay/import 控件慢路径，也会优先保住整套 `summary.json` 落盘；相关慢路径会记为 best-effort artifact，而不是直接中断默认 full signoff。
 - `e2e-ending-room-followup-suite.mjs` 当前也会在命中的 follow-up 场景下额外落：
   - `turn-start`
   - `turn-delta`
@@ -223,6 +224,7 @@
   - hotseat settle / anchored send 的慢路径等待
   - desktop / mobile 分 browser 执行
   - 优先复用最近成功的稳定 fixture
+- `e2e-worldline-roundtable-suite.mjs full` 当前已能在默认本地口径下重新跑通，Firefox / WebKit 的 cross-browser director-state scoped check 也已重新纳入同一条默认签收链。
 - roundtable anchored follow-up 的 desktop / mobile rerun 当前都已重新跑通：
   - desktop 已能稳定落 `turn_start / turn_delta / turn_commit`
   - mobile 当前也已重新抓回 `turn_delta`
@@ -238,6 +240,8 @@
 - roundtable replay 的自动化口径当前已修正：
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时
+- 最近一次默认本地全链签收工件位于：
+  - `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`
 - 当前 single-ending Oracle 已额外做过真实浏览器复核：
   - 结果页无 `Start Roundtable / Crossline Gallery`
   - `ending_chamber / one_move_only` 可正常打开

@@ -464,15 +464,18 @@ describe('scenarioGameplayState helpers', () => {
   });
 
   it('treats explicit empty gameplay partitions as authoritative presence', () => {
+    const explicitEmptyGameplayState: ScenarioGameplayState = {
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    };
+
+    expect(hasScenarioGameplayAuthority(explicitEmptyGameplayState)).toBe(true);
     expect(hasScenarioGameplayAuthority({
       cards: { usage_log: [] },
       betting: { bets: [] },
       archive: { key_moments: [], branch_snapshots: [] },
     })).toBe(true);
-
-    expect(hasScenarioGameplayAuthority({
-      cards: { usage_log: [] },
-    } as ScenarioGameplayState)).toBe(true);
 
     expect(hasScenarioGameplayAuthority(null)).toBe(false);
   });

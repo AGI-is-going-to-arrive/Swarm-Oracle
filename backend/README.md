@@ -35,6 +35,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
+| Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
 | Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention |
 | Social | `app/api/social.py` | Social media copy generation |
@@ -72,7 +73,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```
 
 - Historical full baseline: `815 passed`.
-- Current signoff backend set: `156 passed`.
+- Current signoff backend set: `157 passed`.
 - Current session backend regression pack: `269 passed`.
 - Current ending room service tests: `77 passed` (含 13 个角色化词汇提示测试).
 - Current session backend review-fix pack:
@@ -106,6 +107,8 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - `predictions.py` now enforces one prediction per `scenario_id + user_id` at both layers: API pre-check plus SQLite unique index, and duplicate races still collapse to `409 PREDICTION_ALREADY_SUBMITTED`.
 - `runtime_lock_is_active()` now uses a read-only existence check for active leases instead of taking `BEGIN IMMEDIATE` on the shared lock table.
 - `vector_store.py` now treats the shared Chroma write lease as best-effort; if another worker already owns the same scenario lock, the write is skipped instead of busy-waiting in the caller.
+- Agent identity L2 profiles now live in a dedicated `identity_profile_{user_id}` Chroma collection; custom agent create/update/delete 会同步 profile，旧的 shared-collection profile 文档会在后续写入时自动清理。
+- Ending-room WebSocket 现在只走共享的首帧 auth 协议；HTTP `verify_session` 继续只服务 REST，不再误包住 ending-room WS 路由。
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.
 - `POST /api/scenario` now rejects out-of-range `rounds` at schema level, `import-replay` no longer repeatedly scans agents when it falls back by name, and `GET /api/scenario/{id}/groups` now batch-loads leader/member data.
 - `AgentGroup.scenario_id` now has an index, with both `init_db()` lightweight migration coverage and Alembic revision `011_add_agent_group_scenario_index`.

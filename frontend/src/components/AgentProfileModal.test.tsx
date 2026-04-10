@@ -112,7 +112,7 @@ describe('AgentProfileModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('shows loading state while fetching data', () => {
+  it('shows loading state while fetching data', async () => {
     mockGetIdentityMemory.mockReturnValueOnce(
       new Promise(() => { /* intentionally never resolves */ }),
     );
@@ -122,7 +122,7 @@ describe('AgentProfileModal', () => {
 
     render(<AgentProfileModal identity={baseIdentity} open={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(await screen.findByText('Loading...')).toBeInTheDocument();
   });
 
   it('shows error state on fetch failure', async () => {

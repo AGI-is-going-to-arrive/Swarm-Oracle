@@ -89,6 +89,24 @@ def _compacted_doc(
     }
 
 
+def _profile_doc(
+    doc_id: str,
+    identity_id: str,
+    created_at: str,
+    text: str = "role — persona",
+):
+    return {
+        "id": doc_id,
+        "document": text,
+        "metadata": {
+            "identity_id": identity_id,
+            "created_at": created_at,
+            "doc_type": "identity_profile",
+            "role": "role",
+        },
+    }
+
+
 # ── TestCompactionTrigger ────────────────────────────────────
 
 
@@ -136,6 +154,22 @@ class TestCompactionTrigger:
         # 30 raw + 25 compacted = 55 total, but only 30 raw — below threshold
         docs = [_raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}") for i in range(30)]
         docs += [_compacted_doc(f"c{i}", "id1", "sc1", f"2026-03-{i:02d}") for i in range(25)]
+        col = _make_collection(docs)
+        store._client.get_collection.return_value = col
+
+        from app.services.vector_store import check_identity_compaction_needed
+        assert check_identity_compaction_needed("u1", "id1") is False
+
+    @patch("app.services.vector_store.settings")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_profile_docs_not_counted(self, mock_gvs, mock_settings):
+        mock_settings.IDENTITY_COMPACT_THRESHOLD = 5
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+
+        docs = [_raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}") for i in range(4)]
+        docs += [_profile_doc(f"p{i}", "id1", f"2026-03-{i:02d}") for i in range(3)]
         col = _make_collection(docs)
         store._client.get_collection.return_value = col
 
@@ -199,6 +233,29 @@ class TestCompactionGroups:
         # Only raw docs appear in groups
         all_ids = [gid for g in groups for gid in g.ids]
         assert all(not gid.startswith("c") for gid in all_ids)
+
+    @patch("app.services.vector_store.release_runtime_lock")
+    @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
+    @patch("app.services.vector_store.settings")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_profile_docs_excluded(self, mock_gvs, mock_settings, _acq, _rel):
+        mock_settings.IDENTITY_COMPACT_THRESHOLD = 5
+        mock_settings.IDENTITY_COMPACT_BATCH_SIZE = 5
+        mock_settings.IDENTITY_COMPACT_GROUP_SIZE = 5
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+
+        docs = [_raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}T00:00:00Z") for i in range(5)]
+        docs += [_profile_doc(f"p{i}", "id1", f"2026-03-{i:02d}T00:00:00Z") for i in range(2)]
+        col = _make_collection(docs)
+        store._client.get_or_create_collection.return_value = col
+
+        from app.services.vector_store import prepare_compaction_groups
+        groups = prepare_compaction_groups("u1", "id1")
+
+        all_ids = [gid for g in groups for gid in g.ids]
+        assert all(not gid.startswith("p") for gid in all_ids)
 
     @patch("app.services.vector_store.release_runtime_lock")
     @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")

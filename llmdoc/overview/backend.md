@@ -35,7 +35,7 @@
 | Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断 |
-| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory（串行化锁保护写入） |
+| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease，防重入 |
@@ -88,6 +88,10 @@
 - `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
   - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
   - `cited_refs_json` 有 4 KB 大小限制。
+- Agent identity L2 profile 当前使用独立 `identity_profile_{user_id}` collection：
+  - generated/custom identity 都会同步 profile
+  - custom agent create/update/delete 会同步写入或清理 profile
+  - 旧的 shared-collection profile 文档会在后续写入时自动清理，不再参与 memory eviction / compaction
 - Ending Room API 请求体当前已统一添加输入上限（防超大 payload DOS）：
   - `selected_branch_ids / selected_agent_ids / selected_representatives` 各 ≤ 50 条
   - `addressed_agent_ids / question_anchor_ids` 各 ≤ 20 条
@@ -130,6 +134,9 @@
 - 出站事件统一带顶层 `meta`，供前端按 `sequence / event_id` 去重与补拉。
 - 空闲期会发送轻量 `heartbeat`，便于更快暴露半断开连接。
 - `ending_room` 也有独立 WS 通道，不复用 scenario/debate stream。
+- ending-room WS 当前挂在独立的 ws router 上：
+  - REST `verify_session` 只校验 HTTP header
+  - WebSocket 继续使用首帧 auth 协议
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 - 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
 
