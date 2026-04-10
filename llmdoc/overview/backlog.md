@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-10 (Batch 3 测试收口完成后)
+> 最后更新：2026-04-10 (P1-3/P1-4 交付后)
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -21,15 +21,15 @@
 - P1-8：TranscriptFactionOverlay (FactionBadge + useFactionOverlay hook, integrated in RoundtableTranscriptList + EndingChatModal)
 - X-3：Phase 3 六大功能 Playwright E2E（Batch A/B 脚本）
 - X-4：旧 replay import 空状态回归测试
+- P1-3：Graph 导出图片 — ExportPanel (PNG html2canvas + SVG foreignObject clone)，集成 CausalReviewView + ArgumentMap
+- P1-4：Graph 节点点击展开 — NodeDetailPanel (type/round/payload/unit details)，onNodeClick + selectedNode reset on re-fetch
 
 ## 剩余项
 
-### 长期增强（零代码）
+### 长期增强
 
 | # | 项目 | 说明 |
 |---|------|------|
-| P1-3 | Graph 导出图片 | CausalReviewView 导出 PNG/SVG（ExportPanel） |
-| P1-4 | Graph 节点点击展开 | 因果图节点详情面板 |
 | P1-9 | `resume_from_round` 参数 | simulator 从中间轮次恢复（当前仅 clone+re-run） |
 | P1-10 | Continuity Key L2/L3 匹配 | L2 ChromaDB embedding cosine > 0.85 + L3 前端确认（当前仅 L1 hash） |
 | P1-11 | LLM enrichment (stance/argument) | rule-based → LLM 可选增强 |
