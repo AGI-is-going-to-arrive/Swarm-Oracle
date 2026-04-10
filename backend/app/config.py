@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     FEATURE_COUNTERFACTUAL_REPLAY: bool = False
     FEATURE_FACTIONS: bool = False
     FEATURE_ARGUMENT_MAP: bool = False
+    FEATURE_IDENTITY_COMPACTION: bool = False
+
+    # ── Identity Memory Compaction ───────────────────────
+    IDENTITY_COMPACT_THRESHOLD: int = 50   # trigger when raw doc count >= this
+    IDENTITY_COMPACT_BATCH_SIZE: int = 30  # oldest raw docs to compact per run
+    IDENTITY_COMPACT_GROUP_SIZE: int = 10  # docs per LLM summarization group
 
     # ── Auth ─────────────────────────────────────────────
     SESSION_SECRET: str = ""  # If set, enables lightweight session-token auth
@@ -207,6 +213,22 @@ class Settings(BaseSettings):
         if self.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS > self.MEMORY_CORE_CONTEXT_MAX_CHARS:
             raise ValueError(
                 "MEMORY_IMPORTANT_CONTEXT_MAX_CHARS must be <= MEMORY_CORE_CONTEXT_MAX_CHARS"
+            )
+
+        # Identity memory compaction constraints
+        if self.IDENTITY_COMPACT_THRESHOLD <= 0:
+            raise ValueError("IDENTITY_COMPACT_THRESHOLD must be > 0")
+        if self.IDENTITY_COMPACT_BATCH_SIZE <= 0:
+            raise ValueError("IDENTITY_COMPACT_BATCH_SIZE must be > 0")
+        if self.IDENTITY_COMPACT_GROUP_SIZE <= 0:
+            raise ValueError("IDENTITY_COMPACT_GROUP_SIZE must be > 0")
+        if self.IDENTITY_COMPACT_GROUP_SIZE > self.IDENTITY_COMPACT_BATCH_SIZE:
+            raise ValueError(
+                "IDENTITY_COMPACT_GROUP_SIZE must be <= IDENTITY_COMPACT_BATCH_SIZE"
+            )
+        if self.IDENTITY_COMPACT_THRESHOLD >= 200:
+            raise ValueError(
+                "IDENTITY_COMPACT_THRESHOLD must be < 200 (identity memory FIFO hard limit)"
             )
         return self
 

@@ -1437,9 +1437,14 @@ async def run_simulation(
     # Phase 3 F1: Record growth events + identity memories at scenario end
     # Runs in thread pool to avoid blocking the async event loop (sync DB + ChromaDB I/O).
     if scenario_finished and settings.FEATURE_AGENT_IDENTITY:
-        def _run_identity_lifecycle() -> None:
+        def _run_identity_lifecycle() -> list[tuple[str, str]]:
+            """Returns list of (user_id, identity_id) pairs that may need compaction."""
             from app.services.agent_identity import record_growth_event
-            from app.services.vector_store import store_identity_memory
+            from app.services.vector_store import (
+                check_identity_compaction_needed,
+                store_identity_memory,
+            )
+            _compaction_worklist: list[tuple[str, str]] = []
             with Session(engine) as _id_sess:
                 _sc = _id_sess.get(Scenario, scenario_id)
                 # Prefer Scenario.user_id; fall back to parsed_context for older rows
@@ -1483,6 +1488,14 @@ async def run_simulation(
                                 scenario_id=scenario_id,
                                 summary=f"{_ag.name} ({_ag.role}): {_branch_summary[:300]}",
                             )
+                            # Check if compaction is needed after this write
+                            if settings.FEATURE_IDENTITY_COMPACTION:
+                                if check_identity_compaction_needed(
+                                    _sc_user_id, _ag.agent_identity_id,
+                                ):
+                                    _compaction_worklist.append(
+                                        (_sc_user_id, _ag.agent_identity_id)
+                                    )
                     except Exception:
                         _failed += 1
                         logger.warning(
@@ -1495,15 +1508,71 @@ async def run_simulation(
                         "identity lifecycle: %d/%d agents failed for scenario %s",
                         _failed, len(_id_agents), scenario_id,
                     )
+            # Deduplicate worklist before returning
+            return list(set(_compaction_worklist))
 
         try:
-            await asyncio.to_thread(_run_identity_lifecycle)
+            _compaction_pairs = await asyncio.to_thread(_run_identity_lifecycle)
         except Exception:
+            _compaction_pairs = []
             logger.warning(
                 "identity lifecycle hooks failed for scenario %s (non-blocking)",
                 scenario_id,
                 exc_info=True,
             )
+
+        # Fire-and-forget compaction with explicit exception logging
+        if _compaction_pairs:
+            async def _run_compaction(
+                pairs: list[tuple[str, str]],
+            ) -> None:
+                from app.services.llm_client import llm_call_json
+                from app.services.vector_store import (
+                    build_compaction_prompt,
+                    execute_compaction_group,
+                    prepare_compaction_groups,
+                )
+                for uid, iid in pairs:
+                    try:
+                        groups = await asyncio.to_thread(
+                            prepare_compaction_groups, uid, iid,
+                        )
+                        for grp in groups:
+                            try:
+                                result = await llm_call_json(
+                                    build_compaction_prompt(grp.summaries),
+                                    temperature=0.3,
+                                )
+                                summary = result.get(
+                                    "compacted_summary",
+                                    " | ".join(grp.summaries)[:600],
+                                )
+                            except Exception:
+                                # LLM failure fallback: concatenate
+                                summary = " | ".join(grp.summaries)[:600]
+                                logger.warning(
+                                    "compaction LLM failed for %s/%s, using fallback",
+                                    uid, iid, exc_info=True,
+                                )
+                            await asyncio.to_thread(
+                                execute_compaction_group, uid, iid, grp, summary,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "compaction failed for %s/%s (non-blocking)",
+                            uid, iid, exc_info=True,
+                        )
+
+            task = asyncio.create_task(_run_compaction(_compaction_pairs))
+
+            def _compaction_done(t: asyncio.Task) -> None:  # type: ignore[type-arg]
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc:
+                    logger.warning("compaction task exception: %s", exc)
+
+            task.add_done_callback(_compaction_done)
 
     if scenario_finished:
         await push({"type": "simulation_done"})

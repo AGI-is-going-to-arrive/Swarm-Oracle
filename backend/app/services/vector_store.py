@@ -10,8 +10,10 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+from app.config import settings
 from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
 
 logger = logging.getLogger(__name__)
@@ -537,7 +539,9 @@ def store_identity_memory(
 
     try:
         with _CHROMA_WRITE_LOCK:
-            _store_identity_memory_inner(store, user_id, identity_id, scenario_id, summary, metadata)
+            _store_identity_memory_inner(
+                store, user_id, identity_id, scenario_id, summary, metadata,
+            )
     finally:
         try:
             release_runtime_lock(lease)
@@ -586,7 +590,8 @@ def _store_identity_memory_inner(
         logger.warning("Identity memory store failed (non-fatal): %s", exc)
         return
 
-    # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX per identity
+    # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX per identity.
+    # Raw docs are evicted before compacted docs (compacted preserve long-term knowledge).
     try:
         results = collection.get(
             where={"identity_id": identity_id},
@@ -594,15 +599,18 @@ def _store_identity_memory_inner(
         if results and results.get("ids") and len(results["ids"]) > _IDENTITY_MEMORY_MAX:
             metas = results.get("metadatas", [])
             ids = results["ids"]
-            # Sort by created_at ascending, delete oldest
+            # Sort key: (is_compacted, created_at) — raw first (0), compacted last (1)
             paired = list(zip(ids, metas))
-            paired.sort(key=lambda p: p[1].get("created_at", ""))
+            paired.sort(key=lambda p: (
+                0 if p[1].get("compacted") != "true" else 1,
+                p[1].get("created_at", ""),
+            ))
             excess = len(paired) - _IDENTITY_MEMORY_MAX
             if excess > 0:
                 to_delete = [p[0] for p in paired[:excess]]
                 collection.delete(ids=to_delete)
                 logger.debug(
-                    "Evicted %d oldest identity memories for identity=%s",
+                    "Evicted %d identity memories for identity=%s (raw-first priority)",
                     excess, identity_id,
                 )
     except Exception as exc:
@@ -674,3 +682,305 @@ def purge_identity_memories(user_id: str) -> None:
         logger.info("Purged identity memory collection %s", col_name)
     except Exception as exc:
         logger.warning("Failed to purge identity collection for %s: %s", user_id, exc)
+
+
+# ── Identity Memory Compaction ──────────────────────────────
+
+
+@dataclass
+class CompactionGroup:
+    """A batch of raw memory docs to be summarized into one compacted doc."""
+    ids: list[str]
+    summaries: list[str]
+    scenario_ids: list[str]
+    created_ats: list[str]
+    source_ids_hash: str  # SHA-256(sorted(ids)) — idempotency fingerprint
+
+
+def _compute_source_ids_hash(ids: list[str]) -> str:
+    """SHA-256 of sorted ids for idempotent compaction detection."""
+    import hashlib
+    joined = ",".join(sorted(ids))
+    return hashlib.sha256(joined.encode()).hexdigest()
+
+
+def check_identity_compaction_needed(user_id: str, identity_id: str) -> bool:
+    """Non-locking check: does this identity have enough raw docs to compact?"""
+    store = get_vector_store()
+    if not store.available:
+        return False
+
+    col_name = _identity_collection_name(user_id)
+    try:
+        collection = store._client.get_collection(name=col_name)
+    except Exception:
+        return False
+
+    try:
+        results = collection.get(where={"identity_id": identity_id})
+        if not results or not results.get("ids"):
+            return False
+        raw_count = sum(
+            1 for m in (results.get("metadatas") or [])
+            if m.get("compacted") != "true"
+        )
+        return raw_count >= settings.IDENTITY_COMPACT_THRESHOLD
+    except Exception:
+        return False
+
+
+def prepare_compaction_groups(
+    user_id: str,
+    identity_id: str,
+) -> list[CompactionGroup]:
+    """Fetch oldest raw docs and split into compaction groups.
+
+    Acquires the two-layer lock. Returns empty list on failure.
+    """
+    store = get_vector_store()
+    if not store.available:
+        return []
+
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = acquire_runtime_lock(lock_key, lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS)
+    except Exception:
+        return []
+    if lease is None:
+        return []
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            return _prepare_compaction_groups_inner(store, user_id, identity_id)
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception:
+            pass
+
+
+def _prepare_compaction_groups_inner(
+    store: "VectorStore",
+    user_id: str,
+    identity_id: str,
+) -> list[CompactionGroup]:
+    col_name = _identity_collection_name(user_id)
+    try:
+        collection = store._client.get_or_create_collection(
+            name=col_name, metadata={"hnsw:space": "cosine"},
+        )
+    except Exception:
+        return []
+
+    results = collection.get(where={"identity_id": identity_id})
+    if not results or not results.get("ids"):
+        return []
+
+    # Filter to raw (non-compacted) docs only
+    raw_entries = []
+    docs = results.get("documents", [])
+    metas = results.get("metadatas", [])
+    ids = results["ids"]
+    for doc_id, doc, meta in zip(ids, docs, metas):
+        if meta.get("compacted") != "true":
+            raw_entries.append((doc_id, doc, meta))
+
+    if len(raw_entries) < settings.IDENTITY_COMPACT_THRESHOLD:
+        return []
+
+    # Sort by created_at ASC (oldest first)
+    raw_entries.sort(key=lambda e: e[2].get("created_at", ""))
+
+    # Take oldest BATCH_SIZE
+    batch = raw_entries[: settings.IDENTITY_COMPACT_BATCH_SIZE]
+
+    # Split into groups of GROUP_SIZE
+    groups = []
+    gs = settings.IDENTITY_COMPACT_GROUP_SIZE
+    for i in range(0, len(batch), gs):
+        chunk = batch[i : i + gs]
+        chunk_ids = [c[0] for c in chunk]
+        groups.append(CompactionGroup(
+            ids=chunk_ids,
+            summaries=[c[1] for c in chunk],
+            scenario_ids=[c[2].get("scenario_id", "") for c in chunk],
+            created_ats=[c[2].get("created_at", "") for c in chunk],
+            source_ids_hash=_compute_source_ids_hash(chunk_ids),
+        ))
+    return groups
+
+
+def execute_compaction_group(
+    user_id: str,
+    identity_id: str,
+    group: CompactionGroup,
+    summary: str,
+) -> None:
+    """Write one compacted doc and delete originals. Add-before-delete for safety.
+
+    Uses two-layer lock. Includes staleness check and idempotent retry via source_ids_hash.
+    """
+    store = get_vector_store()
+    if not store.available:
+        return
+
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = acquire_runtime_lock(lock_key, lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS)
+    except Exception:
+        return
+    if lease is None:
+        return
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            _execute_compaction_group_inner(store, user_id, identity_id, group, summary)
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception:
+            pass
+
+
+def _execute_compaction_group_inner(
+    store: "VectorStore",
+    user_id: str,
+    identity_id: str,
+    group: CompactionGroup,
+    summary: str,
+) -> None:
+    import uuid
+    from datetime import datetime, timezone
+
+    col_name = _identity_collection_name(user_id)
+    try:
+        collection = store._client.get_or_create_collection(
+            name=col_name, metadata={"hnsw:space": "cosine"},
+        )
+    except Exception:
+        return
+
+    # Idempotent check: if a compacted doc with this source_ids_hash already exists,
+    # skip add and just retry delete (previous run may have added but failed to delete).
+    try:
+        existing = collection.get(where={
+            "identity_id": identity_id,
+        })
+        already_compacted = False
+        if existing and existing.get("ids"):
+            for m in (existing.get("metadatas") or []):
+                if (m.get("compacted") == "true"
+                        and m.get("source_ids_hash") == group.source_ids_hash):
+                    already_compacted = True
+                    break
+    except Exception:
+        already_compacted = False
+
+    if already_compacted:
+        # Previous add succeeded, just retry delete
+        try:
+            collection.delete(ids=group.ids)
+            logger.info(
+                "Idempotent compaction: deleted %d originals for hash=%s",
+                len(group.ids), group.source_ids_hash[:16],
+            )
+        except Exception as exc:
+            logger.warning("Idempotent delete retry failed: %s", exc)
+        return
+
+    # Staleness check: verify all original_ids still exist and are still raw
+    try:
+        verify = collection.get(ids=group.ids)
+        if not verify or not verify.get("ids"):
+            logger.info("Compaction group stale (no docs found), skipping")
+            return
+        alive_raw = set()
+        for vid, vmeta in zip(verify["ids"], verify.get("metadatas", [])):
+            if vmeta.get("compacted") != "true":
+                alive_raw.add(vid)
+        if alive_raw != set(group.ids):
+            logger.info(
+                "Compaction group stale (expected %d raw, found %d), skipping",
+                len(group.ids), len(alive_raw),
+            )
+            return
+    except Exception:
+        return
+
+    # Step 1: Write compacted doc
+    compacted_range = ""
+    if group.created_ats:
+        sorted_ts = sorted(t for t in group.created_ats if t)
+        if sorted_ts:
+            compacted_range = f"{sorted_ts[0][:10]}..{sorted_ts[-1][:10]}"
+
+    compacted_meta = {
+        "identity_id": identity_id,
+        "scenario_id": group.scenario_ids[0] if group.scenario_ids else "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "compacted": "true",
+        "compacted_count": str(len(group.ids)),
+        "compacted_range": compacted_range,
+        "source_ids_hash": group.source_ids_hash,
+    }
+
+    new_id = str(uuid.uuid4())
+    try:
+        collection.add(documents=[summary], metadatas=[compacted_meta], ids=[new_id])
+    except Exception as exc:
+        logger.warning("Compacted doc add failed, originals preserved: %s", exc)
+        return
+
+    # Step 2: Verify write succeeded
+    try:
+        check = collection.get(ids=[new_id])
+        if not check or not check.get("ids"):
+            logger.warning("Compacted doc write verification failed, originals preserved")
+            return
+    except Exception:
+        return
+
+    # Step 3: Delete originals (safe — compacted doc already persisted)
+    try:
+        collection.delete(ids=group.ids)
+        logger.info(
+            "Compacted %d memories into 1 for identity=%s (hash=%s)",
+            len(group.ids), identity_id, group.source_ids_hash[:16],
+        )
+    except Exception as exc:
+        logger.warning(
+            "Delete originals failed after compaction (recoverable): %s", exc,
+        )
+
+
+def build_compaction_prompt(summaries: list[str]) -> str:
+    """Build the LLM prompt for memory compaction.
+
+    Each summary is wrapped via format_untrusted_text_block to prevent
+    prompt injection from user-generated memory content.
+    """
+    from app.services.llm_client import format_untrusted_text_block
+
+    blocks = "\n".join(
+        format_untrusted_text_block(
+            f"Memory {i + 1}", s, max_chars=400,
+        )
+        for i, s in enumerate(summaries)
+    )
+    return f"""You are compacting cross-scenario agent memories into \
+a single summary.
+
+The following {len(summaries)} memories record an agent's experiences \
+across multiple scenarios:
+
+{blocks}
+
+Produce a single compacted summary that preserves:
+- Key stance changes and pivotal decisions
+- Important alliances and relationships formed
+- Major outcomes and lessons learned
+- Any recurring behavioral patterns
+
+Output strict JSON:
+{{"compacted_summary": "A single paragraph (max 500 chars) preserving \
+the most important information from all memories above."}}"""

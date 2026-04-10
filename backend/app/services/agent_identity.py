@@ -101,9 +101,10 @@ def get_identity_memories(identity_id: str, limit: int = 10) -> list[dict]:
         if count == 0:
             return []
 
+        # Fetch all docs for this identity (no limit), then filter/sort in Python.
+        # This ensures compacted docs don't steal slots from raw docs.
         results = collection.get(
             where={"identity_id": identity_id},
-            limit=min(limit, count),
         )
 
         memories = []
@@ -111,11 +112,17 @@ def get_identity_memories(identity_id: str, limit: int = 10) -> list[dict]:
             docs = results["documents"]
             metas = results.get("metadatas", [{}] * len(docs))
             for doc, meta in zip(docs, metas):
+                # Exclude compacted summaries from the timeline list.
+                # Compacted docs participate in semantic retrieval only.
+                if meta.get("compacted") == "true":
+                    continue
                 memories.append({
                     "summary": doc,
                     "scenario_id": meta.get("scenario_id", ""),
                     "created_at": meta.get("created_at", ""),
                 })
+        # Sort by created_at descending (newest first), then truncate
+        memories.sort(key=lambda m: m.get("created_at", ""), reverse=True)
         return memories[:limit]
     except Exception as exc:
         logger.warning("get_identity_memories failed (non-fatal): %s", exc)
