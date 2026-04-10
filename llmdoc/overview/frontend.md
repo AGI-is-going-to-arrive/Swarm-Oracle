@@ -42,9 +42,6 @@
   - `frontend/src/lib/scenarioAuthority.ts`
   - `frontend/src/lib/scenarioDirectorState.ts`
   - `frontend/src/lib/scenarioGameplayState.ts`
-- `gameplay_state` 当前按“分区显式拥有”判断 authority：
-  - 后端只要显式返回 `cards.usage_log`、`betting.bets`、`archive.key_moments`、`archive.branch_snapshots`，即使数组为空，前端也视为该分区已由后端接管。
-  - 这种情况下前端不会再用本地 `scenarioMeta` 把旧的玩法卡、押注或 archive raw 数据补回去。
 
 ### 兼容与缓存层
 
