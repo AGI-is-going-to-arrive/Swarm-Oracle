@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import settings
 
@@ -221,6 +221,12 @@ class BatchInterveneRequest(BaseModel):
         if len(v) > 50:
             raise ValueError("interventions must contain at most 50 items")
         return v
+
+
+class ResumeRequest(BaseModel):
+    """Resume simulation from a specific round on a new branch (P1-9)."""
+    source_branch_id: str
+    round_number: int = Field(ge=1)
 
 
 # ── Response schemas ─────────────────────────────────────

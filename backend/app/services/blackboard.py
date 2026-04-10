@@ -267,6 +267,39 @@ class Blackboard:
 
         return result
 
+    # ── Checkpoint persistence ────────────────────────────
+
+    def export_snapshot(self) -> dict:
+        """Export complete internal state for checkpoint persistence.
+
+        Unlike get_shared_briefing (which truncates/aggregates for LLM context),
+        this captures the full blackboard state for exact restoration.
+        """
+        return {
+            "global_summary": self.global_summary,
+            "consensus": self.consensus,
+            "active_debates": list(self.active_debates),
+            "tension_points": list(self.tension_points),
+            "agent_positions": dict(self.agent_positions),
+            "activity_log": copy.deepcopy(self.activity_log),
+            "agent_factions": dict(self._agent_factions),
+            "agent_groups": dict(self._agent_groups),
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> Blackboard:
+        """Restore a complete Blackboard from a checkpoint snapshot."""
+        bb = cls()
+        bb.global_summary = data.get("global_summary", "")
+        bb.consensus = data.get("consensus", "")
+        bb.active_debates = list(data.get("active_debates", []))
+        bb.tension_points = list(data.get("tension_points", []))
+        bb.agent_positions = dict(data.get("agent_positions", {}))
+        bb.activity_log = list(data.get("activity_log", []))
+        bb._agent_factions = dict(data.get("agent_factions", {}))
+        bb._agent_groups = dict(data.get("agent_groups", {}))
+        return bb
+
     # ── Branch management ────────────────────────────────
 
     def fork(self) -> Blackboard:

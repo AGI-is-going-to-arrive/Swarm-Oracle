@@ -975,6 +975,7 @@ async def run_simulation(
 
     start_round = 1
     resume_parent_branch_id: str | None = None
+    _resume_replay_kind: str | None = None
     active_branch_id: str
     if branch_id is None:
         root_title = ctx.get("initial_title", "历史拐点")
@@ -1009,11 +1010,27 @@ async def run_simulation(
             start_round = max(completed_rounds + 1, (target_branch.fork_round or 0) + 1, 1)
             active_branch_id = target_branch.id
             resume_parent_branch_id = target_branch.parent_branch_id
+            _resume_replay_kind = target_branch.replay_kind  # str | None
             all_branches = [{
                 "id": active_branch_id,
                 "status": BranchStatus.ACTIVE.value,
                 "probability": target_branch.probability,
             }]
+
+        # P1-9: Restore agent stance/emotion from checkpoint (resume only).
+        # Modifies in-memory dicts only — does NOT write to Agent DB rows.
+        if _resume_replay_kind == "resume" and resume_parent_branch_id:
+            from app.services.replay import load_checkpoint_agent_states
+            cp_agents = load_checkpoint_agent_states(
+                scenario_id, resume_parent_branch_id, start_round - 1,
+            )
+            if cp_agents:
+                _state_map = {a["agent_id"]: a for a in cp_agents}
+                for ag in agents:
+                    cp = _state_map.get(ag["id"])
+                    if cp:
+                        ag["stance"] = cp.get("stance", ag["stance"])
+                        ag["emotion"] = cp.get("emotion", ag["emotion"])
 
     # ── Blackboard per branch (only in blackboard mode) ─
     mode = ctx.get("mode", "blackboard")
@@ -1025,13 +1042,31 @@ async def run_simulation(
                 bb_init.set_agent_group(agent_name, group_name)
                 bb_init.set_agent_faction(agent_name, group_name)
         if branch_id is not None and resume_parent_branch_id:
-            parent_summary = _load_latest_compressed_briefing(
-                engine,
-                resume_parent_branch_id,
-                before_round=start_round,
-            )
-            if parent_summary:
-                bb_init.update_global_summary(parent_summary)
+            _bb_restored = False
+            # P1-9: Prefer full checkpoint blackboard for resume branches
+            if _resume_replay_kind == "resume":
+                from app.services.replay import load_checkpoint_blackboard
+                cp_bb = load_checkpoint_blackboard(
+                    scenario_id, resume_parent_branch_id, start_round - 1,
+                )
+                if cp_bb:
+                    bb_init = Blackboard.from_snapshot(cp_bb)
+                    # Re-register groups if hierarchical (snapshot may lack them
+                    # for old checkpoints written before export_snapshot)
+                    if hierarchical:
+                        for an, gn in agent_to_group.items():
+                            bb_init.set_agent_group(an, gn)
+                            bb_init.set_agent_faction(an, gn)
+                    _bb_restored = True
+            # Fallback: compressed briefing (works for all branch resume types)
+            if not _bb_restored:
+                parent_summary = _load_latest_compressed_briefing(
+                    engine,
+                    resume_parent_branch_id,
+                    before_round=start_round,
+                )
+                if parent_summary:
+                    bb_init.update_global_summary(parent_summary)
         blackboards: dict[str, Blackboard] = {active_branch_id: bb_init}
     else:
         blackboards = {}  # RAW mode — no blackboard, agents read DB directly
@@ -1173,7 +1208,7 @@ async def run_simulation(
                     bb_snapshot = None
                     _cp_bb = blackboards.get(current_branch_id)
                     if _cp_bb is not None:
-                        bb_snapshot = {"summary": _cp_bb.get_global_summary()}
+                        bb_snapshot = _cp_bb.export_snapshot()
                     await asyncio.to_thread(
                         _checkpoint_write,
                         scenario_id, current_branch_id, round_num, agents, bb_snapshot,

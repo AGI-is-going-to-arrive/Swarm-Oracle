@@ -78,23 +78,33 @@ def write_checkpoint(
 
 
 def clone_until_round(
-    scenario_id: str, source_branch_id: str, round_number: int,
+    scenario_id: str,
+    source_branch_id: str,
+    round_number: int,
+    *,
+    replay_kind: str = "counterfactual",
+    title: str | None = None,
 ) -> str:
     """Clone a branch up to round_number (inclusive), return new branch_id.
 
     Creates a new Branch with replay provenance metadata and copies
     all Rounds and AgentMessages up to the specified round.
+
+    Args:
+        replay_kind: "counterfactual" | "resume" | "retrospective"
+        title: Branch display title. Defaults to "{Kind} from round {N}".
     """
+    display_title = title or f"{replay_kind.title()} from round {round_number}"
     with Session(get_engine()) as session:
-        # Create new counterfactual branch
+        # Create new branch with replay provenance
         new_branch = Branch(
             scenario_id=scenario_id,
             parent_branch_id=source_branch_id,
             fork_round=round_number,
-            replay_kind="counterfactual",
+            replay_kind=replay_kind,
             replay_source_branch_id=source_branch_id,
             replay_source_round=round_number,
-            title=f"Counterfactual from round {round_number}",
+            title=display_title,
             status=BranchStatus.ACTIVE,
             probability=0.5,
         )
@@ -269,3 +279,52 @@ def compare_branches(
         "branch_b": branch_b,
         "rounds": diffs,
     }
+
+
+# ── Checkpoint loaders (P1-9 resume) ───────────────────
+
+
+def load_checkpoint_agent_states(
+    scenario_id: str, branch_id: str, round_number: int,
+) -> list[dict] | None:
+    """Load agent stance/emotion snapshot from a checkpoint.
+
+    Returns list of {agent_id, stance, emotion} or None if no checkpoint.
+    """
+    with Session(get_engine()) as session:
+        cp = session.exec(
+            select(ScenarioCheckpoint).where(
+                ScenarioCheckpoint.scenario_id == scenario_id,
+                ScenarioCheckpoint.branch_id == branch_id,
+                ScenarioCheckpoint.round_number == round_number,
+            )
+        ).first()
+        if cp is None or not cp.compressed_summary:
+            return None
+        try:
+            return json.loads(cp.compressed_summary)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+
+def load_checkpoint_blackboard(
+    scenario_id: str, branch_id: str, round_number: int,
+) -> dict | None:
+    """Load blackboard snapshot from a checkpoint.
+
+    Returns the parsed blackboard dict or None if unavailable.
+    """
+    with Session(get_engine()) as session:
+        cp = session.exec(
+            select(ScenarioCheckpoint).where(
+                ScenarioCheckpoint.scenario_id == scenario_id,
+                ScenarioCheckpoint.branch_id == branch_id,
+                ScenarioCheckpoint.round_number == round_number,
+            )
+        ).first()
+        if cp is None or not cp.blackboard_json:
+            return None
+        try:
+            return json.loads(cp.blackboard_json)
+        except (json.JSONDecodeError, TypeError):
+            return None

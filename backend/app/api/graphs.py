@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.api.helpers import run_sim_background, schedule_background_task
+from app.api.schemas import ResumeRequest
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import Branch, Scenario, get_engine
@@ -96,12 +98,12 @@ async def create_counterfactual(scenario_id: str, body: CounterfactualRequest):
                 content={"detail": f"round_number {body.round_number} exceeds available rounds"},
             )
 
-        # Limit to 3 counterfactual branches per scenario
+        # Limit to 3 replay branches (counterfactual + resume) per scenario
         cf_count = len(
             session.exec(
                 select(Branch).where(
                     Branch.scenario_id == scenario_id,
-                    Branch.replay_kind == "counterfactual",
+                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
                 )
             ).all()
         )
@@ -194,3 +196,95 @@ async def list_checkpoints(
             }
             for cp in checkpoints
         ]
+
+
+@router.post("/scenario/{scenario_id}/resume")
+async def resume_from_round(scenario_id: str, body: ResumeRequest):
+    """Resume simulation from a specific round on a new branch (P1-9)."""
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        return _feature_disabled("counterfactual_replay")
+
+    from app.models.database import Round, ScenarioStatus
+
+    with Session(get_engine()) as session:
+        scenario = session.exec(
+            select(Scenario).where(Scenario.id == scenario_id)
+        ).first()
+        if scenario is None:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Scenario {scenario_id} not found"},
+            )
+        if scenario.status != ScenarioStatus.DONE:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Scenario must be in 'done' status to resume"},
+            )
+
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == body.source_branch_id,
+                Branch.scenario_id == scenario_id,
+            )
+        ).first()
+        if branch is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "detail": f"Branch {body.source_branch_id} not found",
+                },
+            )
+
+        max_round = session.exec(
+            select(Round.round_number)
+            .where(Round.branch_id == body.source_branch_id)
+            .order_by(Round.round_number.desc())
+        ).first()
+        if max_round is None or body.round_number > max_round:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": (
+                        f"round_number {body.round_number} exceeds "
+                        f"available rounds"
+                    ),
+                },
+            )
+
+        # Shared limit: counterfactual + resume <= 3
+        replay_count = len(
+            session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == scenario_id,
+                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
+                )
+            ).all()
+        )
+        if replay_count >= 3:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Maximum 3 replay branches per scenario",
+                },
+            )
+
+    # Clone branch up to round_number, then schedule background simulation
+    new_branch_id = clone_until_round(
+        scenario_id,
+        body.source_branch_id,
+        body.round_number,
+        replay_kind="resume",
+        title=f"Resume from round {body.round_number}",
+    )
+
+    schedule_background_task(
+        run_sim_background(scenario_id, branch_id=new_branch_id)
+    )
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "branch_id": new_branch_id,
+            "message": "Resume branch created, simulation started",
+        },
+    )

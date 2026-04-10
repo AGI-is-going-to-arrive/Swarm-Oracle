@@ -120,8 +120,8 @@ class Branch(SQLModel, table=True):
     key_moments: Optional[str] = None  # JSON list of key moment strings
     probability: float = 1.0
     status: BranchStatus = BranchStatus.ACTIVE
-    # Phase 3 F4: counterfactual replay provenance
-    replay_kind: Optional[str] = None  # "retrospective" | "counterfactual"
+    # Phase 3 F4 / P1-9: replay provenance
+    replay_kind: Optional[str] = None  # "retrospective" | "counterfactual" | "resume"
     replay_source_branch_id: Optional[str] = None
     replay_source_round: Optional[int] = None
     replay_source_agent_id: Optional[str] = None
