@@ -866,7 +866,8 @@
       "edges": "edges",
       "empty": "No causal graph data available for this scenario.",
       "a11y_list": "Causal events list",
-      "feature_disabled": "Causal graph feature is not enabled."
+      "feature_disabled": "Causal graph feature is not enabled.",
+      "round_label": "Round"
     },
     "compare": {
       "title": "Counterfactual Compare",
@@ -916,6 +917,28 @@
       "event_betrayal": "Betrayal",
       "load_error": "Failed to load agent data.",
       "identity_disabled": "Agent identity feature is not enabled. Timeline data is unavailable."
+    },
+    "export": {
+      "png": "Export PNG",
+      "svg": "Export SVG",
+      "exporting": "Exporting..."
+    },
+    "node_detail": {
+      "round": "Round",
+      "status": "Status",
+      "full_text": "Full Text",
+      "payload": "Payload",
+      "type_event": "Event",
+      "type_intervention": "Intervention",
+      "type_stance_shift": "Stance Shift",
+      "type_fork": "Fork",
+      "type_round": "Round",
+      "type_verdict": "Verdict",
+      "type_claim": "Claim",
+      "type_evidence": "Evidence",
+      "type_rebuttal": "Rebuttal",
+      "type_counter": "Counter",
+      "turn": "Turn"
     },
     "common": {
       "loading": "Loading…",

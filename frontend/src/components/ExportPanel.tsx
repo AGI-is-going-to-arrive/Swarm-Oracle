@@ -1,0 +1,144 @@
+/* ═══════════════════════════════════════════════════════════
+   P1-3 — Graph Export Panel
+   PNG export via html2canvas (existing infra).
+   SVG export via clone + inline computed styles + foreignObject.
+   ═══════════════════════════════════════════════════════════ */
+
+import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+type ExportStatus = 'idle' | 'exporting';
+
+interface ExportPanelProps {
+  /** CSS selector for the ReactFlow container to capture */
+  containerSelector: string;
+  /** Filename prefix (e.g. "causal-graph" or "argument-map") */
+  filenamePrefix?: string;
+}
+
+function timestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Deep-clone an element and inline every computed style so it renders standalone. */
+function cloneWithInlinedStyles(source: Element): HTMLElement {
+  const clone = source.cloneNode(true) as HTMLElement;
+  const sourceAll = [source, ...Array.from(source.querySelectorAll('*'))];
+  const cloneAll = [clone, ...Array.from(clone.querySelectorAll('*'))];
+  sourceAll.forEach((srcEl, i) => {
+    const tgtEl = cloneAll[i] as HTMLElement | undefined;
+    if (!tgtEl || typeof tgtEl.style?.setProperty !== 'function') return;
+    const computed = window.getComputedStyle(srcEl);
+    // Use indexed access — CSSStyleDeclaration may not be iterable in all runtimes
+    for (let j = 0; j < computed.length; j++) {
+      const prop = computed[j];
+      const val = computed.getPropertyValue(prop);
+      if (val) tgtEl.style.setProperty(prop, val);
+    }
+  });
+  return clone;
+}
+
+export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: ExportPanelProps) {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<ExportStatus>('idle');
+
+  const exportPng = useCallback(async () => {
+    setStatus('exporting');
+    try {
+      const { captureElementBlob } = await import('../hooks/screenCaptureRuntime');
+      const blob = await captureElementBlob(containerSelector, 'element');
+      if (blob) {
+        downloadBlob(blob, `${filenamePrefix}_${timestamp()}.png`);
+      }
+    } catch (err) {
+      console.error('[ExportPanel] PNG export failed:', err);
+    }
+    setStatus('idle');
+  }, [containerSelector, filenamePrefix]);
+
+  const exportSvg = useCallback(() => {
+    setStatus('exporting');
+    try {
+      const container = document.querySelector(containerSelector);
+      if (!container) { setStatus('idle'); return; }
+
+      const rect = container.getBoundingClientRect();
+      const width = Math.max(1, Math.ceil(rect.width));
+      const height = Math.max(1, Math.ceil(rect.height));
+
+      // Clone the entire container and inline all computed styles
+      // so that ReactFlow's position:absolute / transform layout is preserved.
+      const clone = cloneWithInlinedStyles(container);
+      clone.style.margin = '0';
+      clone.style.position = 'static';
+      clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+
+      const serialized = new XMLSerializer().serializeToString(clone);
+      const svgString = [
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+        `<rect width="100%" height="100%" fill="#1a1a2e"/>`,
+        `<foreignObject width="100%" height="100%">${serialized}</foreignObject>`,
+        `</svg>`,
+      ].join('\n');
+
+      const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      downloadBlob(blob, `${filenamePrefix}_${timestamp()}.svg`);
+    } catch (err) {
+      console.error('[ExportPanel] SVG export failed:', err);
+    }
+    setStatus('idle');
+  }, [containerSelector, filenamePrefix]);
+
+  const disabled = status === 'exporting';
+
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }} data-testid="export-panel">
+      <button
+        onClick={exportPng}
+        disabled={disabled}
+        title={t('export.png', 'Export PNG')}
+        style={{
+          padding: '4px 10px',
+          fontSize: '0.8rem',
+          background: '#2a2a3e',
+          color: '#ccc',
+          border: '1px solid #444',
+          borderRadius: 4,
+          cursor: disabled ? 'wait' : 'pointer',
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        {disabled ? t('export.exporting', 'Exporting...') : t('export.png', 'Export PNG')}
+      </button>
+      <button
+        onClick={exportSvg}
+        disabled={disabled}
+        title={t('export.svg', 'Export SVG')}
+        style={{
+          padding: '4px 10px',
+          fontSize: '0.8rem',
+          background: '#2a2a3e',
+          color: '#ccc',
+          border: '1px solid #444',
+          borderRadius: 4,
+          cursor: disabled ? 'wait' : 'pointer',
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        {t('export.svg', 'Export SVG')}
+      </button>
+    </div>
+  );
+}

@@ -2,6 +2,7 @@
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
 import { cleanup, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -12,13 +13,22 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@xyflow/react', () => ({
-  ReactFlow: (props: Record<string, unknown>) => (
-    <div
-      data-testid="reactflow"
-      data-nodes={(props.nodes as unknown[])?.length}
-      data-edges={(props.edges as unknown[])?.length}
-    />
-  ),
+  ReactFlow: (props: Record<string, unknown>) => {
+    const nodes = props.nodes as Array<{ id: string }> | undefined;
+    const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
+    return (
+      <div
+        data-testid="reactflow"
+        data-nodes={nodes?.length}
+        data-edges={(props.edges as unknown[])?.length}
+      >
+        {/* Expose clickable elements per node for testing onNodeClick */}
+        {nodes?.map(n => (
+          <button key={n.id} data-testid={`rf-node-${n.id}`} onClick={(e) => onNodeClick?.(e, n)} />
+        ))}
+      </div>
+    );
+  },
   Background: () => null,
   Controls: () => null,
   MiniMap: () => null,
@@ -117,6 +127,23 @@ describe('ArgumentMap', () => {
     expect(msg).toBeInTheDocument();
   });
 
+  it('shows export panel when data has units', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's1',
+        nodes: [],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'A claim', turn_id: 't1' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    const panel = await screen.findByTestId('export-panel');
+    expect(panel).toBeInTheDocument();
+  });
+
   it('renders legend with all type labels', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -178,6 +205,33 @@ describe('ArgumentMap', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     await screen.findByTestId('reactflow');
     expect(screen.getByLabelText('Debate argument map')).toBeInTheDocument();
+  });
+
+  it('clears node detail panel when refreshTrigger fires re-fetch', async () => {
+    // First render: load data with a graph node
+    const data = {
+      snapshot_id: 's1',
+      nodes: [{ id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null }],
+      edges: [],
+      units: [{ id: 'u1', type: 'claim', status: 'standing', text: 'Main claim full', turn_id: 't1', node_id: 'n1' }],
+    };
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ ok: true, json: async () => data } as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => data } as Response);
+
+    const user = userEvent.setup();
+    const { rerender } = render(<ArgumentMap debateId="d1" visible={true} refreshTrigger={0} />);
+    await screen.findByTestId('reactflow');
+
+    // Click node to open detail panel
+    await user.click(screen.getByTestId('rf-node-n1'));
+    expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+
+    // Re-render with new refreshTrigger → triggers re-fetch → should clear panel
+    rerender(<ArgumentMap debateId="d1" visible={true} refreshTrigger={1} />);
+    // After re-fetch, detail panel should be gone
+    await screen.findByTestId('reactflow');
+    expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
   });
 });
 

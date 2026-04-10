@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { ExportPanel } from '../components/ExportPanel';
+import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
 import {
   ReactFlow,
   Background,
@@ -106,9 +108,11 @@ export function CausalReviewView() {
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const fetchGraph = useCallback(async () => {
     setLoading(true);
+    setSelectedNode(null);
     try {
       const res = await fetch(`/api/scenario/${id}/causal-graph`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -130,6 +134,24 @@ export function CausalReviewView() {
 
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
+
+  const rawNodeMap = useMemo(() => {
+    const m = new Map<string, GraphNodeData>();
+    if (graphData) for (const n of graphData.nodes) m.set(n.id, n);
+    return m;
+  }, [graphData]);
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    const raw = rawNodeMap.get(node.id);
+    if (!raw) return;
+    setSelectedNode({
+      id: raw.id,
+      label: raw.label || raw.key,
+      type: raw.type,
+      round: raw.round,
+      payload: raw.payload,
+    });
+  }, [rawNodeMap]);
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
@@ -169,6 +191,9 @@ export function CausalReviewView() {
         <span style={{ color: '#888', fontSize: '0.85rem' }}>
           {nodes.length} {t('causal.nodes', 'nodes')} · {edges.length} {t('causal.edges', 'edges')}
         </span>
+        {nodes.length > 0 && (
+          <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
+        )}
       </div>
 
       {nodes.length === 0 ? (
@@ -176,18 +201,20 @@ export function CausalReviewView() {
           <p style={{ color: '#888' }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
         </div>
       ) : (
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
           <ReactFlow
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onNodeClick={onNodeClick}
             fitView
             proOptions={{ hideAttribution: true }}
           >
             <Background />
             <Controls />
           </ReactFlow>
+          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
         </div>
       )}
 

@@ -866,7 +866,8 @@
       "edges": "连线",
       "empty": "当前场景暂无可用的因果图数据。",
       "a11y_list": "因果事件列表",
-      "feature_disabled": "因果图谱功能未启用。"
+      "feature_disabled": "因果图谱功能未启用。",
+      "round_label": "回合"
     },
     "compare": {
       "title": "反事实对比",
@@ -916,6 +917,28 @@
       "event_betrayal": "背叛",
       "load_error": "加载 Agent 数据失败。",
       "identity_disabled": "Agent 身份功能未启用，时间线数据不可用。"
+    },
+    "export": {
+      "png": "导出 PNG",
+      "svg": "导出 SVG",
+      "exporting": "导出中..."
+    },
+    "node_detail": {
+      "round": "回合",
+      "status": "状态",
+      "full_text": "完整文本",
+      "payload": "数据负载",
+      "type_event": "事件",
+      "type_intervention": "干预",
+      "type_stance_shift": "立场转变",
+      "type_fork": "分支",
+      "type_round": "回合",
+      "type_verdict": "裁决",
+      "type_claim": "论点",
+      "type_evidence": "证据",
+      "type_rebuttal": "反驳",
+      "type_counter": "反击",
+      "turn": "回合"
     },
     "common": {
       "loading": "加载中…",

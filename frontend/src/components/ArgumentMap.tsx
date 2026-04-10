@@ -17,6 +17,8 @@ import {
   Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { ExportPanel } from './ExportPanel';
+import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 
 // ── Data Types ──────────────────────────────────────────────
 
@@ -271,9 +273,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setSelectedNode(null);
     try {
       const res = await fetch(`/api/debate/${debateId}/argument-map`);
       if (res.status === 501) { setData(null); setLoading(false); return; }
@@ -297,6 +301,36 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
 
+  // Build lookup maps for node click → detail
+  const { rawNodeMap, unitByNodeId, unitById } = useMemo(() => {
+    const rnm = new Map<string, GraphNodeRaw>();
+    const ubn = new Map<string, ArgumentUnit>();
+    const ubi = new Map<string, ArgumentUnit>();
+    if (data) {
+      for (const n of data.nodes) rnm.set(n.id, n);
+      for (const u of data.units) {
+        if (u.node_id) ubn.set(u.node_id, u);
+        ubi.set(u.id, u);
+      }
+    }
+    return { rawNodeMap: rnm, unitByNodeId: ubn, unitById: ubi };
+  }, [data]);
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    const raw = rawNodeMap.get(node.id);
+    const unit = unitByNodeId.get(node.id) ?? unitById.get(node.id);
+    setSelectedNode({
+      id: node.id,
+      label: raw?.label ?? unit?.text ?? node.id,
+      type: unit?.type ?? raw?.type ?? 'unknown',
+      round: raw?.round,
+      payload: raw?.payload,
+      unitText: unit?.text,
+      unitStatus: unit?.status,
+      unitTurnId: unit?.turn_id,
+    });
+  }, [rawNodeMap, unitByNodeId, unitById]);
+
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
   if (!data || (data.units.length === 0 && data.nodes.length === 0)) {
@@ -311,13 +345,17 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
       {/* P1-7: Strength meter summary */}
       <ArgumentStrengthMeter units={data.units} />
 
+      {/* Export controls (P1-3) */}
+      <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
+
       {/* DAG container */}
-      <div style={{ height: 360, border: '1px solid #333', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ height: 360, border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
         <ReactFlow
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onNodeClick={onNodeClick}
           fitView
           proOptions={{ hideAttribution: true }}
         >
@@ -328,6 +366,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             style={{ background: '#1a1a2e' }}
           />
         </ReactFlow>
+        <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
       </div>
 
       {/* Legend */}

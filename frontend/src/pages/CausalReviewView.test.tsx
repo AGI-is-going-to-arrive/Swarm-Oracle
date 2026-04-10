@@ -85,6 +85,32 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows export panel when graph has nodes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g1',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [],
+      }),
+    } as Response);
+    renderView();
+    const panel = await screen.findByTestId('export-panel');
+    expect(panel).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('does not show export panel when graph is empty', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'g1', nodes: [], edges: [] }),
+    } as Response);
+    renderView();
+    await screen.findByText(/No causal graph data/);
+    expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
   it('includes a11y screen reader list', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
