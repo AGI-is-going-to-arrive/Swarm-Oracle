@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 61 文件 / 1732 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 77 文件 / 716 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67 文件 / 1801 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 85 文件 / 794 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -136,7 +136,7 @@ cd backend && alembic upgrade head
 - `simulator.py` 新增 4 个非阻塞 hook：因果图谱、阵营检测+WS 事件发射、检查点写入、身份生命周期（场景结束时写入 growth_event + identity_memory，`asyncio.to_thread` 包装），均受 `FEATURE_*` 环境变量控制
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
 - `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
-- 6 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关
+- 7 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`/`FEATURE_IDENTITY_COMPACTION`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关 + 记忆压缩
 - 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate，disabled 时不发 API 请求
 - `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
 - ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO，写入经 `identity:{user_id}` 粒度串行化锁保护)
@@ -145,11 +145,18 @@ cd backend && alembic upgrade head
 - `ScenarioResponse` 新增 3 个 additive 字段，`custom_agent_identity_ids` 最多 5 个
 - `Scenario.user_id` 在创建时持久化（`scenarios.py`），场景结束 hook 优先读取该列，旧数据兜底从 `parsed_context["user_id"]` 取值
 - `EventBridge` 新增 `viz:faction_cluster` / `viz:faction_event` 事件类型，`WorldScene` 消费这两个事件驱动阵营聚拢动画（对象池 + 命名常量 + `spriteH` 一致性 + `prefers-reduced-motion` snap）
+- P1-3 Graph 导出：`ExportPanel` 组件（PNG via html2canvas + SVG via clone+inline computed styles+foreignObject），集成到 `CausalReviewView` + `ArgumentMap`
+- P1-4 Graph 节点点击：`NodeDetailPanel` 组件（type/round/payload/unit details），`onNodeClick` 绑定到两个 ReactFlow 实例，selectedNode 在 re-fetch 时自动清空
+- P1-12 Identity memory compaction：`FEATURE_IDENTITY_COMPACTION` 控制，阈值超过 50 条未压缩文档时异步 LLM 摘要（fire-and-forget），压缩文档带 `source_ids_hash` 幂等指纹，FIFO eviction raw 优先于 compacted，`get_identity_memories` 过滤压缩文档（只参与语义检索不进 timeline），prompt 经 `format_untrusted_text_block` 防注入
+- P1-9 resume_from_round：`POST /api/scenario/{id}/resume` 从指定轮次续跑（clone+restore+`run_sim_background`），`Blackboard.export_snapshot()`/`from_snapshot()` 完整状态持久化，checkpoint bug fix（`get_global_summary()` → `export_snapshot()`），agent stance/emotion 仅内存恢复不改 DB，`Branch.replay_kind` 新增 `"resume"` 值，与 counterfactual 共享 3 条分支上限，resume 前检查 runtime lock 防 orphan branch
+- 7 个 `FEATURE_*` 环境变量 (`config.py`)：原 6 个 + `FEATURE_IDENTITY_COMPACTION`，compaction 另有 3 个调参变量 (`IDENTITY_COMPACT_THRESHOLD`/`BATCH_SIZE`/`GROUP_SIZE`)
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-10 | P1-9 resume + P1-12 compaction | P1-12 identity memory compaction (LLM 摘要 + 幂等 hash + FIFO raw-first eviction + format_untrusted_text_block 防注入，15 后端测试)；P1-9 resume_from_round (POST /resume + Blackboard export/from_snapshot + checkpoint bug fix + agent in-memory restore + runtime lock guard，16 后端测试) |
+| 2026-04-10 | P1-3 graph export + P1-4 node detail | ExportPanel (PNG html2canvas + SVG foreignObject clone) + NodeDetailPanel (type/round/payload/unit)，集成 CausalReviewView + ArgumentMap，i18n 18 新 keys，38 前端测试 |
 | 2026-04-10 | Phase 3 Batch 2 — UX 壳 + 修复 | M-2 factions/causal_graph/checkpoint asyncio.to_thread (4 call sites, 20 tests)；M-4 tween budget 全局 getTweens().length；P1-6 ArgumentMap → @xyflow/react DAG + dagre layout + MiniMap；P1-7 ArgumentStrengthMeter (stacked bar)；P1-1 AgentProfileModal (dialog + identity details + memory/growth)；P1-2 MemoryTimeline (vertical timeline grouped by scenario)；P1-5 LiveArgumentMap (DebateArenaView collapsible sidebar, auto-refresh on turn)；P1-8 TranscriptFactionOverlay (FactionBadge + useFactionOverlay hook + RoundtableTranscriptList/EndingChatModal 集成)；新 growth-events backend endpoint (3 tests)；i18n 21 新 keys (argument.* + agent_profile.*)；57 新前端测试 + 20 新后端测试 |
 | 2026-04-09 | P0 接线 + 安全修复 | X-5 ownership 校验 (user_id is not None + match) + Scenario.user_id 持久化；P0-2/P0-3 identity lifecycle hooks (asyncio.to_thread + per-agent 异常隔离)；P0-4 faction WS 事件发射 (viz:faction_cluster/event)；P0-5 Phaser 阵营聚拢动画 (对象池 + spriteH 一致性)；P0-1 ReturningBadge 集成 ResultView + capability gate；X-2 i18n keys 补全 (feature_disabled + argument.* + a11y_label)；M-3 identity memory Chroma 串行化锁 (identity:{user_id})；ArgumentMap TYPE_LABELS i18n 化；16 新测试 (test_p0_wiring.py) |
 | 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 全部加 server-side FEATURE_* gate + 404 测试；simulator 3 hook 接线 (causal+factions+checkpoint)；debate argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 同步；前端 capability gate + useCapabilityCheck hook + InputView/ResultView/DebateResultView 集成 |

@@ -83,6 +83,10 @@ docker compose up backend
 | `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 比较 + 检查点 API |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 API + simulator hook |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱 API + debate hook |
+| `FEATURE_IDENTITY_COMPACTION` | `false` | 启用 identity memory LLM 摘要压缩 |
+| `IDENTITY_COMPACT_THRESHOLD` | `50` | 压缩触发阈值（未压缩文档数） |
+| `IDENTITY_COMPACT_BATCH_SIZE` | `30` | 每次压缩最老 N 条 |
+| `IDENTITY_COMPACT_GROUP_SIZE` | `10` | 每组 LLM 摘要文档数 |
 
 ## 数据模型
 
@@ -143,7 +147,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **61 个测试文件 / 1732 tests**，位于 `tests/`
+- **67 个测试文件 / 1801 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -163,7 +167,7 @@ backend/
     services/            # 业务逻辑 (21 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (16 个版本)
-  tests/                 # 测试 (61 个文件)
+  tests/                 # 测试 (67 个文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -261,6 +265,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-10 | P1-9 resume + P1-12 compaction | P1-12: `FEATURE_IDENTITY_COMPACTION` + 3 调参变量 (config.py 含 model_validator 校验)；vector_store.py 新增 `CompactionGroup`/`check`/`prepare`/`execute`/`build_compaction_prompt` (format_untrusted_text_block 防注入)；FIFO eviction raw-first 优先级；agent_identity.py `get_identity_memories` 过滤 compacted (全量取→Python 过滤→DESC 排序→截取)；simulator.py compaction worklist 返回 + asyncio.create_task fire-and-forget + cancelled() guard (15 tests)。P1-9: blackboard.py `export_snapshot()`/`from_snapshot()` (8 字段完整持久化)；simulator.py checkpoint bug fix (`get_global_summary()` → `export_snapshot()`) + resume-scoped agent/bb restore with fallback；replay.py `clone_until_round` +replay_kind/title + `load_checkpoint_agent_states`/`load_checkpoint_blackboard`；graphs.py `POST /scenario/{id}/resume` + runtime lock guard + scenario SIMULATING 状态 + 共享 3 条分支上限；schemas.py `ResumeRequest`；Branch.replay_kind 契约扩展含 `"resume"` (16 tests) |
 | 2026-04-09 | P0 接线 + 安全修复 | X-5 ownership 校验 (`user_id is not None` + match)；`Scenario.user_id` 创建时持久化 + `parsed_context` 兜底；simulator identity lifecycle hook (`asyncio.to_thread` + per-agent 异常隔离)；simulator faction WS 事件发射 (`viz:faction_cluster`/`viz:faction_event`)；`store_identity_memory` 加 Chroma 串行化锁 (`identity:{user_id}` 粒度)；16 新测试 (`test_p0_wiring.py`：ownership 校验 6 + lifecycle 5 + faction WS 5) |
 | 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 加 FEATURE_* server-side 404 gate (11 条回归测试)；simulator 补 factions+checkpoint hook；debate 补 argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 无损同步；argument-map + faction-timeline 2 个新 endpoint |
 | 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities 7-key registry、ChromaDB 双层 memory、125+ 新测试 |

@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-10 (P1-3/P1-4 交付后)
+> 最后更新：2026-04-10 (P1-9/P1-12 交付后)
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -23,6 +23,8 @@
 - X-4：旧 replay import 空状态回归测试
 - P1-3：Graph 导出图片 — ExportPanel (PNG html2canvas + SVG foreignObject clone)，集成 CausalReviewView + ArgumentMap
 - P1-4：Graph 节点点击展开 — NodeDetailPanel (type/round/payload/unit details)，onNodeClick + selectedNode reset on re-fetch
+- P1-9：resume_from_round — POST /resume + Blackboard export/from_snapshot + checkpoint bug fix + agent in-memory restore + runtime lock guard (16 BE tests)
+- P1-12：Identity memory compaction — FEATURE_IDENTITY_COMPACTION + LLM 摘要 + source_ids_hash 幂等 + FIFO raw-first eviction + format_untrusted_text_block 防注入 (15 BE tests)
 
 ## 剩余项
 
@@ -30,10 +32,8 @@
 
 | # | 项目 | 说明 |
 |---|------|------|
-| P1-9 | `resume_from_round` 参数 | simulator 从中间轮次恢复（当前仅 clone+re-run） |
 | P1-10 | Continuity Key L2/L3 匹配 | L2 ChromaDB embedding cosine > 0.85 + L3 前端确认（当前仅 L1 hash） |
 | P1-11 | LLM enrichment (stance/argument) | rule-based → LLM 可选增强 |
-| P1-12 | Identity memory compaction | 每 10 场景摘要压缩同一 identity 的记忆 |
 
 ### v1.1 延后
 
