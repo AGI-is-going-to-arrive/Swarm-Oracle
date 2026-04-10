@@ -92,6 +92,14 @@ cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 ```
 
+### Resume / P1-9 定向回归
+
+```bash
+cd frontend
+npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+npm run e2e:resume -- full
+```
+
 ### Oracle Chambers / Roundtable 定向回归
 
 ```bash
@@ -161,6 +169,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 
 ```bash
 cd frontend
+npm run lint
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 npm run perf:budgets:check

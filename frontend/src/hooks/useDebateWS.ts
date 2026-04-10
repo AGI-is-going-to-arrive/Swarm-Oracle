@@ -11,6 +11,7 @@ const MAX_RECONNECTS = 5;
 
 export function useDebateWS(debateId: string | undefined, ready = true) {
   const wsRef = useRef<WebSocket | null>(null);
+  const connectRef = useRef<() => void>(() => {});
   const reconnectCount = useRef(0);
   const cleanedUp = useRef(false);
   const connectTimerRef = useRef<number | null>(null);
@@ -246,7 +247,9 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
         if (reconnectTimerRef.current) {
           window.clearTimeout(reconnectTimerRef.current);
         }
-        reconnectTimerRef.current = window.setTimeout(connect, delay);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          connectRef.current();
+        }, delay);
       }
     };
 
@@ -258,6 +261,10 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
       });
     };
   }, [debateId, ready, rememberEventId, requestDebateResync]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     lastSequenceRef.current = 0;

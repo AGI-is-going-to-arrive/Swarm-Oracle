@@ -47,7 +47,8 @@ class MockWebSocket {
     MockWebSocket.instances.push(this);
   }
 
-  send(_data: string) {
+  send(data: string) {
+    void data;
     // no-op: captures auth frames without side effects
   }
 

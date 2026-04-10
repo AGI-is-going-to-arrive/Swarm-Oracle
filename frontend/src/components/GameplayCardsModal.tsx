@@ -240,20 +240,32 @@ export default function GameplayCardsModal({
       : t('gameplay.ready_note');
 
   useEffect(() => {
-    setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
+    const timeoutId = window.setTimeout(() => {
+      setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [initialMeta, scenarioId]);
 
   useEffect(() => {
-    setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? defaultCardId));
+    const timeoutId = window.setTimeout(() => {
+      setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? defaultCardId));
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [defaultCardId, recommendedCards]);
 
   useEffect(() => {
-    setPrimaryAgentIdOverride(null);
-    setSecondaryAgentIdOverride(null);
+    const timeoutId = window.setTimeout(() => {
+      setPrimaryAgentIdOverride(null);
+      setSecondaryAgentIdOverride(null);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [agents, cardId, gameplayProfile.id]);
 
   useEffect(() => {
-    setCustomDirectiveOverride(null);
+    const timeoutId = window.setTimeout(() => {
+      setCustomDirectiveOverride(null);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [autoDirective]);
 
   useEffect(() => {

@@ -11,11 +11,11 @@ import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage
 import type { LeaderboardEntry } from '../types';
 import './LeaderboardView.css';
 
-const MEDALS = ['🥇', '🥈', '🥉'];
+const MEDALS = ['🥇', '🥈', '🥉'] as const;
 
 export default function LeaderboardView() {
   const navigate = useNavigate();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -34,7 +34,7 @@ export default function LeaderboardView() {
     } finally {
       setLoading(false);
     }
-  }, [i18n.language]);
+  }, [t]);
 
   useEffect(() => {
     load();

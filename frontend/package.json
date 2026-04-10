@@ -44,7 +44,8 @@
     "e2e:debate:desktop": "node scripts/e2e-debate-suite.mjs desktop",
     "e2e:debate:mobile": "node scripts/e2e-debate-suite.mjs mobile",
     "e2e:debate:full": "node scripts/e2e-debate-suite.mjs full",
-    "e2e:debate": "node scripts/e2e-debate-suite.mjs full"
+    "e2e:debate": "node scripts/e2e-debate-suite.mjs full",
+    "e2e:resume": "node scripts/e2e-phase3-batch-c.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.3",

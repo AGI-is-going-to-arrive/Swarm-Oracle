@@ -8,15 +8,35 @@ import {
   estimateBubbleHeight,
   predictTextOverflow,
 } from '../lib/textLayout/textOverflowPredictor';
+import type { EndingRoomResult, EndingRoomSnapshot } from '../types';
 import EndingChatModal from './EndingChatModal';
 
 const onAutomationStateChangeMock = vi.fn();
 const useEndingRoomWSMock = vi.fn();
-const copyTextMock = vi.fn(async (_value: string) => {});
+const copyTextMock = vi.fn(async (value: string) => {
+  void value;
+});
+
+type AutomationPayload = Record<string, unknown> & {
+  transcript_layout?: {
+    turn_count?: number;
+    max_turn_lines?: number;
+    max_turn_min_height_px?: number;
+  };
+  current_speaker_turn_key?: string;
+  current_speaker_participant_id?: string;
+  stream_state?: string;
+  pending_drafts?: unknown[];
+};
+
+type TestEndingRoomResult = EndingRoomResult & {
+  by_phase?: unknown[];
+  quotes?: unknown[];
+};
 
 const storeState = {
-  snapshot: null as any,
-  result: null as any,
+  snapshot: null as EndingRoomSnapshot | null,
+  result: null as TestEndingRoomResult | null,
   threadsById: {} as Record<string, unknown>,
   threadOrder: [] as string[],
   activeThreadId: null as string | null,
@@ -234,7 +254,7 @@ describe('EndingChatModal', () => {
         },
       ],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.threadsById = {
       'thread-room': {
         id: 'thread-room',
@@ -254,7 +274,7 @@ describe('EndingChatModal', () => {
     storeState.result = {
       summary: 'Visible answer',
       archivist_note: 'Visible answer',
-    } as any;
+    } as EndingRoomResult;
 
     render(
       <EndingChatModal
@@ -335,7 +355,7 @@ describe('EndingChatModal', () => {
     await waitFor(() => {
       const payload = onAutomationStateChangeMock.mock.calls
         .map(([state]) => state)
-        .find((state) => state && typeof state === 'object' && 'transcript_layout' in state) as Record<string, any> | undefined;
+        .find((state): state is AutomationPayload => Boolean(state && typeof state === 'object' && 'transcript_layout' in state));
       expect(payload?.transcript_layout?.turn_count).toBeGreaterThanOrEqual(1);
       expect(payload?.transcript_layout?.max_turn_lines).toBeGreaterThan(1);
       expect(payload?.transcript_layout?.max_turn_min_height_px).toBeGreaterThan(0);
@@ -343,7 +363,7 @@ describe('EndingChatModal', () => {
   });
 
   it('renders anchor badges for a read-only replay thread', () => {
-    const replaySnapshot: any = {
+    const replaySnapshot: EndingRoomSnapshot = {
       id: 'room-replay',
       scenario_id: 'scenario-1',
       anchor_branch_id: 'branch-1',
@@ -474,7 +494,6 @@ describe('EndingChatModal', () => {
       archivist_note: 'No foreign full transcripts.',
       supporting_turns: [],
       next_move: null,
-      by_phase: [],
       quotes: [],
     };
 
@@ -534,7 +553,6 @@ describe('EndingChatModal', () => {
       archivist_note: 'Stay inside the branch scope.',
       supporting_turns: [],
       next_move: 'Force the council to expose its costs.',
-      by_phase: [],
       quotes: [],
     };
 
@@ -833,7 +851,6 @@ describe('EndingChatModal', () => {
       archivist_note: 'Stay inside the branch scope.',
       supporting_turns: [],
       next_move: 'Force the council to expose its costs.',
-      by_phase: [],
       quotes: [],
     };
 
@@ -1412,7 +1429,7 @@ describe('EndingChatModal', () => {
     expect(screen.getByText('The hinge is still unfolding...')).toBeInTheDocument();
     const payload = onAutomationStateChangeMock.mock.calls
       .map(([state]) => state)
-      .find((state) => state && typeof state === 'object' && 'pending_drafts' in state) as Record<string, any> | undefined;
+      .find((state): state is AutomationPayload => Boolean(state && typeof state === 'object' && 'pending_drafts' in state));
     expect(payload?.current_speaker_turn_key).toBe('draft-followup');
     expect(payload?.current_speaker_participant_id).toBe('p-strategist');
     expect(payload?.stream_state).toBe('turn_delta');

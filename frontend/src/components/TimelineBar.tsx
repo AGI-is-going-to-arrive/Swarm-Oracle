@@ -6,7 +6,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
-import type { AgentMessage, BranchInfo, Scenario } from '../types';
+import type { Scenario } from '../types';
 import './TimelineBar.css';
 
 type ScenarioStatus = Scenario['status'] | 'idle';
@@ -17,7 +17,7 @@ type StageDef = {
   icon: string;
 };
 
-export interface TimelineRoundMarker {
+interface TimelineRoundMarker {
   round: number;
   isAvailable: boolean;
   isSelected?: boolean;
@@ -184,7 +184,7 @@ export function TimelineBar({
       eta: formatETA(etaSeconds),
       avgRoundTime: Math.round(avgTime),
     };
-  }, [currentRound, isSimulating, mode, roundCompleteTimes, simStartTime, totalRounds, messages.length]);
+  }, [currentRound, isSimulating, mode, roundCompleteTimes, simStartTime, totalRounds]);
 
   const stages: StageDef[] = [
     { key: 'parsing', label: t('sim.timeline.parsing'), icon: '🔍' },
@@ -377,35 +377,4 @@ export function TimelineBar({
       </div>
     </div>
   );
-}
-
-
-export interface TimelineRoundSummary {
-  round: number;
-  activeBranches: number;
-  totalBranches: number;
-  messageCount: number;
-  hasMessages: boolean;
-  isForkRound: boolean;
-}
-
-export function buildTimelineRoundSummaries(
-  totalRounds: number,
-  branches: BranchInfo[],
-  messages: AgentMessage[],
-): TimelineRoundSummary[] {
-  return Array.from({ length: totalRounds }, (_, index) => {
-    const round = index + 1;
-    const roundBranches = branches.filter((branch) => (branch.fork_round ?? 0) <= round);
-    const activeBranches = roundBranches.filter((branch) => branch.status === "ACTIVE").length;
-    const messageCount = messages.filter((message) => message.round === round).length;
-    return {
-      round,
-      activeBranches,
-      totalBranches: roundBranches.length,
-      messageCount,
-      hasMessages: messageCount > 0,
-      isForkRound: branches.some((branch) => (branch.fork_round ?? 0) === round && round > 0),
-    };
-  });
 }

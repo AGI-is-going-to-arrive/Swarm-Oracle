@@ -1381,7 +1381,32 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('result.title')).toBeInTheDocument();
     expect(screen.queryByText('result.causal_graph_link')).not.toBeInTheDocument();
     expect(screen.queryByText('counterfactual.title')).not.toBeInTheDocument();
+    expect(screen.queryByText('resume.title')).not.toBeInTheDocument();
     expect(screen.queryByText('factions.title')).not.toBeInTheDocument();
+  });
+
+  it('shows the resume panel on normal result pages when counterfactual replay is enabled', async () => {
+    setMockCapabilities({
+      agent_identity: { enabled: false },
+      causal_graph: { enabled: false },
+      counterfactual_replay: { enabled: true },
+      factions: { enabled: false },
+    });
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(await screen.findByText('resume.title')).toBeInTheDocument();
+    expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'resume.submit' })).toBeInTheDocument();
   });
 
   it('shows an inline error when replay import fails', async () => {

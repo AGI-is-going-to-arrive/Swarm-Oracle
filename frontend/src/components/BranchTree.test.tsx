@@ -24,15 +24,22 @@ const {
   class MockGraph {
     _nodes = new Map<string, { width: number; height: number; x?: number; y?: number }>();
 
-    setDefaultEdgeLabel(_factory: () => unknown): void {}
+    setDefaultEdgeLabel(factory: () => unknown): void {
+      void factory;
+    }
 
-    setGraph(_config: unknown): void {}
+    setGraph(config: unknown): void {
+      void config;
+    }
 
     setNode(id: string, value: { width: number; height: number }): void {
       this._nodes.set(id, value);
     }
 
-    setEdge(_source: string, _target: string): void {}
+    setEdge(source: string, target: string): void {
+      void source;
+      void target;
+    }
 
     node(id: string): { width: number; height: number; x?: number; y?: number } {
       return this._nodes.get(id) ?? { width: 0, height: 0, x: 0, y: 0 };

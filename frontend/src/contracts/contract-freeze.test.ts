@@ -11,7 +11,6 @@ import { describe, expect, it } from 'vitest';
 import type {
   AgentInfo,
   BranchInfo,
-  DebateWSEvent as _DebateWSEvent,
   Scenario,
   WSEvent,
   WebSearchContext,

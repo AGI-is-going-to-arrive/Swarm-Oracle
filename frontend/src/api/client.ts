@@ -904,3 +904,14 @@ export async function getFactionTimeline(
     `/scenario/${encodeURIComponent(scenarioId)}/faction-timeline?branch_id=${encodeURIComponent(branchId)}`,
   );
 }
+
+/** POST /api/scenario/:id/resume — P1-9 resume simulation from a round */
+export async function resumeFromRound(
+  scenarioId: string,
+  body: { source_branch_id: string; round_number: number },
+): Promise<{ branch_id: string; message: string }> {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/resume`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}

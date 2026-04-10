@@ -77,11 +77,18 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
 
   useEffect(() => {
     if (open && identity && identityEnabled) {
-      fetchData(identity.id);
-    } else {
+      const timeoutId = window.setTimeout(() => {
+        void fetchData(identity.id);
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+
+    const resetTimeoutId = window.setTimeout(() => {
       setMemories([]);
       setEvents([]);
-    }
+      setError(null);
+    }, 0);
+    return () => window.clearTimeout(resetTimeoutId);
   }, [open, identity, identityEnabled, fetchData]);
 
   // ESC handling is built into <dialog>

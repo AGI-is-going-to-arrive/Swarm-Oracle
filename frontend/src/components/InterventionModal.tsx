@@ -70,11 +70,12 @@ export default function InterventionModal({
   const [errorMsg, setErrorMsg] = useState('');
   const [queueNotice, setQueueNotice] = useState('');
   const [templates, setTemplates] = useState<InterventionTemplate[]>([]);
-  const [loadingTemplates, setLoadingTemplates] = useState(false);
-  const [selectedBatchBranchIds, setSelectedBatchBranchIds] = useState<string[]>([branchId]);
-  const [retrospectiveRound, setRetrospectiveRound] = useState(
-    Math.max(1, branchRoundLimits[branchId] ?? 1),
-  );
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [selectedBatchBranchIds, setSelectedBatchBranchIds] = useState<string[] | null>(null);
+  const [retrospectiveRoundState, setRetrospectiveRoundState] = useState(() => ({
+    branchId,
+    value: Math.max(1, branchRoundLimits[branchId] ?? 1),
+  }));
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -84,26 +85,19 @@ export default function InterventionModal({
   );
   const currentBranchMaxRound = branchRoundLimits[branchId] ?? 0;
   const retrospectiveDisabled = currentBranchMaxRound < 1;
+  const effectiveSelectedBatchBranchIds = useMemo(() => {
+    const validIds = new Set(branchOptions.map((branch) => branch.id));
+    const current = selectedBatchBranchIds ?? [branchId];
+    const preserved = current.filter((id) => validIds.has(id));
+    return preserved.length > 0 ? preserved : [branchId];
+  }, [branchId, branchOptions, selectedBatchBranchIds]);
+  const retrospectiveRound = retrospectiveRoundState.branchId === branchId
+    ? retrospectiveRoundState.value
+    : Math.max(1, branchRoundLimits[branchId] ?? 1);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  useEffect(() => {
-    setSelectedBatchBranchIds((current) => {
-      const validIds = new Set(branchOptions.map((branch) => branch.id));
-      const preserved = current.filter((id) => validIds.has(id));
-      const next = preserved.length > 0 ? preserved : [branchId];
-      if (next.length === current.length && next.every((id, index) => id === current[index])) {
-        return current;
-      }
-      return next;
-    });
-  }, [branchId, branchOptions]);
-
-  useEffect(() => {
-    setRetrospectiveRound(Math.max(1, branchRoundLimits[branchId] ?? 1));
-  }, [branchId, branchRoundLimits]);
 
   useEffect(() => {
     return () => {
@@ -113,7 +107,6 @@ export default function InterventionModal({
 
   useEffect(() => {
     let cancelled = false;
-    setLoadingTemplates(true);
     getInterventionTemplates()
       .then((data) => {
         if (!cancelled) setTemplates(data ?? []);
@@ -146,11 +139,12 @@ export default function InterventionModal({
   };
 
   const toggleBatchBranch = (targetId: string) => {
-    setSelectedBatchBranchIds((current) =>
-      current.includes(targetId)
-        ? current.filter((id) => id !== targetId)
-        : [...current, targetId],
-    );
+    setSelectedBatchBranchIds((current) => {
+      const currentIds = current ?? [branchId];
+      return currentIds.includes(targetId)
+        ? currentIds.filter((id) => id !== targetId)
+        : [...currentIds, targetId];
+    });
   };
 
   const handleSubmit = async () => {
@@ -164,7 +158,7 @@ export default function InterventionModal({
       setErrorMsg(t('intervention.retrospective_unavailable'));
       return;
     }
-    if (mode === 'batch' && selectedBatchBranchIds.length === 0) {
+    if (mode === 'batch' && effectiveSelectedBatchBranchIds.length === 0) {
       setErrorMsg(t('intervention.batch_empty'));
       return;
     }
@@ -189,7 +183,7 @@ export default function InterventionModal({
         });
       } else {
         await interveneBatch(scenarioId, {
-          interventions: selectedBatchBranchIds.map((id) => ({
+          interventions: effectiveSelectedBatchBranchIds.map((id) => ({
             branch_id: id,
             text: trimmed,
           })),
@@ -288,7 +282,10 @@ export default function InterventionModal({
                 id="intervention-retrospective-round"
                 className="intervention-select"
                 value={retrospectiveRound}
-                onChange={(event) => setRetrospectiveRound(Number(event.target.value))}
+                onChange={(event) => setRetrospectiveRoundState({
+                  branchId,
+                  value: Number(event.target.value),
+                })}
                 disabled={isDisabled || retrospectiveDisabled}
               >
                 {Array.from({ length: currentBranchMaxRound }, (_, index) => currentBranchMaxRound - index).map((round) => (
@@ -313,7 +310,7 @@ export default function InterventionModal({
                   <label key={branch.id} className="intervention-branch-item">
                     <input
                       type="checkbox"
-                      checked={selectedBatchBranchIds.includes(branch.id)}
+                      checked={effectiveSelectedBatchBranchIds.includes(branch.id)}
                       onChange={() => toggleBatchBranch(branch.id)}
                       disabled={isDisabled}
                     />
@@ -323,7 +320,7 @@ export default function InterventionModal({
                 ))}
               </div>
               <p className="intervention-help">
-                {t('intervention.batch_hint', { count: selectedBatchBranchIds.length })}
+                {t('intervention.batch_hint', { count: effectiveSelectedBatchBranchIds.length })}
               </p>
             </div>
           )}

@@ -115,6 +115,7 @@ import {
 import './ResultView.css';
 import { CounterfactualPanel } from '../components/CounterfactualPanel';
 import { FactionTimeline } from '../components/FactionTimeline';
+import { ResumePanel } from '../components/ResumePanel';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReturningBadge } from '../components/ReturningBadge';
 
@@ -2111,6 +2112,13 @@ export default function ResultView() {
                 </div>
               )}
             </>
+          )}
+          {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
+            <ResumePanel
+              scenarioId={id}
+              branches={branches}
+              totalRounds={scenario?.total_rounds ?? 10}
+            />
           )}
           {capabilities?.factions?.enabled && branches.length > 0 && (
             <FactionTimeline

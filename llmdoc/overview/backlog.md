@@ -23,7 +23,7 @@
 - X-4：旧 replay import 空状态回归测试
 - P1-3：Graph 导出图片 — ExportPanel (PNG html2canvas + SVG foreignObject clone)，集成 CausalReviewView + ArgumentMap
 - P1-4：Graph 节点点击展开 — NodeDetailPanel (type/round/payload/unit details)，onNodeClick + selectedNode reset on re-fetch
-- P1-9：resume_from_round — POST /resume + Blackboard export/from_snapshot + checkpoint bug fix + agent in-memory restore + runtime lock guard (16 BE tests)
+- P1-9：resume_from_round — POST /resume + Blackboard export/from_snapshot + checkpoint bug fix + agent in-memory restore + runtime lock guard + ResultView `ResumePanel` / `resumeFromRound()` 前端接线 + `ResumePanel.test.tsx / ResultView.test.tsx / i18n/locales.test.ts` + `e2e-phase3-batch-c.mjs` smoke 覆盖 (16 BE tests)
 - P1-12：Identity memory compaction — FEATURE_IDENTITY_COMPACTION + LLM 摘要 + source_ids_hash 幂等 + FIFO raw-first eviction + format_untrusted_text_block 防注入 (15 BE tests)
 
 ## 剩余项

@@ -79,7 +79,6 @@ export function useSimulationCaptureControls({
   useEffect(() => {
     if (viewMode !== 'theater') {
       lastTheaterSceneSignature.current = null;
-      setTheaterSceneState(null);
       return;
     }
 
@@ -179,6 +178,7 @@ export function useSimulationCaptureControls({
   }, [captureGIF, captureMode, resolveCaptureOptions]);
 
   const isModalCaptureAvailable = captureMode !== 'modal' || hasActiveModal;
+  const visibleTheaterSceneState = viewMode === 'theater' ? theaterSceneState : null;
   const captureDoneLabel = lastCaptureKind === 'gif'
     ? t('game.gif_saved')
     : lastCaptureKind === 'gif_fallback_png'
@@ -197,7 +197,7 @@ export function useSimulationCaptureControls({
     setCaptureMode,
     captureStatus,
     lastCaptureKind,
-    theaterSceneState,
+    theaterSceneState: visibleTheaterSceneState,
     isModalCaptureAvailable,
     captureDoneLabel,
     captureModeDescription,
@@ -222,19 +222,26 @@ export function useSimulationDirectorState({
   currentRound: number;
 }) {
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
-  const [commitmentDraftBranchId, setCommitmentDraftBranchId] = useState('');
-  const [backendDirectorState, setBackendDirectorState] = useState<ScenarioDirectorState | null>(
+  const [commitmentDraftBranchIdOverride, setCommitmentDraftBranchIdOverride] = useState<string | null>(null);
+  const [backendDirectorOverrideState, setBackendDirectorOverrideState] = useState<ScenarioDirectorState | null>(
     () => scenario?.director_state ?? null,
   );
-  const [backendGameplayState, setBackendGameplayState] = useState<ScenarioGameplayState | null>(
+  const [backendGameplayOverrideState, setBackendGameplayOverrideState] = useState<ScenarioGameplayState | null>(
     () => scenario?.gameplay_state ?? null,
   );
   const [authorityConflictKind, setAuthorityConflictKind] = useState<'director' | 'gameplay' | null>(null);
 
-  const storedScenarioMeta = useMemo(
-    () => (replayScenarioMeta ?? (id ? loadScenarioMeta(id) : null)),
-    [id, localMetaRevision, replayScenarioMeta],
-  );
+  const backendDirectorState = isReplayMode
+    ? backendDirectorOverrideState
+    : (backendDirectorOverrideState ?? scenario?.director_state ?? null);
+  const backendGameplayState = isReplayMode
+    ? backendGameplayOverrideState
+    : (backendGameplayOverrideState ?? scenario?.gameplay_state ?? null);
+
+  const storedScenarioMeta = useMemo(() => {
+    void localMetaRevision;
+    return replayScenarioMeta ?? (id ? loadScenarioMeta(id) : null);
+  }, [id, localMetaRevision, replayScenarioMeta]);
 
   const scenarioMeta = useMemo(
     () => {
@@ -257,37 +264,27 @@ export function useSimulationDirectorState({
     return subscribeScenarioMeta(id, refreshLocalMeta);
   }, [id, isReplayMode, refreshLocalMeta]);
 
-  useEffect(() => {
-    if (isReplayMode) return;
-    setBackendDirectorState(scenario?.director_state ?? null);
-  }, [isReplayMode, scenario?.director_state]);
-
-  useEffect(() => {
-    if (isReplayMode) return;
-    setBackendGameplayState(scenario?.gameplay_state ?? null);
-  }, [isReplayMode, scenario?.gameplay_state]);
-
   const persistDirectorMeta = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id || isReplayMode) return;
     const nextState = {
       ...scenarioMetaToDirectorState(nextMeta),
       revision: backendDirectorState?.revision ?? scenario?.director_state?.revision ?? 0,
     };
-    setBackendDirectorState(nextState);
+    setBackendDirectorOverrideState(nextState);
     try {
       const persisted = await upsertScenarioDirectorState(id, nextState);
-      setBackendDirectorState(persisted);
+      setBackendDirectorOverrideState(persisted);
     } catch (err) {
       if (isApiError(err) && err.status === 409) {
         const latest = await getScenarioDirectorState(id).catch(() => null);
         if (latest) {
-          setBackendDirectorState(latest);
+          setBackendDirectorOverrideState(latest);
         }
         setAuthorityConflictKind('director');
       }
       console.warn('[DirectorState] Failed to persist backend state', err);
     }
-  }, [backendDirectorState?.revision, id, isReplayMode, scenario?.director_state?.revision, scenarioMeta]);
+  }, [backendDirectorState?.revision, id, isReplayMode, scenario?.director_state?.revision]);
 
   const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
     if (!id || isReplayMode) return;
@@ -295,28 +292,31 @@ export function useSimulationDirectorState({
       ...scenarioMetaToGameplayState(nextMeta),
       revision: backendGameplayState?.revision ?? scenario?.gameplay_state?.revision ?? 0,
     };
-    setBackendGameplayState(nextState);
+    setBackendGameplayOverrideState(nextState);
     try {
       const persisted = await upsertScenarioGameplayState(id, nextState);
-      setBackendGameplayState(persisted);
+      setBackendGameplayOverrideState(persisted);
     } catch (err) {
       if (isApiError(err) && err.status === 409) {
         const latest = await getScenarioGameplayState(id).catch(() => null);
         if (latest) {
-          setBackendGameplayState(latest);
+          setBackendGameplayOverrideState(latest);
         }
         setAuthorityConflictKind('gameplay');
       }
       console.warn('[GameplayState] Failed to persist backend state', err);
     }
-  }, [backendGameplayState?.revision, id, isReplayMode, scenario?.gameplay_state?.revision, scenarioMeta]);
+  }, [backendGameplayState?.revision, id, isReplayMode, scenario?.gameplay_state?.revision]);
 
   useEffect(() => {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
     if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
     if (hasScenarioDirectorAuthority(backendDirectorState)) return;
-    void persistDirectorMeta(storedScenarioMeta);
+    const timeoutId = window.setTimeout(() => {
+      void persistDirectorMeta(storedScenarioMeta);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [backendDirectorState, id, isReplayMode, persistDirectorMeta, storedScenarioMeta]);
 
   useEffect(() => {
@@ -327,16 +327,24 @@ export function useSimulationDirectorState({
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
     if (areScenarioGameplayStatesEquivalent(mergedState, backendGameplayState)) return;
-    void persistGameplayState(mergedMeta);
+    const timeoutId = window.setTimeout(() => {
+      void persistGameplayState(mergedMeta);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [backendGameplayState, id, isReplayMode, persistGameplayState, storedScenarioMeta]);
 
-  useEffect(() => {
+  const commitmentDraftBranchId = useMemo(() => {
     if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {
-      setCommitmentDraftBranchId(scenarioMeta.commitment.branchId);
-      return;
+      return scenarioMeta.commitment.branchId;
     }
-    setCommitmentDraftBranchId(activeBranches[0]?.id ?? '');
-  }, [activeBranches, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
+    if (
+      commitmentDraftBranchIdOverride
+      && activeBranches.some((candidate) => candidate.id === commitmentDraftBranchIdOverride)
+    ) {
+      return commitmentDraftBranchIdOverride;
+    }
+    return activeBranches[0]?.id ?? '';
+  }, [activeBranches, commitmentDraftBranchIdOverride, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
 
   const handleGameplayApplied = useCallback(async (
     nextMeta: NonNullable<typeof scenarioMeta>,
@@ -344,7 +352,7 @@ export function useSimulationDirectorState({
   ) => {
     refreshLocalMeta();
     if (persistedState) {
-      setBackendGameplayState(persistedState);
+      setBackendGameplayOverrideState(persistedState);
       return;
     }
     await persistGameplayState(nextMeta);
@@ -378,9 +386,9 @@ export function useSimulationDirectorState({
   return {
     localMetaRevision,
     backendDirectorState,
-    setBackendDirectorState,
+    setBackendDirectorState: setBackendDirectorOverrideState,
     backendGameplayState,
-    setBackendGameplayState,
+    setBackendGameplayState: setBackendGameplayOverrideState,
     authorityConflictKind,
     clearAuthorityConflictKind: () => setAuthorityConflictKind(null),
     storedScenarioMeta,
@@ -388,7 +396,7 @@ export function useSimulationDirectorState({
     refreshLocalMeta,
     persistDirectorMeta,
     commitmentDraftBranchId,
-    setCommitmentDraftBranchId,
+    setCommitmentDraftBranchId: setCommitmentDraftBranchIdOverride,
     handleGameplayApplied,
     handlePlacedBet,
     handleCommitBranch,

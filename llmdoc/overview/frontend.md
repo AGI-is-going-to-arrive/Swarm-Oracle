@@ -21,7 +21,7 @@
 |------|------|------|
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片 |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口 |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
 | WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay |
@@ -189,6 +189,17 @@
   - `debugEndingRoomMode`
   - `debugEndingRoomAgents`
   - 仅用于脚本/调试稳定打开 live chamber，正常用户流仍走结果页按钮 + picker。
+- `ResultView` 当前在 `counterfactual_replay` capability 开启且结果里存在 branches 时，会显示：
+  - `CounterfactualPanel`
+  - `ResumePanel`
+  - `FactionTimeline`
+- `ResumePanel` 当前会：
+  - 只在用户已选分支且 round 为有效整数时允许提交
+  - 成功后锁表单并在 500ms 后跳回 `/sim/:id`
+  - 对 `429` 统一显示 replay branch 上限提示
+- `ResumePanel` 当前有独立 smoke 入口：
+  - `frontend/scripts/e2e-phase3-batch-c.mjs`
+  - `cd frontend && npm run e2e:resume -- full`
 - `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前已把 ending-room follow-up 主链改成 API-driven 口径，不再靠 mobile `all_present` 的 mode-arm / settled wait 硬等。
 - `e2e-ending-room-followup-suite.mjs full` 当前已重新可稳定落 `summary.json`。
 - `e2e-ending-room-followup-suite.mjs` 当前也会在 multi-ending 桌面/移动端链路下额外覆盖：

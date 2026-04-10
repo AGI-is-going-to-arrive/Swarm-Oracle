@@ -78,19 +78,31 @@ function parseOptionalIntegerInput(value: string): number | null {
 }
 
 export function useInputByokSettings(t: TranslateFn) {
-  const [showByok, setShowByok] = useState(false);
-  const [llmApiKey, setLlmApiKey] = useState('');
-  const [llmBaseUrl, setLlmBaseUrl] = useState('');
-  const [llmModel, setLlmModel] = useState('');
-  const [llmRequestsPerMinute, setLlmRequestsPerMinute] = useState('');
-  const [llmTokensPerMinute, setLlmTokensPerMinute] = useState('');
-  const [disableUserQuota, setDisableUserQuota] = useState(false);
+  const [initialProviderPolicy] = useState(() => loadLlmProviderPolicy());
+  const [showByok, setShowByok] = useState(() => Boolean(
+    initialProviderPolicy.apiKey
+    || initialProviderPolicy.baseUrl
+    || initialProviderPolicy.model
+    || initialProviderPolicy.requestsPerMinute != null
+    || initialProviderPolicy.tokensPerMinute != null
+    || initialProviderPolicy.disableUserQuota
+  ));
+  const [llmApiKey, setLlmApiKey] = useState(() => initialProviderPolicy.apiKey);
+  const [llmBaseUrl, setLlmBaseUrl] = useState(() => initialProviderPolicy.baseUrl);
+  const [llmModel, setLlmModel] = useState(() => initialProviderPolicy.model);
+  const [llmRequestsPerMinute, setLlmRequestsPerMinute] = useState(
+    () => formatOptionalIntegerInput(initialProviderPolicy.requestsPerMinute),
+  );
+  const [llmTokensPerMinute, setLlmTokensPerMinute] = useState(
+    () => formatOptionalIntegerInput(initialProviderPolicy.tokensPerMinute),
+  );
+  const [disableUserQuota, setDisableUserQuota] = useState(() => initialProviderPolicy.disableUserQuota);
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
   const [testError, setTestError] = useState('');
   const [probeResult, setProbeResult] = useState<LlmProbeResponse | null>(null);
   const [testedConfigKey, setTestedConfigKey] = useState('');
-  const [reasoningEffort, setReasoningEffort] = useState('');
-  const providerPolicyHydrated = useRef(false);
+  const [reasoningEffort, setReasoningEffort] = useState(() => initialProviderPolicy.reasoningEffort);
+  const providerPolicyHydrated = useRef(true);
 
   // Web Search Enhancement: opt-in toggle
   // Visibility = compile-time flag (VITE_ENABLE_WEB_SEARCH) + server hint
@@ -133,26 +145,6 @@ export function useInputByokSettings(t: TranslateFn) {
   );
 
   useEffect(() => {
-    const storedPolicy = loadLlmProviderPolicy();
-    setLlmApiKey(storedPolicy.apiKey);
-    setLlmBaseUrl(storedPolicy.baseUrl);
-    setLlmModel(storedPolicy.model);
-    setLlmRequestsPerMinute(formatOptionalIntegerInput(storedPolicy.requestsPerMinute));
-    setLlmTokensPerMinute(formatOptionalIntegerInput(storedPolicy.tokensPerMinute));
-    setDisableUserQuota(storedPolicy.disableUserQuota);
-    setReasoningEffort(storedPolicy.reasoningEffort);
-    setShowByok(Boolean(
-      storedPolicy.apiKey
-      || storedPolicy.baseUrl
-      || storedPolicy.model
-      || storedPolicy.requestsPerMinute != null
-      || storedPolicy.tokensPerMinute != null
-      || storedPolicy.disableUserQuota
-    ));
-    providerPolicyHydrated.current = true;
-  }, []);
-
-  useEffect(() => {
     if (!providerPolicyHydrated.current) return;
     saveLlmProviderPolicy({
       apiKey: llmApiKey,
@@ -173,12 +165,10 @@ export function useInputByokSettings(t: TranslateFn) {
     reasoningEffort,
   ]);
 
-  useEffect(() => {
-    setTestStatus('idle');
-    setTestError('');
-    setProbeResult(null);
-    setTestedConfigKey('');
-  }, [currentConfigKey]);
+  const hasStaleProbe = testedConfigKey !== '' && testedConfigKey !== currentConfigKey;
+  const visibleTestStatus = hasStaleProbe ? 'idle' : testStatus;
+  const visibleTestError = hasStaleProbe ? '' : testError;
+  const visibleProbeResult = hasStaleProbe ? null : probeResult;
 
   const handleTestConnection = useCallback(async () => {
     setTestStatus('testing');
@@ -236,10 +226,10 @@ export function useInputByokSettings(t: TranslateFn) {
     setLlmTokensPerMinute,
     disableUserQuota,
     setDisableUserQuota,
-    testStatus,
-    testError,
-    probeResult,
-    hasFreshProbe: Boolean(probeResult) && testedConfigKey === currentConfigKey && testStatus !== 'fail',
+    testStatus: visibleTestStatus,
+    testError: visibleTestError,
+    probeResult: visibleProbeResult,
+    hasFreshProbe: Boolean(visibleProbeResult) && testedConfigKey === currentConfigKey && visibleTestStatus !== 'fail',
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
@@ -355,7 +345,7 @@ export function useInputCampaignState({
       cancelled = true;
       controller.abort();
     };
-  }, [directorUserId, localDate, todayChallenge?.profileId]);
+  }, [directorUserId, localDate, todayChallenge, todayChallenge?.profileId]);
 
   const dailyMastery = todayChallenge
     ? (campaignMastery.find((item) => item.profile_id === todayChallenge.profileId) ?? null)

@@ -122,7 +122,6 @@ export default function EndingChatModal({
   // Stable ref for automation callback — breaks the render loop caused by
   // onAutomationStateChange being recreated by the parent on every render.
   const automationCallbackRef = useRef(onAutomationStateChange);
-  automationCallbackRef.current = onAutomationStateChange;
   const lastAutomationJsonRef = useRef<string | null>(null);
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const [storyExpanded, setStoryExpanded] = useState(false);
@@ -132,6 +131,9 @@ export default function EndingChatModal({
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const isZh = language === 'zh';
   const profileFrameSrc = profileId ? getGameplayProfileFrameSrc(profileId) : null;
+  const syncTranscriptScrollSnapshot = (nextSnapshot: TranscriptScrollSnapshot | null) => {
+    transcriptScrollSnapshotRef.current = nextSnapshot;
+  };
   const {
     snapshot,
     result,
@@ -172,6 +174,8 @@ export default function EndingChatModal({
   const effectiveResult = readOnly && replayState
     ? replayState.result
     : result;
+  const branchId = branch?.id ?? '';
+  const branchInsight = branch?.insight ?? '';
   const effectiveThreadsById = useMemo(() => {
     if (!readOnly || !replayState?.snapshot) {
       return threadsById;
@@ -198,6 +202,14 @@ export default function EndingChatModal({
   }, [readOnly, replayState, threadsById]);
 
   useEffect(() => {
+    automationCallbackRef.current = onAutomationStateChange;
+  }, [onAutomationStateChange]);
+
+  useEffect(() => {
+    automationCallbackRef.current = onAutomationStateChange;
+  }, [onAutomationStateChange]);
+
+  useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -212,14 +224,16 @@ export default function EndingChatModal({
     if (!open || !branch) {
       return;
     }
-    setStoryExpanded(false);
-    setSelectedAgentId(null);
+    const resetTimerId = window.setTimeout(() => {
+      setStoryExpanded(false);
+      setSelectedAgentId(null);
+    }, 0);
     if (modalRef.current) {
       modalRef.current.scrollTop = 0;
     }
     if (readOnly) {
       reset();
-      return;
+      return () => window.clearTimeout(resetTimerId);
     }
 
     let cancelled = false;
@@ -246,6 +260,7 @@ export default function EndingChatModal({
     });
 
     return () => {
+      window.clearTimeout(resetTimerId);
       cancelled = true;
       if (bootstrapDelayTimer !== null) {
         window.clearTimeout(bootstrapDelayTimer);
@@ -286,15 +301,12 @@ export default function EndingChatModal({
     [defaultThreadId, effectiveActiveThreadId, effectiveThreadsById],
   );
 
-  const threads = useMemo(
-    () => {
-      const order = readOnly && replayState?.snapshot
-        ? replayState.snapshot.threads.map((thread) => thread.id)
-        : threadOrder;
-      return order.map((threadId) => effectiveThreadsById[threadId]).filter(Boolean);
-    },
-    [effectiveThreadsById, readOnly, replayState?.snapshot, threadOrder],
-  );
+  const threads = (() => {
+    const order = readOnly && replayState?.snapshot
+      ? replayState.snapshot.threads.map((thread) => thread.id)
+      : threadOrder;
+    return order.map((threadId) => effectiveThreadsById[threadId]).filter(Boolean);
+  })();
 
   const participants = useMemo(
     () => (effectiveSnapshot?.participants ?? []).filter((participant) => participant.role_slot !== 'user'),
@@ -370,17 +382,18 @@ export default function EndingChatModal({
       return;
     }
     const preferredAgentId = replayState?.selectedAgentIds?.[0] ?? selectedAgentIds[0] ?? null;
+    let nextSelectedAgentId: string | null = null;
     if (preferredAgentId && targetableParticipants.some((participant) => participant.source_agent_id === preferredAgentId)) {
-      setSelectedAgentId(preferredAgentId);
+      nextSelectedAgentId = preferredAgentId;
+    } else if (targetableParticipants.length > 0) {
+      nextSelectedAgentId = targetableParticipants[0].source_agent_id ?? null;
+    } else if (selectedAgentId === null) {
       return;
     }
-    if (targetableParticipants.length > 0) {
-      setSelectedAgentId(targetableParticipants[0].source_agent_id ?? null);
-      return;
-    }
-    if (selectedAgentId !== null) {
-      setSelectedAgentId(null);
-    }
+    const syncTimerId = window.setTimeout(() => {
+      setSelectedAgentId(nextSelectedAgentId);
+    }, 0);
+    return () => window.clearTimeout(syncTimerId);
   }, [replayState?.selectedAgentIds, selectedAgentId, selectedAgentIds, targetableParticipants]);
 
   const participantsById = useMemo(
@@ -391,7 +404,7 @@ export default function EndingChatModal({
   // P1-8: Faction overlay — call hook internally with branch from props
   const factionMap = useFactionOverlay(scenarioId, branch?.id, participantsById);
 
-  const currentTurns = useMemo(() => {
+  const currentTurns = (() => {
     if (readOnly && replayState?.snapshot) {
       const defaultRoomTurns = (effectiveSnapshot?.turns ?? []).filter((turn) => {
         if (turn.thread_id && defaultThreadId) {
@@ -457,24 +470,21 @@ export default function EndingChatModal({
         roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
       };
     });
-  }, [activeThread, defaultThreadId, effectiveSnapshot?.memory_partition_id, effectiveSnapshot?.turns, fallbackMessages, isZh, participantsById, readOnly, replayState?.snapshot, t]);
+  })();
 
   const sortedDrafts = useMemo(
     () => Object.values(pendingDrafts).sort((left, right) => left.sequence - right.sequence),
     [pendingDrafts],
   );
-  const visibleDrafts = useMemo(
-    () => {
-      if (readOnly) return [];
-      const targetThreadId = activeThread?.id ?? defaultThreadId;
-      if (!targetThreadId) return sortedDrafts;
-      if (activeThread?.mode === 'followup') {
-        return sortedDrafts.filter((draft) => draft.threadId === activeThread.id);
-      }
-      return sortedDrafts.filter((draft) => draft.threadId === targetThreadId);
-    },
-    [activeThread?.id, activeThread?.mode, defaultThreadId, readOnly, sortedDrafts],
-  );
+  const visibleDrafts = (() => {
+    if (readOnly) return [];
+    const targetThreadId = activeThread?.id ?? defaultThreadId;
+    if (!targetThreadId) return sortedDrafts;
+    if (activeThread?.mode === 'followup') {
+      return sortedDrafts.filter((draft) => draft.threadId === activeThread.id);
+    }
+    return sortedDrafts.filter((draft) => draft.threadId === targetThreadId);
+  })();
 
   const effectiveInteractionMode = readOnly
     ? (activeThread?.mode === 'followup' ? activeThread.interaction_mode : 'archivist_route')
@@ -562,6 +572,14 @@ export default function EndingChatModal({
     : automationPendingDrafts.some((draft) => draft.variant === 'stream')
       ? 'turn_delta'
       : 'turn_start';
+  const currentTurnSignature = useMemo(
+    () => currentTurns.map((turn) => `${turn.key}:${turn.content.length}`).join('|'),
+    [currentTurns],
+  );
+  const displayedDraftSignature = useMemo(
+    () => displayedDrafts.map((draft) => `${draft.key}:${draft.content.length}`).join('|'),
+    [displayedDrafts],
+  );
   const transcriptLocale = isZh ? 'zh' : 'en';
   const transcriptBubbleLayouts = useMemo(
     () => buildOracleTranscriptLayoutMap(
@@ -578,14 +596,6 @@ export default function EndingChatModal({
       transcriptLocale,
     ),
     [displayedDrafts, transcriptLocale],
-  );
-  const transcriptLayoutTelemetry = useMemo(
-    () => summarizeOracleTranscriptLayout(
-      transcriptBubbleLayouts,
-      transcriptDraftLayouts,
-      transcriptScrollSnapshotRef.current,
-    ),
-    [transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
   );
   const threadDisplayLabels = useMemo(() => {
     const seen = new Map<string, number>();
@@ -621,7 +631,10 @@ export default function EndingChatModal({
   );
 
   useEffect(() => {
-    setReplayActiveThreadId(replayState?.activeThreadId ?? null);
+    const syncTimerId = window.setTimeout(() => {
+      setReplayActiveThreadId(replayState?.activeThreadId ?? null);
+    }, 0);
+    return () => window.clearTimeout(syncTimerId);
   }, [replayState?.activeThreadId, replayState?.snapshot?.id]);
 
   useEffect(() => {
@@ -637,13 +650,13 @@ export default function EndingChatModal({
     if (visibleTurnCount === 0) {
       transcriptHydratedRef.current = false;
       transcriptAutoStickRef.current = false;
-      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
       return;
     }
     if (!transcriptHydratedRef.current) {
       transcriptHydratedRef.current = true;
       transcriptList.scrollTop = 0;
-      transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
+      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
       return;
     }
     if (displayedDrafts.length > 0 || transcriptAutoStickRef.current) {
@@ -655,8 +668,8 @@ export default function EndingChatModal({
         transcriptAutoStickRef.current = false;
       }
     }
-    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
-  }, [activeThread?.id, currentTurns, displayedDrafts, effectiveSnapshot?.id]);
+    syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
+  }, [activeThread?.id, currentTurnSignature, displayedDraftSignature, displayedDrafts.length, effectiveSnapshot?.id]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -667,6 +680,11 @@ export default function EndingChatModal({
       return;
     }
 
+    const transcriptLayoutTelemetry = summarizeOracleTranscriptLayout(
+      transcriptBubbleLayouts,
+      transcriptDraftLayouts,
+      transcriptScrollSnapshotRef.current,
+    );
     const nextState = {
       kind: 'ending_room_modal',
       branch_id: branch.id,
@@ -730,77 +748,35 @@ export default function EndingChatModal({
     effectiveSnapshot?.id,
     pendingQuestionAnchorIds,
     status,
-    transcriptLayoutTelemetry,
     threads.length,
     activeThread?.question_anchor_ids_json,
     activeThreadAnchorSummary,
+    transcriptBubbleLayouts,
+    transcriptDraftLayouts,
   ]);
-
-  if (!open || !branch) {
-    return null;
-  }
-
-  const storyText = branch.story || '—';
-  const collapsedStory = storyText.length > 280 && !storyExpanded
-    ? `${storyText.slice(0, 280)}…`
-    : storyText;
-  const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
-    ? [selectedAgentId]
-    : interactionMode === 'all_present'
-      ? targetableParticipants
-        .map((participant) => participant.source_agent_id)
-        .filter((value): value is string => Boolean(value))
-      : [];
   const transcriptSubtitle = activeThread
     ? scopeText(activeThread, scopeNotice, isZh)
     : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
-  const galleryCards = galleryBranches
-    .filter((candidate) => candidate.id !== branch.id)
-    .sort((left, right) => right.probability - left.probability);
-  const transcriptTitle = isCrosslineGallery ? t('roundtable.gallery_title') : t('ending_room.transcript_title');
-  const transcriptHeaderCopy = isCrosslineGallery ? t('roundtable.gallery_hint') : transcriptSubtitle;
-  const transcriptHeaderNote = isCrosslineGallery
-    ? t('ending_room.foreign_summary_badge')
-    : (activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading'));
-  const interactionModeNote = readOnly
-    ? t('ending_room.replay_readonly')
-    : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
-  const verdictPrompt = useMemo(
-    () => buildEndingVerdictPrompt(effectiveResult?.summary ?? '', isZh),
-    [effectiveResult?.summary, isZh],
-  );
-  const insightPrompt = useMemo(
-    () => (branch?.insight ? buildEndingInsightPrompt(branch.insight, isZh) : ''),
-    [branch?.insight, isZh],
-  );
-  const verdictAnchorAction = useMemo<AnchorAction>(
-    () => ({
-      anchorIds: [buildEndingAnchorId('verdict', branch.id)],
-      prompt: verdictPrompt,
-      threadTitle: null,
-    }),
-    [branch.id, verdictPrompt],
-  );
-  const insightAnchorAction = useMemo<AnchorAction | null>(
-    () => (
-      branch.insight
-        ? {
-            anchorIds: [buildEndingAnchorId('insight', branch.id)],
-            prompt: insightPrompt,
-            threadTitle: null,
-          }
-        : null
-    ),
-    [branch.id, branch.insight, insightPrompt],
-  );
-  const keyMomentAnchorActions = useMemo<AnchorAction[]>(
-    () => (branch.key_moments?.slice(0, 3) ?? []).map((moment, index) => ({
-      anchorIds: [buildEndingAnchorId('key_moment', branch.id, index)],
-      prompt: isZh ? `为什么这里会转向：${moment}` : `Why did the worldline turn here: ${moment}`,
-      threadTitle: isZh ? '关键转折' : 'Key moment',
-    })),
-    [branch.id, branch.key_moments, isZh],
-  );
+
+  const verdictPrompt = buildEndingVerdictPrompt(effectiveResult?.summary ?? '', isZh);
+  const insightPrompt = branchInsight ? buildEndingInsightPrompt(branchInsight, isZh) : '';
+  const verdictAnchorAction: AnchorAction = {
+    anchorIds: [buildEndingAnchorId('verdict', branchId)],
+    prompt: verdictPrompt,
+    threadTitle: null,
+  };
+  const insightAnchorAction: AnchorAction | null = branchInsight
+    ? {
+        anchorIds: [buildEndingAnchorId('insight', branchId)],
+        prompt: insightPrompt,
+        threadTitle: null,
+      }
+    : null;
+  const keyMomentAnchorActions: AnchorAction[] = branchKeyMoments.slice(0, 3).map((moment, index) => ({
+    anchorIds: [buildEndingAnchorId('key_moment', branchId, index)],
+    prompt: isZh ? `为什么这里会转向：${moment}` : `Why did the worldline turn here: ${moment}`,
+    threadTitle: isZh ? '关键转折' : 'Key moment',
+  }));
   const anchorSuggestions = [
     ...keyMomentAnchorActions.map((action) => ({
       label: isZh ? '关键转折' : 'Key moment',
@@ -811,8 +787,7 @@ export default function EndingChatModal({
       action: verdictAnchorAction,
     },
   ];
-  const meetingBrief = useMemo(() => {
-    if (!branch) return '';
+  const meetingBrief = !branch ? '' : (() => {
     const lines = [
       `# ${branch.title}`,
       '',
@@ -835,7 +810,34 @@ export default function EndingChatModal({
       });
     }
     return lines.join('\n');
-  }, [branch, effectiveResult?.next_move, effectiveResult?.summary, transcriptSubtitle]);
+  })();
+
+  if (!open || !branch) {
+    return null;
+  }
+
+  const storyText = branch.story || '—';
+  const collapsedStory = storyText.length > 280 && !storyExpanded
+    ? `${storyText.slice(0, 280)}…`
+    : storyText;
+  const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
+    ? [selectedAgentId]
+    : interactionMode === 'all_present'
+      ? targetableParticipants
+        .map((participant) => participant.source_agent_id)
+        .filter((value): value is string => Boolean(value))
+      : [];
+  const galleryCards = galleryBranches
+    .filter((candidate) => candidate.id !== branch.id)
+    .sort((left, right) => right.probability - left.probability);
+  const transcriptTitle = isCrosslineGallery ? t('roundtable.gallery_title') : t('ending_room.transcript_title');
+  const transcriptHeaderCopy = isCrosslineGallery ? t('roundtable.gallery_hint') : transcriptSubtitle;
+  const transcriptHeaderNote = isCrosslineGallery
+    ? t('ending_room.foreign_summary_badge')
+    : (activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading'));
+  const interactionModeNote = readOnly
+    ? t('ending_room.replay_readonly')
+    : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
 
   const handleCopyBrief = async () => {
     if (!meetingBrief) return;
@@ -946,7 +948,7 @@ export default function EndingChatModal({
   };
 
   const handleTranscriptScroll = (event: UIEvent<HTMLDivElement>) => {
-    transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(event.currentTarget);
+    syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(event.currentTarget));
   };
 
   return (

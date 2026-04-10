@@ -9,6 +9,39 @@ import {
   ORACLE_TEXT_LAYOUT_CONTRACTS,
   predictTextOverflow,
 } from '../lib/textLayout/textOverflowPredictor';
+import type {
+  EndingRoomInteractionMode,
+  EndingRoomResult,
+  EndingRoomSnapshot,
+  EndingRoomThreadSnapshot,
+} from '../types';
+
+interface MockStoreState {
+  snapshot: EndingRoomSnapshot | null;
+  result: EndingRoomResult | null;
+  threadsById: Record<string, EndingRoomThreadSnapshot>;
+  threadOrder: string[];
+  activeThreadId: string | null;
+  interactionMode: EndingRoomInteractionMode;
+  composerDraft: string;
+  scopeNotice: null | { threadId: string; memoryPartitionId: string };
+  sending: boolean;
+  status: 'idle' | 'loading' | 'draft' | 'live' | 'done' | 'error';
+  pendingDrafts: Record<string, unknown>;
+  openRoom: (...args: unknown[]) => Promise<string>;
+  loadRoom: (...args: unknown[]) => Promise<void>;
+  loadThread: (...args: unknown[]) => Promise<void>;
+  createThread: (...args: unknown[]) => Promise<EndingRoomThreadSnapshot>;
+  appendUserTurn: (...args: unknown[]) => Promise<void>;
+  setActiveThread: (threadId: string | null) => void;
+  setInteractionMode: (mode: EndingRoomInteractionMode) => void;
+  setComposerDraft: (value: string) => void;
+  reset: () => void;
+}
+
+type AutomationTextWindow = Window & {
+  render_game_to_text?: () => string;
+};
 
 const {
   createBaseStoreState,
@@ -46,7 +79,7 @@ const {
   const setInteractionMode = vi.fn();
   const setComposerDraft = vi.fn();
   const reset = vi.fn();
-  const createThread = vi.fn(async () => ({
+  const createThread = vi.fn(async (): Promise<EndingRoomThreadSnapshot> => ({
     id: 'thread-hotseat',
     room_id: 'room-1',
     title: 'Hotseat Thread',
@@ -62,7 +95,7 @@ const {
     created_at: '2026-03-29T00:00:00Z',
     updated_at: '2026-03-29T00:00:01Z',
   }));
-  const createBaseStoreState = () => ({
+  const createBaseStoreState = (): MockStoreState => ({
     snapshot: {
       id: 'room-1',
       scenario_id: 'scenario-1',
@@ -192,8 +225,16 @@ const {
       currentLanguage = language;
     }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
-    buildOracleReplayShareUrlMock: vi.fn((_origin: string, _payload: unknown, artifactId: string) => `https://example.com/roundtable/replay?roomShare=${artifactId}`),
-    buildOracleReplayUrlMock: vi.fn(async (_origin: string, _payload: unknown) => 'https://example.com/roundtable/replay?roomReplay=token'),
+    buildOracleReplayShareUrlMock: vi.fn((origin: string, payload: unknown, artifactId: string) => {
+      void origin;
+      void payload;
+      return `https://example.com/roundtable/replay?roomShare=${artifactId}`;
+    }),
+    buildOracleReplayUrlMock: vi.fn(async (origin: string, payload: unknown) => {
+      void origin;
+      void payload;
+      return 'https://example.com/roundtable/replay?roomReplay=token';
+    }),
     getAgentsMock: vi.fn(),
     getReplayArtifactMock: vi.fn(),
     getScenarioMock: vi.fn(),
@@ -209,8 +250,13 @@ const {
     setInteractionModeMock: setInteractionMode,
     setComposerDraftMock: setComposerDraft,
     resetMock: reset,
-    saveOracleReplayLocalCopyMock: vi.fn((_payload: unknown) => 'local-roundtable'),
-    copyTextMock: vi.fn(async (_value: string) => {}),
+    saveOracleReplayLocalCopyMock: vi.fn((payload: unknown) => {
+      void payload;
+      return 'local-roundtable';
+    }),
+    copyTextMock: vi.fn(async (value: string) => {
+      void value;
+    }),
     wsMock: vi.fn(),
     storeState: createBaseStoreState(),
   };
@@ -315,9 +361,17 @@ beforeEach(() => {
   createReplayArtifactMock.mockReset();
   createReplayArtifactMock.mockImplementation(async () => ({ id: 'artifact-1' }));
   buildOracleReplayShareUrlMock.mockReset();
-  buildOracleReplayShareUrlMock.mockImplementation((_origin: string, _payload: unknown, artifactId: string) => `https://example.com/roundtable/replay?roomShare=${artifactId}`);
+  buildOracleReplayShareUrlMock.mockImplementation((origin: string, payload: unknown, artifactId: string) => {
+    void origin;
+    void payload;
+    return `https://example.com/roundtable/replay?roomShare=${artifactId}`;
+  });
   buildOracleReplayUrlMock.mockReset();
-  buildOracleReplayUrlMock.mockImplementation(async (_origin: string, _payload: unknown) => 'https://example.com/roundtable/replay?roomReplay=token');
+  buildOracleReplayUrlMock.mockImplementation(async (origin: string, payload: unknown) => {
+    void origin;
+    void payload;
+    return 'https://example.com/roundtable/replay?roomReplay=token';
+  });
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
   getScenarioMock.mockReset();
@@ -331,7 +385,7 @@ beforeEach(() => {
   loadThreadMock.mockReset();
   loadThreadMock.mockImplementation(async () => {});
   createThreadMock.mockReset();
-  createThreadMock.mockImplementation(async () => ({
+  createThreadMock.mockImplementation(async (): Promise<EndingRoomThreadSnapshot> => ({
     id: 'thread-hotseat',
     room_id: 'room-1',
     title: 'Hotseat Thread',
@@ -358,9 +412,14 @@ beforeEach(() => {
   setComposerDraftMock.mockReset();
   resetMock.mockReset();
   saveOracleReplayLocalCopyMock.mockReset();
-  saveOracleReplayLocalCopyMock.mockImplementation((_payload: unknown) => 'local-roundtable');
+  saveOracleReplayLocalCopyMock.mockImplementation((payload: unknown) => {
+    void payload;
+    return 'local-roundtable';
+  });
   copyTextMock.mockReset();
-  copyTextMock.mockImplementation(async (_value: string) => {});
+  copyTextMock.mockImplementation(async (value: string) => {
+    void value;
+  });
   wsMock.mockReset();
   Object.assign(storeState, createBaseStoreState());
   Object.defineProperty(window, 'scrollTo', {
@@ -383,11 +442,11 @@ afterEach(() => {
 
 describe('WorldlineRoundtableView', () => {
   it('creates a live roundtable room from a multi-ending result', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked?',
@@ -493,11 +552,11 @@ describe('WorldlineRoundtableView', () => {
 
   it('keeps the current UI language and launches the room in that language even when the scenario language differs', async () => {
     setMockLanguage('en');
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: '如果帝国分裂了？',
@@ -544,11 +603,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('lets manual_shortlist launch only the selected worldlines', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked three ways?',
@@ -653,7 +712,7 @@ describe('WorldlineRoundtableView', () => {
       ],
       turns: [],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'The roundtable converged on a single hinge.',
       archivist_note: 'Summary-only crossline scope held.',
@@ -665,7 +724,7 @@ describe('WorldlineRoundtableView', () => {
           commentary: 'Done.',
         },
       ],
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         id: 'thread-room',
@@ -683,7 +742,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: [],
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
     getScenarioMock.mockResolvedValue({
@@ -781,7 +840,7 @@ describe('WorldlineRoundtableView', () => {
       ],
       turns: [],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'The roundtable converged on a single hinge.',
       archivist_note: 'Summary-only crossline scope held.',
@@ -793,7 +852,7 @@ describe('WorldlineRoundtableView', () => {
           commentary: 'Done.',
         },
       ],
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         id: 'thread-room',
@@ -811,7 +870,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: [],
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
     getScenarioMock.mockResolvedValue({
@@ -875,7 +934,7 @@ describe('WorldlineRoundtableView', () => {
         content: longDraft,
         sequence: 2,
       },
-    } as any;
+    } as MockStoreState['pendingDrafts'];
 
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
@@ -933,7 +992,7 @@ describe('WorldlineRoundtableView', () => {
         content: '请继续沿着这张圆桌追问：为什么这条世界线会把短期军令当成长期秩序，并要求档案官替所有后续成本收口？',
         sequence: 2,
       },
-    } as any;
+    } as MockStoreState['pendingDrafts'];
 
     render(
       <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
@@ -944,7 +1003,7 @@ describe('WorldlineRoundtableView', () => {
     );
 
     await screen.findByText('The roundtable converged on a single hinge.');
-    const payload = JSON.parse((window as any).render_game_to_text());
+    const payload = JSON.parse((window as AutomationTextWindow).render_game_to_text?.() ?? '{}');
     expect(payload.page.controls.transcript_layout.turn_count).toBeGreaterThanOrEqual(1);
     expect(payload.page.controls.transcript_layout.draft_count).toBeGreaterThanOrEqual(1);
     expect(payload.page.controls.transcript_layout.max_draft_lines).toBeGreaterThan(1);
@@ -1012,12 +1071,12 @@ describe('WorldlineRoundtableView', () => {
       ],
       turns: [],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'Existing live summary.',
       archivist_note: 'Current table summary.',
       phase_insights: [],
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         ...storeState.snapshot.threads[0],
@@ -1027,7 +1086,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: [],
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
 
@@ -1147,11 +1206,11 @@ describe('WorldlineRoundtableView', () => {
         },
       ],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'Existing live summary.',
       archivist_note: 'Current table summary.',
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         ...storeState.snapshot.threads[0],
@@ -1161,7 +1220,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: storeState.snapshot.turns,
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
 
@@ -1287,11 +1346,11 @@ describe('WorldlineRoundtableView', () => {
         },
       ],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'Existing live summary.',
       archivist_note: 'Current table summary.',
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         ...storeState.snapshot.threads[0],
@@ -1301,7 +1360,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: storeState.snapshot.turns,
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
 
@@ -1365,11 +1424,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('launches expert_witness with an extra witness selection', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked with one witness?',
@@ -1428,11 +1487,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('uses trait_mix to auto-pick a more contrasted cast', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked into rival courts and frontier command?',
@@ -1490,11 +1549,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('uses fault_line_first to auto-shortlist the strongest split', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the archive split across court, frontier, and market pressure?',
@@ -1551,11 +1610,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('uses witness_augmented to auto-attach a witness without manual picking', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked with an extra witness?',
@@ -1611,11 +1670,11 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('keeps the latest witness mode when switching between expert_witness and witness_augmented before launch', async () => {
-    storeState.snapshot = null as any;
-    storeState.result = null as any;
-    storeState.threadsById = {} as any;
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
     storeState.threadOrder = [];
-    storeState.activeThreadId = null as any;
+    storeState.activeThreadId = null;
     getScenarioMock.mockResolvedValue({
       id: 'scenario-1',
       question: 'What if the empire forked with an extra witness?',
@@ -1728,11 +1787,11 @@ describe('WorldlineRoundtableView', () => {
         },
       ],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'Existing live summary.',
       archivist_note: 'Current table summary.',
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         ...storeState.snapshot.threads[0],
@@ -1742,7 +1801,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: storeState.snapshot.turns,
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
 
@@ -1869,7 +1928,7 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('renders a read-only replay from local storage and disables sending', async () => {
-    const replaySnapshot: any = {
+    const replaySnapshot: EndingRoomSnapshot = {
       id: 'room-1',
       scenario_id: 'scenario-1',
       anchor_branch_id: null,
@@ -2206,12 +2265,12 @@ describe('WorldlineRoundtableView', () => {
         },
       ],
       result_ready: true,
-    } as any;
+    } as EndingRoomSnapshot;
     storeState.result = {
       summary: 'The roundtable converged on a single hinge.',
       archivist_note: 'Summary-only crossline scope held.',
       phase_insights: [],
-    } as any;
+    } as EndingRoomResult;
     storeState.threadsById = {
       'thread-room': {
         ...storeState.snapshot.threads[0],
@@ -2221,7 +2280,7 @@ describe('WorldlineRoundtableView', () => {
         language: 'en',
         turns: storeState.snapshot.turns,
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
 
@@ -2370,14 +2429,14 @@ describe('WorldlineRoundtableView text layout contracts', () => {
           created_at: '2026-03-29T00:00:00Z',
         },
       ],
-    } as any;
-    storeState.result = baseState.result as any;
+    } as EndingRoomSnapshot;
+    storeState.result = baseState.result;
     storeState.threadsById = {
       'thread-room': {
         ...baseState.threadsById['thread-room'],
         turns: storeState.snapshot.turns,
       },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
     storeState.pendingDrafts = {};
@@ -2431,13 +2490,13 @@ describe('WorldlineRoundtableView text layout contracts', () => {
 
     const turnText = await screen.findByText(longTurn);
     expect(turnText).toHaveClass('worldline-roundtable-transcript-copy', 'is-collapsed');
-    const collapsedPayload = JSON.parse((window as any).render_game_to_text());
+    const collapsedPayload = JSON.parse((window as AutomationTextWindow).render_game_to_text?.() ?? '{}');
     expect(collapsedPayload.page.controls.transcript_layout.collapsible_turn_count).toBeGreaterThanOrEqual(1);
     expect(collapsedPayload.page.controls.transcript_layout.collapsed_turn_count).toBeGreaterThanOrEqual(1);
 
     await user.click(screen.getByRole('button', { name: 'Show full turn' }));
     expect(turnText).not.toHaveClass('is-collapsed');
-    const expandedPayload = JSON.parse((window as any).render_game_to_text());
+    const expandedPayload = JSON.parse((window as AutomationTextWindow).render_game_to_text?.() ?? '{}');
     expect(expandedPayload.page.controls.transcript_layout.collapsed_turn_count).toBe(0);
 
     await user.click(screen.getByRole('button', { name: 'Collapse turn' }));
@@ -2470,16 +2529,16 @@ describe('WorldlineRoundtableView synthesis section', () => {
 
   it('renders verdict summary in the main area above transcript', async () => {
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot as any;
+    storeState.snapshot = baseState.snapshot;
     storeState.result = {
       summary: 'Synthesis verdict text here',
       next_move: 'Consider the second hinge',
       archivist_note: 'Archivist note for context',
       phase_insights: [],
-    } as any;
-    storeState.threadsById = baseState.threadsById as any;
-    storeState.threadOrder = baseState.threadOrder as any;
-    storeState.activeThreadId = baseState.activeThreadId as any;
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
     storeState.pendingDrafts = {};
     setupFullMocks();
 
@@ -2503,11 +2562,11 @@ describe('WorldlineRoundtableView synthesis section', () => {
 
   it('hides synthesis section when result has no summary', async () => {
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot as any;
-    storeState.result = { summary: '', phase_insights: [] } as any;
-    storeState.threadsById = baseState.threadsById as any;
-    storeState.threadOrder = baseState.threadOrder as any;
-    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = { summary: '', phase_insights: [] } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
     storeState.pendingDrafts = {};
     setupFullMocks();
 
@@ -2534,11 +2593,11 @@ describe('WorldlineRoundtableView phase nav', () => {
         { id: 'turn-cross', room_id: 'room-1', thread_id: 'thread-room', sequence: 2, phase: 'crossfire', participant_id: 'rep-a', content: 'Crossfire point.', emotion: 'focused', created_at: '2026-03-29T00:00:01Z' },
         { id: 'turn-verdict', room_id: 'room-1', thread_id: 'thread-room', sequence: 3, phase: 'verdict', participant_id: 'archivist', content: 'Final verdict.', emotion: 'calm', created_at: '2026-03-29T00:00:02Z' },
       ],
-    } as any;
-    storeState.result = baseState.result as any;
+    } as EndingRoomSnapshot;
+    storeState.result = baseState.result;
     storeState.threadsById = {
       'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns },
-    } as any;
+    } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
     storeState.pendingDrafts = {};
@@ -2568,11 +2627,11 @@ describe('WorldlineRoundtableView phase nav', () => {
 
   it('hides phase nav when only one phase exists', async () => {
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot as any;
-    storeState.result = baseState.result as any;
-    storeState.threadsById = baseState.threadsById as any;
-    storeState.threadOrder = baseState.threadOrder as any;
-    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = baseState.result;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
     storeState.pendingDrafts = {};
     getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
     getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
@@ -2599,9 +2658,9 @@ describe('WorldlineRoundtableView phase nav', () => {
         { id: 'turn-open', room_id: 'room-1', thread_id: 'thread-room', sequence: 1, phase: 'opening', participant_id: 'rep-a', content: 'Opening.', emotion: 'focused', created_at: '2026-03-29T00:00:00Z' },
         { id: 'turn-cross', room_id: 'room-1', thread_id: 'thread-room', sequence: 2, phase: 'crossfire', participant_id: 'rep-a', content: 'Crossfire.', emotion: 'focused', created_at: '2026-03-29T00:00:01Z' },
       ],
-    } as any;
-    storeState.result = baseState.result as any;
-    storeState.threadsById = { 'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns } } as any;
+    } as EndingRoomSnapshot;
+    storeState.result = baseState.result;
+    storeState.threadsById = { 'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns } } as Record<string, EndingRoomThreadSnapshot>;
     storeState.threadOrder = ['thread-room'];
     storeState.activeThreadId = 'thread-room';
     storeState.pendingDrafts = {};
@@ -2636,11 +2695,11 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
   it('renders a mobile roster trigger button and opens the modal on click', async () => {
     const user = userEvent.setup({ delay: null });
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot as any;
-    storeState.result = baseState.result as any;
-    storeState.threadsById = baseState.threadsById as any;
-    storeState.threadOrder = baseState.threadOrder as any;
-    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = baseState.result;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
     storeState.pendingDrafts = {};
     getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
     getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
@@ -2695,11 +2754,11 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
 describe('WorldlineRoundtableView tablet sidebar collapsible', () => {
   it('wraps sidebar content in a details element with a summary toggle', async () => {
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot as any;
-    storeState.result = baseState.result as any;
-    storeState.threadsById = baseState.threadsById as any;
-    storeState.threadOrder = baseState.threadOrder as any;
-    storeState.activeThreadId = baseState.activeThreadId as any;
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = baseState.result;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
     storeState.pendingDrafts = {};
     getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
     getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });

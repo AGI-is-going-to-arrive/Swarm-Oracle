@@ -123,22 +123,27 @@ export default function PredictionModal({
   const oracleLabel = userName.trim() || t('prediction.name_placeholder');
   const isDisabled = status === 'submitting' || status === 'success';
   const hasBranchTargets = branchOptions.length > 0;
-  const hasValidBranchTarget = branchOptions.some((branch) => branch.id === targetBranchId);
+  const effectiveBetKind =
+    !hasBranchTargets && betKind === 'branch_winner'
+      ? 'ending_tone'
+      : betKind;
+  const effectiveTargetBranchId = (() => {
+    if (branchOptions.length === 0) return '';
+    if (committedBranchId && branchOptions.some((branch) => branch.id === committedBranchId)) {
+      return committedBranchId;
+    }
+    return targetBranchId || branchOptions[0].id;
+  })();
+  const hasValidBranchTarget = branchOptions.some((branch) => branch.id === effectiveTargetBranchId);
   const canSubmit =
     Boolean(text.trim())
     && !isDisabled
-    && (betKind !== 'branch_winner' || hasValidBranchTarget);
-
-  useEffect(() => {
-    if (!hasBranchTargets && betKind === 'branch_winner') {
-      setBetKind('ending_tone');
-    }
-  }, [betKind, hasBranchTargets]);
+    && (effectiveBetKind !== 'branch_winner' || hasValidBranchTarget);
 
   const handleSubmit = async () => {
     const trimmed = text.trim();
     if (!trimmed || status === 'submitting' || status === 'success') return;
-    if (betKind === 'branch_winner' && !hasValidBranchTarget) {
+    if (effectiveBetKind === 'branch_winner' && !hasValidBranchTarget) {
       setStatus('error');
       setErrorMsg(t('prediction.error_branch_pending'));
       return;
@@ -148,17 +153,17 @@ export default function PredictionModal({
     setErrorMsg('');
 
     const targetLabel =
-      betKind === 'branch_winner'
-        ? branchOptions.find((branch) => branch.id === targetBranchId)?.label ?? targetBranchId
-        : betKind === 'ending_tone'
+      effectiveBetKind === 'branch_winner'
+        ? branchOptions.find((branch) => branch.id === effectiveTargetBranchId)?.label ?? effectiveTargetBranchId
+        : effectiveBetKind === 'ending_tone'
           ? getEndingToneLabel(endingTone, isZh)
           : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
     const predictionText = buildStructuredPredictionText({
-      kind: betKind,
+      kind: effectiveBetKind,
       targetId:
-        betKind === 'branch_winner'
-          ? targetBranchId
-          : betKind === 'ending_tone'
+        effectiveBetKind === 'branch_winner'
+          ? effectiveTargetBranchId
+          : effectiveBetKind === 'ending_tone'
             ? endingTone
             : profileResonance,
       targetLabel,
@@ -184,11 +189,11 @@ export default function PredictionModal({
       }
       const nextMeta = placeBet(scenarioId, {
         betId: crypto.randomUUID(),
-        kind: betKind,
+        kind: effectiveBetKind,
         targetId:
-          betKind === 'branch_winner'
-            ? targetBranchId
-            : betKind === 'ending_tone'
+          effectiveBetKind === 'branch_winner'
+            ? effectiveTargetBranchId
+            : effectiveBetKind === 'ending_tone'
               ? endingTone
               : profileResonance,
         targetLabel,
@@ -210,8 +215,8 @@ export default function PredictionModal({
   useEffect(() => {
     onAutomationStateChange?.({
       kind: 'prediction_modal',
-      bet_kind: betKind,
-      target_branch_id: targetBranchId || null,
+      bet_kind: effectiveBetKind,
+      target_branch_id: effectiveTargetBranchId || null,
       ending_tone: endingTone,
       profile_resonance: profileResonance,
       text_length: text.length,
@@ -227,19 +232,7 @@ export default function PredictionModal({
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [betKind, canSubmit, confidence, confidenceLabel, endingTone, errorMsg, onAutomationStateChange, status, targetBranchId, text, userName.length]);
-
-  useEffect(() => {
-    if (!targetBranchId && branchOptions.length > 0) {
-      setTargetBranchId(branchOptions[0].id);
-    }
-  }, [branchOptions, targetBranchId]);
-
-  useEffect(() => {
-    if (!committedBranchId) return;
-    if (!branchOptions.some((branch) => branch.id === committedBranchId)) return;
-    setTargetBranchId(committedBranchId);
-  }, [branchOptions, committedBranchId]);
+  }, [canSubmit, confidence, confidenceLabel, effectiveBetKind, effectiveTargetBranchId, endingTone, errorMsg, onAutomationStateChange, profileResonance, status, text, userName.length]);
 
   return (
     <div className="modal-overlay prediction-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>

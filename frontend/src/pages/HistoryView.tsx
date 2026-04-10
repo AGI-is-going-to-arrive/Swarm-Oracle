@@ -26,7 +26,7 @@ const STATUS_BADGE_MAP: Record<string, string> = {
 
 export default function HistoryView() {
   const navigate = useNavigate();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   const [scenarios, setScenarios] = useState<ScenarioListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -56,7 +56,7 @@ export default function HistoryView() {
     } finally {
       setLoading(false);
     }
-  }, [filter, offset, i18n.language]);
+  }, [filter, offset, t]);
 
   useEffect(() => {
     load();

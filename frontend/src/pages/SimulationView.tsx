@@ -36,6 +36,7 @@ import {
   countCompletedObjectives,
   evaluateDirectorObjectives,
 } from '../lib/directorObjectives';
+import { preloadPhaserGame } from '../game/phaserPreload';
 const LazyClassicBranchTree = lazy(() =>
   import('../components/ClassicBranchTree').then((mod) => ({ default: mod.ClassicBranchTree }))
 );
@@ -364,9 +365,7 @@ export function SimulationView() {
     if (viewMode !== 'theater' || !visualizationEnabled) return;
 
     const preload = () => {
-      void loadPhaserGameLoaderModule().then((mod) => {
-        mod.preloadPhaserGame();
-      });
+      preloadPhaserGame();
     };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;

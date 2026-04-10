@@ -74,7 +74,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     } finally {
       setLoading(false);
     }
-  }, [scenarioId, loading, shareContext, isZh, t]);
+  }, [scenarioId, loading, shareContext, isZh, t, directorIdentity.userId]);
 
   const handleCopy = useCallback(async () => {
     setCopyError('');

@@ -27,11 +27,12 @@ function makeParticipant(
     room_id: 'room-1',
     source_branch_id: sourceBranchId ?? 'b1',
     source_agent_id: sourceAgentId,
-    role_slot: 'panelist',
+    role_slot: 'representative',
     display_name: `Agent ${id}`,
-    persona_snapshot: 'test persona',
     worldline_echo_key: null,
-  } as EndingRoomParticipant;
+    persona_snapshot_json: { summary: 'test persona' },
+    visibility_scope_json: null,
+  };
 }
 
 describe('useFactionOverlay', () => {

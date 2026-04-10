@@ -57,7 +57,7 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, scenarioId, selectedAgent, selectedRound, replacement, t, onCreated, agents]);
+  }, [branchId, canSubmit, scenarioId, selectedAgent, selectedRound, replacement, t, onCreated]);
 
   return (
     <div style={{ border: '1px solid var(--color-border, #555)', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>

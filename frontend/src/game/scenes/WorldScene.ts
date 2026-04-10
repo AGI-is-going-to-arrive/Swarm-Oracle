@@ -473,11 +473,11 @@ export class WorldScene extends Phaser.Scene {
     this.terrainLayers.push(textureDots);
 
     // Drifting clouds (only for lighter themes)
-    this.createDriftingClouds(w, horizonY, palette);
+    this.createDriftingClouds(w, horizonY);
   }
 
   /** V3: Simple drifting cloud shapes in the sky area. */
-  private createDriftingClouds(w: number, maxY: number, _palette: typeof DEFAULT_PALETTE): void {
+  private createDriftingClouds(w: number, maxY: number): void {
     // Skip clouds for dark/space themes
   const darkThemes = ['surveillance_megacity', 'scifi_base', 'power_grid_nexus', 'space_station', 'post_apocalypse', 'arcane_sanctum', 'faith_temple', 'faith_temple_variant', 'law_court', 'law_court_variant', 'war_command', 'refuge_compound', 'logistics_hub'];
     if (darkThemes.includes(this.sceneTheme)) return;

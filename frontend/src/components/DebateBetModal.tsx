@@ -97,9 +97,12 @@ export function DebateBetModal({
 
   useEffect(() => {
     const nextKind = resolveSupportedKind(initialSelection?.kind ?? 'winner', normalizedOptions);
-    setKind(nextKind);
-    setTargetValue(resolveSupportedTarget(nextKind, initialSelection?.targetValue, normalizedOptions));
-    setConfidence(initialSelection?.confidence ?? 0.7);
+    const timeoutId = window.setTimeout(() => {
+      setKind(nextKind);
+      setTargetValue(resolveSupportedTarget(nextKind, initialSelection?.targetValue, normalizedOptions));
+      setConfidence(initialSelection?.confidence ?? 0.7);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [initialSelection, normalizedOptions]);
 
   const options = useMemo(
@@ -110,12 +113,17 @@ export function DebateBetModal({
   useEffect(() => {
     const supportedKind = resolveSupportedKind(kind, normalizedOptions);
     if (supportedKind !== kind) {
-      setKind(supportedKind);
-      setTargetValue(resolveSupportedTarget(supportedKind, targetValue, normalizedOptions));
-      return;
+      const timeoutId = window.setTimeout(() => {
+        setKind(supportedKind);
+        setTargetValue(resolveSupportedTarget(supportedKind, targetValue, normalizedOptions));
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
     }
     if (!options.includes(targetValue)) {
-      setTargetValue(resolveSupportedTarget(kind, targetValue, normalizedOptions));
+      const timeoutId = window.setTimeout(() => {
+        setTargetValue(resolveSupportedTarget(kind, targetValue, normalizedOptions));
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
     }
   }, [kind, normalizedOptions, options, targetValue]);
 

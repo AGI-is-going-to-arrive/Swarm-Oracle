@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldPreloadPhaserGame } from './PhaserGameLoader';
+import { shouldPreloadPhaserGame } from './phaserPreload';
 
 describe('shouldPreloadPhaserGame', () => {
   it('skips preloading in jsdom', () => {

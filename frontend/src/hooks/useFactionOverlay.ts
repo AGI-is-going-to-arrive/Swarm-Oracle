@@ -55,10 +55,14 @@ export function useFactionOverlay(
     }
     return [...ids];
   }, [branchId, participantsById]);
+  const shouldSkipFetch = !scenarioId || branchIds.length === 0 || participantsById.size === 0;
+  const visibleFactionMap = useMemo(
+    () => (shouldSkipFetch ? new Map<string, ParticipantFaction>() : factionMap),
+    [factionMap, shouldSkipFetch],
+  );
 
   useEffect(() => {
-    if (!scenarioId || branchIds.length === 0 || participantsById.size === 0) {
-      setFactionMap(new Map());
+    if (shouldSkipFetch) {
       return;
     }
 
@@ -130,7 +134,7 @@ export function useFactionOverlay(
     })();
 
     return () => { cancelled = true; };
-  }, [scenarioId, branchIds, participantsById]);
+  }, [branchIds, participantsById, scenarioId, shouldSkipFetch]);
 
-  return factionMap;
+  return visibleFactionMap;
 }

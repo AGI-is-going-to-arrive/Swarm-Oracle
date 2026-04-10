@@ -940,6 +940,17 @@
       "type_counter": "Counter",
       "turn": "Turn"
     },
+    "resume": {
+      "title": "Resume Simulation",
+      "branch": "Branch",
+      "round": "From Round",
+      "select_branch": "-- Select --",
+      "invalid_round": "Enter a whole round between 1 and {{max}}",
+      "submit": "Resume from Here",
+      "limit_reached": "Maximum 3 replay branches per scenario",
+      "error_generic": "Failed to resume simulation",
+      "created": "Resume branch created! Redirecting..."
+    },
     "common": {
       "loading": "Loading…",
       "back_home": "Back to Home",

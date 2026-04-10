@@ -22,7 +22,7 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, campaign summary, share/export, replay import |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
@@ -56,6 +56,8 @@ React + TypeScript frontend for SwarmOracle.
   Theater-only loading and split capture runtime
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
+- `ResumePanel.tsx`
+  ResultView-side resume control for `POST /api/scenario/:id/resume`; now locks after success, validates round input on the client, and is covered by the dedicated resume smoke script
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 
@@ -67,6 +69,7 @@ npm install
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
+npm run e2e:resume -- full
 npm run perf:budgets:check
 npm run assets:provenance:check
 ```
@@ -95,6 +98,12 @@ npm run build:spike:phaser-custom
 
 - Historical full baseline: `179 passed`.
 - Current targeted frontend set: `112 passed`.
+- Current resume/lint/build verification also passed:
+  - `src/components/ResumePanel.test.tsx + src/pages/ResultView.test.tsx + src/i18n/locales.test.ts`: `50 passed`
+  - `npm run e2e:resume -- full`: `8 / 8 steps passed`
+  - `npm run lint`: `0 errors, warnings remain`
+  - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - `npm run build`: pass
 - Current custom Phaser runtime subset:
   - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
   - `npm run test:spike:phaser-custom`: `30 passed`
@@ -144,4 +153,5 @@ npm run build:spike:phaser-custom
 cd frontend
 npm run build
 npm run preview -- --host 127.0.0.1 --port 18928
+npm run e2e:resume -- full
 ```
