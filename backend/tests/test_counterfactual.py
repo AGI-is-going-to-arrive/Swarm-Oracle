@@ -2,8 +2,9 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
+from sqlmodel import Session
 
+from app.config import settings
 from app.main import app
 from app.models.database import (
     Agent,
@@ -15,8 +16,6 @@ from app.models.database import (
     ScenarioStatus,
     get_engine,
 )
-from app.config import settings
-from app.models.checkpoint import ScenarioCheckpoint
 from app.services.replay import write_checkpoint
 
 
@@ -172,7 +171,7 @@ class TestCreateCounterfactual:
             "replacement_content": "too many",
         })
         assert resp.status_code == 429
-        assert "Maximum 3" in resp.json()["detail"]
+        assert resp.json()["detail"] == "Maximum 3 replay branches per scenario"
 
 
 # ── GET /compare ─────────────────────────────────────────

@@ -18,6 +18,7 @@ from app.models.database import Branch, Scenario, get_engine
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_timeline
 from app.services.replay import clone_until_round, compare_branches, seed_counterfactual
+from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ async def create_counterfactual(scenario_id: str, body: CounterfactualRequest):
         if cf_count >= 3:
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Maximum 3 counterfactual branches per scenario"},
+                content={"detail": "Maximum 3 replay branches per scenario"},
             )
 
     # Clone + seed
@@ -220,6 +221,11 @@ async def resume_from_round(scenario_id: str, body: ResumeRequest):
                 status_code=400,
                 content={"detail": "Scenario must be in 'done' status to resume"},
             )
+        if runtime_lock_is_active(simulation_lock_key(scenario_id)):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "Scenario already has a running simulation"},
+            )
 
         branch = session.exec(
             select(Branch).where(
@@ -276,6 +282,12 @@ async def resume_from_round(scenario_id: str, body: ResumeRequest):
         replay_kind="resume",
         title=f"Resume from round {body.round_number}",
     )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is not None:
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
 
     schedule_background_task(
         run_sim_background(scenario_id, branch_id=new_branch_id)

@@ -329,6 +329,42 @@ class TestResumeEndpoint:
         mock_clone.assert_called_once()
         mock_schedule.assert_called_once()
 
+    @patch("app.api.graphs.get_engine")
+    @patch("app.api.graphs.runtime_lock_is_active")
+    @patch("app.api.graphs.settings")
+    def test_rejects_when_runtime_lock_active(
+        self, mock_settings, mock_lock_active, mock_engine,
+    ):
+        mock_settings.FEATURE_COUNTERFACTUAL_REPLAY = True
+        mock_lock_active.return_value = True
+
+        mock_session = MagicMock()
+        scenario = MagicMock()
+        from app.models.database import ScenarioStatus
+        scenario.status = ScenarioStatus.DONE
+
+        mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = scenario
+        mock_session.exec.return_value = mock_exec_result
+        mock_session.__enter__ = lambda s: s
+        mock_session.__exit__ = MagicMock(return_value=False)
+
+        with patch("app.api.graphs.Session", return_value=mock_session):
+            from fastapi import FastAPI
+
+            from app.api.graphs import router
+            app = FastAPI()
+            app.include_router(router)
+            client = TestClient(app)
+
+            resp = client.post(
+                "/api/scenario/sc1/resume",
+                json={"source_branch_id": "b1", "round_number": 3},
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "Scenario already has a running simulation"
+
 
 # ── TestBranchLimitShared ───────────────────────────────
 
