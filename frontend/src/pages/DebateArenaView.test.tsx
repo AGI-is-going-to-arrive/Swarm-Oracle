@@ -544,7 +544,9 @@ describe('DebateArenaView', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole('button', { name: 'debate.counterplay_submit' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'debate.counterplay_submit' })).not.toBeInTheDocument();
+    });
   });
 
   it('ignores stale counterplay data from a different debate before the fresh load arrives', async () => {

@@ -146,9 +146,15 @@ export function InputView() {
   const challengeProfileLabel = todayChallenge
     ? getGameplayProfileLabel(todayChallenge.profileId, isZh)
     : null;
-  const challengeHooks = todayChallenge
-    ? getGameplayProfileSignatureHooks(todayChallenge.profileId, isZh).slice(0, 2)
-    : [];
+  const challengeProfileId = todayChallenge?.profileId ?? null;
+  const challengeHooks = useMemo(
+    () => (
+      challengeProfileId
+        ? getGameplayProfileSignatureHooks(challengeProfileId, isZh).slice(0, 2)
+        : []
+    ),
+    [challengeProfileId, isZh],
+  );
   const nextUnlockLabel = dailyMastery?.score_to_next_level != null
     ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
     : t('home.campaign_mastered');
@@ -272,11 +278,14 @@ export function InputView() {
   }, [i18n.language]);
 
   // Dynamic placeholders from i18n
-  const placeholders = useMemo(() => [
-    t('home.placeholder_1'),
-    t('home.placeholder_2'),
-    t('home.placeholder_3')
-  ], [i18n.language, t]);
+  const placeholders = useMemo(() => {
+    void i18n.language;
+    return [
+      t('home.placeholder_1'),
+      t('home.placeholder_2'),
+      t('home.placeholder_3')
+    ];
+  }, [i18n.language, t]);
 
   const loadingSteps = [
     t('home.loading_step_1'),
@@ -647,7 +656,9 @@ export function InputView() {
       }
     };
   }, [
+    campaignChallengeRotation?.week_key,
     isSubmitting,
+    isZh,
     mode,
     numAgents,
     question,
@@ -662,6 +673,7 @@ export function InputView() {
     runtimePresetConfig.branchSensitivity,
     runtimePresetConfig.forkDetectorActiveBranchLimit,
     runtimePresetConfig.forkPromptVariant,
+    todayChallenge,
     todayChallengeProgress,
     vizEnabled,
     todayChallenge?.id,

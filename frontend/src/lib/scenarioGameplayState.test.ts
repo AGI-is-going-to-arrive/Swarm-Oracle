@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ScenarioGameplayState } from '../types';
 import {
   areScenarioGameplayStatesEquivalent,
+  hasScenarioGameplayAuthority,
   mergeScenarioMetaWithGameplayState,
   scenarioMetaToGameplayState,
 } from './scenarioGameplayState';
@@ -460,5 +461,19 @@ describe('scenarioGameplayState helpers', () => {
     expect(merged.archive.profileId).toBeUndefined();
     expect(merged.archive.keyMoments).toEqual([]);
     expect(merged.archive.branchSnapshots).toEqual([]);
+  });
+
+  it('treats explicit empty gameplay partitions as authoritative presence', () => {
+    expect(hasScenarioGameplayAuthority({
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    })).toBe(true);
+
+    expect(hasScenarioGameplayAuthority({
+      cards: { usage_log: [] },
+    } as ScenarioGameplayState)).toBe(true);
+
+    expect(hasScenarioGameplayAuthority(null)).toBe(false);
   });
 });

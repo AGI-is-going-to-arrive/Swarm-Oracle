@@ -674,7 +674,7 @@ describe('SimulationView replay automation output', () => {
     }
   });
 
-  it('backfills betting and archive raw gameplay state to the backend and exposes betting automation', async () => {
+  it('backfills betting and key moments while preserving authoritative empty branch snapshots', async () => {
     mockStore.scenario = {
       ...baseScenario,
       gameplay_state: null,
@@ -742,12 +742,7 @@ describe('SimulationView replay automation output', () => {
         },
         archive: {
           key_moments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
-          branch_snapshots: [
-            expect.objectContaining({
-              branch_id: 'b1',
-              title: '永世帝国',
-            }),
-          ],
+          branch_snapshots: [],
         },
       }));
     });

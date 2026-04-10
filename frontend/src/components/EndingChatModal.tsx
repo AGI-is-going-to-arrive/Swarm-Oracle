@@ -669,7 +669,7 @@ export default function EndingChatModal({
       }
     }
     syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
-  }, [activeThread?.id, currentTurnSignature, displayedDraftSignature, displayedDrafts.length, effectiveSnapshot?.id]);
+  }, [activeThread?.id, currentTurnSignature, currentTurns.length, displayedDraftSignature, displayedDrafts.length, effectiveSnapshot?.id]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -731,9 +731,11 @@ export default function EndingChatModal({
   }, [
     activeThread?.id,
     branch,
+    composerEnabled,
     currentSpeakerParticipantId,
     currentSpeakerTurnKey,
     currentTurns.length,
+    displayedDrafts.length,
     effectiveInteractionMode,
     interactionMode,
     automationPendingDrafts,
@@ -746,6 +748,7 @@ export default function EndingChatModal({
     sending,
     effectiveSnapshot?.current_phase,
     effectiveSnapshot?.id,
+    effectiveSnapshot?.room_type,
     pendingQuestionAnchorIds,
     status,
     threads.length,

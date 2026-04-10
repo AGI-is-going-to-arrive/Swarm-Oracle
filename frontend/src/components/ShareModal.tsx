@@ -34,8 +34,7 @@ interface ShareModalProps {
 }
 
 export default function ShareModal({ scenarioId, shareContext, onClose, onAutomationStateChange }: ShareModalProps) {
-  const { t, i18n } = useTranslation();
-  const isZh = i18n.language.startsWith('zh');
+  const { t } = useTranslation();
   const directorIdentity = getDirectorIdentity();
   const [activePlatform, setActivePlatform] = useState<string | null>(null);
   const [copy, setCopy] = useState('');
@@ -74,7 +73,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     } finally {
       setLoading(false);
     }
-  }, [scenarioId, loading, shareContext, isZh, t, directorIdentity.userId]);
+  }, [scenarioId, loading, t, directorIdentity.userId]);
 
   const handleCopy = useCallback(async () => {
     setCopyError('');

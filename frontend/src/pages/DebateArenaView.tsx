@@ -204,7 +204,10 @@ export function DebateArenaView() {
     () => buildDebatePhaseSummaries(visibleTurns, unlockedPhases),
     [unlockedPhases, visibleTurns],
   );
-  const serverPhaseInsights = debate?.phase_insights ?? [];
+  const serverPhaseInsights = useMemo(
+    () => debate?.phase_insights ?? [],
+    [debate?.phase_insights],
+  );
   const serverPhaseInsightMap = useMemo(
     () => new Map(serverPhaseInsights.map((insight) => [insight.phase, insight])),
     [serverPhaseInsights],
@@ -585,9 +588,12 @@ export function DebateArenaView() {
     availablePredictionOptions,
     debate,
     error,
+    errorCode,
+    feedFocusLabel,
     phaseLocked,
     phaseScoreDelta,
     revealCount,
+    latestVisibleTurn?.id,
     selectedPhase,
     showBetModal,
     phaseCue,

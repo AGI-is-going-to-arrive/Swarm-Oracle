@@ -35,10 +35,16 @@
 - 主模式 authority 来自后端：
   - `director_state`
   - `gameplay_state`
+- `gameplay_state` 当前按分区看 authority：
+  - 只要后端显式返回该分区字段，即使值是空数组，也视为后端已接管该分区
+  - 前端不会再把本地 `scenarioMeta` 里的 stale `bets / key_moments / branch_snapshots / usage_log` 反向补回去
 - 前端 authority 合流主要通过：
   - `frontend/src/lib/scenarioAuthority.ts`
   - `frontend/src/lib/scenarioDirectorState.ts`
   - `frontend/src/lib/scenarioGameplayState.ts`
+- `gameplay_state` 当前按“分区显式拥有”判断 authority：
+  - 后端只要显式返回 `cards.usage_log`、`betting.bets`、`archive.key_moments`、`archive.branch_snapshots`，即使数组为空，前端也视为该分区已由后端接管。
+  - 这种情况下前端不会再用本地 `scenarioMeta` 把旧的玩法卡、押注或 archive raw 数据补回去。
 
 ### 兼容与缓存层
 
@@ -141,6 +147,7 @@
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
+- `ShareModal / GameplayCardsModal / InputView / DebateArenaView / DebateResultView / SimulationView / ResultView / EndingChatModal / WorldlineRoundtableView` 当前已清完 `react-hooks/exhaustive-deps` warning；本轮只补 hook 依赖与派生值稳定化，没有改业务口径。
 - 单结局结果页当前不展示 `worldline_roundtable / crossline_gallery` 入口，只保留 `ending_chamber / one_move_only`。
 - Oracle fresh live room 的 English deterministic anchor copy 当前已补去混句兜底；single-ending / roundtable 在 fresh room 下不会再把中文 hinge 直接嵌进英文句子。
 - `EndingChatModal` 当前已补：

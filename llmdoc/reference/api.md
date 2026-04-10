@@ -91,6 +91,9 @@
 
 - `director-state` 与 `gameplay-state` 的写入都使用 `revision` 乐观并发控制。
 - 前端命中 stale 写入时应先回读最新 authority，再决定是否重试。
+- `gameplay-state` 采用分区级 authority：
+  - 后端只要显式返回 `cards.usage_log`、`betting.bets`、`archive.key_moments`、`archive.branch_snapshots`，即使为空数组，也表示该分区 authoritative empty。
+  - 前端不得再用本地缓存把该分区的旧数据补回去。
 
 ## Predictions
 

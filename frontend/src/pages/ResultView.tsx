@@ -120,6 +120,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReturningBadge } from '../components/ReturningBadge';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
+const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
 
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
@@ -711,7 +712,7 @@ export default function ResultView() {
     setActiveEndingRoomSelectedAgentIds(selectedAgentIds);
     setPendingEndingRoomPicker(null);
     setEndingRoomAutomation(null);
-  }, []);
+  }, [setEndingRoomAutomation]);
 
   const normalizeEndingRoomSelection = useCallback((
     branchId: string,
@@ -766,7 +767,7 @@ export default function ResultView() {
     setActiveEndingRoomBranchId(null);
     setActiveEndingRoomSelectedAgentIds([]);
     setEndingRoomAutomation(null);
-  }, []);
+  }, [setEndingRoomAutomation]);
 
   const handleEndingRoomModeChange = useCallback((nextMode: 'ending_chamber' | 'one_move_only') => {
     if (!activeEndingRoomBranchId) {
@@ -779,9 +780,12 @@ export default function ResultView() {
     ));
     setActiveEndingRoomMode(nextMode);
     setEndingRoomAutomation(null);
-  }, [activeEndingRoomBranchId, normalizeEndingRoomSelection]);
+  }, [activeEndingRoomBranchId, normalizeEndingRoomSelection, setEndingRoomAutomation]);
 
-  const branches = storyData?.branches ?? [];
+  const branches = useMemo(
+    () => storyData?.branches ?? [],
+    [storyData?.branches],
+  );
 
   useEffect(() => {
     if (debugEndingRoomAppliedRef.current) return;
@@ -823,6 +827,8 @@ export default function ResultView() {
     if (!id || derivedScenarioMeta || replayPayload?.scenarioMeta) {
       return null;
     }
+    // Re-read local cached meta when an in-view action bumps the revision.
+    void localMetaRevision;
     return loadScenarioMeta(id);
   }, [derivedScenarioMeta, id, localMetaRevision, replayPayload?.scenarioMeta]);
   const storedScenarioMeta = derivedScenarioMeta ?? replayPayload?.scenarioMeta ?? fallbackScenarioMeta;
@@ -857,12 +863,17 @@ export default function ResultView() {
           isZh,
         )
       : null;
-  const gameplayProfileHooks = resolvedProfileId
-    ? getGameplayProfileSignatureHooks(
-        resolvedProfileId as Parameters<typeof getGameplayProfileSignatureHooks>[0],
-        isZh,
-      )
-    : [];
+  const gameplayProfileHooks = useMemo(
+    () => (
+      resolvedProfileId
+        ? getGameplayProfileSignatureHooks(
+            resolvedProfileId as Parameters<typeof getGameplayProfileSignatureHooks>[0],
+            isZh,
+          )
+        : EMPTY_GAMEPLAY_PROFILE_HOOKS
+    ),
+    [isZh, resolvedProfileId],
+  );
   const dominantBranchFromStory = useMemo(
     () => [...branches].sort((a, b) => b.probability - a.probability)[0] ?? null,
     [branches],
@@ -880,7 +891,7 @@ export default function ResultView() {
       scenarioMeta.cards.usageLog,
       isZh,
     );
-  }, [isZh, resolvedProfileId, scenarioMeta?.cards.usageLog]);
+  }, [isZh, resolvedProfileId, scenarioMeta]);
   const systemTracks = useMemo(() => {
     if (!scenarioMeta || !resolvedProfileId) return null;
     return getScenarioSystemTrackState(
@@ -889,7 +900,7 @@ export default function ResultView() {
       scenarioMeta.commitment,
       isZh,
     );
-  }, [isZh, resolvedProfileId, scenarioMeta?.cards.usageLog, scenarioMeta?.commitment]);
+  }, [isZh, resolvedProfileId, scenarioMeta]);
   const evaluatedObjectives = useMemo(() => (
     scenarioMeta
       ? evaluateDirectorObjectives({
@@ -1113,8 +1124,7 @@ export default function ResultView() {
     gameplayProfileHooks,
     profileResonanceLabel,
     directorStyleLabel,
-    displayArchive?.dominantBranchTitle,
-    displayArchive?.counterplayCardCount,
+    displayArchive,
     scenarioMeta?.commitment.active,
     scenarioMeta?.commitment.branchTitle,
     counterplaySummaryLabel,
@@ -1165,6 +1175,7 @@ export default function ResultView() {
     replaySnapshot,
   ]);
   const effectiveEndingRoomReplayPayload = activeEndingRoomReplayPayload ?? liveEndingRoomReplayPayload;
+  const canImportActiveEndingRoomReplay = Boolean(activeEndingRoomReplayPayload);
   const handleOpenRoundtable = useCallback(() => {
     if (!scenario?.id || isReplayMode || branches.length < 2) {
       return;
@@ -1283,7 +1294,7 @@ export default function ResultView() {
             ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
             : (isZh ? '保存只读副本' : 'Save read-only copy')}
         </button>
-        {activeEndingRoomReplayPayload?.scenarioReplay && (
+        {canImportActiveEndingRoomReplay && (
           <button
             type="button"
             className="ending-chat-inline-button"
@@ -1298,6 +1309,7 @@ export default function ResultView() {
       </>
     );
   }, [
+    canImportActiveEndingRoomReplay,
     effectiveEndingRoomReplayPayload,
     endingRoomLocalCopySaved,
     endingRoomPermalinkCopied,
@@ -1442,7 +1454,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
+  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayArchive, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
     return (

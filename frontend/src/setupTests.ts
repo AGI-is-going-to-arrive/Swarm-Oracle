@@ -1,6 +1,31 @@
 import "@testing-library/jest-dom";
 import { vi } from 'vitest';
 
+function createMemoryStorage(): Storage {
+  const store = new Map<string, string>();
+
+  return {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.get(String(key)) ?? null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(String(key));
+    },
+    setItem(key: string, value: string) {
+      store.set(String(key), String(value));
+    },
+  };
+}
+
 function parseFontSize(font: string): number {
   const match = font.match(/(\d+(?:\.\d+)?)px/);
   return match ? Number.parseFloat(match[1]) : 16;
@@ -61,5 +86,31 @@ if (typeof HTMLCanvasElement !== 'undefined') {
       }
       return canvas2DContext;
     }),
+  });
+}
+
+if (typeof window !== 'undefined') {
+  const localStorage = createMemoryStorage();
+  const sessionStorage = createMemoryStorage();
+
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: localStorage,
+  });
+  Object.defineProperty(window, 'sessionStorage', {
+    configurable: true,
+    writable: true,
+    value: sessionStorage,
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: localStorage,
+  });
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    configurable: true,
+    writable: true,
+    value: sessionStorage,
   });
 }

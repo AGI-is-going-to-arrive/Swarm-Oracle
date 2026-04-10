@@ -639,7 +639,10 @@ export function SimulationView() {
       }
     };
   }, [
+    activeBranches.length,
+    archiveKeyMoments.length,
     branches,
+    canCopyReplayLink,
     captureStatus,
     captureMode,
     completedObjectiveCount,
@@ -652,6 +655,7 @@ export function SimulationView() {
     systemTracks,
     interventionTarget,
     isSimulationComplete,
+    lastCaptureKind,
     agents.length,
     messages.length,
     thinkingAgents,
@@ -813,7 +817,7 @@ export function SimulationView() {
       lastCommitmentAction.current = null;
       showCommitmentFeedback('success', t('sim.director.commit_cleared'));
     }
-  }, [scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId, showCommitmentFeedback, t]);
+  }, [scenarioMeta, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId, showCommitmentFeedback, t]);
 
   useEffect(() => {
     if (!authorityConflictKind) return;
@@ -1013,6 +1017,7 @@ export function SimulationView() {
       }
     };
   }, [
+    archiveKeyMoments.length,
     branches,
     captureStatus,
     captureMode,
@@ -1049,6 +1054,7 @@ export function SimulationView() {
     status,
     systemTracks,
     canToggleViewMode,
+    lastCaptureKind,
     viewMode,
     visualizationEnabled,
   ]);

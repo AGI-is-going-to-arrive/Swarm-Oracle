@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -45,6 +45,7 @@ export function DebateResultView() {
   const [searchParams] = useSearchParams();
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
+  const translationRef = useRef(t);
 
   const { capabilities } = useCapabilityCheck('argument_map');
   const [payload, setPayload] = useState<DebateResultPayload | null>(null);
@@ -61,6 +62,10 @@ export function DebateResultView() {
   const isReplayMode = Boolean(replayPayload);
 
   useEffect(() => {
+    translationRef.current = t;
+  }, [t]);
+
+  useEffect(() => {
     if (replayPayload) {
       setPayload(replayPayload);
       setError('');
@@ -69,7 +74,7 @@ export function DebateResultView() {
       return;
     }
     if (!id) {
-      setError(t('debate.result_missing'));
+      setError(translationRef.current('debate.result_missing'));
       setErrorCode('DEBATE_RESULT_MISSING');
       setLoading(false);
       return;
@@ -77,7 +82,6 @@ export function DebateResultView() {
     let cancelled = false;
     let timer: number | null = null;
     let retryAttempts = 0;
-
     const load = async () => {
       try {
         const nextPayload = await getDebateResult(id);
@@ -87,12 +91,12 @@ export function DebateResultView() {
         setErrorCode(null);
         setLoading(false);
       } catch (nextError) {
-        const message = nextError instanceof Error ? nextError.message : t('debate.result_load_failed');
+        const message = nextError instanceof Error ? nextError.message : translationRef.current('debate.result_load_failed');
         if (isApiError(nextError) && nextError.status === 409) {
           if (retryAttempts >= MAX_RESULT_RETRY_ATTEMPTS) {
             if (!cancelled) {
               setErrorCode(getApiErrorCode(nextError) ?? 'DEBATE_RESULT_NOT_READY');
-              setError(getLocalizedApiErrorMessage(nextError, t, message));
+              setError(getLocalizedApiErrorMessage(nextError, translationRef.current, message));
               setLoading(false);
             }
             return;
@@ -103,7 +107,7 @@ export function DebateResultView() {
         }
         if (!cancelled) {
           setErrorCode(getApiErrorCode(nextError) ?? 'DEBATE_RESULT_LOAD_FAILED');
-          setError(getLocalizedApiErrorMessage(nextError, t, message));
+          setError(getLocalizedApiErrorMessage(nextError, translationRef.current, message));
           setLoading(false);
         }
       }
@@ -144,12 +148,18 @@ export function DebateResultView() {
     [counterplayRecord, payload?.result],
   );
   const judgeRationale = payload?.result?.judge_rationale ?? null;
-  const supportingTurns = judgeRationale?.supporting_turns ?? [];
+  const supportingTurns = useMemo(
+    () => judgeRationale?.supporting_turns ?? [],
+    [judgeRationale?.supporting_turns],
+  );
   const phaseSummaries = useMemo(
     () => buildDebatePhaseSummaries(payload?.turns ?? [], payload ? payload.turns.map((turn) => turn.phase) : []),
     [payload],
   );
-  const serverPhaseInsights = payload?.phase_insights ?? [];
+  const serverPhaseInsights = useMemo(
+    () => payload?.phase_insights ?? [],
+    [payload?.phase_insights],
+  );
   const serverPhaseInsightMap = useMemo(
     () => new Map(serverPhaseInsights.map((insight) => [insight.phase, insight])),
     [serverPhaseInsights],

@@ -315,6 +315,8 @@ export default function GameplayCardsModal({
     errorMsg,
     gameplayProfile.id,
     cardCooldownRemaining,
+    meta.commitment.active,
+    meta.commitment.branchId,
     meta.director.remainingPoints,
     normalizedCurrentRound,
     onAutomationStateChange,

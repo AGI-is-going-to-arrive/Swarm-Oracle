@@ -127,12 +127,13 @@ export default function WorldlineRoundtableView() {
   useEffect(() => {
     if (!showMobileRoster) return;
     const dialog = mobileRosterDialogRef.current;
+    const trigger = mobileRosterTriggerRef.current;
     if (dialog) dialog.focus();
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowMobileRoster(false); };
     document.addEventListener('keydown', handleKey);
     return () => {
       document.removeEventListener('keydown', handleKey);
-      mobileRosterTriggerRef.current?.focus();
+      trigger?.focus();
     };
   }, [showMobileRoster]);
   const [importingReplay, setImportingReplay] = useState(false);
@@ -690,7 +691,7 @@ export default function WorldlineRoundtableView() {
         collapsedTurnCount,
       },
     ),
-    [collapsedTurnCount, transcriptBubbleLayouts, transcriptDraftLayouts, currentTurns.length, displayedDrafts.length],
+    [collapsedTurnCount, transcriptBubbleLayouts, transcriptDraftLayouts],
   );
 
   useEffect(() => {
