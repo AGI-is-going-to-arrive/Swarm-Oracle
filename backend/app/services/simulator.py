@@ -25,7 +25,11 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
-from app.services.llm_client import get_runtime_parallelism_limit, llm_call_json
+from app.services.llm_client import (
+    get_runtime_parallelism_limit,
+    llm_call_json,
+    llm_call_json_with_stream_fallback,
+)
 from app.services.memory import (
     build_agent_context,
     compress_rounds,
@@ -87,6 +91,7 @@ _FORK_DEBUG_MAX_SIGNALS = 12
 _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
 _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
+_IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
@@ -152,6 +157,31 @@ def _sanitize_fork_debug_result(payload: Any) -> dict[str, Any]:
         ),
         "branches": sanitized_branches,
     }
+
+
+async def _summarize_identity_compaction_group(summaries: list[str]) -> str:
+    from app.services.vector_store import build_compaction_prompt
+
+    prompt = build_compaction_prompt(summaries)
+    fallback_summary = " | ".join(summaries)[:600]
+
+    try:
+        result = await llm_call_json_with_stream_fallback(
+            prompt,
+            reasoning_effort="low",
+            temperature=0.3,
+            probe_timeout=_IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS,
+        )
+        summary = str(result.get("compacted_summary") or "").strip()
+        if summary:
+            return summary
+    except Exception:
+        logger.warning(
+            "identity compaction non-stream failed, using text fallback",
+            exc_info=True,
+        )
+
+    return fallback_summary
 
 
 def _record_fork_debug_trace(engine, scenario_id: str, entry: dict[str, Any]) -> None:
@@ -1561,9 +1591,7 @@ async def run_simulation(
             async def _run_compaction(
                 pairs: list[tuple[str, str]],
             ) -> None:
-                from app.services.llm_client import llm_call_json
                 from app.services.vector_store import (
-                    build_compaction_prompt,
                     execute_compaction_group,
                     prepare_compaction_groups,
                 )
@@ -1574,13 +1602,8 @@ async def run_simulation(
                         )
                         for grp in groups:
                             try:
-                                result = await llm_call_json(
-                                    build_compaction_prompt(grp.summaries),
-                                    temperature=0.3,
-                                )
-                                summary = result.get(
-                                    "compacted_summary",
-                                    " | ".join(grp.summaries)[:600],
+                                summary = await _summarize_identity_compaction_group(
+                                    grp.summaries,
                                 )
                             except Exception:
                                 # LLM failure fallback: concatenate

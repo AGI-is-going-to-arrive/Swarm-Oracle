@@ -1886,6 +1886,56 @@ async def llm_call_json_stream(
     return _parse_json_response(cleaned, fallback_mode=fallback_mode)
 
 
+async def llm_call_json_with_stream_fallback(
+    input_text: str,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    fallback_mode: str | None = None,
+    probe_timeout: float = 8.0,
+) -> dict:
+    """Prefer streaming JSON when supported, otherwise fall back to non-stream.
+
+    This helper is opt-in. Existing callers keep their current behavior unless
+    they explicitly choose the streaming-first path.
+    """
+    probe = await probe_streaming_support(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        timeout=probe_timeout,
+    )
+    if probe.get("supported"):
+        try:
+            return await llm_call_json_stream(
+                input_text,
+                reasoning_effort=reasoning_effort,
+                temperature=temperature,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                fallback_mode=fallback_mode,
+            )
+        except Exception:
+            logger.warning(
+                "Streaming JSON call failed, falling back to non-stream JSON",
+                exc_info=True,
+            )
+
+    return await llm_call_json(
+        input_text,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        fallback_mode=fallback_mode,
+    )
+
+
 async def health_check(
     *,
     api_key: str | None = None,

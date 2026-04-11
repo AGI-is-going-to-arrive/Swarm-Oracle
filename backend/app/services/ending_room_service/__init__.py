@@ -42,6 +42,7 @@ from app.models import (
 from app.models.database import _uuid, get_engine
 from app.services.llm_client import (  # noqa: F401 — needed for monkeypatch compatibility
     llm_call_json,
+    llm_call_json_with_stream_fallback,
     llm_call_stream,
     probe_streaming_support,
 )
@@ -727,6 +728,7 @@ async def _enhance_room_plan_with_llm(
                     for prev_index in range(max(0, index - 2), index)
                 ],
                 purpose=f"oracle_{room.room_type.value}_{turn['phase'].value}",
+                streaming_first=True,
             )
         )
     rewritten_by_index: dict[int, str] = {}

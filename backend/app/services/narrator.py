@@ -9,7 +9,7 @@ from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call_json_with_stream_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ async def narrate_branch(
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
     try:
         raw_result = await asyncio.wait_for(
-            llm_call_json(
+            llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
                 api_key=api_key,

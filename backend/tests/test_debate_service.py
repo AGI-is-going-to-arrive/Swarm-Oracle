@@ -399,36 +399,38 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
 
     counter = {"turns": 0}
 
-    async def _fake_llm_call_json(prompt, *args, **kwargs):
-        if "JSON verdict package" in prompt or "裁决理由 JSON" in prompt:
-            return {
-                "summary": "LLM judge summary",
-                "winner_reason": "LLM winner reason",
-                "loser_gap": "LLM loser gap",
-                "swing_factor": "LLM swing factor",
-                "closing_note": "LLM closing note",
-                "dimension_rationales": {
-                    "coherence": "LLM coherence",
-                    "evidence": "LLM evidence",
-                    "adaptability": "LLM adaptability",
-                    "impact": "LLM impact",
-                },
-                "counterplay_explanation": "",
-                "adjudication": {
-                    "winner": "opposition",
-                    "verdict_tone": "rupture",
-                    "dimensions": {
-                        "coherence": {"proposition": 1, "opposition": 5},
-                        "evidence": {"proposition": 2, "opposition": 5},
-                        "adaptability": {"proposition": 2, "opposition": 4},
-                        "impact": {"proposition": 1, "opposition": 5},
-                    },
-                },
-            }
+    async def _fake_turn_llm(prompt, *args, **kwargs):
         counter["turns"] += 1
         return {"content": f"LLM turn #{counter['turns']}"}
 
-    monkeypatch.setattr(debate_module, "llm_call_json", _fake_llm_call_json)
+    async def _fake_judge_llm(prompt, *args, **kwargs):
+        return {
+            "summary": "LLM judge summary",
+            "winner_reason": "LLM winner reason",
+            "loser_gap": "LLM loser gap",
+            "swing_factor": "LLM swing factor",
+            "closing_note": "LLM closing note",
+            "dimension_rationales": {
+                "coherence": "LLM coherence",
+                "evidence": "LLM evidence",
+                "adaptability": "LLM adaptability",
+                "impact": "LLM impact",
+            },
+            "counterplay_explanation": "",
+            "adjudication": {
+                "winner": "opposition",
+                "verdict_tone": "rupture",
+                "dimensions": {
+                    "coherence": {"proposition": 1, "opposition": 5},
+                    "evidence": {"proposition": 2, "opposition": 5},
+                    "adaptability": {"proposition": 2, "opposition": 4},
+                    "impact": {"proposition": 1, "opposition": 5},
+                },
+            },
+        }
+
+    monkeypatch.setattr(debate_module, "llm_call_json", _fake_turn_llm)
+    monkeypatch.setattr(debate_module, "llm_call_json_with_stream_fallback", _fake_judge_llm)
 
     debate = create_debate_record("Should a permanent audit chamber review every emergency budget?")
 

@@ -39,7 +39,12 @@ from app.services.debate_scoring import (
     DebatePlan,
     build_debate_plan,
 )
-from app.services.llm_client import format_untrusted_text_block, llm_call_json, llm_request_scope
+from app.services.llm_client import (
+    format_untrusted_text_block,
+    llm_call_json,
+    llm_call_json_with_stream_fallback,
+    llm_request_scope,
+)
 from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
 
 # Phase 3 F6: Argument map extraction (non-blocking)
@@ -1150,7 +1155,7 @@ async def _generate_judge_analysis(
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
-            result = await llm_call_json(
+            result = await llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort=overrides.get("reasoning_effort") or "low",
                 model=overrides.get("model"),

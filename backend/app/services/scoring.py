@@ -20,7 +20,7 @@ from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
 
@@ -335,7 +335,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
             requests_per_minute=effective_requests_per_minute,
             tokens_per_minute=effective_tokens_per_minute,
         ):
-            result = await llm_call_json(
+            result = await llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
                 model=effective_model,

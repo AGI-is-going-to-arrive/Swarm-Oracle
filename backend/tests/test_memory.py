@@ -270,7 +270,7 @@ class TestCompressRounds:
             "tension_points": ["主战派与主和派之间的根本路线之争"],
             "consensus": "众人一致认为需要加强后勤",
         }
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             result = await compress_rounds("[曹操]: 我要南征\n[刘备]: 我们必须抵抗")
 
@@ -291,7 +291,7 @@ class TestCompressRounds:
             "tension_points": ["The alliance may fracture."],
             "consensus": "",
         }
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             await compress_rounds("[A]: We escalate at dawn.", language="English")
 
@@ -304,7 +304,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_partial_fields_from_llm(self):
         """LLM returning only some fields should still produce valid result."""
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {"situation": "混乱局势"}
             result = await compress_rounds("[A]: 发言内容")
 
@@ -317,7 +317,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_empty_input(self):
         """Empty string input should return defaults without calling LLM."""
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             result = await compress_rounds("")
 
         assert result == _COMPRESS_DEFAULTS
@@ -326,7 +326,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_whitespace_input(self):
         """Whitespace-only input should return defaults without calling LLM."""
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             result = await compress_rounds("   \n\t  ")
 
         assert result == _COMPRESS_DEFAULTS
@@ -342,7 +342,7 @@ class TestCompressRounds:
             "tension_points": ["旧紧张点"],
             "consensus": "旧共识",
         }
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM connection failed")
             result = await compress_rounds(
                 "[A]: some message",
@@ -361,7 +361,7 @@ class TestCompressRounds:
             await asyncio.sleep(0.05)
             return {"situation": "来不及返回"}
 
-        with patch("app.services.memory.llm_call_json", side_effect=_slow_llm) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", side_effect=_slow_llm) as mock_llm:
             result = await compress_rounds("[A]: some message")
 
         assert result == _COMPRESS_DEFAULTS
@@ -385,7 +385,7 @@ class TestCompressRounds:
             "tension_points": [],
             "consensus": "",
         }
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = [older_response, final_response]
             result = await compress_rounds(long_text)
 
@@ -409,7 +409,7 @@ class TestCompressRounds:
             "tension_points": ["新紧张点"],
             "consensus": "新共识",
         }
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             await compress_rounds(
                 "[B]: 当前窗口原始发言",
@@ -431,7 +431,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_provider_overrides_are_forwarded(self):
         """BYOK overrides should propagate to the compression LLM call."""
-        with patch("app.services.memory.llm_call_json", new_callable=AsyncMock) as mock_llm:
+        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {"situation": "局势"}
             await compress_rounds(
                 "[A]: 当前局势更新",

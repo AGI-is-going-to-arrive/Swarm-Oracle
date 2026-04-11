@@ -15,7 +15,7 @@ from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call_json_with_stream_fallback,
 )
 from app.services.vector_store import get_vector_store
 
@@ -799,7 +799,7 @@ async def _compress_round_window(
     fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)
     try:
         result = await asyncio.wait_for(
-            llm_call_json(
+            llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
                 api_key=api_key,

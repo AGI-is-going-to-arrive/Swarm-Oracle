@@ -208,6 +208,60 @@ python -m pytest tests/test_blackboard_e2e.py tests/test_token_matrix.py tests/t
 LLM_API_KEY=sk-xxx LLM_MODEL_NAME=gpt-xxx LLM_RESPONSES_URL=https://your-api/v1 python -m pytest tests/test_token_matrix.py tests/test_e2e_matrix.py -v
 ```
 
+### Backend JSON Stream-First 定向回归
+
+这组命令覆盖当前已经接到 `llm_call_json_with_stream_fallback()` 的主要结构化 JSON 链路：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_llm_client.py tests/test_parser.py tests/test_narrator.py tests/test_memory.py -q
+python -m pytest tests/test_simulator.py -q -k 'IdentityCompactionSummary'
+python -m pytest tests/test_identity_compaction.py tests/test_identity_compaction_integration.py tests/test_predictions.py -q -k 'score_prediction or score_all_for_scenario or score_predictions_endpoint'
+python -m pytest tests/test_debate_service.py tests/test_ending_room_service.py -q
+```
+
+当前覆盖面：
+
+- parser
+- narrator
+- memory 压缩
+- identity compaction
+- prediction scoring
+- debate judge summary
+- Oracle auto-recap 静态改写
+
+### 本地网关 live probe
+
+如果你在本地用 `8318 / 8317` 这类 OpenAI-compatible 兼容网关，先跑这条 probe，再决定是否把真实 LLM 纳入调试链路：
+
+```bash
+cd backend
+source .venv/bin/activate
+RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s
+```
+
+这条 probe 不进默认回归。它只回答两件事：
+
+- 非流式 `chat/completions` / `responses` 当前有没有正文
+- 流式 JSON 路径当前能不能正常返回可解析结果
+
+### Identity Compaction 集成烟雾测试
+
+真实 Chroma 路径的 identity compaction 烟雾测试是单独文件，不和原有 mock 单测混在一起：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_identity_compaction.py tests/test_identity_compaction_integration.py -q
+```
+
+说明：
+
+- `test_identity_compaction.py` 仍是 mock 单测
+- `test_identity_compaction_integration.py` 走真实临时 SQLite + 真实临时 Chroma
+- 默认不用真实 LLM；LLM 路径问题应先用 `test_llm_gateway_probe.py` 单独确认
+
 ### Backend 健康检查
 
 ```bash

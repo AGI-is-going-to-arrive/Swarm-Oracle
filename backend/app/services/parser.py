@@ -10,7 +10,7 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     LLMError,
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call_json_with_stream_fallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -631,7 +631,7 @@ async def parse_question(
 
     logger.info("Parsing question: %s (hierarchical=%s)", question[:80], hierarchical)
     try:
-        result = await llm_call_json(
+        result = await llm_call_json_with_stream_fallback(
             prompt, reasoning_effort="low",
             api_key=api_key, base_url=base_url, temperature=temperature, model=model,
         )
@@ -667,7 +667,7 @@ async def parse_question(
             untrusted_input_guardrail=UNTRUSTED_INPUT_GUARDRAIL,
         )
         try:
-            retry_result = await llm_call_json(
+            retry_result = await llm_call_json_with_stream_fallback(
                 retry_prompt,
                 **_build_parser_retry_kwargs(
                     api_key=api_key,

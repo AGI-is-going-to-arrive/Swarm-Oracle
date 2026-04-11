@@ -1493,6 +1493,7 @@ async def _maybe_rewrite_oracle_copy(
     interaction_mode: EndingRoomInteractionMode | None = None,
     recent_lines: list[str] | None = None,
     purpose: str,
+    streaming_first: bool = False,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return anchor_copy
@@ -1510,8 +1511,13 @@ async def _maybe_rewrite_oracle_copy(
     try:
         with llm_request_scope(quota_key=None, purpose=purpose):
             import app.services.ending_room_service as _pkg
+            llm_call = (
+                _pkg.llm_call_json_with_stream_fallback
+                if streaming_first
+                else _pkg.llm_call_json
+            )
             result = await asyncio.wait_for(
-                _pkg.llm_call_json(
+                llm_call(
                     prompt,
                     reasoning_effort="low",
                     temperature=0.55,
@@ -1622,4 +1628,3 @@ async def _stream_oracle_copy(
         language=room.language,
     )
     return _normalize_oracle_generated_content(polished, fallback=anchor_copy)
-

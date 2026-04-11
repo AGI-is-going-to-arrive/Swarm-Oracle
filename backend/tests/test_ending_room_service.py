@@ -383,6 +383,38 @@ def test_run_ending_room_background_uses_selected_agents_in_auto_recap():
     assert any(participant_lookup[turn["participant_id"]]["role_slot"] == "archivist" for turn in payload["turns"])  # noqa: E501
 
 
+def test_run_ending_room_background_passes_streaming_first_for_auto_recap(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    captured_flags: list[bool] = []
+
+    async def _fake_rewrite(**kwargs):
+        captured_flags.append(bool(kwargs.get("streaming_first")))
+        return kwargs["anchor_copy"]
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "_maybe_rewrite_oracle_copy", _fake_rewrite)
+
+    asyncio.run(
+        run_ending_room_background(
+            snapshot["id"],
+            ws_callback=AsyncMock(side_effect=_noop_broadcast),
+        )
+    )
+
+    assert captured_flags
+    assert all(captured_flags)
+
+
 def test_create_ending_room_deduplicates_under_concurrency():
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
 
@@ -1607,7 +1639,11 @@ def test_run_ending_room_background_prefers_llm_verdict_copy_when_enabled(monkey
         return {"content": "档案官结论：别再把这一步说成命运，它就是没人及时踩刹车。"}
 
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
-    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "llm_call_json_with_stream_fallback",
+        _fake_llm_call_json,
+    )
 
     asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
@@ -1631,7 +1667,11 @@ def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatc
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
-    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _boom)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "llm_call_json_with_stream_fallback",
+        _boom,
+    )
 
     asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])

@@ -48,6 +48,7 @@ from app.services.simulator import (
     _save_messages,
     _save_narration,
     _save_round_summary,
+    _summarize_identity_compaction_group,
     _update_branch_status,
     add_pending_intervention,
     clear_pending_interventions_for_scenario,
@@ -1789,6 +1790,50 @@ class TestDetectFork:
 
         assert "偏积极的世界线分叉分析师" in captured["prompt"]
         assert "优先判定应该 fork" in captured["prompt"]
+
+
+class TestIdentityCompactionSummary:
+    @pytest.mark.asyncio
+    async def test_returns_summary_from_streaming_first_helper(self, monkeypatch):
+        async def _fake_call(*args, **kwargs):
+            return {"compacted_summary": "streamed summary"}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_call,
+        )
+
+        summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
+
+        assert summary == "streamed summary"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_concatenation_when_helper_returns_empty_summary(self, monkeypatch):
+        async def _fake_call(*args, **kwargs):
+            return {"compacted_summary": "   "}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_call,
+        )
+
+        summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
+
+        assert summary == "memory a | memory b"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_concatenation_when_helper_fails(self, monkeypatch):
+        async def _broken_call(*args, **kwargs):
+            raise RuntimeError("helper failed")
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _broken_call,
+        )
+
+        summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
+
+        assert summary == "memory a | memory b"
 
 
 # ── Corner Cases ─────────────────────────────────────────────

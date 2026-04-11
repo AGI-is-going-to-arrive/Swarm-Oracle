@@ -16,6 +16,7 @@ from app.services.llm_client import (
     health_check,
     llm_call,
     llm_call_json,
+    llm_call_json_with_stream_fallback,
     llm_call_json_stream,
 )
 
@@ -1033,6 +1034,65 @@ class TestStreamingSupportProbe:
 
         assert result["supported"] is False
         assert "unsupported" in (result["reason"] or "")
+
+
+class TestJSONStreamFallbackHelper:
+    @pytest.mark.asyncio
+    async def test_prefers_streaming_when_probe_supported(self, monkeypatch):
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        async def _fake_stream(*args, **kwargs):
+            return {"answer": "from-stream"}
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("non-stream path should not run when stream succeeds")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _fake_stream)
+        monkeypatch.setattr(llm_client, "llm_call_json", _should_not_run)
+
+        result = await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
+
+        assert result == {"answer": "from-stream"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_non_stream_when_probe_reports_unsupported(self, monkeypatch):
+        async def _fake_probe(**kwargs):
+            return {"supported": False, "reason": "unsupported"}
+
+        async def _fake_non_stream(*args, **kwargs):
+            return {"answer": "from-non-stream"}
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("stream path should not run when probe is unsupported")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _should_not_run)
+        monkeypatch.setattr(llm_client, "llm_call_json", _fake_non_stream)
+
+        result = await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
+
+        assert result == {"answer": "from-non-stream"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_non_stream_when_stream_call_errors(self, monkeypatch):
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        async def _broken_stream(*args, **kwargs):
+            raise llm_client.LLMError("stream failed")
+
+        async def _fake_non_stream(*args, **kwargs):
+            return {"answer": "fallback"}
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _broken_stream)
+        monkeypatch.setattr(llm_client, "llm_call_json", _fake_non_stream)
+
+        result = await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
+
+        assert result == {"answer": "fallback"}
 
 
 class TestStripReasoningBlocks:

@@ -9,7 +9,7 @@ from app.services.narrator import narrate_branch
 
 class TestNarrateBranch:
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_basic_narration(self, mock_llm):
         """Should return story, insight, key_moments from LLM response."""
         mock_llm.return_value = {
@@ -31,7 +31,7 @@ class TestNarrateBranch:
         mock_llm.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_empty_llm_response(self, mock_llm):
         """Should handle LLM returning empty/partial response."""
         mock_llm.return_value = {}
@@ -48,7 +48,7 @@ class TestNarrateBranch:
         assert result["key_moments"] == []
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_list_payload_uses_first_mapping(self, mock_llm):
         """List payloads should not crash if the first useful item is a mapping."""
         mock_llm.return_value = [
@@ -66,7 +66,7 @@ class TestNarrateBranch:
         assert result["key_moments"] == ["转折点A", "转折点B"]
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_list_payload_without_mapping_falls_back_to_story(self, mock_llm):
         """String list payloads should degrade into a usable story instead of crashing."""
         mock_llm.return_value = ["临时叙事正文", "一句启示", "转折点1", "转折点2"]
@@ -78,7 +78,7 @@ class TestNarrateBranch:
         assert result["key_moments"] == ["转折点1", "转折点2"]
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_empty_branch_title(self, mock_llm):
         """Empty branch_title should use default."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
@@ -95,7 +95,7 @@ class TestNarrateBranch:
         assert "未命名分支" in call_args
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_probability_formatting(self, mock_llm):
         """Probability should be formatted as percentage in prompt."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
@@ -111,7 +111,7 @@ class TestNarrateBranch:
         assert "75%" in call_args
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_zero_probability(self, mock_llm):
         """Zero probability should be formatted as 0%."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
@@ -127,7 +127,7 @@ class TestNarrateBranch:
         assert "0%" in call_args
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_unicode_in_content(self, mock_llm):
         """Should handle unicode characters in all fields."""
         mock_llm.return_value = {
@@ -147,7 +147,7 @@ class TestNarrateBranch:
         assert len(result["key_moments"]) == 2
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_reasoning_effort_low(self, mock_llm):
         """Narration should use low reasoning effort for lower latency."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
@@ -158,7 +158,7 @@ class TestNarrateBranch:
         assert kwargs.get("reasoning_effort") == "low"
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_llm_failure_falls_back_to_compact_summary(self, mock_llm):
         """Narration should degrade to a compact summary if the LLM call fails."""
         mock_llm.side_effect = RuntimeError("llm unavailable")
@@ -175,7 +175,7 @@ class TestNarrateBranch:
         assert result["key_moments"] == ["[R1 A]: 第一条记录", "[R1 B]: 第二条记录"]
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_llm_failure_falls_back_in_english_when_requested(self, mock_llm):
         """Fallback narration should respect the requested output language."""
         mock_llm.side_effect = RuntimeError("llm unavailable")
@@ -192,7 +192,7 @@ class TestNarrateBranch:
         assert "compact summary" in result["insight"]
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_english_prompt_uses_english_scaffold(self, mock_llm):
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
 
@@ -211,7 +211,7 @@ class TestNarrateBranch:
         assert "原始交互记录" not in prompt
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_provider_overrides_are_forwarded(self, mock_llm):
         """BYOK overrides should propagate to the narration LLM call."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}
@@ -232,7 +232,7 @@ class TestNarrateBranch:
         assert kwargs["model"] == "gpt-test"
 
     @pytest.mark.asyncio
-    @patch("app.services.narrator.llm_call_json", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_prompt_wraps_untrusted_inputs(self, mock_llm):
         """Narration prompt should wrap user-controlled text in guarded blocks."""
         mock_llm.return_value = {"story": "s", "insight": "i", "key_moments": []}

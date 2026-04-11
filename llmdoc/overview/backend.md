@@ -36,7 +36,7 @@
 | Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
-| LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断 |
+| LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
@@ -123,9 +123,22 @@
   - circuit breaker
   - 共享 `httpx.AsyncClient`
   - request-scoped RPM/TPM 限制（BYOK 场景下由前端传入）。scope 限制只覆盖服务端默认值，触发后请求会排队等待下一个窗口，不会立即拒绝。
+- `llm_call_json_with_stream_fallback()` 当前已落到这些结构化 JSON 链路：
+  - parser
+  - narrator
+  - memory 压缩
+  - prediction scoring
+  - debate judge summary
+  - identity compaction
+  - Oracle auto-recap 静态改写
+  - 行为是：先 probe 当前 provider/model 是否支持流式 JSON；支持则优先流式，不支持或失败再退非流式。各业务自己的本地 fallback 仍保留，不靠 LLM helper 兜底所有问题。
+- 本地兼容网关的 live probe 当前有独立测试：
+  - `backend/tests/test_llm_gateway_probe.py`
+  - 用来确认本地 OpenAI-compatible 端点的非流式正文和流式 JSON 路径是否可用。
 - Oracle follow-up 的 stream support probe 当前复用 `llm_call_stream()`；`estimated_tokens` 预估已补回，不再因为 probe 自身变量缺失而误触发 fallback。
 - Oracle follow-up 流式链路当前会给“首个可见 delta”一个短预算；如果 provider 长时间不出可见 token，会尽快回退到非流式改写，而不是把 anchored follow-up 长时间挂住。
 - Oracle follow-up 当前会在 WebSocket delta 广播和最终 turn 落库前先剥掉 provider reasoning block；`<think>` 不会再泄漏进 transcript。
+- Oracle auto-recap 的静态改写当前已接到 `stream-first + non-stream fallback` helper；follow-up / thread 仍走独立流式状态机，不和 auto-recap 共用同一条改写调度逻辑。
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
