@@ -51,7 +51,11 @@ from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, rel
 try:
     from app.services.debate_argument_map import (
         extract_argument_units as _argmap_extract,
+    )
+    from app.services.debate_argument_map import (
         link_verdict as _argmap_link_verdict,
+    )
+    from app.services.debate_argument_map import (
         schedule_argument_enrichment_for_turn as _argmap_schedule_enrichment,
     )
     _ARGMAP_AVAILABLE = True
@@ -1299,7 +1303,12 @@ async def _generate_turn_content(
     return anchor_copy
 
 
-def create_debate_record(question: str, *, profile_hint: str | None = None) -> Debate:
+def create_debate_record(
+    question: str,
+    *,
+    profile_hint: str | None = None,
+    user_id: str = "anonymous",
+) -> Debate:
     language = resolve_debate_language(question)
     profile_id = profile_hint or infer_debate_profile(question)
     scene_theme = select_debate_scene(profile_id)
@@ -1307,6 +1316,7 @@ def create_debate_record(question: str, *, profile_hint: str | None = None) -> D
     debate = Debate(
         question=question,
         motion=build_motion(question, language),
+        user_id=user_id,
         language=language,
         profile_id=profile_id,
         scene_theme=scene_theme,
@@ -1539,7 +1549,13 @@ async def run_debate_background(
                 # Phase 3 F6: Extract argument units (non-blocking)
                 if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
                     try:
-                        _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+                        await asyncio.to_thread(
+                            _argmap_extract,
+                            debate_id,
+                            persisted_turn["id"],
+                            content,
+                            side.value,
+                        )
                         _argmap_schedule_enrichment(
                             debate_id=debate_id,
                             turn_id=persisted_turn["id"],
@@ -1642,7 +1658,13 @@ async def run_debate_background(
         # Phase 3 F6: Extract argument units (non-blocking)
         if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
             try:
-                _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+                await asyncio.to_thread(
+                    _argmap_extract,
+                    debate_id,
+                    persisted_turn["id"],
+                    content,
+                    side.value,
+                )
                 _argmap_schedule_enrichment(
                     debate_id=debate_id,
                     turn_id=persisted_turn["id"],
@@ -1676,13 +1698,14 @@ async def run_debate_background(
             },
         )
 
-        finalized = _finalize_debate(
+        finalized = await asyncio.to_thread(
+            _finalize_debate,
             debate_id,
             final_plan,
             judge_analysis=judge_analysis,
             adjudication_mode=adjudication_mode,
         )
-        result_payload = load_debate_result_payload(debate_id)
+        result_payload = await asyncio.to_thread(load_debate_result_payload, debate_id)
         await ws_callback(
             debate_id,
             {

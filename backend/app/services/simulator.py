@@ -1620,17 +1620,9 @@ async def run_simulation(
                             "compaction failed for %s/%s (non-blocking)",
                             uid, iid, exc_info=True,
                         )
+            from app.api.helpers import schedule_background_task
 
-            task = asyncio.create_task(_run_compaction(_compaction_pairs))
-
-            def _compaction_done(t: asyncio.Task) -> None:  # type: ignore[type-arg]
-                if t.cancelled():
-                    return
-                exc = t.exception()
-                if exc:
-                    logger.warning("compaction task exception: %s", exc)
-
-            task.add_done_callback(_compaction_done)
+            schedule_background_task(_run_compaction(_compaction_pairs))
 
     if scenario_finished:
         await push({"type": "simulation_done"})

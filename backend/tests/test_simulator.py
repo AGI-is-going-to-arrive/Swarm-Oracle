@@ -6,6 +6,7 @@ in isolation, using real SQLite test databases.
 
 import asyncio
 import json
+import logging
 
 import pytest
 from sqlmodel import Session, select
@@ -321,7 +322,14 @@ class TestRunSimulation:
                 "key_moments": [],
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -383,7 +391,14 @@ class TestRunSimulation:
                 "key_moments": [],
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -468,7 +483,14 @@ class TestRunSimulation:
                 "key_moments": [],
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -565,7 +587,14 @@ class TestRunSimulation:
                 "key_moments": [],
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -658,7 +687,14 @@ class TestRunSimulation:
                 "key_moments": [],
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -772,7 +808,14 @@ class TestRunSimulation:
                 "insight": "Continuity survived the fork.",
             }
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
 
         await run_simulation(scenario_id, branch_id=target_branch_id)
@@ -796,6 +839,7 @@ class TestRunSimulation:
 
 class TestResolveHierarchicalAgentSets:
     def test_missing_group_leader_falls_back_to_first_available_member(self, caplog):
+        caplog.set_level(logging.WARNING, logger="app.services.simulator")
         agents = [
             {"id": "a1", "name": "Worker Alpha", "role": "strategist"},
             {"id": "a2", "name": "Worker Beta", "role": "envoy"},
@@ -902,8 +946,18 @@ class TestGatherAgentMessages:
         def _raise_on_recent_messages(*args, **kwargs):
             raise AssertionError("blackboard path should not query recent DB messages")
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
-        monkeypatch.setattr("app.services.simulator._get_recent_messages", _raise_on_recent_messages)  # noqa: E501
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator._get_recent_messages",
+            _raise_on_recent_messages,
+        )
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -953,7 +1007,14 @@ class TestGatherAgentMessages:
         async def _push(event):
             pushed_events.append(event)
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -1013,7 +1074,14 @@ class TestGatherAgentMessages:
             current_calls -= 1
             return {"content": "正常发言", "emotion": "calm", "diverge": None}
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
 
         with llm_request_scope(quota_key="user:director-test", purpose="scenario_runtime"):
             results = await _gather_agent_messages(
@@ -1738,7 +1806,10 @@ class TestDetectFork:
             captured["model"] = kwargs.get("model")
             return {"should_fork": False, "reason": "仍属单一路线", "branches": []}
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
 
         result = await _detect_fork(
             engine,
@@ -1777,7 +1848,10 @@ class TestDetectFork:
             captured["prompt"] = prompt
             return {"should_fork": False, "reason": "still one path", "branches": []}
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
 
         await _detect_fork(
             engine,
@@ -1803,7 +1877,10 @@ class TestDetectFork:
         async def _broken_call(*_args, **_kwargs):
             raise RuntimeError("llm down")
 
-        monkeypatch.setattr("app.services.simulator.llm_call_json_with_stream_fallback", _broken_call)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _broken_call,
+        )
 
         result = await _detect_fork(
             engine,
@@ -1858,6 +1935,83 @@ class TestIdentityCompactionSummary:
         summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
 
         assert summary == "memory a | memory b"
+
+
+class TestIdentityCompactionTaskRegistration:
+    @pytest.mark.asyncio
+    async def test_scenario_end_registers_compaction_in_background_registry(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.user_id = "user-compaction"
+            scenario.parsed_context = {
+                "_language": "Chinese",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.7,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="记忆代理",
+                    role="分析师",
+                    tier=AgentTier.CORE,
+                    agent_identity_id="identity-compaction-1",
+                )
+            )
+            session.commit()
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "保持记录。", "emotion": "calm", "diverge": None}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "完成分支",
+                "story": "叙事完成。",
+                "insight": "需要压缩身份记忆。",
+                "key_moments": [],
+            }
+
+        scheduled_coroutines = []
+
+        def _fake_schedule_background_task(coro):
+            scheduled_coroutines.append(coro)
+            coro.close()
+            return asyncio.create_task(asyncio.sleep(0))
+
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "app.services.agent_identity.record_growth_event",
+            lambda **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "app.services.vector_store.store_identity_memory",
+            lambda **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            "app.services.vector_store.check_identity_compaction_needed",
+            lambda *_args, **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            "app.api.helpers.schedule_background_task",
+            _fake_schedule_background_task,
+        )
+        monkeypatch.setattr("app.services.simulator.settings.FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr("app.services.simulator.settings.FEATURE_IDENTITY_COMPACTION", True)
+
+        await run_simulation(scenario_id)
+
+        assert len(scheduled_coroutines) == 1
 
 
 # ── Corner Cases ─────────────────────────────────────────────

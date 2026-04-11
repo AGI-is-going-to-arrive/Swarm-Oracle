@@ -98,6 +98,79 @@ def _load_payload(payload_json: str | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _load_units_for_enrichment_sync(
+    debate_id: str,
+    turn_id: str,
+) -> list[dict[str, str]]:
+    with Session(get_engine()) as session:
+        units = session.exec(
+            select(DebateArgumentUnit).where(
+                DebateArgumentUnit.debate_id == debate_id,
+                DebateArgumentUnit.turn_id == turn_id,
+            )
+        ).all()
+    return [
+        {
+            "id": unit.id,
+            "node_id": unit.node_id,
+            "canonical_text": unit.canonical_text,
+            "unit_type": unit.unit_type,
+        }
+        for unit in units
+        if unit.canonical_text.strip()
+    ]
+
+
+def _apply_enriched_units_sync(
+    *,
+    speaker_side: str,
+    unit_refs_by_text: dict[str, dict[str, str]],
+    enriched_units: list[dict[str, Any]],
+) -> int:
+    updated = 0
+    with Session(get_engine()) as session:
+        for item in enriched_units:
+            if not isinstance(item, dict):
+                continue
+            normalized_text = _normalize_unit_text(str(item.get("text", "")))
+            if not normalized_text:
+                continue
+
+            original_unit = unit_refs_by_text.get(normalized_text)
+            if original_unit is None:
+                continue
+
+            unit = session.get(DebateArgumentUnit, original_unit["id"])
+            if unit is None:
+                continue
+
+            next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
+            stance = _normalize_stance(item.get("stance"))
+            confidence = _normalize_confidence(item.get("confidence"))
+
+            node = session.get(GraphNode, original_unit["node_id"])
+            if node is None:
+                continue
+
+            unit.unit_type = next_type
+            node.node_type = next_type
+
+            payload = _load_payload(node.payload_json)
+            payload["side"] = payload.get("side") or speaker_side
+            payload["stance"] = stance
+            payload["confidence"] = confidence
+            payload["enriched_by"] = "llm"
+            node.payload_json = json.dumps(payload, ensure_ascii=False)
+
+            session.add(unit)
+            session.add(node)
+            updated += 1
+
+        if updated:
+            session.commit()
+    return updated
+
+
 def _build_enrichment_prompt(
     *,
     debate_id: str,
@@ -235,18 +308,15 @@ async def enrich_argument_units_for_turn(
     if not settings.ARGUMENT_MAP_LLM_ENRICHMENT:
         return 0
 
-    with Session(get_engine()) as session:
-        units = session.exec(
-            select(DebateArgumentUnit).where(
-                DebateArgumentUnit.debate_id == debate_id,
-                DebateArgumentUnit.turn_id == turn_id,
-            )
-        ).all()
-
+    units = await asyncio.to_thread(
+        _load_units_for_enrichment_sync,
+        debate_id,
+        turn_id,
+    )
     if not units:
         return 0
 
-    unit_texts = [unit.canonical_text for unit in units if unit.canonical_text.strip()]
+    unit_texts = [unit["canonical_text"] for unit in units]
     if not unit_texts:
         return 0
 
@@ -277,53 +347,16 @@ async def enrich_argument_units_for_turn(
     if not isinstance(enriched_units, list):
         return 0
 
-    by_text: dict[str, DebateArgumentUnit] = {
-        _normalize_unit_text(unit.canonical_text): unit
+    by_text: dict[str, dict[str, str]] = {
+        _normalize_unit_text(unit["canonical_text"]): unit
         for unit in units
-        if unit.canonical_text.strip()
     }
-
-    updated = 0
-    with Session(get_engine()) as session:
-        for item in enriched_units:
-            if not isinstance(item, dict):
-                continue
-            normalized_text = _normalize_unit_text(str(item.get("text", "")))
-            if not normalized_text:
-                continue
-
-            original_unit = by_text.get(normalized_text)
-            if original_unit is None:
-                continue
-
-            unit = session.get(DebateArgumentUnit, original_unit.id)
-            if unit is None:
-                continue
-
-            next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
-            stance = _normalize_stance(item.get("stance"))
-            confidence = _normalize_confidence(item.get("confidence"))
-
-            node = session.get(GraphNode, unit.node_id)
-            if node is None:
-                continue
-
-            unit.unit_type = next_type
-            node.node_type = next_type
-
-            payload = _load_payload(node.payload_json)
-            payload["side"] = payload.get("side") or speaker_side
-            payload["stance"] = stance
-            payload["confidence"] = confidence
-            payload["enriched_by"] = "llm"
-            node.payload_json = json.dumps(payload, ensure_ascii=False)
-
-            session.add(unit)
-            session.add(node)
-            updated += 1
-
-        if updated:
-            session.commit()
+    updated = await asyncio.to_thread(
+        _apply_enriched_units_sync,
+        speaker_side=speaker_side,
+        unit_refs_by_text=by_text,
+        enriched_units=enriched_units,
+    )
 
     if updated:
         logger.info(
