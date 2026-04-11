@@ -246,6 +246,10 @@ RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s
 - 非流式 `chat/completions` / `responses` 当前有没有正文
 - 流式 JSON 路径当前能不能正常返回可解析结果
 
+补充：
+
+- 这条 probe 现在会把非流式 `500`、空正文、空 `output` 都记成观测结果，不会因为某个本地网关瞬时波动直接把整条 probe 跑挂
+
 ### Identity Compaction 集成烟雾测试
 
 真实 Chroma 路径的 identity compaction 烟雾测试是单独文件，不和原有 mock 单测混在一起：

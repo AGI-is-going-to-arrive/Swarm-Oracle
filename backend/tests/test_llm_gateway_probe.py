@@ -25,6 +25,13 @@ async def _probe_non_stream(base_url: str) -> dict:
         "Authorization": f"Bearer {LLM_API_KEY}",
         "Content-Type": "application/json",
     }
+    chat_status = None
+    responses_status = None
+    chat_content = ""
+    output_text = ""
+    chat_error = None
+    responses_error = None
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         chat_resp = await client.post(
             f"{base_url}/chat/completions",
@@ -35,9 +42,13 @@ async def _probe_non_stream(base_url: str) -> dict:
                 "max_tokens": 32,
             },
         )
-        chat_resp.raise_for_status()
-        chat_data = chat_resp.json()
-        chat_content = ((chat_data.get("choices") or [{}])[0].get("message") or {}).get("content")
+        chat_status = chat_resp.status_code
+        if chat_resp.is_success:
+            chat_data = chat_resp.json()
+            chat_content = ((chat_data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        else:
+            chat_data = {}
+            chat_error = chat_resp.text[:300]
 
         responses_resp = await client.post(
             f"{base_url}/responses",
@@ -47,20 +58,27 @@ async def _probe_non_stream(base_url: str) -> dict:
                 "input": 'Reply with exactly: {"ok":true}',
             },
         )
-        responses_resp.raise_for_status()
-        responses_data = responses_resp.json()
-        outputs = responses_data.get("output") or []
-        output_text = ""
-        if outputs:
-            msg = next((item for item in outputs if item.get("type") == "message"), None)
-            if msg and msg.get("content"):
-                first = msg["content"][0]
-                output_text = first.get("text") or first.get("output_text") or ""
+        responses_status = responses_resp.status_code
+        if responses_resp.is_success:
+            responses_data = responses_resp.json()
+            outputs = responses_data.get("output") or []
+            if outputs:
+                msg = next((item for item in outputs if item.get("type") == "message"), None)
+                if msg and msg.get("content"):
+                    first = msg["content"][0]
+                    output_text = first.get("text") or first.get("output_text") or ""
+        else:
+            responses_data = {}
+            responses_error = responses_resp.text[:300]
 
     return {
         "base_url": base_url,
+        "chat_status": chat_status,
+        "responses_status": responses_status,
         "chat_has_content": bool(isinstance(chat_content, str) and chat_content.strip()),
         "responses_has_output_text": bool(isinstance(output_text, str) and output_text.strip()),
+        "chat_error": chat_error,
+        "responses_error": responses_error,
         "chat_usage": chat_data.get("usage"),
         "responses_usage": responses_data.get("usage"),
     }

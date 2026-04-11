@@ -739,6 +739,98 @@ class TestLLMCall:
 
         assert result == "Visible answer"
 
+    @pytest.mark.asyncio
+    async def test_llm_call_raises_on_empty_chat_content(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                            }
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_uses_responses_top_level_output_text(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [],
+                    "output_text": "Top-level response text",
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with one sentence.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/responses",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Top-level response text"
+
+    @pytest.mark.asyncio
+    async def test_llm_call_raises_on_empty_responses_output(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content|Unexpected response structure"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/responses",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
     def test_shared_async_client_is_reused(self):
         first = llm_client._get_shared_async_client()
         second = llm_client._get_shared_async_client()

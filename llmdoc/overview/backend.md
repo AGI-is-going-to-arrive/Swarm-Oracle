@@ -132,6 +132,10 @@
   - identity compaction
   - Oracle auto-recap 静态改写
   - 行为是：先 probe 当前 provider/model 是否支持流式 JSON；支持则优先流式，不支持或失败再退非流式。各业务自己的本地 fallback 仍保留，不靠 LLM helper 兜底所有问题。
+- `llm_call()` 当前会把“`HTTP 200` 但非流式正文为空”视为 provider incompatibility，而不是静默返回空字符串：
+  - `chat/completions` 的 `choices[0].message.content` 为空会直接报错
+  - `responses` 会先尝试 `content[].text`、`content[].output_text`、top-level `output_text`；还拿不到正文就报错
+  - 这样上层不会再把空正文拖到 `json.loads("")` 才暴露
 - 本地兼容网关的 live probe 当前有独立测试：
   - `backend/tests/test_llm_gateway_probe.py`
   - 用来确认本地 OpenAI-compatible 端点的非流式正文和流式 JSON 路径是否可用。

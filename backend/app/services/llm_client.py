@@ -1460,14 +1460,20 @@ async def llm_call(
             # choices[0].message.content (may be None for reasoning-only models)
             text = data["choices"][0]["message"]["content"] or ""
         else:
-            # output[].type=="message" -> content[0].text
+            text = ""
             outputs = data.get("output", [])
             msg = next((o for o in outputs if o.get("type") == "message"), None)
             if msg is None:
                 msg = next((o for o in outputs if "content" in o), None)
-            if msg is None:
+            if msg is not None:
+                parts = msg.get("content") or []
+                if parts:
+                    first = parts[0] or {}
+                    text = first.get("text") or first.get("output_text") or ""
+            if not text:
+                text = data.get("output_text") or ""
+            if not text and msg is None:
                 raise KeyError("No message block in output")
-            text = msg["content"][0]["text"]
     except (KeyError, IndexError, TypeError, StopIteration) as exc:
         logger.error("Unexpected LLM response structure: %s",
                      json.dumps(data, ensure_ascii=False)[:500])
@@ -1477,6 +1483,12 @@ async def llm_call(
     tok_in = usage.get("prompt_tokens") or usage.get("input_tokens", "?")
     tok_out = usage.get("completion_tokens") or usage.get("output_tokens", "?")
     text = _strip_reasoning_blocks(text)
+    if not text.strip():
+        logger.error(
+            "LLM returned empty non-stream content despite success response: %s",
+            json.dumps(data, ensure_ascii=False)[:500],
+        )
+        raise LLMError("Empty non-stream content")
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
                  len(text), tok_in, tok_out)
     await _record_provider_success(provider_key)
