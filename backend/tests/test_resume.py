@@ -267,6 +267,8 @@ class TestResumeEndpoint:
             json={"source_branch_id": "b1", "round_number": 3},
         )
         assert resp.status_code == 404
+        data = resp.json()
+        assert data["detail"]["code"] == "FEATURE_DISABLED"
 
     @patch("app.api.graphs.schedule_background_task")
     @patch("app.api.graphs.run_sim_background")

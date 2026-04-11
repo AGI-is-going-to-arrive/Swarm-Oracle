@@ -236,13 +236,13 @@ class TestCheckpoints:
         assert data[1]["round_number"] == 2
         assert data[1]["blackboard_json"] is not None
 
-    def test_returns_empty_for_unknown_scenario(self, client):
-        """GET checkpoints should return empty list for unknown scenario."""
+    def test_returns_404_for_unknown_scenario(self, client):
+        """GET checkpoints should return 404 for unknown scenario."""
         resp = client.get(
             "/api/scenario/nonexistent/checkpoints",
         )
-        assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
     def test_filters_by_branch(self, client):
         """GET checkpoints with branch_id should only return matching checkpoints."""
