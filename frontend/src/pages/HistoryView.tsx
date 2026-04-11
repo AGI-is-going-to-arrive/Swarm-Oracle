@@ -33,15 +33,22 @@ export default function HistoryView() {
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [loadErrorFallback, setLoadErrorFallback] = useState('');
   const [loadErrorCode, setLoadErrorCode] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
+  const [deleteErrorFallback, setDeleteErrorFallback] = useState('');
+  const [deleteErrorCode, setDeleteErrorCode] = useState<string | null>(null);
+  const loadErrorMessage = loadErrorFallback
+    ? getLocalizedApiErrorMessage({ code: loadErrorCode }, t, loadErrorFallback)
+    : '';
+  const deleteErrorMessage = deleteErrorFallback
+    ? getLocalizedApiErrorMessage({ code: deleteErrorCode }, t, deleteErrorFallback)
+    : '';
 
   const load = useCallback(async () => {
     setLoading(true);
-    setLoadError('');
+    setLoadErrorFallback('');
     setLoadErrorCode(null);
     try {
       const statusParam = filter === 'all' ? undefined : filter;
@@ -50,13 +57,13 @@ export default function HistoryView() {
       setTotal(data.total ?? 0);
     } catch (err) {
       setLoadErrorCode(getApiErrorCode(err));
-      setLoadError(getLocalizedApiErrorMessage(err, t, 'Failed to load scenarios'));
+      setLoadErrorFallback('Failed to load scenarios');
       setScenarios([]);
       setTotal(0);
     } finally {
       setLoading(false);
     }
-  }, [filter, offset, t]);
+  }, [filter, offset]);
 
   useEffect(() => {
     load();
@@ -72,7 +79,8 @@ export default function HistoryView() {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
-    setDeleteError('');
+    setDeleteErrorFallback('');
+    setDeleteErrorCode(null);
     try {
       await deleteScenario(deleteTarget);
       setDeleteTarget(null);
@@ -83,7 +91,8 @@ export default function HistoryView() {
         await load(); // refresh list
       }
     } catch (err) {
-      setDeleteError(getLocalizedApiErrorMessage(err, t, 'Delete failed'));
+      setDeleteErrorCode(getApiErrorCode(err));
+      setDeleteErrorFallback('Delete failed');
     } finally {
       setDeleting(false);
     }
@@ -105,7 +114,7 @@ export default function HistoryView() {
     const render = () => stringifyAutomationPayload(
       {
         question: null,
-        status: loading ? 'loading' : loadError ? 'error' : 'idle',
+        status: loading ? 'loading' : loadErrorMessage ? 'error' : 'idle',
         currentRound: 0,
         totalRounds: null,
         viewMode: 'classic',
@@ -120,7 +129,7 @@ export default function HistoryView() {
         route: window.location.pathname,
         kind: 'history',
         loading,
-        error: buildAutomationErrorState(loadErrorCode, loadError),
+        error: buildAutomationErrorState(loadErrorCode, loadErrorMessage),
         filter,
         total,
         current_page: currentPage,
@@ -141,7 +150,7 @@ export default function HistoryView() {
         delete win.render_game_to_text;
       }
     };
-  }, [currentPage, filter, loadError, loadErrorCode, loading, scenarios, total, totalPages]);
+  }, [currentPage, filter, loadErrorCode, loadErrorMessage, loading, scenarios, total, totalPages]);
 
   return (
     <div className="history-view">
@@ -172,9 +181,9 @@ export default function HistoryView() {
         <div className="history-empty">
           <p>{t('sim.status.loading')}</p>
         </div>
-      ) : loadError ? (
+      ) : loadErrorMessage ? (
         <div className="history-empty">
-          <p className="result-error">{loadError}</p>
+          <p className="result-error">{loadErrorMessage}</p>
           <button className="btn" onClick={load}>
             ↺ Retry
           </button>
@@ -206,7 +215,8 @@ export default function HistoryView() {
                     onClick={(e) => {
                       e.stopPropagation();
                       setDeleteTarget(s.id);
-                      setDeleteError('');
+                      setDeleteErrorFallback('');
+                      setDeleteErrorCode(null);
                     }}
                   >
                     ×
@@ -255,7 +265,7 @@ export default function HistoryView() {
         <div className="modal-overlay" onClick={() => !deleting && setDeleteTarget(null)}>
           <div className="modal-content history-delete-modal" onClick={(e) => e.stopPropagation()}>
             <p className="delete-confirm-text">{t('history.delete_confirm')}</p>
-            {deleteError && <p className="modal-error">{deleteError}</p>}
+            {deleteErrorMessage && <p className="modal-error">{deleteErrorMessage}</p>}
             <div className="modal-footer">
               <button
                 className="btn btn-ghost"

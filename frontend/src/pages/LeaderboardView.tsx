@@ -18,23 +18,26 @@ export default function LeaderboardView() {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [errorFallback, setErrorFallback] = useState('');
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const errorMessage = errorFallback
+    ? getLocalizedApiErrorMessage({ code: errorCode }, t, errorFallback)
+    : '';
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setErrorFallback('');
     setErrorCode(null);
     try {
       const data = await getLeaderboard(50);
       setEntries(data ?? []);
     } catch (err) {
       setErrorCode(getApiErrorCode(err));
-      setError(getLocalizedApiErrorMessage(err, t, 'Failed to load leaderboard'));
+      setErrorFallback('Failed to load leaderboard');
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -45,7 +48,7 @@ export default function LeaderboardView() {
     const render = () => stringifyAutomationPayload(
       {
         question: null,
-        status: loading ? 'loading' : error ? 'error' : 'idle',
+        status: loading ? 'loading' : errorMessage ? 'error' : 'idle',
         currentRound: 0,
         totalRounds: null,
         viewMode: 'classic',
@@ -60,7 +63,7 @@ export default function LeaderboardView() {
         route: window.location.pathname,
         kind: 'leaderboard',
         loading,
-        error: buildAutomationErrorState(errorCode, error),
+        error: buildAutomationErrorState(errorCode, errorMessage),
         entry_count: entries.length,
         top_entries: entries.slice(0, 10).map((entry, index) => ({
           rank: index + 1,
@@ -79,7 +82,7 @@ export default function LeaderboardView() {
         delete win.render_game_to_text;
       }
     };
-  }, [entries, error, errorCode, loading]);
+  }, [entries, errorCode, errorMessage, loading]);
 
   return (
     <div className="leaderboard-view">
@@ -95,9 +98,9 @@ export default function LeaderboardView() {
         <div className="leaderboard-empty">
           <p>{t('sim.status.loading')}</p>
         </div>
-      ) : error ? (
+      ) : errorMessage ? (
         <div className="leaderboard-empty">
-          <p className="result-error">{error}</p>
+          <p className="result-error">{errorMessage}</p>
           <button className="btn" onClick={load}>
             ↺ Retry
           </button>
