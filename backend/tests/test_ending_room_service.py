@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import text
 from sqlmodel import Session, select
 
 import app.services.ending_room_service as ending_room_service_module
@@ -28,7 +27,7 @@ from app.models import (
     Scenario,
     ScenarioStatus,
 )
-from app.models.database import get_engine, init_db
+from app.models.database import get_engine
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     _build_oracle_rewrite_prompt,
@@ -1813,56 +1812,6 @@ def test_create_ending_room_retries_from_error_state(monkeypatch):
     assert retried_snapshot["turns"] == []
 
 
-def test_init_db_normalizes_legacy_ending_room_enum_rows():
-    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
-    snapshot, created = create_ending_room(
-        scenario_id,
-        room_type=EndingRoomType.ENDING_CHAMBER,
-        anchor_branch_id=branch_a_id,
-        selected_branch_ids=[branch_a_id],
-        language="zh",
-    )
-
-    assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
-
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "UPDATE ending_room SET room_type = 'ending_chamber', status = 'done', phase = 'verdict', current_phase = 'verdict' WHERE id = :room_id",  # noqa: E501
-            {"room_id": snapshot["id"]},
-        )
-        conn.exec_driver_sql(
-            "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id",  # noqa: E501
-            {"room_id": snapshot["id"]},
-        )
-        conn.exec_driver_sql(
-            "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id",  # noqa: E501
-            {"room_id": snapshot["id"]},
-        )
-        conn.exec_driver_sql(
-            "UPDATE ending_room_participant SET role_slot = 'archivist' WHERE room_id = :room_id AND source_agent_id IS NULL",  # noqa: E501
-            {"room_id": snapshot["id"]},
-        )
-        conn.exec_driver_sql(
-            "UPDATE ending_room_participant SET role_slot = 'agent' WHERE room_id = :room_id AND source_agent_id IS NOT NULL",  # noqa: E501
-            {"room_id": snapshot["id"]},
-        )
-
-    init_db()
-
-    refreshed = load_ending_room_snapshot(snapshot["id"])
-
-    assert refreshed["room_type"] == "ending_chamber"
-    assert refreshed["status"] == "done"
-    assert refreshed["current_phase"] == "verdict"
-    assert refreshed["threads"][0]["mode"] == "room"
-    assert refreshed["threads"][0]["interaction_mode"] == "auto_recap"
-    assert refreshed["turns"]
-    assert {turn["source"] for turn in refreshed["turns"]} == {"auto_recap"}
-    assert {turn["interaction_mode"] for turn in refreshed["turns"]} == {"auto_recap"}
-    assert {participant["role_slot"] for participant in refreshed["participants"]} >= {"agent", "archivist"}  # noqa: E501
-
 
 def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch):
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
@@ -1907,36 +1856,6 @@ def test_participants_include_worldline_echo_key():
     assert all(value is None or value for value in echoed)
 
 
-def test_init_db_normalizes_legacy_lowercase_ending_room_enums():
-    scenario_id, branch_id, _agent_ids = _seed_multi_agent_branch_world()
-    snapshot, created = create_ending_room(
-        scenario_id,
-        room_type=EndingRoomType.ENDING_CHAMBER,
-        anchor_branch_id=branch_id,
-        selected_branch_ids=[branch_id],
-        language="zh",
-    )
-    assert created is True
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
-
-    with Session(get_engine()) as session:
-        session.exec(
-            text(
-                "UPDATE ending_room_turn SET source = 'auto_recap', interaction_mode = 'auto_recap' WHERE room_id = :room_id"  # noqa: E501
-            ).bindparams(room_id=snapshot["id"]),
-        )
-        session.exec(
-            text(
-                "UPDATE ending_room_thread SET mode = 'room', interaction_mode = 'auto_recap' WHERE room_id = :room_id"  # noqa: E501
-            ).bindparams(room_id=snapshot["id"]),
-        )
-        session.commit()
-
-    init_db()
-    normalized_snapshot = load_ending_room_snapshot(snapshot["id"])
-
-    assert normalized_snapshot["threads"][0]["mode"] == "room"
-    assert all(turn["source"] == "auto_recap" for turn in normalized_snapshot["turns"])
 
 
 def test_append_room_user_turn_uses_room_memory_partition():

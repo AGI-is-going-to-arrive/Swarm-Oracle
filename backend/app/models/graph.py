@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -73,6 +74,14 @@ class AgentStateFrame(SQLModel, table=True):
     """Per-round derived agent state (stance score + emotion)."""
 
     __tablename__ = "agent_state_frame"
+    __table_args__ = (
+        UniqueConstraint(
+            "branch_id",
+            "round_number",
+            "agent_id",
+            name="uq_state_frame_branch_round_agent",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     scenario_id: str = Field(index=True)

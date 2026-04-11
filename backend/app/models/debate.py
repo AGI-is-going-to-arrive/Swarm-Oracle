@@ -45,6 +45,7 @@ class Debate(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     question: str
     motion: str
+    user_id: str = Field(default="anonymous", index=True)
     language: str = "en"
     profile_id: str = "generic"
     scene_theme: str = "switchboard_forum_variant"

@@ -19,9 +19,13 @@ class DirectorProfile(SQLModel, table=True):
     """A persistent director profile keyed by user_id."""
 
     __tablename__ = "director_profile"
+    __table_args__ = (
+        Index("ix_director_profile_user_id", "user_id"),
+        UniqueConstraint("user_id", name="uq_director_profile_user_id"),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    user_id: str = Field(index=True, unique=True)
+    user_id: str
     user_name: str = Field(default_factory=_default_director_name)
 
     total_runs: int = 0
@@ -87,6 +91,10 @@ class ScenarioCampaignLog(SQLModel, table=True):
     __tablename__ = "scenario_campaign_log"
     __table_args__ = (
         Index(
+            "ix_scenario_campaign_log_scenario_id",
+            "scenario_id",
+        ),
+        Index(
             "ix_scenario_campaign_log_director_profile_id_created_at",
             "director_profile_id",
             "created_at",
@@ -98,10 +106,11 @@ class ScenarioCampaignLog(SQLModel, table=True):
             "completed_daily_challenge",
             "created_at",
         ),
+        UniqueConstraint("scenario_id", name="uq_scenario_campaign_log_scenario_id"),
     )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(index=True, unique=True)
+    scenario_id: str
     director_profile_id: str = Field(foreign_key="director_profile.id", index=True)
     profile_id: str = Field(index=True)
 

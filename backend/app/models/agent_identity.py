@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -23,6 +24,13 @@ class AgentIdentity(SQLModel, table=True):
     """Persistent agent identity that spans multiple scenarios."""
 
     __tablename__ = "agent_identity"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "continuity_key",
+            name="uq_identity_user_continuity",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     user_id: str = Field(index=True)

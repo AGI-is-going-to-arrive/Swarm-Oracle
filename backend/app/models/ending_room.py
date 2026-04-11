@@ -84,7 +84,7 @@ class EndingRoom(SQLModel, table=True):
     anchor_branch_id: str | None = Field(default=None, foreign_key="branch.id")
     room_type: EndingRoomType
     participant_set_hash: str
-    scope_fingerprint: str = Field(index=True)
+    scope_fingerprint: str
     title: str
     language: str = "en"
     status: EndingRoomStatus = EndingRoomStatus.DRAFT

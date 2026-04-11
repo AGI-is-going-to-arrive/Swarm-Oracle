@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -24,6 +25,13 @@ class ScenarioCheckpoint(SQLModel, table=True):
     """Round-boundary snapshot for counterfactual replay (F4)."""
 
     __tablename__ = "scenario_checkpoint"
+    __table_args__ = (
+        UniqueConstraint(
+            "branch_id",
+            "round_number",
+            name="uq_checkpoint_branch_round",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     scenario_id: str = Field(index=True)
@@ -38,6 +46,15 @@ class AgentRelationEdge(SQLModel, table=True):
     """Pairwise agent relationship per round (F5)."""
 
     __tablename__ = "agent_relation_edge"
+    __table_args__ = (
+        UniqueConstraint(
+            "branch_id",
+            "round_number",
+            "source_agent_id",
+            "target_agent_id",
+            name="uq_relation_edge_branch_round_agents",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     scenario_id: str = Field(index=True)

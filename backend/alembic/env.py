@@ -6,14 +6,13 @@ for autogenerate support.
 
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
-from app.config import settings
-
 # Import all models so SQLModel.metadata picks them up
 import app.models  # noqa: F401
+from alembic import context
+from app.config import settings
 
 # Alembic Config object
 config = context.config
@@ -22,7 +21,7 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Set up Python logging from alembic.ini
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configure_logging", True):
     fileConfig(config.config_file_name)
 
 # Target metadata for autogenerate
