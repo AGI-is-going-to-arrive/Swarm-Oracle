@@ -91,6 +91,7 @@ import type {
 } from '../types';
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
@@ -383,8 +384,9 @@ export default function WorldlineRoundtableView() {
     () => new Map(participants.map((participant) => [participant.id, participant])),
     [participants],
   );
+  const { enabled: factionsEnabled } = useCapabilityCheck('factions');
   // P1-8: faction overlay — hook discovers branches from participants
-  const factionMap = useFactionOverlay(scenario?.id, undefined, participantsById);
+  const factionMap = useFactionOverlay(scenario?.id, undefined, participantsById, factionsEnabled);
   const speakerIndexMap = useMemo(() => {
     const seen = new Map<string, number>();
     let idx = 0;
@@ -1089,6 +1091,7 @@ export default function WorldlineRoundtableView() {
     if (!branchOrder.includes(branchId)) {
       return;
     }
+    const isRemoving = selectedBranchIdsForLaunch.includes(branchId);
     setManualShortlistBranchIds((current) => {
       const normalized = normalizeManualShortlist(branchOrder, current);
       if (normalized.includes(branchId)) {
@@ -1102,7 +1105,20 @@ export default function WorldlineRoundtableView() {
       }
       return normalizeManualShortlist(branchOrder, [...normalized, branchId]);
     });
-  }, [branchOrder, manualShortlistMax, manualShortlistMin]);
+    if (isRemoving) {
+      setSelectedRepresentatives((current) => {
+        if (!(branchId in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[branchId];
+        return next;
+      });
+      setSelectedWitness((current) => (
+        current?.branchId === branchId ? null : current
+      ));
+    }
+  }, [branchOrder, manualShortlistMax, manualShortlistMin, selectedBranchIdsForLaunch]);
 
   const handleSelectionModeChange = useCallback((nextMode: RoundtableSelectionMode) => {
     setSelectionMode(nextMode);

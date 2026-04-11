@@ -808,7 +808,19 @@ export type EndingRoomWSEvent =
     | { type: 'ending_room_turn_start'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
     | { type: 'ending_room_turn_delta'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; delta: string; chunk_index: number } }
     | { type: 'ending_room_turn_commit'; data: EndingRoomTurn }
-    | { type: 'ending_room_turn_error'; data: { room_id: string; turn_id: string; participant_id: string; message: string } }
+    | {
+      type: 'ending_room_turn_error';
+      data: {
+        room_id: string;
+        thread_id?: string | null;
+        turn_id: string;
+        participant_id?: string;
+        message?: string;
+        error?: string;
+        code?: string;
+        recoverable?: boolean;
+      };
+    }
     | { type: 'ending_room_phase_change'; data: { phase: EndingRoomPhase } }
     | { type: 'ending_room_result_ready'; data: { result: EndingRoomResult } }
     | { type: 'ending_room_thread_created'; data: EndingRoomThreadSnapshot }

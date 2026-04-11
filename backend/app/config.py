@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     FEATURE_CUSTOM_AGENTS: bool = False
     FEATURE_AGENT_IDENTITY: bool = False
     FEATURE_CAUSAL_GRAPH: bool = False
-    FEATURE_COUNTERFACTUAL_REPLAY: bool = False
+    FEATURE_COUNTERFACTUAL_REPLAY: bool = True
     FEATURE_FACTIONS: bool = False
     FEATURE_ARGUMENT_MAP: bool = False
     ARGUMENT_MAP_LLM_ENRICHMENT: bool = True

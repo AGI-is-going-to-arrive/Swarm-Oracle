@@ -1,5 +1,6 @@
 """Tests for app.services.llm_client — LLM API integration."""
 
+import asyncio
 import json
 import sqlite3
 import threading
@@ -59,6 +60,8 @@ class TestLLMCall:
         llm_client._provider_circuit_until.clear()
         llm_client._global_semaphore = None
         llm_client._global_semaphore_limit = 0
+        llm_client._purpose_semaphores.clear()
+        llm_client._purpose_semaphore_limits.clear()
         llm_client._runtime_guard_table_ensured_keys.clear()
         llm_client._runtime_rate_limit_table_ensured_keys.clear()
         llm_client._rate_limit_requests.clear()
@@ -232,7 +235,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
 
         with llm_client.llm_request_scope(quota_key="user:director-1", purpose="scenario_runtime"):
-            assert llm_client.get_runtime_parallelism_limit() == 5
+            assert llm_client.get_runtime_parallelism_limit() == 4
 
     def test_runtime_parallelism_limit_can_disable_global_caps(self, monkeypatch):
         """Disabling total caps should let caller-side fan-out fall back to MAX_AGENTS."""
@@ -243,6 +246,147 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "MAX_AGENTS", 123)
 
         assert llm_client.get_runtime_parallelism_limit() == 123
+
+    def test_purpose_lane_limit_preserves_headroom_for_interactive_work(self, monkeypatch):
+        """Scenario fan-out should leave at least one global slot for other lanes."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+
+        assert llm_client._purpose_lane("scenario_runtime") == "scenario"
+        assert llm_client._purpose_lane("scenario_turn_generation") == "scenario_turn"
+        assert llm_client._purpose_lane("scenario_fork_detection") == "scenario_control"
+        assert llm_client._purpose_lane("scenario_memory_compression") == "scenario_background"
+        assert llm_client._purpose_lane("scenario_narration") == "scenario_background"
+        assert llm_client._purpose_lane("identity_compaction") == "scenario_background"
+        assert llm_client._purpose_lane("identity_preflight_parse") == "identity_parse"
+        assert llm_client._purpose_lane("oracle_followup_hotseat") == "oracle"
+        assert llm_client._purpose_lane("debate_turn_opening") == "debate"
+        assert llm_client._purpose_lane("debate_argument_map_enrichment") == "background"
+        assert llm_client._purpose_lane("prediction_scoring") == "background"
+
+        assert llm_client._purpose_lane_limit("scenario_runtime") == 4
+        assert llm_client._purpose_lane_limit("scenario_turn_generation") == 4
+        assert llm_client._purpose_lane_limit("scenario_fork_detection") == 1
+        assert llm_client._purpose_lane_limit("scenario_memory_compression") == 1
+        assert llm_client._purpose_lane_limit("scenario_narration") == 1
+        assert llm_client._purpose_lane_limit("identity_compaction") == 1
+        assert llm_client._purpose_lane_limit("oracle_followup_hotseat") == 2
+        assert llm_client._purpose_lane_limit("scenario_parse") == 1
+        assert llm_client._purpose_lane_limit("identity_preflight_parse") == 1
+        assert llm_client._purpose_lane_limit("prediction_scoring") == 1
+
+    @pytest.mark.asyncio
+    async def test_purpose_lane_isolation_keeps_oracle_slot_available(self, monkeypatch):
+        """Scenario-runtime work should not consume every local concurrency slot."""
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 2)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 24)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 4)
+
+        scenario_one = await llm_client._reserve_runtime_slot(
+            quota_key="user:director-1",
+            purpose="scenario_runtime",
+            provider_key="provider",
+            lease_seconds=30,
+        )
+
+        blocked_scenario = asyncio.create_task(
+            llm_client._reserve_runtime_slot(
+                quota_key="user:director-1",
+                purpose="scenario_runtime",
+                provider_key="provider",
+                lease_seconds=30,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not blocked_scenario.done()
+
+        oracle_slot = await asyncio.wait_for(
+            llm_client._reserve_runtime_slot(
+                quota_key=None,
+                purpose="oracle_followup_hotseat",
+                provider_key="provider",
+                lease_seconds=30,
+            ),
+            timeout=1.0,
+        )
+        assert oracle_slot is None
+        assert not blocked_scenario.done()
+
+        await llm_client._release_runtime_slot(
+            quota_key=None,
+            purpose="oracle_followup_hotseat",
+            reservation_id=oracle_slot,
+        )
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-1",
+            purpose="scenario_runtime",
+            reservation_id=scenario_one,
+        )
+
+        scenario_two = await asyncio.wait_for(blocked_scenario, timeout=1.0)
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-1",
+            purpose="scenario_runtime",
+            reservation_id=scenario_two,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancelled_waiting_reservation_releases_sqlite_row_and_pending_counts(self, monkeypatch, tmp_path):
+        """Cancelling while blocked on semaphores should not leak reservations or pending counts."""
+        self._reset_runtime_guard()
+        db_path = tmp_path / "runtime_guard_cancel.db"
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 24)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 4)
+
+        held = await llm_client._reserve_runtime_slot(
+            quota_key="user:director-1",
+            purpose="scenario_runtime",
+            provider_key="provider",
+            lease_seconds=30,
+        )
+        assert held is not None
+
+        blocked = asyncio.create_task(
+            llm_client._reserve_runtime_slot(
+                quota_key="user:director-1",
+                purpose="scenario_runtime",
+                provider_key="provider",
+                lease_seconds=30,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not blocked.done()
+
+        blocked.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await blocked
+
+        conn = sqlite3.connect(db_path)
+        rows_after_cancel = conn.execute(
+            f"SELECT COUNT(*) FROM {llm_client._RUNTIME_GUARD_TABLE}"
+        ).fetchone()[0]
+        conn.close()
+        assert rows_after_cancel == 1
+
+        await llm_client._release_runtime_slot(
+            quota_key="user:director-1",
+            purpose="scenario_runtime",
+            reservation_id=held,
+        )
+
+        conn = sqlite3.connect(db_path)
+        rows_after_release = conn.execute(
+            f"SELECT COUNT(*) FROM {llm_client._RUNTIME_GUARD_TABLE}"
+        ).fetchone()[0]
+        conn.close()
+        assert rows_after_release == 0
+        assert llm_client._pending_requests == 0
+        assert llm_client._pending_by_quota == {}
+        assert llm_client._pending_requests == 0
 
     def test_sqlite_runtime_guard_reuses_engine_managed_connection(self, monkeypatch, tmp_path):
         """SQLite runtime guard should use engine-managed connections instead of sqlite3.connect."""

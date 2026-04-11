@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import { closePlaywrightBrowser, closePlaywrightContext } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +29,7 @@ function parseArgs(argv) {
     baseUrl: DEFAULT_BASE_URL,
     backendUrl: DEFAULT_BACKEND_URL,
     outputDir: "",
+    browser: "chromium",
     headless: process.env.HEADLESS === "1",
   };
 
@@ -44,13 +45,19 @@ function parseArgs(argv) {
     } else if (arg === "--output-dir" && next) {
       args.outputDir = path.isAbsolute(next) ? next : path.join(FRONTEND_ROOT, next);
       i += 1;
+    } else if (arg === "--browser" && next) {
+      args.browser = next;
+      i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--headless]");
+    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--headless]");
+  }
+  if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
+    throw new Error(`Unsupported browser: ${args.browser}`);
   }
 
   return args;
@@ -157,7 +164,13 @@ async function findMultiEndingScenarioId(backendUrl) {
   throw new Error("No multi-ending DONE scenario is available for roundtable E2E");
 }
 
-async function launchBrowser(headless) {
+async function launchBrowser(headless, browserName = "chromium") {
+  if (browserName === "firefox") {
+    return firefox.launch({ headless });
+  }
+  if (browserName === "webkit") {
+    return webkit.launch({ headless });
+  }
   try {
     return await chromium.launch({ channel: "chrome", headless });
   } catch {
@@ -181,6 +194,34 @@ async function fillComposerIfEditable(page, text) {
   if (!editable) return false;
   await textarea.fill(text);
   return true;
+}
+
+async function clickActionable(locator, label) {
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.waitFor({ state: "visible", timeout: 10000 });
+  try {
+    await locator.click({ trial: true });
+    await locator.click();
+    return;
+  } catch (error) {
+    await locator.focus().catch(() => {});
+    try {
+      await locator.press("Enter");
+      return;
+    } catch {
+      throw error;
+    }
+  }
+}
+
+async function tapLocator(page, locator, label) {
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.waitFor({ state: "visible", timeout: 10000 });
+  const box = await locator.boundingBox();
+  if (!box) {
+    throw new Error(`${label} has no tappable bounding box`);
+  }
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
 }
 
 async function readComposerValue(page) {
@@ -362,9 +403,7 @@ async function sendComposer(page, prompt, modeText, options = {}) {
   const sendVisible = await sendButton.isVisible().catch(() => false);
   const sendEnabled = await sendButton.isEnabled().catch(() => false);
   if (sendVisible && sendEnabled) {
-    await sendButton.click();
-  } else if (sendVisible) {
-    await sendButton.click({ force: true });
+    await clickActionable(sendButton, "roundtable send button");
   } else {
     const composer = page.locator(".ending-chat-composer__input").last();
     await composer.press("Enter").catch(() => {});
@@ -461,24 +500,29 @@ async function createVerdictAnchoredThread(page, label) {
   });
   if (await quoteFollowButton.isVisible().catch(() => false)) {
     await quoteFollowButton.scrollIntoViewIfNeeded().catch(() => {});
-    await quoteFollowButton.evaluate((node) => node.click());
+    await clickActionable(quoteFollowButton, `${label} quote follow button`);
     await waitForAutomation(
       page,
       (payload) => (payload.page?.controls?.pending_question_anchor_ids?.length ?? 0) > 0,
       10000,
       `${label} quote anchor armed`,
     );
-    await quoteThreadButton.evaluate((node) => node.click());
+    await clickActionable(quoteThreadButton, `${label} quote thread button`);
   } else if (await quoteThreadButton.isVisible().catch(() => false)) {
-    await quoteThreadButton.evaluate((node) => node.click());
+    await clickActionable(quoteThreadButton, `${label} quote thread button`);
   } else {
     const globalQuoteThreadButton = page.getByRole("button", { name: /Start anchored thread|另开线程/i }).last();
     if (await globalQuoteThreadButton.isVisible().catch(() => false)) {
-      await globalQuoteThreadButton.scrollIntoViewIfNeeded().catch(() => {});
-      await globalQuoteThreadButton.click({ force: true });
+      await clickActionable(globalQuoteThreadButton, `${label} global quote thread button`);
     } else {
-      await page.getByRole("button", { name: /Archive Verdict|档案总结|档案结论/i }).first().click();
-      await page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }).click({ force: true });
+      await clickActionable(
+        page.getByRole("button", { name: /Archive Verdict|档案总结|档案结论/i }).first(),
+        `${label} archive verdict button`,
+      );
+      await clickActionable(
+        page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }),
+        `${label} current anchor thread button`,
+      );
     }
   }
   return waitForAutomation(
@@ -509,7 +553,7 @@ async function sendAnchoredFollowup(page, label, options = {}) {
     const payload = JSON.parse(raw);
     return payload.page?.controls?.can_send === true;
   }, { timeout: 10000 });
-  await page.locator(".ending-chat-send").click({ force: true });
+  await clickActionable(page.locator(".ending-chat-send"), `${label} anchored send button`);
   await waitForAutomation(
     page,
     (payload) => {
@@ -691,6 +735,248 @@ async function reseatRoundtable(page) {
   };
 }
 
+async function dragReseatRoundtable(page) {
+  const before = await readAutomation(page);
+  const previousRoomId = before?.scene?.room_id ?? null;
+  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+
+  const sourceCard = page
+    .locator(".worldline-roundtable-picker-branch.is-active")
+    .first()
+    .locator(".worldline-roundtable-picker-card:not(.is-selected)")
+    .first();
+  const targetSlot = page.locator('[data-testid^="roundtable-seat-slot-"]').first();
+  await sourceCard.scrollIntoViewIfNeeded();
+  await targetSlot.scrollIntoViewIfNeeded();
+
+  const sourceName = ((await sourceCard.locator("strong").innerText().catch(() => "")) || "").trim();
+  if (!sourceName) {
+    throw new Error("Could not resolve drag source representative");
+  }
+
+  const dragOnce = async () => {
+    const sourceBox = await sourceCard.boundingBox();
+    const targetBox = await targetSlot.boundingBox();
+    if (!sourceBox || !targetBox) {
+      throw new Error("Could not resolve drag-and-drop bounds");
+    }
+    await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 18 });
+    await page.mouse.up();
+  };
+
+  let slotName = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await dragOnce();
+    await page.waitForTimeout(350);
+    slotName = ((await targetSlot.locator("strong").innerText().catch(() => "")) || "").trim();
+    if (slotName === sourceName) {
+      break;
+    }
+  }
+
+  if (slotName !== sourceName) {
+    throw new Error(`Desktop drag-and-drop did not update the seat occupant (expected ${sourceName}, got ${slotName || "empty"})`);
+  }
+
+  const reopenButton = page.getByRole("button", {
+    name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup|Open this lineup/i,
+  }).first();
+  const start = Date.now();
+  let reseated = null;
+  while (Date.now() - start < 45000) {
+    if (await reopenButton.isVisible().catch(() => false)) {
+      await reopenButton.click().catch(() => {});
+    }
+    reseated = await readAutomation(page);
+    if (
+      reseated?.page?.kind === "worldline_roundtable"
+      && reseated?.page?.controls?.has_result === true
+      && reseated?.page?.controls?.showing_picker === false
+      && Boolean(reseated?.scene?.room_id)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !reseated?.page?.kind
+    || reseated.page.kind !== "worldline_roundtable"
+    || reseated?.page?.controls?.has_result !== true
+    || reseated?.page?.controls?.showing_picker !== false
+    || !reseated?.scene?.room_id
+  ) {
+    throw new Error("Timed out waiting for drag-reseated roundtable");
+  }
+
+  return {
+    previousRoomId,
+    nextRoomId: reseated?.scene?.room_id ?? null,
+    nextRepresentative: sourceName,
+    selectionMode: reseated?.page?.controls?.selection_mode ?? null,
+    selectedBranchCount: reseated?.page?.controls?.selected_branch_count ?? null,
+  };
+}
+
+async function clickReseatRoundtable(page) {
+  const before = await readAutomation(page);
+  const previousRoomId = before?.scene?.room_id ?? null;
+  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+
+  let nextRepresentative = null;
+  const branchCards = page.locator(
+    ".worldline-roundtable-picker-card:not(.is-selected):not([disabled])"
+  );
+  const branchCardCount = await branchCards.count();
+  for (let index = 0; index < branchCardCount; index += 1) {
+    const card = branchCards.nth(index);
+    await card.scrollIntoViewIfNeeded().catch(() => {});
+    nextRepresentative = (await card.locator("strong").innerText()).trim();
+    await tapLocator(page, card, "mobile click-to-seat card");
+    break;
+  }
+
+  const seatSelector = '[data-testid^="roundtable-seat-slot-"] strong';
+  const seatNames = await page.locator(seatSelector).allInnerTexts().catch(() => []);
+  if (!nextRepresentative) {
+    throw new Error("Mobile click-to-seat could not find a non-selected candidate");
+  }
+  if (!seatNames.some((name) => name.trim() === nextRepresentative)) {
+    throw new Error(`Mobile click-to-seat did not update the seating board (expected ${nextRepresentative})`);
+  }
+
+  const reopenButton = page.getByRole("button", {
+    name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup|Open this lineup/i,
+  }).first();
+
+  const start = Date.now();
+  let reseated = null;
+  while (Date.now() - start < 45000) {
+    if (await reopenButton.isVisible().catch(() => false)) {
+      await reopenButton.click().catch(() => {});
+    }
+    reseated = await readAutomation(page);
+    if (
+      reseated?.page?.kind === "worldline_roundtable"
+      && reseated?.page?.controls?.has_result === true
+      && reseated?.page?.controls?.showing_picker === false
+      && Boolean(reseated?.scene?.room_id)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !reseated?.page?.kind
+    || reseated.page.kind !== "worldline_roundtable"
+    || reseated?.page?.controls?.has_result !== true
+    || reseated?.page?.controls?.showing_picker !== false
+    || !reseated?.scene?.room_id
+  ) {
+    throw new Error("Timed out waiting for click-reseated roundtable");
+  }
+
+  return {
+    previousRoomId,
+    nextRoomId: reseated?.scene?.room_id ?? null,
+    nextRepresentative,
+    selectionMode: reseated?.page?.controls?.selection_mode ?? null,
+    selectedBranchCount: reseated?.page?.controls?.selected_branch_count ?? null,
+  };
+}
+
+async function keyboardReseatRoundtable(page) {
+  const before = await readAutomation(page);
+  const previousRoomId = before?.scene?.room_id ?? null;
+  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+
+  const sourceCard = page
+    .locator(".worldline-roundtable-picker-branch.is-active .worldline-roundtable-picker-card:not(.is-selected):not([disabled])")
+    .first();
+  const targetSlot = page.locator('[data-testid^="roundtable-seat-slot-"]').first();
+
+  if (!(await sourceCard.isVisible().catch(() => false))) {
+    throw new Error("Keyboard reseat could not find a non-selected candidate");
+  }
+
+  const nextRepresentative = ((await sourceCard.locator("strong").innerText().catch(() => "")) || "").trim();
+  if (!nextRepresentative) {
+    throw new Error("Keyboard reseat could not resolve candidate name");
+  }
+
+  await sourceCard.scrollIntoViewIfNeeded().catch(() => {});
+  await sourceCard.focus();
+  await page.keyboard.press("Space");
+
+  let overValid = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await page.keyboard.press("ArrowUp");
+    await page.waitForTimeout(60);
+    overValid = await targetSlot.evaluate((node) => node.classList.contains("worldline-roundtable-seating-slot--over-valid")).catch(() => false);
+    if (overValid) {
+      break;
+    }
+  }
+
+  if (!overValid) {
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error("Keyboard drag never reached a valid seat");
+  }
+
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(200);
+
+  const slotName = ((await targetSlot.locator("strong").innerText().catch(() => "")) || "").trim();
+  if (slotName !== nextRepresentative) {
+    throw new Error(`Keyboard drag-and-drop did not update the seat occupant (expected ${nextRepresentative}, got ${slotName || "empty"})`);
+  }
+
+  const reopenButton = page.getByRole("button", {
+    name: /Rebuild the roundtable with this seating|按当前改选重建圆桌|按当前阵容重开|Reopen this lineup|Open this lineup/i,
+  }).first();
+  const start = Date.now();
+  let reseated = null;
+  while (Date.now() - start < 45000) {
+    if (await reopenButton.isVisible().catch(() => false)) {
+      await reopenButton.click().catch(() => {});
+    }
+    reseated = await readAutomation(page);
+    if (
+      reseated?.page?.kind === "worldline_roundtable"
+      && reseated?.page?.controls?.has_result === true
+      && reseated?.page?.controls?.showing_picker === false
+      && Boolean(reseated?.scene?.room_id)
+    ) {
+      break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  if (
+    !reseated?.page?.kind
+    || reseated.page.kind !== "worldline_roundtable"
+    || reseated?.page?.controls?.has_result !== true
+    || reseated?.page?.controls?.showing_picker !== false
+    || !reseated?.scene?.room_id
+  ) {
+    throw new Error("Timed out waiting for keyboard-reseated roundtable");
+  }
+
+  return {
+    previousRoomId,
+    nextRoomId: reseated?.scene?.room_id ?? null,
+    nextRepresentative,
+    selectionMode: reseated?.page?.controls?.selection_mode ?? null,
+    selectedBranchCount: reseated?.page?.controls?.selected_branch_count ?? null,
+  };
+}
+
 async function addExpertWitness(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
@@ -702,11 +988,20 @@ async function addExpertWitness(page) {
     await expertWitnessButton.click();
   }
 
-  const witnessCard = page.locator(".worldline-roundtable-picker-witness .worldline-roundtable-picker-card").first();
+  const witnessCards = page.locator(".worldline-roundtable-picker-witness .worldline-roundtable-picker-card");
+  const witnessCardCount = await witnessCards.count();
   let witnessName = null;
-  if (await witnessCard.isVisible().catch(() => false)) {
+  for (let index = 0; index < witnessCardCount; index += 1) {
+    const witnessCard = witnessCards.nth(index);
+    if (!(await witnessCard.isVisible().catch(() => false))) {
+      continue;
+    }
     witnessName = (await witnessCard.locator("strong").innerText()).trim();
-    await witnessCard.click();
+    const enabled = await witnessCard.isEnabled().catch(() => false);
+    if (enabled) {
+      await witnessCard.click();
+    }
+    break;
   }
 
   const reopenButton = page.getByRole("button", {
@@ -813,6 +1108,14 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   const ready = await openRoundtable(page, baseUrl, scenarioId);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), ready);
+
+  const dragReseated = await dragReseatRoundtable(page);
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-drag-reseated.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-drag-reseated.json"), dragReseated);
+
+  const keyboardReseated = await keyboardReseatRoundtable(page);
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-keyboard-reseated.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-keyboard-reseated.json"), keyboardReseated);
 
   const reseated = await reseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-reseated.png"));
@@ -937,6 +1240,8 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   return {
     scenarioId,
     ready,
+    dragReseated,
+    keyboardReseated,
     reseated,
     expertWitness,
     traitMix,
@@ -964,6 +1269,10 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
   const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit });
+
+  const clickReseated = await clickReseatRoundtable(page);
+  await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-click-reseated.png"));
+  writeJson(path.join(outputDir, "mobile-roundtable-click-reseated.json"), clickReseated);
 
   const traitMix = await reopenWithSelectionMode(page, {
     modeButton: /Trait mix|冲突人设混编/i,
@@ -1110,11 +1419,12 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     writeJson(path.join(outputDir, "mobile-roundtable-replay-coverage-error.json"), { error: replayCoverageError });
   }
 
-  await closePlaywrightContext(context, "roundtable-mobile-context");
+  await closePlaywrightContext(context, "roundtable-mobile-context", 15000);
   return {
     scenarioId,
     ready,
     fit,
+    clickReseated,
     traitMix,
     faultLineFirst,
     witnessAugmented,
@@ -1145,22 +1455,22 @@ async function main() {
   const summary = {};
 
   if (args.mode === "desktop" || args.mode === "full") {
-    const desktopBrowser = await launchBrowser(args.headless);
+    const desktopBrowser = await launchBrowser(args.headless, args.browser);
     try {
       const context = await desktopBrowser.newContext({ viewport: { width: 1600, height: 900 } });
       summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, desktopScenarioId);
-      await closePlaywrightContext(context, "roundtable-desktop-context");
+      await closePlaywrightContext(context, "roundtable-desktop-context", 15000);
     } finally {
-      await closePlaywrightBrowser(desktopBrowser, "roundtable-desktop-browser");
+      await closePlaywrightBrowser(desktopBrowser, "roundtable-desktop-browser", 20000);
     }
   }
 
   if (args.mode === "mobile" || args.mode === "full") {
-    const mobileBrowser = await launchBrowser(args.headless);
+    const mobileBrowser = await launchBrowser(args.headless, args.browser);
     try {
       summary.mobile = await runMobile(mobileBrowser, args.baseUrl, args.backendUrl, outputDir, mobileScenarioId);
     } finally {
-      await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser");
+      await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser", 20000);
     }
   }
 

@@ -271,7 +271,7 @@ class TestResumeEndpoint:
         assert data["detail"]["code"] == "FEATURE_DISABLED"
 
     @patch("app.api.graphs.schedule_background_task")
-    @patch("app.api.graphs.run_sim_background")
+    @patch("app.api.graphs.run_sim_background", new_callable=MagicMock)
     @patch("app.api.graphs.clone_until_round")
     @patch("app.api.graphs.get_engine")
     @patch("app.api.graphs.settings")
@@ -333,11 +333,11 @@ class TestResumeEndpoint:
 
     @patch("app.api.graphs.get_engine")
     @patch("app.api.graphs.runtime_lock_is_active")
-    @patch("app.api.graphs.settings")
     def test_rejects_when_runtime_lock_active(
-        self, mock_settings, mock_lock_active, mock_engine,
+        self, mock_lock_active, mock_engine, monkeypatch,
     ):
-        mock_settings.FEATURE_COUNTERFACTUAL_REPLAY = True
+        from app.api import graphs as graphs_module
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
         mock_lock_active.return_value = True
 
         mock_session = MagicMock()

@@ -1553,6 +1553,110 @@ def test_followup_falls_back_when_stream_never_emits_visible_delta(monkeypatch):
     assert any("首个流式 delta 超时后已切回非流式 fallback" in turn["content"] for turn in followup["turns"][1:])  # noqa: E501
 
 
+def test_followup_partial_stream_emits_recoverable_turn_error(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+
+    async def _fake_probe(**kwargs):
+        return {"supported": True, "reason": None}
+
+    async def _broken_stream(*args, **kwargs):
+        if on_delta := kwargs.get("on_delta"):
+            await on_delta("先给出一半")
+        raise RuntimeError("stream exploded")
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", _fake_probe)
+    monkeypatch.setattr(ending_room_service_module, "_stream_oracle_copy", _broken_stream)
+
+    ws_callback = AsyncMock(side_effect=_noop_broadcast)
+    followup = asyncio.run(
+        ending_room_service_module.append_room_user_turn_async(
+            snapshot["id"],
+            content="如果这里的流式链路半路断掉，会怎么收口？",
+            addressed_agent_ids=[agent_ids[0]],
+            interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+            ws_callback=ws_callback,
+        )
+    )
+
+    assert any(turn["content"] for turn in followup["turns"][1:])
+    recoverable_errors = [
+        call.args[1]["data"]
+        for call in ws_callback.await_args_list
+        if call.args[1]["type"] == "ending_room_turn_error"
+    ]
+    assert recoverable_errors
+    followup_turns = {
+        turn["id"]: turn["participant_id"]
+        for turn in followup["turns"][1:]
+    }
+    for payload in recoverable_errors:
+        assert payload["room_id"] == snapshot["id"]
+        assert payload["turn_id"] in followup_turns
+        assert payload["participant_id"] == followup_turns[payload["turn_id"]]
+        assert payload["message"] == "stream_interrupted"
+        assert payload["error"] == "stream_interrupted"
+        assert payload["code"] == "stream_interrupted"
+        assert payload["recoverable"] is True
+
+
+def test_followup_emits_terminal_turn_error_when_fallback_rewrite_fails(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+
+    async def _fake_probe(**kwargs):
+        return {"supported": False, "reason": "stream unsupported"}
+
+    async def _broken_fallback(**kwargs):
+        raise RuntimeError("fallback exploded")
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", _fake_probe)
+    monkeypatch.setattr(ending_room_service_module, "_maybe_rewrite_oracle_copy", _broken_fallback)
+
+    ws_callback = AsyncMock(side_effect=_noop_broadcast)
+    with pytest.raises(RuntimeError, match="fallback exploded"):
+        asyncio.run(
+            ending_room_service_module.append_room_user_turn_async(
+                snapshot["id"],
+                content="如果 fallback 本身爆掉，线程会怎样收尾？",
+                addressed_agent_ids=[agent_ids[0]],
+                interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+                ws_callback=ws_callback,
+            )
+        )
+
+    error_payloads = [
+        call.args[1]["data"]
+        for call in ws_callback.await_args_list
+        if call.args[1]["type"] == "ending_room_turn_error"
+    ]
+    assert error_payloads
+    assert all(payload["code"] == "followup_failed" for payload in error_payloads)
+    assert all(payload["recoverable"] is True for payload in error_payloads)
+
+
 def test_followup_fallback_uses_profile_specific_language_when_llm_is_off(monkeypatch):
     scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world(
         question="如果一项紧急法令越过法院复核直接生效，会发生什么？",

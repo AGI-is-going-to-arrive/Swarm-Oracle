@@ -5,7 +5,7 @@
 ## 当前定位
 
 - 当前交付形态是 `browser-first Web`。
-- `跨平台` 仅指桌面/移动浏览器响应式与视口 E2E，不包含原生客户端壳。
+- `跨平台` 当前以 Chromium 桌面/移动与桌面 Firefox / WebKit 的 scoped regression 为准，不包含原生客户端壳。
 - 当前主闭环已覆盖：
   - 主模式 `InputView -> SimulationView -> ResultView`
   - `Debate Arena` live/result/replay
@@ -26,9 +26,12 @@
   - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
 - 最近一轮 roundtable 可读性收口工件位于：
   - `frontend/output/e2e/20260331-codex-roundtable-readability-pass-desktop/summary.json`
-- 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件位于：
-  - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
-  - `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
+- 最近一轮 roundtable strict 桌面/移动工件位于：
+  - `frontend/output/e2e/2026-04-12-final9-roundtable-desktop/summary.json`
+  - `frontend/output/e2e/2026-04-12-final8-roundtable-mobile/summary.json`
+- 最近一轮 roundtable Firefox / WebKit scoped regression 工件位于：
+  - `frontend/output/e2e/2026-04-12-roundtable-firefox-final/summary.json`
+  - `frontend/output/e2e/2026-04-12-roundtable-webkit-final/summary.json`
 - 最近一轮 Oracle ending-room follow-up deterministic API-driven 工件位于：
   - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/summary.json`
   - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven5/summary.json`
@@ -36,12 +39,7 @@
   - `进入会客厅`
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
-- 当前仍在持续收口的增量主要是：
-  - follow-up 与经典模式的流式一致性
-  - `pretext` 更深的 transcript / runtime 稳定化
-  - Oracle 更深的 corner-case hardening
-  - ending-room follow-up 专项当前已切到 deterministic API-driven 口径；desktop / mobile / full 都已重新签收，`后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 已纳入同一条链路
-  - 新增 11 个主题场景（finance、medical、scholar、tech、entertainment、diplomacy 等），当前全部 33 个主题场景均已有专属 PNG 素材
+- 当前无 active Phase 3 backlog；剩余架构级限制见 `llmdoc/overview/backlog.md`。
 
 ## 文档契约
 
@@ -72,8 +70,9 @@
 | Gameplay Cards | 已落地，14 张卡，走共享 gameplay contract |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
+| Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
-| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式 |
+| Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式 |
 | Replay & Import | 主模式与 Debate 均支持 |
 | i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子 |
 

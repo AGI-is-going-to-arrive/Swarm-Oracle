@@ -42,7 +42,7 @@
 - 这些覆盖项只作用于当前请求，不会改写服务端默认值。
 - `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验；业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400 `BYOK_API_KEY_REQUIRED`。`/api/health/test` 是连通性探测，不做此前移拒绝。
 - `llm_requests_per_minute / llm_tokens_per_minute` 会覆盖服务端默认 RPM/TPM。触发限流后请求会排队等待下一个窗口（最多等 2 个 rate window），不会立即拒绝。
-- `disable_user_quota` 只对本地或 self-hosted provider 生效。
+- `disable_user_quota` 只对本地或 self-hosted provider 生效；它只移除单用户公平队列这一层，不会绕过全局并发、全局 pending、lane 隔离或 RPM/TPM 等待。
 
 ## Scenario 运行时调参
 
@@ -95,7 +95,9 @@
 说明：
 
 - 多个 backend 进程共用同一个 SQLite 文件时，pending/quota 计数会共享。
+- `LLM_CONCURRENCY` 当前会叠加全局并发和按用途的 lane 隔离；scenario fan-out 不会再独占 Oracle / Debate / parse / background 的全部 slot。
 - `LLM_CONCURRENCY` 的修改需要重启 backend 才能稳定生效。
+- `LLM_CONCURRENCY / LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 设为 `<= 0` 时表示关闭对应限制，不是字面上的 `0 并发 / 0 pending`。
 
 ## 数据存储
 
@@ -191,14 +193,14 @@
 | `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆查询 |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator 逐轮写入 |
-| `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 分支比较 + 检查点 |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 分支比较 + 检查点 |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 + 时间线 API |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱抽取 + API |
 | `ARGUMENT_MAP_LLM_ENRICHMENT` | `true` | Argument map 在 rule-based 抽取后，默认追加每个 debate turn 一次 fire-and-forget LLM enrichment；设为 `false` 可退回纯规则模式 |
 
 说明：
 
-- 所有 Phase 3 功能默认关闭，通过环境变量逐个启用。
+- `FEATURE_COUNTERFACTUAL_REPLAY` 当前默认开启，其余 Phase 3 功能默认关闭，可通过环境变量逐个启用。
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
 - `FEATURE_*=false` 时：对应后端 API 返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。
 - 6 个开关互相独立，可单独开启任意功能。

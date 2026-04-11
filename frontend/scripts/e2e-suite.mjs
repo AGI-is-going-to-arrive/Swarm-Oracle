@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
-import { closePlaywrightBrowser, closePlaywrightContext } from "./playwrightTeardown.mjs";
+import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -1127,15 +1127,8 @@ async function runDirectorStateBrowserReadback(page, {
       `${browserName} simulation director state`,
     );
   } catch (error) {
-    const simulationUiReady = await page.evaluate(() => {
-      const bodyText = document.body?.innerText || "";
-      return bodyText.includes("导演目标")
-        || bodyText.includes("Director Goals")
-        || bodyText.includes("Worldline Commitment")
-        || bodyText.includes("世界线承诺");
-    }).catch(() => false);
-    if (!simulationUiReady) throw error;
-    simulation = await readAutomation(page) ?? { page: { kind: "simulation", director: null } };
+    await saveScreenshot(page, path.join(outputDir, `${browserName}-sim-automation-miss.png`), { fullPage: true }).catch(() => {});
+    throw error;
   }
   await saveScreenshot(page, path.join(outputDir, `${browserName}-sim.png`), { fullPage: true });
 
@@ -1154,13 +1147,8 @@ async function runDirectorStateBrowserReadback(page, {
       `${browserName} result director state`,
     );
   } catch (error) {
-    const archiveLocator = page.locator(".result-archive");
-    try {
-      await archiveLocator.waitFor({ state: "visible", timeout: 30000 });
-    } catch {
-      throw error;
-    }
-    result = await readAutomation(page) ?? { page: { kind: "result", archive_summary: null } };
+    await saveScreenshot(page, path.join(outputDir, `${browserName}-archive-automation-miss.png`), { fullPage: true }).catch(() => {});
+    throw error;
   }
   await saveLocatorScreenshot(
     page.locator(".result-archive"),
@@ -2785,7 +2773,8 @@ async function runCornersSuite(args) {
       cases,
     };
   } finally {
-    await closePlaywrightBrowser(browser, "corners-browser");
+    await closePlaywrightPage(page, "corners-browser:page", 10000);
+    await closePlaywrightBrowser(browser, "corners-browser", 20000);
   }
 }
 

@@ -388,6 +388,55 @@ describe('endingRoomStore', () => {
     expect(useEndingRoomStore.getState().threadsById['thread-followup']?.turns[0]?.content).toBe('Committed inside thread.');
   });
 
+  it('drops a recoverable stream draft error without poisoning the whole room state', () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+
+    useEndingRoomStore.getState().startDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-stream',
+      participant_id: 'p-1',
+      phase: 'verdict',
+      sequence: 7,
+    });
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-stream',
+      participant_id: 'p-1',
+      delta: 'partial stream',
+      chunk_index: 1,
+    });
+
+    useEndingRoomStore.getState().handleTurnError({
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      turn_id: 'turn-stream',
+      participant_id: 'p-1',
+      message: 'stream_interrupted',
+      recoverable: true,
+    });
+
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+    expect(useEndingRoomStore.getState().status).toBe('live');
+    expect(useEndingRoomStore.getState().error).toBeNull();
+  });
+
   it('creates a follow-up thread and switches the active thread', async () => {
     useEndingRoomStore.getState().hydrateSnapshot({
       id: 'room-1',

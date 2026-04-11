@@ -229,7 +229,11 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
             });
             break;
           case 'ending_room_turn_error':
-            store.setError(payload.data.message);
+            if (payload.data.recoverable || payload.data.code === 'stream_interrupted' || payload.data.error === 'stream_interrupted') {
+              store.handleTurnError(payload.data);
+              break;
+            }
+            store.setError(payload.data.message ?? payload.data.error);
             break;
           default:
             break;

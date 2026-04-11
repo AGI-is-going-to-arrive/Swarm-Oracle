@@ -16579,3 +16579,303 @@ QA Inventory
 - 代码检查补充：
   - `backend/app/services/causal_graph.py` 的 `append_round_nodes()` 当前只有测试在调用，运行时代码里没有接线点；空图问题更像功能未接入而非单条数据异常。
   - `frontend` 的功能性 E2E 更适合走 `vite dev`（本轮使用 `http://127.0.0.1:5174`）；`vite preview` 不代理 `/api` 和 `/ws`，不适合作为真实功能验收入口。
+
+## 2026-04-11 P2-1 / P2-2 implementation pass
+
+- 已按用户确认的方案继续推进前端两项：
+  - `P2-1`：世界线圆桌 picker 引入 `@dnd-kit/core + @dnd-kit/utilities`
+  - `P2-2`：CompareDigestView 升级为单活跃 Phaser compare 页面
+- 实际改动文件：
+  - `frontend/package.json`
+  - `frontend/package-lock.json`
+  - `frontend/src/pages/RoundtablePickerPanel.tsx`
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+  - `frontend/src/pages/WorldlineRoundtable.css`
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+  - `frontend/src/pages/CompareDigestView.tsx`
+  - `frontend/src/pages/CompareDigestView.css`
+  - `frontend/src/pages/CompareDigestView.test.tsx`
+- `P2-1` 当前落地结果：
+  - 新增 seating board / representative slot / witness slot
+  - desktop 启用 pointer + keyboard DnD；mobile 保留 click-to-seat
+  - shortlist 移除分支时会清该 branch 的 representative / witness 选择
+- `P2-2` 当前落地结果：
+  - compare 页现在会加载 scenario + compare 数据
+  - 页面有 branch tab、单活跃 theater、shared round selector、compare 自动化输出
+  - `render_game_to_text()` 现会输出 `compare_mode / active_compare_pane / active_branch_id / selected_round`
+- 定向验证：
+  - `cd frontend && npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/pages/CompareDigestView.test.tsx`
+    - `30 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+- 浏览器实测：
+  - backend 临时以 `FEATURE_COUNTERFACTUAL_REPLAY=true` 启动，本地 compare 路由可真实访问
+  - Playwright MCP 桌面端验证：compare 页 active pane / round 切换 / 自动化状态更新正常
+  - Playwright MCP 移动端验证：compare 页窄屏布局、branch tab 可用；roundtable picker 移动端点击选人可更新 seating board，expert witness 会显示独立 witness slot
+  - 输出截图：
+    - `output/playwright/compare-desktop.png`
+    - `output/playwright/compare-mobile.png`
+    - `output/playwright/roundtable-mobile-top.png`
+- `develop-web-game` 附加说明：
+  - 技能自带 `web_game_playwright_client.js` 仍有 `.js`/ESM 老问题，需要复制到工作区 `.mjs` 临时执行
+  - 该客户端在 compare 页的 headless/headed 截图里都把 panel 中的 WebGL 画面拍成黑底，但 `state-0.json` 与 Playwright MCP 截图都显示 `WorldScene` 正常；当前更像该脚本/SwiftShader 的捕获差异，而不是页面逻辑回归
+
+## 2026-04-11 compare capture + mobile click-to-seat follow-up
+
+- 已继续完成两项补丁：
+  - 修复 compare 页 `capture_game_screenshot('panel')` 对 WebGL/canvas 的黑屏抓图问题
+  - 在 `e2e-worldline-roundtable-suite.mjs` 里新增 mobile `click-to-seat` 验收链路
+- compare 抓图修复：
+  - `frontend/src/pages/CompareDigestView.tsx`
+    - `panel` 截图现在优先抓 `.compare-theater-pane.is-active .phaser-game-container` 的 canvas
+    - 只有拿不到 active canvas 时才回退到整页 element capture
+  - `frontend/src/pages/CompareDigestView.test.tsx`
+    - 新增 `panel screenshot routes to active theater canvas first` 断言
+- compare 修复后验证：
+  - `cd frontend && npm test -- --run src/pages/CompareDigestView.test.tsx`
+    - `3 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `develop-web-game` 客户端复验产物：
+    - `output/playwright/web-game-compare-fixed/state-0.json`
+    - `output/playwright/web-game-compare-fixed/shot-0.png`
+    - 现在 `state-0.json` 仍为 `scene=WorldScene`，且截图不再是黑屏
+- mobile click-to-seat 脚本化验收：
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - 新增 `clickReseatRoundtable(page)`，在 mobile 路径里验证 `tap/click -> seating board 更新 -> reopen`
+    - 新增产物：
+      - `mobile-roundtable-click-reseated.png`
+      - `mobile-roundtable-click-reseated.json`
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-11-roundtable-mobile-click --headless`
+    - 通过
+    - `summary.json` 中 `mobile.clickReseated.nextRepresentative = "狄奥多西一世"`
+    - `mobile.clickReseated.previousRoomId != nextRoomId`，说明移动端点击上桌后确实重开了新圆桌
+
+## 2026-04-12 priority follow-up: default counterfactual + compare composite + keyboard lane pass
+
+- 已继续按用户确认的优先级推进 1-4：
+  1. `counterfactual_replay` 默认配置落盘
+  2. compare 页整页 composite screenshot
+  3. roundtable desktop 键盘可访问验收
+  4. 后端 `scenario_runtime` 子 lane 细拆
+- 配置/文档对齐：
+  - `backend/app/config.py`
+    - `FEATURE_COUNTERFACTUAL_REPLAY` 默认值改为 `True`
+  - `.env.example`
+    - 新增 `FEATURE_COUNTERFACTUAL_REPLAY=true`
+  - `.env.docker`
+    - 新增 `FEATURE_COUNTERFACTUAL_REPLAY=true`
+  - `llmdoc/reference/config.md`
+    - 反事实功能默认值改为 `true`
+    - “所有 Phase 3 功能默认关闭”更新为“除 counterfactual 外其余默认关闭”
+- compare composite screenshot：
+  - `frontend/src/pages/CompareDigestView.tsx`
+    - `capture_game_screenshot('panel')` 现在优先走 `captureCompositeElementDataUrl('.compare-digest-view', '.compare-theater-pane.is-active .phaser-game-container')`
+    - composite 失败时再退 active canvas / 整页 element
+  - `frontend/src/pages/CompareDigestView.test.tsx`
+    - 新断言 panel capture 先走 compare composite
+- roundtable keyboard accessibility E2E：
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - desktop 新增 `keyboardReseatRoundtable(page)`
+    - summary 新增 `desktop.keyboardReseated`
+  - 运行：
+    - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-11-roundtable-desktop-keyboard --headless`
+    - 通过
+    - `summary.json` 中 `desktop.keyboardReseated.nextRepresentative = "阿拉里克"`
+- backend scenario_runtime 子 lane：
+  - `backend/app/services/llm_client.py`
+    - 新增/细化 lane：
+      - `identity_preflight_parse -> identity_parse`
+      - `scenario_turn_generation -> scenario_turn`
+      - `scenario_fork_detection -> scenario_control`
+      - `scenario_narration / scenario_memory_compression / identity_compaction -> scenario_background`
+  - `backend/app/services/simulator.py`
+    - agent 发言生成包 `scenario_turn_generation`
+    - fork detection 包 `scenario_fork_detection`
+    - identity compaction 摘要包 `identity_compaction`
+  - `backend/app/services/narrator.py`
+    - narration 包 `scenario_narration`
+  - `backend/app/services/memory.py`
+    - compress window 包 `scenario_memory_compression`
+  - `backend/tests/test_llm_client.py`
+    - 增加新 lane 的映射/限额断言
+- 验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_contract_freeze.py tests/test_counterfactual.py tests/test_resume.py tests/test_llm_client.py tests/test_narrator.py tests/test_memory.py -q`
+    - `177 passed, 1 warning`
+  - `cd frontend && npm test -- --run src/pages/CompareDigestView.test.tsx`
+    - `3 passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-11-roundtable-mobile-click --headless`
+    - 通过
+    - `summary.json` 中 `mobile.clickReseated.nextRepresentative = "狄奥多西一世"`
+
+## 2026-04-12 Oracle stream turn-error hardening + corners teardown rerun
+
+- 已继续收口 `llmdoc/overview/project.md` 中还挂着的两类尾巴：
+  - Oracle follow-up 流式 corner case：partial delta 后的 turn-level error 不再被前端误判为整房间 fatal error
+  - `corners` Playwright teardown warning：针对 `corners-browser` 增加显式 page close + 更宽 browser close budget
+- 本轮代码改动：
+  - backend
+    - `backend/app/services/ending_room_service/_threads.py`
+    - `backend/tests/test_ending_room_service.py`
+  - frontend
+    - `frontend/src/types.ts`
+    - `frontend/src/stores/endingRoomStore.ts`
+    - `frontend/src/stores/endingRoomStore.test.ts`
+    - `frontend/src/hooks/useEndingRoomWS.ts`
+    - `frontend/src/hooks/useEndingRoomWS.test.tsx`
+    - `frontend/scripts/e2e-suite.mjs`
+- Oracle 流式 hardening 细节：
+  - partial stream failure 现在广播：
+    - `message=stream_interrupted`
+    - `participant_id`
+    - `code=stream_interrupted`
+    - `recoverable=true`
+  - 前端 `useEndingRoomWS` 对 recoverable turn error 改为走 `handleTurnError()`，只清掉对应 draft，不再把整 room 置成 `error`
+  - fatal room-runtime error 仍继续走 `setError()` 口径
+- 定向验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py -q`
+    - `77 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm test -- --run src/stores/endingRoomStore.test.ts src/hooks/useEndingRoomWS.test.tsx`
+    - `20 passed`
+  - `cd frontend && npm test -- --run src/pages/CompareDigestView.test.tsx`
+    - `3 passed`
+- `corners` 真实复跑：
+  - `cd frontend && node scripts/e2e-suite.mjs corners --url http://127.0.0.1:18928 --output-dir output/e2e/2026-04-12-corners-teardown-rerun --headless`
+  - `result.json` 已正常落盘：
+    - `frontend/output/e2e/2026-04-12-corners-teardown-rerun/result.json`
+  - 本轮 CLI 收尾未再观察到此前那条：
+    - `[playwright-teardown] corners-browser did not close within 10000ms`
+
+- classic stream consistency 补充：
+  - `frontend/src/stores/simulationStore.ts`
+    - `setScenario/loadScenario` 走 snapshot hydrate 时现在会清掉 `thinkingAgents`
+    - 目的：WS gap-resync / reconnect 后不再残留过期的 thinking indicator
+  - `frontend/src/stores/simulationStore.test.ts`
+    - 新增 `clears stale thinkingAgents when a scenario snapshot resync is applied`
+  - 定向验证：
+    - `cd frontend && npm test -- --run src/stores/simulationStore.test.ts src/hooks/useSimulationWS.test.tsx`
+      - `35 passed`
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+      - 通过
+
+## 2026-04-12 roundtable strict actionability pass
+
+- 继续收口 roundtable 自动化假阳性：
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - 新增 `clickActionable()`：优先走 Playwright 真 `click()`，若 pointer 被拦截则退到 `focus + Enter`，不再用 DOM `evaluate(...click())`
+    - 新增 `tapLocator()`：移动端 click-to-seat 改为真实 `touchscreen.tap()`，不再用 DOM 注入
+    - desktop `keyboardReseatRoundtable()` 改为真正走 `dnd-kit KeyboardSensor` 路径：
+      - `Space` 开始拖拽
+      - 多次 `ArrowUp`
+      - 检查目标 seat class 进入 `worldline-roundtable-seating-slot--over-valid`
+      - `Space` 放下
+    - `createVerdictAnchoredThread()` / `sendAnchoredFollowup()` 关键按钮改成真实 actionability 路径
+- roundtable / ending-room faction overlay 再收口：
+  - `frontend/src/hooks/useFactionOverlay.ts`
+    - 新增 `enabled` 参数，允许 capability gate 关闭时直接跳过 fetch
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+  - `frontend/src/components/EndingChatModal.tsx`
+    - 接入 `useCapabilityCheck('factions')`
+    - `FEATURE_FACTIONS=false` 时不再反复打 `faction-timeline 404`
+- 实机结果：
+  - 手动 Playwright 复查 roundtable 桌面/移动 live 开桌后控制台已无 `faction-timeline 404`
+  - 桌面严格脚本复跑通过：
+    - `frontend/output/e2e/2026-04-12-final9-roundtable-desktop/summary.json`
+    - `dragReseated.nextRepresentative = "狄奥多西一世"`
+    - `keyboardReseated.nextRepresentative = "阿拉里克"`
+    - `anchoredThread.page.controls.interaction_mode = "thread_followup"`
+  - 移动严格脚本复跑通过：
+    - `frontend/output/e2e/2026-04-12-final8-roundtable-mobile/summary.json`
+    - `clickReseated.nextRepresentative = "狄奥多西一世"`
+    - `traitMix.selectionMode = "trait_mix"`
+    - `faultLineFirst.selectionMode = "fault_line_first"`
+    - `witnessAugmented.selectionMode = "witness_augmented"`
+    - `anchoredThread.page.controls.interaction_mode = "thread_followup"`
+- 仍保留的观察：
+  - roundtable desktop script 的 browser teardown warning 仍偶发打印；summary 能稳定落盘，但测试基础设施层还没完全无噪音
+
+## 2026-04-12 roundtable cross-browser + WS auth follow-up
+
+- 补齐剩余两类验证缺口：
+  1. roundtable Firefox / WebKit 专项验收
+  2. `useSimulationWS` / `useEndingRoomWS` 的首帧 auth 测试
+- `frontend/src/hooks/useSimulationWS.test.tsx`
+  - `MockWebSocket` 新增 `sentMessages`
+  - 新增 `localStorage` stub
+  - 新增测试：token 存在时会先发送 `{"type":"auth","token":"..."}`，且在 `auth_ok` 之前不会触发 resync
+- `frontend/src/hooks/useEndingRoomWS.test.tsx`
+  - `MockWebSocket` 新增 `send()` / `sentMessages`
+  - 新增 `localStorage` stub
+  - 新增测试：token 存在时会先发送 auth 首帧，`auth_ok` 后才触发 room/result resync
+- `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+  - 新增 `--browser chromium|firefox|webkit`
+  - `launchBrowser()` 现在支持 Firefox / WebKit
+  - mobile click-to-seat 继续保持真实输入，但改成：
+    - 选择 `:not([disabled])` 候选卡
+    - 用 `touchscreen.tap()` 而不是 DOM click
+  - `clickActionable()` 现在优先真 `click()`，若 pointer 被拦截则退到 `focus + Enter`
+  - desktop `KeyboardSensor` 拖拽步数从 16 提高到 80，兼容 WebKit
+- 验证：
+  - `cd frontend && npm test -- --run src/hooks/useSimulationWS.test.tsx src/hooks/useEndingRoomWS.test.tsx`
+    - `21 passed`
+  - roundtable Firefox:
+    - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-12-roundtable-firefox --headless`
+    - 通过；`keyboardReseated.nextRepresentative = "斯提里科"`，`dragReseated.nextRepresentative = "狄奥多西一世"`，anchored thread 仍为 `thread_followup`
+  - roundtable WebKit:
+    - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-12-roundtable-webkit-rerun --headless`
+    - 通过；`keyboardReseated.nextRepresentative = "阿拉里克"`，`dragReseated.nextRepresentative = "狄奥多西一世"`，anchored thread 仍为 `thread_followup`
+
+## 2026-04-12 final roundtable hardening pass
+
+- `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+  - `clickActionable()`：
+    - 先走真实 `locator.click({ trial: true }) + locator.click()`
+    - 若 pointer 被拦截，再退到 `focus + Enter`
+    - 不再直接用 DOM `evaluate(...click())` 作为主路径
+  - mobile click-to-seat：
+    - 改为选择 `:not([disabled])` 的候选卡
+    - 使用真实 `touchscreen.tap()` 触发点击
+  - desktop keyboard drag：
+    - 保留 `KeyboardSensor` 真实键序列
+    - `ArrowUp` 步数从 16 提高到 80，以兼容 WebKit
+- 额外专项验证：
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-12-final9-roundtable-desktop --headless`
+    - 通过
+  - `cd frontend && node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/2026-04-12-final8-roundtable-mobile --headless`
+    - 通过
+  - Firefox / WebKit 专项 summary：
+    - `frontend/output/e2e/2026-04-12-roundtable-firefox/summary.json`
+    - `frontend/output/e2e/2026-04-12-roundtable-webkit-rerun/summary.json`
+  - Firefox 关键字段：
+    - `keyboardReseated.nextRepresentative = "斯提里科"`
+    - `dragReseated.nextRepresentative = "狄奥多西一世"`
+    - `anchoredThread.page.controls.interaction_mode = "thread_followup"`
+  - WebKit 关键字段：
+    - `keyboardReseated.nextRepresentative = "阿拉里克"`
+    - `dragReseated.nextRepresentative = "狄奥多西一世"`
+    - `anchoredThread.page.controls.interaction_mode = "thread_followup"`
+- 手动 Playwright 复查：
+  - roundtable desktop/mobile live 开桌后控制台已无 `faction-timeline 404`
+  - compare desktop/mobile 仍保持可用
+
+## 2026-04-12 test warning cleanup
+
+- `frontend/src/components/EndingChatModal.test.tsx`
+  - 新增 `useCapabilityCheck` 静态 mock
+  - 目的：消除 capability hook 带来的异步状态更新 `act(...)` warning
+  - 验证：
+    - `cd frontend && npm test -- --run src/components/EndingChatModal.test.tsx`
+    - `19 passed`
+- `backend/tests/test_resume.py`
+  - `test_valid_resume_returns_201` 中把 `run_sim_background` patch 从默认 `AsyncMock` 改为 `MagicMock`
+  - 目的：消除未 await coroutine 导致的 `RuntimeWarning`
+  - 验证：
+    - `python -m pytest backend/tests/test_resume.py -q`
+    - `python -m pytest backend/tests/test_resume.py -q -W error::RuntimeWarning`
+    - 两次都 `16 passed`

@@ -122,6 +122,14 @@ vi.mock('../hooks/useEndingRoomWS', () => ({
   useEndingRoomWS: (...args: unknown[]) => useEndingRoomWSMock(...args),
 }));
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: false,
+    enabled: false,
+    capabilities: null,
+  }),
+}));
+
 vi.mock('../game/managers/VizSynthesizer', () => ({
   mapRoleToSpriteId: () => 'sprite_default',
 }));

@@ -483,6 +483,79 @@
   gap: 8px;
 }
 
+.worldline-roundtable-seating {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in oklab, var(--oracle-accent) 18%, var(--border-subtle));
+  background:
+    radial-gradient(circle at top left, color-mix(in oklab, var(--oracle-accent) 10%, transparent), transparent 36%),
+    var(--bg-surface);
+}
+
+.worldline-roundtable-seating__grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.worldline-roundtable-seating-slot {
+  display: grid;
+  gap: 8px;
+  min-height: 112px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px dashed var(--border-default);
+  background: linear-gradient(135deg, color-mix(in oklab, var(--oracle-accent) 4%, var(--bg-elevated)), var(--bg-elevated));
+  transition: border-color 160ms ease, box-shadow 180ms ease, transform 180ms ease, opacity 180ms ease;
+}
+
+.worldline-roundtable-seating-slot--available {
+  opacity: 0.92;
+}
+
+.worldline-roundtable-seating-slot--over-valid {
+  border-color: oklch(62% 0.18 145);
+  box-shadow: 0 0 0 1px oklch(62% 0.18 145 / 0.24), 0 14px 28px oklch(62% 0.18 145 / 0.12);
+  transform: translateY(-2px);
+}
+
+.worldline-roundtable-seating-slot--over-invalid {
+  border-color: oklch(60% 0.19 24);
+  box-shadow: 0 0 0 1px oklch(60% 0.19 24 / 0.18);
+}
+
+.worldline-roundtable-seating-slot__eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.worldline-roundtable-seating-slot__empty,
+.worldline-roundtable-seating-slot__occupant {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 54px;
+}
+
+.worldline-roundtable-seating-slot__empty strong,
+.worldline-roundtable-seating-slot__occupant strong {
+  color: var(--text-primary);
+}
+
+.worldline-roundtable-seating-slot__empty {
+  color: var(--text-secondary);
+}
+
+.worldline-roundtable-seating-slot__occupant span,
+.worldline-roundtable-seating-slot__occupant small {
+  color: var(--text-secondary);
+}
+
 @keyframes picker-slide-in {
   from { opacity: 0; transform: translateX(24px); }
   to { opacity: 1; transform: translateX(0); }
@@ -547,6 +620,12 @@
   background: var(--bg-elevated);
   color: inherit;
   text-align: left;
+  cursor: grab;
+  transition: transform 160ms ease, box-shadow 180ms ease, border-color 160ms ease;
+}
+
+.worldline-roundtable-picker-card.is-dragging {
+  opacity: 0.42;
 }
 
 .worldline-roundtable-picker-card:disabled {
@@ -558,6 +637,13 @@
   border-color: var(--oracle-accent);
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 22%, transparent);
   background: color-mix(in oklab, var(--oracle-accent) 5%, var(--bg-elevated));
+}
+
+.worldline-roundtable-picker-card--overlay {
+  width: min(280px, 78vw);
+  box-shadow: 0 18px 38px oklch(0% 0 0 / 0.18);
+  transform: rotate(2deg);
+  cursor: grabbing;
 }
 
 .worldline-roundtable-picker-card__title {
@@ -958,6 +1044,14 @@ h3.roundtable-phase-divider {
     grid-template-columns: 1fr;
   }
 
+  .worldline-roundtable-seating {
+    padding: 14px;
+  }
+
+  .worldline-roundtable-seating__grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+
   .worldline-roundtable-main {
     order: 1;
   }
@@ -997,6 +1091,14 @@ h3.roundtable-phase-divider {
 @media (max-width: 640px) {
   .worldline-roundtable-view {
     padding: 8px;
+  }
+
+  .worldline-roundtable-seating__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .worldline-roundtable-seating .worldline-roundtable-picker__count {
+    display: none;
   }
 
   .worldline-roundtable-hero,

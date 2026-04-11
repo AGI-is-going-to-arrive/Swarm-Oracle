@@ -43,6 +43,7 @@ export function useFactionOverlay(
   scenarioId: string | undefined,
   branchId: string | undefined,
   participantsById: Map<string, EndingRoomParticipant>,
+  enabled = true,
 ): Map<string, ParticipantFaction> {
   const [factionMap, setFactionMap] = useState<Map<string, ParticipantFaction>>(new Map());
 
@@ -55,7 +56,7 @@ export function useFactionOverlay(
     }
     return [...ids];
   }, [branchId, participantsById]);
-  const shouldSkipFetch = !scenarioId || branchIds.length === 0 || participantsById.size === 0;
+  const shouldSkipFetch = !enabled || !scenarioId || branchIds.length === 0 || participantsById.size === 0;
   const visibleFactionMap = useMemo(
     () => (shouldSkipFetch ? new Map<string, ParticipantFaction>() : factionMap),
     [factionMap, shouldSkipFetch],

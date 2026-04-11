@@ -209,6 +209,10 @@ function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Part
     visualizationEnabled: scenario.visualization_enabled ?? false,
     viewMode: scenario.visualization_enabled ? 'theater' : 'classic',
     messages: mergedMessages,
+    // Snapshot resync is authoritative for durable state, but does not carry
+    // in-flight speaker progress. Clear stale thinking indicators and let the
+    // next websocket frame repopulate them if the stream is still active.
+    thinkingAgents: [],
     status: mergedStatus,
     currentRound: sameScenario ? Math.max(state.currentRound, highestRound) : highestRound,
     isSimulationComplete: mergedStatus === 'done',

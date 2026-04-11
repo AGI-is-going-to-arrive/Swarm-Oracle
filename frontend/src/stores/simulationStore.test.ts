@@ -142,6 +142,32 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().thinkingAgents).toHaveLength(0);
   });
 
+  it("clears stale thinkingAgents when a scenario snapshot resync is applied", () => {
+    const store = useSimulationStore;
+
+    store.getState().handleWSEvent({
+      type: "agent_speak_start",
+      data: { agent: "曹操", agent_id: "a1", branch: "b1", round: 1 },
+    } as WSEvent);
+    expect(store.getState().thinkingAgents).toHaveLength(1);
+
+    store.getState().setScenario({
+      id: "scenario-resync",
+      question: "What if?",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    expect(store.getState().thinkingAgents).toEqual([]);
+  });
+
   it("deduplicates identical agent_speak events", () => {
     const store = useSimulationStore;
     const event = {

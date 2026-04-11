@@ -22,6 +22,7 @@
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、identity continuity preflight / confirm dialog |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口 |
+| CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
 | WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay |
@@ -42,6 +43,7 @@
   - `frontend/src/lib/scenarioAuthority.ts`
   - `frontend/src/lib/scenarioDirectorState.ts`
   - `frontend/src/lib/scenarioGameplayState.ts`
+- 主模式里 `scenario / branches / messages / status` 是 durable truth；`thinkingAgents` 只是瞬时 UI 态，resync 时会清空，不承担 replay authority。
 
 ### 兼容与缓存层
 
@@ -128,7 +130,7 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
-| `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择） |
+| `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 
 ## 当前边界
@@ -141,12 +143,15 @@
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
+- `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
 - `endingRoomStore` 当前在 `hydrateThread()` 时也会同步更新 `snapshot.threads`；新建 anchored thread 后，Oracle replay 不会再只序列化旧主桌快照。
+- `CompareDigestView` 当前采用“单活跃 live Theater + 非活跃静态镜像”的 compare 方案，不会同时挂两个 live Phaser runtime；左右 pane 共用 round timeline，切 pane 时会先抓当前活跃 pane 的快照。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
 - `ShareModal / GameplayCardsModal / InputView / DebateArenaView / DebateResultView / SimulationView / ResultView / EndingChatModal / WorldlineRoundtableView` 当前已清完 `react-hooks/exhaustive-deps` warning；本轮只补 hook 依赖与派生值稳定化，没有改业务口径。
@@ -164,9 +169,13 @@
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
   - `后续三回合` 按钮
-- Oracle 当前统一锚点规则：
-  - `verdict / key_moment / quote / phase`
-  - 都先落到显式 `questionAnchorIds`
+- Oracle 当前锚点规则：
+  - `EndingChatModal`
+    - `verdict / insight / key_moment / quote`
+    - 都先落到显式 `questionAnchorIds`
+  - `WorldlineRoundtableView`
+    - `verdict / phase / quote`
+    - 都先落到显式 `questionAnchorIds`
   - `appendUserTurn()` 与 `createThread()` 两条链都带锚点语义，不再只靠 prompt 预填
 - `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail / transcript header 回显当前 thread 的 anchor badge，只显示用户可读 label，不直接暴露内部 ids。
 - Oracle 自动化状态当前会额外输出：
@@ -227,9 +236,11 @@
 - `e2e-worldline-roundtable-suite.mjs` 当前已补：
   - 更稳的 quote-anchor thread 交互链
   - hotseat settle / anchored send 的慢路径等待
-  - desktop / mobile 分 browser 执行
+  - desktop 当前覆盖 pointer drag 与 `KeyboardSensor` 键盘拖拽
+  - mobile 当前保留真实 touch `tap-to-seat`
+  - `--browser chromium|firefox|webkit` scoped 执行
   - 优先复用最近成功的稳定 fixture
-- `e2e-worldline-roundtable-suite.mjs full` 当前已能在默认本地口径下重新跑通，Firefox / WebKit 的 cross-browser director-state scoped check 也已重新纳入同一条默认签收链。
+- `e2e-worldline-roundtable-suite.mjs full` 当前已能在默认本地口径下重新跑通；roundtable 桌面 Chromium / Firefox / WebKit 的 scoped regression 也已重新落盘。
 - roundtable anchored follow-up 的 desktop / mobile rerun 当前都已重新跑通：
   - desktop 已能稳定落 `turn_start / turn_delta / turn_commit`
   - mobile 当前也已重新抓回 `turn_delta`

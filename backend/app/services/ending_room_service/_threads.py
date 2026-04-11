@@ -544,6 +544,7 @@ def _commit_followup_assistant_turn(
 ) -> dict[str, Any]:
     cleaned_content = _sanitize_oracle_visible_text(content).strip() or plan.anchor_copy
     with Session(get_engine()) as session:
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         room = session.get(EndingRoom, plan.room_id)
         thread = session.get(EndingRoomThread, plan.thread_id)
         if room is None or thread is None:
@@ -552,11 +553,15 @@ def _commit_followup_assistant_turn(
                 "ENDING_ROOM_THREAD_NOT_FOUND",
                 "Ending room thread not found",
             )
+        sequences = session.exec(
+            select(EndingRoomTurn.sequence).where(EndingRoomTurn.room_id == plan.room_id)
+        ).all()
+        next_sequence = max((int(sequence) for sequence in sequences), default=0) + 1
         response_turn = EndingRoomTurn(
             id=plan.turn_id,
             room_id=plan.room_id,
             thread_id=plan.thread_id,
-            sequence=plan.sequence,
+            sequence=next_sequence,
             phase=plan.phase,
             participant_id=plan.participant.id,
             content=cleaned_content,
@@ -577,6 +582,33 @@ def _commit_followup_assistant_turn(
         session.commit()
         session.refresh(response_turn)
         return _serialize_turn(response_turn)
+
+
+async def _broadcast_followup_turn_error(
+    plan: _OracleFollowupPlan,
+    *,
+    ws_callback: EndingRoomBroadcast | None,
+    message: str,
+    code: str,
+    recoverable: bool = True,
+) -> None:
+    await _broadcast(
+        plan.room_id,
+        ws_callback,
+        {
+            "type": "ending_room_turn_error",
+            "data": {
+                "room_id": plan.room_id,
+                "thread_id": plan.thread_id,
+                "turn_id": plan.turn_id,
+                "participant_id": plan.participant.id,
+                "message": message,
+                "error": message,
+                "code": code,
+                "recoverable": recoverable,
+            },
+        },
+    )
 
 
 
@@ -710,32 +742,94 @@ async def _append_followup_turns_with_retry(
     committed_turns = [prepared_user_turn]
     recent_lines = [*thread_recent_lines, prepared_user_turn["content"]]
     for plan in prepared_plans:
-        await _broadcast(
-            plan.room_id,
-            ws_callback,
-            {
-                "type": "ending_room_turn_start",
-                "data": {
-                    "room_id": plan.room_id,
-                    "thread_id": plan.thread_id,
-                    "turn_id": plan.turn_id,
-                    "participant_id": plan.participant.id,
-                    "phase": plan.phase.value,
-                    "sequence": plan.sequence,
+        turn_started = False
+        try:
+            await _broadcast(
+                plan.room_id,
+                ws_callback,
+                {
+                    "type": "ending_room_turn_start",
+                    "data": {
+                        "room_id": plan.room_id,
+                        "thread_id": plan.thread_id,
+                        "turn_id": plan.turn_id,
+                        "participant_id": plan.participant.id,
+                        "phase": plan.phase.value,
+                        "sequence": plan.sequence,
+                    },
                 },
-            },
-        )
-        generated_content = plan.anchor_copy
-        streamed = False
-        if settings.ORACLE_CHAMBERS_USE_LLM and stream_supported:
-            try:
-                chunk_index = 0
+            )
+            turn_started = True
+            generated_content = plan.anchor_copy
+            streamed = False
+            if settings.ORACLE_CHAMBERS_USE_LLM and stream_supported:
+                try:
+                    chunk_index = 0
 
-                async def _on_delta(delta: str) -> None:
-                    nonlocal chunk_index
-                    if not delta:
-                        return
-                    chunk_index += 1
+                    async def _on_delta(delta: str) -> None:
+                        nonlocal chunk_index
+                        if not delta:
+                            return
+                        chunk_index += 1
+                        await _broadcast(
+                            plan.room_id,
+                            ws_callback,
+                            {
+                                "type": "ending_room_turn_delta",
+                                "data": {
+                                    "room_id": plan.room_id,
+                                    "thread_id": plan.thread_id,
+                                    "turn_id": plan.turn_id,
+                                    "participant_id": plan.participant.id,
+                                    "delta": delta,
+                                    "chunk_index": chunk_index,
+                                },
+                            },
+                        )
+
+                    generated_content = await _pkg._stream_oracle_copy(
+                        room=prepared_room,
+                        participant=plan.participant,
+                        phase=plan.phase,
+                        anchor_copy=plan.anchor_copy,
+                        user_content=plan.user_content,
+                        thread_mode=plan.thread_mode,
+                        interaction_mode=plan.interaction_mode,
+                        recent_lines=recent_lines,
+                        purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
+                        on_delta=_on_delta,
+                    )
+                    if chunk_index > 0:
+                        await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
+                    streamed = True
+                except Exception as exc:
+                    logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
+                    if chunk_index > 0:
+                        # Partial deltas already sent — emit error instead of duplicating
+                        await _broadcast_followup_turn_error(
+                            plan,
+                            ws_callback=ws_callback,
+                            message="stream_interrupted",
+                            code="stream_interrupted",
+                        )
+                        # Use anchor_copy as final content since stream was partial
+                        generated_content = plan.anchor_copy
+                        streamed = True  # skip fallback re-emission
+            if not streamed:
+                generated_content = await _pkg._maybe_rewrite_oracle_copy(
+                    room=prepared_room,
+                    participant=plan.participant,
+                    phase=plan.phase,
+                    anchor_copy=plan.anchor_copy,
+                    user_content=plan.user_content,
+                    thread_mode=plan.thread_mode,
+                    interaction_mode=plan.interaction_mode,
+                    recent_lines=recent_lines,
+                    purpose=f"oracle_followup_{plan.interaction_mode.value}",
+                )
+                generated_content = _sanitize_oracle_visible_text(generated_content).strip() or plan.anchor_copy
+                chunk_index = 0
+                for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
                     await _broadcast(
                         plan.room_id,
                         ws_callback,
@@ -751,82 +845,26 @@ async def _append_followup_turns_with_retry(
                             },
                         },
                     )
-
-                generated_content = await _pkg._stream_oracle_copy(
-                    room=prepared_room,
-                    participant=plan.participant,
-                    phase=plan.phase,
-                    anchor_copy=plan.anchor_copy,
-                    user_content=plan.user_content,
-                    thread_mode=plan.thread_mode,
-                    interaction_mode=plan.interaction_mode,
-                    recent_lines=recent_lines,
-                    purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
-                    on_delta=_on_delta,
-                )
+                    await asyncio.sleep(0)
                 if chunk_index > 0:
                     await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
-                streamed = True
-            except Exception as exc:
-                logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
-                if chunk_index > 0:
-                    # Partial deltas already sent — emit error instead of duplicating
-                    await _broadcast(
-                        plan.room_id,
-                        ws_callback,
-                        {
-                            "type": "ending_room_turn_error",
-                            "data": {
-                                "room_id": plan.room_id,
-                                "turn_id": plan.turn_id,
-                                "error": "stream_interrupted",
-                            },
-                        },
-                    )
-                    # Use anchor_copy as final content since stream was partial
-                    generated_content = plan.anchor_copy
-                    streamed = True  # skip fallback re-emission
-        if not streamed:
-            generated_content = await _pkg._maybe_rewrite_oracle_copy(
-                room=prepared_room,
-                participant=plan.participant,
-                phase=plan.phase,
-                anchor_copy=plan.anchor_copy,
-                user_content=plan.user_content,
-                thread_mode=plan.thread_mode,
-                interaction_mode=plan.interaction_mode,
-                recent_lines=recent_lines,
-                purpose=f"oracle_followup_{plan.interaction_mode.value}",
+            committed_turn = _commit_followup_assistant_turn(plan, content=generated_content)
+            committed_turns.append(committed_turn)
+            recent_lines.append(committed_turn["content"])
+            await _broadcast(
+                plan.room_id,
+                ws_callback,
+                {"type": "ending_room_turn_commit", "data": committed_turn},
             )
-            generated_content = _sanitize_oracle_visible_text(generated_content).strip() or plan.anchor_copy
-            chunk_index = 0
-            for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
-                await _broadcast(
-                    plan.room_id,
-                    ws_callback,
-                    {
-                        "type": "ending_room_turn_delta",
-                        "data": {
-                            "room_id": plan.room_id,
-                            "thread_id": plan.thread_id,
-                            "turn_id": plan.turn_id,
-                            "participant_id": plan.participant.id,
-                            "delta": delta,
-                            "chunk_index": chunk_index,
-                        },
-                    },
+        except Exception:
+            if turn_started:
+                await _broadcast_followup_turn_error(
+                    plan,
+                    ws_callback=ws_callback,
+                    message="followup_failed",
+                    code="followup_failed",
                 )
-                await asyncio.sleep(0)
-            if chunk_index > 0:
-                await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
-        committed_turn = _commit_followup_assistant_turn(plan, content=generated_content)
-        committed_turns.append(committed_turn)
-        recent_lines.append(committed_turn["content"])
-        await _broadcast(
-            plan.room_id,
-            ws_callback,
-            {"type": "ending_room_turn_commit", "data": committed_turn},
-        )
+            raise
 
     return committed_turns
 

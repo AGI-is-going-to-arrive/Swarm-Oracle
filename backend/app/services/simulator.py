@@ -29,6 +29,7 @@ from app.services.llm_client import (
     get_runtime_parallelism_limit,
     llm_call_json,
     llm_call_json_with_stream_fallback,
+    llm_request_scope,
 )
 from app.services.memory import (
     build_agent_context,
@@ -159,19 +160,66 @@ def _sanitize_fork_debug_result(payload: Any) -> dict[str, Any]:
     }
 
 
-async def _summarize_identity_compaction_group(summaries: list[str]) -> str:
+def _normalize_fork_detector_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"should_fork": False, "reason": "", "branches": []}
+
+    should_fork = payload.get("should_fork") is True
+    reason = str(payload.get("reason") or "").strip()
+    normalized_branches: list[dict[str, Any]] = []
+    for item in payload.get("branches", []):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        try:
+            probability = float(item.get("probability"))
+        except (TypeError, ValueError):
+            continue
+        branch_payload: dict[str, Any] = {
+            "title": title,
+            "probability": probability,
+        }
+        description = str(item.get("description") or "").strip()
+        if description:
+            branch_payload["description"] = description
+        normalized_branches.append(branch_payload)
+
+    if not should_fork:
+        return {"should_fork": False, "reason": reason, "branches": []}
+    if not reason or not normalized_branches:
+        return {"should_fork": False, "reason": reason, "branches": []}
+
+    return {
+        "should_fork": True,
+        "reason": reason,
+        "branches": normalized_branches,
+    }
+
+
+async def _summarize_identity_compaction_group(
+    summaries: list[str],
+    *,
+    llm_overrides: dict | None = None,
+) -> str:
     from app.services.vector_store import build_compaction_prompt
 
     prompt = build_compaction_prompt(summaries)
     fallback_summary = " | ".join(summaries)[:600]
 
     try:
-        result = await llm_call_json_with_stream_fallback(
-            prompt,
-            reasoning_effort="low",
-            temperature=0.3,
-            probe_timeout=_IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS,
-        )
+        _overrides = llm_overrides or {}
+        with llm_request_scope(purpose="identity_compaction"):
+            result = await llm_call_json_with_stream_fallback(
+                prompt,
+                reasoning_effort="low",
+                model=_overrides.get("model"),
+                api_key=_overrides.get("api_key"),
+                base_url=_overrides.get("base_url"),
+                temperature=0.3,
+                probe_timeout=_IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS,
+            )
         summary = str(result.get("compacted_summary") or "").strip()
         if summary:
             return summary
@@ -1604,6 +1652,7 @@ async def run_simulation(
                             try:
                                 summary = await _summarize_identity_compaction_group(
                                     grp.summaries,
+                                    llm_overrides=llm_overrides,
                                 )
                             except Exception:
                                 # LLM failure fallback: concatenate
@@ -1744,14 +1793,15 @@ async def _gather_agent_messages(
 
             try:
                 _overrides = llm_overrides or {}
-                result = await llm_call_json(
-                    ctx, reasoning_effort=effort,
-                    model=_overrides.get("model"),
-                    api_key=_overrides.get("api_key"),
-                    base_url=_overrides.get("base_url"),
-                    temperature=_overrides.get("temperature"),
-                    fallback_mode="agent_message",
-                )
+                with llm_request_scope(purpose="scenario_turn_generation"):
+                    result = await llm_call_json(
+                        ctx, reasoning_effort=effort,
+                        model=_overrides.get("model"),
+                        api_key=_overrides.get("api_key"),
+                        base_url=_overrides.get("base_url"),
+                        temperature=_overrides.get("temperature"),
+                        fallback_mode="agent_message",
+                    )
                 content = result.get("content", "")
                 emotion = result.get("emotion", "neutral")
                 diverge = result.get("diverge")
@@ -2047,13 +2097,15 @@ async def _detect_fork(
 
     try:
         _overrides = llm_overrides or {}
-        return await llm_call_json_with_stream_fallback(
-            prompt, reasoning_effort="medium",
-            model=_overrides.get("model"),
-            api_key=_overrides.get("api_key"),
-            base_url=_overrides.get("base_url"),
-            temperature=_overrides.get("temperature"),
-        )
+        with llm_request_scope(purpose="scenario_fork_detection"):
+            result = await llm_call_json_with_stream_fallback(
+                prompt, reasoning_effort="medium",
+                model=_overrides.get("model"),
+                api_key=_overrides.get("api_key"),
+                base_url=_overrides.get("base_url"),
+                temperature=_overrides.get("temperature"),
+            )
+            return _normalize_fork_detector_result(result)
     except Exception as exc:
         logger.warning("Fork detection failed: %s", exc)
         return {"should_fork": False}

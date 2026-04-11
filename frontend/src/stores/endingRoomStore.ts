@@ -53,6 +53,17 @@ interface DraftDeltaPayload {
   chunk_index: number;
 }
 
+interface DraftErrorPayload {
+  room_id: string;
+  thread_id?: string | null;
+  turn_id: string;
+  participant_id?: string;
+  message?: string;
+  error?: string;
+  code?: string;
+  recoverable?: boolean;
+}
+
 interface ScopeNoticePayload {
   threadId: string;
   memoryPartitionId: string;
@@ -82,6 +93,7 @@ interface EndingRoomState {
   setStatus: (status: EndingRoomStatus, error?: unknown) => void;
   startDraft: (payload: DraftStartPayload) => void;
   appendDraft: (payload: DraftDeltaPayload) => void;
+  handleTurnError: (payload: DraftErrorPayload) => void;
   commitTurn: (turn: EndingRoomTurn) => void;
   setResult: (result: EndingRoomResult) => void;
   setActiveThread: (threadId: string | null) => void;
@@ -470,6 +482,20 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
           content: `${current?.content ?? ''}${payload.delta}`,
         },
       },
+    };
+  }),
+
+  handleTurnError: (payload) => set((state) => {
+    if (!payload.turn_id) {
+      return state;
+    }
+    if (!(payload.turn_id in state.pendingDrafts)) {
+      return state;
+    }
+    const pendingDrafts = { ...state.pendingDrafts };
+    delete pendingDrafts[payload.turn_id];
+    return {
+      pendingDrafts,
     };
   }),
 

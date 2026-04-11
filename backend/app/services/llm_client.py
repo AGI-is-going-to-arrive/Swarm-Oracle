@@ -224,6 +224,8 @@ _provider_failures: dict[str, int] = defaultdict(int)
 _provider_circuit_until: dict[str, float] = defaultdict(float)
 _global_semaphore: asyncio.Semaphore | None = None
 _global_semaphore_limit = 0
+_purpose_semaphores: dict[str, asyncio.Semaphore] = {}
+_purpose_semaphore_limits: dict[str, int] = {}
 _RUNTIME_GUARD_TABLE = "llm_runtime_guard"
 _RUNTIME_RATE_LIMIT_TABLE = "llm_runtime_rate_limit"
 _SQLITE_RUNTIME_GUARD_TTL_SECONDS = 600.0
@@ -342,6 +344,79 @@ def _get_global_semaphore() -> asyncio.Semaphore | None:
     return _global_semaphore
 
 
+def _purpose_lane(purpose: str | None) -> str:
+    normalized = (purpose or "").strip().lower()
+    if not normalized:
+        return "default"
+    if normalized == "scenario_parse":
+        return "parse"
+    if normalized == "identity_preflight_parse":
+        return "identity_parse"
+    if normalized == "scenario_runtime":
+        return "scenario"
+    if normalized == "scenario_turn_generation":
+        return "scenario_turn"
+    if normalized == "scenario_fork_detection":
+        return "scenario_control"
+    if normalized in {"scenario_narration", "scenario_memory_compression", "identity_compaction"}:
+        return "scenario_background"
+    if normalized.startswith("oracle_"):
+        return "oracle"
+    if normalized == "debate_argument_map_enrichment":
+        return "background"
+    if normalized.startswith("debate_"):
+        return "debate"
+    if normalized in {"prediction_scoring", "social_copy"}:
+        return "background"
+    return "default"
+
+
+def _purpose_lane_limit(purpose: str | None) -> int | None:
+    global_limit = _get_global_concurrency_limit()
+    if global_limit is None:
+        return None
+
+    lane = _purpose_lane(purpose)
+    if lane == "scenario":
+        return max(1, global_limit - 1)
+    if lane == "scenario_turn":
+        return max(1, global_limit - 1)
+    if lane in {"scenario_control", "scenario_background"}:
+        return 1
+    if lane == "debate":
+        return 1 if global_limit <= 3 else 2
+    if lane == "oracle":
+        return 1 if global_limit <= 4 else 2
+    if lane in {"parse", "identity_parse", "background"}:
+        return 1
+    return max(1, min(global_limit, 2))
+
+
+def _get_purpose_semaphore(purpose: str | None) -> asyncio.Semaphore | None:
+    limit = _purpose_lane_limit(purpose)
+    if limit is None:
+        return None
+
+    lane = _purpose_lane(purpose)
+    semaphore = _purpose_semaphores.get(lane)
+    cached_limit = _purpose_semaphore_limits.get(lane)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(limit)
+        _purpose_semaphores[lane] = semaphore
+        _purpose_semaphore_limits[lane] = limit
+        return semaphore
+
+    if cached_limit != limit:
+        logger.warning(
+            "LLM scheduling lane %s limit changed at runtime (%s -> %s); "
+            "keeping existing semaphore until process restart",
+            lane,
+            cached_limit,
+            limit,
+        )
+    return semaphore
+
+
 def get_runtime_parallelism_limit() -> int:
     """Return a safe per-request concurrency cap for local fan-out call sites.
 
@@ -363,6 +438,10 @@ def get_runtime_parallelism_limit() -> int:
     user_limit = _get_user_pending_limit()
     if quota_key and user_limit is not None:
         candidate_limits.append(user_limit)
+
+    purpose_limit = _purpose_lane_limit(request_context.purpose)
+    if purpose_limit is not None:
+        candidate_limits.append(purpose_limit)
 
     if candidate_limits:
         return max(1, min(candidate_limits))
@@ -1116,6 +1195,7 @@ def _release_sqlite_runtime_slot(*, db_path: str | None = None, reservation_id: 
 async def _reserve_runtime_slot(
     *,
     quota_key: str | None,
+    purpose: str | None = None,
     provider_key: str,
     lease_seconds: float,
     estimated_tokens: int | None = None,
@@ -1213,17 +1293,55 @@ async def _reserve_runtime_slot(
             await asyncio.sleep(wait_seconds)
             continue
 
+        purpose_semaphore = _get_purpose_semaphore(purpose)
         semaphore = _get_global_semaphore()
-        if semaphore is not None:
-            await semaphore.acquire()
-        return reservation_id
+        acquired_purpose = False
+        acquired_global = False
+        try:
+            if purpose_semaphore is not None:
+                await purpose_semaphore.acquire()
+                acquired_purpose = True
+            if semaphore is not None:
+                await semaphore.acquire()
+                acquired_global = True
+            return reservation_id
+        except BaseException:
+            if acquired_global and semaphore is not None:
+                semaphore.release()
+            if acquired_purpose and purpose_semaphore is not None:
+                purpose_semaphore.release()
+            async with _guard_lock:
+                db_path = _runtime_guard_db_path()
+                if db_path is not None and reservation_id is not None:
+                    try:
+                        _release_sqlite_runtime_slot(db_path=db_path, reservation_id=reservation_id)
+                    except (sqlite3.Error, SQLAlchemyError) as exc:
+                        logger.warning("SQLite runtime guard release failed: %s", exc)
+                if reservation_id is None:
+                    if _get_global_pending_limit() is not None:
+                        _pending_requests = max(0, _pending_requests - 1)
+                    if quota_key and _get_user_pending_limit() is not None:
+                        next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
+                        if next_count == 0:
+                            _pending_by_quota.pop(quota_key, None)
+                        else:
+                            _pending_by_quota[quota_key] = next_count
+            raise
 
 
-async def _release_runtime_slot(*, quota_key: str | None, reservation_id: str | None) -> None:
+async def _release_runtime_slot(
+    *,
+    quota_key: str | None,
+    purpose: str | None = None,
+    reservation_id: str | None,
+) -> None:
     global _pending_requests
     semaphore = _get_global_semaphore()
     if semaphore is not None:
         semaphore.release()
+    purpose_semaphore = _get_purpose_semaphore(purpose)
+    if purpose_semaphore is not None:
+        purpose_semaphore.release()
     async with _guard_lock:
         db_path = _runtime_guard_db_path()
         if db_path is not None and reservation_id is not None:
@@ -1341,6 +1459,7 @@ async def llm_call(
     """
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
+    purpose = request_context.purpose
     target_url = _resolve_llm_api_url(base_url)
     # SSRF + key-exfil guard: when the caller provides a custom base_url
     # (BYOK mode), they MUST also supply their own api_key. Never send the
@@ -1380,6 +1499,7 @@ async def llm_call(
 
     reservation_id = await _reserve_runtime_slot(
         quota_key=quota_key,
+        purpose=purpose,
         provider_key=provider_key,
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
         estimated_tokens=estimated_tokens,
@@ -1451,6 +1571,7 @@ async def llm_call(
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
+            purpose=purpose,
             reservation_id=reservation_id,
         )
     assert data is not None
@@ -1733,6 +1854,7 @@ async def llm_call_stream(
     """
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
+    purpose = request_context.purpose
     target_url = _resolve_llm_api_url(base_url)
     # SSRF + key-exfil guard: BYOK base_url requires a matching api_key.
     if base_url and not api_key:
@@ -1768,6 +1890,7 @@ async def llm_call_stream(
 
     reservation_id = await _reserve_runtime_slot(
         quota_key=quota_key,
+        purpose=purpose,
         provider_key=provider_key,
         lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
         estimated_tokens=estimated_tokens,
@@ -1862,6 +1985,7 @@ async def llm_call_stream(
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
+            purpose=purpose,
             reservation_id=reservation_id,
         )
 

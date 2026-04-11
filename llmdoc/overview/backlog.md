@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-11 (P1-10/P1-11 交付后)
+> 最后更新：2026-04-12
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -30,15 +30,7 @@
 
 ## 剩余项
 
-当前无 active Phase 3 backlog，只剩下方 `v1.1 延后` 项。
-
-### v1.1 延后
-
-| # | 项目 | 延后理由 |
-|---|------|---------|
-| P2-1 | @dnd-kit/core 拖拽注入 Agent | 当前走 selectable attach |
-| P2-2 | 双 Phaser split-screen compare | 当前走文本 diff，双实例内存翻倍 |
-| P2-3 | LLM scheduling isolation | 需独立 semaphore refactor |
+当前无 active Phase 3 backlog。
 
 ## 架构级已知限制
 

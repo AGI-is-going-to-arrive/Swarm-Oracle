@@ -1892,6 +1892,51 @@ class TestDetectFork:
 
         assert result == {"should_fork": False}
 
+    @pytest.mark.asyncio
+    async def test_detector_sanitizes_malformed_branch_payloads(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线")
+        aid = _make_agent(engine, sid, name="Agent-A")
+        round_id = _create_round(engine, bid, 1)
+        _save_message(engine, round_id, aid, "存在路线之争", "tense", "是否全面开战")
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "should_fork": True,
+                "reason": "路线已经分裂",
+                "branches": [
+                    {"title": "有效分支", "probability": 0.6, "description": "保留描述"},
+                    {"title": "", "probability": 0.4},
+                    {"title": "缺概率"},
+                ],
+            }
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+
+        result = await _detect_fork(
+            engine,
+            bid,
+            ["是否全面开战"],
+            0.7,
+            language="Chinese",
+        )
+
+        assert result == {
+            "should_fork": True,
+            "reason": "路线已经分裂",
+            "branches": [
+                {
+                    "title": "有效分支",
+                    "probability": 0.6,
+                    "description": "保留描述",
+                },
+            ],
+        }
+
 
 class TestIdentityCompactionSummary:
     @pytest.mark.asyncio
@@ -1935,6 +1980,33 @@ class TestIdentityCompactionSummary:
         summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
 
         assert summary == "memory a | memory b"
+
+    @pytest.mark.asyncio
+    async def test_passes_llm_overrides_to_identity_compaction_helper(self, monkeypatch):
+        captured = {}
+
+        async def _fake_call(*args, **kwargs):
+            captured.update(kwargs)
+            return {"compacted_summary": "streamed summary"}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_call,
+        )
+
+        summary = await _summarize_identity_compaction_group(
+            ["memory a", "memory b"],
+            llm_overrides={
+                "model": "custom-model",
+                "api_key": "secret",
+                "base_url": "http://example.test/v1",
+            },
+        )
+
+        assert summary == "streamed summary"
+        assert captured["model"] == "custom-model"
+        assert captured["api_key"] == "secret"
+        assert captured["base_url"] == "http://example.test/v1"
 
 
 class TestIdentityCompactionTaskRegistration:

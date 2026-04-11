@@ -15,6 +15,7 @@ import {
   type GameplayProfileId,
 } from './gameplayCards';
 import { useEndingRoomWS } from '../hooks/useEndingRoomWS';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
 import {
   type AnchorAction,
@@ -402,7 +403,8 @@ export default function EndingChatModal({
   );
 
   // P1-8: Faction overlay — call hook internally with branch from props
-  const factionMap = useFactionOverlay(scenarioId, branch?.id, participantsById);
+  const { enabled: factionsEnabled } = useCapabilityCheck('factions');
+  const factionMap = useFactionOverlay(scenarioId, branch?.id, participantsById, factionsEnabled);
 
   const currentTurns = (() => {
     if (readOnly && replayState?.snapshot) {

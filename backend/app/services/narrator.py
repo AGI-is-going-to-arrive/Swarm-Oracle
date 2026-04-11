@@ -10,6 +10,7 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
+    llm_request_scope,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,17 +195,18 @@ async def narrate_branch(
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
     try:
-        raw_result = await asyncio.wait_for(
-            llm_call_json_with_stream_fallback(
-                prompt,
-                reasoning_effort="low",
-                api_key=api_key,
-                base_url=base_url,
-                temperature=temperature,
-                model=model,
-            ),
-            timeout=_NARRATION_TIMEOUT_SECONDS,
-        )
+        with llm_request_scope(purpose="scenario_narration"):
+            raw_result = await asyncio.wait_for(
+                llm_call_json_with_stream_fallback(
+                    prompt,
+                    reasoning_effort="low",
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=temperature,
+                    model=model,
+                ),
+                timeout=_NARRATION_TIMEOUT_SECONDS,
+            )
         result = _normalize_narration_result(raw_result)
     except Exception as exc:
         logger.warning("Narration fallback for %s: %s", branch_title, exc)

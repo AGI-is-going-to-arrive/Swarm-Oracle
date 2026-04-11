@@ -41,6 +41,7 @@ class MockWebSocket {
   onclose: ((event: CloseEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   url: string;
+  sentMessages: string[] = [];
 
   constructor(url: string) {
     this.url = url;
@@ -48,8 +49,7 @@ class MockWebSocket {
   }
 
   send(data: string) {
-    void data;
-    // no-op: captures auth frames without side effects
+    this.sentMessages.push(data);
   }
 
   close(code = 1000) {
@@ -103,6 +103,16 @@ describe('useSimulationWS', () => {
       }),
       removeItem: vi.fn((key: string) => {
         sessionStore.delete(key);
+      }),
+    });
+    const localStore = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => localStore.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStore.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        localStore.delete(key);
       }),
     });
   });
@@ -314,6 +324,44 @@ describe('useSimulationWS', () => {
     });
 
     expect(getScenarioMock).toHaveBeenCalledWith('scenario-gap');
+    expect(storeState.setScenario).toHaveBeenCalledWith(scenario);
+  });
+
+  it('sends auth first and waits for auth_ok before resyncing when a token is present', async () => {
+    const scenario = {
+      id: 'scenario-auth-ok',
+      question: 'Q',
+      status: 'done',
+      created_at: '2026-03-23T00:00:00Z',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    } satisfies Scenario;
+    getScenarioMock.mockResolvedValue(scenario);
+    window.localStorage.setItem('swarmoracle_session_token', 'token-123');
+
+    render(<Harness scenarioId="scenario-auth-ok" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.(new Event('open'));
+    });
+
+    expect(MockWebSocket.instances[0]?.sentMessages).toEqual([
+      JSON.stringify({ type: 'auth', token: 'token-123' }),
+    ]);
+    expect(getScenarioMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({ type: 'auth_ok' }),
+      } as MessageEvent<string>);
+      await flushMicrotasks();
+    });
+
+    expect(getScenarioMock).toHaveBeenCalledWith('scenario-auth-ok');
     expect(storeState.setScenario).toHaveBeenCalledWith(scenario);
   });
 

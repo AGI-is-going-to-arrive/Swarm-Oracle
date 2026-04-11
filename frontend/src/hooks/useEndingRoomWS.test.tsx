@@ -13,6 +13,7 @@ const storeState = {
   setStatus: vi.fn(),
   startDraft: vi.fn(),
   appendDraft: vi.fn(),
+  handleTurnError: vi.fn(),
   commitTurn: vi.fn(),
   setResult: vi.fn(),
   setScopeNotice: vi.fn(),
@@ -44,10 +45,15 @@ class MockWebSocket {
   onclose: ((event: CloseEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   url: string;
+  sentMessages: string[] = [];
 
   constructor(url: string) {
     this.url = url;
     MockWebSocket.instances.push(this);
+  }
+
+  send(data: string) {
+    this.sentMessages.push(data);
   }
 
   close(code = 1000) {
@@ -78,6 +84,16 @@ describe('useEndingRoomWS', () => {
     getEndingRoomMock.mockReset();
     getEndingRoomResultMock.mockReset();
     Object.values(storeState).forEach((value) => value.mockReset());
+    const localStore = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn((key: string) => localStore.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStore.set(key, value);
+      }),
+      removeItem: vi.fn((key: string) => {
+        localStore.delete(key);
+      }),
+    });
   });
 
   afterEach(() => {
@@ -175,6 +191,36 @@ describe('useEndingRoomWS', () => {
 
     expect(storeState.setStatus).not.toHaveBeenCalled();
     expect(storeState.startDraft).not.toHaveBeenCalled();
+  });
+
+  it('treats recoverable stream turn errors as draft cleanup instead of a room-level fatal error', () => {
+    render(<Harness roomId="room-recoverable-error" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_turn_error',
+          data: {
+            room_id: 'room-recoverable-error',
+            thread_id: 'thread-room',
+            turn_id: 'turn-1',
+            participant_id: 'p-1',
+            message: 'stream_interrupted',
+            code: 'stream_interrupted',
+            recoverable: true,
+          },
+          meta: { stream_id: 'room-recoverable-error', sequence: 1, event_id: 'room-recoverable-error:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.handleTurnError).toHaveBeenCalledWith(expect.objectContaining({
+      turn_id: 'turn-1',
+      code: 'stream_interrupted',
+      recoverable: true,
+    }));
+    expect(storeState.setError).not.toHaveBeenCalled();
   });
 
   it('resyncs when sequence gaps are detected', async () => {
@@ -281,6 +327,66 @@ describe('useEndingRoomWS', () => {
 
     expect(getEndingRoomMock).toHaveBeenCalledWith('room-open');
     expect(getEndingRoomResultMock).toHaveBeenCalledWith('room-open');
+    expect(storeState.hydrateSnapshot).toHaveBeenCalled();
+    expect(storeState.hydrateResult).toHaveBeenCalled();
+  });
+
+  it('sends auth first and waits for auth_ok before resyncing when a token is present', async () => {
+    getEndingRoomMock.mockResolvedValue({
+      id: 'room-auth-ok',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      turns: [],
+      result_ready: true,
+    });
+    getEndingRoomResultMock.mockResolvedValue({
+      id: 'room-auth-ok',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      turns: [],
+      result_ready: true,
+      result: { summary: 'Summary' },
+    });
+    window.localStorage.setItem('swarmoracle_session_token', 'token-abc');
+
+    render(<Harness roomId="room-auth-ok" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.({} as Event);
+    });
+
+    expect(MockWebSocket.instances[0]?.sentMessages).toEqual([
+      JSON.stringify({ type: 'auth', token: 'token-abc' }),
+    ]);
+    expect(getEndingRoomMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({ type: 'auth_ok' }),
+      } as MessageEvent<string>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getEndingRoomMock).toHaveBeenCalledWith('room-auth-ok');
+    expect(getEndingRoomResultMock).toHaveBeenCalledWith('room-auth-ok');
     expect(storeState.hydrateSnapshot).toHaveBeenCalled();
     expect(storeState.hydrateResult).toHaveBeenCalled();
   });

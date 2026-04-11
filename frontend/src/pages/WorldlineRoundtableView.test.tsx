@@ -646,11 +646,15 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    expect(screen.getByTestId('roundtable-seating-board')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Manual shortlist' }));
     expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
+    expect(screen.getByTestId('roundtable-seat-slot-branch-a')).toBeInTheDocument();
+    expect(screen.getByTestId('roundtable-seat-slot-branch-b')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: 'Seat this worldline' })[0]);
     expect(screen.getByText('3 / 3 worldlines selected')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: 'Leave this worldline out' })[2]);
+    expect(screen.queryByTestId('roundtable-seat-slot-branch-c')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
@@ -1467,8 +1471,8 @@ describe('WorldlineRoundtableView', () => {
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Expert witness' }));
-    expect(screen.getByText('Witness stand')).toBeInTheDocument();
-    const witnessStand = screen.getByText('Witness stand').closest('section');
+    expect(screen.getByTestId('roundtable-seat-slot-witness')).toBeInTheDocument();
+    const witnessStand = screen.getByRole('heading', { name: 'Witness stand' }).closest('section');
     expect(witnessStand).not.toBeNull();
     await user.click(within(witnessStand as HTMLElement).getByRole('button', { name: /Witness A/ }));
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
@@ -1653,7 +1657,7 @@ describe('WorldlineRoundtableView', () => {
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Witness augmented' }));
-    expect(screen.getByText('Augmented witness stand')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Augmented witness stand' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {

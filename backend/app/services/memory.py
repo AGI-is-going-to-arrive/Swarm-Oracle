@@ -16,6 +16,7 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
+    llm_request_scope,
 )
 from app.services.vector_store import get_vector_store
 
@@ -798,17 +799,18 @@ async def _compress_round_window(
 
     fallback = _validate_compress_result(previous_briefing or _COMPRESS_DEFAULTS)
     try:
-        result = await asyncio.wait_for(
-            llm_call_json_with_stream_fallback(
-                prompt,
-                reasoning_effort="low",
-                api_key=api_key,
-                base_url=base_url,
-                temperature=temperature,
-                model=model,
-            ),
-            timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,
-        )
+        with llm_request_scope(purpose="scenario_memory_compression"):
+            result = await asyncio.wait_for(
+                llm_call_json_with_stream_fallback(
+                    prompt,
+                    reasoning_effort="low",
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=temperature,
+                    model=model,
+                ),
+                timeout=_COMPRESS_ROUNDS_TIMEOUT_SECONDS,
+            )
     except asyncio.TimeoutError:
         logger.warning(
             "compress_rounds timed out after %.1fs; using fallback briefing",
