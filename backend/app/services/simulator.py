@@ -2055,7 +2055,7 @@ async def _detect_fork(
 
     try:
         _overrides = llm_overrides or {}
-        return await llm_call_json(
+        return await llm_call_json_with_stream_fallback(
             prompt, reasoning_effort="medium",
             model=_overrides.get("model"),
             api_key=_overrides.get("api_key"),

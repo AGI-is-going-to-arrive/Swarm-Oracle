@@ -21,7 +21,7 @@ from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.llm_client import (
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
 
@@ -265,7 +265,7 @@ async def enrich_argument_units_for_turn(
         requests_per_minute=overrides.get("requests_per_minute"),
         tokens_per_minute=overrides.get("tokens_per_minute"),
     ):
-        result = await llm_call_json(
+        result = await llm_call_json_with_stream_fallback(
             prompt,
             reasoning_effort=overrides.get("reasoning_effort") or "low",
             model=overrides.get("model"),

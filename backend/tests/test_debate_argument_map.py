@@ -217,7 +217,7 @@ async def test_enrich_argument_units_for_turn_updates_types_and_payload():
     settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
     try:
         with patch(
-            "app.services.debate_argument_map.llm_call_json",
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
             new=AsyncMock(
                 return_value={
                     "units": [
@@ -272,7 +272,7 @@ async def test_enrich_argument_units_for_turn_keeps_rule_based_units_on_invalid_
     settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
     try:
         with patch(
-            "app.services.debate_argument_map.llm_call_json",
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
             new=AsyncMock(return_value={"units": [{"text": "unknown", "type": "counter"}]}),
         ):
             updated = await enrich_argument_units_for_turn(
