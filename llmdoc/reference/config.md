@@ -143,15 +143,20 @@
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求首帧 auth。未通过则返回 401/4001。 |
+| `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有业务 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求首帧 auth。未通过则返回 401/4001。 |
 
 说明：
 
 - **这是临时开发态的全局门禁 hardening，不是 owner-aware authorization。**
 - 空值时完全跳过鉴权，本地开发零影响。
-- 前端通过 `localStorage.swarmoracle_session_token` 存取 token，REST 自动注入 `X-Session-Token` header，WS 在连接建立后发送首帧 `{"type":"auth","token":"..."}` 进行认证。
+- 前端通过 `localStorage.swarmoracle_session_token` 存取 token，所有业务 REST 调用（包括原生 `fetch('/api/...')` 页面）都会自动注入 `X-Session-Token` header，WS 在连接建立后发送首帧 `{"type":"auth","token":"..."}` 进行认证。
+- `X-Session-Token` 当前支持两种形态：
+  - 裸 `SESSION_SECRET`：只提供门禁，不携带 caller principal。
+  - signed principal token：格式 `v1.<payload>.<signature>`，payload 至少包含 `sub`（user_id），由 `SESSION_SECRET` 做 HMAC-SHA256 验签。
+- ownership-sensitive 接口（当前至少包括 agent identity / workshop，以及按 `user_id` 读取的 campaign profile 系列）在 `SESSION_SECRET` 开启时要求 signed principal token；裸 secret 只够通过一般业务门禁，不够声明调用者身份。
 - WS 首帧 auth 协议：服务端 accept 后等待客户端首帧（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，再注册连接并启动 heartbeat。认证失败或超时返回 `close(4001)`。
 - 前端对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连。
+- 当前显式例外是 app 级非业务端点，如 `/` 和 `/metrics`；挂在业务 router 下的 `/api/capabilities`、`/api/health`、`/api/health/test` 也受此门禁约束。
 - 不是最终 auth 设计。最终方案需要 JWT/OAuth2 + per-resource ownership + httpOnly cookie。
 
 ## Web Search Enhancement (搜索增强推演)

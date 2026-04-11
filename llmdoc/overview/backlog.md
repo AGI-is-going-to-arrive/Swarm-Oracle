@@ -44,5 +44,5 @@
 
 | 问题 | 说明 |
 |------|------|
-| 无服务端 auth principal | ownership guard 仍依赖客户端自报 `user_id`，非完整 IDOR 修复。待独立 auth 重构 |
+| auth/ownership 仍非最终方案 | 当前已有 signed principal token 与局部 owner 收口，但还不是完整 JWT/OAuth2 + per-resource authorization 方案 |
 | test_p0_wiring.py 覆盖定位 | 定向回归保护，非全链路端到端入口验证 |

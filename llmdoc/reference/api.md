@@ -27,6 +27,21 @@
 - 路由层未显式处理的异常，会统一收口为 `INTERNAL_ERROR`。
 - FastAPI/Pydantic 原生 `422` 仍保持框架默认形状。
 
+### Session Gate
+
+当 `SESSION_SECRET` 非空时：
+
+- 所有业务 REST 路由都会要求 `X-Session-Token`。
+- app 级非业务端点（当前如 `/`、`/metrics`）不走 router 级门禁。
+- 部分 ownership-sensitive 路由当前还要求 signed principal token，而不是只接受裸 `SESSION_SECRET`。
+  - 当前至少包括：
+    - agent identity / workshop
+    - campaign profile 系列
+    - 按 scenario / ending-room / thread owner 读取或写入的路由
+- 这类路由常见业务错误包括：
+  - `SESSION_PRINCIPAL_REQUIRED`
+  - `SESSION_PRINCIPAL_MISMATCH`
+
 ## Scenarios
 
 | 方法 | 路径 | 说明 |
@@ -60,6 +75,7 @@
 说明：
 
 - 主模式与 replay 页面优先使用 artifact 短链。
+- `POST /api/replay-artifact` 当前要求 payload 能解析出 source scenario；后端会把 artifact 绑定到该 scenario owner。
 - 常见业务错误包括：`REPLAY_ARTIFACT_PAYLOAD_INVALID`、`REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE`、`REPLAY_ARTIFACT_NOT_FOUND`。
 
 ## Interventions
@@ -130,6 +146,7 @@
 
 - provider overrides 只能通过 `POST body` 传入，不能放在社交文案 `GET query` 中。
 - `export` 通过附件下载返回 Markdown 文件。
+- `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
 
 ## Debate
 
@@ -167,6 +184,9 @@
 
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
+- 当 `SESSION_SECRET` 非空时：
+  - agent identity / workshop 当前要求 signed principal token
+  - 读取 scenario owner 资源的 graph / counterfactual / checkpoints / faction-timeline 也会按 principal 收口
 - 前端通过 `GET /api/capabilities` 检测 `enabled` 字段，disabled 时隐藏入口且不发请求。
 
 ## Ending Room / Worldline Roundtable

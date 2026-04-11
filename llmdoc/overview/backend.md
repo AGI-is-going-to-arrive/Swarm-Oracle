@@ -166,10 +166,13 @@
 - 空闲期会发送轻量 `heartbeat`，便于更快暴露半断开连接。
 - `ending_room` 也有独立 WS 通道，不复用 scenario/debate stream。
 - ending-room WS 当前挂在独立的 ws router 上：
-  - REST `verify_session` 只校验 HTTP header
+  - 业务 REST router 统一通过 `verify_session` 校验 `X-Session-Token` header
+  - 当路由需要 caller identity 时，会继续要求 signed principal token，而不是只接受裸 `SESSION_SECRET`
   - WebSocket 继续使用首帧 auth 协议
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 - 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
+- app 级非业务端点（当前如 `/`、`/metrics`）不走 router 级 `verify_session`；`/api/capabilities`、`/api/health`、`/api/health/test` 已纳入业务 REST 门禁。
+- agent identity / workshop 与按 `user_id` 读取的 campaign profile 系列当前已开始优先使用 token 内的 principal `sub` 作为 owner 真值，不再单纯信任 query/body 里的 `user_id`。
 
 ## 源码入口建议
 
