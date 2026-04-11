@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -30,8 +31,94 @@ def _continuity_key(role: str, persona: str | None) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def build_continuity_key(role: str, persona: str | None) -> str:
+    """Public helper for computing the continuity key."""
+    return _continuity_key(role, persona)
+
+
+def _serialize_identity(
+    identity: AgentIdentity,
+    *,
+    similarity: float | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": identity.id,
+        "display_name": identity.display_name,
+        "role": identity.role,
+        "persona": identity.persona,
+        "kind": identity.kind,
+        "continuity_key": identity.continuity_key,
+    }
+    if similarity is not None:
+        payload["similarity"] = similarity
+    return payload
+
+
+def preview_identity_match(
+    user_id: str,
+    name: str,
+    role: str,
+    persona: str | None,
+) -> dict[str, Any]:
+    """Preview how identity resolution would behave without mutating state."""
+    key = _continuity_key(role, persona)
+    engine = get_engine()
+
+    with Session(engine) as session:
+        existing = session.exec(
+            select(AgentIdentity).where(
+                AgentIdentity.user_id == user_id,
+                AgentIdentity.continuity_key == key,
+            )
+        ).first()
+        if existing is not None:
+            return {
+                "name": name,
+                "role": role,
+                "persona": persona,
+                "continuity_key": key,
+                "match_kind": "l1_exact",
+                "needs_confirmation": False,
+                "candidate_identity": _serialize_identity(existing, similarity=1.0),
+            }
+
+        candidates = search_identity_candidates(user_id, role, persona)
+        for candidate in candidates:
+            db_identity = session.get(AgentIdentity, candidate["identity_id"])
+            if db_identity is None:
+                continue
+            return {
+                "name": name,
+                "role": role,
+                "persona": persona,
+                "continuity_key": key,
+                "match_kind": "l2_candidate",
+                "needs_confirmation": True,
+                "candidate_identity": _serialize_identity(
+                    db_identity,
+                    similarity=candidate["similarity"],
+                ),
+            }
+
+    return {
+        "name": name,
+        "role": role,
+        "persona": persona,
+        "continuity_key": key,
+        "match_kind": "new",
+        "needs_confirmation": False,
+        "candidate_identity": None,
+    }
+
+
 def resolve_identity(
-    user_id: str, name: str, role: str, persona: str | None,
+    user_id: str,
+    name: str,
+    role: str,
+    persona: str | None,
+    *,
+    allow_l2: bool = True,
+    session: Session | None = None,
 ) -> str:
     """Resolve or create an AgentIdentity, return identity_id.
 
@@ -40,15 +127,15 @@ def resolve_identity(
     On create, stores L2 profile embedding for future fuzzy matching.
     """
     key = _continuity_key(role, persona)
-    engine = get_engine()
-
-    with Session(engine) as session:
+    own_session = session is None
+    session_obj = session or Session(get_engine())
+    try:
         # ── L1: exact hash match ──
         stmt = select(AgentIdentity).where(
             AgentIdentity.user_id == user_id,
             AgentIdentity.continuity_key == key,
         )
-        existing = session.exec(stmt).first()
+        existing = session_obj.exec(stmt).first()
         if existing is not None:
             # Ensure L2 profile exists (backfill for pre-L2 identities)
             store_identity_profile(user_id, existing.id, role, persona)
@@ -59,16 +146,17 @@ def resolve_identity(
             return existing.id
 
         # ── L2: cosine similarity fallback ──
-        candidates = search_identity_candidates(user_id, role, persona)
-        for candidate in candidates:
-            # Verify L2 candidate still exists in DB (ChromaDB may be stale)
-            db_identity = session.get(AgentIdentity, candidate["identity_id"])
-            if db_identity is not None:
-                logger.info(
-                    "L2 resolved identity %s for user=%s (similarity=%.4f)",
-                    candidate["identity_id"], user_id, candidate["similarity"],
-                )
-                return candidate["identity_id"]
+        if allow_l2:
+            candidates = search_identity_candidates(user_id, role, persona)
+            for candidate in candidates:
+                # Verify L2 candidate still exists in DB (ChromaDB may be stale)
+                db_identity = session_obj.get(AgentIdentity, candidate["identity_id"])
+                if db_identity is not None:
+                    logger.info(
+                        "L2 resolved identity %s for user=%s (similarity=%.4f)",
+                        candidate["identity_id"], user_id, candidate["similarity"],
+                    )
+                    return candidate["identity_id"]
 
         # ── No match: create new identity + store L2 profile ──
         identity = AgentIdentity(
@@ -79,9 +167,12 @@ def resolve_identity(
             persona=persona,
             continuity_key=key,
         )
-        session.add(identity)
-        session.commit()
-        session.refresh(identity)
+        session_obj.add(identity)
+        if own_session:
+            session_obj.commit()
+            session_obj.refresh(identity)
+        else:
+            session_obj.flush()
 
         store_identity_profile(user_id, identity.id, role, persona)
         logger.info(
@@ -89,6 +180,9 @@ def resolve_identity(
             identity.id, user_id, key,
         )
         return identity.id
+    finally:
+        if own_session:
+            session_obj.close()
 
 
 def get_identity_memories(identity_id: str, limit: int = 10) -> list[dict]:

@@ -433,6 +433,27 @@ async def create_scenario(req: CreateScenarioRequest):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 
+    if req.continuity_overrides and not req.user_id:
+        raise api_error(
+            400,
+            "CONTINUITY_OVERRIDE_USER_REQUIRED",
+            "user_id is required when continuity_overrides are provided",
+        )
+
+    if req.continuity_overrides and req.user_id:
+        from app.models.agent_identity import AgentIdentity
+        with Session(get_engine()) as session:
+            for override in req.continuity_overrides:
+                if override.action != "reuse_existing" or not override.identity_id:
+                    continue
+                identity = session.get(AgentIdentity, override.identity_id)
+                if identity is None or identity.user_id != req.user_id:
+                    raise api_error(
+                        400,
+                        "CONTINUITY_OVERRIDE_IDENTITY_INVALID",
+                        "continuity override identity does not belong to the requesting user",
+                    )
+
     engine = get_engine()
     question = req.question.strip()
 
@@ -523,6 +544,10 @@ async def create_scenario(req: CreateScenarioRequest):
             llm_tokens_per_minute=req.llm_tokens_per_minute,
             disable_user_quota=req.disable_user_quota,
             custom_agent_identity_ids=req.custom_agent_identity_ids,
+            continuity_overrides=[
+                override.model_dump()
+                for override in (req.continuity_overrides or [])
+            ] or None,
         )
     )
 

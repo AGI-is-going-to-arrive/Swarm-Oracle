@@ -103,6 +103,19 @@ npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.
 npm run e2e:resume -- full
 ```
 
+### P1-10 / P1-11 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
+
+cd ../frontend
+npm test -- --run src/pages/InputView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+```
+
 ### Oracle Chambers / Roundtable 定向回归
 
 ```bash

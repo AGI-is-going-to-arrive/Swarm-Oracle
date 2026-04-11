@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+import app.api.agents as agents_api
 import app.api.scenarios as scenarios_api
 import app.api.social as social_api
 from app.api.schemas import CreateScenarioRequest
@@ -205,6 +206,84 @@ class TestHealthEndpoint:
         assert data["llm"]["status"] == "ok"
         assert data["probe"]["estimated_parallelism"] == 6
         assert data["probe"]["recommended"]["agents_max"] == 24
+
+
+class TestIdentityPreflightEndpoint:
+    def test_preflight_returns_l2_matches(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+        try:
+            async def _fake_parse_question(*args, **kwargs):
+                return {
+                    "setting": {},
+                    "key_variable": "test",
+                    "initial_title": "Test",
+                    "agents": [
+                        {
+                            "name": "Sun Tzu",
+                            "role": "Military Strategist",
+                            "persona": "Legendary Chinese warfare tactician",
+                        },
+                        {
+                            "name": "New Analyst",
+                            "role": "Analyst",
+                            "persona": "Fresh observer",
+                        },
+                    ],
+                    "groups": [],
+                    "simulation_rounds": 5,
+                    "branch_sensitivity": 0.7,
+                }
+
+            def _fake_preview(user_id, name, role, persona):
+                if name == "Sun Tzu":
+                    return {
+                        "name": name,
+                        "role": role,
+                        "persona": persona,
+                        "continuity_key": "ck-sun",
+                        "match_kind": "l2_candidate",
+                        "needs_confirmation": True,
+                        "candidate_identity": {
+                            "id": "identity-1",
+                            "display_name": "Sun Tzu",
+                            "role": role,
+                            "persona": "Ancient Chinese general",
+                            "kind": "generated",
+                            "continuity_key": "legacy-ck",
+                            "similarity": 0.91,
+                        },
+                    }
+                return {
+                    "name": name,
+                    "role": role,
+                    "persona": persona,
+                    "continuity_key": "ck-new",
+                    "match_kind": "new",
+                    "needs_confirmation": False,
+                    "candidate_identity": None,
+                }
+
+            monkeypatch.setattr(agents_api, "parse_question", _fake_parse_question)
+            monkeypatch.setattr(agents_api, "preview_identity_match", _fake_preview)
+
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if Sun Tzu returns?",
+                "user_id": "director-1",
+                "num_agents": 3,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_confirmation"] is True
+        assert len(data["matches"]) == 1
+        assert data["matches"][0]["continuity_key"] == "ck-sun"
+        assert data["summary"]["candidate_count"] == 1
+        assert data["summary"]["new_identity_count"] == 1
 
 
 # ── Scenario CRUD ────────────────────────────────────────
@@ -543,6 +622,45 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 200
         assert scheduled["count"] == 1
         assert captured["temperature"] == 0.4
+
+    def test_create_scenario_forwards_continuity_overrides(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            coro.close()
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "What if Sun Tzu returns?",
+            "user_id": "director-1",
+            "continuity_overrides": [
+                {"continuity_key": "ck-sun-tzu", "action": "create_new"},
+            ],
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["continuity_overrides"] == [
+            {
+                "continuity_key": "ck-sun-tzu",
+                "action": "create_new",
+                "identity_id": None,
+                "agent_name": None,
+                "agent_role": None,
+            },
+        ]
 
     def test_create_scenario_forwards_branch_controls(self, client, monkeypatch):
         scheduled = {"count": 0}

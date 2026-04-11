@@ -9,6 +9,10 @@ import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import {
   createDebate,
+  identityContinuityPreflight,
+  type ContinuityOverride,
+  type CreateScenarioOptions,
+  type IdentityContinuityMatch,
 } from '../api/client';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
@@ -73,6 +77,15 @@ function LoadingStep({ label, active, done }: { label: string; active: boolean; 
   );
 }
 
+type PendingSimulationLaunch = {
+  nextQuestion: string;
+  nextRounds: number;
+  nextAgents: number;
+  nextMode: 'raw' | 'blackboard';
+  nextVisualization: boolean;
+  challengeId?: string;
+};
+
 export function InputView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
@@ -83,6 +96,10 @@ export function InputView() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [placeholder, setPlaceholder] = useState('');
+  const [continuityMatches, setContinuityMatches] = useState<IdentityContinuityMatch[]>([]);
+  const [continuityChoices, setContinuityChoices] = useState<Record<string, ContinuityOverride['action']>>({});
+  const [continuityError, setContinuityError] = useState<string | null>(null);
+  const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
@@ -248,6 +265,33 @@ export function InputView() {
     }),
     [estimatedSimulationMinutes, numAgents, rounds, t],
   );
+  const continuityCopy = useMemo(() => (
+    isZh
+      ? {
+        title: '确认身份连续性',
+        subtitle: '检测到以下角色可能对应你已有的跨场景身份。请选择是复用旧身份，还是为这次推演创建新身份。',
+        reuse: '复用已有身份',
+        createNew: '创建新身份',
+        candidateLabel: '候选身份',
+        similarityLabel: '相似度',
+        cancel: '取消',
+        confirm: '继续开始',
+      }
+      : {
+        title: 'Confirm identity continuity',
+        subtitle: 'These proposed agents may match identities from your earlier runs. Choose whether to reuse the existing identity or create a new one for this simulation.',
+        reuse: 'Reuse existing identity',
+        createNew: 'Create new identity',
+        candidateLabel: 'Candidate identity',
+        similarityLabel: 'Similarity',
+        cancel: 'Cancel',
+        confirm: 'Continue',
+      }
+  ), [isZh]);
+  const continuityPreflightErrorCopy = useMemo(
+    () => (isZh ? '身份连续性预检失败，请重试。' : 'Identity continuity preflight failed. Please retry.'),
+    [isZh],
+  );
 
   const resizeQuestionField = useCallback(() => {
     const el = questionRef.current;
@@ -401,22 +445,133 @@ export function InputView() {
     }
   }, []);
 
-  const launchSimulation = async ({
-    nextQuestion,
-    nextRounds,
-    nextAgents,
-    nextMode,
-    nextVisualization,
-    challengeId,
-  }: {
-    nextQuestion: string;
-    nextRounds: number;
-    nextAgents: number;
-    nextMode: 'raw' | 'blackboard';
-    nextVisualization: boolean;
-    challengeId?: string;
-  }) => {
-    const trimmed = nextQuestion.trim();
+  const buildSimulationOptions = useCallback((
+    launch: PendingSimulationLaunch,
+    continuityOverrides?: ContinuityOverride[],
+  ): CreateScenarioOptions => {
+    const trimmed = launch.nextQuestion.trim();
+    return {
+      question: trimmed,
+      rounds: launch.nextRounds,
+      numAgents: launch.nextAgents,
+      mode: launch.nextMode,
+      llmApiKey: llmApiKey || undefined,
+      llmBaseUrl: llmBaseUrl || undefined,
+      llmModel: llmModel || undefined,
+      llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
+      llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
+      reasoningEffort: reasoningEffort || undefined,
+      visualizationEnabled: launch.nextVisualization,
+      userId: directorIdentity.userId,
+      disableUserQuota,
+      webSearchEnabled: webSearchEnabled && webSearchAvailable,
+      continuityOverrides,
+      ...buildScenarioRuntimePresetOptions(runtimePreset),
+      ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
+    };
+  }, [
+    agentSelectedIds,
+    byokRequestsPerMinute,
+    byokTokensPerMinute,
+    directorIdentity.userId,
+    disableUserQuota,
+    llmApiKey,
+    llmBaseUrl,
+    llmModel,
+    reasoningEffort,
+    runtimePreset,
+    webSearchAvailable,
+    webSearchEnabled,
+  ]);
+
+  const closeContinuityDialog = useCallback(() => {
+    if (isSubmitting) return;
+    setPendingLaunch(null);
+    setContinuityMatches([]);
+    setContinuityChoices({});
+    setContinuityError(null);
+  }, [isSubmitting]);
+
+  const executeSimulationLaunch = useCallback(async (
+    launch: PendingSimulationLaunch,
+    continuityOverrides?: ContinuityOverride[],
+  ) => {
+    setIsSubmitting(true);
+    setContinuityError(null);
+    const wantsSearch = webSearchEnabled && webSearchAvailable;
+    if (wantsSearch) setWebSearchStatus('searching');
+    else setWebSearchStatus('skipped');
+    try {
+      const id = await startSimulation(buildSimulationOptions(launch, continuityOverrides));
+      if (launch.challengeId) {
+        markChallengeStarted(launch.challengeId, id);
+      }
+      setPendingLaunch(null);
+      setContinuityMatches([]);
+      setContinuityChoices({});
+      navigate(`/sim/${id}`);
+    } catch {
+      setWebSearchStatus('idle');
+      setIsSubmitting(false);
+    }
+  }, [
+    buildSimulationOptions,
+    navigate,
+    startSimulation,
+    webSearchAvailable,
+    webSearchEnabled,
+  ]);
+
+  const maybeRunContinuityPreflight = useCallback(async (
+    launch: PendingSimulationLaunch,
+  ) => {
+    if (!caps?.agent_identity?.enabled) return false;
+    setContinuityError(null);
+    try {
+      const result = await identityContinuityPreflight(buildSimulationOptions(launch));
+      if (!result.needs_confirmation || result.matches.length === 0) {
+        return false;
+      }
+      setPendingLaunch(launch);
+      setContinuityMatches(result.matches);
+      setContinuityChoices(
+        Object.fromEntries(
+          result.matches.map((match) => [match.continuity_key, 'reuse_existing']),
+        ) as Record<string, ContinuityOverride['action']>,
+      );
+      return true;
+    } catch (error) {
+      console.warn('[InputView] identity continuity preflight failed', error);
+      setContinuityError(continuityPreflightErrorCopy);
+      return true;
+    }
+  }, [buildSimulationOptions, caps?.agent_identity?.enabled, continuityPreflightErrorCopy]);
+
+  const confirmContinuityLaunch = useCallback(async () => {
+    if (!pendingLaunch || isSubmitting) return;
+    const overrides: ContinuityOverride[] = continuityMatches.map((match) => {
+      const action = continuityChoices[match.continuity_key] ?? 'reuse_existing';
+      return {
+        continuityKey: match.continuity_key,
+        action,
+        ...(action === 'reuse_existing' && match.candidate_identity
+          ? { identityId: match.candidate_identity.id }
+          : {}),
+        agentName: match.name,
+        agentRole: match.role,
+      };
+    });
+    await executeSimulationLaunch(pendingLaunch, overrides);
+  }, [
+    continuityChoices,
+    continuityMatches,
+    executeSimulationLaunch,
+    isSubmitting,
+    pendingLaunch,
+  ]);
+
+  const launchSimulation = async (launch: PendingSimulationLaunch) => {
+    const trimmed = launch.nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
     if (isSimulationBudgetBlocked) return;
 
@@ -427,39 +582,12 @@ export function InputView() {
       }
     }
 
-    setIsSubmitting(true);
-    const wantsSearch = webSearchEnabled && webSearchAvailable;
-    if (wantsSearch) setWebSearchStatus('searching');
-    else setWebSearchStatus('skipped');
-    try {
-      const id = await startSimulation({
-        question: trimmed,
-        rounds: nextRounds,
-        numAgents: nextAgents,
-        mode: nextMode,
-        llmApiKey: llmApiKey || undefined,
-        llmBaseUrl: llmBaseUrl || undefined,
-        llmModel: llmModel || undefined,
-        llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
-        llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
-        reasoningEffort: reasoningEffort || undefined,
-        visualizationEnabled: nextVisualization,
-        userId: directorIdentity.userId,
-        disableUserQuota,
-        webSearchEnabled: wantsSearch,
-        ...buildScenarioRuntimePresetOptions(runtimePreset),
-        ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
-      });
-      // Note: search result is already in store (scenario.web_search_context).
-      // No point setting success/error status here — navigate() follows immediately.
-      if (challengeId) {
-        markChallengeStarted(challengeId, id);
-      }
-      navigate(`/sim/${id}`);
-    } catch {
-      setWebSearchStatus('idle');
-      setIsSubmitting(false);
+    const blockedByContinuityDialog = await maybeRunContinuityPreflight(launch);
+    if (blockedByContinuityDialog) {
+      return;
     }
+
+    await executeSimulationLaunch(launch);
   };
 
   const launchDebate = async ({
@@ -1366,6 +1494,95 @@ export function InputView() {
           </div>
           {submitError && !isSubmitting && (
             <span className="byok-test-error" role="alert">{submitError}</span>
+          )}
+          {continuityError && !isSubmitting && (
+            <span className="byok-test-error" role="alert">{continuityError}</span>
+          )}
+
+          {pendingLaunch && continuityMatches.length > 0 && (
+            <div className="continuity-dialog-backdrop" role="presentation">
+              <div
+                className="continuity-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label={continuityCopy.title}
+              >
+                <div className="continuity-dialog__header">
+                  <h3>{continuityCopy.title}</h3>
+                  <p>{continuityCopy.subtitle}</p>
+                </div>
+                <div className="continuity-dialog__list">
+                  {continuityMatches.map((match) => (
+                    <article className="continuity-dialog__card" key={match.continuity_key}>
+                      <div className="continuity-dialog__card-copy">
+                        <strong>{match.name}</strong>
+                        <span>{match.role}</span>
+                        {match.persona && <p>{match.persona}</p>}
+                      </div>
+                      {match.candidate_identity && (
+                        <div className="continuity-dialog__candidate">
+                          <div className="continuity-dialog__candidate-copy">
+                            <strong>{continuityCopy.candidateLabel}</strong>
+                            <span>{match.candidate_identity.display_name} · {match.candidate_identity.role}</span>
+                            <span>
+                              {continuityCopy.similarityLabel}: {Math.round((match.candidate_identity.similarity ?? 0) * 100)}%
+                            </span>
+                          </div>
+                          <div className="continuity-dialog__actions">
+                            <label className="continuity-dialog__option">
+                              <input
+                                type="radio"
+                                name={`continuity-${match.continuity_key}`}
+                                checked={(continuityChoices[match.continuity_key] ?? 'reuse_existing') === 'reuse_existing'}
+                                onChange={() => {
+                                  setContinuityChoices((current) => ({
+                                    ...current,
+                                    [match.continuity_key]: 'reuse_existing',
+                                  }));
+                                }}
+                              />
+                              <span>{continuityCopy.reuse}</span>
+                            </label>
+                            <label className="continuity-dialog__option">
+                              <input
+                                type="radio"
+                                name={`continuity-${match.continuity_key}`}
+                                checked={(continuityChoices[match.continuity_key] ?? 'reuse_existing') === 'create_new'}
+                                onChange={() => {
+                                  setContinuityChoices((current) => ({
+                                    ...current,
+                                    [match.continuity_key]: 'create_new',
+                                  }));
+                                }}
+                              />
+                              <span>{continuityCopy.createNew}</span>
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+                <div className="continuity-dialog__footer">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={closeContinuityDialog}
+                    disabled={isSubmitting}
+                  >
+                    {continuityCopy.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void confirmContinuityLaunch()}
+                    disabled={isSubmitting}
+                  >
+                    {continuityCopy.confirm}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
 

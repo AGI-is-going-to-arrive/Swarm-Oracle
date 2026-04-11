@@ -324,6 +324,177 @@ class TestIdentityLifecycleHooks:
             sc_user_id = sc.user_id or (sc.parsed_context or {}).get("user_id")
             assert sc_user_id == "legacy-user"
 
+    @pytest.mark.asyncio
+    async def test_parse_and_run_background_respects_create_new_continuity_override(self, monkeypatch):
+        from app.api import helpers as helpers_api
+        from app.services.agent_identity import build_continuity_key, resolve_identity
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="user-preflight")
+
+        existing_identity_id = resolve_identity(
+            user_id="user-preflight",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Ancient Chinese general who wrote The Art of War",
+        )
+
+        proposed_agent = {
+            "name": "Sun Tzu",
+            "role": "Military Strategist",
+            "persona": "Legendary Chinese warfare tactician, author of Art of War",
+            "tier": "IMPORTANT",
+            "stance": "",
+        }
+
+        async def _fake_parse_question(*args, **kwargs):
+            return {
+                "setting": {},
+                "key_variable": "test",
+                "initial_title": "Test",
+                "agents": [proposed_agent],
+                "groups": [],
+                "simulation_rounds": 5,
+                "branch_sensitivity": 0.7,
+            }
+
+        async def _fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers_api, "parse_question", _fake_parse_question)
+        monkeypatch.setattr(helpers_api, "run_sim_background", _fake_run_sim_background)
+
+        try:
+            await helpers_api.parse_and_run_background(
+                scenario_id,
+                question="What if Sun Tzu returns?",
+                num_agents=1,
+                mode="blackboard",
+                hierarchical=False,
+                rounds=5,
+                visualization_enabled=False,
+                reasoning_effort=None,
+                temperature=None,
+                branch_sensitivity=None,
+                fork_prompt_variant=None,
+                fork_detector_active_branch_limit=None,
+                user_id="user-preflight",
+                llm_api_key=None,
+                llm_base_url=None,
+                llm_model=None,
+                llm_requests_per_minute=None,
+                llm_tokens_per_minute=None,
+                disable_user_quota=None,
+                continuity_overrides=[
+                    {
+                        "continuity_key": build_continuity_key(
+                            proposed_agent["role"],
+                            proposed_agent["persona"],
+                        ),
+                        "action": "create_new",
+                        "identity_id": None,
+                    },
+                ],
+            )
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        with Session(engine) as session:
+            agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+            assert len(agents) == 1
+            assert agents[0].agent_identity_id is not None
+            assert agents[0].agent_identity_id != existing_identity_id
+
+    @pytest.mark.asyncio
+    async def test_parse_and_run_background_matches_override_by_agent_name_and_role(self, monkeypatch):
+        from app.api import helpers as helpers_api
+        from app.services.agent_identity import resolve_identity
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="user-preflight-agent-key")
+
+        existing_identity_id = resolve_identity(
+            user_id="user-preflight-agent-key",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Ancient Chinese general who wrote The Art of War",
+        )
+
+        proposed_agent = {
+            "name": "Sun Tzu",
+            "role": "Military Strategist",
+            "persona": "Legendary Chinese warfare tactician, author of Art of War",
+            "tier": "IMPORTANT",
+            "stance": "",
+        }
+
+        async def _fake_parse_question(*args, **kwargs):
+            return {
+                "setting": {},
+                "key_variable": "test",
+                "initial_title": "Test",
+                "agents": [proposed_agent],
+                "groups": [],
+                "simulation_rounds": 5,
+                "branch_sensitivity": 0.7,
+            }
+
+        async def _fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers_api, "parse_question", _fake_parse_question)
+        monkeypatch.setattr(helpers_api, "run_sim_background", _fake_run_sim_background)
+
+        try:
+            await helpers_api.parse_and_run_background(
+                scenario_id,
+                question="What if Sun Tzu returns?",
+                num_agents=1,
+                mode="blackboard",
+                hierarchical=False,
+                rounds=5,
+                visualization_enabled=False,
+                reasoning_effort=None,
+                temperature=None,
+                branch_sensitivity=None,
+                fork_prompt_variant=None,
+                fork_detector_active_branch_limit=None,
+                user_id="user-preflight-agent-key",
+                llm_api_key=None,
+                llm_base_url=None,
+                llm_model=None,
+                llm_requests_per_minute=None,
+                llm_tokens_per_minute=None,
+                disable_user_quota=None,
+                continuity_overrides=[
+                    {
+                        "continuity_key": "ck-wrong",
+                        "action": "create_new",
+                        "identity_id": None,
+                        "agent_name": "Sun Tzu",
+                        "agent_role": "Military Strategist",
+                    },
+                ],
+            )
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        with Session(engine) as session:
+            agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+            assert len(agents) == 1
+            assert agents[0].agent_identity_id is not None
+            assert agents[0].agent_identity_id != existing_identity_id
+
 
 # ═══════════════════════════════════════════════════════════
 # 3. Faction WS event emission (P0-4) — verify push() is called

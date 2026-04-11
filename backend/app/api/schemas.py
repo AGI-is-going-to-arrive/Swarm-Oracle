@@ -9,6 +9,58 @@ from app.config import settings
 # ── Request schemas ──────────────────────────────────────
 
 
+class ContinuityOverrideRequest(BaseModel):
+    continuity_key: str
+    action: str
+    identity_id: str | None = None
+    agent_name: str | None = None
+    agent_role: str | None = None
+
+    @field_validator("continuity_key")
+    @classmethod
+    def validate_continuity_key(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("continuity_key cannot be empty")
+        if len(normalized) > 128:
+            raise ValueError("continuity_key must be at most 128 characters")
+        return normalized
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        normalized = v.strip().lower()
+        if normalized not in {"reuse_existing", "create_new"}:
+            raise ValueError("action must be 'reuse_existing' or 'create_new'")
+        return normalized
+
+    @field_validator("identity_id")
+    @classmethod
+    def normalize_identity_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        return normalized or None
+
+    @field_validator("agent_name", "agent_role")
+    @classmethod
+    def normalize_agent_fields(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        if len(normalized) > 200:
+            raise ValueError("agent_name/agent_role must be at most 200 characters")
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_identity_choice(self) -> "ContinuityOverrideRequest":
+        if self.action == "reuse_existing" and not self.identity_id:
+            raise ValueError("identity_id is required when action is 'reuse_existing'")
+        if self.action == "create_new":
+            self.identity_id = None
+        return self
+
+
 class CreateScenarioRequest(BaseModel):
     question: str
     user_id: str | None = None
@@ -34,12 +86,23 @@ class CreateScenarioRequest(BaseModel):
     web_search_enabled: bool = False  # Request web search before simulation (default off)
     # Phase 3 F3: Custom agent identities to include in simulation
     custom_agent_identity_ids: list[str] | None = None
+    continuity_overrides: list["ContinuityOverrideRequest"] | None = None
 
     @field_validator("custom_agent_identity_ids")
     @classmethod
     def validate_custom_agent_identity_ids(cls, v: list[str] | None) -> list[str] | None:
         if v is not None and len(v) > 5:
             raise ValueError("custom_agent_identity_ids must contain at most 5 items")
+        return v
+
+    @field_validator("continuity_overrides")
+    @classmethod
+    def validate_continuity_overrides(
+        cls,
+        v: list["ContinuityOverrideRequest"] | None,
+    ) -> list["ContinuityOverrideRequest"] | None:
+        if v is not None and len(v) > 50:
+            raise ValueError("continuity_overrides must contain at most 50 items")
         return v
 
     @field_validator("question")

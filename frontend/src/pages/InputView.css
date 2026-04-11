@@ -959,6 +959,139 @@
   to { transform: rotate(360deg); }
 }
 
+.continuity-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 12, 26, 0.38);
+  backdrop-filter: blur(10px);
+}
+
+.continuity-dialog {
+  width: min(720px, 100%);
+  max-height: min(80vh, 760px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid rgba(194, 24, 91, 0.16);
+  background: rgba(255, 251, 247, 0.96);
+  box-shadow: 0 28px 80px rgba(18, 14, 32, 0.22);
+}
+
+.continuity-dialog__header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.continuity-dialog__header h3,
+.continuity-dialog__header p,
+.continuity-dialog__card-copy p,
+.continuity-dialog__candidate-copy strong,
+.continuity-dialog__candidate-copy span {
+  margin: 0;
+}
+
+.continuity-dialog__header h3 {
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.continuity-dialog__header p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.continuity-dialog__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.continuity-dialog__card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(64, 48, 40, 0.08);
+}
+
+.continuity-dialog__card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.continuity-dialog__card-copy strong {
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.continuity-dialog__card-copy span,
+.continuity-dialog__card-copy p,
+.continuity-dialog__candidate-copy span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.continuity-dialog__candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 247, 232, 0.92), rgba(255, 252, 247, 0.96));
+  border: 1px solid rgba(194, 24, 91, 0.12);
+}
+
+.continuity-dialog__candidate-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.continuity-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.continuity-dialog__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(64, 48, 40, 0.08);
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.continuity-dialog__option input {
+  margin: 0;
+}
+
+.continuity-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 /* ── Quick Start ─────────────────────────────────────────── */
 .quick-start-section {
   width: 100%;
@@ -1064,6 +1197,19 @@
   }
 
   .input-view__submit-row .btn {
+    width: 100%;
+  }
+
+  .continuity-dialog {
+    padding: 18px;
+    max-height: min(84vh, 720px);
+  }
+
+  .continuity-dialog__footer {
+    flex-direction: column-reverse;
+  }
+
+  .continuity-dialog__footer .btn {
     width: 100%;
   }
 }

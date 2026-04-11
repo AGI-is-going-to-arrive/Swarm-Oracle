@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-10 (P1-9/P1-12 交付后)
+> 最后更新：2026-04-11 (P1-10/P1-11 交付后)
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -25,15 +25,12 @@
 - P1-4：Graph 节点点击展开 — NodeDetailPanel (type/round/payload/unit details)，onNodeClick + selectedNode reset on re-fetch
 - P1-9：resume_from_round — POST /resume + Blackboard export/from_snapshot + checkpoint bug fix + agent in-memory restore + runtime lock guard + ResultView `ResumePanel` / `resumeFromRound()` 前端接线 + `ResumePanel.test.tsx / ResultView.test.tsx / i18n/locales.test.ts` + `e2e-phase3-batch-c.mjs` smoke 覆盖 (16 BE tests)
 - P1-12：Identity memory compaction — FEATURE_IDENTITY_COMPACTION + LLM 摘要 + source_ids_hash 幂等 + FIFO raw-first eviction + format_untrusted_text_block 防注入 (15 BE tests)
+- P1-10：Continuity Key L2/L3 匹配 — `POST /api/agents/identities/preflight` + InputView confirm dialog + `continuity_overrides`；`create_new` 可跳过 L2 fuzzy reuse，`reuse_existing` 会校验 identity 归属；`resolve_identity()` 已改为可复用外层 session，避免 scenario parse 路径撞到 SQLite `database is locked`
+- P1-11：LLM enrichment (stance/argument) — debate argument map 继续保留 rule-based 抽取，同时默认追加每个 debate turn 一次 fire-and-forget LLM enrichment；provider 失败时自动回退纯规则结果
 
 ## 剩余项
 
-### 长期增强
-
-| # | 项目 | 说明 |
-|---|------|------|
-| P1-10 | Continuity Key L2/L3 匹配 | L2 ChromaDB embedding cosine > 0.85 + L3 前端确认（当前仅 L1 hash） |
-| P1-11 | LLM enrichment (stance/argument) | rule-based → LLM 可选增强 |
+当前无 active Phase 3 backlog，只剩下方 `v1.1 延后` 项。
 
 ### v1.1 延后
 

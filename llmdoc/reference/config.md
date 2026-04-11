@@ -63,6 +63,11 @@
 | `Calibrated / 校准` | `b + 0.7 + k=1` | 默认推荐 |
 | `Riftbound / 裂界` | `b + 0.7 + k=0` | 更激进 |
 
+补充：
+
+- `continuity_overrides` 也是 `POST /api/scenario` 的单局字段，不是环境变量。
+- 正常前端链路里，它来自 `POST /api/agents/identities/preflight` 之后的用户确认结果。
+
 ## 模拟与系统限制
 
 | 变量 | 默认值 | 说明 |
@@ -184,10 +189,12 @@
 | `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 分支比较 + 检查点 |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 + 时间线 API |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱抽取 + API |
+| `ARGUMENT_MAP_LLM_ENRICHMENT` | `true` | Argument map 在 rule-based 抽取后，默认追加每个 debate turn 一次 fire-and-forget LLM enrichment；设为 `false` 可退回纯规则模式 |
 
 说明：
 
 - 所有 Phase 3 功能默认关闭，通过环境变量逐个启用。
+- `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
 - `FEATURE_*=false` 时：对应后端 API 返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。
 - 6 个开关互相独立，可单独开启任意功能。
 

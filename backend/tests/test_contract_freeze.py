@@ -141,6 +141,7 @@ class TestNamingFreeze:
     FROZEN_NEW_API_ROUTES = frozenset({
         "GET /api/agents/identities",
         "GET /api/agents/identities/{id}/memory",
+        "POST /api/agents/identities/preflight",
         "POST /api/agents/workshop",
         "PUT /api/agents/workshop/{id}",
         "DELETE /api/agents/workshop/{id}",
@@ -183,7 +184,7 @@ class TestNamingFreeze:
         assert len(self.FROZEN_NEW_COLUMNS) == 6
 
     def test_api_routes_frozen(self):
-        assert len(self.FROZEN_NEW_API_ROUTES) == 11
+        assert len(self.FROZEN_NEW_API_ROUTES) == 12
 
     def test_frontend_routes_frozen(self):
         assert len(self.FROZEN_NEW_FRONTEND_ROUTES) == 4
@@ -264,6 +265,13 @@ class TestServerSideGates:
 
     async def test_identities_list_returns_404_when_disabled(self, client):
         resp = await client.get("/api/agents/identities", params={"user_id": "u1"})
+        assert resp.status_code == 404
+
+    async def test_identity_preflight_returns_404_when_disabled(self, client):
+        resp = await client.post("/api/agents/identities/preflight", json={
+            "question": "test",
+            "user_id": "u1",
+        })
         assert resp.status_code == 404
 
     async def test_update_workshop_returns_404_when_disabled(self, client):

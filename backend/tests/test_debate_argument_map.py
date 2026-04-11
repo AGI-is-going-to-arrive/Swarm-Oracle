@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.services.debate_argument_map import (
+    enrich_argument_units_for_turn,
     extract_argument_units,
     get_argument_map,
     link_verdict,
 )
+from app.config import settings
 
 
 # ── extract_argument_units ──────────────────────────────────
@@ -199,3 +202,90 @@ def test_get_argument_map_populated_after_extraction():
         # unit node_id is stored in the DebateArgumentUnit but surfaced via
         # GraphNode; verify the node_key matches the unit's semantic hash
         assert unit["turn_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_updates_types_and_payload():
+    extract_argument_units(
+        debate_id="d-enrich",
+        turn_id="t1",
+        content="A 2024 study shows improvement. However the rollout remains fragile.",
+        speaker_side="proposition",
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "A 2024 study shows improvement.",
+                            "type": "evidence",
+                            "stance": "supports_proposition",
+                            "confidence": 0.92,
+                        },
+                        {
+                            "text": "However the rollout remains fragile.",
+                            "type": "rebuttal",
+                            "stance": "supports_opposition",
+                            "confidence": 0.88,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 2
+    result = get_argument_map("d-enrich")
+    node_types = {node["label"]: node["node_type"] for node in result["nodes"]}
+    assert node_types["A 2024 study shows improvement."] == "evidence"
+    assert node_types["However the rollout remains fragile."] == "rebuttal"
+    payloads = {
+        node["label"]: node["payload_json"]
+        for node in result["nodes"]
+    }
+    assert "\"stance\": \"supports_proposition\"" in payloads["A 2024 study shows improvement."]
+    assert "\"enriched_by\": \"llm\"" in payloads["However the rollout remains fragile."]
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_keeps_rule_based_units_on_invalid_output():
+    extract_argument_units(
+        debate_id="d-enrich-invalid",
+        turn_id="t1",
+        content="This is a claim. Data confirms the trend.",
+        speaker_side="opposition",
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json",
+            new=AsyncMock(return_value={"units": [{"text": "unknown", "type": "counter"}]}),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-invalid",
+                turn_id="t1",
+                speaker_side="opposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 0
+    result = get_argument_map("d-enrich-invalid")
+    unit_types = {unit["text"]: unit["type"] for unit in result["units"]}
+    assert unit_types["This is a claim."] == "claim"
+    assert unit_types["Data confirms the trend."] == "evidence"

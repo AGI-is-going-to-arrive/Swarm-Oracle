@@ -16,6 +16,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ### 主模式
 
 - 首页创建 scenario，支持 agent/rounds、BYOK、玩法档位与 quick starts。
+- 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、档案、campaign summary、分享、导出与 replay/import。
 
@@ -23,6 +24,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。
+- debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
 
 ### Oracle Chambers / 世界线圆桌
 

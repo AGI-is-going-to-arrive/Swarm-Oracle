@@ -20,6 +20,7 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact |
+| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
@@ -33,6 +34,7 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
+| Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断 |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
@@ -92,6 +94,11 @@
   - generated/custom identity 都会同步 profile
   - custom agent create/update/delete 会同步写入或清理 profile
   - 旧的 shared-collection profile 文档会在后续写入时自动清理，不再参与 memory eviction / compaction
+- main simulation 当前已补 continuity preflight/override 链路：
+  - `POST /api/agents/identities/preflight` 会先跑 parser，再只把 `L2 fuzzy candidate` 返回给前端确认
+  - `POST /api/scenario` 当前接受 `continuity_overrides`
+  - `reuse_existing` 会校验目标 identity 属于当前 `user_id`
+  - `create_new` 会在真正 `resolve_identity()` 时跳过 L2 fuzzy reuse
 - Ending Room API 请求体当前已统一添加输入上限（防超大 payload DOS）：
   - `selected_branch_ids / selected_agent_ids / selected_representatives` 各 ≤ 50 条
   - `addressed_agent_ids / question_anchor_ids` 各 ≤ 20 条
@@ -120,7 +127,12 @@
 - Oracle follow-up 流式链路当前会给“首个可见 delta”一个短预算；如果 provider 长时间不出可见 token，会尽快回退到非流式改写，而不是把 anchored follow-up 长时间挂住。
 - Oracle follow-up 当前会在 WebSocket delta 广播和最终 turn 落库前先剥掉 provider reasoning block；`<think>` 不会再泄漏进 transcript。
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
+- `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
+- Debate argument map 当前走两层抽取：
+  - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类
+  - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
+  - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。
 - BYOK `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验。业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400。

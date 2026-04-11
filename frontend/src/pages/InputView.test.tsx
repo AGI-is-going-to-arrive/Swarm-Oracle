@@ -7,6 +7,7 @@ import { InputView } from './InputView';
 
 const {
   getCapabilitiesMock,
+  identityPreflightMock,
   testLlmConnectionMock,
   startSimulationMock,
   getCampaignProfileMock,
@@ -114,6 +115,7 @@ const {
   };
   return {
     getCapabilitiesMock: vi.fn(),
+    identityPreflightMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
     startSimulationMock: vi.fn(async () => 'scenario-1'),
     getCampaignProfileMock: vi.fn(),
@@ -165,6 +167,7 @@ vi.mock('../stores/simulationStore', () => ({
 
 vi.mock('../api/client', () => ({
   getCapabilities: getCapabilitiesMock,
+  identityContinuityPreflight: identityPreflightMock,
   testLlmConnection: testLlmConnectionMock,
   getCampaignProfile: getCampaignProfileMock,
   getCampaignMastery: getCampaignMasteryMock,
@@ -284,10 +287,21 @@ describe('InputView campaign progress', () => {
     window.sessionStorage.clear();
     setMockLanguage('en');
     startSimulationMock.mockClear();
+    identityPreflightMock.mockReset();
     testLlmConnectionMock.mockReset();
     getCapabilitiesMock.mockReset();
     // Default: server web search disabled (tests that need it override)
     getCapabilitiesMock.mockResolvedValue({});
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
     // Enable compile-time flag for web search tests
     import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
@@ -716,6 +730,98 @@ describe('InputView campaign progress', () => {
         disableUserQuota: true,
       }));
     });
+  });
+
+  it('shows continuity confirmation before simulation start when preflight finds fuzzy matches', async () => {
+    const user = userEvent.setup();
+
+    getCapabilitiesMock.mockResolvedValue({
+      agent_identity: { enabled: true },
+    });
+    identityPreflightMock.mockResolvedValueOnce({
+      needs_confirmation: true,
+      matches: [
+        {
+          name: 'Sun Tzu',
+          role: 'Military Strategist',
+          persona: 'Legendary Chinese warfare tactician',
+          continuity_key: 'ck-sun-tzu',
+          match_kind: 'l2_candidate',
+          needs_confirmation: true,
+          candidate_identity: {
+            id: 'identity-1',
+            display_name: 'Sun Tzu',
+            role: 'Military Strategist',
+            persona: 'Ancient Chinese general',
+            kind: 'generated',
+            continuity_key: 'legacy-ck',
+            similarity: 0.91,
+          },
+        },
+      ],
+      summary: {
+        agent_count: 1,
+        exact_match_count: 0,
+        candidate_count: 1,
+        new_identity_count: 0,
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getAllByRole('textbox')[0], 'What if Sun Tzu returns?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(identityPreflightMock).toHaveBeenCalledTimes(1);
+    });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: 'Confirm identity continuity' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if Sun Tzu returns?',
+        continuityOverrides: [
+          {
+            continuityKey: 'ck-sun-tzu',
+            action: 'reuse_existing',
+            identityId: 'identity-1',
+            agentName: 'Sun Tzu',
+            agentRole: 'Military Strategist',
+          },
+        ],
+      }));
+    });
+  });
+
+  it('blocks simulation start when identity continuity preflight fails', async () => {
+    const user = userEvent.setup();
+
+    getCapabilitiesMock.mockResolvedValue({
+      agent_identity: { enabled: true },
+    });
+    identityPreflightMock.mockRejectedValueOnce(new Error('preflight failed'));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getAllByRole('textbox')[0], 'What if continuity breaks?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(identityPreflightMock).toHaveBeenCalledTimes(1);
+    });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Identity continuity preflight failed. Please retry.');
   });
 
   it('publishes homepage challenge and growth summaries inside render_game_to_text', async () => {

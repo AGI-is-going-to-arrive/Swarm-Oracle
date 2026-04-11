@@ -19,7 +19,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、identity continuity preflight / confirm dialog |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口 |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
@@ -79,6 +79,10 @@
 - 三个 WS hooks 对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连；`1006`（异常断连）照常重连。
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
+- InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
+  - 只要命中 `L2 fuzzy candidate` 才会弹确认框
+  - 用户可选 `复用已有身份` 或 `创建新身份`
+  - preflight 失败时会阻断启动并显示错误，不会静默绕过确认
 
 ## Theater 与性能边界
 
@@ -131,6 +135,7 @@
 
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
+- InputView 当前会把 continuity 确认结果按 request-scoped `continuityOverrides` 传给 `POST /api/scenario`，只影响这次启动，不改本地缓存身份。
 - `SimulationView` 的 automation payload 当前已补：
   - `thinkingAgentCount`
   - `thinkingAgents`

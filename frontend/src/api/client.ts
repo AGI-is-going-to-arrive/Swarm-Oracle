@@ -143,6 +143,44 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
   customAgentIdentityIds?: string[];
+  continuityOverrides?: ContinuityOverride[];
+}
+
+export interface ContinuityOverride {
+  continuityKey: string;
+  action: 'reuse_existing' | 'create_new';
+  identityId?: string;
+  agentName?: string;
+  agentRole?: string;
+}
+
+export interface IdentityContinuityMatch {
+  name: string;
+  role: string;
+  persona?: string | null;
+  continuity_key: string;
+  match_kind: 'l2_candidate' | 'l1_exact' | 'new';
+  needs_confirmation: boolean;
+  candidate_identity: {
+    id: string;
+    display_name: string;
+    role: string;
+    persona?: string | null;
+    kind: string;
+    continuity_key: string;
+    similarity?: number;
+  } | null;
+}
+
+export interface IdentityContinuityPreflightResponse {
+  needs_confirmation: boolean;
+  matches: IdentityContinuityMatch[];
+  summary: {
+    agent_count: number;
+    exact_match_count: number;
+    candidate_count: number;
+    new_identity_count: number;
+  };
 }
 
 export interface LlmProbeResponse {
@@ -159,6 +197,64 @@ export interface LlmProbeResponse {
     rounds_max: number;
   };
   failure?: string | null;
+}
+
+function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string, unknown> {
+  const {
+    question,
+    rounds,
+    numAgents,
+    mode,
+    hierarchical,
+    llmApiKey,
+    llmBaseUrl,
+    llmModel,
+    llmRequestsPerMinute,
+    llmTokensPerMinute,
+    reasoningEffort,
+    temperature,
+    branchSensitivity,
+    forkPromptVariant,
+    forkDetectorActiveBranchLimit,
+    visualizationEnabled,
+    webSearchEnabled,
+    userId,
+    disableUserQuota,
+    customAgentIdentityIds,
+    continuityOverrides,
+  } = options;
+
+  return {
+    question,
+    ...(rounds != null && { rounds }),
+    ...(numAgents != null && { num_agents: numAgents }),
+    ...(mode != null && { mode }),
+    ...(hierarchical != null && { hierarchical }),
+    ...(llmApiKey && { llm_api_key: llmApiKey }),
+    ...(llmBaseUrl && { llm_base_url: llmBaseUrl }),
+    ...(llmModel && { llm_model: llmModel }),
+    ...(llmRequestsPerMinute != null && { llm_requests_per_minute: llmRequestsPerMinute }),
+    ...(llmTokensPerMinute != null && { llm_tokens_per_minute: llmTokensPerMinute }),
+    ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
+    ...(temperature != null && { temperature }),
+    ...(branchSensitivity != null && { branch_sensitivity: branchSensitivity }),
+    ...(forkPromptVariant && { fork_prompt_variant: forkPromptVariant }),
+    ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
+    ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
+    ...(webSearchEnabled && { web_search_enabled: true }),
+    ...(userId && { user_id: userId }),
+    ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
+    ...(customAgentIdentityIds?.length && { custom_agent_identity_ids: customAgentIdentityIds }),
+    ...(continuityOverrides?.length && {
+      continuity_overrides: continuityOverrides.map((override) => ({
+        continuity_key: override.continuityKey,
+        action: override.action,
+        ...(override.identityId && { identity_id: override.identityId }),
+        ...(override.agentName && { agent_name: override.agentName }),
+        ...(override.agentRole && { agent_role: override.agentRole }),
+      })),
+    }),
+  };
 }
 
 async function fetchWithTimeout(
@@ -335,51 +431,18 @@ export async function testLlmConnection(
 export async function createScenario(
   options: CreateScenarioOptions,
 ): Promise<Scenario> {
-  const {
-    question,
-    rounds,
-    numAgents,
-    mode,
-    hierarchical,
-    llmApiKey,
-    llmBaseUrl,
-    llmModel,
-    llmRequestsPerMinute,
-    llmTokensPerMinute,
-    reasoningEffort,
-    temperature,
-    branchSensitivity,
-    forkPromptVariant,
-    forkDetectorActiveBranchLimit,
-    visualizationEnabled,
-    webSearchEnabled,
-    userId,
-    disableUserQuota,
-  } = options;
   return request('/scenario', {
     method: 'POST',
-    body: JSON.stringify({
-      question,
-      ...(rounds != null && { rounds }),
-      ...(numAgents != null && { num_agents: numAgents }),
-      ...(mode != null && { mode }),
-      ...(hierarchical != null && { hierarchical }),
-      ...(llmApiKey && { llm_api_key: llmApiKey }),
-      ...(llmBaseUrl && { llm_base_url: llmBaseUrl }),
-      ...(llmModel && { llm_model: llmModel }),
-      ...(llmRequestsPerMinute != null && { llm_requests_per_minute: llmRequestsPerMinute }),
-      ...(llmTokensPerMinute != null && { llm_tokens_per_minute: llmTokensPerMinute }),
-      ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
-      ...(temperature != null && { temperature }),
-      ...(branchSensitivity != null && { branch_sensitivity: branchSensitivity }),
-      ...(forkPromptVariant && { fork_prompt_variant: forkPromptVariant }),
-      ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
-      ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
-      ...(webSearchEnabled && { web_search_enabled: true }),
-      ...(userId && { user_id: userId }),
-      ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
-      ...(options.customAgentIdentityIds?.length && { custom_agent_identity_ids: options.customAgentIdentityIds }),
-    }),
+    body: JSON.stringify(buildScenarioRequestBody(options)),
+  });
+}
+
+export async function identityContinuityPreflight(
+  options: CreateScenarioOptions,
+): Promise<IdentityContinuityPreflightResponse> {
+  return request('/agents/identities/preflight', {
+    method: 'POST',
+    body: JSON.stringify(buildScenarioRequestBody(options)),
   });
 }
 

@@ -9,9 +9,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
+from app.api.schemas import CreateScenarioRequest
 from app.config import settings
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
+from app.services.agent_identity import preview_identity_match
+from app.services.llm_client import (
+    is_local_provider_url,
+    llm_request_scope,
+    validate_llm_base_url,
+)
+from app.services.parser import parse_question
 from app.services.persona_workshop import (
     ALLOWED_KNOWLEDGE_DOMAINS,
     create_custom_agent,
@@ -159,6 +167,98 @@ async def list_identities(user_id: str | None = None):
         )
     agents = list_all_agents(user_id)
     return agents
+
+
+@router.post("/identities/preflight")
+async def preflight_identity_continuity(req: CreateScenarioRequest):
+    """Preview identity continuity matches before scenario creation."""
+    if not settings.FEATURE_AGENT_IDENTITY:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Agent identity feature not enabled"},
+        )
+    if not req.user_id:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "user_id is required"},
+        )
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Provided llm_base_url is not in the allowed provider list"},
+            )
+        if not req.llm_api_key:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "An API key is required when using a custom LLM base URL"},
+            )
+        req.llm_base_url = validated_url
+
+    num_agents = req.num_agents or settings.DEFAULT_NUM_AGENTS
+    use_hierarchical = req.hierarchical
+    if use_hierarchical is None:
+        use_hierarchical = num_agents > settings.HIERARCHICAL_AGENT_THRESHOLD
+    sim_rounds = (
+        max(1, min(req.rounds, settings.MAX_ROUNDS))
+        if req.rounds is not None
+        else settings.DEFAULT_ROUNDS
+    )
+
+    local_provider = is_local_provider_url(req.llm_base_url)
+    quota_key = (
+        None
+        if (req.disable_user_quota and local_provider)
+        else f"user:{req.user_id}"
+    )
+
+    with llm_request_scope(
+        quota_key=quota_key,
+        purpose="identity_preflight_parse",
+        requests_per_minute=req.llm_requests_per_minute,
+        tokens_per_minute=req.llm_tokens_per_minute,
+    ):
+        parsed = await parse_question(
+            req.question,
+            max_agents=num_agents,
+            target_agents=num_agents,
+            default_rounds=sim_rounds,
+            max_rounds=settings.MAX_ROUNDS,
+            hierarchical=use_hierarchical,
+            api_key=req.llm_api_key,
+            base_url=req.llm_base_url,
+            temperature=req.temperature,
+            model=req.llm_model,
+        )
+
+    matches: list[dict] = []
+    exact_match_count = 0
+    new_identity_count = 0
+    for agent in parsed.get("agents", []):
+        preview = preview_identity_match(
+            req.user_id,
+            agent.get("name", ""),
+            agent.get("role", ""),
+            agent.get("persona"),
+        )
+        if preview["match_kind"] == "l1_exact":
+            exact_match_count += 1
+        elif preview["match_kind"] == "l2_candidate":
+            matches.append(preview)
+        else:
+            new_identity_count += 1
+
+    return {
+        "needs_confirmation": bool(matches),
+        "matches": matches,
+        "summary": {
+            "agent_count": len(parsed.get("agents", [])),
+            "exact_match_count": exact_match_count,
+            "candidate_count": len(matches),
+            "new_identity_count": new_identity_count,
+        },
+    }
 
 
 @router.get("/identities/{identity_id}/memory")

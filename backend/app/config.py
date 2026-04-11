@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     FEATURE_COUNTERFACTUAL_REPLAY: bool = False
     FEATURE_FACTIONS: bool = False
     FEATURE_ARGUMENT_MAP: bool = False
+    ARGUMENT_MAP_LLM_ENRICHMENT: bool = True
     FEATURE_IDENTITY_COMPACTION: bool = False
 
     # ── Identity Memory Compaction ───────────────────────

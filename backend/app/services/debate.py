@@ -47,6 +47,7 @@ try:
     from app.services.debate_argument_map import (
         extract_argument_units as _argmap_extract,
         link_verdict as _argmap_link_verdict,
+        schedule_argument_enrichment_for_turn as _argmap_schedule_enrichment,
     )
     _ARGMAP_AVAILABLE = True
 except ImportError:
@@ -1534,6 +1535,14 @@ async def run_debate_background(
                 if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
                     try:
                         _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+                        _argmap_schedule_enrichment(
+                            debate_id=debate_id,
+                            turn_id=persisted_turn["id"],
+                            speaker_side=side.value,
+                            language=debate.language,
+                            llm_overrides=llm_overrides,
+                            quota_key=quota_key,
+                        )
                     except Exception:
                         logger.debug("argmap extract failed (non-blocking)", exc_info=True)
                 recent_turns.append(
@@ -1629,6 +1638,14 @@ async def run_debate_background(
         if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
             try:
                 _argmap_extract(debate_id, persisted_turn["id"], content, side.value)
+                _argmap_schedule_enrichment(
+                    debate_id=debate_id,
+                    turn_id=persisted_turn["id"],
+                    speaker_side=side.value,
+                    language=debate.language,
+                    llm_overrides=llm_overrides,
+                    quota_key=quota_key,
+                )
             except Exception:
                 logger.debug("argmap extract failed (non-blocking)", exc_info=True)
         recent_turns.append(

@@ -39,6 +39,14 @@ from app.services.simulator import reconcile_scenario_done_if_complete, run_simu
 logger = logging.getLogger(__name__)
 
 
+def _normalize_continuity_agent_key(name: str | None, role: str | None) -> str | None:
+    normalized_name = str(name or "").strip().lower()
+    normalized_role = str(role or "").strip().lower()
+    if not normalized_name or not normalized_role:
+        return None
+    return f"{normalized_name}::{normalized_role}"
+
+
 async def verify_session(request: Request) -> str | None:
     """Lightweight auth: if SESSION_SECRET is configured, verify the request token.
 
@@ -255,6 +263,7 @@ async def parse_and_run_background(
     llm_tokens_per_minute: int | None,
     disable_user_quota: bool | None,
     custom_agent_identity_ids: list[str] | None = None,
+    continuity_overrides: list[dict] | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -382,11 +391,35 @@ async def parse_and_run_background(
 
         # Phase 3 F1: Identity resolution helper (non-blocking, gated)
         _resolve_id = None
+        _build_continuity_key = None
         if settings.FEATURE_AGENT_IDENTITY:
             try:
-                from app.services.agent_identity import resolve_identity as _resolve_id
+                from app.services.agent_identity import (
+                    build_continuity_key as _build_continuity_key,
+                    resolve_identity as _resolve_id,
+                )
             except ImportError:
                 pass
+
+        continuity_override_map: dict[str, dict] = {}
+        continuity_override_agent_map: dict[str, dict] = {}
+        if continuity_overrides and user_id and _build_continuity_key:
+            for override in continuity_overrides:
+                continuity_key = str(override.get("continuity_key", "")).strip()
+                action = str(override.get("action", "")).strip().lower()
+                identity_id = str(override.get("identity_id", "")).strip() or None
+                agent_key = _normalize_continuity_agent_key(
+                    override.get("agent_name"),
+                    override.get("agent_role"),
+                )
+                if continuity_key and action in {"reuse_existing", "create_new"}:
+                    payload = {
+                        "action": action,
+                        "identity_id": identity_id,
+                    }
+                    continuity_override_map[continuity_key] = payload
+                    if agent_key:
+                        continuity_override_agent_map[agent_key] = payload
 
         # Phase 3 F3: Inject custom agents into CROWD slots (gated)
         custom_agents_to_inject: list[dict] = []
@@ -438,15 +471,65 @@ async def parse_and_run_background(
             # Phase 3 F1: Resolve identity for each agent
             if _resolve_id and user_id:
                 try:
+                    role = agent_data.get("role", "")
+                    persona = agent_data.get("persona")
+                    continuity_key = (
+                        _build_continuity_key(role, persona)
+                        if _build_continuity_key
+                        else None
+                    )
+                    continuity_override = (
+                        continuity_override_map.get(continuity_key)
+                        if continuity_key
+                        else None
+                    )
+                    if continuity_override is None:
+                        continuity_override = continuity_override_agent_map.get(
+                            _normalize_continuity_agent_key(
+                                agent_data.get("name"),
+                                role,
+                            ) or "",
+                        )
                     pre_assigned_id = agent_data.get("identity_id")
                     if pre_assigned_id:
                         agent.agent_identity_id = pre_assigned_id
                         agent.source_type = "custom"
+                    elif continuity_override and continuity_override["action"] == "reuse_existing":
+                        override_identity_id = continuity_override.get("identity_id")
+                        from app.models.agent_identity import AgentIdentity
+                        existing_identity = (
+                            session.get(AgentIdentity, override_identity_id)
+                            if override_identity_id
+                            else None
+                        )
+                        if existing_identity and existing_identity.user_id == user_id:
+                            agent.agent_identity_id = existing_identity.id
+                            agent.source_type = "generated"
+                        else:
+                            logger.debug(
+                                "continuity override reuse_existing ignored for %s",
+                                agent_data.get("name"),
+                            )
+                            identity_id = _resolve_id(
+                                user_id,
+                                agent_data.get("name", ""),
+                                role,
+                                persona,
+                                session=session,
+                            )
+                            agent.agent_identity_id = identity_id
+                            agent.source_type = "generated"
                     else:
                         identity_id = _resolve_id(
-                            user_id, agent_data.get("name", ""),
-                            agent_data.get("role", ""),
-                            agent_data.get("persona"),
+                            user_id,
+                            agent_data.get("name", ""),
+                            role,
+                            persona,
+                            allow_l2=not (
+                                continuity_override
+                                and continuity_override["action"] == "create_new"
+                            ),
+                            session=session,
                         )
                         agent.agent_identity_id = identity_id
                         agent.source_type = "generated"

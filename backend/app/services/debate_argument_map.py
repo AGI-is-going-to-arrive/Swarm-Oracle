@@ -6,15 +6,24 @@ builds a directed argument graph linked to the verdict.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import logging
 import re
+from typing import Any
 
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.llm_client import (
+    format_untrusted_text_block,
+    llm_call_json,
+    llm_request_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +42,9 @@ _EVIDENCE_KEYWORDS = re.compile(
 
 # Sentence-split pattern: period-space, Chinese period, or newline
 _SENTENCE_SPLIT = re.compile(r"(?<=\.)\s+|。|\n")
+_VALID_UNIT_TYPES = {"claim", "evidence", "rebuttal", "counter"}
+_VALID_STANCES = {"supports_proposition", "supports_opposition", "neutral"}
+_enrichment_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _split_sentences(content: str) -> list[str]:
@@ -52,6 +64,69 @@ def _classify_sentence(sentence: str) -> str:
 
 def _semantic_hash(text: str) -> str:
     return hashlib.sha256(text.strip().lower().encode()).hexdigest()[:16]
+
+
+def _normalize_unit_text(text: str) -> str:
+    return " ".join((text or "").strip().split())
+
+
+def _normalize_unit_type(value: str | None, fallback: str) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in _VALID_UNIT_TYPES else fallback
+
+
+def _normalize_stance(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in _VALID_STANCES else "neutral"
+
+
+def _normalize_confidence(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return max(0.0, min(1.0, numeric))
+
+
+def _load_payload(payload_json: str | None) -> dict[str, Any]:
+    if not payload_json:
+        return {}
+    try:
+        loaded = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _build_enrichment_prompt(
+    *,
+    debate_id: str,
+    turn_id: str,
+    speaker_side: str,
+    language: str,
+    unit_texts: list[str],
+) -> str:
+    unit_lines = [
+        {"text": text, "speaker_side": speaker_side}
+        for text in unit_texts
+    ]
+    return (
+        "You are enriching an existing debate argument map.\n"
+        f"Debate ID: {debate_id}\n"
+        f"Turn ID: {turn_id}\n"
+        f"Language: {language or 'auto'}\n"
+        "Task:\n"
+        "- Review the existing extracted argument units for this turn.\n"
+        "- Keep one output item per input sentence.\n"
+        "- Preserve the exact original text in the `text` field.\n"
+        "- Reclassify `type` using only: claim, evidence, rebuttal, counter.\n"
+        "- Assign `stance` using only: supports_proposition, supports_opposition, neutral.\n"
+        "- Set `confidence` between 0 and 1.\n"
+        "- If uncertain, keep the classification conservative.\n"
+        "- Output strict JSON only in this shape: "
+        "{\"units\":[{\"text\":\"...\",\"type\":\"claim\",\"stance\":\"neutral\",\"confidence\":0.5}]}\n"
+        f"{format_untrusted_text_block('Existing argument units', json.dumps(unit_lines, ensure_ascii=False), max_chars=5000)}\n"  # noqa: E501
+    )
 
 
 def _get_or_create_snapshot(
@@ -140,6 +215,162 @@ def extract_argument_units(
         debate_id, turn_id, len(created_ids),
     )
     return created_ids
+
+
+async def enrich_argument_units_for_turn(
+    *,
+    debate_id: str,
+    turn_id: str,
+    speaker_side: str,
+    language: str,
+    llm_overrides: dict[str, Any] | None = None,
+    quota_key: str | None = None,
+) -> int:
+    """Optionally enrich one turn's argument units with a single LLM call.
+
+    This updates unit/node types and stores stance/confidence in node payloads,
+    while preserving the existing rule-based extraction as the fallback source
+    of truth.
+    """
+    if not settings.ARGUMENT_MAP_LLM_ENRICHMENT:
+        return 0
+
+    with Session(get_engine()) as session:
+        units = session.exec(
+            select(DebateArgumentUnit).where(
+                DebateArgumentUnit.debate_id == debate_id,
+                DebateArgumentUnit.turn_id == turn_id,
+            )
+        ).all()
+
+    if not units:
+        return 0
+
+    unit_texts = [unit.canonical_text for unit in units if unit.canonical_text.strip()]
+    if not unit_texts:
+        return 0
+
+    prompt = _build_enrichment_prompt(
+        debate_id=debate_id,
+        turn_id=turn_id,
+        speaker_side=speaker_side,
+        language=language,
+        unit_texts=unit_texts,
+    )
+    overrides = llm_overrides or {}
+
+    with llm_request_scope(
+        quota_key=f"user:{quota_key}" if quota_key else None,
+        purpose="debate_argument_map_enrichment",
+        requests_per_minute=overrides.get("requests_per_minute"),
+        tokens_per_minute=overrides.get("tokens_per_minute"),
+    ):
+        result = await llm_call_json(
+            prompt,
+            reasoning_effort=overrides.get("reasoning_effort") or "low",
+            model=overrides.get("model"),
+            api_key=overrides.get("api_key"),
+            base_url=overrides.get("base_url"),
+        )
+
+    enriched_units = result.get("units")
+    if not isinstance(enriched_units, list):
+        return 0
+
+    by_text: dict[str, DebateArgumentUnit] = {
+        _normalize_unit_text(unit.canonical_text): unit
+        for unit in units
+        if unit.canonical_text.strip()
+    }
+
+    updated = 0
+    with Session(get_engine()) as session:
+        for item in enriched_units:
+            if not isinstance(item, dict):
+                continue
+            normalized_text = _normalize_unit_text(str(item.get("text", "")))
+            if not normalized_text:
+                continue
+
+            original_unit = by_text.get(normalized_text)
+            if original_unit is None:
+                continue
+
+            unit = session.get(DebateArgumentUnit, original_unit.id)
+            if unit is None:
+                continue
+
+            next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
+            stance = _normalize_stance(item.get("stance"))
+            confidence = _normalize_confidence(item.get("confidence"))
+
+            node = session.get(GraphNode, unit.node_id)
+            if node is None:
+                continue
+
+            unit.unit_type = next_type
+            node.node_type = next_type
+
+            payload = _load_payload(node.payload_json)
+            payload["side"] = payload.get("side") or speaker_side
+            payload["stance"] = stance
+            payload["confidence"] = confidence
+            payload["enriched_by"] = "llm"
+            node.payload_json = json.dumps(payload, ensure_ascii=False)
+
+            session.add(unit)
+            session.add(node)
+            updated += 1
+
+        if updated:
+            session.commit()
+
+    if updated:
+        logger.info(
+            "enrich_argument_units_for_turn debate=%s turn=%s updated=%d",
+            debate_id, turn_id, updated,
+        )
+    return updated
+
+
+def _finalize_enrichment_task(task: asyncio.Task[Any]) -> None:
+    _enrichment_tasks.discard(task)
+    try:
+        task.result()
+    except Exception:
+        logger.debug("argument map enrichment failed (non-blocking)", exc_info=True)
+
+
+def schedule_argument_enrichment_for_turn(
+    *,
+    debate_id: str,
+    turn_id: str,
+    speaker_side: str,
+    language: str,
+    llm_overrides: dict[str, Any] | None = None,
+    quota_key: str | None = None,
+) -> bool:
+    """Schedule a fire-and-forget enrichment task for one debate turn."""
+    if not settings.ARGUMENT_MAP_LLM_ENRICHMENT:
+        return False
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+
+    task = loop.create_task(
+        enrich_argument_units_for_turn(
+            debate_id=debate_id,
+            turn_id=turn_id,
+            speaker_side=speaker_side,
+            language=language,
+            llm_overrides=llm_overrides,
+            quota_key=quota_key,
+        )
+    )
+    _enrichment_tasks.add(task)
+    task.add_done_callback(_finalize_enrichment_task)
+    return True
 
 
 def link_verdict(debate_id: str, verdict_data: dict) -> None:

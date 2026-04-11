@@ -8,7 +8,9 @@ from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
 from app.services.agent_identity import (
     _continuity_key,
+    build_continuity_key,
     get_identity_memories,
+    preview_identity_match,
     record_growth_event,
     resolve_identity,
 )
@@ -133,6 +135,9 @@ class TestContinuityKey:
         k1 = _continuity_key("Role", long_persona)
         k2 = _continuity_key("Role", long_persona[:30] + "ZZZZZ")
         assert k1 == k2
+
+    def test_public_helper_matches_internal_hash(self):
+        assert build_continuity_key("Role", "Persona") == _continuity_key("Role", "Persona")
 
 
 class TestRecordGrowthEvent:
@@ -369,3 +374,51 @@ class TestL2CosineMatching:
                 persona="Unique persona for mock test",
             )
         assert result == real_id
+
+    def test_preview_identity_match_reports_l2_candidate(self):
+        real_id = resolve_identity(
+            user_id="user-l2-preview",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Ancient Chinese general who wrote The Art of War",
+        )
+        fake_candidates = [
+            {"identity_id": real_id, "distance": 0.07, "similarity": 0.93, "role": "Military Strategist"},
+        ]
+        with patch(
+            "app.services.agent_identity.search_identity_candidates",
+            return_value=fake_candidates,
+        ):
+            preview = preview_identity_match(
+                "user-l2-preview",
+                "Sun Tzu",
+                "Military Strategist",
+                "Legendary Chinese warfare tactician, author of Art of War",
+            )
+        assert preview["match_kind"] == "l2_candidate"
+        assert preview["needs_confirmation"] is True
+        assert preview["candidate_identity"]["id"] == real_id
+        assert preview["candidate_identity"]["similarity"] == 0.93
+
+    def test_resolve_identity_can_skip_l2_with_allow_l2_false(self):
+        real_id = resolve_identity(
+            user_id="user-l2-optout",
+            name="Sun Tzu",
+            role="Military Strategist",
+            persona="Ancient Chinese general who wrote The Art of War",
+        )
+        fake_candidates = [
+            {"identity_id": real_id, "distance": 0.05, "similarity": 0.95, "role": "Military Strategist"},
+        ]
+        with patch(
+            "app.services.agent_identity.search_identity_candidates",
+            return_value=fake_candidates,
+        ):
+            result = resolve_identity(
+                user_id="user-l2-optout",
+                name="Sun Tzu",
+                role="Military Strategist",
+                persona="Legendary Chinese warfare tactician, author of Art of War",
+                allow_l2=False,
+            )
+        assert result != real_id

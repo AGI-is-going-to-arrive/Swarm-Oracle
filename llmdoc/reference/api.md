@@ -44,6 +44,10 @@
 关键约束：
 
 - `GET /api/scenario/{scenario_id}` 会在读取前尽量收敛 stale `simulating/narrating` 状态。
+- `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
+  - 前端通常先调用 `POST /api/agents/identities/preflight`
+  - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
+  - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
 
 ## Replay Artifact
@@ -148,6 +152,7 @@
 | 方法 | 路径 | 说明 | 开关 |
 |------|------|------|------|
 | `GET` | `/api/agents/identities` | Agent 身份列表 | `FEATURE_CUSTOM_AGENTS` 或 `FEATURE_AGENT_IDENTITY` |
+| `POST` | `/api/agents/identities/preflight` | 创建 scenario 前预览 continuity 匹配 | `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/memory` | 跨场景记忆 | `FEATURE_AGENT_IDENTITY` |
 | `POST` | `/api/agents/workshop` | 创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `PUT` | `/api/agents/workshop/{id}` | 更新自建 Agent | `FEATURE_CUSTOM_AGENTS` |
@@ -161,6 +166,7 @@
 说明：
 
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
+- `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
 - 前端通过 `GET /api/capabilities` 检测 `enabled` 字段，disabled 时隐藏入口且不发请求。
 
 ## Ending Room / Worldline Roundtable
