@@ -37,6 +37,54 @@ export function setSessionToken(token: string): void {
   } catch { /* ignore */ }
 }
 
+function decodeBase64Url(segment: string): string | null {
+  try {
+    const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+    return atob(`${normalized}${padding}`);
+  } catch {
+    return null;
+  }
+}
+
+export function getSessionPrincipalSubject(token: string = getSessionToken()): string | null {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') return null;
+  const decoded = decodeBase64Url(parts[1]);
+  if (!decoded) return null;
+  try {
+    const payload = JSON.parse(decoded) as { sub?: unknown };
+    const subject = typeof payload.sub === 'string' ? payload.sub.trim() : '';
+    return subject || null;
+  } catch {
+    return null;
+  }
+}
+
+export function getSessionBoundUserId(fallback?: string | null): string {
+  const subject = getSessionPrincipalSubject();
+  if (subject) return subject;
+  const normalizedFallback = fallback?.trim();
+  if (normalizedFallback) return normalizedFallback;
+  try {
+    const stored = localStorage.getItem('swarmoracle_user_id')?.trim();
+    if (stored) return stored;
+  } catch {
+    // ignore
+  }
+  return 'default_user';
+}
+
+export function buildSessionHeaders(headers?: HeadersInit): Headers {
+  const merged = new Headers(headers ?? {});
+  const sessionToken = getSessionToken();
+  if (sessionToken && !merged.has('X-Session-Token')) {
+    merged.set('X-Session-Token', sessionToken);
+  }
+  return merged;
+}
+
 function sanitizeErrorText(text: string): string {
   if (!text || text.length > 200) return 'Server error';
   if (/Traceback|at\s+\S+\s+\(|<html|<\/div>/i.test(text)) return 'Server error';
@@ -310,10 +358,6 @@ async function request<T>(
   if (init?.body) {
     headers['Content-Type'] = 'application/json';
   }
-  const sessionToken = getSessionToken();
-  if (sessionToken) {
-    headers['X-Session-Token'] = sessionToken;
-  }
   const retryTransient = retryOptions?.retryTransient ?? false;
   const retryAttempts = retryOptions?.retryAttempts ?? 0;
 
@@ -321,7 +365,7 @@ async function request<T>(
     const res = await fetchWithTimeout(path, {
       ...init,
       // H-3 fix: spread init.headers AFTER defaults so user overrides win
-      headers: { ...headers, ...(init?.headers as Record<string, string>) },
+      headers: buildSessionHeaders({ ...headers, ...(init?.headers as Record<string, string>) }),
     }, timeoutMs);
     if (res.ok) {
       return parseJsonResponse<T>(res, path);
@@ -355,7 +399,11 @@ async function safeGet<T>(
 
 /** Fetch response as raw text (for Markdown export). */
 async function requestText(path: string): Promise<string> {
-  const res = await fetchWithTimeout(path, undefined, DEFAULT_TIMEOUT);
+  const res = await fetchWithTimeout(
+    path,
+    { headers: buildSessionHeaders() },
+    DEFAULT_TIMEOUT,
+  );
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`API ${res.status}: ${body}`);
@@ -941,7 +989,7 @@ export async function getIdentityMemory(
   identityId: string,
   userId?: string,
 ): Promise<{ identity_id: string; memories: AgentMemoryEntry[] }> {
-  const uid = userId || localStorage.getItem('swarmoracle_user_id') || 'default_user';
+  const uid = getSessionBoundUserId(userId);
   return safeGet(
     `/agents/identities/${encodeURIComponent(identityId)}/memory?user_id=${encodeURIComponent(uid)}`,
   );
@@ -952,7 +1000,7 @@ export async function getIdentityGrowthEvents(
   identityId: string,
   userId?: string,
 ): Promise<{ identity_id: string; events: AgentGrowthEvent[] }> {
-  const uid = userId || localStorage.getItem('swarmoracle_user_id') || 'default_user';
+  const uid = getSessionBoundUserId(userId);
   return safeGet(
     `/agents/identities/${encodeURIComponent(identityId)}/growth-events?user_id=${encodeURIComponent(uid)}`,
   );

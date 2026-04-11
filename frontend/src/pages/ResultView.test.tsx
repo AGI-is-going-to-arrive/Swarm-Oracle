@@ -447,6 +447,16 @@ beforeEach(() => {
       localStore.delete(key);
     }),
   });
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    writable: true,
+    value: vi.fn(() => 'blob:mock-export'),
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
 });
 
 describe('ResultView campaign summary', () => {
@@ -2228,6 +2238,158 @@ describe('ResultView campaign summary', () => {
     });
   });
 
+  it('prefers authoritative gameplay branch snapshots over story branches in automation payload', async () => {
+    const { getScenario } = await import('../api/client');
+    const { loadScenarioMeta } = await import('../lib/scenarioMeta');
+
+    vi.mocked(loadScenarioMeta).mockReturnValue({
+      director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+      cooldowns: {},
+      cards: { usageLog: [] },
+      betting: { bets: [] },
+      commitment: {
+        active: false,
+        branchId: null,
+        branchTitle: null,
+        committedAtRound: null,
+        committedAt: null,
+        outcome: null,
+      },
+      objectives: {
+        generatedForQuestion: null,
+        generatedForProfile: null,
+        goals: [],
+      },
+      archive: {
+        branchSnapshots: [],
+        keyMoments: [],
+        profileId: 'law',
+        dominantBranchTitle: null,
+        dominantTone: null,
+        mostUsedCard: null,
+        bettingHit: null,
+        archiveGrade: 'B',
+        directorStyleTag: 'quiet_observer',
+        profileResonance: 'aligned',
+        counterplayCardCount: 0,
+        lastCounterplayCard: null,
+      },
+    });
+    vi.mocked(getScenario).mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [
+        {
+          id: 'branch-1',
+          parent_branch_id: null,
+          fork_round: 1,
+          fork_reason: 'Recovered from story payload.',
+          title: 'Archive Branch',
+          summary: 'Story payload summary.',
+          story: 'Rendered story branch from scenario payload.',
+          insight: '',
+          key_moments: ['Moment 1'],
+          probability: 1,
+          status: 'COMPLETED',
+        },
+      ],
+      groups: [],
+      hierarchical: false,
+      director_state: {
+        objectives: {
+          generated_for_question: null,
+          generated_for_profile: null,
+          goals: [],
+          last_updated_at: null,
+        },
+        commitment: {
+          active: false,
+          branch_id: null,
+          branch_title: null,
+          committed_at_round: null,
+          committed_at: null,
+          outcome: null,
+        },
+      },
+      gameplay_state: {
+        betting: {
+          bets: [
+            {
+              bet_id: 'bet-1',
+              kind: 'branch_winner',
+              target_id: 'archive-branch-1',
+              target_label: 'Archive Branch',
+              confidence: 0.88,
+              user_name: 'Remote Director',
+              placed_at_round: 2,
+              placed_at: '2026-03-19T00:02:00Z',
+              resolved: false,
+            },
+            {
+              bet_id: 'bet-2',
+              kind: 'ending_tone',
+              target_id: 'order',
+              target_label: '秩序整合',
+              confidence: 0.64,
+              user_name: 'Remote Director',
+              placed_at_round: 3,
+              placed_at: '2026-03-19T00:03:00Z',
+              resolved: false,
+            },
+          ],
+        },
+        archive: {
+          key_moments: ['Remote key moment'],
+          branch_snapshots: [
+            {
+              branch_id: 'archive-branch-1',
+              title: 'Archive Branch',
+              probability: 0.72,
+            },
+            {
+              branch_id: 'archive-branch-2',
+              title: 'Counterfactual Branch',
+              probability: 0.28,
+            },
+          ],
+        },
+      } as unknown as Scenario['gameplay_state'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.archive_summary?.profile_id).toBe('law');
+      expect(payload?.page?.result_bet_list).toHaveLength(2);
+      expect(payload?.page?.result_key_moments).toContain('Remote key moment');
+      expect(payload?.page?.result_branch_snapshots?.length).toBeGreaterThanOrEqual(2);
+      expect(payload?.page?.result_branch_snapshots).toEqual(expect.arrayContaining([
+        {
+          branch_id: 'archive-branch-1',
+          title: 'Archive Branch',
+          probability: 0.72,
+        },
+        {
+          branch_id: 'archive-branch-2',
+          title: 'Counterfactual Branch',
+          probability: 0.28,
+        },
+      ]));
+    });
+  });
+
   it('preserves local usage and bets when remote gameplay authority only provides key moments', async () => {
     const { getScenario } = await import('../api/client');
     const { loadScenarioMeta } = await import('../lib/scenarioMeta');
@@ -2688,6 +2850,32 @@ describe('ResultView campaign summary', () => {
       expect(await screen.findByText('result.title')).toBeInTheDocument();
       expect(screen.queryByText('result.web_sources_title')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('ResultView export flow', () => {
+  it('downloads exported markdown through the authenticated client helper', async () => {
+    const user = userEvent.setup();
+    const appendChildSpy = vi.spyOn(document.body, 'appendChild');
+    const removeChildSpy = vi.spyOn(document.body, 'removeChild');
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const exportButton = await screen.findByRole('button', { name: 'result.export' });
+    await user.click(exportButton);
+
+    await waitFor(() => {
+      expect(apiClient.exportScenario).toHaveBeenCalledWith('scenario-1');
+    });
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(appendChildSpy).toHaveBeenCalled();
+    expect(removeChildSpy).toHaveBeenCalled();
   });
 });
 

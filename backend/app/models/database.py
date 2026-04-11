@@ -3,8 +3,10 @@
 import enum
 import logging
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Any, Optional
 
@@ -16,6 +18,40 @@ logger = logging.getLogger(__name__)
 
 # C-2 fix: SQL identifier whitelist pattern
 _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+_ENDING_ROOM_PREVIOUS_REVISION = "016_checkpoint_faction_argument_tables"
+_ENDING_ROOM_REVISION = "017_add_ending_room_tables"
+_ENDING_ROOM_SCHEMA_COLUMNS = {
+    "ending_room": {
+        "scenario_id",
+        "anchor_branch_id",
+        "room_type",
+        "scope_fingerprint",
+        "current_phase",
+        "memory_partition_version",
+    },
+    "ending_room_participant": {
+        "room_id",
+        "source_branch_id",
+        "source_agent_id",
+        "role_slot",
+        "worldline_echo_key",
+    },
+    "ending_room_thread": {
+        "room_id",
+        "mode",
+        "interaction_mode",
+        "memory_partition_id",
+        "question_anchor_ids_json",
+    },
+    "ending_room_turn": {
+        "room_id",
+        "thread_id",
+        "sequence",
+        "interaction_mode",
+        "question_anchor_ids_json",
+        "cited_branch_id",
+    },
+}
 
 
 # ── Enums ────────────────────────────────────────────────
@@ -203,6 +239,8 @@ class ReplayArtifact(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     kind: str
+    owner_user_id: str | None = Field(default=None, index=True)
+    source_scenario_id: str | None = Field(default=None, index=True)
     payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=_now)
 
@@ -247,215 +285,285 @@ def dispose_engine():
             logger.info("Database engine disposed.")
 
 
-def init_db():
-    """Create all tables and run lightweight schema migrations.
+def _make_bootstrap_engine(database_url: str):
+    extra_kwargs: dict = {}
+    if database_url.startswith("sqlite"):
+        extra_kwargs["connect_args"] = {"timeout": 5}
+    return create_engine(database_url, echo=False, **extra_kwargs)
 
-    NOTE: For production deployments, prefer ``alembic upgrade head`` instead.
-    This function is kept as a backward-compatible fallback for development
-    and tests where Alembic is not configured.
-    """
+
+def _load_alembic_runtime():
+    """Load Alembic modules without being shadowed by the local ``backend/alembic`` dir."""
+    backend_root = Path(__file__).resolve().parents[2]
+    blocked_paths = {
+        str(backend_root),
+        str(Path.cwd().resolve()),
+    }
+    original_path = list(sys.path)
+    try:
+        sys.path = [
+            entry
+            for entry in original_path
+            if str(Path(entry or ".").resolve()) not in blocked_paths
+        ]
+        from alembic import command as alembic_command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        return Config, alembic_command, ScriptDirectory
+    except ModuleNotFoundError:
+        return None
+    finally:
+        sys.path = original_path
+
+
+def _current_alembic_revision(connection) -> str | None:
+    table_names = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+    if "alembic_version" not in table_names:
+        return None
+    row = connection.exec_driver_sql("SELECT version_num FROM alembic_version").first()
+    return row[0] if row else None
+
+
+def _has_expected_columns(connection, table_name: str, expected_columns: set[str]) -> bool:
+    rows = connection.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
+    existing_columns = {row[1] for row in rows}
+    return expected_columns <= existing_columns
+
+
+def _has_legacy_ending_room_schema(connection) -> bool:
+    for table_name, expected_columns in _ENDING_ROOM_SCHEMA_COLUMNS.items():
+        if not _has_expected_columns(connection, table_name, expected_columns):
+            return False
+    return True
+
+
+def _should_stamp_existing_ending_room_schema(database_url: str) -> bool:
+    if not database_url.startswith("sqlite"):
+        return False
+
+    engine = _make_bootstrap_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            current_revision = _current_alembic_revision(connection)
+            if current_revision != _ENDING_ROOM_PREVIOUS_REVISION:
+                return False
+            return _has_legacy_ending_room_schema(connection)
+    finally:
+        engine.dispose()
+
+
+def _init_db_lightweight() -> None:
+    """Backward-compatible schema sync for environments without Alembic."""
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
 
-    # Lightweight migration: add columns that create_all() can't add to existing tables.
-    # Reuse an engine-managed SQLAlchemy connection so migrations share the same
-    # pool, transaction handling, and SQLite connection settings as the rest of the app.
-    if engine.dialect.name == "sqlite":
-        try:
-            from app.models.ending_room import (
-                EndingRoomInteractionMode,
-                EndingRoomPhase,
-                EndingRoomRoleSlot,
-                EndingRoomStatus,
-                EndingRoomThreadMode,
-                EndingRoomTurnSource,
-                EndingRoomType,
-            )
+    if engine.dialect.name != "sqlite":
+        return
 
-            with engine.begin() as conn:
-                # Check and add missing columns
-                _migrate_add_column(conn, "branch", "key_moments", "TEXT")
-                _migrate_add_column(conn, "branch", "replay_kind", "TEXT")
-                _migrate_add_column(conn, "branch", "replay_source_branch_id", "TEXT")
-                _migrate_add_column(conn, "branch", "replay_source_round", "INTEGER")
-                _migrate_add_column(conn, "branch", "replay_source_agent_id", "TEXT")
-                _migrate_add_column(conn, "agent", "group_id", "TEXT")
-                _migrate_add_column(conn, "agent", "agent_identity_id", "TEXT")
-                _migrate_add_column(conn, "agent", "source_type", "TEXT")
-                # V2: Visualization fields
-                _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
-                _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
-                _migrate_add_column(conn, "scenario", "web_context_json", "TEXT")
-                _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
-                _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
-                _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
-                _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
-                _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")  # noqa: E501
-                _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
-                _migrate_add_column(
-                    conn,
-                    "ending_room_thread",
-                    "interaction_mode",
-                    "TEXT DEFAULT 'archivist_route'",
-                )
-                _migrate_add_column(conn, "ending_room_thread", "addressed_agent_ids_json", "TEXT")
-                _migrate_add_column(conn, "ending_room_thread", "question_anchor_ids_json", "TEXT")
-                _migrate_add_column(conn, "ending_room_turn", "thread_id", "TEXT")
-                _migrate_add_column(conn, "ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'")
-                _migrate_add_column(
-                    conn,
-                    "ending_room_turn",
-                    "interaction_mode",
-                    "TEXT DEFAULT 'auto_recap'",
-                )
-                _migrate_add_column(conn, "ending_room_turn", "memory_partition_id", "TEXT")
-                _migrate_add_column(
-                    conn,
-                    "ending_room_turn",
-                    "addressed_agent_ids_json",
-                    "TEXT",
-                )
-                _migrate_add_column(
-                    conn,
-                    "ending_room_turn",
-                    "question_anchor_ids_json",
-                    "TEXT",
-                )
-                # Track A follow-up: commitment/objective settlement fields
-                _migrate_add_column(
-                    conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"
-                )
-                _migrate_add_column(
-                    conn, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"
-                )
-                _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
-                _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")  # noqa: E501
-                _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
-                _migrate_add_column(conn, "debate_prediction", "counterplay_variant", "TEXT")
-                _migrate_create_index(
-                    conn, "agent_message", "ix_agent_message_round_id", ["round_id"]
-                )
-                _migrate_create_index(
-                    conn, "agent_message", "ix_agent_message_agent_id", ["agent_id"]
-                )
-                _migrate_create_index(conn, "agent", "ix_agent_identity_id", ["agent_identity_id"])
-                _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
-                _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
-                _migrate_create_index(
-                    conn, "agent_group", "ix_agent_group_scenario_id", ["scenario_id"]
-                )
-                _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
-                _migrate_create_index(
-                    conn,
-                    "ending_room",
-                    "ix_ending_room_scenario_anchor",
-                    ["scenario_id", "anchor_branch_id"],
-                )
-                _migrate_create_unique_index(
-                    conn,
-                    "ending_room",
-                    "uq_ending_room_scope",
-                    ["scenario_id", "room_type", "participant_set_hash", "language"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_participant",
-                    "ix_ending_room_participant_room_id",
-                    ["room_id"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_participant",
-                    "ix_ending_room_participant_worldline_echo_key",
-                    ["worldline_echo_key"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_thread",
-                    "ix_ending_room_thread_room_id",
-                    ["room_id"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_thread",
-                    "ix_ending_room_thread_room_id_mode",
-                    ["room_id", "mode"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_thread",
-                    "ix_ending_room_thread_memory_partition_id",
-                    ["memory_partition_id"],
-                )
-                _migrate_create_unique_index(
-                    conn,
-                    "ending_room_turn",
-                    "ix_ending_room_turn_room_sequence",
-                    ["room_id", "sequence"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "ending_room_turn",
-                    "ix_ending_room_turn_thread_id",
-                    ["thread_id"],
-                )
-                _migrate_create_index(
-                    conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"]
-                )
-                _migrate_create_index(
-                    conn, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"]
-                )
-                _migrate_create_unique_index(
-                    conn,
-                    "prediction",
-                    "uq_prediction_scenario_user",
-                    ["scenario_id", "user_id"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "pending_intervention",
-                    "ix_pending_intervention_queue",
-                    ["scenario_id", "branch_id", "id"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "scenario_campaign_log",
-                    "ix_scenario_campaign_log_director_profile_id_created_at",
-                    ["director_profile_id", "created_at"],
-                )
-                _migrate_create_index(
-                    conn,
-                    "scenario_campaign_log",
-                    "ix_scenario_campaign_log_daily_lookup",
-                    [
-                        "director_profile_id",
-                        "profile_id",
-                        "completed_daily_challenge",
-                        "created_at",
-                    ],
-                )
-                _migrate_normalize_enum_values(conn, "ending_room", "room_type", EndingRoomType)
-                _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
-                _migrate_normalize_enum_values(conn, "ending_room", "phase", EndingRoomPhase)
-                _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)  # noqa: E501
-                _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)  # noqa: E501
-                _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)  # noqa: E501
-                _migrate_normalize_enum_values(
-                    conn,
-                    "ending_room_thread",
-                    "interaction_mode",
-                    EndingRoomInteractionMode,
-                )
-                _migrate_normalize_enum_values(conn, "ending_room_turn", "source", EndingRoomTurnSource)  # noqa: E501
-                _migrate_normalize_enum_values(
-                    conn,
-                    "ending_room_turn",
-                    "interaction_mode",
-                    EndingRoomInteractionMode,
-                )
-        except Exception as exc:
-            # M-1 fix: log migration failures instead of silently passing
-            logger.warning("Schema migration failed (best-effort): %s", exc)
+    try:
+        from app.models.ending_room import (
+            EndingRoomInteractionMode,
+            EndingRoomPhase,
+            EndingRoomRoleSlot,
+            EndingRoomStatus,
+            EndingRoomThreadMode,
+            EndingRoomTurnSource,
+            EndingRoomType,
+        )
+
+        with engine.begin() as conn:
+            _migrate_add_column(conn, "branch", "key_moments", "TEXT")
+            _migrate_add_column(conn, "branch", "replay_kind", "TEXT")
+            _migrate_add_column(conn, "branch", "replay_source_branch_id", "TEXT")
+            _migrate_add_column(conn, "branch", "replay_source_round", "INTEGER")
+            _migrate_add_column(conn, "branch", "replay_source_agent_id", "TEXT")
+            _migrate_add_column(conn, "agent", "group_id", "TEXT")
+            _migrate_add_column(conn, "agent", "agent_identity_id", "TEXT")
+            _migrate_add_column(conn, "agent", "source_type", "TEXT")
+            _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
+            _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
+            _migrate_add_column(conn, "scenario", "web_context_json", "TEXT")
+            _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
+            _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
+            _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
+            _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
+            _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")
+            _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
+            _migrate_add_column(
+                conn,
+                "ending_room_thread",
+                "interaction_mode",
+                "TEXT DEFAULT 'archivist_route'",
+            )
+            _migrate_add_column(conn, "ending_room_thread", "addressed_agent_ids_json", "TEXT")
+            _migrate_add_column(conn, "ending_room_thread", "question_anchor_ids_json", "TEXT")
+            _migrate_add_column(conn, "ending_room_turn", "thread_id", "TEXT")
+            _migrate_add_column(conn, "ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'")
+            _migrate_add_column(
+                conn,
+                "ending_room_turn",
+                "interaction_mode",
+                "TEXT DEFAULT 'auto_recap'",
+            )
+            _migrate_add_column(conn, "ending_room_turn", "memory_partition_id", "TEXT")
+            _migrate_add_column(conn, "ending_room_turn", "addressed_agent_ids_json", "TEXT")
+            _migrate_add_column(conn, "ending_room_turn", "question_anchor_ids_json", "TEXT")
+            _migrate_add_column(conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0")
+            _migrate_add_column(conn, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0")
+            _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
+            _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
+            _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
+            _migrate_add_column(conn, "debate_prediction", "counterplay_variant", "TEXT")
+            _migrate_add_column(conn, "replay_artifact", "owner_user_id", "TEXT")
+            _migrate_add_column(conn, "replay_artifact", "source_scenario_id", "TEXT")
+            _migrate_add_column(conn, "debate", "user_id", "TEXT DEFAULT 'anonymous'")
+
+            _migrate_create_index(conn, "agent_message", "ix_agent_message_round_id", ["round_id"])
+            _migrate_create_index(conn, "agent_message", "ix_agent_message_agent_id", ["agent_id"])
+            _migrate_create_index(conn, "agent", "ix_agent_identity_id", ["agent_identity_id"])
+            _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
+            _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
+            _migrate_create_index(conn, "agent_group", "ix_agent_group_scenario_id", ["scenario_id"])
+            _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
+            _migrate_create_index(
+                conn,
+                "ending_room",
+                "ix_ending_room_scenario_anchor",
+                ["scenario_id", "anchor_branch_id"],
+            )
+            _migrate_create_unique_index(
+                conn,
+                "ending_room",
+                "uq_ending_room_scope",
+                ["scenario_id", "room_type", "participant_set_hash", "language"],
+            )
+            _migrate_create_index(
+                conn,
+                "ending_room_participant",
+                "ix_ending_room_participant_room_id",
+                ["room_id"],
+            )
+            _migrate_create_index(
+                conn,
+                "ending_room_participant",
+                "ix_ending_room_participant_worldline_echo_key",
+                ["worldline_echo_key"],
+            )
+            _migrate_create_index(
+                conn,
+                "ending_room_thread",
+                "ix_ending_room_thread_room_id",
+                ["room_id"],
+            )
+            _migrate_create_index(
+                conn,
+                "ending_room_thread",
+                "ix_ending_room_thread_room_id_mode",
+                ["room_id", "mode"],
+            )
+            _migrate_create_index(
+                conn,
+                "ending_room_thread",
+                "ix_ending_room_thread_memory_partition_id",
+                ["memory_partition_id"],
+            )
+            _migrate_create_unique_index(
+                conn,
+                "ending_room_turn",
+                "ix_ending_room_turn_room_sequence",
+                ["room_id", "sequence"],
+            )
+            _migrate_create_index(conn, "ending_room_turn", "ix_ending_room_turn_thread_id", ["thread_id"])
+            _migrate_create_index(conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"])
+            _migrate_create_index(conn, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"])
+            _migrate_create_unique_index(
+                conn,
+                "prediction",
+                "uq_prediction_scenario_user",
+                ["scenario_id", "user_id"],
+            )
+            _migrate_create_index(
+                conn,
+                "pending_intervention",
+                "ix_pending_intervention_queue",
+                ["scenario_id", "branch_id", "id"],
+            )
+            _migrate_create_index(
+                conn,
+                "scenario_campaign_log",
+                "ix_scenario_campaign_log_director_profile_id_created_at",
+                ["director_profile_id", "created_at"],
+            )
+            _migrate_create_index(
+                conn,
+                "scenario_campaign_log",
+                "ix_scenario_campaign_log_daily_lookup",
+                [
+                    "director_profile_id",
+                    "profile_id",
+                    "completed_daily_challenge",
+                    "created_at",
+                ],
+            )
+            _migrate_create_index(conn, "replay_artifact", "ix_replay_artifact_owner_user_id", ["owner_user_id"])
+            _migrate_create_index(
+                conn,
+                "replay_artifact",
+                "ix_replay_artifact_source_scenario_id",
+                ["source_scenario_id"],
+            )
+            _migrate_create_index(conn, "debate", "ix_debate_user_id", ["user_id"])
+
+            _migrate_normalize_enum_values(conn, "ending_room", "room_type", EndingRoomType)
+            _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
+            _migrate_normalize_enum_values(conn, "ending_room", "phase", EndingRoomPhase)
+            _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)
+            _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)
+            _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)
+            _migrate_normalize_enum_values(
+                conn,
+                "ending_room_thread",
+                "interaction_mode",
+                EndingRoomInteractionMode,
+            )
+            _migrate_normalize_enum_values(conn, "ending_room_turn", "source", EndingRoomTurnSource)
+            _migrate_normalize_enum_values(
+                conn,
+                "ending_room_turn",
+                "interaction_mode",
+                EndingRoomInteractionMode,
+            )
+    except Exception as exc:
+        logger.warning("Schema migration failed (best-effort): %s", exc)
+
+
+def init_db():
+    """Apply Alembic migrations when available, otherwise fall back to lightweight sync."""
+    from app.config import settings
+
+    alembic_runtime = _load_alembic_runtime()
+    if alembic_runtime is None:
+        logger.info("Alembic runtime unavailable; using lightweight schema sync.")
+        _init_db_lightweight()
+        return
+
+    Config, command, _script_directory = alembic_runtime
+    backend_root = Path(__file__).resolve().parents[2]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "alembic"))
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    config.attributes["configure_logging"] = False
+
+    dispose_engine()
+    if _should_stamp_existing_ending_room_schema(settings.DATABASE_URL):
+        logger.info(
+            "Detected existing %s schema on %s; stamping database before upgrade.",
+            _ENDING_ROOM_REVISION,
+            settings.DATABASE_URL,
+        )
+        command.stamp(config, _ENDING_ROOM_REVISION)
+    command.upgrade(config, "head")
 
 
 def _sqlite_exec(handle: Any, statement: str):

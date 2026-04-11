@@ -15,7 +15,22 @@ from app.main import app
 from app.models import Debate, DebatePhase, DebateStatus
 from app.models.database import get_engine
 from app.services.debate import create_debate_record, run_debate_background
+from app.services.debate_argument_map import extract_argument_units
 from app.services.debate_scoring import DebatePlan, build_debate_plan
+
+
+def _make_signed_session_token(secret: str, subject: str) -> str:
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    payload = json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    payload_segment = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+    signing_input = f"v1.{payload_segment}".encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+    return f"v1.{payload_segment}.{signature_segment}"
 
 
 @pytest.fixture
@@ -51,6 +66,25 @@ def test_create_debate_returns_immediately_and_schedules_background(
     assert len(data["phase_insights"]) == 5
     assert data["phase_insights"][0]["commentary"]
     assert scheduled["count"] == 1
+
+
+def test_get_argument_map_returns_snapshot_when_enabled(client: TestClient, monkeypatch):
+    monkeypatch.setattr(debate_api.settings, "FEATURE_ARGUMENT_MAP", True)
+    debate = create_debate_record("如果审计庭拥有最终否决权，会更稳定吗？")
+    extract_argument_units(
+        debate.id,
+        "turn-1",
+        "研究表明审计程序能降低错误。然而流程也会变慢。",
+        "proposition",
+    )
+
+    resp = client.get(f"/api/debate/{debate.id}/argument-map")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["snapshot_id"] is not None
+    assert len(payload["nodes"]) == 2
+    assert len(payload["units"]) == 2
 
 
 @pytest.mark.asyncio
@@ -290,6 +324,25 @@ async def test_debate_websocket_disconnects_on_normal_close(monkeypatch):
 
     websocket.accept.assert_awaited_once()
     disconnect.assert_called_once_with(debate.id, websocket)
+
+
+def test_debate_websocket_route_accepts_real_connections(client: TestClient, monkeypatch):
+    monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "test-secret")
+    monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", "test-secret")
+
+    debate = create_debate_record(
+        "Should the real websocket route stay reachable?",
+        user_id="owner-a",
+    )
+
+    with client.websocket_connect(f"/ws/debate/{debate.id}") as websocket:
+        websocket.send_json(
+            {
+                "type": "auth",
+                "token": _make_signed_session_token("test-secret", "owner-a"),
+            }
+        )
+        assert websocket.receive_json()["type"] == "auth_ok"
 
 
 def test_import_replay_debate_persists_snapshot(client: TestClient):

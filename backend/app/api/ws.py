@@ -11,9 +11,10 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlmodel import Session
 
+from app.api.helpers import SessionPrincipal, authenticate_session_token
 from app.config import settings
 from app.models import Scenario
 from app.models.database import get_engine
@@ -171,12 +172,21 @@ async def _close_missing_resource(
     await websocket.close(code=4404, reason=f"{resource_name} not found")
 
 
+def _release_pending_auth(manager: WSManager, scenario_id: str) -> None:
+    remaining = manager._pending_auth.get(scenario_id, 0) - 1
+    if remaining <= 0:
+        manager._pending_auth.pop(scenario_id, None)
+        return
+    manager._pending_auth[scenario_id] = remaining
+
+
 async def run_websocket_session(
     manager: WSManager,
     scenario_id: str,
     websocket: WebSocket,
     *,
     exists_check: Callable[[str], Awaitable[bool]] | None = None,
+    authorize_principal: Callable[[str, SessionPrincipal], Awaitable[bool]] | None = None,
     missing_resource_name: str = "scenario",
     log_client_messages: bool = False,
 ) -> None:
@@ -189,8 +199,12 @@ async def run_websocket_session(
       4. Register in manager ONLY after auth succeeds
       5. Start heartbeat ONLY after registration
     """
-    # Pre-accept checks (resource existence + connection limit)
-    if exists_check is not None and not await exists_check(scenario_id):
+    auth_enabled = bool(settings.SESSION_SECRET)
+
+    # When auth is disabled, keep the cheaper pre-accept resource guard.
+    # When auth is enabled, defer resource checks until after first-frame auth
+    # so callers cannot probe resource existence before authenticating.
+    if not auth_enabled and exists_check is not None and not await exists_check(scenario_id):
         await _close_missing_resource(
             websocket,
             resource_name=missing_resource_name,
@@ -210,12 +224,15 @@ async def run_websocket_session(
     logger.info("WS accepted (pending): scenario=%s", scenario_id)
 
     # First-frame auth (when SESSION_SECRET is configured)
-    if settings.SESSION_SECRET:
+    if auth_enabled:
         auth_passed = False
         try:
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
             if len(raw.encode("utf-8")) > 65536:
-                logger.warning("WS auth frame too large (%d bytes), closing", len(raw.encode("utf-8")))
+                logger.warning(
+                    "WS auth frame too large (%d bytes), closing",
+                    len(raw.encode("utf-8")),
+                )
                 await websocket.close(code=1009, reason="Auth frame too large")
                 return
             frame = json.loads(raw)
@@ -223,10 +240,25 @@ async def run_websocket_session(
                 await websocket.close(code=4001, reason="Unauthorized")
                 return
             token = frame.get("token", "")
-            if frame.get("type") != "auth" or not token or token != settings.SESSION_SECRET:
+            if frame.get("type") != "auth":
                 await websocket.close(code=4001, reason="Unauthorized")
                 return
+            principal = authenticate_session_token(
+                token,
+                require_principal=authorize_principal is not None,
+            )
+            if authorize_principal is not None:
+                if principal is None or not await authorize_principal(scenario_id, principal):
+                    await _close_missing_resource(
+                        websocket,
+                        resource_name=missing_resource_name,
+                        resource_id=scenario_id,
+                    )
+                    return
             auth_passed = True
+        except HTTPException:
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
         except asyncio.TimeoutError:
             logger.info("WS auth timeout: scenario=%s", scenario_id)
             await websocket.close(code=4001, reason="Auth timeout")
@@ -239,29 +271,35 @@ async def run_websocket_session(
             return
         finally:
             if not auth_passed:
-                manager._pending_auth[scenario_id] -= 1
-                if manager._pending_auth[scenario_id] <= 0:
-                    manager._pending_auth.pop(scenario_id, None)
+                _release_pending_auth(manager, scenario_id)
+
+        try:
+            if exists_check is not None and not await exists_check(scenario_id):
+                _release_pending_auth(manager, scenario_id)
+                await _close_missing_resource(
+                    websocket,
+                    resource_name=missing_resource_name,
+                    resource_id=scenario_id,
+                )
+                return
+        except Exception:
+            _release_pending_auth(manager, scenario_id)
+            raise
+
         try:
             await websocket.send_text(json.dumps({"type": "auth_ok"}))
         except WebSocketDisconnect:
-            manager._pending_auth[scenario_id] -= 1
-            if manager._pending_auth[scenario_id] <= 0:
-                manager._pending_auth.pop(scenario_id, None)
+            _release_pending_auth(manager, scenario_id)
             return
         except Exception as exc:
             logger.warning("WS auth_ok send failed: scenario=%s error=%s", scenario_id, exc)
-            manager._pending_auth[scenario_id] -= 1
-            if manager._pending_auth[scenario_id] <= 0:
-                manager._pending_auth.pop(scenario_id, None)
+            _release_pending_auth(manager, scenario_id)
             with suppress(Exception):
                 await websocket.close(code=1011, reason="auth_ok delivery failed")
             return
 
     # Move from pending to registered
-    manager._pending_auth[scenario_id] = max(0, manager._pending_auth[scenario_id] - 1)
-    if manager._pending_auth[scenario_id] == 0:
-        manager._pending_auth.pop(scenario_id, None)
+    _release_pending_auth(manager, scenario_id)
     manager._connections[scenario_id].append(websocket)
     logger.info("WS registered: scenario=%s (total=%d)",
                 scenario_id, len(manager._connections[scenario_id]))

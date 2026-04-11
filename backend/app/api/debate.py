@@ -8,14 +8,20 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
-from app.api.helpers import schedule_background_task
-from app.config import settings
+from app.api.helpers import (
+    SessionPrincipal,
+    require_session_principal,
+    resolve_authenticated_user_id,
+    schedule_background_task,
+    verify_session,
+)
 from app.api.ws import WSManager, run_websocket_session
+from app.config import settings
 from app.models import (
     Debate,
     DebateCounterplay,
@@ -37,7 +43,8 @@ from app.services.debate import (
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.llm_client import validate_llm_base_url
 
-router = APIRouter(tags=["debate"])
+router = APIRouter(tags=["debate"], dependencies=[Depends(verify_session)])
+ws_router = APIRouter(tags=["debate"])
 debate_ws_manager = WSManager()
 DEBATE_START_DELAY_SECONDS = 1.0
 MAX_IMPORT_REPLAY_DEBATE_BYTES = 1_000_000
@@ -56,6 +63,37 @@ _PHASE_INSIGHT_DIRECTIONS = {"balanced", "proposition", "opposition"}
 _IMPORT_REPLAY_DEFAULT_WINNER = "proposition"
 _IMPORT_REPLAY_DEFAULT_VERDICT_TONE = "balance"
 
+def _load_owned_debate(
+    session: Session,
+    debate_id: str,
+    principal: SessionPrincipal | None,
+) -> Debate:
+    if principal is None:
+        debate = session.get(Debate, debate_id)
+        if debate is None:
+            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+        return debate
+    debate = session.exec(
+        select(Debate).where(
+            Debate.id == debate_id,
+            Debate.user_id == principal.subject,
+        )
+    ).first()
+    if debate is None:
+        raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+    return debate
+
+
+def _load_debate_argument_map_sync(
+    debate_id: str,
+    principal: SessionPrincipal | None,
+) -> dict[str, Any]:
+    engine = get_engine()
+    with Session(engine) as session:
+        _load_owned_debate(session, debate_id, principal)
+    from app.services.debate_argument_map import get_argument_map
+    return get_argument_map(debate_id)
+
 
 def _debate_exists_sync(debate_id: str) -> bool:
     engine = get_engine()
@@ -65,6 +103,32 @@ def _debate_exists_sync(debate_id: str) -> bool:
 
 async def _debate_exists(debate_id: str) -> bool:
     return await asyncio.to_thread(_debate_exists_sync, debate_id)
+
+
+def _debate_authorized_principal_sync(
+    debate_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    engine = get_engine()
+    with Session(engine) as session:
+        debate = session.exec(
+            select(Debate).where(
+                Debate.id == debate_id,
+                Debate.user_id == principal.subject,
+            )
+        ).first()
+    return debate is not None
+
+
+async def _debate_authorized_principal(
+    debate_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    return await asyncio.to_thread(
+        _debate_authorized_principal_sync,
+        debate_id,
+        principal,
+    )
 
 
 class CreateDebateRequest(BaseModel):
@@ -483,7 +547,10 @@ def _extract_replay_import_fingerprint(debate: Debate) -> str | None:
 
 
 @router.post("/api/debate")
-async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
+async def create_debate(
+    req: CreateDebateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
     # SSRF protection: validate BYOK base_url against allowlist
     if req.llm_base_url:
         validated_url = validate_llm_base_url(req.llm_base_url)
@@ -492,7 +559,12 @@ async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
         if not req.llm_api_key:
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
-    debate = create_debate_record(req.question, profile_hint=req.profile_hint)
+    effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
+    debate = create_debate_record(
+        req.question,
+        profile_hint=req.profile_hint,
+        user_id=effective_user_id,
+    )
     llm_overrides = None
     if (
         req.llm_api_key
@@ -517,7 +589,7 @@ async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
             debate.id,
             ws_callback=debate_ws_manager.broadcast,
             llm_overrides=llm_overrides,
-            quota_key=req.user_id,
+            quota_key=effective_user_id,
         )
 
     schedule_background_task(
@@ -530,8 +602,12 @@ async def create_debate(req: CreateDebateRequest) -> dict[str, Any]:
 
 
 @router.post("/api/debate/import-replay")
-async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]:
+async def import_replay_debate(
+    req: ImportReplayDebateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
     payload = req.debate if isinstance(req.debate, dict) else {}
+    effective_user_id = principal.subject if principal is not None else "anonymous"
     question = str(payload.get("question", "")).strip()
     motion = str(payload.get("motion", "")).strip()
     if not question or not motion:
@@ -601,6 +677,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
             select(Debate).where(
                 Debate.question == question,
                 Debate.motion == motion,
+                Debate.user_id == effective_user_id,
                 Debate.language == normalized_language,
                 Debate.profile_id == normalized_profile_id,
                 Debate.scene_theme == normalized_scene_theme,
@@ -621,6 +698,7 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
         debate = Debate(
             question=question,
             motion=motion,
+            user_id=effective_user_id,
             language=normalized_language,
             profile_id=normalized_profile_id,
             scene_theme=normalized_scene_theme,
@@ -726,7 +804,12 @@ async def import_replay_debate(req: ImportReplayDebateRequest) -> dict[str, Any]
 
 
 @router.get("/api/debate/{debate_id}")
-async def get_debate(debate_id: str) -> dict[str, Any]:
+async def get_debate(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        _load_owned_debate(session, debate_id, principal)
     payload = load_debate_snapshot(debate_id)
     if payload is None:
         raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
@@ -734,12 +817,13 @@ async def get_debate(debate_id: str) -> dict[str, Any]:
 
 
 @router.get("/api/debate/{debate_id}/result")
-async def get_debate_result(debate_id: str) -> dict[str, Any]:
+async def get_debate_result(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+        debate = _load_owned_debate(session, debate_id, principal)
         if debate.status == DebateStatus.ERROR:
             raise api_error(500, "DEBATE_RESULT_ERROR_STATE", "Debate ended with an error")
         if debate.status != DebateStatus.DONE:
@@ -751,24 +835,27 @@ async def get_debate_result(debate_id: str) -> dict[str, Any]:
 
 
 @router.get("/api/debate/{debate_id}/argument-map")
-async def get_debate_argument_map(debate_id: str) -> dict[str, Any]:
+async def get_debate_argument_map(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
     """Return the argument map for a debate (Phase 3 F6)."""
     if not settings.FEATURE_ARGUMENT_MAP:
         raise api_error(404, "FEATURE_DISABLED", "Argument map feature is not enabled")
-    engine = get_engine()
-    with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
     try:
-        from app.services.debate_argument_map import get_argument_map
-        return get_argument_map(debate_id)
+        return await asyncio.to_thread(_load_debate_argument_map_sync, debate_id, principal)
+    except HTTPException:
+        raise
     except Exception:
         return {"snapshot_id": None, "nodes": [], "edges": [], "units": []}
 
 
 @router.post("/api/debate/{debate_id}/predict")
-async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[str, Any]:
+async def predict_debate(
+    debate_id: str,
+    req: DebatePredictionRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
     allowed = _PREDICTION_OPTIONS[req.kind]
     if req.target_value not in allowed:
         raise api_error(
@@ -779,20 +866,22 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
 
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+        debate = _load_owned_debate(session, debate_id, principal)
         if debate.status != DebateStatus.LIVE:
             raise api_error(400, "DEBATE_PREDICTIONS_CLOSED", "Debate is not accepting predictions")
         if debate.current_phase in {DebatePhase.CLOSING, DebatePhase.VERDICT}:
             raise api_error(400, "DEBATE_PREDICTIONS_LOCKED", "Predictions lock once closing arguments begin")  # noqa: E501
 
+        effective_user_id = (
+            resolve_authenticated_user_id(req.user_id or None, principal)
+            or "anonymous"
+        )
         prediction = DebatePrediction(
             debate_id=debate_id,
             kind=req.kind,
             target_value=req.target_value,
             confidence=req.confidence,
-            user_id=req.user_id or "anonymous",
+            user_id=effective_user_id,
             user_name=req.user_name,
             is_counterplay=req.is_counterplay,
             counterplay_phase=req.counterplay_phase,
@@ -810,7 +899,7 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
                 confidence=req.confidence,
                 phase=req.counterplay_phase,
                 variant=req.counterplay_variant,
-                user_id=req.user_id or "anonymous",
+                user_id=effective_user_id,
                 user_name=req.user_name,
             )
             session.add(counterplay)
@@ -862,12 +951,13 @@ async def predict_debate(debate_id: str, req: DebatePredictionRequest) -> dict[s
         return payload
 
 
-@router.websocket("/ws/debate/{debate_id}")
+@ws_router.websocket("/ws/debate/{debate_id}")
 async def debate_websocket_endpoint(websocket: WebSocket, debate_id: str) -> None:
     await run_websocket_session(
         debate_ws_manager,
         debate_id,
         websocket,
         exists_check=_debate_exists,
+        authorize_principal=_debate_authorized_principal,
         missing_resource_name="debate",
     )

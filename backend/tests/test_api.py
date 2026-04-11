@@ -410,11 +410,13 @@ class TestByokValidation:
 
 class TestReplayArtifactEndpoints:
     def test_create_replay_artifact_returns_structured_payload_too_large_error(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
         resp = client.post(
             "/api/replay-artifact",
             json={
                 "kind": "scenario_result_v1",
                 "payload": {
+                    "scenario": {"id": scenario_id},
                     "blob": "x" * 2_100_000,
                 },
             },
@@ -1091,10 +1093,10 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 404
 
     def test_get_branches_empty(self, client):
-        """Branches for nonexistent scenario should return empty list."""
+        """Branches for nonexistent scenario should return structured not found."""
         resp = client.get("/api/scenario/nonexistent-id/branches")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
 
 class TestPredictionLeaderboardEndpoints:

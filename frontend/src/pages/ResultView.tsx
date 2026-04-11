@@ -7,6 +7,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   createReplayArtifact,
+  exportScenario,
   finalizeCampaign,
   getAgents,
   getCampaignBadges,
@@ -613,12 +614,16 @@ export default function ResultView() {
     setExportError('');
     try {
       const filename = `swarmoracle-${id.slice(0, 8)}.md`;
+      const markdown = await exportScenario(id);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = `/api/scenario/${id}/export`;
+      a.href = objectUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Export failed');
     } finally {
@@ -920,19 +925,30 @@ export default function ResultView() {
     () => (scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta) : []),
     [scenarioMeta],
   );
+  const hasAuthoritativeBranchSnapshots = useMemo(() => {
+    const archive = scenario?.gameplay_state?.archive;
+    return typeof archive === 'object'
+      && archive !== null
+      && Object.prototype.hasOwnProperty.call(archive, 'branch_snapshots');
+  }, [scenario?.gameplay_state]);
   const displayBranchSnapshots = useMemo(() => {
+    const archiveSnapshots = scenarioMeta?.archive.branchSnapshots ?? [];
     const storySnapshots = storyData?.branches.map((branch) => ({
       branchId: branch.id,
       title: branch.title,
       probability: branch.probability,
     })) ?? [];
 
+    if (hasAuthoritativeBranchSnapshots) {
+      return archiveSnapshots;
+    }
+
     if (storySnapshots.length > 0) {
       return storySnapshots;
     }
 
-    return scenarioMeta?.archive.branchSnapshots ?? [];
-  }, [scenarioMeta?.archive.branchSnapshots, storyData?.branches]);
+    return archiveSnapshots;
+  }, [hasAuthoritativeBranchSnapshots, scenarioMeta?.archive.branchSnapshots, storyData?.branches]);
   const localCommitmentOutcome = !scenarioMeta?.commitment.active
     ? null
     : dominantBranchFromStory?.id

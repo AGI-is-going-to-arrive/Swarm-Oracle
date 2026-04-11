@@ -9,22 +9,23 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+# Phase 3: new API routers
+from app.api.agents import router as agents_router
 from app.api.campaign import router as campaign_router
 from app.api.debate import router as debate_router
+from app.api.debate import ws_router as debate_ws_router
 from app.api.ending_rooms import (
     router as ending_rooms_router,
 )
 from app.api.ending_rooms import (
     ws_router as ending_rooms_ws_router,
 )
+from app.api.graphs import router as graphs_router
 from app.api.interventions import router as interventions_router
 from app.api.predictions import router as predictions_router
 from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
 from app.api.ws import router as ws_router
-# Phase 3: new API routers
-from app.api.agents import router as agents_router
-from app.api.graphs import router as graphs_router
 from app.config import settings
 from app.logging_utils import configure_logging
 from app.models import init_db
@@ -99,6 +100,7 @@ app.include_router(interventions_router)
 app.include_router(social_router)
 app.include_router(campaign_router)
 app.include_router(debate_router)
+app.include_router(debate_ws_router)
 app.include_router(ending_rooms_router)
 app.include_router(ending_rooms_ws_router)
 app.include_router(predictions_router)

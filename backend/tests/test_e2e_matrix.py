@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 import time
 from dataclasses import dataclass, field
 
@@ -35,6 +34,8 @@ from app.services.memory import (
 
 LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 8
+RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+REQUEST_RETRY_ATTEMPTS = 3
 
 SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。"
 TOPIC = "如果诸葛亮北伐成功占领长安，三国格局将如何改变？"
@@ -130,21 +131,30 @@ async def _call_llm(
     async with semaphore:
         start = time.perf_counter()
         async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                LLM_API_URL,
-                json={
-                    "model": settings.LLM_MODEL_NAME,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "reasoning_effort": "low",
-                },
-                headers={
-                    "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
+            resp = None
+            for attempt in range(REQUEST_RETRY_ATTEMPTS):
+                resp = await client.post(
+                    LLM_API_URL,
+                    json={
+                        "model": settings.LLM_MODEL_NAME,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "reasoning_effort": "low",
+                    },
+                    headers={
+                        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                if (
+                    resp.status_code not in RETRIABLE_STATUS_CODES
+                    or attempt + 1 >= REQUEST_RETRY_ATTEMPTS
+                ):
+                    resp.raise_for_status()
+                    break
+                await asyncio.sleep(0.5 * (attempt + 1))
         m.latency_ms = (time.perf_counter() - start) * 1000
 
+    assert resp is not None
     data = resp.json()
     usage = data.get("usage", {})
     m.prompt_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
@@ -253,26 +263,39 @@ class TestE2EMatrix:
     @pytest.fixture(autouse=True)
     def check_api(self):
         try:
-            r = subprocess.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                 "--connect-timeout", "5", "-m", "10", LLM_API_URL],
-                capture_output=True, text=True, timeout=15,
-            )
-            if r.stdout.strip() == "000":
-                pytest.skip("LLM API not reachable")
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(
+                    LLM_API_URL,
+                    json={
+                        "model": settings.LLM_MODEL_NAME,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 1,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            if response.status_code >= 500:
+                pytest.skip(f"LLM API unhealthy: HTTP {response.status_code}")
         except Exception as e:
             pytest.skip(f"API check failed: {e}")
 
     @pytest.mark.asyncio
     async def test_full_matrix(self):
         """Run all matrix configs with real API calls."""
-        sem = asyncio.Semaphore(CONCURRENCY)
+        effective_concurrency = (
+            min(CONCURRENCY, settings.LLM_CONCURRENCY)
+            if settings.LLM_CONCURRENCY > 0
+            else CONCURRENCY
+        )
+        sem = asyncio.Semaphore(max(1, effective_concurrency))
         all_results: list[tuple[ConfigResult, ConfigResult]] = []
 
         total_calls = sum(a * r * 2 for a, r in MATRIX_CONFIGS)
         print(f"\n{'=' * 90}")
         print(f"  E2E TEST MATRIX — {len(MATRIX_CONFIGS)} configs, "
-              f"~{total_calls} API calls, concurrency={CONCURRENCY}")
+              f"~{total_calls} API calls, concurrency={max(1, effective_concurrency)}")
         print(f"{'=' * 90}")
 
         for ac, rc in MATRIX_CONFIGS:

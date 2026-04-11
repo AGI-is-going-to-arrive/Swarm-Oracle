@@ -66,15 +66,23 @@ describe('api client request parsing', () => {
   });
 
   it('keeps plain-text export requests working', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    localStorage.setItem('swarmoracle_session_token', 'signed-token');
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       headers: {
         get: () => 'text/markdown; charset=utf-8',
       },
       text: vi.fn().mockResolvedValue('# export'),
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(exportScenario('scenario-1')).resolves.toBe('# export');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scenario/scenario-1/export',
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      }),
+    );
   });
 
   it('retries transient GET failures for safe read endpoints', async () => {
