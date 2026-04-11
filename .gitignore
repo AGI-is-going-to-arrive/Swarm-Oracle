@@ -28,6 +28,11 @@ frontend/.tmp-playwright/
 .tmp/
 .tmp-playwright/
 .playwright-cli/
+/.playwright-mcp/
+/e2e-screenshots/
+/pytest-of-yangjunjie/
+/node-compile-cache/
+/node_modules/
 /video/
 /output/
 /*.png
@@ -38,6 +43,11 @@ frontend/.tmp-playwright/
 /后续开发命令.md
 frontend/.tmp-web-game-client*.mjs
 backend/swarmoracle.db.bak-*
+backend/chroma_data_e2e_*/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/swarm_backup*.db
 
 # Frontend test outputs: keep only the checked-in sample matrix
 frontend/output/*
@@ -50,3 +60,8 @@ frontend/output/e2e/*
 /LobeHub 多模型群聊协作 + Agent文件编辑 简单使用 - 搞七捻三 - LINUX DO_files/
 /swarm_oracle_consolidated_audit.md
 /后续考虑的改进方案.md
+/AUDIT_REPORT_*.md
+/COMPREHENSIVE_AUDIT_*.md
+/FIX_REPORT_*.md
+/backend/CODE_REVIEW_REPORT.md
+/frontend/CODE_REVIEW_REPORT.md
