@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
@@ -22,10 +22,15 @@ from sqlmodel import Session, select
 
 from app.api.errors import api_error
 from app.api.helpers import (
+    SessionPrincipal,
     load_scenario_response,
     parse_and_run_background,
     parse_key_moments,
+    require_owned_scenario,
+    require_session_principal,
+    resolve_authenticated_user_id,
     schedule_background_task,
+    verify_session,
 )
 from app.api.schemas import (
     CreateScenarioRequest,
@@ -58,12 +63,16 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.campaign import remove_scenario_campaign_artifacts
-from app.services.llm_client import health_check, measure_provider_parallelism, validate_llm_base_url
+from app.services.llm_client import (
+    health_check,
+    measure_provider_parallelism,
+    validate_llm_base_url,
+)
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
 _CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 MAX_IMPORT_REPLAY_SCENARIO_BYTES = 1_000_000
 MAX_IMPORT_REPLAY_SCENARIO_GROUPS = 128
@@ -103,6 +112,30 @@ class CreateReplayArtifactRequest(BaseModel):
         if len(normalized) > 64:
             raise ValueError("kind too long (max 64 chars)")
         return normalized
+
+
+def _extract_string_path(payload: dict[str, Any], *path: str) -> str | None:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if not isinstance(current, str):
+        return None
+    normalized = current.strip()
+    return normalized or None
+
+
+def _resolve_replay_artifact_source_scenario_id(kind: str, payload: dict[str, Any]) -> str | None:
+    if kind in {"scenario_result_v1", "simulation_view_v1"}:
+        return _extract_string_path(payload, "scenario", "id")
+    if kind in {"ending_room_v1", "worldline_roundtable_v1"}:
+        return (
+            _extract_string_path(payload, "scenarioId")
+            or _extract_string_path(payload, "scenarioReplay", "scenario", "id")
+            or _extract_string_path(payload, "roomSnapshot", "scenario_id")
+        )
+    return None
 
 
 def _placeholder_root_title(question: str) -> str:
@@ -352,14 +385,28 @@ def _build_web_search_server_hint() -> dict:
         return {**info, "method": "native", "provider": "native"}
     if provider in _PROVIDER_MAP:
         has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
-        return {"scope": "server", "server_enabled": has_key, "method": "external", "provider": provider}
+        return {
+            "scope": "server",
+            "server_enabled": has_key,
+            "method": "external",
+            "provider": provider,
+        }
     # Configured but not yet implemented (exa, brave, etc.)
     return {**info, "method": "external", "provider": provider}
 
 
-def _capability_entry(enabled: bool = False, version: str = "0.0",
-                      server_only: bool = False, degraded_mode: str | None = None) -> dict:
-    return {"enabled": enabled, "version": version, "server_only": server_only, "degraded_mode": degraded_mode}
+def _capability_entry(
+    enabled: bool = False,
+    version: str = "0.0",
+    server_only: bool = False,
+    degraded_mode: str | None = None,
+) -> dict:
+    return {
+        "enabled": enabled,
+        "version": version,
+        "server_only": server_only,
+        "degraded_mode": degraded_mode,
+    }
 
 
 @router.get("/capabilities")
@@ -372,13 +419,42 @@ async def api_capabilities():
     """
     ws_hint = _build_web_search_server_hint()
     return {
-        "web_search": {**_capability_entry(enabled=ws_hint.get("server_enabled", False), version="1.0"), **ws_hint},
-        "custom_agents": _capability_entry(enabled=settings.FEATURE_CUSTOM_AGENTS, version="1.0" if settings.FEATURE_CUSTOM_AGENTS else "0.0"),
-        "agent_identity": _capability_entry(enabled=settings.FEATURE_AGENT_IDENTITY, version="1.0" if settings.FEATURE_AGENT_IDENTITY else "0.0"),
-        "causal_graph": _capability_entry(enabled=settings.FEATURE_CAUSAL_GRAPH, version="1.0" if settings.FEATURE_CAUSAL_GRAPH else "0.0"),
-        "counterfactual_replay": _capability_entry(enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY, version="1.0" if settings.FEATURE_COUNTERFACTUAL_REPLAY else "0.0"),
-        "factions": _capability_entry(enabled=settings.FEATURE_FACTIONS, version="1.0" if settings.FEATURE_FACTIONS else "0.0"),
-        "argument_map": _capability_entry(enabled=settings.FEATURE_ARGUMENT_MAP, version="1.0" if settings.FEATURE_ARGUMENT_MAP else "0.0", degraded_mode="rule_based_only"),
+        "web_search": {
+            **_capability_entry(
+                enabled=ws_hint.get("server_enabled", False),
+                version="1.0",
+            ),
+            **ws_hint,
+        },
+        "custom_agents": _capability_entry(
+            enabled=settings.FEATURE_CUSTOM_AGENTS,
+            version="1.0" if settings.FEATURE_CUSTOM_AGENTS else "0.0",
+        ),
+        "agent_identity": _capability_entry(
+            enabled=settings.FEATURE_AGENT_IDENTITY,
+            version="1.0" if settings.FEATURE_AGENT_IDENTITY else "0.0",
+        ),
+        "causal_graph": _capability_entry(
+            enabled=settings.FEATURE_CAUSAL_GRAPH,
+            version="1.0" if settings.FEATURE_CAUSAL_GRAPH else "0.0",
+        ),
+        "counterfactual_replay": _capability_entry(
+            enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY,
+            version=(
+                "1.0"
+                if settings.FEATURE_COUNTERFACTUAL_REPLAY
+                else "0.0"
+            ),
+        ),
+        "factions": _capability_entry(
+            enabled=settings.FEATURE_FACTIONS,
+            version="1.0" if settings.FEATURE_FACTIONS else "0.0",
+        ),
+        "argument_map": _capability_entry(
+            enabled=settings.FEATURE_ARGUMENT_MAP,
+            version="1.0" if settings.FEATURE_ARGUMENT_MAP else "0.0",
+            degraded_mode="rule_based_only",
+        ),
     }
 
 
@@ -412,14 +488,22 @@ async def api_health_test(req: TestLlmRequest):
             requests_per_minute=req.llm_requests_per_minute,
             tokens_per_minute=req.llm_tokens_per_minute,
         )
-    return {"server": "ok", "llm": llm_status, "probe": probe, "web_search": _build_web_search_server_hint()}
+    return {
+        "server": "ok",
+        "llm": llm_status,
+        "probe": probe,
+        "web_search": _build_web_search_server_hint(),
+    }
 
 
 # ── Scenario CRUD ────────────────────────────────────────
 
 
 @router.post("/scenario", response_model=ScenarioResponse)
-async def create_scenario(req: CreateScenarioRequest):
+async def create_scenario(
+    req: CreateScenarioRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Create a new scenario and offload parsing to a background task."""
     if not req.question.strip():
         raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
@@ -433,21 +517,22 @@ async def create_scenario(req: CreateScenarioRequest):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 
-    if req.continuity_overrides and not req.user_id:
+    effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    if req.continuity_overrides and not effective_user_id:
         raise api_error(
             400,
             "CONTINUITY_OVERRIDE_USER_REQUIRED",
             "user_id is required when continuity_overrides are provided",
         )
 
-    if req.continuity_overrides and req.user_id:
+    if req.continuity_overrides and effective_user_id:
         from app.models.agent_identity import AgentIdentity
         with Session(get_engine()) as session:
             for override in req.continuity_overrides:
                 if override.action != "reuse_existing" or not override.identity_id:
                     continue
                 identity = session.get(AgentIdentity, override.identity_id)
-                if identity is None or identity.user_id != req.user_id:
+                if identity is None or identity.user_id != effective_user_id:
                     raise api_error(
                         400,
                         "CONTINUITY_OVERRIDE_IDENTITY_INVALID",
@@ -485,7 +570,7 @@ async def create_scenario(req: CreateScenarioRequest):
         status=ScenarioStatus.SIMULATING,
         visualization_enabled=viz_enabled,
         scene_theme=initial_scene_theme,
-        user_id=req.user_id or None,
+        user_id=effective_user_id or None,
         parsed_context={
             "mode": mode,
             "hierarchical": use_hierarchical,
@@ -536,7 +621,7 @@ async def create_scenario(req: CreateScenarioRequest):
             branch_sensitivity=req.branch_sensitivity,
             fork_prompt_variant=req.fork_prompt_variant,
             fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
-            user_id=req.user_id,
+            user_id=effective_user_id,
             llm_api_key=req.llm_api_key,
             llm_base_url=req.llm_base_url,
             llm_model=req.llm_model,
@@ -563,7 +648,10 @@ async def create_scenario(req: CreateScenarioRequest):
 
 
 @router.post("/scenario/import-replay", response_model=ScenarioResponse)
-async def import_replay_scenario(req: ImportReplayScenarioRequest):
+async def import_replay_scenario(
+    req: ImportReplayScenarioRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Persist a replay snapshot as a real local scenario run."""
     snapshot = req.scenario if isinstance(req.scenario, dict) else {}
     question = str(snapshot.get("question", "")).strip()
@@ -594,6 +682,11 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
                 "simulation_rounds": max_round,
             }
 
+    effective_user_id = resolve_authenticated_user_id(
+        str(snapshot.get("user_id", "")).strip() or None,
+        principal,
+    )
+
     with Session(engine) as session:
         scenario = Scenario(
             question=question,
@@ -601,7 +694,7 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
             director_state_json=snapshot.get("director_state") if isinstance(snapshot.get("director_state"), dict) else None,  # noqa: E501
             gameplay_state_json=snapshot.get("gameplay_state") if isinstance(snapshot.get("gameplay_state"), dict) else None,  # noqa: E501
             status=_coerce_scenario_status(snapshot.get("status")),
-            user_id=str(snapshot.get("user_id", "")).strip() or None,
+            user_id=effective_user_id,
             visualization_enabled=bool(snapshot.get("visualization_enabled")),
             scene_theme=str(snapshot.get("scene_theme", "")).strip() or None,
         )
@@ -750,7 +843,10 @@ async def import_replay_scenario(req: ImportReplayScenarioRequest):
 
 
 @router.post("/replay-artifact")
-async def create_replay_artifact(req: CreateReplayArtifactRequest):
+async def create_replay_artifact(
+    req: CreateReplayArtifactRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     kind = req.kind.strip()
     if not kind:
         raise api_error(422, "REPLAY_ARTIFACT_KIND_REQUIRED", "Replay artifact kind is required")
@@ -768,10 +864,21 @@ async def create_replay_artifact(req: CreateReplayArtifactRequest):
     if payload_size > MAX_REPLAY_ARTIFACT_BYTES:
         raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")  # noqa: E501
 
+    source_scenario_id = _resolve_replay_artifact_source_scenario_id(kind, req.payload)
+    if not source_scenario_id:
+        raise api_error(
+            422,
+            "REPLAY_ARTIFACT_SOURCE_SCENARIO_REQUIRED",
+            "Replay artifact payload must reference a source scenario",
+        )
+
     engine = get_engine()
     with Session(engine) as session:
+        scenario = require_owned_scenario(session, source_scenario_id, principal)
         artifact = ReplayArtifact(
             kind=kind,
+            owner_user_id=scenario.user_id,
+            source_scenario_id=scenario.id,
             payload_json=req.payload,
         )
         session.add(artifact)
@@ -800,9 +907,14 @@ async def get_replay_artifact(artifact_id: str):
 
 
 @router.get("/scenario/{scenario_id}", response_model=ScenarioResponse)
-async def get_scenario(scenario_id: str):
+async def get_scenario(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Get scenario status, agents, and branches."""
     engine = get_engine()
+    with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
     result = load_scenario_response(engine, scenario_id)
     if not result:
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
@@ -810,10 +922,14 @@ async def get_scenario(scenario_id: str):
 
 
 @router.get("/scenario/{scenario_id}/branches")
-async def get_branches(scenario_id: str):
+async def get_branches(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Get the branch tree for a scenario."""
     engine = get_engine()
     with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
         branches = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
         return [
             {
@@ -835,13 +951,14 @@ async def get_branches(scenario_id: str):
 
 
 @router.get("/scenario/{scenario_id}/story")
-async def get_story(scenario_id: str):
+async def get_story(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Get narrated stories for all completed branches."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
 
         branches = session.exec(
             select(Branch).where(
@@ -889,13 +1006,14 @@ async def get_story(scenario_id: str):
 
 
 @router.get("/scenario/{scenario_id}/agents")
-async def get_agents(scenario_id: str):
+async def get_agents(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Get all agents for a scenario."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        require_owned_scenario(session, scenario_id, principal)
 
         agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
 
@@ -922,13 +1040,14 @@ async def get_agents(scenario_id: str):
 
 
 @router.get("/scenario/{scenario_id}/groups")
-async def get_groups(scenario_id: str):
+async def get_groups(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """P3-A: Get all agent groups for a scenario."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        require_owned_scenario(session, scenario_id, principal)
 
         groups = session.exec(select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)).all()
         if not groups:
@@ -988,6 +1107,7 @@ async def list_scenarios(
     status: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """P4-A: List scenarios with optional status filtering and pagination.
 
@@ -1016,6 +1136,8 @@ async def list_scenarios(
             .outerjoin(agent_count_sub, Scenario.id == agent_count_sub.c.scenario_id)
             .order_by(Scenario.created_at.desc())
         )
+        if principal is not None:
+            query = query.where(Scenario.user_id == principal.subject)
 
         if status is not None:
             try:
@@ -1032,6 +1154,8 @@ async def list_scenarios(
 
         # Get total count for pagination
         count_query = select(sa_func.count()).select_from(Scenario)
+        if principal is not None:
+            count_query = count_query.where(Scenario.user_id == principal.subject)
         if status is not None:
             count_query = count_query.where(Scenario.status == ScenarioStatus(status))
         total = session.exec(count_query).one()
@@ -1054,16 +1178,17 @@ async def list_scenarios(
 
 
 @router.delete("/scenario/{scenario_id}")
-async def delete_scenario(scenario_id: str):
+async def delete_scenario(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """P4-A: Hard delete a scenario and all related data (cascade).
 
     P2-7 fix: Uses batch SQL DELETE instead of row-by-row Python loops.
     """
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
 
         # M-7 fix: Allow deleting PARSING/ERROR/DONE scenarios
         if scenario.status not in (ScenarioStatus.DONE, ScenarioStatus.ERROR, ScenarioStatus.PARSING):  # noqa: E501

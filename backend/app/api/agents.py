@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
+from app.api.errors import api_error
+from app.api.helpers import (
+    SessionPrincipal,
+    require_session_principal,
+    resolve_authenticated_user_id,
+    verify_session,
+)
 from app.api.schemas import CreateScenarioRequest
 from app.config import settings
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
@@ -29,7 +36,11 @@ from app.services.persona_workshop import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/agents", tags=["agents"])
+router = APIRouter(
+    prefix="/api/agents",
+    tags=["agents"],
+    dependencies=[Depends(verify_session)],
+)
 
 
 # ── Request schemas ─────────────────────────────────────
@@ -156,28 +167,33 @@ class UpdateAgentRequest(BaseModel):
 
 
 @router.get("/identities")
-async def list_identities(user_id: str | None = None):
+async def list_identities(
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """List agent identities (custom + generated) for a user."""
     if not settings.FEATURE_CUSTOM_AGENTS and not settings.FEATURE_AGENT_IDENTITY:
-        return JSONResponse(status_code=404, content={"detail": "Agent features not enabled"})
-    if not user_id:
+        raise api_error(404, "FEATURE_DISABLED", "Agent features are not enabled")
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
         return JSONResponse(
             status_code=400,
             content={"detail": "user_id query parameter is required"},
         )
-    agents = list_all_agents(user_id)
+    agents = list_all_agents(effective_user_id)
     return agents
 
 
 @router.post("/identities/preflight")
-async def preflight_identity_continuity(req: CreateScenarioRequest):
+async def preflight_identity_continuity(
+    req: CreateScenarioRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Preview identity continuity matches before scenario creation."""
     if not settings.FEATURE_AGENT_IDENTITY:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Agent identity feature not enabled"},
-        )
-    if not req.user_id:
+        raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
+    effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    if not effective_user_id:
         return JSONResponse(
             status_code=400,
             content={"detail": "user_id is required"},
@@ -210,7 +226,7 @@ async def preflight_identity_continuity(req: CreateScenarioRequest):
     quota_key = (
         None
         if (req.disable_user_quota and local_provider)
-        else f"user:{req.user_id}"
+        else f"user:{effective_user_id}"
     )
 
     with llm_request_scope(
@@ -237,7 +253,7 @@ async def preflight_identity_continuity(req: CreateScenarioRequest):
     new_identity_count = 0
     for agent in parsed.get("agents", []):
         preview = preview_identity_match(
-            req.user_id,
+            effective_user_id,
             agent.get("name", ""),
             agent.get("role", ""),
             agent.get("persona"),
@@ -265,14 +281,13 @@ async def preflight_identity_continuity(req: CreateScenarioRequest):
 async def get_identity_memory(
     identity_id: str,
     user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Get cross-scenario memory for an agent identity (B2)."""
     if not settings.FEATURE_AGENT_IDENTITY:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Agent identity feature not enabled"},
-        )
-    if not user_id:
+        raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
         return JSONResponse(
             status_code=400,
             content={"detail": "user_id query parameter is required"},
@@ -280,7 +295,7 @@ async def get_identity_memory(
     try:
         with Session(get_engine()) as session:
             identity = session.get(AgentIdentity, identity_id)
-            if not identity or identity.user_id != user_id:
+            if not identity or identity.user_id != effective_user_id:
                 return JSONResponse(
                     status_code=404,
                     content={"detail": "Identity not found"},
@@ -300,14 +315,13 @@ async def get_identity_memory(
 async def get_identity_growth_events(
     identity_id: str,
     user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Get growth events for an agent identity across scenarios."""
     if not settings.FEATURE_AGENT_IDENTITY:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Agent identity feature not enabled"},
-        )
-    if not user_id:
+        raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
         return JSONResponse(
             status_code=400,
             content={"detail": "user_id query parameter is required"},
@@ -316,7 +330,7 @@ async def get_identity_growth_events(
         with Session(get_engine()) as session:
             # Verify identity belongs to the requesting user
             identity = session.get(AgentIdentity, identity_id)
-            if not identity or identity.user_id != user_id:
+            if not identity or identity.user_id != effective_user_id:
                 return JSONResponse(
                     status_code=404,
                     content={"detail": "Identity not found"},
@@ -360,13 +374,17 @@ async def get_identity_growth_events(
 
 
 @router.post("/workshop", status_code=201)
-async def create_workshop_agent(body: CreateAgentRequest):
+async def create_workshop_agent(
+    body: CreateAgentRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Create a custom agent identity via the Persona Workshop."""
     if not settings.FEATURE_CUSTOM_AGENTS:
-        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
+        raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
+    effective_user_id = resolve_authenticated_user_id(body.user_id, principal)
     try:
         identity_id = create_custom_agent(
-            user_id=body.user_id,
+            user_id=effective_user_id,
             display_name=body.display_name,
             role=body.role,
             persona=body.persona,
@@ -379,16 +397,31 @@ async def create_workshop_agent(body: CreateAgentRequest):
 
 
 @router.put("/workshop/{identity_id}")
-async def update_workshop_agent(identity_id: str, body: UpdateAgentRequest):
+async def update_workshop_agent(
+    identity_id: str,
+    body: UpdateAgentRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Update fields on an existing custom agent identity."""
     if not settings.FEATURE_CUSTOM_AGENTS:
-        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
+        raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
     kwargs = body.model_dump(exclude_unset=True)
     if not kwargs:
         return JSONResponse(
             status_code=400,
             content={"detail": "No fields to update"},
         )
+    if principal is not None:
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            if identity is None:
+                return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+            if identity.user_id != principal.subject:
+                raise api_error(
+                    403,
+                    "SESSION_PRINCIPAL_MISMATCH",
+                    "Authenticated principal does not own this agent identity",
+                )
     try:
         update_custom_agent(identity_id, **kwargs)
     except LookupError:
@@ -399,10 +432,24 @@ async def update_workshop_agent(identity_id: str, body: UpdateAgentRequest):
 
 
 @router.delete("/workshop/{identity_id}", status_code=204)
-async def delete_workshop_agent(identity_id: str):
+async def delete_workshop_agent(
+    identity_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Delete a custom agent identity."""
     if not settings.FEATURE_CUSTOM_AGENTS:
-        return JSONResponse(status_code=404, content={"detail": "Custom agents feature not enabled"})
+        raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
+    if principal is not None:
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            if identity is None:
+                return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+            if identity.user_id != principal.subject:
+                raise api_error(
+                    403,
+                    "SESSION_PRINCIPAL_MISMATCH",
+                    "Authenticated principal does not own this agent identity",
+                )
     try:
         delete_custom_agent(identity_id)
     except LookupError:

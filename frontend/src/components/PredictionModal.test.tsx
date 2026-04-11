@@ -13,6 +13,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   submitPrediction: vi.fn(),
+  getSessionPrincipalSubject: vi.fn(() => null),
 }));
 
 describe('PredictionModal automation callback', () => {

@@ -5,12 +5,20 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from app.api.helpers import run_sim_background, schedule_background_task
+from app.api.errors import api_error
+from app.api.helpers import (
+    SessionPrincipal,
+    require_owned_scenario,
+    require_session_principal,
+    run_sim_background,
+    schedule_background_task,
+    verify_session,
+)
 from app.api.schemas import ResumeRequest
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
@@ -23,8 +31,10 @@ from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_ke
 logger = logging.getLogger(__name__)
 
 def _feature_disabled(name: str):
-    return JSONResponse(status_code=404, content={"detail": f"Feature '{name}' is not enabled"})
-router = APIRouter(prefix="/api", tags=["graphs"])
+    return api_error(404, "FEATURE_DISABLED", f"Feature '{name}' is not enabled")
+
+
+router = APIRouter(prefix="/api", tags=["graphs"], dependencies=[Depends(verify_session)])
 
 
 class CounterfactualRequest(BaseModel):
@@ -38,40 +48,29 @@ class CounterfactualRequest(BaseModel):
 async def get_causal_graph(
     scenario_id: str,
     branch_id: Optional[str] = Query(default=None),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Return the causal graph for a scenario."""
     if not settings.FEATURE_CAUSAL_GRAPH:
-        return _feature_disabled("causal_graph")
-    # Verify scenario exists
+        raise _feature_disabled("causal_graph")
     with Session(get_engine()) as session:
-        scenario = session.exec(
-            select(Scenario).where(Scenario.id == scenario_id)
-        ).first()
-        if scenario is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Scenario {scenario_id} not found"},
-            )
+        require_owned_scenario(session, scenario_id, principal)
 
     graph = build_snapshot(scenario_id, branch_id=branch_id)
     return graph
 
 
 @router.post("/scenario/{scenario_id}/counterfactual")
-async def create_counterfactual(scenario_id: str, body: CounterfactualRequest):
+async def create_counterfactual(
+    scenario_id: str,
+    body: CounterfactualRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Create a counterfactual branch by cloning + seeding a replacement."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
-        return _feature_disabled("counterfactual_replay")
+        raise _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
-        # Validate scenario exists
-        scenario = session.exec(
-            select(Scenario).where(Scenario.id == scenario_id)
-        ).first()
-        if scenario is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Scenario {scenario_id} not found"},
-            )
+        require_owned_scenario(session, scenario_id, principal)
 
         # Validate source branch exists and belongs to this scenario
         branch = session.exec(
@@ -129,19 +128,13 @@ async def compare_branches_endpoint(
     scenario_id: str,
     branch_a: str = Query(...),
     branch_b: str = Query(...),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Compare two branches and return per-round diff."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
-        return _feature_disabled("counterfactual_replay")
+        raise _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
-        scenario = session.exec(
-            select(Scenario).where(Scenario.id == scenario_id)
-        ).first()
-        if scenario is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Scenario {scenario_id} not found"},
-            )
+        require_owned_scenario(session, scenario_id, principal)
 
     result = compare_branches(scenario_id, branch_a, branch_b)
     return result
@@ -151,19 +144,13 @@ async def compare_branches_endpoint(
 async def get_faction_timeline_endpoint(
     scenario_id: str,
     branch_id: str = Query(...),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Return faction evolution timeline for a scenario branch."""
     if not settings.FEATURE_FACTIONS:
-        return _feature_disabled("factions")
+        raise _feature_disabled("factions")
     with Session(get_engine()) as session:
-        scenario = session.exec(
-            select(Scenario).where(Scenario.id == scenario_id)
-        ).first()
-        if scenario is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Scenario {scenario_id} not found"},
-            )
+        require_owned_scenario(session, scenario_id, principal)
     timeline = get_faction_timeline(scenario_id, branch_id)
     return timeline
 
@@ -172,11 +159,13 @@ async def get_faction_timeline_endpoint(
 async def list_checkpoints(
     scenario_id: str,
     branch_id: Optional[str] = Query(default=None),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """List checkpoints for a scenario, optionally filtered by branch."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
-        return _feature_disabled("counterfactual_replay")
+        raise _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
         stmt = select(ScenarioCheckpoint).where(
             ScenarioCheckpoint.scenario_id == scenario_id
         )
@@ -200,22 +189,19 @@ async def list_checkpoints(
 
 
 @router.post("/scenario/{scenario_id}/resume")
-async def resume_from_round(scenario_id: str, body: ResumeRequest):
+async def resume_from_round(
+    scenario_id: str,
+    body: ResumeRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Resume simulation from a specific round on a new branch (P1-9)."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
-        return _feature_disabled("counterfactual_replay")
+        raise _feature_disabled("counterfactual_replay")
 
     from app.models.database import Round, ScenarioStatus
 
     with Session(get_engine()) as session:
-        scenario = session.exec(
-            select(Scenario).where(Scenario.id == scenario_id)
-        ).first()
-        if scenario is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Scenario {scenario_id} not found"},
-            )
+        scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status != ScenarioStatus.DONE:
             return JSONResponse(
                 status_code=400,

@@ -127,4 +127,5 @@ class TestGrowthEventsEndpoint:
             params={"user_id": TEST_USER},
         )
         assert resp.status_code == 404
-        assert "not enabled" in resp.json()["detail"]
+        data = resp.json()
+        assert data["detail"]["code"] == "FEATURE_DISABLED"

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
@@ -114,7 +115,9 @@ export function CausalReviewView() {
     setLoading(true);
     setSelectedNode(null);
     try {
-      const res = await fetch(`/api/scenario/${id}/causal-graph`);
+      const res = await fetch(`/api/scenario/${id}/causal-graph`, {
+        headers: buildSessionHeaders(),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setGraphData(data);

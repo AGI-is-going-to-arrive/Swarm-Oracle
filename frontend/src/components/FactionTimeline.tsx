@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders } from '../api/client';
 
 interface FactionInfo {
   key: string;
@@ -42,7 +43,9 @@ export function FactionTimeline({ scenarioId, branchId, visible }: Props) {
   const fetchTimeline = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/scenario/${scenarioId}/faction-timeline?branch_id=${branchId}`);
+      const res = await fetch(`/api/scenario/${scenarioId}/faction-timeline?branch_id=${branchId}`, {
+        headers: buildSessionHeaders(),
+      });
       if (res.status === 501) { setTimeline([]); setLoading(false); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();

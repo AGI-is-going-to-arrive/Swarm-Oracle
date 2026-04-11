@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
 import { useAgentStore } from '../stores/agentStore';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { AgentProfileModal } from '../components/AgentProfileModal';
@@ -36,7 +37,7 @@ export function AgentLibrary() {
 
   useEffect(() => {
     if (!enabled) return;
-    const userId = localStorage.getItem('swarmoracle_user_id') || 'default_user';
+    const userId = getSessionBoundUserId();
     fetchIdentities(userId);
   }, [fetchIdentities, enabled]);
 
@@ -113,8 +114,11 @@ export function AgentLibrary() {
                 onClick={async (e) => {
                   e.stopPropagation();
                   if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
-                  await fetch(`/api/agents/workshop/${agent.id}`, { method: 'DELETE' });
-                  const userId = localStorage.getItem('swarmoracle_user_id') || 'default_user';
+                  await fetch(`/api/agents/workshop/${agent.id}`, {
+                    method: 'DELETE',
+                    headers: buildSessionHeaders(),
+                  });
+                  const userId = getSessionBoundUserId();
                   fetchIdentities(userId);
                 }}
                 style={{ fontSize: '0.8rem', padding: '4px 10px', borderRadius: 4, background: '#e74c3c22', color: '#e74c3c', border: '1px solid #e74c3c44', cursor: 'pointer' }}

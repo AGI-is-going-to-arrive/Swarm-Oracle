@@ -5,6 +5,7 @@
 import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { KnowledgeDomain } from '../types';
 
@@ -68,10 +69,10 @@ export function AgentWorkshopView() {
     setSaving(true);
     setError(null);
     try {
-      const userId = localStorage.getItem('swarmoracle_user_id') || 'default_user';
+      const userId = getSessionBoundUserId();
       const res = await fetch('/api/agents/workshop', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           user_id: userId,
           display_name: form.displayName.trim(),

@@ -6,9 +6,17 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlmodel import Session
 
 from app.api.errors import api_error_from_exception
-from app.api.helpers import verify_session
+from app.api.helpers import (
+    SessionPrincipal,
+    require_owned_scenario,
+    require_session_principal,
+    resolve_authenticated_user_id,
+    verify_session,
+)
+from app.models.database import get_engine
 from app.services.campaign import (
     CampaignConflictError,
     CampaignError,
@@ -28,12 +36,26 @@ from app.services.campaign import (
 )
 from app.services.daily_challenges import get_challenge_rotation
 
-router = APIRouter(prefix="/api/campaign", tags=["campaign"], dependencies=[Depends(verify_session)])
+router = APIRouter(
+    prefix="/api/campaign",
+    tags=["campaign"],
+    dependencies=[Depends(verify_session)],
+)
 
 VALID_ARCHIVE_GRADES = {"S", "A", "B", "C"}
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
 VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
 VALID_GAMEPLAY_BET_KINDS = {"branch_winner", "ending_tone", "profile_resonance"}
+
+
+def _require_owned_campaign_scenario(
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+) -> None:
+    if principal is None:
+        return
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
 
 
 class CampaignProfileResponse(BaseModel):
@@ -502,19 +524,31 @@ class ScenarioGameplayStateResponse(ScenarioGameplayStateRequest):
 
 
 @router.get("/profile/{user_id}", response_model=CampaignProfileResponse)
-async def get_profile(user_id: str) -> CampaignProfileResponse:
+async def get_profile(
+    user_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> CampaignProfileResponse:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     profile = get_campaign_profile_summary(user_id)
     return CampaignProfileResponse(**profile)
 
 
 @router.get("/profile/{user_id}/mastery", response_model=list[CampaignMasteryResponse])
-async def get_mastery(user_id: str) -> list[CampaignMasteryResponse]:
+async def get_mastery(
+    user_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> list[CampaignMasteryResponse]:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     masteries = list_campaign_mastery_summaries(user_id)
     return [CampaignMasteryResponse(**mastery) for mastery in masteries]
 
 
 @router.get("/profile/{user_id}/badges", response_model=list[CampaignBadgeResponse])
-async def get_badges(user_id: str) -> list[CampaignBadgeResponse]:
+async def get_badges(
+    user_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> list[CampaignBadgeResponse]:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     badges = list_campaign_badge_summaries(user_id)
     return [CampaignBadgeResponse(**badge) for badge in badges]
 
@@ -523,7 +557,11 @@ async def get_badges(user_id: str) -> list[CampaignBadgeResponse]:
     "/scenario/{scenario_id}/summary",
     response_model=CampaignScenarioSummaryResponse,
 )
-async def get_scenario_summary(scenario_id: str) -> CampaignScenarioSummaryResponse:
+async def get_scenario_summary(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> CampaignScenarioSummaryResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
     try:
         summary = get_scenario_campaign_summary(scenario_id)
     except CampaignNotFoundError as exc:
@@ -536,7 +574,11 @@ async def get_scenario_summary(scenario_id: str) -> CampaignScenarioSummaryRespo
     "/scenario/{scenario_id}/director-state",
     response_model=ScenarioDirectorStateResponse,
 )
-async def get_director_state(scenario_id: str) -> ScenarioDirectorStateResponse:
+async def get_director_state(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> ScenarioDirectorStateResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
     try:
         state = get_scenario_director_state(scenario_id)
     except CampaignNotFoundError as exc:
@@ -552,7 +594,9 @@ async def get_director_state(scenario_id: str) -> ScenarioDirectorStateResponse:
 async def put_director_state(
     scenario_id: str,
     req: ScenarioDirectorStateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> ScenarioDirectorStateResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
     try:
         state = save_scenario_director_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
@@ -569,7 +613,11 @@ async def put_director_state(
     "/scenario/{scenario_id}/gameplay-state",
     response_model=ScenarioGameplayStateResponse,
 )
-async def get_gameplay_state(scenario_id: str) -> ScenarioGameplayStateResponse:
+async def get_gameplay_state(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> ScenarioGameplayStateResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
     try:
         state = get_scenario_gameplay_state(scenario_id)
     except CampaignNotFoundError as exc:
@@ -585,7 +633,9 @@ async def get_gameplay_state(scenario_id: str) -> ScenarioGameplayStateResponse:
 async def put_gameplay_state(
     scenario_id: str,
     req: ScenarioGameplayStateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> ScenarioGameplayStateResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
     try:
         state = save_scenario_gameplay_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
@@ -623,7 +673,9 @@ async def get_daily_status(
     profile_id: str,
     local_date: str,
     timezone_offset_minutes: int = 0,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> CampaignDailyChallengeResponse:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     try:
         summary = get_daily_challenge_summary(
             user_id,
@@ -645,7 +697,9 @@ async def get_weekly_summary(
     user_id: str,
     local_date: str,
     timezone_offset_minutes: int = 0,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> CampaignWeeklySummaryResponse:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     try:
         summary = get_weekly_campaign_summary(
             user_id,
@@ -665,11 +719,14 @@ async def get_weekly_summary(
 async def finalize_campaign(
     scenario_id: str,
     req: CampaignFinalizeRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> CampaignFinalizeResponse:
+    _require_owned_campaign_scenario(scenario_id, principal)
+    user_id = resolve_authenticated_user_id(req.user_id, principal) or req.user_id
     try:
         result = finalize_scenario_campaign(
             scenario_id,
-            user_id=req.user_id,
+            user_id=user_id,
             user_name=req.user_name,
             profile_id=req.profile_id,
             archive_grade=req.archive_grade,

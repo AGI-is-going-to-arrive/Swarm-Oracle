@@ -211,6 +211,11 @@ describe('FactionTimeline', () => {
     render(<FactionTimeline scenarioId="sc-123" branchId="br-456" visible={true} />);
 
     await screen.findByText(/No faction data/);
-    expect(fetchSpy).toHaveBeenCalledWith('/api/scenario/sc-123/faction-timeline?branch_id=br-456');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/scenario/sc-123/faction-timeline?branch_id=br-456',
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      }),
+    );
   });
 });

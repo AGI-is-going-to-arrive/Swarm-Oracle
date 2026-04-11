@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
 from app.api.errors import api_error, api_error_from_exception
-from app.api.helpers import parse_key_moments
+from app.api.helpers import (
+    SessionPrincipal,
+    parse_key_moments,
+    require_owned_scenario,
+    require_session_principal,
+    verify_session,
+)
 from app.models import Agent, Branch, BranchStatus, Scenario
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_language_directive
@@ -22,7 +28,7 @@ from app.services.llm_client import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
 SOCIAL_COPY_MAX_CHARS = {
     "xiaohongshu": 4_000,
     "weibo": 2_000,
@@ -282,6 +288,7 @@ async def _generate_social_copy(
     scenario_id: str,
     platform: str,
     req: SocialCopyRequest,
+    principal: SessionPrincipal | None,
 ):
     """Generate platform-specific social media copy from simulation results."""
     from app.services.llm_client import (
@@ -311,9 +318,7 @@ async def _generate_social_copy(
 
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
 
         branches = list(session.exec(
             select(Branch).where(Branch.scenario_id == scenario_id)
@@ -402,9 +407,15 @@ async def _generate_social_copy(
 async def generate_social_copy(
     scenario_id: str,
     platform: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Generate platform-specific social media copy without provider overrides."""
-    return await _generate_social_copy(scenario_id, platform, SocialCopyRequest())
+    return await _generate_social_copy(
+        scenario_id,
+        platform,
+        SocialCopyRequest(),
+        principal=principal,
+    )
 
 
 @router.post("/scenario/{scenario_id}/social/{platform}")
@@ -412,23 +423,26 @@ async def generate_social_copy_with_overrides(
     scenario_id: str,
     platform: str,
     req: SocialCopyRequest | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Generate platform-specific social media copy with provider overrides in the POST body."""
     return await _generate_social_copy(
         scenario_id,
         platform,
         req or SocialCopyRequest(),
+        principal=principal,
     )
 
 
 @router.get("/scenario/{scenario_id}/export")
-async def export_scenario(scenario_id: str):
+async def export_scenario(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """P4-C: Export scenario results as Markdown."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
 
         agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
         branches = list(session.exec(

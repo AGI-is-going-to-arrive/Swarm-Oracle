@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 
 interface RoundDiff {
@@ -42,7 +43,9 @@ export function CompareDigestView() {
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/scenario/${id}/compare?branch_a=${branchA}&branch_b=${branchB}`);
+      const res = await fetch(`/api/scenario/${id}/compare?branch_a=${branchA}&branch_b=${branchB}`, {
+        headers: buildSessionHeaders(),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();
       setData(d);

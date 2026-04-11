@@ -5,11 +5,17 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import update
 from sqlmodel import Session, func, select
 
 from app.api.errors import api_error
+from app.api.helpers import (
+    SessionPrincipal,
+    require_owned_scenario,
+    require_session_principal,
+    verify_session,
+)
 from app.api.schemas import BatchInterveneRequest, InterveneRequest, RetrospectiveInterveneRequest
 from app.models import (
     AgentMessage,
@@ -31,7 +37,7 @@ from app.services.simulator import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
 MAX_RETROSPECTIVE_FORK_DEPTH = 5
 RETROSPECTIVE_BRANCH_PROBABILITY_FLOOR = 0.3
 
@@ -276,7 +282,11 @@ INTERVENTION_TEMPLATES = [
 
 
 @router.post("/scenario/{scenario_id}/intervene")
-async def intervene(scenario_id: str, req: InterveneRequest):
+async def intervene(
+    scenario_id: str,
+    req: InterveneRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Butterfly effect — inject a user event into an active simulation branch."""
     text = req.text.strip()
     if not text:
@@ -289,9 +299,7 @@ async def intervene(scenario_id: str, req: InterveneRequest):
     # Validate scenario exists and is in a running state
     gameplay_state = None
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
             raise api_error(
                 400,
@@ -300,8 +308,13 @@ async def intervene(scenario_id: str, req: InterveneRequest):
             )
 
         # Validate the branch exists, belongs to this scenario, and is active
-        branch = session.get(Branch, req.branch_id)
-        if not branch or branch.scenario_id != scenario_id:
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == req.branch_id,
+                Branch.scenario_id == scenario.id,
+            )
+        ).first()
+        if branch is None:
             raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
         if branch.status != BranchStatus.ACTIVE:
             raise api_error(
@@ -369,7 +382,11 @@ async def intervene(scenario_id: str, req: InterveneRequest):
 
 
 @router.post("/scenario/{scenario_id}/intervene/retrospective")
-async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneRequest):
+async def intervene_retrospective(
+    scenario_id: str,
+    req: RetrospectiveInterveneRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Retrospective butterfly effect — replay from a past round with an injected event.
 
     Creates a new branch forked from the specified round and re-runs
@@ -381,12 +398,15 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
     engine = get_engine()
 
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
 
-        branch = session.get(Branch, req.branch_id)
-        if not branch or branch.scenario_id != scenario_id:
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == req.branch_id,
+                Branch.scenario_id == scenario.id,
+            )
+        ).first()
+        if branch is None:
             raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
 
         branch_depth = _get_branch_depth(session, req.branch_id)
@@ -478,7 +498,11 @@ async def intervene_retrospective(scenario_id: str, req: RetrospectiveInterveneR
 
 
 @router.post("/scenario/{scenario_id}/intervene/batch")
-async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
+async def intervene_batch(
+    scenario_id: str,
+    req: BatchInterveneRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
     """Batch butterfly effect — inject events into multiple branches simultaneously."""
     if not req.interventions:
         raise api_error(400, "INTERVENTIONS_EMPTY", "Interventions list cannot be empty")
@@ -490,9 +514,7 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
     use_persisted_queue = _pending_intervention_db_path() is not None
     memory_queue_entries: list[tuple[str, str]] = []
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
             raise api_error(
                 400,
@@ -509,8 +531,13 @@ async def intervene_batch(scenario_id: str, req: BatchInterveneRequest):
                     f"Empty intervention text for branch {item.branch_id}",
                 )
 
-            branch = session.get(Branch, item.branch_id)
-            if not branch or branch.scenario_id != scenario_id:
+            branch = session.exec(
+                select(Branch).where(
+                    Branch.id == item.branch_id,
+                    Branch.scenario_id == scenario.id,
+                )
+            ).first()
+            if branch is None:
                 raise api_error(
                     400,
                     "INTERVENTION_BRANCH_NOT_FOUND",

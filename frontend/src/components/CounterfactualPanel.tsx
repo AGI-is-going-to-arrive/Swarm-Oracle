@@ -5,6 +5,7 @@
 
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders } from '../api/client';
 import type { AgentInfo } from '../types';
 
 interface Props {
@@ -33,7 +34,7 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
     try {
       const res = await fetch(`/api/scenario/${scenarioId}/counterfactual`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           source_branch_id: branchId,
           round_number: selectedRound,

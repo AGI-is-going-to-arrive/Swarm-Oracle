@@ -11,25 +11,45 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
+from app.api.helpers import (
+    SessionPrincipal,
+    require_owned_scenario,
+    require_session_principal,
+    resolve_authenticated_user_id,
+    verify_session,
+)
 from app.models import Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
 from app.services.llm_client import validate_llm_base_url
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api", tags=["predictions"])
+router = APIRouter(prefix="/api", tags=["predictions"], dependencies=[Depends(verify_session)])
 DEFAULT_PREDICTION_PAGE_SIZE = 50
 OPEN_PREDICTION_STATUSES = {
     ScenarioStatus.PARSING,
     ScenarioStatus.SIMULATING,
 }
 ANONYMOUS_USER_ID = "anonymous"
+
+
+def _require_owned_prediction_scenario(
+    session: Session,
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+) -> Scenario:
+    if principal is None:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        return scenario
+    return require_owned_scenario(session, scenario_id, principal)
 
 
 # ── Request / Response Schemas ─────────────────────────
@@ -113,13 +133,15 @@ class ScorePredictionsRequest(BaseModel):
 # ── Endpoints ─────────────────────────────────────────
 
 @router.post("/scenario/{scenario_id}/predict")
-async def submit_prediction(scenario_id: str, req: PredictRequest) -> PredictionResponse:
+async def submit_prediction(
+    scenario_id: str,
+    req: PredictRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> PredictionResponse:
     """Submit a prediction for a scenario (before or during simulation)."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = _require_owned_prediction_scenario(session, scenario_id, principal)
 
         if scenario.status not in OPEN_PREDICTION_STATUSES:
             raise api_error(
@@ -128,7 +150,8 @@ async def submit_prediction(scenario_id: str, req: PredictRequest) -> Prediction
                 f"Scenario is '{scenario.status.value}' — predictions are closed",
             )
 
-        normalized_user_id = req.user_id or ANONYMOUS_USER_ID
+        effective_user_id = resolve_authenticated_user_id(req.user_id or None, principal)
+        normalized_user_id = effective_user_id or ANONYMOUS_USER_ID
         existing = session.exec(
             select(Prediction).where(
                 Prediction.scenario_id == scenario_id,
@@ -185,13 +208,12 @@ async def list_predictions(
     scenario_id: str,
     limit: int = Query(default=DEFAULT_PREDICTION_PAGE_SIZE, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> list[PredictionResponse]:
     """List all predictions for a scenario."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        _require_owned_prediction_scenario(session, scenario_id, principal)
 
         query = (
             select(Prediction)
@@ -221,13 +243,12 @@ async def list_predictions(
 async def trigger_scoring(
     scenario_id: str,
     req: ScorePredictionsRequest | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> dict:
     """Score all unscored predictions for a completed scenario."""
     engine = get_engine()
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if not scenario:
-            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        scenario = _require_owned_prediction_scenario(session, scenario_id, principal)
         if scenario.status != ScenarioStatus.DONE:
             raise api_error(
                 400,
@@ -259,7 +280,7 @@ async def trigger_scoring(
             "model": req.llm_model,
             "requests_per_minute": req.llm_requests_per_minute,
             "tokens_per_minute": req.llm_tokens_per_minute,
-            "quota_key": req.user_id,
+            "quota_key": resolve_authenticated_user_id(req.user_id, principal),
         }
 
     summary = await score_all_for_scenario(scenario_id, llm_overrides=llm_overrides)

@@ -3,6 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { create } from 'zustand';
+import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
 import type { AgentIdentityInfo } from '../types';
 
 interface AgentStoreState {
@@ -26,7 +27,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   fetchIdentities: async (userId: string) => {
     set({ loading: true, error: null });
     try {
-      const res = await fetch(`/api/agents/identities?user_id=${encodeURIComponent(userId)}`);
+      const effectiveUserId = getSessionBoundUserId(userId);
+      const res = await fetch(`/api/agents/identities?user_id=${encodeURIComponent(effectiveUserId)}`, {
+        headers: buildSessionHeaders(),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentIdentityInfo[] = await res.json();
       set({ identities: data, loading: false });

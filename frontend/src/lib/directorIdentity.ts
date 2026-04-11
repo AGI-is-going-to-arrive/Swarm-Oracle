@@ -1,3 +1,5 @@
+import { getSessionPrincipalSubject } from '../api/client';
+
 const STORAGE_KEY = 'swarmoracle:director-identity:v1';
 
 export interface DirectorIdentity {
@@ -34,6 +36,17 @@ function writeStoredIdentity(identity: DirectorIdentity) {
 
 export function getDirectorIdentity(): DirectorIdentity {
   const existing = readStoredIdentity();
+  const sessionSubject = getSessionPrincipalSubject();
+  if (sessionSubject) {
+    const identity = {
+      userId: sessionSubject,
+      userName: existing?.userName || DEFAULT_NAME,
+    };
+    if (!existing || existing.userId !== identity.userId || existing.userName !== identity.userName) {
+      writeStoredIdentity(identity);
+    }
+    return identity;
+  }
   if (existing) return existing;
 
   const identity = {

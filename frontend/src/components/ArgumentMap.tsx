@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { buildSessionHeaders } from '../api/client';
 import dagre from 'dagre';
 import {
   ReactFlow,
@@ -279,7 +280,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     setLoading(true);
     setSelectedNode(null);
     try {
-      const res = await fetch(`/api/debate/${debateId}/argument-map`);
+      const res = await fetch(`/api/debate/${debateId}/argument-map`, {
+        headers: buildSessionHeaders(),
+      });
       if (res.status === 501) { setData(null); setLoading(false); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();

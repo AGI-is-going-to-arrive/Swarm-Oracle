@@ -7,11 +7,25 @@ import logging
 
 from fastapi import APIRouter, Depends, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlmodel import Session, select
 
 from app.api.errors import api_error
-from app.api.helpers import schedule_background_task, verify_session
+from app.api.helpers import (
+    SessionPrincipal,
+    require_owned_scenario,
+    require_session_principal,
+    schedule_background_task,
+    verify_session,
+)
 from app.api.ws import WSManager, run_websocket_session
-from app.models import EndingRoomInteractionMode, EndingRoomType
+from app.models import (
+    EndingRoom,
+    EndingRoomInteractionMode,
+    EndingRoomThread,
+    EndingRoomType,
+    Scenario,
+)
+from app.models.database import get_engine
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     append_room_user_turn_async,
@@ -180,8 +194,94 @@ def _raise_room_error(exc: EndingRoomServiceError) -> None:
     raise api_error(exc.status_code, exc.code, exc.message) from exc
 
 
+def _load_owned_room(
+    session: Session,
+    room_id: str,
+    principal: SessionPrincipal | None,
+) -> EndingRoom:
+    stmt = select(EndingRoom).where(EndingRoom.id == room_id)
+    if principal is not None:
+        stmt = (
+            stmt.join(Scenario, Scenario.id == EndingRoom.scenario_id)
+            .where(Scenario.user_id == principal.subject)
+        )
+    room = session.exec(stmt).first()
+    if room is None:
+        raise api_error(404, "ENDING_ROOM_NOT_FOUND", "Ending room not found")
+    return room
+
+
+def _load_owned_thread(
+    session: Session,
+    thread_id: str,
+    principal: SessionPrincipal | None,
+) -> EndingRoomThread:
+    stmt = select(EndingRoomThread).where(EndingRoomThread.id == thread_id)
+    if principal is not None:
+        stmt = (
+            stmt.join(EndingRoom, EndingRoom.id == EndingRoomThread.room_id)
+            .join(Scenario, Scenario.id == EndingRoom.scenario_id)
+            .where(Scenario.user_id == principal.subject)
+        )
+    thread = session.exec(stmt).first()
+    if thread is None:
+        raise api_error(404, "ENDING_ROOM_THREAD_NOT_FOUND", "Ending room thread not found")
+    return thread
+
+
+def _ensure_owned_room_creation_sync(
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+) -> None:
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+
+
+def _ensure_owned_room_sync(
+    room_id: str,
+    principal: SessionPrincipal | None,
+) -> None:
+    with Session(get_engine()) as session:
+        _load_owned_room(session, room_id, principal)
+
+
+def _ensure_owned_thread_sync(
+    thread_id: str,
+    principal: SessionPrincipal | None,
+) -> None:
+    with Session(get_engine()) as session:
+        _load_owned_thread(session, thread_id, principal)
+
+
+def _ending_room_authorized_principal_sync(
+    room_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    with Session(get_engine()) as session:
+        stmt = (
+            select(EndingRoom.id)
+            .join(Scenario, Scenario.id == EndingRoom.scenario_id)
+            .where(
+                EndingRoom.id == room_id,
+                Scenario.user_id == principal.subject,
+            )
+        )
+        return session.exec(stmt).first() is not None
+
+
 async def _ending_room_exists(room_id: str) -> bool:
     return await asyncio.to_thread(ending_room_exists, room_id)
+
+
+async def _ending_room_authorized_principal(
+    room_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    return await asyncio.to_thread(
+        _ending_room_authorized_principal_sync,
+        room_id,
+        principal,
+    )
 
 
 async def _broadcast_followup_turns(room_id: str, turns: list[dict]) -> None:
@@ -193,7 +293,12 @@ async def _broadcast_followup_turns(room_id: str, turns: list[dict]) -> None:
 
 
 @router.post("/scenario/{scenario_id}/ending-room")
-async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomRequest):
+async def create_ending_room_endpoint(
+    scenario_id: str,
+    req: CreateEndingRoomRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
     try:
         snapshot, created = await asyncio.to_thread(
             create_ending_room,
@@ -241,7 +346,11 @@ async def create_ending_room_endpoint(scenario_id: str, req: CreateEndingRoomReq
 
 
 @router.get("/ending-room/{room_id}")
-async def get_ending_room_snapshot_endpoint(room_id: str):
+async def get_ending_room_snapshot_endpoint(
+    room_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_sync, room_id, principal)
     try:
         snapshot = await asyncio.to_thread(load_ending_room_snapshot, room_id)
     except EndingRoomServiceError as exc:
@@ -252,7 +361,11 @@ async def get_ending_room_snapshot_endpoint(room_id: str):
 
 
 @router.get("/ending-room/{room_id}/result")
-async def get_ending_room_result_endpoint(room_id: str):
+async def get_ending_room_result_endpoint(
+    room_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_sync, room_id, principal)
     try:
         payload = await asyncio.to_thread(load_ending_room_result_payload, room_id)
     except EndingRoomServiceError as exc:
@@ -263,7 +376,12 @@ async def get_ending_room_result_endpoint(room_id: str):
 
 
 @router.post("/ending-room/{room_id}/thread")
-async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoomThreadRequest):
+async def create_ending_room_thread_endpoint(
+    room_id: str,
+    req: CreateEndingRoomThreadRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_sync, room_id, principal)
     try:
         payload = await asyncio.to_thread(
             create_ending_room_thread,
@@ -286,7 +404,11 @@ async def create_ending_room_thread_endpoint(room_id: str, req: CreateEndingRoom
 
 
 @router.get("/ending-room/thread/{thread_id}")
-async def get_ending_room_thread_endpoint(thread_id: str):
+async def get_ending_room_thread_endpoint(
+    thread_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_thread_sync, thread_id, principal)
     try:
         return await asyncio.to_thread(load_ending_room_thread_snapshot, thread_id)
     except EndingRoomServiceError as exc:
@@ -294,7 +416,12 @@ async def get_ending_room_thread_endpoint(thread_id: str):
 
 
 @router.post("/ending-room/{room_id}/user-turn")
-async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRequest):
+async def create_room_user_turn_endpoint(
+    room_id: str,
+    req: EndingRoomUserTurnRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_sync, room_id, principal)
     try:
         payload = await append_room_user_turn_async(
             room_id,
@@ -312,7 +439,12 @@ async def create_room_user_turn_endpoint(room_id: str, req: EndingRoomUserTurnRe
 
 
 @router.post("/ending-room/thread/{thread_id}/user-turn")
-async def create_thread_user_turn_endpoint(thread_id: str, req: EndingRoomUserTurnRequest):
+async def create_thread_user_turn_endpoint(
+    thread_id: str,
+    req: EndingRoomUserTurnRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_thread_sync, thread_id, principal)
     try:
         payload = await append_thread_user_turn_async(
             thread_id,
@@ -345,6 +477,7 @@ async def _run_ending_room_websocket_session(websocket: WebSocket, room_id: str)
         room_id,
         websocket,
         exists_check=_ending_room_exists,
+        authorize_principal=_ending_room_authorized_principal,
         missing_resource_name="ending room",
         log_client_messages=False,
     )

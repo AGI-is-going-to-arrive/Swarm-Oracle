@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import time
+from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import selectinload
@@ -37,6 +42,15 @@ from app.services.runtime_lock import (
 from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
 
 logger = logging.getLogger(__name__)
+_SESSION_AUTH_CACHE_KEY = "_session_auth_cache"
+
+
+@dataclass(frozen=True)
+class SessionPrincipal:
+    subject: str
+    issued_at: int | None = None
+    expires_at: int | None = None
+    token_kind: str = "signed_v1"
 
 
 def _normalize_continuity_agent_key(name: str | None, role: str | None) -> str | None:
@@ -53,13 +67,174 @@ async def verify_session(request: Request) -> str | None:
     Returns the token on success or None when auth is disabled (empty secret).
     Raises HTTP 401 if the token is missing or invalid.
     """
+    token, _principal = _authenticate_request_session(request)
+    return token
+
+
+def authenticate_session_token(
+    token: str,
+    *,
+    require_principal: bool = False,
+) -> SessionPrincipal | None:
+    """Validate a raw session token and optionally require a signed principal."""
     if not settings.SESSION_SECRET:
-        return None  # Auth not enabled — backwards compatible
+        return None
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if token == settings.SESSION_SECRET:
+        if require_principal:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return None
+
+    principal = _parse_signed_session_principal(token)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return principal
+
+
+def _decode_base64url(segment: str) -> bytes:
+    padding = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(f"{segment}{padding}")
+
+
+def _parse_signed_session_principal(token: str) -> SessionPrincipal | None:
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "v1":
+        return None
+
+    try:
+        payload_segment = parts[1]
+        signature_segment = parts[2]
+        signing_input = f"v1.{payload_segment}".encode("utf-8")
+        expected_signature = hmac.new(
+            settings.SESSION_SECRET.encode("utf-8"),
+            signing_input,
+            hashlib.sha256,
+        ).digest()
+        provided_signature = _decode_base64url(signature_segment)
+        if not hmac.compare_digest(provided_signature, expected_signature):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+        payload = json.loads(_decode_base64url(payload_segment).decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    subject = str(payload.get("sub", "")).strip()
+    if not subject or len(subject) > 128:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    issued_at = payload.get("iat")
+    expires_at = payload.get("exp")
+    if issued_at is not None and not isinstance(issued_at, int):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if expires_at is not None:
+        if not isinstance(expires_at, int):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        if expires_at < int(time.time()):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    return SessionPrincipal(
+        subject=subject,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+
+
+def _authenticate_request_session(
+    request: Request,
+) -> tuple[str | None, SessionPrincipal | None]:
+    cached = getattr(request.state, _SESSION_AUTH_CACHE_KEY, None)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        return cached
+
+    if not settings.SESSION_SECRET:
+        result = (None, None)
+        setattr(request.state, _SESSION_AUTH_CACHE_KEY, result)
+        return result
 
     token = request.headers.get("X-Session-Token", "")
-    if not token or token != settings.SESSION_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return token
+    principal = authenticate_session_token(token)
+
+    result = (token, principal)
+    setattr(request.state, _SESSION_AUTH_CACHE_KEY, result)
+    return result
+
+
+async def get_session_principal(request: Request) -> SessionPrincipal | None:
+    """Return the signed session principal when present."""
+    _token, principal = _authenticate_request_session(request)
+    return principal
+
+
+async def require_session_principal(request: Request) -> SessionPrincipal | None:
+    """Require a signed session principal when auth is enabled."""
+    if not settings.SESSION_SECRET:
+        return None
+
+    _token, principal = _authenticate_request_session(request)
+    if principal is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "SESSION_PRINCIPAL_REQUIRED",
+                "message": "A signed session token with subject is required",
+            },
+        )
+    return principal
+
+
+def resolve_authenticated_user_id(
+    requested_user_id: str | None,
+    principal: SessionPrincipal | None,
+) -> str | None:
+    """Resolve user ownership with the authenticated principal taking precedence."""
+    if principal is None:
+        return requested_user_id
+    if requested_user_id and requested_user_id != principal.subject:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "SESSION_PRINCIPAL_MISMATCH",
+                "message": "Requested user_id does not match authenticated session principal",
+            },
+        )
+    return principal.subject
+
+
+def require_owned_scenario(
+    session: Session,
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+    *,
+    require_principal: bool = True,
+) -> Scenario:
+    """Load a scenario scoped to the authenticated principal when available."""
+    if settings.SESSION_SECRET and require_principal and principal is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "SESSION_PRINCIPAL_REQUIRED",
+                "message": "A signed session token with subject is required",
+            },
+        )
+
+    stmt = select(Scenario).where(Scenario.id == scenario_id)
+    if principal is not None:
+        stmt = stmt.where(Scenario.user_id == principal.subject)
+    scenario = session.exec(stmt).first()
+    if scenario is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "SCENARIO_NOT_FOUND",
+                "message": "Scenario not found",
+            },
+        )
+    return scenario
 
 
 class _OpaqueStr(str):
@@ -396,6 +571,8 @@ async def parse_and_run_background(
             try:
                 from app.services.agent_identity import (
                     build_continuity_key as _build_continuity_key,
+                )
+                from app.services.agent_identity import (
                     resolve_identity as _resolve_id,
                 )
             except ImportError:
@@ -534,7 +711,11 @@ async def parse_and_run_background(
                         agent.agent_identity_id = identity_id
                         agent.source_type = "generated"
                 except Exception:
-                    logger.debug("resolve_identity failed for %s", agent_data.get("name"), exc_info=True)
+                    logger.debug(
+                        "resolve_identity failed for %s",
+                        agent_data.get("name"),
+                        exc_info=True,
+                    )
             session.add(agent)
             session.flush()
             agent_name_to_id[agent.name] = agent.id
@@ -653,7 +834,11 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             "query": parsed["query"],
             "provider": parsed["provider"],
             "snippets": safe_snippets,
-            "timestamp": parsed.get("timestamp", "") if isinstance(parsed.get("timestamp"), str) else "",
+            "timestamp": (
+                parsed.get("timestamp", "")
+                if isinstance(parsed.get("timestamp"), str)
+                else ""
+            ),
             "cached": parsed.get("cached") is True,
         }
     except (json.JSONDecodeError, TypeError):
