@@ -129,7 +129,9 @@
   - memory 压缩
   - prediction scoring
   - debate judge summary
+  - debate argument map enrichment
   - identity compaction
+  - fork detection
   - Oracle auto-recap 静态改写
   - 行为是：先 probe 当前 provider/model 是否支持流式 JSON；支持则优先流式，不支持或失败再退非流式。各业务自己的本地 fallback 仍保留，不靠 LLM helper 兜底所有问题。
 - `llm_call()` 当前会把“`HTTP 200` 但非流式正文为空”视为 provider incompatibility，而不是静默返回空字符串：

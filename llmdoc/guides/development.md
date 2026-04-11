@@ -216,9 +216,9 @@ LLM_API_KEY=sk-xxx LLM_MODEL_NAME=gpt-xxx LLM_RESPONSES_URL=https://your-api/v1 
 cd backend
 source .venv/bin/activate
 python -m pytest tests/test_llm_client.py tests/test_parser.py tests/test_narrator.py tests/test_memory.py -q
-python -m pytest tests/test_simulator.py -q -k 'IdentityCompactionSummary'
+python -m pytest tests/test_simulator.py -q -k 'IdentityCompactionSummary or passes_llm_overrides_into_detector or detector_variant_b_uses_alternate_prompt or detector_falls_back_to_no_fork_when_helper_errors'
 python -m pytest tests/test_identity_compaction.py tests/test_identity_compaction_integration.py tests/test_predictions.py -q -k 'score_prediction or score_all_for_scenario or score_predictions_endpoint'
-python -m pytest tests/test_debate_service.py tests/test_ending_room_service.py -q
+python -m pytest tests/test_debate_service.py tests/test_debate_argument_map.py tests/test_ending_room_service.py -q
 ```
 
 当前覆盖面：
@@ -229,6 +229,8 @@ python -m pytest tests/test_debate_service.py tests/test_ending_room_service.py 
 - identity compaction
 - prediction scoring
 - debate judge summary
+- debate argument map enrichment
+- fork detection
 - Oracle auto-recap 静态改写
 
 ### 本地网关 live probe
