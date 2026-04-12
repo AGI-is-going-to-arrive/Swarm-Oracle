@@ -1,6 +1,9 @@
 """Tests for app.api.ws — WebSocket manager."""
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,6 +17,24 @@ import app.api.ws as ws_api
 from app.api.ws import WSManager
 from app.models import Debate, Scenario, ScenarioStatus
 from app.models.database import get_engine
+
+
+def _make_ws_mock(**kwargs):
+    ws = MagicMock()
+    ws.accept = AsyncMock()
+    ws.receive_text = AsyncMock(**kwargs)
+    ws.close = AsyncMock()
+    ws.send_text = AsyncMock()
+    return ws
+
+
+def _make_signed_session_token(secret: str, subject: str) -> str:
+    payload = json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    payload_segment = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+    signing_input = f"v1.{payload_segment}".encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+    return f"v1.{payload_segment}.{signature_segment}"
 
 
 class TestWSManager:
@@ -327,6 +348,67 @@ class TestWSManagerConcurrency:
 
 
 class TestScenarioWebSocketEndpoint:
+    @pytest.mark.asyncio
+    async def test_requires_signed_principal_when_auth_enabled(self, monkeypatch):
+        monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "test-secret")
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", "test-secret")
+
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="owned ws test",
+                status=ScenarioStatus.SIMULATING,
+                user_id="owner-a",
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+
+        websocket = _make_ws_mock(
+            side_effect=[
+                json.dumps({"type": "auth", "token": "test-secret"}),
+                WebSocketDisconnect(),
+            ]
+        )
+
+        await ws_api.websocket_endpoint(websocket, scenario_id)
+
+        websocket.accept.assert_awaited_once()
+        websocket.close.assert_awaited_once_with(code=4001, reason="Unauthorized")
+        assert websocket not in ws_api.ws_manager._connections.get(scenario_id, [])
+
+    @pytest.mark.asyncio
+    async def test_rejects_cross_owner_access_when_auth_enabled(self, monkeypatch):
+        monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "test-secret")
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", "test-secret")
+
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="owned ws test",
+                status=ScenarioStatus.SIMULATING,
+                user_id="owner-a",
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+
+        outsider_token = _make_signed_session_token("test-secret", "owner-b")
+        websocket = _make_ws_mock(
+            side_effect=[
+                json.dumps({"type": "auth", "token": outsider_token}),
+                WebSocketDisconnect(),
+            ]
+        )
+
+        await ws_api.websocket_endpoint(websocket, scenario_id)
+
+        websocket.accept.assert_awaited_once()
+        websocket.close.assert_awaited_once_with(code=4404, reason="scenario not found")
+        send_calls = [call[0][0] for call in websocket.send_text.call_args_list if call[0]]
+        assert not any('"auth_ok"' in message for message in send_calls)
+        assert websocket not in ws_api.ws_manager._connections.get(scenario_id, [])
+
     @pytest.mark.asyncio
     async def test_rejects_missing_scenario_before_accept(self, monkeypatch):
         websocket = AsyncMock()

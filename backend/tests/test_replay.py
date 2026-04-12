@@ -330,3 +330,45 @@ class TestCompareBranches:
         # Round 2 only in branch A — max divergence
         assert result["rounds"][1]["divergence_score"] == 1.0
         assert result["rounds"][1]["branch_b_summary"] == ""
+
+    @pytest.mark.parametrize(
+        ("branch_a", "branch_b", "missing_param"),
+        [
+            ("missing-branch", "valid", "branch_a"),
+            ("valid", "missing-branch", "branch_b"),
+        ],
+    )
+    def test_raises_for_missing_branch(self, branch_a, branch_b, missing_param):
+        """compare_branches should reject branch ids that do not exist in the scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid_a = _seed_branch(engine, sid, title="A")
+        bid_b = _seed_branch(engine, sid, title="B")
+
+        resolved_branch_a = bid_a if branch_a == "valid" else branch_a
+        resolved_branch_b = bid_b if branch_b == "valid" else branch_b
+
+        with pytest.raises(ValueError, match=rf"{missing_param} not found in scenario"):
+            compare_branches(sid, resolved_branch_a, resolved_branch_b)
+
+    @pytest.mark.parametrize(
+        ("use_foreign_branch_a", "missing_param"),
+        [
+            (True, "branch_a"),
+            (False, "branch_b"),
+        ],
+    )
+    def test_raises_for_branch_from_other_scenario(self, use_foreign_branch_a, missing_param):
+        """compare_branches should reject branch ids from a different scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="Scenario A")
+        other_sid = _seed_scenario(engine, question="Scenario B")
+        bid_a = _seed_branch(engine, sid, title="A")
+        bid_b = _seed_branch(engine, sid, title="B")
+        foreign_branch = _seed_branch(engine, other_sid, title="Foreign")
+
+        branch_a = foreign_branch if use_foreign_branch_a else bid_a
+        branch_b = bid_b if use_foreign_branch_a else foreign_branch
+
+        with pytest.raises(ValueError, match=rf"{missing_param} not found in scenario"):
+            compare_branches(sid, branch_a, branch_b)

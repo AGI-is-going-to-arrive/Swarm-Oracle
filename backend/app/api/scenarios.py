@@ -327,6 +327,16 @@ def _collect_scenario_delete_integrity_issues(
         ),
     )
     record(
+        "replay_artifact",
+        int(
+            session.exec(
+                select(sa_func.count())
+                .select_from(ReplayArtifact)
+                .where(ReplayArtifact.source_scenario_id == scenario_id)
+            ).one()
+        ),
+    )
+    record(
         "director_badge_unlock.source_scenario_id",
         int(
             session.exec(
@@ -1259,14 +1269,19 @@ async def delete_scenario(
         # 5c. Remove scenario-scoped campaign artifacts and refresh derived aggregates.
         remove_scenario_campaign_artifacts(session, scenario)
 
-        # 6. Branches (batch)
+        # 6. Replay artifacts
+        session.exec(
+            sa_delete(ReplayArtifact).where(ReplayArtifact.source_scenario_id == scenario_id)
+        )
+
+        # 7. Branches (batch)
         if branch_ids:
             session.exec(sa_delete(Branch).where(Branch.scenario_id == scenario_id))
 
-        # 7. Agents (batch)
+        # 8. Agents (batch)
         session.exec(sa_delete(Agent).where(Agent.scenario_id == scenario_id))
 
-        # 8. Scenario
+        # 9. Scenario
         session.delete(scenario)
         session.flush()
 
@@ -1296,7 +1311,7 @@ async def delete_scenario(
 
         session.commit()
 
-    # 9. Clean up ChromaDB collection (best-effort)
+    # 10. Clean up ChromaDB collection (best-effort)
     get_vector_store().delete_collection(scenario_id)
 
     logger.info("Deleted scenario %s and all related data", scenario_id)

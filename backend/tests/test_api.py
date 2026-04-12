@@ -34,6 +34,7 @@ from app.models import (
     Leaderboard,
     PendingIntervention,
     Prediction,
+    ReplayArtifact,
     Round,
     Scenario,
     ScenarioCampaignLog,
@@ -2546,6 +2547,56 @@ class TestDeleteScenario:
                 select(Leaderboard).where(Leaderboard.user_id == "leaderboard-cleanup-user")
             ).first()
             assert entry is None
+
+    def test_delete_removes_replay_artifacts_and_old_artifact_becomes_unreadable(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+
+        with Session(engine) as session:
+            artifact = ReplayArtifact(
+                kind="scenario_result_v1",
+                source_scenario_id=sid,
+                payload_json={"scenario": {"id": sid}},
+            )
+            session.add(artifact)
+            session.commit()
+            artifact_id = artifact.id
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+
+        with Session(engine) as session:
+            assert session.get(ReplayArtifact, artifact_id) is None
+
+        artifact_resp = client.get(f"/api/replay-artifact/{artifact_id}")
+        assert artifact_resp.status_code == 404
+        assert artifact_resp.json()["detail"]["code"] == "REPLAY_ARTIFACT_NOT_FOUND"
+
+    def test_delete_integrity_guard_reports_residual_replay_artifacts(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+
+        with Session(engine) as session:
+            session.add(
+                ReplayArtifact(
+                    kind="scenario_result_v1",
+                    source_scenario_id=sid,
+                    payload_json={"scenario": {"id": sid}},
+                )
+            )
+            session.commit()
+
+            issues = scenarios_api._collect_scenario_delete_integrity_issues(
+                session,
+                sid,
+                branch_ids=[],
+                round_ids=[],
+                group_ids=[],
+                room_ids=[],
+            )
+
+        assert issues["replay_artifact"] == 1
 
     def test_delete_integrity_guard_rolls_back_on_residual_records(self, client, monkeypatch):
         """Delete should fail loudly if post-delete integrity checks still find rows."""

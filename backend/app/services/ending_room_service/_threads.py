@@ -308,6 +308,7 @@ def create_ending_room_thread(
     with Session(get_engine()) as session:
         room, participants = _resolve_room_and_participants(session, room_id)
         _ensure_followup_write_allowed(room)
+        _ensure_interaction_mode_allowed(room, interaction_mode)
         addressed = _resolve_addressed_participants(participants, addressed_agent_ids or [])
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT and len(addressed) != 1:
             raise EndingRoomServiceError(

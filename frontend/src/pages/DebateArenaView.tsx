@@ -122,6 +122,7 @@ export function DebateArenaView() {
   const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
   const revealRef = useRef(0);
   const previousPhaseRef = useRef<string | null>(null);
+  const advanceTimeRemainderRef = useRef(0);
 
   const { status: captureStatus, captureScreenshot } = useScreenCapture({
     selector: '.debate-shell',
@@ -164,6 +165,10 @@ export function DebateArenaView() {
   useEffect(() => {
     revealRef.current = revealCount;
   }, [revealCount]);
+
+  useEffect(() => {
+    advanceTimeRemainderRef.current = 0;
+  }, [debate?.id, id]);
 
   useEffect(() => {
     if (!debate?.turns.length || !autoReveal) return undefined;
@@ -496,7 +501,10 @@ export function DebateArenaView() {
       return captureElementDataUrl('.debate-shell', 'element');
     };
     win.advanceTime = async (ms: number) => {
-      const steps = Math.max(1, Math.floor(ms / REVEAL_INTERVAL_MS));
+      advanceTimeRemainderRef.current += Math.max(0, ms);
+      const steps = Math.floor(advanceTimeRemainderRef.current / REVEAL_INTERVAL_MS);
+      if (steps <= 0) return;
+      advanceTimeRemainderRef.current -= steps * REVEAL_INTERVAL_MS;
       setAutoReveal(false);
       setRevealCount((current) => Math.min(debate?.turns.length ?? current, current + steps));
     };

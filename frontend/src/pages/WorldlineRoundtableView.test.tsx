@@ -927,6 +927,75 @@ describe('WorldlineRoundtableView', () => {
     expect(setInteractionModeMock).toHaveBeenCalledWith('thread_followup');
   });
 
+  it('keeps phase insight actions working after the third card', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled four distinct beats.',
+      archivist_note: 'Keep following the later phases.',
+      phase_insights: [
+        { phase: 'opening', stakes: 'Opening hinge.', moderator_focus: 'Focus the frame.', commentary: 'Opening.' },
+        { phase: 'crossfire', stakes: 'Crossfire hinge.', moderator_focus: 'Expose the weak seam.', commentary: 'Crossfire.' },
+        { phase: 'rebuttal', stakes: 'Rebuttal hinge.', moderator_focus: 'Absorb and redirect.', commentary: 'Rebuttal.' },
+        { phase: 'closing', stakes: 'Closing hinge.', moderator_focus: 'Compress the takeaway.', commentary: 'Closing.' },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What changed last?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What changed last?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.6,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.4,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const insightCard = (await screen.findByText('Closing hinge.')).closest('article');
+    expect(insightCard).toBeTruthy();
+    await user.click(within(insightCard as HTMLElement).getByRole('button', { name: 'Start anchored thread' }));
+
+    await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
+      title: expect.any(String),
+      questionAnchorIds: ['roundtable:phase:room-1:closing-3'],
+      interactionMode: 'thread_followup',
+    }));
+  });
+
   it('applies transcript layout metadata to long pending drafts', async () => {
     const longDraft = '请继续沿着这张圆桌追问：为什么这条世界线会把短期军令当成长期秩序，并要求档案官替所有后续成本收口？';
     storeState.pendingDrafts = {
@@ -2699,7 +2768,20 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
   it('renders a mobile roster trigger button and opens the modal on click', async () => {
     const user = userEvent.setup({ delay: null });
     const baseState = createBaseStoreState();
-    storeState.snapshot = baseState.snapshot;
+    storeState.snapshot = {
+      ...baseState.snapshot!,
+      participants: [
+        ...baseState.snapshot!.participants,
+        {
+          id: 'witness-1',
+          room_id: 'room-1',
+          role_slot: 'critic',
+          display_name: 'Witness A',
+          source_branch_id: 'branch-b',
+          source_agent_id: 'agent-b',
+        },
+      ],
+    };
     storeState.result = baseState.result;
     storeState.threadsById = baseState.threadsById;
     storeState.threadOrder = baseState.threadOrder;
@@ -2723,7 +2805,7 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
     const trigger = document.querySelector('.roundtable-mobile-roster-trigger');
     expect(trigger).toBeTruthy();
     // Count should match participants (including archivist), not just representatives
-    expect(trigger!.textContent).toContain('2 participant');
+    expect(trigger!.textContent).toContain('3 participant');
     expect(trigger!.getAttribute('aria-controls')).toBe('mobile-roster-dialog');
 
     // Modal initially hidden
@@ -2737,6 +2819,7 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
     const modal = document.querySelector('.roundtable-mobile-roster-modal');
     expect(modal).toBeTruthy();
     expect(modal!.textContent).toContain('Representative A');
+    expect(modal!.textContent).toContain('Expert witness');
 
     // Dialog semantics
     expect(modal!.getAttribute('role')).toBe('dialog');

@@ -1213,7 +1213,18 @@ describe('ResultView campaign summary', () => {
       agents: [
         { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
       ],
-      predictions: [],
+      predictions: [
+        {
+          id: 'prediction-replay-1',
+          scenario_id: 'scenario-1',
+          user_name: 'Replay Reader',
+          prediction_text: 'The archive stays split.',
+          confidence: 0.6,
+          score: null,
+          score_reason: null,
+          created_at: '2026-03-17T00:00:00Z',
+        },
+      ],
       scenarioMeta: {
         director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
         cooldowns: {},
@@ -1273,6 +1284,8 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'result.export' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'result.score_predictions' })).not.toBeInTheDocument();
     await waitFor(() => {
       const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
       const payload = raw ? JSON.parse(raw) : null;

@@ -799,7 +799,7 @@ export default function WorldlineRoundtableView() {
     [effectiveSnapshot?.id, isZh, verdictPrompt],
   );
   const phaseActionPrompts = useMemo(
-    () => (effectiveResult?.phase_insights ?? []).slice(0, 3).map((insight, index) => {
+    () => (effectiveResult?.phase_insights ?? []).map((insight, index) => {
       const label = getEndingRoomPhaseLabel(insight.phase, t);
       return {
         key: `${insight.phase}-${index}`,
@@ -1982,6 +1982,8 @@ export default function WorldlineRoundtableView() {
                       <span>
                         {participant.role_slot === 'archivist'
                           ? t('roundtable.role_archivist')
+                          : participant.role_slot === 'critic'
+                            ? t('roundtable.role_witness')
                           : (branch?.title ?? t('roundtable.role_representative'))}
                       </span>
                       {branch && <small>{Math.round((branch.probability ?? 0) * 100)}%</small>}

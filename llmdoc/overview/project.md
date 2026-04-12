@@ -83,10 +83,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `gameplay_state_json`
 - `scenarioMeta` 仍存在，但只承担缓存、兼容与 replay 输入职责。
 - replay 分享优先走后端 `ReplayArtifact`；当 artifact 不可用且 URL token 也过大时，Oracle replay 会回退为本地只读副本链接。
+- Oracle follow-up 当前已能通过默认 full signoff，但 `hotseat / all_present / evidence_card / anchored thread` 这类生命周期抓取在慢路径下仍可能回退到 `settled wait / API-driven wait`；这属于自动化与体验稳定性问题，不表示主链未接入。
 
 ## 当前状态
 
 - 主闭环当前维持 `release-candidate` 级别。
+- 最近一次默认本地全链签收工件位于：
+  - `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
 - 最近一轮默认本地全链签收当前已覆盖：
   - `corners / mobile / cross_browser / ending_room_followup / roundtable_full / debate_full`
 - 最近一轮 stricter cross-browser director-state 工件位于：

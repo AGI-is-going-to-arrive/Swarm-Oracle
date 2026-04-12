@@ -1152,6 +1152,36 @@ def test_worldline_roundtable_rejects_all_present_followup():
     assert exc_info.value.code == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
 
 
+def test_worldline_roundtable_rejects_all_present_thread_creation():
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+
+    with pytest.raises(EndingRoomServiceError) as exc_info:
+        create_ending_room_thread(
+            snapshot["id"],
+            title="非法全员线程",
+            interaction_mode=EndingRoomInteractionMode.ALL_PRESENT,
+        )
+
+    assert exc_info.value.code == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
+    with Session(get_engine()) as session:
+        threads = session.exec(
+            select(EndingRoomThread).where(EndingRoomThread.room_id == snapshot["id"])
+        ).all()
+
+    assert len(threads) == 1
+    assert threads[0].mode.value == "room"
+
+
 def test_roundtable_followup_uses_branch_specific_hinges_instead_of_room_title():
     scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(

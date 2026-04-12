@@ -162,6 +162,27 @@ async def _scenario_exists(scenario_id: str) -> bool:
     return await asyncio.to_thread(_scenario_exists_sync, scenario_id)
 
 
+def _scenario_authorized_principal_sync(
+    scenario_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        return scenario is not None and scenario.user_id == principal.subject
+
+
+async def _scenario_authorized_principal(
+    scenario_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    return await asyncio.to_thread(
+        _scenario_authorized_principal_sync,
+        scenario_id,
+        principal,
+    )
+
+
 async def _close_missing_resource(
     websocket: WebSocket,
     *,
@@ -333,6 +354,7 @@ async def websocket_endpoint(websocket: WebSocket, scenario_id: str):
         scenario_id,
         websocket,
         exists_check=_scenario_exists,
+        authorize_principal=_scenario_authorized_principal,
         missing_resource_name="scenario",
         log_client_messages=True,
     )

@@ -67,6 +67,8 @@
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
+- `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
+- `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
 
 ### Ending Room
 
@@ -81,6 +83,7 @@
   `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
+- `create_ending_room_thread()` 当前会在创建阶段校验 room type 与 `interaction_mode` 的组合是否合法；例如 `worldline_roundtable` 不会再先落库一个从一开始就不可用的 `all_present` thread。
 - Oracle 改写 prompt 当前包含双层角色化词汇提示（`_oracle_vocabulary_hints()`）：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
@@ -159,6 +162,7 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
+- `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。
 - BYOK `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验。业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400。
@@ -179,7 +183,7 @@
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 - 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
 - 开启 auth 后，资源存在性与 owner 检查会延后到首帧 auth 之后：
-  - `scenario WS` 当前只做 session gate
+  - `scenario WS` 当前也会校验 signed principal 与 scenario owner，不再只做 session gate
   - `debate / ending-room` WS 还会继续要求 signed principal；认证通过但资源不存在或不属于该 principal 时会走 `4404`
 - app 级非业务端点（当前如 `/`、`/metrics`）不走 router 级 `verify_session`；`/api/capabilities`、`/api/health`、`/api/health/test` 已纳入业务 REST 门禁。
 - agent identity / workshop 与按 `user_id` 读取的 campaign profile 系列当前已开始优先使用 token 内的 principal `sub` 作为 owner 真值，不再单纯信任 query/body 里的 `user_id`。

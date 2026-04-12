@@ -510,6 +510,48 @@ def test_worldline_roundtable_api_rejects_all_present_followup(client):
     assert followup_resp.json()["detail"]["code"] == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
 
 
+def test_worldline_roundtable_api_rejects_all_present_thread_creation(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+
+    asyncio.run(run_ending_room_background(snapshot["id"]))
+
+    thread_resp = client.post(
+        f"/api/ending-room/{snapshot['id']}/thread",
+        json={
+            "title": "非法全员线程",
+            "interaction_mode": "all_present",
+        },
+    )
+
+    assert thread_resp.status_code == 422
+    assert thread_resp.json()["detail"]["code"] == "ENDING_ROOM_INTERACTION_MODE_NOT_ALLOWED"
+
+    with Session(get_engine()) as session:
+        threads = session.exec(
+            select(EndingRoomThread).where(EndingRoomThread.room_id == snapshot["id"])
+        ).all()
+
+    assert len(threads) == 1
+    assert threads[0].mode.value == "room"
+
+
 def test_deleted_scenario_invalidates_ending_room_endpoints(client):
     fixture = _seed_ready_scenario()
 

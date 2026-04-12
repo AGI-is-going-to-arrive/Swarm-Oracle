@@ -1,7 +1,6 @@
 """API tests for Debate Arena Track D / Phase D1."""
 
 from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -471,6 +470,125 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
     result_payload = result.json()
     assert result_payload["phase_insights"][0]["commentary"] == "Imported opening commentary"
     assert result_payload["phase_insights"][-1]["judge_focus"] == "Imported verdict focus"
+
+
+def _make_import_replay_payload() -> dict[str, object]:
+    return {
+        "debate": {
+            "question": "Should AI run every city?",
+            "motion": "Motion",
+            "participants": [
+                {"side": "proposition", "name": "Proposition", "role": "Governance Vanguard"},
+                {"side": "opposition", "name": "Opposition", "role": "Governance Skeptic"},
+                {"side": "judge", "name": "Judge", "role": "Structured Arbiter"},
+            ],
+            "turns": [
+                {
+                    "sequence": 1,
+                    "phase": "opening",
+                    "speaker_side": "proposition",
+                    "speaker_name": "Proposition",
+                    "content": "Imported turn",
+                },
+            ],
+            "predictions": [
+                {
+                    "kind": "winner",
+                    "target_value": "proposition",
+                    "confidence": 0.8,
+                    "user_id": "director-1",
+                    "user_name": "Director",
+                },
+            ],
+            "counterplay": {
+                "kind": "winner",
+                "target_value": "opposition",
+                "confidence": 0.6,
+                "phase": "crossfire",
+                "variant": "reversal",
+                "outcome": "miss",
+                "user_name": "Replay User",
+            },
+            "result": {
+                "winner": "proposition",
+                "verdict_tone": "balance",
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("phase", "overture", "invalid turns.phase"),
+        ("speaker_side", "moderator", "invalid turns.speaker_side"),
+    ],
+)
+def test_import_replay_debate_rejects_invalid_turn_fields(
+    client: TestClient,
+    field: str,
+    value: str,
+    message: str,
+):
+    payload = _make_import_replay_payload()
+    payload["debate"]["turns"][0][field] = value
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert message in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_prediction_kind(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["predictions"][0]["kind"] = "judge"
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "invalid predictions.kind" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_prediction_confidence(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["predictions"][0]["confidence"] = "very-sure"
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "invalid predictions.confidence" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_prediction_counterplay_phase(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["predictions"][0]["is_counterplay"] = True
+    payload["debate"]["predictions"][0]["counterplay_phase"] = "finale"
+    payload["debate"]["predictions"][0]["counterplay_variant"] = "reversal"
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "invalid predictions.counterplay_phase" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_counterplay_phase(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["counterplay"]["phase"] = "finale"
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "invalid counterplay.phase" in resp.text
+
+
+def test_import_replay_debate_rejects_invalid_counterplay_confidence(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["counterplay"]["confidence"] = "certain"
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "invalid counterplay.confidence" in resp.text
 
 
 def test_import_replay_debate_is_idempotent_for_identical_payload(client: TestClient):

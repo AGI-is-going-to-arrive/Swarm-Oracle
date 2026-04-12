@@ -209,6 +209,74 @@ class TestCompare:
         )
         assert resp.status_code == 404
 
+    @pytest.mark.parametrize(
+        ("use_missing_branch_a", "expected_message"),
+        [
+            (True, "branch_a not found in scenario"),
+            (False, "branch_b not found in scenario"),
+        ],
+    )
+    def test_rejects_missing_branch_with_stable_error(
+        self,
+        client,
+        use_missing_branch_a,
+        expected_message,
+    ):
+        """GET compare should return a structured 404 when a branch is invalid."""
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid_a = _seed_branch(engine, sid, title="A")
+        bid_b = _seed_branch(engine, sid, title="B")
+
+        resp = client.get(
+            f"/api/scenario/{sid}/compare",
+            params={
+                "branch_a": "missing-branch" if use_missing_branch_a else bid_a,
+                "branch_b": bid_b if use_missing_branch_a else "missing-branch",
+            },
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "COMPARE_BRANCH_NOT_FOUND",
+            "message": expected_message,
+        }
+
+    @pytest.mark.parametrize(
+        ("use_foreign_branch_a", "expected_message"),
+        [
+            (True, "branch_a not found in scenario"),
+            (False, "branch_b not found in scenario"),
+        ],
+    )
+    def test_rejects_branch_from_other_scenario(
+        self,
+        client,
+        use_foreign_branch_a,
+        expected_message,
+    ):
+        """GET compare should return the same error for cross-scenario branches."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="Scenario A")
+        other_sid = _seed_scenario(engine, question="Scenario B")
+        bid_a = _seed_branch(engine, sid, title="A")
+        bid_b = _seed_branch(engine, sid, title="B")
+        foreign_branch = _seed_branch(engine, other_sid, title="Foreign")
+
+        resp = client.get(
+            f"/api/scenario/{sid}/compare",
+            params={
+                "branch_a": foreign_branch if use_foreign_branch_a else bid_a,
+                "branch_b": bid_b if use_foreign_branch_a else foreign_branch,
+            },
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "COMPARE_BRANCH_NOT_FOUND",
+            "message": expected_message,
+        }
+
 
 # ── GET /checkpoints ─────────────────────────────────────
 

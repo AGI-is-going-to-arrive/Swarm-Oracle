@@ -219,6 +219,76 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
 - 已完成的前端适配：
   - `frontend/src/stores/endingRoomStore.ts`
 
+## 2026-04-12 Comprehensive review / QA / playability audit
+
+- 已重新读取当前真值入口：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+  - `README.md`
+  - `implement/11_optimization_roadmap.md`
+  - `implement/19_four_track_execution_plan.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `implement/pretext_integration_plan.md`
+  - `.impeccable.md`
+- `impeccable` 更新后的清理步骤已执行，`skills-lock.json` 已移除旧 skill 锁项：`frontend-design`、`teach-impeccable`、`normalize`、`onboard`、`extract`。
+- 当前并行审查线：
+  - 后端 reviewer：审 correctness / auth / replay / Oracle / Debate / corner cases
+  - 前端 reviewer：审 UI/交互 / Phaser / i18n / responsive / pretext / E2E 覆盖
+  - Phase 对照 explorer：核对 roadmap / backlog / pretext 阶段与真实接线状态
+  - 玩法 explorer：评估核心循环、玩家主动性、差异化与薄弱点
+- 当前本地环境：
+  - backend `uvicorn` 已启动在 `http://127.0.0.1:18927`
+  - frontend `vite` 已启动在 `http://127.0.0.1:18928`
+- 当前验证结果：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `cd frontend && npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/pages/DebateArenaView.test.tsx src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/i18n/locales.test.ts`：`127 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_debate_api.py tests/test_debate_service.py tests/test_api.py tests/test_predictions.py tests/test_config.py -q`：`327 passed`
+  - `cd frontend && npm run build`：通过
+  - `cd frontend && npm run perf:budgets:check`：通过
+  - `cd frontend && npm run assets:provenance:check`：通过
+  - `cd frontend && npm run e2e:resume -- full`：`8 / 8` steps passed
+  - `cd frontend && npm run e2e:phase3a:full`：`17 / 17` steps passed
+  - `cd frontend && npm run e2e:phase3b:full`：`14 / 14` steps passed
+  - `cd frontend && npm run release:signoff -- --headless`：进行中
+- 当前人工/交互式 QA：
+  - 首页 desktop / mobile 首屏截图已检查，当前无明显裁切，但 desktop 顶部留白偏多、整体更像“精致控制台”而非高动势游戏入口。
+  - `playwright-interactive` 已创建桌面 + 移动持久会话。
+  - Desktop quick-start -> `/sim/:id` 已手动跑通，SimulationView 首屏无明显功能性报错，但在推演前段存在较大空白区，游戏感偏弱，后续需结合 reviewer 结论再定是否修。
+- 当前路线判断：
+  - 不建议整仓切换到 `Tailwind + shadcn`
+  - 优先考虑在现有 CSS 体系上局部引入 `Motion`
+  - `Pretext` 继续聚焦文本密集区，不作为全站 UI 方案
+  - `Phaser` 继续只负责 Theater / playfield，不接管主 UI
+
+## 2026-04-12 Security + UX fix pass
+
+- 已落地后端修复：
+  - `scenario WS` 现在要求 owner principal，修补跨用户订阅 live scenario 的漏洞。
+  - `/api/scenario/{scenario_id}/compare` 现在会验证 `branch_a / branch_b` 属于该 `scenario_id`，不再允许跨场景 branch 混入。
+  - `delete_scenario()` 现在会清理关联 `ReplayArtifact`，并把 `replay_artifact` 纳入完整性检查。
+  - `create_ending_room_thread()` 现在会在创建阶段拒绝 `worldline_roundtable + all_present` 这种不允许的 interaction mode。
+  - `debate import-replay` 现在会把非法 `phase / speaker_side / prediction / counterplay` 字段收口为稳定 `422`，不再 silent corruption / `500`。
+- 已落地前端修复：
+  - `WorldlineRoundtableView` 的 phase insight CTA 不再只支持前 3 条；第 4 条及之后不再因为 `undefined.action` 崩掉。
+  - roundtable mobile roster 现在会正确把 `critic` 标成 witness，而不是落回普通代表/分支名。
+  - `ResultView` replay 模式下的 `Export Markdown` 现在禁用，`score_predictions` 不再在 replay 模式出现。
+  - `DebateArenaView` 的 `advanceTime(ms)` 现在改为带余量累计，不会因为 16ms/33ms 这类 settle tick 提前跳过 turn。
+  - `release-signoff` 的 `corners` 步骤现在显式启用 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
+- 当前额外验证：
+  - `frontend`: `ResultView + DebateArenaView + WorldlineRoundtableView` 定向回归 `70 passed`
+  - `backend`: `test_ws + test_counterfactual + test_replay + test_api + test_ending_room_service + test_ending_room_api + test_debate_api` 合并回归 `327 passed`
+  - `frontend`: `npx tsc --noEmit -p tsconfig.app.json` 通过
+  - `frontend`: `npm run build` 通过
+- `release-signoff` 第二轮进行中：
+  - 最终工件：`frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
+  - 最终结果：`passed`
+  - 已通过：`backend_checks / backend_metrics / typecheck / build / perf_budgets / assets_check / corners / mobile / cross_browser / ending_room_followup / roundtable_full / debate_full`
+  - 过程中已观察到多条 Oracle follow-up fallback warning：`hotseat / all-present / evidence-card / single-ending verdict thread / anchored thread / mobile hotseat` 等生命周期抓取会回退到 `settled wait` 或 `API-driven wait`
+  - `ending_room_followup` 最终仍被记为 `passed`，但产物里确实出现过 `replayCoverageError` 与多条 fallback warning；说明 Oracle follow-up 主链可用，但“实时生命周期可观测性/流式感”还不够稳，属于体验与自动化稳定性问题，而不是主链未接入
+
 ## 2026-04-07 Claude follow-up e2e + Oracle reasoning leak fix
 
 - 已按当前真值重新读取：

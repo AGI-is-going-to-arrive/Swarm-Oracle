@@ -413,6 +413,9 @@ function main() {
         artifactDir: cornersOutput,
         resultFile: path.join(cornersOutput, "result.json"),
         browserLaunchFile: path.join(cornersOutput, "browser-launch.json"),
+        env: {
+          SWARM_E2E_FIXTURE_MODE: "1",
+        },
       },
     );
     runStep(

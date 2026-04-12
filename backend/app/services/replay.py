@@ -23,6 +23,25 @@ from app.models.database import (
 logger = logging.getLogger(__name__)
 
 
+def _require_branch_in_scenario(
+    session: Session,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    branch_param: str,
+) -> Branch:
+    """Load a branch scoped to the current scenario or raise a stable error."""
+    branch = session.exec(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.scenario_id == scenario_id,
+        )
+    ).first()
+    if branch is None:
+        raise ValueError(f"{branch_param} not found in scenario")
+    return branch
+
+
 def write_checkpoint(
     scenario_id: str,
     branch_id: str,
@@ -221,6 +240,19 @@ def compare_branches(
     word-level Jaccard similarity of message contents.
     """
     with Session(get_engine()) as session:
+        _require_branch_in_scenario(
+            session,
+            scenario_id,
+            branch_a,
+            branch_param="branch_a",
+        )
+        _require_branch_in_scenario(
+            session,
+            scenario_id,
+            branch_b,
+            branch_param="branch_b",
+        )
+
         # Load rounds + messages for branch A
         rounds_a = session.exec(
             select(Round)

@@ -264,6 +264,29 @@ describe('DebateArenaView', () => {
     });
   });
 
+  it('does not advance debate turns on sub-interval automation ticks', async () => {
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByRole('button', { name: 'debate.view_result' })).length).toBeGreaterThan(0);
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(16);
+    });
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.debate?.latest_turn_id).toBe('turn-1');
+      expect(payload?.page?.debate?.visible_quotes).not.toContain('Verdict issued.');
+    });
+  });
+
   it('captures panel and bet modal surfaces through automation hook', async () => {
     const user = userEvent.setup();
     mockDebateStore.debate = {

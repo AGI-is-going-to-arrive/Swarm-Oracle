@@ -265,6 +265,49 @@ def _normalize_import_replay_choice(
     return cleaned
 
 
+def _normalize_import_replay_enum(
+    raw_value: Any,
+    *,
+    enum_cls: type[DebatePhase] | type[DebateSide] | type[DebatePredictionKind],
+    field_name: str,
+    code: str,
+):
+    if isinstance(raw_value, enum_cls):
+        return raw_value
+    cleaned = str(raw_value or "").strip().lower()
+    try:
+        return enum_cls(cleaned)
+    except ValueError as exc:
+        raise api_error(
+            422,
+            code,
+            f"Replay debate has invalid {field_name}: {cleaned}",
+        ) from exc
+
+
+def _normalize_import_replay_float(
+    raw_value: Any,
+    *,
+    field_name: str,
+    code: str,
+) -> float:
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise api_error(
+            422,
+            code,
+            f"Replay debate has invalid {field_name}: {raw_value}",
+        ) from exc
+    if not (0.0 <= value <= 1.0):
+        raise api_error(
+            422,
+            code,
+            f"Replay debate has invalid {field_name}: {raw_value}",
+        )
+    return value
+
+
 def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
     normalized: list[tuple[int, dict[str, Any]]] = []
     for raw_turn in turns:
@@ -284,7 +327,28 @@ def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
                 "REPLAY_DEBATE_TURN_SEQUENCE_INVALID",
                 "Replay debate turn sequence must be a positive integer",
             )
-        normalized.append((sequence, raw_turn))
+        phase = _normalize_import_replay_enum(
+            raw_turn.get("phase", DebatePhase.OPENING.value),
+            enum_cls=DebatePhase,
+            field_name="turns.phase",
+            code="REPLAY_DEBATE_TURN_FIELD_INVALID",
+        )
+        speaker_side = _normalize_import_replay_enum(
+            raw_turn.get("speaker_side", DebateSide.PROPOSITION.value),
+            enum_cls=DebateSide,
+            field_name="turns.speaker_side",
+            code="REPLAY_DEBATE_TURN_FIELD_INVALID",
+        )
+        normalized.append(
+            (
+                sequence,
+                {
+                    **raw_turn,
+                    "phase": phase.value,
+                    "speaker_side": speaker_side.value,
+                },
+            )
+        )
 
     if not normalized:
         return []
@@ -377,33 +441,72 @@ def _normalize_import_replay_predictions(predictions: list[Any]) -> list[dict[st
     for raw_prediction in predictions:
         if not isinstance(raw_prediction, dict):
             continue
-        try:
-            kind = DebatePredictionKind(
-                str(raw_prediction.get("kind", DebatePredictionKind.WINNER.value))
-            )
-        except ValueError:
-            continue
+        kind = _normalize_import_replay_enum(
+            raw_prediction.get("kind", DebatePredictionKind.WINNER.value),
+            enum_cls=DebatePredictionKind,
+            field_name="predictions.kind",
+            code="REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+        )
 
         counterplay_phase = raw_prediction.get("counterplay_phase")
         normalized_phase: str | None = None
         if counterplay_phase:
-            normalized_phase = DebatePhase(str(counterplay_phase)).value
+            normalized_phase = _normalize_import_replay_enum(
+                counterplay_phase,
+                enum_cls=DebatePhase,
+                field_name="predictions.counterplay_phase",
+                code="REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+            ).value
+        counterplay_variant = (
+            str(raw_prediction.get("counterplay_variant", "")).strip().lower() or None
+        )
+        if counterplay_variant is not None and counterplay_variant not in _COUNTERPLAY_VARIANTS:
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+                f"Replay debate has invalid predictions.counterplay_variant: {counterplay_variant}",
+            )
+
+        target_value = str(raw_prediction.get("target_value", "")).strip().lower()
+        if target_value and target_value not in _PREDICTION_OPTIONS[kind]:
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+                f"Replay debate has invalid predictions.target_value: {target_value}",
+            )
+
+        confidence = _normalize_import_replay_float(
+            raw_prediction.get("confidence", 0.5),
+            field_name="predictions.confidence",
+            code="REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+        )
+        is_counterplay = bool(raw_prediction.get("is_counterplay"))
+        if is_counterplay and normalized_phase is None:
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+                "Replay debate counterplay prediction is missing predictions.counterplay_phase",
+            )
+        if is_counterplay and counterplay_variant is None:
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+                "Replay debate counterplay prediction is missing predictions.counterplay_variant",
+            )
 
         normalized.append(
             {
                 "kind": kind.value,
-                "target_value": str(raw_prediction.get("target_value", "")).strip(),
-                "confidence": float(raw_prediction.get("confidence", 0.5) or 0.5),
+                "target_value": target_value,
+                "confidence": confidence,
                 "user_id": str(raw_prediction.get("user_id", "anonymous")).strip() or "anonymous",
                 "user_name": (
                     str(raw_prediction.get("user_name", "Anonymous Director")).strip()
                     or "Anonymous Director"
                 ),
-                "is_counterplay": bool(raw_prediction.get("is_counterplay")),
+                "is_counterplay": is_counterplay,
                 "counterplay_phase": normalized_phase,
-                "counterplay_variant": (
-                    str(raw_prediction.get("counterplay_variant", "")).strip() or None
-                ),
+                "counterplay_variant": counterplay_variant,
                 "score": raw_prediction.get("score"),
                 "score_reason": str(raw_prediction.get("score_reason", "")).strip() or None,
             }
@@ -428,20 +531,43 @@ def _normalize_import_replay_counterplay(counterplay: dict[str, Any] | None) -> 
     if not isinstance(counterplay, dict):
         return None
 
-    try:
-        kind = DebatePredictionKind(
-            str(counterplay.get("kind", DebatePredictionKind.WINNER.value))
+    kind = _normalize_import_replay_enum(
+        counterplay.get("kind", DebatePredictionKind.WINNER.value),
+        enum_cls=DebatePredictionKind,
+        field_name="counterplay.kind",
+        code="REPLAY_DEBATE_COUNTERPLAY_FIELD_INVALID",
+    )
+    phase = _normalize_import_replay_enum(
+        counterplay.get("phase", DebatePhase.CROSSFIRE.value),
+        enum_cls=DebatePhase,
+        field_name="counterplay.phase",
+        code="REPLAY_DEBATE_COUNTERPLAY_FIELD_INVALID",
+    )
+    variant = _normalize_import_replay_choice(
+        counterplay.get("variant"),
+        allowed=_COUNTERPLAY_VARIANTS,
+        default="balanced",
+        field_name="counterplay.variant",
+    )
+    target_value = str(counterplay.get("target_value", "")).strip().lower()
+    if target_value and target_value not in _PREDICTION_OPTIONS[kind]:
+        raise api_error(
+            422,
+            "REPLAY_DEBATE_COUNTERPLAY_FIELD_INVALID",
+            f"Replay debate has invalid counterplay.target_value: {target_value}",
         )
-        phase = DebatePhase(str(counterplay.get("phase", DebatePhase.CROSSFIRE.value)))
-    except ValueError:
-        return None
+    confidence = _normalize_import_replay_float(
+        counterplay.get("confidence", 0.5),
+        field_name="counterplay.confidence",
+        code="REPLAY_DEBATE_COUNTERPLAY_FIELD_INVALID",
+    )
 
     return {
         "kind": kind.value,
-        "target_value": str(counterplay.get("target_value", "")).strip(),
-        "confidence": float(counterplay.get("confidence", 0.5) or 0.5),
+        "target_value": target_value,
+        "confidence": confidence,
         "phase": phase.value,
-        "variant": str(counterplay.get("variant", "balanced")).strip() or "balanced",
+        "variant": variant,
         "outcome": str(counterplay.get("outcome", "")).strip() or None,
         "user_name": str(counterplay.get("user_name", "Imported Replay")).strip()
         or "Imported Replay",
@@ -740,19 +866,12 @@ async def import_replay_debate(
         debate_id = debate.id
 
         for raw_turn in normalized_turns:
-            if not isinstance(raw_turn, dict):
-                continue
-            try:
-                phase = DebatePhase(str(raw_turn.get("phase", DebatePhase.OPENING.value)))
-                side = DebateSide(str(raw_turn.get("speaker_side", DebateSide.PROPOSITION.value)))
-            except ValueError:
-                continue
             session.add(
                 DebateTurn(
                     debate_id=debate.id,
                     sequence=int(raw_turn.get("sequence", 1) or 1),
-                    phase=phase,
-                    speaker_side=side,
+                    phase=DebatePhase(raw_turn["phase"]),
+                    speaker_side=DebateSide(raw_turn["speaker_side"]),
                     speaker_name=str(raw_turn.get("speaker_name", "")).strip() or "Speaker",
                     content=str(raw_turn.get("content", "")).strip(),
                     score_delta_json=raw_turn.get("score_delta") if isinstance(raw_turn.get("score_delta"), dict) else None,  # noqa: E501

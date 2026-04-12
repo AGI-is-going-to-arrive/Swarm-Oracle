@@ -136,7 +136,10 @@ async def compare_branches_endpoint(
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
 
-    result = compare_branches(scenario_id, branch_a, branch_b)
+    try:
+        result = compare_branches(scenario_id, branch_a, branch_b)
+    except ValueError as exc:
+        raise api_error(404, "COMPARE_BRANCH_NOT_FOUND", str(exc)) from exc
     return result
 
 

@@ -12,7 +12,7 @@
   - `Oracle Chambers / 世界线圆桌`
   - replay 分享与导入
   - director campaign、玩法卡、结构化押注
-- 最近一次稳定全链签收工件位于 `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`。
+- 最近一次稳定全链签收工件位于 `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`。
 - 这份工件当前覆盖默认本地签收口径：
   - backend checks
   - backend `/metrics`

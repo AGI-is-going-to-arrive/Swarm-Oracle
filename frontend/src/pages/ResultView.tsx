@@ -1559,7 +1559,7 @@ export default function ResultView() {
           <button
             className="btn"
             onClick={handleExport}
-            disabled={exporting}
+            disabled={exporting || isReplayMode}
           >
             {exporting ? t('result.exporting') : t('result.export')}
           </button>
@@ -1770,7 +1770,7 @@ export default function ResultView() {
       {predictions.length > 0 && (
         <section className="result-predictions">
           <h2 className="result-predictions-title">{t('result.predictions_title')}</h2>
-          {hasUnscored && (
+          {hasUnscored && !isReplayMode && (
             <button
               className="btn result-score-btn"
               onClick={handleScore}

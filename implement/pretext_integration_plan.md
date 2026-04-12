@@ -3,7 +3,7 @@
 > 文档类型：active archive
 > 当前真值：否，作为独立接入计划使用；当前产品真值仍以 `README.md` 与 `llmdoc/*` 为准
 > 当前时间：2026-03-31
-> 状态：P0-P3、P5 已完成；P4 模块已封装但未接入 WorldScene
+> 状态：P0-P5 已完成；其中 P4 已接入 `WorldScene`，但口径仍保持“可选桥接 + 失败自动回退”
 
 > 状态更新（2026-04-01，最新）：
 > - `@chenglou/pretext@0.0.3` 已安装进 `frontend/`
@@ -15,7 +15,7 @@
 >   - `overflow_turn_count / overflow_draft_count`
 >   - `collapsible_turn_count / collapsed_turn_count`
 > - `P3` 已完成：`inputPredict.ts` 替代 InputView textarea 的 scrollHeight 回流（13 测试）
-> - `P4` 模块已封装（`canvasTextPredict.ts`，7 测试），但未接入 WorldScene（Phaser 字体栈差异导致预测偏差，回滚后保留为独立模块）
+> - `P4` 已完成：`canvasTextPredict.ts` 当前已接入 `WorldScene.showBubble()`，预测可用时跳过 Phaser `getBounds()`，预测失败时自动回退原路径
 > - `P5` 已完成：`textContract.test.ts` 71 项文本契约测试，覆盖中英双语按钮标签 / 卡片标题 / 描述文本 / Oracle 布局 / Share 文案溢出检测
 
 ---
@@ -422,7 +422,7 @@
 
 ## P4 — Canvas / Theater 可选桥接
 
-> 当前状态：未开始
+> 当前状态：已完成，按“预测可用就走 pretext / 不可用就回退 Phaser 原路径”的方式接入
 
 ### 目标
 
@@ -446,13 +446,17 @@
 
 ### 结论
 
-默认不做，除非前面阶段已经证明收益非常明确。
+这条线当前已经正式接进 `WorldScene.showBubble()`，但仍保持保守口径：
+
+- 预测命中时减少 Phaser `getBounds()` 路径
+- 预测不可靠时自动回退
+- 不把 Canvas 文本预测继续扩到更多页面或更多 Phaser 文本面
 
 ---
 
 ## P5 — QA / CI 文本契约
 
-> 当前状态：未开始
+> 当前状态：已完成；当前主要问题不是测试不存在，而是默认 CI / signoff 还没有把全部 pretext 契约都升成硬门槛
 
 ### 目标
 

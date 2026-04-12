@@ -164,11 +164,12 @@
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
-  - `phase insight` 级追问 / 开线程
+  - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
   - `后续三回合` 按钮
+  - mobile roster modal 当前会区分 `archivist / witness / representative`，不再把 witness 回落成普通代表标签
 - Oracle 当前锚点规则：
   - `EndingChatModal`
     - `verdict / insight / key_moment / quote`
@@ -207,6 +208,10 @@
   - `debugEndingRoomMode`
   - `debugEndingRoomAgents`
   - 仅用于脚本/调试稳定打开 live chamber，正常用户流仍走结果页按钮 + picker。
+- `ResultView` 当前在 replay 模式下会：
+  - 禁用 `Export Markdown`
+  - 隐藏 `score_predictions`
+  - 只保留本地导入、只读分享与 permalink 相关动作
 - `ResultView` 当前在 `counterfactual_replay` capability 开启且结果里存在 branches 时，会显示：
   - `CounterfactualPanel`
   - `ResumePanel`
@@ -230,6 +235,10 @@
   - `turn-delta`
   - `turn-commit`
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
+- 默认 `release-signoff` 当前会把 `corners` 步骤固定到 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
+- 最新 full signoff 当前已通过：
+  - `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
+  - 其中 `ending_room_followup` 虽然最终标记为 `passed`，但 `hotseat / all_present / evidence_card / anchored thread` 在慢路径下仍可能回退到 `settled wait / API-driven wait`；summary 会记录 warning，不会直接升成失败。
 - `single-ending` 的 mobile verdict-anchor thread 当前也走 deterministic 兜底：
   - thread title 每次唯一，避免复用同一 room 时点到旧 thread
   - 如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
@@ -257,7 +266,7 @@
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时
 - 最近一次默认本地全链签收工件位于：
-  - `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`
+  - `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
 - 当前 single-ending Oracle 已额外做过真实浏览器复核：
   - 结果页无 `Start Roundtable / Crossline Gallery`
   - `ending_chamber / one_move_only` 可正常打开
