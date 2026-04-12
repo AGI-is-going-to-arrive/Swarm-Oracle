@@ -41,6 +41,8 @@
       "web_search_status_success": "Real-world context acquired",
       "web_search_status_error": "Search returned no results, proceeding",
       "web_search_status_skipped": "Search not enabled",
+      "advanced_settings": "Advanced Settings",
+      "advanced_settings_expanded": "Advanced Settings (collapse)",
       "byok_toggle": "🔑 Custom LLM",
       "byok_api_key_label": "API Key",
       "byok_api_key_help": "Paste your provider API key. It stays only in this tab session.",
@@ -230,7 +232,11 @@
         "noon": "Noon",
         "dusk": "Dusk",
         "night": "Night"
-      }
+      },
+      "warmup_narrative_phase_1": "Loading theater engine...",
+      "warmup_narrative_phase_2": "Summoning AI agents...",
+      "warmup_narrative_phase_3": "Building worldlines...",
+      "warmup_narrative_hint": "Simulation starting soon"
     },
     "intervention": {
       "title": "Butterfly Effect",
@@ -292,6 +298,8 @@
       "leaderboard_link": "View Leaderboard →",
       "share_btn": "📱 Generate Copy",
       "copy_permalink_btn": "🔗 Copy Permalink",
+      "causal_graph_link": "View Causal Graph",
+      "compare_link": "Compare branches",
       "permalink_copied": "✅ Permalink Copied",
       "share_challenge_btn": "🔗 Share Challenge",
       "challenge_link_copied": "✅ Challenge Link Copied",
@@ -735,7 +743,13 @@
       "result_pending": "This debate result is still being prepared.",
       "result_missing": "This debate does not have a result payload yet.",
       "bet_error_locked": "Betting is already locked for this debate.",
-      "share_title": "Debate Share Copy"
+      "share_title": "Debate Share Copy",
+      "spotlight_speaker": "{{name}} is speaking",
+      "fold_show_all": "Show all turns",
+      "fold_collapse": "Collapse past turns",
+      "new_messages": "{{count}} new",
+      "strategy_accordion_label": "Strategy panels",
+      "viewing_history": "Viewing history · Back to Live"
     },
     "ending_room": {
       "title": "Ending Chamber",
@@ -772,7 +786,12 @@
       "action_evidence_card": "Submit evidence card",
       "evidence_card_hint": "Drag a summary card from another worldline to compare.",
       "evidence_card_label": "Evidence from another worldline",
-      "evidence_card_drop_hint": "Drop an evidence card here to compare worldlines"
+      "evidence_card_drop_hint": "Drop an evidence card here to compare worldlines",
+      "participants_collapsed": "Participants",
+      "expand_details": "Expand details",
+      "collapse_details": "Collapse details",
+      "sidebar_mobile_label": "Chamber sidebar",
+      "sidebar_mobile_description": "Quick actions and participant details for this chamber."
     },
     "roundtable": {
       "title": "Worldline Roundtable",
@@ -824,7 +843,12 @@
       "action_collapse_turn": "Collapse turn",
       "action_epilogue": "Three-turn epilogue",
       "action_evidence_card": "Submit evidence card",
-      "evidence_card_label": "Evidence from another worldline"
+      "evidence_card_label": "Evidence from another worldline",
+      "avatar_ring_speaker": "{{name}} is speaking",
+      "new_messages": "{{count}} new messages",
+      "expand_roster": "Expand full roster",
+      "collapse_roster": "Collapse roster",
+      "phase_insights_label": "Phase insights"
     },
     "agents": {
       "library_title": "Agent Library",
@@ -980,7 +1004,66 @@
       },
       "theme_hooks_aria": "Theme hooks",
       "daily_challenge_art_alt": "Daily challenge pixel illustration",
-      "archive_seal_alt": "Archive seal illustration"
+      "archive_seal_alt": "Archive seal illustration",
+      "more_count": "+{{count}} more",
+      "overflow_menu": "More actions"
+    },
+    "shared": {
+      "spotlight": {
+        "latest_turn": "Latest turn",
+        "hot_turn": "Hot turn",
+        "speaker_label": "Speaker",
+        "score_delta": "Score change"
+      },
+      "foldable": {
+        "show_full": "Show full turn",
+        "collapse": "Collapse turn",
+        "collapsed_hint": "Click to expand full turn",
+        "turn_count": "{{count}} turns total",
+        "phase_divider": "Phase {{phase}}"
+      },
+      "avatar": {
+        "speaking": "Speaking",
+        "idle": "Waiting to speak",
+        "avatar_alt": "{{name}}'s avatar"
+      },
+      "actions": {
+        "follow_quote": "Follow this quote",
+        "start_thread": "Start new thread",
+        "hotseat_quote": "Hotseat quote",
+        "copy_turn": "Copy turn"
+      },
+      "spotlight_card": {
+        "counterplay_badge": "Counterplay",
+        "verdict_badge": "Verdict",
+        "opening_badge": "Opening",
+        "rebuttal_badge": "Rebuttal",
+        "closing_badge": "Closing",
+        "crossfire_badge": "Crossfire"
+      },
+      "transcript": {
+        "auto_scroll": "Auto scroll",
+        "scroll_to_latest": "Jump to latest",
+        "no_turns_yet": "No turns yet",
+        "loading_turns": "Loading..."
+      }
+    },
+    "input_view": {
+      "config_toggle": "Advanced settings",
+      "config_toggle_expand": "Expand advanced settings",
+      "config_toggle_collapse": "Collapse advanced settings",
+      "quick_action_hint": "Quick start",
+      "hero_brand_alt": "SwarmOracle logo"
+    },
+    "result_ux": {
+      "action_overflow": "More actions",
+      "director_notebook": "Director's Notebook",
+      "director_notebook_expand": "Expand director's notebook",
+      "director_notebook_collapse": "Collapse director's notebook",
+      "web_sources_show": "Show real-world sources",
+      "web_sources_hide": "Hide real-world sources",
+      "ending_most_likely": "Most Likely",
+      "section_predictions": "Prediction Scores"
     }
   }
 }

@@ -3,6 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
+import {
+  ENDING_ROOM_COPY_REPLAY_PATTERN,
+  ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+  ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+} from "../src/lib/endingRoomReplayAutomation.js";
+import { assertReplayCoverage } from "../src/lib/e2eReplayGuards.js";
+import {
+  isLiveRoundtableAutomationPayload,
+  isReadonlyRoundtableAutomationPayload,
+} from "../src/lib/roundtableReplayAutomation.js";
 import { closePlaywrightBrowser, closePlaywrightContext } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -222,6 +232,70 @@ async function tapLocator(page, locator, label) {
     throw new Error(`${label} has no tappable bounding box`);
   }
   await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+function locateRoundtableHeaderAction(page, namePattern) {
+  return page
+    .locator(".worldline-roundtable-hero__actions .btn")
+    .filter({ hasText: namePattern })
+    .last();
+}
+
+async function waitForRoundtableHeaderAction(page, {
+  label,
+  namePattern,
+  timeout = 30000,
+} = {}) {
+  const action = locateRoundtableHeaderAction(page, namePattern);
+  await action.waitFor({ state: "visible", timeout });
+  return action;
+}
+
+async function waitForLiveRoundtableReady(page, {
+  expectedRoomId = null,
+  expectedActiveThreadId = null,
+  expectedQuestionAnchorIds = null,
+  expectedAnchorKind = null,
+  expectedInteractionMode = null,
+  timeout = 10000,
+  label = "roundtable live replay preflight",
+} = {}) {
+  return waitForAutomation(
+    page,
+    (payload) => isLiveRoundtableAutomationPayload(payload, {
+      expectedRoomId,
+      expectedActiveThreadId,
+      expectedQuestionAnchorIds,
+      expectedAnchorKind,
+      expectedInteractionMode,
+    }),
+    timeout,
+    label,
+  );
+}
+
+async function waitForReadonlyRoundtableReplayVisible(page, {
+  replayKind = "either",
+  expectedActiveThreadId = null,
+  expectedQuestionAnchorIds = null,
+  expectedAnchorKind = null,
+  expectedInteractionMode = null,
+  timeout = 20000,
+  label = "roundtable replay readonly state",
+} = {}) {
+  return waitForAutomation(
+    page,
+    (payload) => isReadonlyRoundtableAutomationPayload(payload, {
+      replayUrl: page.url(),
+      replayKind,
+      expectedActiveThreadId,
+      expectedQuestionAnchorIds,
+      expectedAnchorKind,
+      expectedInteractionMode,
+    }),
+    timeout,
+    label,
+  );
 }
 
 async function readComposerValue(page) {
@@ -1191,6 +1265,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     filePrefix: "desktop-roundtable-anchored-thread-stream",
   });
   const anchoredThread = anchoredThreadLifecycle.payload;
+  const anchoredRoomId = anchoredThread?.scene?.room_id ?? null;
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
   const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-anchored-thread.png"));
@@ -1199,8 +1274,21 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     stream_lifecycle: anchoredThreadLifecycle.captures,
   });
 
+  await waitForLiveRoundtableReady(page, {
+    expectedRoomId: anchoredRoomId,
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "desktop roundtable replay preflight",
+  });
   await armClipboardCapture(page);
-  await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+  await (await waitForRoundtableHeaderAction(page, {
+    label: "desktop roundtable copy replay",
+    namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
+    timeout: 30000,
+  })).click();
   const shareReplayUrl = await waitForCapturedClipboardUrl(page, "roundtable copied share permalink");
   const sharePage = await context.newPage();
   await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -1217,25 +1305,84 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   );
   await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact.json"), artifactReadonly);
-  await sharePage.getByRole("button", { name: /Import local run|导入本地运行/i }).click();
+  await sharePage.reload({ waitUntil: "domcontentloaded" });
+  const artifactReloaded = await waitForReadonlyRoundtableReplayVisible(sharePage, {
+    replayKind: "share",
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "desktop roundtable artifact readonly restore",
+  });
+  await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
+  await (await waitForRoundtableHeaderAction(sharePage, {
+    label: "desktop roundtable artifact import",
+    namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+    timeout: 30000,
+  })).click();
   await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
   const artifactImportedUrl = sharePage.url();
 
-  await page.getByRole("button", { name: /Save(?:d)? (local )?read-only copy|Read-only copy saved|保存本地只读副本|已保存本地只读副本|保存只读副本|只读副本已保存/i }).click();
+  await waitForLiveRoundtableReady(page, {
+    expectedRoomId: anchoredRoomId,
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "desktop roundtable readonly save preflight",
+  });
+  await (await waitForRoundtableHeaderAction(page, {
+    label: "desktop roundtable save readonly copy",
+    namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+    timeout: 30000,
+  })).click();
   await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
-  const replayReadonly = await waitForAutomation(
-    page,
-    (payload) => payload.page?.kind === "worldline_roundtable"
-      && payload.page?.controls?.is_read_only === true
-      && payload.page?.controls?.can_send === false
-      && payload.page?.controls?.active_thread_id === anchoredThreadId
-      && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-      && payload.page?.controls?.anchor_kind === "quote",
-    15000,
-    "roundtable replay readonly state",
-  );
+  const replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
+    replayKind: "local",
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    timeout: 15000,
+    label: "roundtable replay readonly state",
+  });
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-replay-readonly.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-readonly.json"), replayReadonly);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const replayReloaded = await waitForReadonlyRoundtableReplayVisible(page, {
+    replayKind: "local",
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "desktop roundtable readonly restore",
+  });
+  await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-replay-readonly-reloaded.png"));
+  writeJson(path.join(outputDir, "desktop-roundtable-replay-readonly-reloaded.json"), replayReloaded);
+
+  assertReplayCoverage(
+    {
+      replayCoverageError: null,
+      artifactReadonly,
+      artifactReloaded,
+      artifactImportedUrl,
+      replayReadonly,
+      replayReloaded,
+    },
+    {
+      label: "roundtable desktop replay coverage",
+      requiredFields: [
+        "artifactReadonly",
+        "artifactReloaded",
+        "artifactImportedUrl",
+        "replayReadonly",
+        "replayReloaded",
+      ],
+    },
+  );
 
   return {
     scenarioId,
@@ -1253,8 +1400,10 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     anchoredThread,
     anchoredThreadStreamLifecycle: anchoredThreadLifecycle.captures,
     artifactReadonly,
+    artifactReloaded,
     artifactImportedUrl,
     replayReadonly,
+    replayReloaded,
   };
 }
 
@@ -1332,6 +1481,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     filePrefix: "mobile-roundtable-anchored-thread-stream",
   });
   const anchoredThread = anchoredThreadLifecycle.payload;
+  const anchoredRoomId = anchoredThread?.scene?.room_id ?? null;
   const anchoredThreadId = anchoredThread?.page?.controls?.active_thread_id ?? null;
   const anchoredAnchorIds = anchoredThread?.page?.controls?.question_anchor_ids ?? [];
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-anchored-thread.png"));
@@ -1340,6 +1490,15 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     stream_lifecycle: anchoredThreadLifecycle.captures,
   });
 
+  await waitForLiveRoundtableReady(page, {
+    expectedRoomId: anchoredRoomId,
+    expectedActiveThreadId: anchoredThreadId,
+    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "mobile roundtable replay preflight",
+  });
   await armClipboardCapture(page);
   let artifactReadonly = null;
   let artifactReloaded = null;
@@ -1348,76 +1507,108 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
   let replayReloaded = null;
   let replayCoverageError = null;
   try {
-    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    await (await waitForRoundtableHeaderAction(page, {
+      label: "mobile roundtable copy replay",
+      namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
+      timeout: 30000,
+    })).click();
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "mobile roundtable copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-    artifactReadonly = await waitForAutomation(
-      sharePage,
-      (payload) => payload.page?.kind === "worldline_roundtable"
-        && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.can_send === false
-        && payload.page?.controls?.interaction_mode === "thread_followup"
-        && payload.page?.controls?.active_thread_id === anchoredThreadId
-        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-        && payload.page?.controls?.anchor_kind === "quote",
-      20000,
-      "mobile roundtable artifact replay readonly state",
-    );
+    artifactReadonly = await waitForReadonlyRoundtableReplayVisible(sharePage, {
+      replayKind: "share",
+      expectedActiveThreadId: anchoredThreadId,
+      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedAnchorKind: "quote",
+      expectedInteractionMode: "thread_followup",
+      timeout: 20000,
+      label: "mobile roundtable artifact replay readonly state",
+    });
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact.json"), artifactReadonly);
     await sharePage.reload({ waitUntil: "domcontentloaded" });
-    artifactReloaded = await waitForAutomation(
-      sharePage,
-      (payload) => payload.page?.kind === "worldline_roundtable"
-        && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.interaction_mode === "thread_followup"
-        && payload.page?.controls?.active_thread_id === anchoredThreadId
-        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-        && payload.page?.controls?.anchor_kind === "quote",
-      20000,
-      "mobile roundtable artifact readonly restore",
-    );
+    artifactReloaded = await waitForReadonlyRoundtableReplayVisible(sharePage, {
+      replayKind: "share",
+      expectedActiveThreadId: anchoredThreadId,
+      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedAnchorKind: "quote",
+      expectedInteractionMode: "thread_followup",
+      timeout: 20000,
+      label: "mobile roundtable artifact readonly restore",
+    });
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
-    await sharePage.getByRole("button", { name: /Import local run|导入本地运行/i }).click();
+    await (await waitForRoundtableHeaderAction(sharePage, {
+      label: "mobile roundtable artifact import",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 30000,
+    })).click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
 
-    await page.getByRole("button", { name: /Save(?:d)? (local )?read-only copy|Read-only copy saved|保存本地只读副本|已保存本地只读副本|保存只读副本|只读副本已保存/i }).click();
+    await waitForLiveRoundtableReady(page, {
+      expectedRoomId: anchoredRoomId,
+      expectedActiveThreadId: anchoredThreadId,
+      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedAnchorKind: "quote",
+      expectedInteractionMode: "thread_followup",
+      timeout: 15000,
+      label: "mobile roundtable readonly save preflight",
+    });
+    await (await waitForRoundtableHeaderAction(page, {
+      label: "mobile roundtable save readonly copy",
+      namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+      timeout: 30000,
+    })).click();
     await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
-    replayReadonly = await waitForAutomation(
-      page,
-      (payload) => payload.page?.kind === "worldline_roundtable"
-        && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.can_send === false
-        && payload.page?.controls?.interaction_mode === "thread_followup"
-        && payload.page?.controls?.active_thread_id === anchoredThreadId
-        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-        && payload.page?.controls?.anchor_kind === "quote",
-      20000,
-      "mobile roundtable replay readonly state",
-    );
+    replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
+      replayKind: "local",
+      expectedActiveThreadId: anchoredThreadId,
+      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedAnchorKind: "quote",
+      expectedInteractionMode: "thread_followup",
+      timeout: 20000,
+      label: "mobile roundtable replay readonly state",
+    });
     await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly.json"), replayReadonly);
     await page.reload({ waitUntil: "domcontentloaded" });
-    replayReloaded = await waitForAutomation(
-      page,
-      (payload) => payload.page?.kind === "worldline_roundtable"
-        && payload.page?.controls?.is_read_only === true
-        && payload.page?.controls?.interaction_mode === "thread_followup"
-        && payload.page?.controls?.active_thread_id === anchoredThreadId
-        && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-        && payload.page?.controls?.anchor_kind === "quote",
-      20000,
-      "mobile roundtable readonly restore",
-    );
+    replayReloaded = await waitForReadonlyRoundtableReplayVisible(page, {
+      replayKind: "local",
+      expectedActiveThreadId: anchoredThreadId,
+      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedAnchorKind: "quote",
+      expectedInteractionMode: "thread_followup",
+      timeout: 20000,
+      label: "mobile roundtable readonly restore",
+    });
     await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.json"), replayReloaded);
   } catch (error) {
     replayCoverageError = String(error);
     writeJson(path.join(outputDir, "mobile-roundtable-replay-coverage-error.json"), { error: replayCoverageError });
   }
+
+  assertReplayCoverage(
+    {
+      replayCoverageError,
+      artifactReadonly,
+      artifactReloaded,
+      artifactImportedUrl,
+      replayReadonly,
+      replayReloaded,
+    },
+    {
+      label: "roundtable mobile replay coverage",
+      requiredFields: [
+        "artifactReadonly",
+        "artifactReloaded",
+        "artifactImportedUrl",
+        "replayReadonly",
+        "replayReloaded",
+      ],
+    },
+  );
 
   await closePlaywrightContext(context, "roundtable-mobile-context", 15000);
   return {

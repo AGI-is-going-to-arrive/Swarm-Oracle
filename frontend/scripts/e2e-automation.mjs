@@ -107,6 +107,18 @@ async function setRangeValue(page, selector, value) {
   }, value);
 }
 
+async function openAdvancedSettings(page) {
+  const trigger = page.getByRole("button", {
+    name: /高级设置|Advanced Settings/,
+  });
+  if (await trigger.count()) {
+    const expanded = await trigger.first().getAttribute("aria-expanded");
+    if (expanded !== "true") {
+      await trigger.first().click();
+    }
+  }
+}
+
 async function createScenario(page, { baseUrl, question, theater = false }) {
   await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
   await waitForAutomation(page, (payload) => payload.page?.kind === "input", 10000, "input page");
@@ -116,6 +128,7 @@ async function createScenario(page, { baseUrl, question, theater = false }) {
   await setRangeValue(page, "input.agents-slider", 3);
 
   if (theater) {
+    await openAdvancedSettings(page);
     await page.getByRole("button", { name: /像素剧场|Pixel Theater/ }).click();
   }
 

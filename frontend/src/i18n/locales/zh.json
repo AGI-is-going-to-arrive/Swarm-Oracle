@@ -41,6 +41,8 @@
       "web_search_status_success": "已获取真实世界背景",
       "web_search_status_error": "搜索未返回结果，将继续推演",
       "web_search_status_skipped": "未启用搜索增强",
+      "advanced_settings": "高级设置",
+      "advanced_settings_expanded": "高级设置（收起）",
       "byok_toggle": "🔑 自定义 LLM",
       "byok_api_key_label": "API Key",
       "byok_api_key_help": "填写你的模型服务密钥，仅保存在当前标签页会话中。",
@@ -230,7 +232,11 @@
         "noon": "正午",
         "dusk": "黄昏",
         "night": "夜晚"
-      }
+      },
+      "warmup_narrative_phase_1": "正在加载剧场引擎...",
+      "warmup_narrative_phase_2": "正在召集 AI 代理...",
+      "warmup_narrative_phase_3": "正在构建世界线...",
+      "warmup_narrative_hint": "推演即将开始"
     },
     "intervention": {
       "title": "蝴蝶效应",
@@ -292,6 +298,8 @@
       "leaderboard_link": "查看排行榜 →",
       "share_btn": "📱 生成文案",
       "copy_permalink_btn": "🔗 复制固定链接",
+      "causal_graph_link": "查看因果图谱",
+      "compare_link": "对比分支",
       "permalink_copied": "✅ 固定链接已复制",
       "share_challenge_btn": "🔗 分享挑战",
       "challenge_link_copied": "✅ 挑战链接已复制",
@@ -735,7 +743,13 @@
       "result_pending": "这场辩论的结果仍在生成中。",
       "result_missing": "该场辩论暂时没有可展示的结果。",
       "bet_error_locked": "这场辩论的下注窗口已经锁定。",
-      "share_title": "辩论分享文案"
+      "share_title": "辩论分享文案",
+      "spotlight_speaker": "{{name}} 正在发言",
+      "fold_show_all": "展开所有发言",
+      "fold_collapse": "折叠历史发言",
+      "new_messages": "{{count}} 条新发言",
+      "strategy_accordion_label": "策略面板",
+      "viewing_history": "正在查看历史 · 返回 Live"
     },
     "ending_room": {
       "title": "结局会客厅",
@@ -772,7 +786,12 @@
       "action_evidence_card": "提交证据卡",
       "evidence_card_hint": "拖入另一条世界线的摘要卡来比较异同。",
       "evidence_card_label": "来自另一条世界线的证据",
-      "evidence_card_drop_hint": "拖入证据卡来比较世界线差异"
+      "evidence_card_drop_hint": "拖入证据卡来比较世界线差异",
+      "participants_collapsed": "参与者",
+      "expand_details": "展开详情",
+      "collapse_details": "收起详情",
+      "sidebar_mobile_label": "密室侧栏",
+      "sidebar_mobile_description": "查看此密室的快捷操作与参与者详情。"
     },
     "roundtable": {
       "title": "世界线圆桌",
@@ -824,7 +843,12 @@
       "action_collapse_turn": "收起长段",
       "action_epilogue": "后续三回合",
       "action_evidence_card": "提交证据卡",
-      "evidence_card_label": "来自另一条世界线的证据"
+      "evidence_card_label": "来自另一条世界线的证据",
+      "avatar_ring_speaker": "{{name}} 正在发言",
+      "new_messages": "{{count}} 条新消息",
+      "expand_roster": "展开完整名册",
+      "collapse_roster": "收起名册",
+      "phase_insights_label": "阶段洞察"
     },
     "agents": {
       "library_title": "Agent 库",
@@ -980,7 +1004,66 @@
       },
       "theme_hooks_aria": "题材钩子",
       "daily_challenge_art_alt": "每日挑战像素插画",
-      "archive_seal_alt": "因果档案印章插画"
+      "archive_seal_alt": "因果档案印章插画",
+      "more_count": "+{{count}} 更多",
+      "overflow_menu": "更多操作"
+    },
+    "shared": {
+      "spotlight": {
+        "latest_turn": "最新发言",
+        "hot_turn": "热门发言",
+        "speaker_label": "发言者",
+        "score_delta": "分数变化"
+      },
+      "foldable": {
+        "show_full": "展开全文",
+        "collapse": "收起",
+        "collapsed_hint": "点击展开完整发言",
+        "turn_count": "共 {{count}} 条发言",
+        "phase_divider": "第 {{phase}} 阶段"
+      },
+      "avatar": {
+        "speaking": "正在发言",
+        "idle": "等待发言",
+        "avatar_alt": "{{name}} 的头像"
+      },
+      "actions": {
+        "follow_quote": "引用跟进",
+        "start_thread": "开启新话题",
+        "hotseat_quote": "热席引用",
+        "copy_turn": "复制发言"
+      },
+      "spotlight_card": {
+        "counterplay_badge": "反击",
+        "verdict_badge": "裁决",
+        "opening_badge": "开场",
+        "rebuttal_badge": "反驳",
+        "closing_badge": "总结",
+        "crossfire_badge": "交锋"
+      },
+      "transcript": {
+        "auto_scroll": "自动滚动",
+        "scroll_to_latest": "跳转到最新",
+        "no_turns_yet": "暂无发言记录",
+        "loading_turns": "加载中..."
+      }
+    },
+    "input_view": {
+      "config_toggle": "调整高级参数",
+      "config_toggle_expand": "展开高级配置",
+      "config_toggle_collapse": "收起高级配置",
+      "quick_action_hint": "快速开始",
+      "hero_brand_alt": "SwarmOracle 标志"
+    },
+    "result_ux": {
+      "action_overflow": "更多操作",
+      "director_notebook": "导演笔记",
+      "director_notebook_expand": "展开导演笔记",
+      "director_notebook_collapse": "收起导演笔记",
+      "web_sources_show": "展开真实世界来源",
+      "web_sources_hide": "收起真实世界来源",
+      "ending_most_likely": "最可能",
+      "section_predictions": "预测评分"
     }
   }
 }

@@ -140,6 +140,8 @@ export default function ResultView() {
 
   const { capabilities } = useCapabilityCheck('causal_graph');
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
+  const [notebookOpen, setNotebookOpen] = useState(true);
+  const [webSourcesOpen, setWebSourcesOpen] = useState(false);
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -1308,7 +1310,7 @@ export default function ResultView() {
         >
           {endingRoomLocalCopySaved
             ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
-            : (isZh ? '保存只读副本' : 'Save read-only copy')}
+            : (isZh ? '保存只读副本' : 'Save local read-only copy')}
         </button>
         {canImportActiveEndingRoomReplay && (
           <button
@@ -1547,60 +1549,82 @@ export default function ResultView() {
           </span>
         </div>
         <div className="result-actions">
-          {branches.length > 1 && (
+          <div className="result-actions__primary">
+            {branches.length > 1 && (
+              <button
+                className="btn"
+                onClick={handleOpenRoundtable}
+                disabled={isReplayMode || scenario?.status !== 'done'}
+              >
+                {t('roundtable.entry_cta')}
+              </button>
+            )}
+            {isReplayMode && (
+              <button
+                className="btn btn-primary"
+                onClick={() => void handleImportReplay()}
+                disabled={importingReplay}
+              >
+                {importingReplay
+                  ? (isZh ? '导入中...' : 'Importing...')
+                  : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+              </button>
+            )}
+          </div>
+          <div className="result-actions__secondary">
             <button
               className="btn"
-              onClick={handleOpenRoundtable}
-              disabled={isReplayMode || scenario?.status !== 'done'}
+              onClick={handleExport}
+              disabled={exporting || isReplayMode}
             >
-              {t('roundtable.entry_cta')}
+              {exporting ? t('result.exporting') : t('result.export')}
             </button>
-          )}
-          <button
-            className="btn"
-            onClick={handleExport}
-            disabled={exporting || isReplayMode}
-          >
-            {exporting ? t('result.exporting') : t('result.export')}
-          </button>
-          <button
-            className="btn"
-            onClick={() => setShowShare(true)}
-            disabled={isReplayMode || !replayUrl}
-          >
-            {t('result.share_btn')}
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={() => void handleCopyPermalink()}
-            disabled={!replayUrl}
-          >
-            {permalinkCopied ? t('result.permalink_copied') : t('result.copy_permalink_btn')}
-          </button>
-          {isReplayMode && (
             <button
-              className="btn btn-primary"
-              onClick={() => void handleImportReplay()}
-              disabled={importingReplay}
+              className="btn"
+              onClick={() => setShowShare(true)}
+              disabled={isReplayMode || !replayUrl}
             >
-              {importingReplay
-                ? (isZh ? '导入中...' : 'Importing...')
-                : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+              {t('result.share_btn')}
             </button>
-          )}
-          <button
-            className="btn btn-ghost"
-            onClick={() => void handleShareChallenge()}
-            disabled={!scenario}
-          >
-            {challengeLinkCopied ? t('result.challenge_link_copied') : t('result.share_challenge_btn')}
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={() => navigate('/leaderboard')}
-          >
-            {t('result.leaderboard_link')}
-          </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => void handleCopyPermalink()}
+              disabled={!replayUrl}
+            >
+              {permalinkCopied ? t('result.permalink_copied') : t('result.copy_permalink_btn')}
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => void handleShareChallenge()}
+              disabled={!scenario}
+            >
+              {challengeLinkCopied ? t('result.challenge_link_copied') : t('result.share_challenge_btn')}
+            </button>
+          </div>
+          <div className="result-actions__overflow">
+            <button
+              className="btn btn-ghost"
+              onClick={() => navigate('/leaderboard')}
+            >
+              {t('result.leaderboard_link')}
+            </button>
+            {id && !isReplayMode && capabilities?.causal_graph?.enabled && (
+              <a
+                className="btn btn-ghost"
+                href={`/sim/${id}/causal-map`}
+              >
+                {t('result.causal_graph_link', 'View Causal Graph')}
+              </a>
+            )}
+            {id && !isReplayMode && cfBranchId && (
+              <a
+                className="btn btn-ghost"
+                href={`/result/${id}/compare?branch_a=${branches[0]?.id ?? ''}&branch_b=${cfBranchId}`}
+              >
+                {t('result.compare_link', 'Compare branches')}
+              </a>
+            )}
+          </div>
         </div>
         {exportError && <p className="result-error result-error--spaced">{exportError}</p>}
         {importError && <p className="result-error result-error--spaced">{importError}</p>}
@@ -1693,7 +1717,7 @@ export default function ResultView() {
                 </button>
               )}
 
-              <div className="ending-room-actions">
+              <div className="ending-room-actions ending-action-band">
                 <button
                   type="button"
                   className="btn"
@@ -1732,36 +1756,48 @@ export default function ResultView() {
         && Array.isArray(scenario.web_search_context.snippets)
         && scenario.web_search_context.snippets.length > 0 && (
         <section className="result-web-sources">
-          <h2 className="result-web-sources__title">{t('result.web_sources_title')}</h2>
-          <div className="result-web-sources__meta">
-            <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
-            {typeof scenario.web_search_context.provider === 'string' && (
-              <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
-            )}
-            {scenario.web_search_context.cached && (
-              <span>{t('result.web_sources_cached')}</span>
-            )}
-          </div>
-          <div className="result-web-sources__list">
-            {scenario.web_search_context.snippets
-              .filter((s): s is { text: string; source_url: string } =>
-                s != null && typeof s.text === 'string')
-              .map((snippet, idx) => (
-              <article key={idx} className="result-web-sources__item">
-                <p className="result-web-sources__item-text">{snippet.text}</p>
-                {snippet.source_url && /^https?:\/\//i.test(snippet.source_url) && (
-                  <a
-                    className="result-web-sources__item-url"
-                    href={snippet.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={t('result.web_sources_visit')}
-                  >
-                    {snippet.source_url}
-                  </a>
+          <button
+            type="button"
+            className="result-web-sources__trigger"
+            aria-expanded={webSourcesOpen}
+            onClick={() => setWebSourcesOpen((prev) => !prev)}
+          >
+            <span>{t('result.web_sources_title')}</span>
+            <span aria-hidden="true">{webSourcesOpen ? '\u25B2' : '\u25BC'}</span>
+          </button>
+          <div className={`result-web-sources__body ${webSourcesOpen ? 'is-open' : ''}`} inert={!webSourcesOpen || undefined}>
+            <div className="result-web-sources__inner">
+              <div className="result-web-sources__meta">
+                <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
+                {typeof scenario.web_search_context.provider === 'string' && (
+                  <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
                 )}
-              </article>
-            ))}
+                {scenario.web_search_context.cached && (
+                  <span>{t('result.web_sources_cached')}</span>
+                )}
+              </div>
+              <div className="result-web-sources__list">
+                {scenario.web_search_context.snippets
+                  .filter((s): s is { text: string; source_url: string } =>
+                    s != null && typeof s.text === 'string')
+                  .map((snippet, idx) => (
+                  <article key={idx} className="result-web-sources__item">
+                    <p className="result-web-sources__item-text">{snippet.text}</p>
+                    {snippet.source_url && /^https?:\/\//i.test(snippet.source_url) && (
+                      <a
+                        className="result-web-sources__item-url"
+                        href={snippet.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t('result.web_sources_visit')}
+                      >
+                        {snippet.source_url}
+                      </a>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
       )}
@@ -1828,6 +1864,20 @@ export default function ResultView() {
           </div>
         </section>
       )}
+
+      {/* Director's Notebook fold */}
+      <section className="result-director-notebook">
+        <button
+          type="button"
+          className="result-director-notebook__trigger"
+          aria-expanded={notebookOpen}
+          onClick={() => setNotebookOpen((prev) => !prev)}
+        >
+          <span>{t('result_ux.director_notebook')}</span>
+          <span aria-hidden="true">{notebookOpen ? '\u25B2' : '\u25BC'}</span>
+        </button>
+        <div className={`result-director-notebook__body ${notebookOpen ? 'is-open' : ''}`} inert={!notebookOpen || undefined}>
+          <div className="result-director-notebook__inner">
 
       {scenarioMeta && (
         <section className="result-archive">
@@ -2035,6 +2085,10 @@ export default function ResultView() {
           )}
         </section>
       )}
+
+          </div>{/* end .result-director-notebook__inner */}
+        </div>{/* end .result-director-notebook__body */}
+      </section>{/* end .result-director-notebook */}
 
       {campaignSummary && (
         <section className="result-campaign">

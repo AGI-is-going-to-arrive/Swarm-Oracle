@@ -102,6 +102,7 @@ export function InputView() {
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -359,6 +360,19 @@ export function InputView() {
     saveScenarioRuntimePreset(runtimePreset);
   }, [runtimePreset]);
 
+  // BYOK auto-expand: open advanced config when sessionStorage has a saved BYOK key
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem('swarmoracle.llm-provider-policy.v1');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.apiKey) {
+          setIsConfigOpen(true);
+        }
+      }
+    } catch { /* ignore parse errors */ }
+  }, []);
+
   // Animate loading steps while submitting
   useEffect(() => {
     if (!isSubmitting) {
@@ -517,6 +531,7 @@ export function InputView() {
   }, [
     buildSimulationOptions,
     navigate,
+    setWebSearchStatus,
     startSimulation,
     webSearchAvailable,
     webSearchEnabled,
@@ -861,633 +876,662 @@ export function InputView() {
       )}
 
       <div className="input-view__content">
-        {/* Logo + Title */}
-        <div className="input-view__header">
-          <div className="logo">
-            <span className="logo__icon"></span>
-            <span className="logo__text">{t('app_title')}</span>
-          </div>
-          <h1 ref={titleRef} className="input-view__title heading-display">
-            {t('app_title')}
-          </h1>
-          <div className="input-view__nav">
-            <button className="btn btn-ghost" onClick={() => navigate('/history')}>
-              {t('home.history')}
-            </button>
-            <button className="btn btn-ghost" onClick={() => navigate('/leaderboard')}>
-              🏆
-            </button>
-          </div>
-        </div>
-
-        {/* Input Area */}
         <div className="input-view__form">
-          {sharedChallengeBanner && (
-            <section className="shared-challenge-banner" role="status">
-              <span className="shared-challenge-banner__eyebrow">
-                {t('home.shared_challenge_label')}
+          {/* ── STAGE 1: Hero ── */}
+          <div className="iv-hero">
+            <div className="iv-hero__brand">
+              {/* Logo + Title */}
+              <div className="input-view__header">
+                <div className="logo">
+                  <span className="logo__icon"></span>
+                  <span className="logo__text">{t('app_title')}</span>
+                </div>
+                <h1 ref={titleRef} className="input-view__title heading-display">
+                  {t('app_title')}
+                </h1>
+                <div className="input-view__nav">
+                  <button className="btn btn-ghost" onClick={() => navigate('/history')}>
+                    {t('home.history')}
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => navigate('/leaderboard')}>
+                    🏆
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="iv-hero__prompt">
+              <div className="input-wrapper">
+                <textarea
+                  ref={questionRef}
+                  className="input input--hero"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder={placeholder}
+                  disabled={isSubmitting}
+                  autoFocus
+                  rows={1}
+                />
+              </div>
+            </div>
+
+            <div className="iv-hero__cta">
+              <div className="input-view__submit-row">
+                {isSimulationBudgetBlocked && (
+                  <p className="byok-probe-warning">
+                    {t('home.byok_budget_blocked')}
+                  </p>
+                )}
+                <button
+                  className="btn btn-primary btn--submit"
+                  onClick={() => handleSubmit(question)}
+                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked}
+                >
+                  {isSubmitting ? <span className="spinner spinner--sm" /> : null}
+                  {t('home.submit')}
+                </button>
+                <button
+                  className="btn btn-ghost btn--submit"
+                  onClick={() => void launchDebate({ nextQuestion: question })}
+                  disabled={!question.trim() || isSubmitting}
+                >
+                  {t('debate.entry_cta')}
+                </button>
+              </div>
+            </div>
+
+            {/* Round Count Slider */}
+            <div className="rounds-selector">
+              <span className="rounds-label">{t('home.rounds_label')}</span>
+              <div className="rounds-slider-wrap">
+                <input
+                  type="range"
+                  className="rounds-slider"
+                  aria-label={t('home.rounds_label')}
+                  min={3}
+                  max={HOME_MAX_ROUNDS}
+                  step={1}
+                  value={rounds}
+                  onChange={(e) => setRounds(Number(e.target.value))}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <span className="rounds-value">{rounds}</span>
+              <span className="rounds-hint">
+                {rounds <= 5 ? t('home.rounds_fast') : rounds <= 15 ? t('home.rounds_standard') : rounds <= 25 ? t('home.rounds_deep') : t('home.rounds_extreme')}
+                <span className="rounds-time">≈{estimatedSimulationMinutes}min</span>
               </span>
-              <strong className="shared-challenge-banner__title">{sharedChallengeBanner.question}</strong>
-              <div className="shared-challenge-banner__meta">
-                {sharedChallengeProfileLabel && (
-                  <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                    {sharedChallengeProfileLabel}
+            </div>
+
+            {/* Agent Count Slider */}
+            <div className="agents-selector">
+              <span className="agents-label">{t('home.agents_label')}</span>
+              <div className="agents-slider-wrap">
+                <input
+                  type="range"
+                  className="agents-slider"
+                  aria-label={t('home.agents_label')}
+                  min={3}
+                  max={HOME_MAX_AGENTS}
+                  step={1}
+                  value={numAgents}
+                  onChange={(e) => setNumAgents(Number(e.target.value))}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <span className="agents-value">{numAgents}</span>
+              <span className="agents-hint">
+                {numAgents <= 10 ? t('home.agents_few') : numAgents <= 20 ? t('home.agents_standard') : numAgents <= 30 ? t('home.agents_large') : t('home.agents_extreme')}
+              </span>
+            </div>
+
+            {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
+            {webSearchAvailable && (
+              <div className="web-search-section">
+                <label className="web-search-toggle">
+                  <input
+                    type="checkbox"
+                    checked={webSearchEnabled}
+                    onChange={(e) => setWebSearchEnabled(e.target.checked)}
+                    disabled={isSubmitting}
+                  />
+                  <span className="web-search-toggle__copy">
+                    <strong>{t('home.web_search_toggle')}</strong>
+                    <span>{t('home.web_search_hint')}</span>
+                  </span>
+                </label>
+                {webSearchStatus !== 'idle' && (
+                  <span
+                    className={`web-search-status web-search-status--${webSearchStatus}`}
+                    aria-live="polite"
+                    role="status"
+                  >
+                    {t(`home.web_search_status_${webSearchStatus}`)}
                   </span>
                 )}
-                <span className="daily-challenge-card__pill">
-                  {t('home.shared_challenge_prefilled')}
-                </span>
               </div>
-            </section>
-          )}
+            )}
+          </div>
 
-          {todayChallenge && (
-          <section className="daily-challenge-card">
-            <img
-              className="daily-challenge-card__art"
-              src="/assets/ui/generated/daily_challenge_panel.png"
-              alt={t('common.daily_challenge_art_alt')}
-            />
-            <div className="daily-challenge-card__copy">
-              <span className="daily-challenge-card__eyebrow">
+          {/* ── STAGE 2: Challenges ── */}
+          <div className="iv-challenges">
+            {sharedChallengeBanner && (
+              <section className="shared-challenge-banner" role="status">
+                <span className="shared-challenge-banner__eyebrow">
+                  {t('home.shared_challenge_label')}
+                </span>
+                <strong className="shared-challenge-banner__title">{sharedChallengeBanner.question}</strong>
+                <div className="shared-challenge-banner__meta">
+                  {sharedChallengeProfileLabel && (
+                    <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                      {sharedChallengeProfileLabel}
+                    </span>
+                  )}
+                  <span className="daily-challenge-card__pill">
+                    {t('home.shared_challenge_prefilled')}
+                  </span>
+                </div>
+              </section>
+            )}
+
+            {todayChallenge && (
+            <section className="daily-challenge-card">
+              <img
+                className="daily-challenge-card__art"
+                src="/assets/ui/generated/daily_challenge_panel.png"
+                alt={t('common.daily_challenge_art_alt')}
+              />
+              <div className="daily-challenge-card__copy">
+                <span className="daily-challenge-card__eyebrow">
+                  <img
+                    className="daily-challenge-card__eyebrow-icon"
+                    src={getGameplayBadgeSrc('daily_challenge')}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                  <span>{t('home.daily_challenge_label')}</span>
+                </span>
+                <strong className="daily-challenge-card__title">{todayChallengeQuestion}</strong>
+                <span className="daily-challenge-card__subtitle">
+                  {isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn}
+                </span>
+                <div className="daily-challenge-card__hooks" aria-label={t('common.theme_hooks_aria')}>
+                  <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                    {challengeProfileLabel}
+                  </span>
+                  {dailyMastery && (
+                    <span className="daily-challenge-card__pill">
+                      {t('home.campaign_mastery_level', { level: dailyMastery.level })}
+                    </span>
+                  )}
+                  {challengeHooks.map((hook) => (
+                    <span key={hook} className="daily-challenge-card__pill">
+                      {hook}
+                    </span>
+                  ))}
+                </div>
+                <div className="daily-challenge-card__campaign">
+                  <span className="daily-challenge-card__campaign-label">
+                    {t('home.campaign_progress')}
+                  </span>
+                  <strong>
+                    {dailyMastery
+                      ? `${t('home.campaign_mastery_level', { level: dailyMastery.level })} · ${nextUnlockLabel}`
+                      : t('home.campaign_first_run')}
+                  </strong>
+                </div>
+                {todayChallengeProgress && (
+                  <div className="daily-challenge-card__status">
+                    <span className={`daily-challenge-card__pill ${todayChallengeProgress.completed ? 'daily-challenge-card__pill--done' : ''}`}>
+                      {todayChallengeProgress.completed
+                        ? t('home.daily_challenge_done')
+                        : t('home.daily_challenge_in_progress')}
+                    </span>
+                    {todayChallengeProgress.profileResonance && (
+                      <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                        {challengeProfileLabel} · {t(`result.archive_resonance_${todayChallengeProgress.profileResonance}`)}
+                      </span>
+                    )}
+                    {todayChallengeProgress.usedCardsKnown && (
+                      <span className="daily-challenge-card__pill">
+                        {t('home.daily_challenge_cards_used', { count: todayChallengeProgress.usedCards.length })}
+                      </span>
+                    )}
+                    {todayChallengeProgress.betPlacedKnown && (
+                      <span className="daily-challenge-card__pill">
+                        {todayChallengeProgress.betPlaced
+                          ? t('home.daily_challenge_bet_placed')
+                          : t('home.daily_challenge_bet_missing')}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary daily-challenge-card__action"
+                onClick={handleStartChallenge}
+                disabled={isSubmitting}
+              >
+                {todayChallengeProgress?.completed
+                  ? t('home.daily_challenge_replay')
+                  : todayChallengeProgress
+                    ? t('home.daily_challenge_continue')
+                    : t('home.daily_challenge_start')}
+              </button>
+            </section>
+            )}
+
+            {campaignChallengeRotation && (
+            <section className="weekly-challenge-card">
+              <div className="weekly-challenge-card__side">
                 <img
-                  className="daily-challenge-card__eyebrow-icon"
+                  className="weekly-challenge-card__badge-art"
                   src={getGameplayBadgeSrc('daily_challenge')}
                   alt=""
                   aria-hidden="true"
                 />
-                <span>{t('home.daily_challenge_label')}</span>
-              </span>
-              <strong className="daily-challenge-card__title">{todayChallengeQuestion}</strong>
-              <span className="daily-challenge-card__subtitle">
-                {isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn}
-              </span>
-              <div className="daily-challenge-card__hooks" aria-label={t('common.theme_hooks_aria')}>
-                <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                  {challengeProfileLabel}
-                </span>
-                {dailyMastery && (
-                  <span className="daily-challenge-card__pill">
-                    {t('home.campaign_mastery_level', { level: dailyMastery.level })}
-                  </span>
-                )}
-                {challengeHooks.map((hook) => (
-                  <span key={hook} className="daily-challenge-card__pill">
-                    {hook}
-                  </span>
-                ))}
               </div>
-              <div className="daily-challenge-card__campaign">
-                <span className="daily-challenge-card__campaign-label">
-                  {t('home.campaign_progress')}
+              <div className="weekly-challenge-card__copy">
+                <span className="daily-challenge-card__eyebrow">
+                  {t('home.weekly_challenge_label')}
                 </span>
-                <strong>
-                  {dailyMastery
-                    ? `${t('home.campaign_mastery_level', { level: dailyMastery.level })} · ${nextUnlockLabel}`
-                    : t('home.campaign_first_run')}
+                <strong className="daily-challenge-card__title">
+                  {t('home.weekly_challenge_title', { week: campaignChallengeRotation.week_key })}
                 </strong>
-              </div>
-              {todayChallengeProgress && (
-                <div className="daily-challenge-card__status">
-                  <span className={`daily-challenge-card__pill ${todayChallengeProgress.completed ? 'daily-challenge-card__pill--done' : ''}`}>
-                    {todayChallengeProgress.completed
-                      ? t('home.daily_challenge_done')
-                      : t('home.daily_challenge_in_progress')}
-                  </span>
-                  {todayChallengeProgress.profileResonance && (
-                    <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                      {challengeProfileLabel} · {t(`result.archive_resonance_${todayChallengeProgress.profileResonance}`)}
-                    </span>
-                  )}
-                  {todayChallengeProgress.usedCardsKnown && (
-                    <span className="daily-challenge-card__pill">
-                      {t('home.daily_challenge_cards_used', { count: todayChallengeProgress.usedCards.length })}
-                    </span>
-                  )}
-                  {todayChallengeProgress.betPlacedKnown && (
-                    <span className="daily-challenge-card__pill">
-                      {todayChallengeProgress.betPlaced
-                        ? t('home.daily_challenge_bet_placed')
-                        : t('home.daily_challenge_bet_missing')}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              className="btn btn-primary daily-challenge-card__action"
-              onClick={handleStartChallenge}
-              disabled={isSubmitting}
-            >
-              {todayChallengeProgress?.completed
-                ? t('home.daily_challenge_replay')
-                : todayChallengeProgress
-                  ? t('home.daily_challenge_continue')
-                  : t('home.daily_challenge_start')}
-            </button>
-          </section>
-          )}
-
-          {campaignChallengeRotation && (
-          <section className="weekly-challenge-card">
-            <div className="weekly-challenge-card__side">
-              <img
-                className="weekly-challenge-card__badge-art"
-                src={getGameplayBadgeSrc('daily_challenge')}
-                alt=""
-                aria-hidden="true"
-              />
-            </div>
-            <div className="weekly-challenge-card__copy">
-              <span className="daily-challenge-card__eyebrow">
-                {t('home.weekly_challenge_label')}
-              </span>
-              <strong className="daily-challenge-card__title">
-                {t('home.weekly_challenge_title', { week: campaignChallengeRotation.week_key })}
-              </strong>
-              <span className="daily-challenge-card__subtitle">
-                {campaignWeeklySummary
-                  ? t('home.weekly_challenge_intro')
-                  : t('home.weekly_challenge_fallback')}
-              </span>
-              <div className="daily-challenge-card__hooks">
-                {weeklyChallengeEntries.map((entry) => (
-                  <span
-                    key={entry.challenge_id}
-                    className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${entry.runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
-                  >
-                    {entry.profile_label}
-                  </span>
-                ))}
-              </div>
-              <div className="daily-challenge-card__status">
-                {campaignWeeklySummary && (
-                  <span className="daily-challenge-card__pill">
-                    {t('home.weekly_challenge_completed_runs', { runs: campaignWeeklySummary.total_runs })}
-                  </span>
-                )}
-                {campaignWeeklySummary && (
-                  <span className="daily-challenge-card__pill">
-                    {t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })}
-                  </span>
-                )}
-                {weeklyTopProfileLabel && (
-                  <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                    {t('home.weekly_challenge_top_profile', { profile: weeklyTopProfileLabel })}
-                  </span>
-                )}
-              </div>
-            </div>
-          </section>
-          )}
-
-          <section className="weekly-challenge-card weekly-challenge-card--growth">
-            <div className="weekly-challenge-card__side">
-              <img
-                className="weekly-challenge-card__badge-art"
-                src={getGameplayBadgeSrc('archive_record')}
-                alt=""
-                aria-hidden="true"
-              />
-            </div>
-            <div className="weekly-challenge-card__copy">
-              <span className="daily-challenge-card__eyebrow">
-                {t('home.director_growth_label')}
-              </span>
-              <strong
-                className="daily-challenge-card__title"
-                aria-label={t('home.director_growth_title', {
-                  runs: campaignProfile?.total_runs ?? 0,
-                  badges: campaignBadges.length,
-                })}
-              >
-                {hasDirectorGrowth
-                  ? t('home.director_growth_active_title', { runs: campaignProfile?.total_runs ?? 0 })
-                  : t('home.director_growth_empty_title')}
-              </strong>
-              <span className="daily-challenge-card__subtitle">
-                {hasDirectorGrowth
-                  ? t('home.director_growth_active_subtitle', { badges: campaignBadges.length })
-                  : t('home.director_growth_hint')}
-              </span>
-              {hasDirectorGrowth && (
-                <div className="daily-challenge-card__status">
-                  <span className="daily-challenge-card__pill">
-                    {t('home.director_growth_runs', { runs: campaignProfile?.total_runs ?? 0 })}
-                  </span>
-                  <span className="daily-challenge-card__pill">
-                    {t('home.director_growth_badges', { badges: campaignBadges.length })}
-                  </span>
-                </div>
-              )}
-              {topMasteries.length > 0 && (
+                <span className="daily-challenge-card__subtitle">
+                  {campaignWeeklySummary
+                    ? t('home.weekly_challenge_intro')
+                    : t('home.weekly_challenge_fallback')}
+                </span>
                 <div className="daily-challenge-card__hooks">
-                  {topMasteries.map((mastery) => (
-                    <span key={mastery.profile_id} className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                      {getGameplayProfileLabel(mastery.profile_id as never, isZh)}
-                      {' · '}
-                      {t('home.campaign_mastery_level', { level: mastery.level })}
+                  {weeklyChallengeEntries.map((entry) => (
+                    <span
+                      key={entry.challenge_id}
+                      className={`daily-challenge-card__pill daily-challenge-card__pill--profile ${entry.runs > 0 ? 'daily-challenge-card__pill--done' : ''}`}
+                    >
+                      {entry.profile_label}
                     </span>
                   ))}
                 </div>
-              )}
-            </div>
-          </section>
-
-          <div className="input-wrapper">
-            <textarea
-              ref={questionRef}
-              className="input input--hero"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={placeholder}
-              disabled={isSubmitting}
-              autoFocus
-              rows={1}
-            />
-          </div>
-
-          {/* Round Count Slider */}
-          <div className="rounds-selector">
-            <span className="rounds-label">{t('home.rounds_label')}</span>
-            <div className="rounds-slider-wrap">
-              <input
-                type="range"
-                className="rounds-slider"
-                aria-label={t('home.rounds_label')}
-                min={3}
-                max={HOME_MAX_ROUNDS}
-                step={1}
-                value={rounds}
-                onChange={(e) => setRounds(Number(e.target.value))}
-                disabled={isSubmitting}
-              />
-            </div>
-            <span className="rounds-value">{rounds}</span>
-            <span className="rounds-hint">
-              {rounds <= 5 ? t('home.rounds_fast') : rounds <= 15 ? t('home.rounds_standard') : rounds <= 25 ? t('home.rounds_deep') : t('home.rounds_extreme')}
-              <span className="rounds-time">≈{estimatedSimulationMinutes}min</span>
-            </span>
-          </div>
-
-          {/* Agent Count Slider */}
-          <div className="agents-selector">
-            <span className="agents-label">{t('home.agents_label')}</span>
-            <div className="agents-slider-wrap">
-              <input
-                type="range"
-                className="agents-slider"
-                aria-label={t('home.agents_label')}
-                min={3}
-                max={HOME_MAX_AGENTS}
-                step={1}
-                value={numAgents}
-                onChange={(e) => setNumAgents(Number(e.target.value))}
-                disabled={isSubmitting}
-              />
-            </div>
-            <span className="agents-value">{numAgents}</span>
-            <span className="agents-hint">
-              {numAgents <= 10 ? t('home.agents_few') : numAgents <= 20 ? t('home.agents_standard') : numAgents <= 30 ? t('home.agents_large') : t('home.agents_extreme')}
-            </span>
-          </div>
-
-          {/* Mode Selector */}
-          <div className="mode-selector-wrap">
-            <div className="mode-selector">
-              <span className="mode-label">{t('home.mode_label')}</span>
-              <div className="mode-options">
-                <button
-                  type="button"
-                  className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
-                  onClick={() => setMode('blackboard')}
-                  disabled={isSubmitting}
-                  title={t('home.mode_blackboard_title')}
-                >
-                  📋 {t('home.mode_blackboard')}
-                </button>
-                <button
-                  type="button"
-                  className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
-                  onClick={() => setMode('raw')}
-                  disabled={isSubmitting}
-                  title={t('home.mode_raw_title')}
-                >
-                  📜 {t('home.mode_raw')}
-                </button>
-              </div>
-            </div>
-            <span className="mode-desc">
-              {mode === 'blackboard' ? t('home.mode_blackboard_desc') : t('home.mode_raw_desc')}
-            </span>
-          </div>
-
-          {/* V2: Visualization Mode Toggle */}
-          <div className="mode-selector-wrap">
-            <div className="mode-selector">
-              <span className="mode-label">{t('home.viz_label')}</span>
-              <div className="mode-options">
-                <button
-                  type="button"
-                  className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
-                  onClick={() => setVizEnabled(false)}
-                  disabled={isSubmitting}
-                >
-                  📊 {t('home.viz_classic')}
-                </button>
-                <button
-                  type="button"
-                  className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
-                  onClick={() => setVizEnabled(true)}
-                  disabled={isSubmitting}
-                >
-                  🎮 {t('home.viz_theater')}
-                </button>
-              </div>
-            </div>
-            {vizEnabled && (
-              <span className="mode-desc">{t('home.viz_theater_desc')}</span>
-            )}
-          </div>
-
-          {/* Reasoning Effort Selector */}
-          <div className="mode-selector-wrap">
-            <div className="mode-selector">
-              <span className="mode-label">{t('home.reasoning_label')}</span>
-              <div className="mode-options">
-                {[
-                  { value: '', label: t('home.reasoning_off') },
-                  { value: 'low', label: t('home.reasoning_low') },
-                  { value: 'medium', label: t('home.reasoning_medium') },
-                  { value: 'high', label: t('home.reasoning_high') },
-                ].map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
-                    onClick={() => setReasoningEffort(opt.value)}
-                    disabled={isSubmitting}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {reasoningEffort && (
-              <span className="mode-desc">{t('home.reasoning_hint')}</span>
-            )}
-          </div>
-
-          <div className="mode-selector-wrap">
-            <div className="mode-selector">
-              <span className="mode-label">{t('home.runtime_preset_label')}</span>
-              <div className="mode-options">
-                {(['conservative', 'balanced', 'aggressive'] as ScenarioRuntimePresetId[]).map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
-                    onClick={() => setRuntimePreset(preset)}
-                    disabled={isSubmitting}
-                    title={t(`home.runtime_preset_${preset}_desc`)}
-                  >
-                    {t(`home.runtime_preset_${preset}`)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <span className="mode-desc">{runtimePresetDescription}</span>
-            <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
-          </div>
-
-          {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
-          {webSearchAvailable && (
-            <div className="web-search-section">
-              <label className="web-search-toggle">
-                <input
-                  type="checkbox"
-                  checked={webSearchEnabled}
-                  onChange={(e) => setWebSearchEnabled(e.target.checked)}
-                  disabled={isSubmitting}
-                />
-                <span className="web-search-toggle__copy">
-                  <strong>{t('home.web_search_toggle')}</strong>
-                  <span>{t('home.web_search_hint')}</span>
-                </span>
-              </label>
-              {webSearchStatus !== 'idle' && (
-                <span
-                  className={`web-search-status web-search-status--${webSearchStatus}`}
-                  aria-live="polite"
-                  role="status"
-                >
-                  {t(`home.web_search_status_${webSearchStatus}`)}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Phase 3 F3: Custom Agent Attach Panel */}
-          {caps?.custom_agents?.enabled && (
-            <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
-          )}
-
-          {/* P4-E: BYOK — Bring Your Own Key */}
-          <div className="byok-section">
-            <button
-              type="button"
-              className="byok-toggle"
-              onClick={() => setShowByok(!showByok)}
-              disabled={isSubmitting}
-            >
-              {t('home.byok_toggle')} {showByok ? '▲' : '▼'}
-            </button>
-            {showByok && (
-              <div className="byok-fields">
-                <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
-                  <span className="byok-field-help">{t('home.byok_api_key_help')}</span>
-                  <input
-                    id="byok-key"
-                    type="password"
-                    className="input byok-input"
-                    value={llmApiKey}
-                    onChange={(e) => setLlmApiKey(e.target.value)}
-                    placeholder="sk-..."
-                    disabled={isSubmitting}
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-url">{t('home.byok_base_url_label')}</label>
-                  <span className="byok-field-help">{t('home.byok_base_url_help')}</span>
-                  <input
-                    id="byok-url"
-                    type="url"
-                    className="input byok-input"
-                    value={llmBaseUrl}
-                    onChange={(e) => setLlmBaseUrl(e.target.value)}
-                    placeholder="https://api.openai.com/v1/chat/completions"
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-model">{t('home.byok_model_label')}</label>
-                  <span className="byok-field-help">{t('home.byok_model_help')}</span>
-                  <input
-                    id="byok-model"
-                    type="text"
-                    className="input byok-input"
-                    value={llmModel}
-                    onChange={(e) => setLlmModel(e.target.value)}
-                    placeholder="gpt-4o / claude-3.5-sonnet / ..."
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-rpm">{t('home.byok_rpm_label')}</label>
-                  <span className="byok-field-help">{t('home.byok_rpm_help')}</span>
-                  <input
-                    id="byok-rpm"
-                    type="number"
-                    min="1"
-                    step="1"
-                    className="input byok-input"
-                    value={llmRequestsPerMinute}
-                    onChange={(e) => setLlmRequestsPerMinute(e.target.value)}
-                    placeholder="10"
-                    disabled={isSubmitting}
-                    inputMode="numeric"
-                  />
-                </div>
-                <div className="byok-field">
-                  <label className="byok-label" htmlFor="byok-tpm">{t('home.byok_tpm_label')}</label>
-                  <span className="byok-field-help">{t('home.byok_tpm_help')}</span>
-                  <input
-                    id="byok-tpm"
-                    type="number"
-                    min="1"
-                    step="1"
-                    className="input byok-input"
-                    value={llmTokensPerMinute}
-                    onChange={(e) => setLlmTokensPerMinute(e.target.value)}
-                    placeholder="100000"
-                    disabled={isSubmitting}
-                    inputMode="numeric"
-                  />
-                </div>
-                <label className="byok-switch">
-                  <input
-                    type="checkbox"
-                    checked={disableUserQuota}
-                    onChange={(e) => setDisableUserQuota(e.target.checked)}
-                    disabled={isSubmitting}
-                  />
-                  <span className="byok-switch__copy">
-                    <strong>{t('home.byok_disable_user_quota_label')}</strong>
-                    <span>{t('home.byok_disable_user_quota_hint')}</span>
-                  </span>
-                </label>
-                <div className="byok-actions">
-                  <button
-                    type="button"
-                    className={`mode-btn byok-test-btn ${testStatus === 'ok' ? 'byok-test-btn--ok' : testStatus === 'fail' ? 'byok-test-btn--fail' : ''}`}
-                    onClick={handleTestConnection}
-                    disabled={isSubmitting || testStatus === 'testing' || !llmApiKey.trim()}
-                  >
-                    {testStatus === 'testing' ? t('home.byok_testing')
-                      : testStatus === 'ok' ? t('home.byok_test_ok')
-                      : testStatus === 'fail' ? t('home.byok_test_fail')
-                      : t('home.byok_test')}
-                  </button>
-                  {testStatus === 'fail' && testError && (
-                    <span className="byok-test-error">{testError}</span>
+                <div className="daily-challenge-card__status">
+                  {campaignWeeklySummary && (
+                    <span className="daily-challenge-card__pill">
+                      {t('home.weekly_challenge_completed_runs', { runs: campaignWeeklySummary.total_runs })}
+                    </span>
+                  )}
+                  {campaignWeeklySummary && (
+                    <span className="daily-challenge-card__pill">
+                      {t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })}
+                    </span>
+                  )}
+                  {weeklyTopProfileLabel && (
+                    <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                      {t('home.weekly_challenge_top_profile', { profile: weeklyTopProfileLabel })}
+                    </span>
                   )}
                 </div>
-                {byokBudgetRecommendation && (
-                  <div className={`byok-probe-card ${byokBudgetRecommendation.overBudget ? 'byok-probe-card--warn' : ''}`}>
-                    <div className="byok-probe-card__title-row">
-                      <strong>{t('home.byok_budget_title')}</strong>
-                    </div>
-                    <p className="byok-probe-copy">
-                      {t('home.byok_budget_recommendation', {
-                        rounds,
-                        agentsMax: byokBudgetRecommendation.agentsMax,
-                        agents: numAgents,
-                        roundsMax: byokBudgetRecommendation.roundsMax,
-                      })}
-                    </p>
-                    {byokBudgetRecommendation.overBudget && (
-                      <p className="byok-probe-warning">
-                        {t('home.byok_budget_warning')}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {probeResult && byokRecommendation && (
-                  <div className={`byok-probe-card ${(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) ? 'byok-probe-card--warn' : ''}`}>
-                    <div className="byok-probe-card__title-row">
-                      <strong>{t('home.byok_probe_title')}</strong>
-                      <span className="byok-probe-badge">
-                        {t('home.byok_probe_parallelism', { count: probeResult.estimated_parallelism })}
-                      </span>
-                    </div>
-                    <p className="byok-probe-copy">
-                      {t('home.byok_probe_recommendation', {
-                        agentsMin: byokRecommendation.agents_min,
-                        agentsMax: byokRecommendation.agents_max,
-                        roundsMin: byokRecommendation.rounds_min,
-                        roundsMax: byokRecommendation.rounds_max,
-                      })}
-                    </p>
-                    <p className="byok-probe-copy">
-                      {probeResult.allow_disable_user_quota
-                        ? t('home.byok_probe_local_toggle_enabled')
-                        : t('home.byok_probe_local_toggle_disabled')}
-                    </p>
-                    {(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) && (
-                      <p className="byok-probe-warning">
-                        {t('home.byok_probe_warning', {
-                          agents: numAgents,
-                          rounds,
-                        })}
-                      </p>
-                    )}
-                  </div>
-                )}
-                <p className="byok-hint">{t('home.byok_hint')}</p>
-                {llmApiKey.trim() && !hasFreshProbe && (
-                  <p className="byok-hint">{t('home.byok_preflight_required')}</p>
-                )}
-                <p className="byok-hint">{t('home.byok_storage_notice')}</p>
               </div>
+            </section>
             )}
+
+            <section className="weekly-challenge-card weekly-challenge-card--growth">
+              <div className="weekly-challenge-card__side">
+                <img
+                  className="weekly-challenge-card__badge-art"
+                  src={getGameplayBadgeSrc('archive_record')}
+                  alt=""
+                  aria-hidden="true"
+                />
+              </div>
+              <div className="weekly-challenge-card__copy">
+                <span className="daily-challenge-card__eyebrow">
+                  {t('home.director_growth_label')}
+                </span>
+                <strong
+                  className="daily-challenge-card__title"
+                  aria-label={t('home.director_growth_title', {
+                    runs: campaignProfile?.total_runs ?? 0,
+                    badges: campaignBadges.length,
+                  })}
+                >
+                  {hasDirectorGrowth
+                    ? t('home.director_growth_active_title', { runs: campaignProfile?.total_runs ?? 0 })
+                    : t('home.director_growth_empty_title')}
+                </strong>
+                <span className="daily-challenge-card__subtitle">
+                  {hasDirectorGrowth
+                    ? t('home.director_growth_active_subtitle', { badges: campaignBadges.length })
+                    : t('home.director_growth_hint')}
+                </span>
+                {hasDirectorGrowth && (
+                  <div className="daily-challenge-card__status">
+                    <span className="daily-challenge-card__pill">
+                      {t('home.director_growth_runs', { runs: campaignProfile?.total_runs ?? 0 })}
+                    </span>
+                    <span className="daily-challenge-card__pill">
+                      {t('home.director_growth_badges', { badges: campaignBadges.length })}
+                    </span>
+                  </div>
+                )}
+                {topMasteries.length > 0 && (
+                  <div className="daily-challenge-card__hooks">
+                    {topMasteries.map((mastery) => (
+                      <span key={mastery.profile_id} className="daily-challenge-card__pill daily-challenge-card__pill--profile">
+                        {getGameplayProfileLabel(mastery.profile_id as never, isZh)}
+                        {' · '}
+                        {t('home.campaign_mastery_level', { level: mastery.level })}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
           </div>
 
-          <div className="input-view__submit-row">
-            {isSimulationBudgetBlocked && (
-              <p className="byok-probe-warning">
-                {t('home.byok_budget_blocked')}
-              </p>
-            )}
+          {/* ── STAGE 3: Collapsible Config ── */}
+          <div className="iv-config">
             <button
-              className="btn btn-primary btn--submit"
-              onClick={() => handleSubmit(question)}
-              disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked}
+              type="button"
+              className="iv-config__trigger"
+              onClick={() => setIsConfigOpen((prev) => !prev)}
+              aria-expanded={isConfigOpen}
             >
-              {isSubmitting ? <span className="spinner spinner--sm" /> : null}
-              {t('home.submit')}
+              {isConfigOpen ? t('home.advanced_settings_expanded') : t('home.advanced_settings')}
+              {' '}
+              {isConfigOpen ? '▲' : '▼'}
             </button>
-            <button
-              className="btn btn-ghost btn--submit"
-              onClick={() => void launchDebate({ nextQuestion: question })}
-              disabled={!question.trim() || isSubmitting}
-            >
-              {t('debate.entry_cta')}
-            </button>
+            <div className={`iv-config__body ${isConfigOpen ? 'is-open' : ''}`} inert={!isConfigOpen || undefined}>
+              <div className="iv-config__inner">
+                {/* Mode Selector */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.mode_label')}</span>
+                    <div className="mode-options">
+                      <button
+                        type="button"
+                        className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
+                        onClick={() => setMode('blackboard')}
+                        disabled={isSubmitting}
+                        title={t('home.mode_blackboard_title')}
+                      >
+                        📋 {t('home.mode_blackboard')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
+                        onClick={() => setMode('raw')}
+                        disabled={isSubmitting}
+                        title={t('home.mode_raw_title')}
+                      >
+                        📜 {t('home.mode_raw')}
+                      </button>
+                    </div>
+                  </div>
+                  <span className="mode-desc">
+                    {mode === 'blackboard' ? t('home.mode_blackboard_desc') : t('home.mode_raw_desc')}
+                  </span>
+                </div>
+
+                {/* V2: Visualization Mode Toggle */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.viz_label')}</span>
+                    <div className="mode-options">
+                      <button
+                        type="button"
+                        className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
+                        onClick={() => setVizEnabled(false)}
+                        disabled={isSubmitting}
+                      >
+                        📊 {t('home.viz_classic')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
+                        onClick={() => setVizEnabled(true)}
+                        disabled={isSubmitting}
+                      >
+                        🎮 {t('home.viz_theater')}
+                      </button>
+                    </div>
+                  </div>
+                  {vizEnabled && (
+                    <span className="mode-desc">{t('home.viz_theater_desc')}</span>
+                  )}
+                </div>
+
+                {/* Reasoning Effort Selector */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.reasoning_label')}</span>
+                    <div className="mode-options">
+                      {[
+                        { value: '', label: t('home.reasoning_off') },
+                        { value: 'low', label: t('home.reasoning_low') },
+                        { value: 'medium', label: t('home.reasoning_medium') },
+                        { value: 'high', label: t('home.reasoning_high') },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
+                          onClick={() => setReasoningEffort(opt.value)}
+                          disabled={isSubmitting}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {reasoningEffort && (
+                    <span className="mode-desc">{t('home.reasoning_hint')}</span>
+                  )}
+                </div>
+
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.runtime_preset_label')}</span>
+                    <div className="mode-options">
+                      {(['conservative', 'balanced', 'aggressive'] as ScenarioRuntimePresetId[]).map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
+                          onClick={() => setRuntimePreset(preset)}
+                          disabled={isSubmitting}
+                          title={t(`home.runtime_preset_${preset}_desc`)}
+                        >
+                          {t(`home.runtime_preset_${preset}`)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="mode-desc">{runtimePresetDescription}</span>
+                  <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
+                </div>
+
+                {/* Phase 3 F3: Custom Agent Attach Panel */}
+                {caps?.custom_agents?.enabled && (
+                  <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
+                )}
+
+                {/* P4-E: BYOK — Bring Your Own Key */}
+                <div className="byok-section">
+                  <button
+                    type="button"
+                    className="byok-toggle"
+                    onClick={() => setShowByok(!showByok)}
+                    disabled={isSubmitting}
+                  >
+                    {t('home.byok_toggle')} {showByok ? '▲' : '▼'}
+                  </button>
+                  {showByok && (
+                    <div className="byok-fields">
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
+                        <span className="byok-field-help">{t('home.byok_api_key_help')}</span>
+                        <input
+                          id="byok-key"
+                          type="password"
+                          className="input byok-input"
+                          value={llmApiKey}
+                          onChange={(e) => setLlmApiKey(e.target.value)}
+                          placeholder="sk-..."
+                          disabled={isSubmitting}
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="byok-url">{t('home.byok_base_url_label')}</label>
+                        <span className="byok-field-help">{t('home.byok_base_url_help')}</span>
+                        <input
+                          id="byok-url"
+                          type="url"
+                          className="input byok-input"
+                          value={llmBaseUrl}
+                          onChange={(e) => setLlmBaseUrl(e.target.value)}
+                          placeholder="https://api.openai.com/v1/chat/completions"
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="byok-model">{t('home.byok_model_label')}</label>
+                        <span className="byok-field-help">{t('home.byok_model_help')}</span>
+                        <input
+                          id="byok-model"
+                          type="text"
+                          className="input byok-input"
+                          value={llmModel}
+                          onChange={(e) => setLlmModel(e.target.value)}
+                          placeholder="gpt-4o / claude-3.5-sonnet / ..."
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="byok-rpm">{t('home.byok_rpm_label')}</label>
+                        <span className="byok-field-help">{t('home.byok_rpm_help')}</span>
+                        <input
+                          id="byok-rpm"
+                          type="number"
+                          min="1"
+                          step="1"
+                          className="input byok-input"
+                          value={llmRequestsPerMinute}
+                          onChange={(e) => setLlmRequestsPerMinute(e.target.value)}
+                          placeholder="10"
+                          disabled={isSubmitting}
+                          inputMode="numeric"
+                        />
+                      </div>
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="byok-tpm">{t('home.byok_tpm_label')}</label>
+                        <span className="byok-field-help">{t('home.byok_tpm_help')}</span>
+                        <input
+                          id="byok-tpm"
+                          type="number"
+                          min="1"
+                          step="1"
+                          className="input byok-input"
+                          value={llmTokensPerMinute}
+                          onChange={(e) => setLlmTokensPerMinute(e.target.value)}
+                          placeholder="100000"
+                          disabled={isSubmitting}
+                          inputMode="numeric"
+                        />
+                      </div>
+                      <label className="byok-switch">
+                        <input
+                          type="checkbox"
+                          checked={disableUserQuota}
+                          onChange={(e) => setDisableUserQuota(e.target.checked)}
+                          disabled={isSubmitting}
+                        />
+                        <span className="byok-switch__copy">
+                          <strong>{t('home.byok_disable_user_quota_label')}</strong>
+                          <span>{t('home.byok_disable_user_quota_hint')}</span>
+                        </span>
+                      </label>
+                      <div className="byok-actions">
+                        <button
+                          type="button"
+                          className={`mode-btn byok-test-btn ${testStatus === 'ok' ? 'byok-test-btn--ok' : testStatus === 'fail' ? 'byok-test-btn--fail' : ''}`}
+                          onClick={handleTestConnection}
+                          disabled={isSubmitting || testStatus === 'testing' || !llmApiKey.trim()}
+                        >
+                          {testStatus === 'testing' ? t('home.byok_testing')
+                            : testStatus === 'ok' ? t('home.byok_test_ok')
+                            : testStatus === 'fail' ? t('home.byok_test_fail')
+                            : t('home.byok_test')}
+                        </button>
+                        {testStatus === 'fail' && testError && (
+                          <span className="byok-test-error">{testError}</span>
+                        )}
+                      </div>
+                      {byokBudgetRecommendation && (
+                        <div className={`byok-probe-card ${byokBudgetRecommendation.overBudget ? 'byok-probe-card--warn' : ''}`}>
+                          <div className="byok-probe-card__title-row">
+                            <strong>{t('home.byok_budget_title')}</strong>
+                          </div>
+                          <p className="byok-probe-copy">
+                            {t('home.byok_budget_recommendation', {
+                              rounds,
+                              agentsMax: byokBudgetRecommendation.agentsMax,
+                              agents: numAgents,
+                              roundsMax: byokBudgetRecommendation.roundsMax,
+                            })}
+                          </p>
+                          {byokBudgetRecommendation.overBudget && (
+                            <p className="byok-probe-warning">
+                              {t('home.byok_budget_warning')}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {probeResult && byokRecommendation && (
+                        <div className={`byok-probe-card ${(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) ? 'byok-probe-card--warn' : ''}`}>
+                          <div className="byok-probe-card__title-row">
+                            <strong>{t('home.byok_probe_title')}</strong>
+                            <span className="byok-probe-badge">
+                              {t('home.byok_probe_parallelism', { count: probeResult.estimated_parallelism })}
+                            </span>
+                          </div>
+                          <p className="byok-probe-copy">
+                            {t('home.byok_probe_recommendation', {
+                              agentsMin: byokRecommendation.agents_min,
+                              agentsMax: byokRecommendation.agents_max,
+                              roundsMin: byokRecommendation.rounds_min,
+                              roundsMax: byokRecommendation.rounds_max,
+                            })}
+                          </p>
+                          <p className="byok-probe-copy">
+                            {probeResult.allow_disable_user_quota
+                              ? t('home.byok_probe_local_toggle_enabled')
+                              : t('home.byok_probe_local_toggle_disabled')}
+                          </p>
+                          {(byokRecommendation.exceedsAgents || byokRecommendation.exceedsRounds) && (
+                            <p className="byok-probe-warning">
+                              {t('home.byok_probe_warning', {
+                                agents: numAgents,
+                                rounds,
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      <p className="byok-hint">{t('home.byok_hint')}</p>
+                      {llmApiKey.trim() && !hasFreshProbe && (
+                        <p className="byok-hint">{t('home.byok_preflight_required')}</p>
+                      )}
+                      <p className="byok-hint">{t('home.byok_storage_notice')}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
+
           <div className="input-view__submit-hints">
             <p className="input-view__submit-hint">{simulationEtaHint}</p>
             <p className="input-view__submit-hint">{t('debate.entry_hint')}</p>

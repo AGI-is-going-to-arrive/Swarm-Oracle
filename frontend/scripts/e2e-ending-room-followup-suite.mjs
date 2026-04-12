@@ -3,6 +3,15 @@ import path from "node:path";
 import process from "node:process";
 
 import { chromium } from "playwright";
+import {
+  ENDING_ROOM_COPY_REPLAY_PATTERN,
+  ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+  ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+  isLiveEndingRoomModalState,
+  isReadonlyEndingRoomModalState,
+  isReadonlyReplayUiReady,
+} from "../src/lib/endingRoomReplayAutomation.js";
+import { assertReplayCoverage } from "../src/lib/e2eReplayGuards.js";
 import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
 
 const DESKTOP_CONTEXT_OPTIONS = {
@@ -449,9 +458,24 @@ async function ensureLiveEndingRoomPage(
   contextOptions = {},
 ) {
   if (page && !page.isClosed?.()) {
-    return page;
+    try {
+      const current = await waitForLiveEndingRoomVisible(page, {
+        expectedRoomId: roomId,
+        expectedRoomType: roomType,
+        timeout: 5000,
+        label: `${label} live room revalidate`,
+      });
+      if (isLiveEndingRoomModalState(current?.page?.controls?.modal_state, {
+        expectedRoomId: roomId,
+        expectedRoomType: roomType,
+      })) {
+        return page;
+      }
+    } catch (error) {
+      console.warn(`[ending-room] ${label}: live room revalidation failed, reopening room: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
-  console.warn(`[ending-room] ${label}: page closed unexpectedly, reopening room`);
+  console.warn(`[ending-room] ${label}: page unavailable or stale, reopening room`);
   return reopenLiveEndingRoomPage(
     context,
     roomUrl,
@@ -460,6 +484,23 @@ async function ensureLiveEndingRoomPage(
     `${label} reopen`,
     contextOptions,
   );
+}
+
+function locateEndingRoomHeaderAction(page, namePattern) {
+  return page
+    .locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button")
+    .filter({ hasText: namePattern })
+    .last();
+}
+
+async function waitForEndingRoomHeaderAction(page, {
+  label,
+  namePattern,
+  timeout = 30000,
+} = {}) {
+  const action = locateEndingRoomHeaderAction(page, namePattern);
+  await action.waitFor({ state: "visible", timeout });
+  return action;
 }
 
 async function waitForLiveEndingRoomVisible(page, {
@@ -715,21 +756,30 @@ async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
     async () => {
       const current = await getAutomationState(page);
       const modalState = current?.page?.controls?.modal_state;
-      if (modalState?.read_only === true && modalState?.can_send === false) {
+      if (isReadonlyEndingRoomModalState(modalState)) {
         return current;
       }
       const uiReady = await page.evaluate(() => {
         const modal = document.querySelector(".ending-chat-modal");
-        if (!(modal instanceof HTMLElement)) return false;
+        if (!(modal instanceof HTMLElement)) {
+          return {
+            url: window.location.href,
+            hasImportAction: false,
+            hasComposerSendButton: false,
+          };
+        }
         const text = modal.innerText || "";
         const hasImport = text.includes("Import local run")
           || text.includes("Import as Local Run")
           || text.includes("导入本地运行")
           || text.includes("导入为本地运行");
-        const hasNoComposer = !modal.querySelector(".ending-chat-send");
-        return hasImport || hasNoComposer;
+        return {
+          url: window.location.href,
+          hasImportAction: hasImport,
+          hasComposerSendButton: modal.querySelector(".ending-chat-send") instanceof HTMLElement,
+        };
       });
-      if (!uiReady) return null;
+      if (!isReadonlyReplayUiReady(uiReady)) return null;
       return {
         page: {
           controls: {
@@ -1322,7 +1372,11 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   let importedUrl = null;
   let replayCoverageError = null;
   try {
-    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "ending-room live copy replay",
+      namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
+      timeout: 40000,
+    })).click();
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "ending-room copied share permalink");
     const sharePage = await page.context().newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -1336,15 +1390,21 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "multi-ending-room-replay-artifact.json"),
       JSON.stringify(artifactReadonly, null, 2),
     );
-  const importButton = sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-    hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-  }).last();
+    const importButton = await waitForEndingRoomHeaderAction(sharePage, {
+      label: "ending-room artifact replay import",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    });
     await importButton.waitFor({ state: "visible", timeout: 40000 });
     await importButton.click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
 
-    await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "ending-room live save readonly copy",
+      namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
     replayReadonly = await waitForReadonlyEndingRoomVisible(
       page,
@@ -1357,9 +1417,11 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify(replayReadonly, null, 2),
     );
 
-  await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-    hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-  }).last().click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "ending-room readonly import local run",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
   } catch (error) {
@@ -1369,6 +1431,20 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify({ error: replayCoverageError }, null, 2),
     );
   }
+
+  assertReplayCoverage(
+    {
+      replayCoverageError,
+      artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
+      artifactImportedUrl,
+      replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
+      importedUrl,
+    },
+    {
+      label: "ending-room desktop replay coverage",
+      requiredFields: ["artifactReadonly", "artifactImportedUrl", "replayReadonly", "importedUrl"],
+    },
+  );
 
   return {
     resultUrl,
@@ -1573,7 +1649,11 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   let importedUrl = null;
   let replayCoverageError = null;
   try {
-    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "single ending live copy replay",
+      namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
+      timeout: 40000,
+    })).click();
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "single ending copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -1587,14 +1667,20 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "single-mobile-replay-artifact.json"),
       JSON.stringify(artifactReadonly, null, 2),
     );
-    await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-    }).last().click();
+    await (await waitForEndingRoomHeaderAction(sharePage, {
+      label: "single ending artifact replay import",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    })).click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
     await closePlaywrightPage(sharePage, "ending-room-single-mobile-share-page");
 
-    await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "single ending live save readonly copy",
+      namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
     replayReadonly = await waitForReadonlyEndingRoomVisible(
       page,
@@ -1608,9 +1694,11 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     );
     const replayReadonlyUrl = page.url();
 
-    await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-    }).last().click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "single ending readonly import local run",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
 
@@ -1634,6 +1722,27 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify({ error: replayCoverageError }, null, 2),
     );
   }
+
+  assertReplayCoverage(
+    {
+      replayCoverageError,
+      artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
+      artifactImportedUrl,
+      replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
+      replayReloaded: replayReloaded?.page?.controls?.modal_state ?? null,
+      importedUrl,
+    },
+    {
+      label: "ending-room single-mobile replay coverage",
+      requiredFields: [
+        "artifactReadonly",
+        "artifactImportedUrl",
+        "replayReadonly",
+        "replayReloaded",
+        "importedUrl",
+      ],
+    },
+  );
   await closePlaywrightContext(context, "ending-room-single-mobile-context");
   return {
     resultUrl,
@@ -2041,16 +2150,30 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         console.warn(`[ending-room] mobile evidence-card UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
         evidenceCardState = await waitForModalSettled(page, "mobile evidence-card settled fallback", 10000).catch(() => getAutomationState(page));
       }
-      await saveScreenshot(page, path.join(outputDir, "mobile-gallery-evidence-card.png"));
-      writeJson(path.join(outputDir, "mobile-gallery-evidence-card.json"), {
-        state: evidenceCardState,
-        api_payload: evidenceApiPayload,
-        stream_lifecycle: evidenceCardLifecycle?.captures ?? evidenceCardCaptures,
-      });
-    }
+    await saveScreenshot(page, path.join(outputDir, "mobile-gallery-evidence-card.png"));
+    writeJson(path.join(outputDir, "mobile-gallery-evidence-card.json"), {
+      state: evidenceCardState,
+      api_payload: evidenceApiPayload,
+      stream_lifecycle: evidenceCardLifecycle?.captures ?? evidenceCardCaptures,
+    });
+  }
+
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "mobile ending-room replay controls",
+      MOBILE_CONTEXT_OPTIONS,
+    );
 
     await armClipboardCapture(page);
-    await page.getByRole("button", { name: /Copy replay|复制回放/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "mobile ending-room live copy replay",
+      namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
+      timeout: 40000,
+    })).click();
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "mobile ending-room copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -2064,14 +2187,20 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       path.join(outputDir, "mobile-ending-room-replay-artifact.json"),
       JSON.stringify(artifactReadonly, null, 2),
     );
-    await sharePage.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-    }).last().click();
+    await (await waitForEndingRoomHeaderAction(sharePage, {
+      label: "mobile ending-room artifact replay import",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    })).click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
     await closePlaywrightPage(sharePage, "ending-room-multi-mobile-share-page");
 
-    await page.getByRole("button", { name: /Save local read-only copy|保存本地只读副本|保存只读副本/i }).click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "mobile ending-room live save readonly copy",
+      namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/result\/replay\?roomLocal=/, { timeout: 15000 });
     replayReadonly = await waitForReadonlyEndingRoomVisible(
       page,
@@ -2085,9 +2214,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     );
     const replayReadonlyUrl = page.url();
 
-    await page.locator(".ending-chat-overlay .ending-chat-header__actions .ending-chat-inline-button").filter({
-      hasText: /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i,
-    }).last().click();
+    await (await waitForEndingRoomHeaderAction(page, {
+      label: "mobile ending-room readonly import local run",
+      namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      timeout: 40000,
+    })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
 
@@ -2111,6 +2242,27 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       JSON.stringify({ error: replayCoverageError }, null, 2),
     );
   }
+
+  assertReplayCoverage(
+    {
+      replayCoverageError,
+      artifactReadonly: artifactReadonly?.page?.controls?.modal_state ?? null,
+      artifactImportedUrl,
+      replayReadonly: replayReadonly?.page?.controls?.modal_state ?? null,
+      replayReloaded: replayReloaded?.page?.controls?.modal_state ?? null,
+      importedUrl,
+    },
+    {
+      label: "ending-room multi-mobile replay coverage",
+      requiredFields: [
+        "artifactReadonly",
+        "artifactImportedUrl",
+        "replayReadonly",
+        "replayReloaded",
+        "importedUrl",
+      ],
+    },
+  );
 
   await closePlaywrightContext(context, "ending-room-multi-mobile-context");
   return {

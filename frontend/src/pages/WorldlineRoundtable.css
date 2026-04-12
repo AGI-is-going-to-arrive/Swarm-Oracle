@@ -1026,6 +1026,97 @@ h3.roundtable-phase-divider {
   color: var(--color-danger);
 }
 
+/* ── D-10: Compress hero to header bar when live ──────── */
+.worldline-roundtable-view.is-live-room .worldline-roundtable-hero {
+  min-height: 56px;
+  max-height: 56px;
+  overflow: hidden;
+}
+
+.worldline-roundtable-view.is-live-room .worldline-roundtable-hero__body {
+  display: none;
+}
+
+/* ── D-11: Avatar ring row ────────────────────────────── */
+.roundtable-avatar-ring-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  flex-wrap: wrap;
+}
+
+.roundtable-avatar-ring-item {
+  display: inline-flex;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.roundtable-avatar-ring-row__more-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px dashed var(--border-default);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.roundtable-roster-toggle-btn {
+  margin-top: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.roundtable-roster-toggle-btn:hover {
+  background: var(--oracle-accent-soft);
+  color: var(--text-primary);
+}
+
+.roundtable-roster-hidden {
+  display: none;
+}
+
+.worldline-roundtable-card--summary > p {
+  display: none;
+}
+
+/* ── D-13: Spotlight bubble + new messages pill ───────── */
+.ending-chat-bubble--spotlight {
+  background: var(--spotlight-bg, oklch(95% 0.04 60 / 0.9));
+  border-left: 4px solid var(--spotlight-border, var(--oracle-accent, oklch(65% 0.12 60)));
+  padding: 18px;
+}
+
+.roundtable-new-message-pill {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  background: var(--new-message-bg, oklch(35% 0.08 250));
+  color: var(--new-message-text, #fff);
+  border: none;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px oklch(0% 0 0 / 0.18);
+}
+
 /* Desktop: details wrapper is transparent, summary hidden */
 .worldline-roundtable-sidebar__collapsible {
   display: contents;
@@ -1187,6 +1278,12 @@ h3.roundtable-phase-divider {
     margin-bottom: 10px;
     padding: 8px;
     padding-top: 30px;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .worldline-roundtable-view.is-live-room .worldline-roundtable-hero__body {
+    display: grid;
   }
 
   .worldline-roundtable-view.is-live-room {

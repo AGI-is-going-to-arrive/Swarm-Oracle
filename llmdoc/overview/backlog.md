@@ -1,6 +1,6 @@
 # Phase 3 Backlog — 当前真值
 
-> 最后更新：2026-04-12
+> 最后更新：2026-04-13
 > 维护规则：只记"还没做完的事"，完成后删除对应行。不要追加历史流水。
 
 ## 已完成的基座
@@ -37,5 +37,5 @@
 | 问题 | 说明 |
 |------|------|
 | auth/ownership 仍非最终方案 | 当前已有 signed principal token 与局部 owner 收口；本轮又补了 `scenario WS` owner 校验、compare branch 归属校验与 scenario 删除时的 artifact 清理，但还不是完整 JWT/OAuth2 + per-resource authorization 方案 |
-| Oracle follow-up 自动化稳定性仍待继续收口 | 默认 full signoff 当前已通过，但 `hotseat / all_present / evidence_card / anchored thread` 的生命周期抓取在慢路径下仍可能回退到 `settled wait / API-driven wait`；主功能链可用，严格时序观测还不够稳 |
+| Oracle / Roundtable 严格 replay 自动化稳定性仍待继续收口 | replay coverage 现在按 fail-closed 收口；readonly replay / reload restore / import 关键字段缺失会直接失败，不再 best-effort 保 `summary.json`。基础 ending-room suite full 已通过，但 ending-room follow-up `full / mobile` 的慢路径仍可能 fallback、超时或挂起；roundtable desktop replay restore 已通过，roundtable `full` 的移动端链路本轮仍可能卡在 result 页面 goto timeout |
 | test_p0_wiring.py 覆盖定位 | 定向回归保护，非全链路端到端入口验证 |

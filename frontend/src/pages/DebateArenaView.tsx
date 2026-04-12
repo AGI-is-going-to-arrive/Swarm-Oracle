@@ -8,6 +8,9 @@ import { DebateBetModal } from '../components/DebateBetModal';
 import { DebateMomentumBar } from '../components/DebateMomentumBar';
 import { DebateScoreCard } from '../components/DebateScoreCard';
 import { DebateStageRibbon } from '../components/DebateStageRibbon';
+import { SpotlightTurnCard } from '../components/ui/SpotlightTurnCard';
+import { FoldableTurn } from '../components/ui/FoldableTurn';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import {
   resolveDebateCounterplayRecord,
@@ -120,6 +123,8 @@ export function DebateArenaView() {
     variant: 'balanced' | 'reversal';
   } | null>(null);
   const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
+  const [expandedPastTurnIds, setExpandedPastTurnIds] = useState<Set<string>>(new Set());
+  const [strategyOpenItems, setStrategyOpenItems] = useState<string[]>(['clash']);
   const revealRef = useRef(0);
   const previousPhaseRef = useRef<string | null>(null);
   const advanceTimeRemainderRef = useRef(0);
@@ -353,34 +358,30 @@ export function DebateArenaView() {
       variant: 'reversal' as const,
     };
   }, [availablePredictionOptions.verdict_tone, availablePredictionOptions.winner, canBetNow, debate, phaseScoreDelta.opposition, phaseScoreDelta.proposition, t]);
+  const canSubmitCounterplay = Boolean(counterplayPlan) && canBetNow && selectedPhase === currentPhase;
   const feedFocusLabel = useMemo(() => {
     if (!latestVisibleTurn) return null;
-    const sideLabel = getDebateSideLabel(t, latestVisibleTurn.speaker_side);
-    if (isZh) {
-      return `${latestVisibleTurn.speaker_name} 正在把话题推向 ${sideLabel}`;
-    }
-    return `${latestVisibleTurn.speaker_name} currently has the floor for ${sideLabel}`;
-  }, [isZh, latestVisibleTurn, t]);
+    return [
+      latestVisibleTurn.speaker_name,
+      getDebateSideLabel(t, latestVisibleTurn.speaker_side),
+      t('debate.room_state_floor'),
+    ].join(' · ');
+  }, [latestVisibleTurn, t]);
   const phaseCueCopy = useMemo(() => {
     if (!phaseCue) return null;
-    const phaseLabel = getDebatePhaseLabel(t, phaseCue.phase);
-    if (isZh) {
-      return phaseCue.speakerName
-        ? `${phaseLabel}阶段已解锁，${phaseCue.speakerName} 刚把局势往前推了一步。`
-        : `${phaseLabel}阶段已解锁。`;
-    }
-    return phaseCue.speakerName
-      ? `${phaseLabel} just unlocked and ${phaseCue.speakerName} pushed the room into a new beat.`
-      : `${phaseLabel} just unlocked.`;
-  }, [isZh, phaseCue, t]);
+    return [
+      getDebatePhaseLabel(t, phaseCue.phase),
+      t('debate.stage_status_live'),
+      phaseCue.speakerName,
+    ].filter(Boolean).join(' · ');
+  }, [phaseCue, t]);
   const unlockProgressLabel = useMemo(() => {
     if (isZh) return `已解锁 ${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length}`;
     return `${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length} unlocked`;
   }, [isZh, phaseUnlockCount]);
   const stageStateLabel = useMemo(() => {
-    if (!phaseLocked) return isZh ? '直播跟进' : 'Live sync';
-    return isZh ? '阶段锁定回看' : 'Phase locked';
-  }, [isZh, phaseLocked]);
+    return phaseLocked ? t('debate.stage_status_locked') : t('debate.stage_status_live');
+  }, [phaseLocked, t]);
   const overallLeaderLabel = useMemo(
     () => getLeaderLabel(t, overallPressure.leader),
     [overallPressure.leader, t],
@@ -492,6 +493,19 @@ export function DebateArenaView() {
   }, [betPreset, canBetNow, showBetModal]);
 
   useEffect(() => {
+    setStrategyOpenItems((current) => {
+      if (!counterplayPlan) {
+        return current.includes('counterplay')
+          ? current.filter((item) => item !== 'counterplay')
+          : current;
+      }
+      return current.includes('counterplay')
+        ? current
+        : [...current, 'counterplay'];
+    });
+  }, [counterplayPlan]);
+
+  useEffect(() => {
     const win = window as AutomationWindow;
     const capture = async (mode: 'canvas' | 'panel' | 'modal' = 'panel') => {
       if (mode === 'modal') {
@@ -538,7 +552,7 @@ export function DebateArenaView() {
         unlocked_phases: unlockedPhases,
         controls: {
           can_open_prediction: canBetNow,
-          can_open_counterplay: Boolean(counterplayPlan),
+          can_open_counterplay: canSubmitCounterplay,
           counterplay_used: Boolean(counterplayRecord),
           can_view_result: Boolean(debate?.result_ready),
           can_capture_screenshot: captureStatus === 'idle',
@@ -612,6 +626,7 @@ export function DebateArenaView() {
     unlockedPhases,
     visibleTurns,
     watchedDimension,
+    canSubmitCounterplay,
     counterplayPlan,
     counterplayRecord,
     overviewCards,
@@ -691,20 +706,20 @@ export function DebateArenaView() {
   };
 
   const handleOpenCounterplay = () => {
-    if (!counterplayPlan) return;
+    if (!counterplayPlan || !canSubmitCounterplay) return;
     setBetPreset({
       kind: counterplayPlan.kind,
       targetValue: counterplayPlan.targetValue,
       confidence: counterplayPlan.confidence,
       strategyHint: counterplayPlan.strategyHint,
-      phase: currentPhase as DebatePhase,
+      phase: selectedPhase as DebatePhase,
       variant: counterplayPlan.variant,
     });
     setShowBetModal(true);
   };
 
   const handleQuickCounterplay = async () => {
-    if (!id || !counterplayPlan || !canBetNow || betSubmitting) return;
+    if (!id || !counterplayPlan || !canSubmitCounterplay || betSubmitting) return;
     setBetSubmitting(true);
     try {
       await predictDebate(id, {
@@ -714,14 +729,14 @@ export function DebateArenaView() {
         userId: directorIdentity.userId,
         userName: directorIdentity.userName,
         isCounterplay: true,
-        counterplayPhase: currentPhase,
+        counterplayPhase: selectedPhase as DebatePhase,
         counterplayVariant: counterplayPlan.variant,
       });
       persistCounterplay({
         kind: counterplayPlan.kind,
         targetValue: counterplayPlan.targetValue,
         confidence: counterplayPlan.confidence,
-        phase: currentPhase as DebatePhase,
+        phase: selectedPhase as DebatePhase,
         variant: counterplayPlan.variant,
       });
       setBetNotice(t('debate.counterplay_success'));
@@ -757,6 +772,14 @@ export function DebateArenaView() {
               <span className={`debate-hero__status ${debate?.result_ready ? 'debate-hero__status--done' : ''}`}>
                 {debateStatusLabel}
               </span>
+              <DebateStageRibbon
+                activePhase={selectedPhase as DebatePhase}
+                unlockedPhases={unlockedPhases as DebatePhase[]}
+                onSelect={(phase) => {
+                  setSelectedPhase(phase);
+                  setPhaseLocked(phase !== currentPhase);
+                }}
+              />
             </div>
 
             <div className="debate-hero__copy">
@@ -766,15 +789,6 @@ export function DebateArenaView() {
                 <strong>{t('debate.motion_label')}:</strong> {debate?.motion ?? t('debate.loading')}
               </p>
             </div>
-
-            <DebateStageRibbon
-              activePhase={selectedPhase}
-              unlockedPhases={unlockedPhases}
-              onSelect={(phase) => {
-                setSelectedPhase(phase);
-                setPhaseLocked(phase !== currentPhase);
-              }}
-            />
 
             <div className="debate-hero__bottom">
               <DebateMomentumBar
@@ -818,15 +832,6 @@ export function DebateArenaView() {
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
         {error && <p className="debate-modal__error">{error}</p>}
-        <section className="debate-situation-grid" aria-label={t('debate.overview_room_title')}>
-          {overviewCards.map((card) => (
-            <article key={card.title} className="debate-situation-card">
-              <span className="debate-situation-card__eyebrow">{card.title}</span>
-              <strong className="debate-situation-card__value">{card.value}</strong>
-              <p className="debate-situation-card__detail">{card.detail}</p>
-            </article>
-          ))}
-        </section>
         {phaseCueCopy && !debate?.result_ready && (
           <section
             key={phaseCue?.token}
@@ -864,6 +869,161 @@ export function DebateArenaView() {
 
         <div className="debate-layout">
           <div className="debate-main">
+            <section
+              className="debate-panel"
+              id="debate-stage-panel"
+              role="tabpanel"
+              aria-labelledby={`debate-stage-tab-${selectedPhase}`}
+            >
+              <div className="debate-panel__header">
+                <h2>{t('debate.feed_title')}</h2>
+                <div className="debate-feed-header-meta">
+                  <span className="debate-phase-chip debate-phase-chip--accent">
+                    {unlockProgressLabel}
+                  </span>
+                  <span className="debate-phase-chip">{stageStateLabel}</span>
+                </div>
+                <div className="debate-controls">
+                  <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
+                    {t('debate.auto_reveal')}: {t(autoReveal ? 'debate.state_on' : 'debate.state_off')}
+                  </button>
+                  {phaseLocked && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setPhaseLocked(false);
+                        setSelectedPhase(currentPhase);
+                      }}
+                    >
+                      {t('debate.return_to_live')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setAutoReveal(false);
+                      setPhaseLocked(false);
+                      setRevealCount(debate?.turns.length ?? 0);
+                      setSelectedPhase('verdict');
+                    }}
+                  >
+                    {t('debate.skip_to_verdict')}
+                  </button>
+                </div>
+              </div>
+              {/* D-2: SpotlightCard for latest visible turn */}
+              {latestVisibleTurn && selectedPhase === currentPhase && (
+                <SpotlightTurnCard
+                  data-testid="debate-live-turn"
+                  variant="debate"
+                  speaker={latestVisibleTurn.speaker_name}
+                  content={latestVisibleTurn.content.length > 120 ? latestVisibleTurn.content.slice(0, 120) + '...' : latestVisibleTurn.content}
+                  isHighlighted
+                  badge={
+                    <span className="debate-phase-chip">
+                      {getDebateSideLabel(t, latestVisibleTurn.speaker_side)}
+                    </span>
+                  }
+                  className="mb-4"
+                />
+              )}
+              <div className="debate-panel__body">
+                {feedFocusLabel && (
+                  <div className="debate-feed-focus" data-testid="debate-feed-focus">
+                    <span className="debate-feed-focus__dot" aria-hidden="true" />
+                    <div className="debate-feed-focus__copy">
+                      <strong>{getDebatePhaseLabel(t, currentPhase)}</strong>
+                      <p>{feedFocusLabel}</p>
+                    </div>
+                  </div>
+                )}
+                {stageTurns.length > 0 ? (
+                  <div className="debate-turn-list">
+                    {stageTurns.map((turn) => {
+                      const isCurrentPhaseTurn = turn.phase === currentPhase;
+                      const isPastTurn = !isCurrentPhaseTurn;
+                      const isExpanded = expandedPastTurnIds.has(turn.id);
+
+                      if (isPastTurn) {
+                        return (
+                          <FoldableTurn
+                            key={turn.id}
+                            speaker={turn.speaker_name}
+                            content={turn.content}
+                            isCollapsed={!isExpanded}
+                            onToggle={() => {
+                              setExpandedPastTurnIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(turn.id)) {
+                                  next.delete(turn.id);
+                                } else {
+                                  next.add(turn.id);
+                                }
+                                return next;
+                              });
+                            }}
+                            badge={
+                              <span className="debate-phase-chip">
+                                {getDebateSideLabel(t, turn.speaker_side)}
+                              </span>
+                            }
+                          />
+                        );
+                      }
+
+                      return (
+                        <article
+                          key={turn.id}
+                          className={`debate-turn-card ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
+                        >
+                          <div className="debate-turn-card__meta">
+                            <strong>{turn.speaker_name}</strong>
+                            <div className="debate-turn-card__tags">
+                              <span>{getDebateSideLabel(t, turn.speaker_side)}</span>
+                              {turn.score_delta && (
+                                <span className="debate-phase-chip">
+                                  {(turn.score_delta.proposition ?? 0) === (turn.score_delta.opposition ?? 0)
+                                    ? t('debate.turn_swing_even')
+                                    : t('debate.turn_swing_edge', {
+                                      side: getDebateSideLabel(
+                                        t,
+                                        (turn.score_delta.proposition ?? 0) > (turn.score_delta.opposition ?? 0)
+                                          ? 'proposition'
+                                          : 'opposition',
+                                      ),
+                                      value: Math.abs((turn.score_delta.proposition ?? 0) - (turn.score_delta.opposition ?? 0)),
+                                    })}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <p className="debate-turn-card__content">{turn.content}</p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="debate-empty-state">{t('debate.loading')}</p>
+                )}
+              </div>
+            </section>
+
+            {/* D-extra: Situation Grid moved to bottom of debate-main */}
+            <section className="debate-situation-grid" aria-label={t('debate.overview_room_title')}>
+              {overviewCards.map((card) => (
+                <article key={card.title} className="debate-situation-card">
+                  <span className="debate-situation-card__eyebrow">{card.title}</span>
+                  <strong className="debate-situation-card__value">{card.value}</strong>
+                  <p className="debate-situation-card__detail">{card.detail}</p>
+                </article>
+              ))}
+            </section>
+          </div>
+
+          <aside className="debate-side">
+            {/* D-5: Score Grid moved to top of sidebar */}
             <section className="debate-panel">
               <div className="debate-panel__header">
                 <h2>{t('debate.participants_title')}</h2>
@@ -922,157 +1082,89 @@ export function DebateArenaView() {
               </div>
             </section>
 
-            <section className="debate-panel">
-              <div className="debate-panel__header">
-                <h2>{t('debate.feed_title')}</h2>
-                <div className="debate-feed-header-meta">
-                  <span className="debate-phase-chip debate-phase-chip--accent">
-                    {unlockProgressLabel}
-                  </span>
-                  <span className="debate-phase-chip">{stageStateLabel}</span>
-                </div>
-                <div className="debate-controls">
-                  <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
-                    {t('debate.auto_reveal')}: {t(autoReveal ? 'debate.state_on' : 'debate.state_off')}
-                  </button>
-                  {phaseLocked && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => {
-                        setPhaseLocked(false);
-                        setSelectedPhase(currentPhase);
-                      }}
-                    >
-                      {t('debate.return_to_live')}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => {
-                      setAutoReveal(false);
-                      setPhaseLocked(false);
-                      setRevealCount(debate?.turns.length ?? 0);
-                      setSelectedPhase('verdict');
-                    }}
-                  >
-                    {t('debate.skip_to_verdict')}
-                  </button>
-                </div>
-              </div>
-              <div className="debate-panel__body">
-                {feedFocusLabel && (
-                  <div className="debate-feed-focus" data-testid="debate-feed-focus">
-                    <span className="debate-feed-focus__dot" aria-hidden="true" />
-                    <div className="debate-feed-focus__copy">
-                      <strong>{getDebatePhaseLabel(t, currentPhase)}</strong>
-                      <p>{feedFocusLabel}</p>
-                    </div>
-                  </div>
-                )}
-                {stageTurns.length > 0 ? (
-                  <div className="debate-turn-list">
-                    {stageTurns.map((turn) => (
-                      <article
-                        key={turn.id}
-                        className={`debate-turn-card ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
-                        data-testid={turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-live-turn' : undefined}
-                      >
-                        <div className="debate-turn-card__meta">
-                          <strong>{turn.speaker_name}</strong>
-                          <div className="debate-turn-card__tags">
-                            <span>{getDebateSideLabel(t, turn.speaker_side)}</span>
-                            {turn.score_delta && (
-                              <span className="debate-phase-chip">
-                                {(turn.score_delta.proposition ?? 0) === (turn.score_delta.opposition ?? 0)
-                                  ? t('debate.turn_swing_even')
-                                  : t('debate.turn_swing_edge', {
-                                    side: getDebateSideLabel(
-                                      t,
-                                      (turn.score_delta.proposition ?? 0) > (turn.score_delta.opposition ?? 0)
-                                        ? 'proposition'
-                                        : 'opposition',
-                                    ),
-                                    value: Math.abs((turn.score_delta.proposition ?? 0) - (turn.score_delta.opposition ?? 0)),
-                                  })}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <p className="debate-turn-card__content">{turn.content}</p>
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="debate-empty-state">{t('debate.loading')}</p>
-                )}
-              </div>
-            </section>
-          </div>
-
-          <aside className="debate-side">
+            {/* D-4: Strategy panel with shadcn Accordion */}
             <section className="debate-panel">
               <div className="debate-panel__header">
                 <h3>{t('debate.strategy_title')}</h3>
                 <span className="debate-phase-chip">{betWindowLabel}</span>
               </div>
               <div className="debate-panel__body">
-                <div className="debate-turn-list">
-                  <article className="debate-turn-card">
-                    <div className="debate-turn-card__meta">
-                      <strong>{t('debate.strategy_current_clash')}</strong>
-                      <span>{getDebatePhaseLabel(t, selectedPhase)}</span>
-                    </div>
-                    <p className="debate-rule-copy">{clashCopy}</p>
-                  </article>
-                  <article className="debate-turn-card">
-                    <div className="debate-turn-card__meta">
-                      <strong>{t('debate.strategy_pressure')}</strong>
-                      <span>{phaseLeaderLabel}</span>
-                    </div>
-                    <p className="debate-rule-copy">{phasePressureCopy}</p>
-                  </article>
-                  <article className="debate-turn-card">
-                    <div className="debate-turn-card__meta">
-                      <strong>{t('debate.strategy_watchlist')}</strong>
-                      <span>{getDebateDimensionLabel(t, watchedDimension)}</span>
-                    </div>
-                    <p className="debate-rule-copy">
-                      {canBetNow ? t('debate.watchlist_open') : t('debate.watchlist_locked')}
-                    </p>
-                  </article>
-                  {counterplayPlan && (
-                    <article className="debate-turn-card debate-turn-card--counterplay">
+                <Accordion
+                  type="multiple"
+                  value={strategyOpenItems}
+                  onValueChange={setStrategyOpenItems}
+                  aria-label={t('debate.strategy_accordion_label')}
+                >
+                  <AccordionItem value="clash">
+                    <AccordionTrigger>
                       <div className="debate-turn-card__meta">
-                        <strong>{t('debate.counterplay_title')}</strong>
-                        <span>{counterplayPlan.label}</span>
+                        <strong>{t('debate.strategy_current_clash')}</strong>
+                        <span>{getDebatePhaseLabel(t, selectedPhase)}</span>
                       </div>
-                      <p className="debate-rule-copy">{counterplayPlan.summary}</p>
-                      <div className="debate-counterplay-actions">
-                        <button
-                          type="button"
-                          className="btn btn-primary debate-counterplay-btn"
-                          onClick={handleQuickCounterplay}
-                          disabled={!canBetNow || betSubmitting}
-                        >
-                          {betSubmitting ? t('debate.bet_submitting') : t('debate.counterplay_submit')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost debate-counterplay-btn"
-                          onClick={handleOpenCounterplay}
-                          disabled={!canBetNow || betSubmitting}
-                        >
-                          {t('debate.counterplay_apply')}
-                        </button>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <p className="debate-rule-copy">{clashCopy}</p>
+                    </AccordionContent>
+                  </AccordionItem>
+                  <AccordionItem value="pressure">
+                    <AccordionTrigger>
+                      <div className="debate-turn-card__meta">
+                        <strong>{t('debate.strategy_pressure')}</strong>
+                        <span>{phaseLeaderLabel}</span>
                       </div>
-                      {counterplayRecord && (
-                        <p className="debate-rule-copy">{t('debate.counterplay_used')}</p>
-                      )}
-                    </article>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <p className="debate-rule-copy">{phasePressureCopy}</p>
+                    </AccordionContent>
+                  </AccordionItem>
+                  <AccordionItem value="watchlist">
+                    <AccordionTrigger>
+                      <div className="debate-turn-card__meta">
+                        <strong>{t('debate.strategy_watchlist')}</strong>
+                        <span>{getDebateDimensionLabel(t, watchedDimension)}</span>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <p className="debate-rule-copy">
+                        {canBetNow ? t('debate.watchlist_open') : t('debate.watchlist_locked')}
+                      </p>
+                    </AccordionContent>
+                  </AccordionItem>
+                  {counterplayPlan && (
+                    <AccordionItem value="counterplay">
+                      <AccordionTrigger>
+                        <div className="debate-turn-card__meta">
+                          <strong>{t('debate.counterplay_title')}</strong>
+                          <span>{counterplayPlan.label}</span>
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <p className="debate-rule-copy">{counterplayPlan.summary}</p>
+                        <div className="debate-counterplay-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary debate-counterplay-btn"
+                            onClick={handleQuickCounterplay}
+                            disabled={!canSubmitCounterplay || betSubmitting}
+                          >
+                            {betSubmitting ? t('debate.bet_submitting') : t('debate.counterplay_submit')}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost debate-counterplay-btn"
+                            onClick={handleOpenCounterplay}
+                            disabled={!canSubmitCounterplay || betSubmitting}
+                          >
+                            {t('debate.counterplay_apply')}
+                          </button>
+                        </div>
+                        {counterplayRecord && (
+                          <p className="debate-rule-copy">{t('debate.counterplay_used')}</p>
+                        )}
+                      </AccordionContent>
+                    </AccordionItem>
                   )}
-                </div>
+                </Accordion>
               </div>
             </section>
 

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -303,6 +303,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.action_thread_from_anchor': 'Start thread from current anchor',
         'roundtable.action_expand_turn': 'Show full turn',
         'roundtable.action_collapse_turn': 'Collapse turn',
+        'roundtable.new_messages': `${String(options?.count ?? 0)} new messages`,
         'common.loading': 'Loading',
       }[key] ?? key);
     },
@@ -422,6 +423,7 @@ beforeEach(() => {
   });
   wsMock.mockReset();
   Object.assign(storeState, createBaseStoreState());
+  setViewportWidth(1024);
   Object.defineProperty(window, 'scrollTo', {
     value: vi.fn(),
     writable: true,
@@ -440,7 +442,99 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function renderRoundtableView(initialEntry = '/roundtable/scenario-1') {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
+function setTranscriptScrollMetrics(
+  element: HTMLDivElement,
+  {
+    scrollHeight,
+    clientHeight,
+    scrollTop,
+  }: {
+    scrollHeight: number;
+    clientHeight: number;
+    scrollTop: number;
+  },
+) {
+  Object.defineProperty(element, 'scrollHeight', {
+    configurable: true,
+    get: () => scrollHeight,
+  });
+  Object.defineProperty(element, 'clientHeight', {
+    configurable: true,
+    get: () => clientHeight,
+  });
+  let currentScrollTop = scrollTop;
+  Object.defineProperty(element, 'scrollTop', {
+    configurable: true,
+    get: () => currentScrollTop,
+    set: (value: number) => {
+      currentScrollTop = value;
+    },
+  });
+}
+
 describe('WorldlineRoundtableView', () => {
+  it('keeps live hero actions in a single scrollable strip', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('Worldline Roundtable');
+
+    const actionStrip = document.querySelector('.worldline-roundtable-hero__actions') as HTMLDivElement | null;
+    expect(actionStrip).toBeTruthy();
+    const actionStripStyle = window.getComputedStyle(actionStrip!);
+    expect(actionStripStyle.flexWrap).toBe('nowrap');
+    expect(actionStripStyle.overflowX).toBe('auto');
+  });
+
   it('creates a live roundtable room from a multi-ending result', async () => {
     storeState.snapshot = null;
     storeState.result = null;
@@ -780,22 +874,69 @@ describe('WorldlineRoundtableView', () => {
     });
     getAgentsMock.mockResolvedValue([]);
 
-    render(
-      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
-        <Routes>
-          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderRoundtableView();
 
     await screen.findByText('The roundtable converged on a single hinge.');
 
-    await user.click(screen.getByRole('button', { name: 'Continue this table' }));
+    const summaryCard = document.querySelector('.worldline-roundtable-card--summary');
+    expect(summaryCard).toBeTruthy();
+    const summaryScope = within(summaryCard as HTMLElement);
+
+    expect(summaryScope.getByRole('button', { name: 'Continue this table' })).toBeVisible();
+    expect(summaryScope.getByRole('button', { name: 'Start anchored thread' })).toBeVisible();
+    expect(summaryScope.getByRole('button', { name: 'Copy roundtable brief' })).toBeVisible();
+
+    await user.click(summaryScope.getByRole('button', { name: 'Continue this table' }));
     expect(setComposerDraftMock).toHaveBeenCalledWith('Continue from this table: why did "The roundtable converged on a single hinge." become the table verdict?');
 
-    await user.click(screen.getByRole('button', { name: 'Copy roundtable brief' }));
+    await user.click(summaryScope.getByRole('button', { name: 'Copy roundtable brief' }));
     await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
     expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Archivist Verdict'));
+  });
+
+  it('keeps critical summary actions reachable in the live synthesis section on compact viewports', async () => {
+    setViewportWidth(640);
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The roundtable converged on a single hinge.');
+
+    const synthesisSection = document.querySelector('.worldline-roundtable-synthesis');
+    expect(synthesisSection).toBeTruthy();
+    const synthesisScope = within(synthesisSection as HTMLElement);
+    expect(synthesisScope.getByRole('button', { name: 'Continue this table' })).toBeVisible();
+    expect(synthesisScope.getByRole('button', { name: 'Start anchored thread' })).toBeVisible();
+    expect(synthesisScope.getByRole('button', { name: 'Copy roundtable brief' })).toBeVisible();
   });
 
   it('can start an anchored follow-up thread from a phase insight card', async () => {
@@ -2835,6 +2976,315 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
     await user.keyboard('{Escape}');
     expect(document.querySelector('.roundtable-mobile-roster-overlay')).toBeNull();
     expect(trigger!.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('WorldlineRoundtableView new message pill', () => {
+  it('stays quiet when the transcript is pinned to the bottom', async () => {
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    const view = renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    const transcriptList = view.container.querySelector('.worldline-roundtable-transcript-list') as HTMLDivElement | null;
+    expect(transcriptList).toBeTruthy();
+    setTranscriptScrollMetrics(transcriptList!, {
+      scrollHeight: 640,
+      clientHeight: 320,
+      scrollTop: 320,
+    });
+    fireEvent.scroll(transcriptList!);
+
+    const nextTurn: EndingRoomSnapshot['turns'][number] = {
+      id: 'turn-2',
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      sequence: 2,
+      phase: 'crossfire',
+      participant_id: 'rep-a',
+      content: 'A committed follow-up lands while the reader stays at the bottom.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:02Z',
+    };
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      turns: [...storeState.snapshot!.turns, nextTurn],
+    };
+    storeState.threadsById = {
+      ...storeState.threadsById,
+      'thread-room': {
+        ...storeState.threadsById['thread-room'],
+        turns: [...storeState.threadsById['thread-room'].turns, nextTurn],
+      },
+    };
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('A committed follow-up lands while the reader stays at the bottom.');
+    expect(screen.queryByRole('button', { name: '1 new messages' })).toBeNull();
+  });
+
+  it('resets unread baseline when switching threads', async () => {
+    const baselineTurn: EndingRoomSnapshot['turns'][number] = {
+      id: 'turn-1b',
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      sequence: 2,
+      phase: 'crossfire',
+      participant_id: 'rep-a',
+      content: 'Baseline activity keeps the room thread warm.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:01Z',
+    };
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      turns: [...storeState.snapshot!.turns, baselineTurn],
+    };
+    storeState.threadsById = {
+      ...storeState.threadsById,
+      'thread-room': {
+        ...storeState.threadsById['thread-room'],
+        turns: [...storeState.threadsById['thread-room'].turns, baselineTurn],
+      },
+    };
+    const alternateThread: EndingRoomThreadSnapshot = {
+      id: 'thread-followup',
+      room_id: 'room-1',
+      title: 'Follow-up Thread',
+      mode: 'followup',
+      interaction_mode: 'archivist_route',
+      participant_set_hash: 'hash-followup',
+      memory_partition_id: 'partition-followup',
+      room_type: 'worldline_roundtable',
+      room_title: 'Worldline Roundtable',
+      room_status: 'done',
+      language: 'en',
+      turns: [
+        {
+          id: 'turn-followup-1',
+          room_id: 'room-1',
+          thread_id: 'thread-followup',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'archivist',
+          content: 'A new follow-up thread begins cleanly.',
+          emotion: 'calm',
+          created_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+      created_at: '2026-03-29T00:00:02Z',
+      updated_at: '2026-03-29T00:00:03Z',
+    };
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      threads: [...storeState.snapshot!.threads, {
+        id: 'thread-followup',
+        room_id: 'room-1',
+        title: 'Follow-up Thread',
+        mode: 'followup',
+        interaction_mode: 'archivist_route',
+        participant_set_hash: 'hash-followup',
+        memory_partition_id: 'partition-followup',
+        created_at: '2026-03-29T00:00:02Z',
+        updated_at: '2026-03-29T00:00:03Z',
+      }],
+    };
+    storeState.threadsById = {
+      ...storeState.threadsById,
+      'thread-followup': alternateThread,
+    };
+    storeState.threadOrder = ['thread-room', 'thread-followup'];
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    const view = renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    storeState.activeThreadId = 'thread-followup';
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('A new follow-up thread begins cleanly.');
+
+    const followupTurn: EndingRoomSnapshot['turns'][number] = {
+      id: 'turn-followup-2',
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      sequence: 2,
+      phase: 'verdict',
+      participant_id: 'archivist',
+      content: 'Unread state should start clean in the switched thread.',
+      emotion: 'calm',
+      created_at: '2026-03-29T00:00:04Z',
+    };
+    storeState.threadsById = {
+      ...storeState.threadsById,
+      'thread-followup': {
+        ...storeState.threadsById['thread-followup'],
+        turns: [...storeState.threadsById['thread-followup'].turns, followupTurn],
+      },
+    };
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Unread state should start clean in the switched thread.');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '1 new messages' })).toBeInTheDocument();
+    });
+  });
+
+  it('resets unread baseline when switching rooms', async () => {
+    const baselineTurn: EndingRoomSnapshot['turns'][number] = {
+      id: 'turn-1b',
+      room_id: 'room-1',
+      thread_id: 'thread-room',
+      sequence: 2,
+      phase: 'crossfire',
+      participant_id: 'rep-a',
+      content: 'Baseline room activity keeps unread tracking primed.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:01Z',
+    };
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      turns: [...storeState.snapshot!.turns, baselineTurn],
+    };
+    storeState.threadsById = {
+      ...storeState.threadsById,
+      'thread-room': {
+        ...storeState.threadsById['thread-room'],
+        turns: [...storeState.threadsById['thread-room'].turns, baselineTurn],
+      },
+    };
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    const view = renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      id: 'room-2',
+      scenario_id: 'scenario-2',
+      threads: [
+        {
+          id: 'thread-room-2',
+          room_id: 'room-2',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room-2',
+          memory_partition_id: 'room-partition-2',
+          created_at: '2026-03-29T00:00:04Z',
+          updated_at: '2026-03-29T00:00:05Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-room-2',
+          room_id: 'room-2',
+          thread_id: 'thread-room-2',
+          sequence: 1,
+          phase: 'opening',
+          participant_id: 'rep-a',
+          content: 'A fresh room starts without stale unread state.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:05Z',
+        },
+      ],
+    };
+    storeState.threadsById = {
+      'thread-room-2': {
+        ...storeState.threadsById['thread-room'],
+        id: 'thread-room-2',
+        room_id: 'room-2',
+        participant_set_hash: 'hash-room-2',
+        memory_partition_id: 'room-partition-2',
+        turns: [
+          {
+            id: 'turn-room-2',
+            room_id: 'room-2',
+            thread_id: 'thread-room-2',
+            sequence: 1,
+            phase: 'opening',
+            participant_id: 'rep-a',
+            content: 'A fresh room starts without stale unread state.',
+            emotion: 'focused',
+            created_at: '2026-03-29T00:00:05Z',
+          },
+        ],
+      },
+    };
+    storeState.threadOrder = ['thread-room-2'];
+    storeState.activeThreadId = 'thread-room-2';
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('A fresh room starts without stale unread state.');
+
+    const roomTwoTurn: EndingRoomSnapshot['turns'][number] = {
+      id: 'turn-room-2b',
+      room_id: 'room-2',
+      thread_id: 'thread-room-2',
+      sequence: 2,
+      phase: 'crossfire',
+      participant_id: 'rep-a',
+      content: 'Unread state should restart from one in the fresh room.',
+      emotion: 'focused',
+      created_at: '2026-03-29T00:00:06Z',
+    };
+    storeState.snapshot = {
+      ...storeState.snapshot!,
+      turns: [...storeState.snapshot!.turns, roomTwoTurn],
+    };
+    storeState.threadsById = {
+      'thread-room-2': {
+        ...storeState.threadsById['thread-room-2'],
+        turns: [...storeState.threadsById['thread-room-2'].turns, roomTwoTurn],
+      },
+    };
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Unread state should restart from one in the fresh room.');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '1 new messages' })).toBeInTheDocument();
+    });
   });
 });
 

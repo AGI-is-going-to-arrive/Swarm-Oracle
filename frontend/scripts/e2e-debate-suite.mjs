@@ -548,25 +548,23 @@ async function openBet(page, mode, locale) {
     const railClicked = await page.evaluate(() => {
       const button = document.querySelector(".debate-mobile-rail .btn");
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      const rect = button.getBoundingClientRect();
+      const style = window.getComputedStyle(button);
+      const visible =
+        style.display !== "none"
+        && style.visibility !== "hidden"
+        && rect.width > 0
+        && rect.height > 0;
+      if (!visible) return false;
       button.click();
       return true;
     });
-    if (railClicked) {
-      await page.waitForTimeout(250);
-      if (await hasSelector(page, ".debate-modal")) {
-        return;
-      }
+    if (!railClicked) {
+      throw new Error("Mobile debate rail bet button is unavailable");
     }
-
-    const heroClicked = await page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll(".debate-hero__bottom .debate-controls .btn"));
-      const button = buttons[1];
-      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-      button.click();
-      return true;
-    });
-    if (!heroClicked) {
-      throw new Error("Failed to click mobile debate bet button");
+    await page.waitForTimeout(250);
+    if (!(await hasSelector(page, ".debate-modal"))) {
+      throw new Error("Mobile debate rail bet button did not open the modal");
     }
     return;
   }
@@ -609,27 +607,22 @@ async function openResult(page, mode, locale) {
     const railClicked = await page.evaluate(() => {
       const button = document.querySelector(".debate-mobile-rail .btn");
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
+      const rect = button.getBoundingClientRect();
+      const style = window.getComputedStyle(button);
+      const visible =
+        style.display !== "none"
+        && style.visibility !== "hidden"
+        && rect.width > 0
+        && rect.height > 0;
+      if (!visible) return false;
       button.click();
       return true;
     });
-    if (railClicked) {
-      if (await waitForResultNavigation()) {
-        return;
-      }
+    if (!railClicked) {
+      throw new Error("Mobile debate rail result button is unavailable");
     }
-
-    const heroClicked = await page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll(".debate-hero__bottom .debate-controls .btn"));
-      const button = buttons.at(-1);
-      if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-      button.click();
-      return true;
-    });
-    if (!heroClicked) {
-      throw new Error("Failed to click mobile debate result button");
-    }
-    if (await waitForResultNavigation()) {
-      return;
+    if (!(await waitForResultNavigation())) {
+      throw new Error("Mobile debate rail result button did not navigate");
     }
     return;
   }

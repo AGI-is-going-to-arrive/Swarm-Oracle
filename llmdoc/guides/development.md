@@ -111,10 +111,17 @@ source .venv/bin/activate
 python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx
+npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx
+node --test scripts/e2e-debate-suite.test.mjs
+node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 ```
+
+- debate mobile E2E 当前按 rail fail-closed：
+  - 只认 `.debate-mobile-rail .btn`
+  - rail 按钮不可用，或点击后没打开 modal / 没跳到结果页，脚本会直接失败
+  - 不再 fallback 去点隐藏 hero CTA
 
 ### Oracle Chambers / Roundtable 定向回归
 
@@ -124,7 +131,7 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
@@ -140,13 +147,32 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 
 当前脚本口径：
 
+- `e2e-ending-room-suite.mjs full`
+  - 默认 `fixture=single`，覆盖 desktop + mobile 的结果页基础链路：
+    - result -> picker -> ending chamber
+    - `hotseat / all_present`
+    - `one_move_only`
+  - 如需多结局基础 smoke，再补 `--fixture multi-ending`
+  - picker confirm 当前走 DOM-first：
+    - 先等 `.ending-chat-modal`
+    - 再等 live chamber usable
+    - 如果 `modal_state` 因 bootstrap / cleanup 短暂回到 `null`，脚本会退回 chamber UI-ready 判定，不会误报“modal 没打开”
 - `e2e-ending-room-followup-suite.mjs full`
   - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
   - 桌面/移动端均覆盖 `epilogue`（后续三回合）和 `evidence_card`（证据投牌）交互模式
   - ending-room follow-up 当前走 deterministic API-driven 口径：
     - 先 API 预热 `ending_chamber`
     - 再通过 `ResultView` 的 `debugEndingRoomBranch / debugEndingRoomMode / debugEndingRoomAgents` 直开 live chamber
-    - `hotseat / all_present / epilogue / evidence_card` 由 API 发起，UI 只负责观测已提交状态和 readonly replay
+  - `hotseat / all_present / epilogue / evidence_card` 由 API 发起，UI 只负责观测已提交状态和 readonly replay
+  - replay coverage 当前额外做了三层收口：
+    - 复用旧页面前先 revalidate live chamber
+    - `Copy / Save / Import` 只在 `.ending-chat-header__actions` 里找
+    - readonly replay 必须同时满足 replay URL、Import 可见、composer 不可发
+  - replay coverage 现在按 fail-closed 收口：
+    - artifact/local readonly
+    - import
+    - reload/restore
+    - 任一关键字段缺失都会直接报错，不再 best-effort 保 `summary.json`
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
     - `current_speaker_turn_key / current_speaker_participant_id`
@@ -160,13 +186,22 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
   - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / epilogue / crossline gallery / evidence_card / readonly replay / restore / import`
   - `single-ending` anchored thread 当前会使用唯一 thread title；如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
+- `e2e-ending-room-followup-suite.mjs full / mobile`
+  - 当前更适合专项 follow-up 回归
+  - 本轮真实复跑里慢路径仍可能 fallback、超时或挂起
+  - 如果目标只是基础 smoke，优先跑 `e2e-ending-room-suite.mjs full`
 - `single-ending`
-  - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 当前已进入 CLI summary
+  - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 仍是目标覆盖链路
   - 桌面 single-ending 与中英语言切换当前仍建议保留真实浏览器复核
 - `e2e-worldline-roundtable-suite.mjs desktop`
   - 当前适合单独复核 roundtable anchored follow-up 的真流式生命周期
   - Chromium / Firefox / WebKit 当前都可通过 `--browser` 单独执行
   - desktop 链路当前覆盖 pointer drag、`KeyboardSensor` 键盘拖拽、expert witness、selection mode 切换、hotseat、anchored thread、artifact/local readonly replay
+  - replay 覆盖当前和 ending-room followup 保持同一口径：
+    - hero/header action scoped locator
+    - live room 复用前先 revalidate
+    - readonly replay 先校验 replay URL 契约
+    - artifact share readonly restore 与 local readonly restore 都会校验，coverage 缺口直接失败
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
     - `current_speaker_turn_key / current_speaker_participant_id`
@@ -180,6 +215,8 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat`
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
   - current summary 会落出 `transcript_layout`
+  - 本轮真实复跑里，移动端链路仍可能卡在 result 页面 goto timeout
+  - 当前严格签收以 desktop scoped rerun 为准
 - `e2e-worldline-roundtable-suite.mjs mobile`
   - 只跑移动端圆桌链路，适合单独复核 recipe 切换、touch `click-to-seat`、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
   - mobile rerun 当前也已重新抓回 anchored thread 的 `turn_delta`
@@ -324,43 +361,25 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最近一次稳定总链工件：
 
-- `frontend/output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`
+- `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
 
-最近一次 Oracle 专项签收工件：
+最近一轮 Oracle replay hardening 工件：
 
-- `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
-- `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
+- `frontend/output/e2e/review-phase-d-ending-desktop-replay-hardened/summary.json`
+- `frontend/output/e2e/review-phase-d-ending-mobile-replay-hardened/summary.json`
+- `frontend/output/e2e/review-roundtable-suite-hardened-desktop/summary.json`
+- `frontend/output/e2e/review-roundtable-suite-hardened-mobile/summary.json`
 
-最近一轮 Oracle 0.3 锚点观测工件：
+最近一轮 ending-room 基础 smoke 修复工件：
 
-- `frontend/output/e2e/20260331-codex-oracle-anchor-ending-room-mobile-v3/summary.json`
-- `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-desktop-v8/summary.json`
-- `frontend/output/e2e/20260331-codex-oracle-anchor-roundtable-mobile-v2/summary.json`
-
-最近一轮 Oracle `P2` transcript layout scoped signoff 工件：
-
-- `frontend/output/e2e/20260331-codex-p2-signoff-ending-room/summary.json`
-- `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-desktop/summary.json`
-- `frontend/output/e2e/20260331-codex-p2-signoff-roundtable-mobile/summary.json`
-
-最近一轮 roundtable 可读性收口工件：
-
-- `frontend/output/e2e/20260331-codex-roundtable-readability-pass-desktop/summary.json`
+- `frontend/output/e2e/review-ending-room-suite-fixed-single/summary.json`
+- `frontend/output/e2e/review-ending-room-suite-fixed-full-single/summary.json`
+- `frontend/output/e2e/review-ending-room-suite-fixed-desktop-multi/summary.json`
 
 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件：
 
-- `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/firefox/summary.json`
-- `frontend/output/e2e/20260331-codex-oracle-roundtable-cross-browser-scoped/webkit/summary.json`
-
-最近一次 roundtable `full` 稳定工件：
-
-- `frontend/output/e2e/20260331-codex-roundtable-full-stable5/summary.json`
-
-最近一轮 Oracle 流式观测 rerun 工件：
-
-- `frontend/output/e2e/20260331-codex-followup-stream-lifecycle/summary.json`
-- `frontend/output/e2e/20260331-codex-roundtable-stream-desktop-rerun/summary.json`
-- `frontend/output/e2e/20260331-codex-roundtable-stream-mobile-rerun2/summary.json`
+- `frontend/output/e2e/2026-04-12-roundtable-firefox-final/summary.json`
+- `frontend/output/e2e/2026-04-12-roundtable-webkit-final/summary.json`
 
 最近一轮经典模式流式 hardening 工件：
 

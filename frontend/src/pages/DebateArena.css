@@ -106,7 +106,7 @@
   overflow: hidden;
   border-radius: 24px;
   border: 1px solid rgba(64, 48, 40, 0.16);
-  min-height: 320px;
+  min-height: var(--debate-hero-min-h, 200px);
   background-position: center;
   background-size: cover;
   box-shadow: var(--shadow-elevated);
@@ -872,6 +872,11 @@
 }
 
 @media (max-width: 720px) {
+  .debate-shell {
+    padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+  }
+
   .debate-hero {
     min-height: 0;
   }
@@ -1016,6 +1021,8 @@
       calc(12px + env(safe-area-inset-right, 0px))
       calc(18px + env(safe-area-inset-bottom, 0px))
       calc(12px + env(safe-area-inset-left, 0px));
+    padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
   }
 
   .debate-hero__title {

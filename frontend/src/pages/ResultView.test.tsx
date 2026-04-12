@@ -514,7 +514,7 @@ describe('ResultView campaign summary', () => {
   it('renders ending-room CTAs, opens the picker, and confirms into the modal with the selected mode', async () => {
     const user = userEvent.setup();
 
-    render(
+    const { container } = render(
       <MemoryRouter initialEntries={['/result/scenario-1']}>
         <Routes>
           <Route path="/result/:id" element={<ResultView />} />
@@ -524,6 +524,7 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByRole('button', { name: 'ending_room.entry_cta' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'ending_room.one_move_cta' })).toBeInTheDocument();
+    expect(container.querySelector('.ending-room-actions')).not.toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'ending_room.one_move_cta' }));
     expect(await screen.findByRole('heading', { name: 'Pick visible participants for this worldline' })).toBeInTheDocument();
@@ -659,7 +660,7 @@ describe('ResultView campaign summary', () => {
     await user.click(screen.getByRole('button', { name: 'Enter chamber' }));
 
     expect(await screen.findByTestId('ending-chat-readonly')).toHaveTextContent('live');
-    await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
+    await user.click(screen.getByRole('button', { name: 'Save local read-only copy' }));
 
     await waitFor(() => {
       expect(screen.getByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
@@ -1418,7 +1419,7 @@ describe('ResultView campaign summary', () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockReset();
 
-    render(
+    const { container } = render(
       <MemoryRouter initialEntries={['/result/scenario-1']}>
         <Routes>
           <Route path="/result/:id" element={<ResultView />} />
@@ -1430,6 +1431,9 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('resume.title')).toBeInTheDocument();
     expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'resume.submit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'result_ux.director_notebook' })).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelector('.result-director-notebook__body .result-archive')).not.toBeNull();
+    expect(screen.getByText('resume.title').closest('.result-director-notebook__body')).toBeNull();
   });
 
   it('shows an inline error when replay import fails', async () => {

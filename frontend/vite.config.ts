@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
 
 const backendTarget = process.env.SWARM_BACKEND_URL || 'http://127.0.0.1:18927'
@@ -14,7 +15,7 @@ const spectorStub = fileURLToPath(
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: [
       {

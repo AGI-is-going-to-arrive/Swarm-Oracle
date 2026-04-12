@@ -18,16 +18,9 @@ vi.mock('../api/client', () => ({
 
 describe('PredictionModal automation callback', () => {
   beforeEach(() => {
-    const store = new Map<string, string>();
-    Object.defineProperty(window, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: (key: string) => store.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          store.set(key, value);
-        },
-      },
-    });
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it('reports text and confidence changes', async () => {
@@ -150,5 +143,35 @@ describe('PredictionModal automation callback', () => {
     expect(onPlacedBet).toHaveBeenCalledTimes(1);
     expect(onPlacedBet.mock.calls[0][0].betting.bets).toHaveLength(1);
     expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetLabel).toBeTruthy();
+  });
+
+  it('releases the scenario meta lock after a successful submission', async () => {
+    const user = userEvent.setup();
+    const scenarioId = 'scenario-lock-cleanup';
+    const lockKey = `swarmoracle:scenario-meta:v1:lock:${scenarioId}`;
+    const { submitPrediction } = await import('../api/client');
+    vi.mocked(submitPrediction).mockResolvedValue({
+      id: 'prediction-2',
+      scenario_id: scenarioId,
+      user_name: 'Test Director',
+      prediction_text: 'Structured bet',
+      confidence: 0.7,
+      score: null,
+      score_reason: null,
+      created_at: '2026-03-19T00:00:00Z',
+    });
+
+    render(
+      <PredictionModal
+        scenarioId={scenarioId}
+        onClose={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'I think this branch will hold.');
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalled();
+    expect(window.localStorage.getItem(lockKey)).toBeNull();
   });
 });

@@ -101,6 +101,13 @@ vi.mock('react-i18next', () => ({
       'ending_room.action_follow_insight': 'Follow this insight',
       'ending_room.action_follow_quote': 'Follow this quote',
       'ending_room.action_thread_from_anchor': 'Start thread from current anchor',
+      'ending_room.action_epilogue': 'Three-turn epilogue',
+      'ending_room.collapse_details': 'Collapse details',
+      'ending_room.expand_details': 'Expand details',
+      'ending_room.epilogue_hint': 'Continue three more turns inside this chamber.',
+      'ending_room.epilogue_prompt': 'Continue three more turns from this ending.',
+      'ending_room.sidebar_mobile_description': 'Quick actions and participant details for this chamber.',
+      'ending_room.sidebar_mobile_label': 'Chamber sidebar',
       'result.story': 'Story',
       'result.insight': 'Insight',
       'roundtable.phase_verdict': 'Archive Verdict',
@@ -184,6 +191,154 @@ describe('EndingChatModal', () => {
     key_moments: ['Moment 1'],
     parent_branch_id: null,
     fork_reason: 'Early fork',
+  };
+
+  const installMatchMedia = ({
+    mobile = false,
+    reducedMotion = false,
+  }: {
+    mobile?: boolean;
+    reducedMotion?: boolean;
+  } = {}) => {
+    const matchMedia = vi.fn((query: string) => ({
+      matches:
+        (query === '(max-width: 560px)' && mobile)
+        || (query === '(prefers-reduced-motion: reduce)' && reducedMotion),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: matchMedia,
+    });
+
+    return matchMedia;
+  };
+
+  const buildLiveSnapshot = () => {
+    const snapshot: EndingRoomSnapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      result_ready: true,
+      participants: [
+        {
+          id: 'p-1',
+          room_id: 'room-1',
+          role_slot: 'agent',
+          source_agent_id: 'agent-1',
+          display_name: 'Archivist',
+          persona_snapshot_json: {
+            agent_role: 'Judge',
+          },
+        },
+        {
+          id: 'p-2',
+          room_id: 'room-1',
+          role_slot: 'agent',
+          source_agent_id: 'agent-2',
+          display_name: 'Strategist',
+          persona_snapshot_json: {
+            agent_role: 'Planner',
+          },
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Ending Chamber',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+        {
+          id: 'thread-followup',
+          room_id: 'room-1',
+          title: 'Follow-up Thread',
+          mode: 'followup',
+          interaction_mode: 'thread_followup',
+          participant_set_hash: 'hash-thread',
+          memory_partition_id: 'thread-partition',
+          question_anchor_ids_json: ['ending:key_moment:branch-1:0'],
+          created_at: '2026-03-29T00:00:02Z',
+          updated_at: '2026-03-29T00:00:03Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'verdict',
+          participant_id: 'p-1',
+          content: 'Committed turn.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+    };
+
+    storeState.snapshot = snapshot;
+    storeState.threadsById = {
+      'thread-room': {
+        ...snapshot.threads[0],
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'done',
+        language: 'en',
+        turns: snapshot.turns,
+      },
+      'thread-followup': {
+        ...snapshot.threads[1],
+        room_type: 'ending_chamber',
+        room_title: 'Ending Chamber',
+        room_status: 'done',
+        language: 'en',
+        turns: [
+          {
+            id: 'turn-2',
+            room_id: 'room-1',
+            thread_id: 'thread-followup',
+            sequence: 2,
+            phase: 'verdict',
+            participant_id: 'p-2',
+            content: 'Thread-local answer.',
+            emotion: 'measured',
+            created_at: '2026-03-29T00:00:02Z',
+          },
+        ],
+      },
+    };
+    storeState.threadOrder = ['thread-room', 'thread-followup'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.result = {
+      summary: 'The hinge held because the council blinked first.',
+      archivist_note: 'Stay inside the branch scope.',
+      supporting_turns: [],
+      next_move: 'Force the council to expose its costs.',
+      quotes: [],
+    };
+    storeState.status = 'done';
   };
 
   it('renders replay fallback transcript without creating a live room', () => {
@@ -1450,5 +1605,248 @@ describe('EndingChatModal', () => {
         content_length: 'The hinge is still unfolding...'.length,
       },
     ]);
+  });
+
+  it('resets participant expansion and sidebar sheet state when reopening the same chamber', async () => {
+    installMatchMedia({ mobile: true });
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+
+    const { rerender } = render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Expand details' }));
+    await user.click(screen.getByRole('button', { name: 'Chamber sidebar' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(2);
+
+    rerender(
+      <EndingChatModal
+        open={false}
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    rerender(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Expand details' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Chamber sidebar' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    });
+  });
+
+  it('resets participant expansion and sidebar sheet state when switching branches in-place', async () => {
+    installMatchMedia({ mobile: true });
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+
+    const { rerender } = render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Expand details' }));
+    await user.click(screen.getByRole('button', { name: 'Chamber sidebar' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(2);
+
+    rerender(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={{
+          ...branch,
+          id: 'branch-2',
+          title: 'Counter Branch',
+          insight: 'A divergent insight.',
+        }}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Expand details' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Chamber sidebar' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    });
+  });
+
+  it('exposes accessible expand and mobile sidebar controls, and describes the sheet dialog', async () => {
+    installMatchMedia({ mobile: true });
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const expandButton = screen.getByRole('button', { name: 'Expand details' });
+    expect(expandButton).toHaveAttribute('aria-expanded', 'false');
+    const detailsId = expandButton.getAttribute('aria-controls');
+    expect(detailsId).toBeTruthy();
+    expect(document.getElementById(detailsId!)).toBeTruthy();
+
+    await user.click(expandButton);
+    expect(screen.getByRole('button', { name: 'Collapse details' })).toHaveAttribute('aria-expanded', 'true');
+
+    const sidebarTrigger = screen.getByRole('button', { name: 'Chamber sidebar' });
+    expect(sidebarTrigger).toHaveAttribute('aria-expanded', 'false');
+    const controlledSheetId = sidebarTrigger.getAttribute('aria-controls');
+    expect(controlledSheetId).toBeTruthy();
+
+    await user.click(sidebarTrigger);
+
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+    const sheetDialog = dialogs[1];
+    expect(sidebarTrigger).toHaveAttribute('aria-expanded', 'true');
+    expect(sheetDialog).toHaveAttribute('id', controlledSheetId);
+    expect(sheetDialog).toHaveAttribute('aria-describedby');
+    const descriptionId = sheetDialog.getAttribute('aria-describedby');
+    expect(descriptionId).toBeTruthy();
+    expect(within(sheetDialog).getByText('Quick actions and participant details for this chamber.')).toHaveAttribute('id', descriptionId);
+  });
+
+  it('supports tab semantics and keyboard switching in the thread rail', async () => {
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const threadRail = screen.getByRole('tablist', { name: 'Follow-up threads' });
+    const [roomTab, followupTab] = within(threadRail).getAllByRole('tab');
+    expect(roomTab).toHaveAttribute('aria-selected', 'true');
+    expect(roomTab).toHaveAttribute('tabindex', '0');
+    expect(followupTab).toHaveAttribute('aria-selected', 'false');
+    expect(followupTab).toHaveAttribute('tabindex', '-1');
+
+    roomTab.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(storeState.setActiveThread).toHaveBeenCalledWith('thread-followup');
+    expect(storeState.loadThread).toHaveBeenCalledWith('thread-followup');
+  });
+
+  it('opens the mobile sidebar sheet and keeps the epilogue action reachable', async () => {
+    installMatchMedia({ mobile: true });
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Chamber sidebar' }));
+
+    const sheetDialog = screen.getAllByRole('dialog')[1];
+    await user.click(within(sheetDialog).getByRole('button', { name: 'Three-turn epilogue' }));
+
+    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Continue three more turns from this ending.');
+    expect(storeState.setInteractionMode).toHaveBeenCalledWith('epilogue');
+  });
+
+  it('closes the mobile sidebar sheet on Escape before closing the outer chamber', async () => {
+    installMatchMedia({ mobile: true });
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={onClose}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Chamber sidebar' }));
+
+    const sheetDialog = screen.getAllByRole('dialog')[1];
+    const epilogueButton = within(sheetDialog).getByRole('button', { name: 'Three-turn epilogue' });
+    epilogueButton.focus();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Chamber sidebar' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    });
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

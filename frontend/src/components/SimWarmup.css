@@ -1,0 +1,93 @@
+/* ── SimWarmupNarrative ── */
+.sim-warmup-narrative {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  position: relative;
+  z-index: 3;
+  pointer-events: none;
+  color: var(--warmup-text-color);
+}
+
+.sim-warmup-narrative__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sim-warmup-narrative__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  opacity: 0.4;
+  transition: opacity 0.3s ease;
+}
+
+.sim-warmup-narrative__step.is-active {
+  opacity: 1;
+}
+
+.sim-warmup-narrative__step.is-done {
+  opacity: 0.7;
+}
+
+.sim-warmup-narrative__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warmup-progress-fill);
+  flex-shrink: 0;
+}
+
+.sim-warmup-narrative__step.is-active .sim-warmup-narrative__dot {
+  animation: warmupPulse 1.2s ease-in-out infinite;
+}
+
+.sim-warmup-narrative__text {
+  font-size: var(--text-sm);
+}
+
+.sim-warmup-narrative__hint {
+  font-size: var(--text-xs);
+  opacity: 0.6;
+}
+
+@keyframes warmupPulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.3); opacity: 1; }
+}
+
+/* ── TheaterCurtain ── */
+.theater-curtain {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--curtain-bg-from);
+  opacity: 1;
+  animation: curtainFadeIn 0.3s ease both;
+}
+
+.theater-curtain.is-exiting {
+  animation: curtainFadeOut 0.6s ease both;
+}
+
+@keyframes curtainFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes curtainFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-warmup-narrative__step.is-active .sim-warmup-narrative__dot,
+  .theater-curtain,
+  .theater-curtain.is-exiting {
+    animation: none !important;
+  }
+  .theater-curtain.is-exiting { opacity: 0; }
+}

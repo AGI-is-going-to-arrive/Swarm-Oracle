@@ -66,6 +66,8 @@ export function CompareDigestView() {
     () => data?.rounds.map((entry) => entry.round) ?? [],
     [data],
   );
+  const scenarioQuestion = storeScenario?.question ?? null;
+  const hasScenario = Boolean(storeScenario);
 
   useEffect(() => {
     if (!enabled) return;
@@ -238,13 +240,13 @@ export function CompareDigestView() {
     win.capture_game_screenshot = capture;
     win.render_game_to_text = () => stringifyAutomationPayload(
       {
-        question: storeScenario?.question ?? null,
+        question: scenarioQuestion,
         status: loading ? 'loading' : error ? 'error' : 'done',
         currentRound: selectedRound ?? 0,
         totalRounds: availableRounds.at(-1) ?? null,
         viewMode: 'theater',
         visualizationEnabled: true,
-        isSimulationComplete: Boolean(data && storeScenario),
+        isSimulationComplete: Boolean(data && hasScenario),
         messageCount: messages.length,
         agentCount: agents.length,
         branchCount: [branchA, branchB].filter(Boolean).length,
@@ -285,7 +287,7 @@ export function CompareDigestView() {
       if (win.render_game_to_text) delete win.render_game_to_text;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, error, loading, messages.length, playbackMode, replaySpeed, selectedRound, snapshots.a, snapshots.b, storeScenario?.question]);
+  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, error, hasScenario, loading, messages.length, playbackMode, replaySpeed, scenarioQuestion, selectedRound, snapshots.a, snapshots.b]);
 
   if (capLoading) {
     return <div className="compare-digest-view compare-digest-view--empty">{t('common.loading', 'Loading...')}</div>;
@@ -322,7 +324,7 @@ export function CompareDigestView() {
             ← {t('common.back_to_result', 'Back to Result')}
           </Link>
           <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
-          <p>{storeScenario?.question}</p>
+          <p>{scenarioQuestion}</p>
         </div>
         <div className="compare-digest-view__controls">
           <button type="button" className="btn btn-ghost" onClick={handleReplay}>

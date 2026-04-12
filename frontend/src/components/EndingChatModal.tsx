@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, type UIEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type UIEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { copyText } from '../lib/copyText';
@@ -49,6 +49,7 @@ import type {
 
 import { FactionBadge } from './FactionBadge';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
 import './EndingChatModal.css';
 
 const EMPTY_SELECTED_BRANCH_IDS: string[] = [];
@@ -130,6 +131,16 @@ export default function EndingChatModal({
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
   const [briefCopied, setBriefCopied] = useState(false);
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
+  const [participantsExpanded, setParticipantsExpanded] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [sidebarSheetOpen, setSidebarSheetOpen] = useState(false);
+  const [sheetContainer, setSheetContainer] = useState<HTMLElement | null>(null);
+  const participantDetailsId = useId();
+  const sidebarSheetId = useId();
+  const threadRailId = useId();
+  const threadPanelId = useId();
+  const threadTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const pendingThreadFocusIdRef = useRef<string | null>(null);
   const isZh = language === 'zh';
   const profileFrameSrc = profileId ? getGameplayProfileFrameSrc(profileId) : null;
   const syncTranscriptScrollSnapshot = (nextSnapshot: TranscriptScrollSnapshot | null) => {
@@ -213,13 +224,39 @@ export default function EndingChatModal({
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
+      if (event.key !== 'Escape') return;
+      if (sidebarSheetOpen) {
+        setSidebarSheetOpen(false);
+        return;
       }
+      onClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose, open]);
+  }, [onClose, open, sidebarSheetOpen]);
+
+  // D-9: Sync sheet container from ref (avoids accessing ref during render)
+  useEffect(() => {
+    setSheetContainer(modalRef.current);
+  }, [open]);
+
+  // D-9: Track mobile breakpoint for sidebar sheet
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(max-width: 560px)');
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsMobile(e.matches);
+    handler(mq);
+    mq.addEventListener('change', handler as (e: MediaQueryListEvent) => void);
+    return () => mq.removeEventListener('change', handler as (e: MediaQueryListEvent) => void);
+  }, []);
+
+  useEffect(() => {
+    const resetTimerId = window.setTimeout(() => {
+      setParticipantsExpanded(false);
+      setSidebarSheetOpen(false);
+    }, 0);
+    return () => window.clearTimeout(resetTimerId);
+  }, [branch?.id, open]);
 
   useEffect(() => {
     if (!open || !branch) {
@@ -302,12 +339,23 @@ export default function EndingChatModal({
     [defaultThreadId, effectiveActiveThreadId, effectiveThreadsById],
   );
 
-  const threads = (() => {
+  const activeThreadSelectionId = activeThread?.id ?? defaultThreadId;
+
+  useLayoutEffect(() => {
+    if (!pendingThreadFocusIdRef.current) return;
+    const targetId = pendingThreadFocusIdRef.current;
+    threadTabRefs.current[targetId]?.focus();
+    if (activeThreadSelectionId === targetId) {
+      pendingThreadFocusIdRef.current = null;
+    }
+  }, [activeThreadSelectionId]);
+
+  const threads = useMemo(() => {
     const order = readOnly && replayState?.snapshot
       ? replayState.snapshot.threads.map((thread) => thread.id)
       : threadOrder;
     return order.map((threadId) => effectiveThreadsById[threadId]).filter(Boolean);
-  })();
+  }, [effectiveThreadsById, readOnly, replayState, threadOrder]);
 
   const participants = useMemo(
     () => (effectiveSnapshot?.participants ?? []).filter((participant) => participant.role_slot !== 'user'),
@@ -559,6 +607,48 @@ export default function EndingChatModal({
   const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
     ?? currentTurns.at(-1)?.participantId
     ?? null;
+  const handleThreadSelect = (threadId: string) => {
+    const thread = effectiveThreadsById[threadId];
+    if (!thread) return;
+    if (readOnly) {
+      setReplayActiveThreadId(thread.id);
+    } else {
+      setActiveThread(thread.id);
+      setInteractionMode(thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route');
+    }
+    setSelectedAgentId(thread.addressed_agent_ids_json?.[0] ?? null);
+    if (!readOnly && thread.mode === 'followup') {
+      void loadThread(thread.id);
+    }
+  };
+  const handleThreadRailKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (threads.length < 2) return;
+    let nextIndex: number | null = null;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        nextIndex = (index + 1) % threads.length;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        nextIndex = (index - 1 + threads.length) % threads.length;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = threads.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    const nextThread = threads[nextIndex];
+    if (!nextThread) return;
+    pendingThreadFocusIdRef.current = nextThread.id;
+    handleThreadSelect(nextThread.id);
+  };
   const automationPendingDrafts = useMemo(
     () => displayedDrafts.map((draft) => ({
       turn_key: draft.key,
@@ -1000,6 +1090,16 @@ export default function EndingChatModal({
           </div>
           <div className="ending-chat-header__actions">
             {headerActions}
+            <button
+              type="button"
+              className="ending-chat-sidebar-sheet-trigger"
+              aria-controls={sidebarSheetId}
+              aria-expanded={sidebarSheetOpen}
+              aria-haspopup="dialog"
+              onClick={() => setSidebarSheetOpen(true)}
+            >
+              {t('ending_room.sidebar_mobile_label')}
+            </button>
             <button type="button" className="ending-chat-close" onClick={onClose} aria-label={t('common.close')}>
               ×
             </button>
@@ -1026,208 +1126,264 @@ export default function EndingChatModal({
         )}
 
         <div className="ending-chat-body">
-          <aside className="ending-chat-sidebar">
-            {isCrosslineGallery ? (
-              <section className="ending-chat-panel ending-chat-panel--notice">
-                <div className="ending-chat-panel__heading">
-                  <h3>{t('roundtable.gallery_title')}</h3>
-                </div>
-                <p>{t('roundtable.gallery_hint')}</p>
-              </section>
-            ) : (
-              <section className="ending-chat-panel">
-                <div className="ending-chat-panel__heading">
-                  <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
-                  {!readOnly && effectiveSnapshot?.id && (
-                    <div className="ending-chat-panel__actions">
+          {(() => {
+            const sidebarContent = (
+              <>
+                {isCrosslineGallery ? (
+                  <section className="ending-chat-panel ending-chat-panel--notice">
+                    <div className="ending-chat-panel__heading">
+                      <h3>{t('roundtable.gallery_title')}</h3>
+                    </div>
+                    <p>{t('roundtable.gallery_hint')}</p>
+                  </section>
+                ) : (
+                  <>
+                    {/* D-7: Verdict panel moved before participants */}
+                    {effectiveResult && (
+                      <section className="ending-chat-panel ending-chat-panel--summary">
+                        <div className="ending-chat-panel__heading">
+                          <h3>{t('roundtable.phase_verdict')}</h3>
+                          <div className="ending-chat-panel__actions">
+                            {!readOnly && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="ending-chat-inline-button"
+                                  onClick={() => activateAnchor(verdictAnchorAction)}
+                                  disabled={!composerEnabled}
+                                >
+                                  {t('ending_room.action_continue')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ending-chat-inline-button"
+                                  onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
+                                  disabled={!composerEnabled}
+                                >
+                                  {t('ending_room.action_new_thread')}
+                                </button>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              className="ending-chat-inline-button"
+                              onClick={() => void handleCopyBrief()}
+                              disabled={!meetingBrief}
+                            >
+                              {briefCopied ? t('ending_room.action_brief_copied') : t('ending_room.action_copy_brief')}
+                            </button>
+                            {composerEnabled && (
+                              <button
+                                type="button"
+                                className={`ending-chat-inline-button ${isMobile ? 'ending-chat-epilogue-btn--summary' : 'ending-chat-epilogue-btn'}`}
+                                onClick={() => {
+                                  setComposerDraft(t('ending_room.epilogue_prompt'));
+                                  setInteractionMode('epilogue');
+                                }}
+                                title={t('ending_room.epilogue_hint')}
+                              >
+                                {t('ending_room.action_epilogue')}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <p>{effectiveResult.summary}</p>
+                        {effectiveResult.next_move && effectiveResult.next_move !== effectiveResult.summary && (
+                          <>
+                            <h4>{t('ending_room.mode_one_move_only')}</h4>
+                            <p>{effectiveResult.next_move}</p>
+                          </>
+                        )}
+                      </section>
+                    )}
+
+                    <section className="ending-chat-panel">
+                      <div className="ending-chat-panel__heading">
+                        <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
+                        {!readOnly && effectiveSnapshot?.id && (
+                          <div className="ending-chat-panel__actions">
+                            <button
+                              type="button"
+                              className="ending-chat-inline-button"
+                              onClick={() => void handleCreateThread()}
+                            >
+                              {isZh ? '新建追问线程' : 'New thread'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        id={participantDetailsId}
+                        className={`ending-chat-participant-strip ${!participantsExpanded ? 'ending-chat-participant-strip--collapsed' : ''}`}
+                      >
+                        {participants.length === 0 && (
+                          <div className="ending-chat-participant-empty">
+                            {isZh
+                              ? '当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。'
+                              : 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.'}
+                          </div>
+                        )}
+                        {participants.map((participant) => {
+                          const metrics = participantMetrics(participant);
+                          const isSelected = selectedAgentId === participant.source_agent_id;
+                          const hotseatSelectable = interactionMode === 'hotseat' && participant.source_agent_id;
+                          const isCurrentSpeaker = currentSpeakerParticipantId === participant.id;
+                          const isHotseatFocus = effectiveInteractionMode === 'hotseat' && isSelected;
+                          return (
+                            <button
+                              key={participant.id}
+                              type="button"
+                              className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''} ${isCurrentSpeaker ? 'is-current-speaker' : ''} ${isHotseatFocus ? 'is-hotseat-focus' : ''}`}
+                              onClick={() => {
+                                if (!hotseatSelectable) return;
+                                setSelectedAgentId(participant.source_agent_id ?? null);
+                              }}
+                              disabled={!hotseatSelectable}
+                            >
+                              <img
+                                className="ending-chat-participant-card__avatar"
+                                src={participantSprite(participant)}
+                                alt=""
+                                aria-hidden="true"
+                              />
+                              <div className="ending-chat-participant-card__copy">
+                                <strong>
+                                  {participant.display_name}
+                                  {isCurrentSpeaker && (
+                                    <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
+                                      {isZh ? '正在发言' : 'Speaking'}
+                                    </span>
+                                  )}
+                                  {!isCurrentSpeaker && isHotseatFocus && (
+                                    <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
+                                      {isZh ? '当前追问对象' : 'Current target'}
+                                    </span>
+                                  )}
+                                </strong>
+                                <span>{metrics.role || roleLabel(participant, isZh)}</span>
+                                {metrics.persona && <small>{metrics.persona}</small>}
+                              </div>
+                              <div className="ending-chat-participant-metrics">
+                                <em>{isZh ? `影响 ${Math.round(metrics.impactScore * 100)}` : `Impact ${Math.round(metrics.impactScore * 100)}`}</em>
+                                <em>{isZh ? `发言 ${metrics.turnCount}` : `${metrics.turnCount} turns`}</em>
+                                <em>{isZh ? `转折 ${metrics.keyMomentHits}` : `${metrics.keyMomentHits} hinge hits`}</em>
+                                {metrics.lastRoundSpoken > 0 && <em>{`R${metrics.lastRoundSpoken}`}</em>}
+                              </div>
+                              {metrics.fallbackCast && (
+                                <span className="ending-chat-participant-flag">
+                                  {isZh ? '兜底阵容' : 'Fallback lineup'}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {participants.length > 0 && (
+                        <button
+                          type="button"
+                          className="ending-chat-participant-expand-btn"
+                          onClick={() => setParticipantsExpanded((v) => !v)}
+                          aria-expanded={participantsExpanded}
+                          aria-controls={participantDetailsId}
+                        >
+                          {participantsExpanded ? t('ending_room.collapse_details') : t('ending_room.expand_details')}
+                        </button>
+                      )}
+                    </section>
+                  </>
+                )}
+
+                <section className="ending-chat-panel">
+                  <div className="ending-chat-panel__heading">
+                    <h3>{t('result.story')}</h3>
+                    {storyText.length > 280 && (
                       <button
                         type="button"
                         className="ending-chat-inline-button"
-                        onClick={() => void handleCreateThread()}
+                        onClick={() => setStoryExpanded((current) => !current)}
                       >
-                        {isZh ? '新建追问线程' : 'New thread'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div className="ending-chat-participant-strip">
-                  {participants.length === 0 && (
-                    <div className="ending-chat-participant-empty">
-                      {isZh
-                        ? '当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。'
-                        : 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.'}
-                    </div>
-                  )}
-                  {participants.map((participant) => {
-                    const metrics = participantMetrics(participant);
-                    const isSelected = selectedAgentId === participant.source_agent_id;
-                    const hotseatSelectable = interactionMode === 'hotseat' && participant.source_agent_id;
-                    const isCurrentSpeaker = currentSpeakerParticipantId === participant.id;
-                    const isHotseatFocus = effectiveInteractionMode === 'hotseat' && isSelected;
-                    return (
-                      <button
-                        key={participant.id}
-                        type="button"
-                        className={`ending-chat-participant-card ${hotseatSelectable && isSelected ? 'is-selected' : ''} ${isCurrentSpeaker ? 'is-current-speaker' : ''} ${isHotseatFocus ? 'is-hotseat-focus' : ''}`}
-                        onClick={() => {
-                          if (!hotseatSelectable) return;
-                          setSelectedAgentId(participant.source_agent_id ?? null);
-                        }}
-                        disabled={!hotseatSelectable}
-                      >
-                        <img
-                          className="ending-chat-participant-card__avatar"
-                          src={participantSprite(participant)}
-                          alt=""
-                          aria-hidden="true"
-                        />
-                        <div className="ending-chat-participant-card__copy">
-                          <strong>
-                            {participant.display_name}
-                            {isCurrentSpeaker && (
-                              <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
-                                {isZh ? '正在发言' : 'Speaking'}
-                              </span>
-                            )}
-                            {!isCurrentSpeaker && isHotseatFocus && (
-                              <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
-                                {isZh ? '当前追问对象' : 'Current target'}
-                              </span>
-                            )}
-                          </strong>
-                          <span>{metrics.role || roleLabel(participant, isZh)}</span>
-                          {metrics.persona && <small>{metrics.persona}</small>}
-                        </div>
-                        <div className="ending-chat-participant-metrics">
-                          <em>{isZh ? `影响 ${Math.round(metrics.impactScore * 100)}` : `Impact ${Math.round(metrics.impactScore * 100)}`}</em>
-                          <em>{isZh ? `发言 ${metrics.turnCount}` : `${metrics.turnCount} turns`}</em>
-                          <em>{isZh ? `转折 ${metrics.keyMomentHits}` : `${metrics.keyMomentHits} hinge hits`}</em>
-                          {metrics.lastRoundSpoken > 0 && <em>{`R${metrics.lastRoundSpoken}`}</em>}
-                        </div>
-                        {metrics.fallbackCast && (
-                          <span className="ending-chat-participant-flag">
-                            {isZh ? '兜底阵容' : 'Fallback lineup'}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {effectiveResult && (
-              <section className="ending-chat-panel ending-chat-panel--summary">
-                <div className="ending-chat-panel__heading">
-                  <h3>{t('roundtable.phase_verdict')}</h3>
-                  <div className="ending-chat-panel__actions">
-                    {!readOnly && (
-                      <>
-                        <button
-                          type="button"
-                          className="ending-chat-inline-button"
-                          onClick={() => activateAnchor(verdictAnchorAction)}
-                          disabled={!composerEnabled}
-                        >
-                          {t('ending_room.action_continue')}
-                        </button>
-                        <button
-                          type="button"
-                          className="ending-chat-inline-button"
-                          onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
-                          disabled={!composerEnabled}
-                        >
-                          {t('ending_room.action_new_thread')}
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className="ending-chat-inline-button"
-                      onClick={() => void handleCopyBrief()}
-                      disabled={!meetingBrief}
-                    >
-                      {briefCopied ? t('ending_room.action_brief_copied') : t('ending_room.action_copy_brief')}
-                    </button>
-                    {effectiveRoomType !== 'crossline_gallery' && composerEnabled && (
-                      <button
-                        type="button"
-                        className="ending-chat-inline-button ending-chat-epilogue-btn"
-                        onClick={() => {
-                          setComposerDraft(t('ending_room.epilogue_prompt'));
-                          setInteractionMode('epilogue');
-                        }}
-                        title={t('ending_room.epilogue_hint')}
-                      >
-                        {t('ending_room.action_epilogue')}
+                        {storyExpanded ? (isZh ? '收起' : 'Collapse') : (isZh ? '展开' : 'Expand')}
                       </button>
                     )}
                   </div>
-                </div>
-                <p>{effectiveResult.summary}</p>
-                {effectiveResult.next_move && effectiveResult.next_move !== effectiveResult.summary && (
-                  <>
-                    <h4>{t('ending_room.mode_one_move_only')}</h4>
-                    <p>{effectiveResult.next_move}</p>
-                  </>
-                )}
-              </section>
-            )}
+                  <p>{collapsedStory}</p>
+                </section>
 
-            <section className="ending-chat-panel">
-              <div className="ending-chat-panel__heading">
-                <h3>{t('result.story')}</h3>
-                {storyText.length > 280 && (
-                  <button
-                    type="button"
-                    className="ending-chat-inline-button"
-                    onClick={() => setStoryExpanded((current) => !current)}
-                  >
-                    {storyExpanded ? (isZh ? '收起' : 'Collapse') : (isZh ? '展开' : 'Expand')}
-                  </button>
-                )}
-              </div>
-              <p>{collapsedStory}</p>
-            </section>
-
-            {branch.insight && (
-              <section className="ending-chat-panel">
-                <div className="ending-chat-panel__heading">
-                  <h3>{t('result.insight')}</h3>
-                  {!readOnly && (
-                    <div className="ending-chat-panel__actions">
-                      <button
-                        type="button"
-                        className="ending-chat-inline-button"
-                        onClick={() => {
-                          if (!insightAnchorAction) return;
-                          activateAnchor(insightAnchorAction);
-                        }}
-                        disabled={!composerEnabled}
-                      >
-                        {t('ending_room.action_follow_insight')}
-                      </button>
+                {branch.insight && (
+                  <section className="ending-chat-panel">
+                    <div className="ending-chat-panel__heading">
+                      <h3>{t('result.insight')}</h3>
+                      {!readOnly && (
+                        <div className="ending-chat-panel__actions">
+                          <button
+                            type="button"
+                            className="ending-chat-inline-button"
+                            onClick={() => {
+                              if (!insightAnchorAction) return;
+                              activateAnchor(insightAnchorAction);
+                            }}
+                            disabled={!composerEnabled}
+                          >
+                            {t('ending_room.action_follow_insight')}
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-                <blockquote>{branch.insight}</blockquote>
-              </section>
-            )}
+                    <blockquote>{branch.insight}</blockquote>
+                  </section>
+                )}
 
-            {readOnly && (
-              <section className="ending-chat-panel ending-chat-panel--notice">
-                <p>{t('ending_room.replay_readonly')}</p>
-              </section>
-            )}
+                {readOnly && (
+                  <section className="ending-chat-panel ending-chat-panel--notice">
+                    <p>{t('ending_room.replay_readonly')}</p>
+                  </section>
+                )}
 
-            {error && (
-              <section className="ending-chat-panel ending-chat-panel--error">
-                <p>{error}</p>
-              </section>
-            )}
-          </aside>
+                {error && (
+                  <section className="ending-chat-panel ending-chat-panel--error">
+                    <p>{error}</p>
+                  </section>
+                )}
+              </>
+            );
 
-            <section className="ending-chat-transcript">
+            return (
+              <>
+                {/* D-9: Desktop inline sidebar */}
+                <aside className="ending-chat-sidebar ending-chat-sidebar--inline">
+                  {sidebarContent}
+                </aside>
+
+                {/* D-9: Mobile bottom sheet sidebar */}
+                {(isMobile || sidebarSheetOpen) && (
+                  <Sheet open={sidebarSheetOpen} onOpenChange={setSidebarSheetOpen}>
+                    <SheetContent
+                      id={sidebarSheetId}
+                      side="bottom"
+                      container={sheetContainer ?? undefined}
+                      className="ending-chat-sidebar"
+                      style={{ maxHeight: '70vh', overflowY: 'auto' }}
+                    >
+                      <SheetTitle className="sr-only">{t('ending_room.sidebar_mobile_label')}</SheetTitle>
+                      <SheetDescription className="sr-only">
+                        {t('ending_room.sidebar_mobile_description')}
+                      </SheetDescription>
+                      {sidebarContent}
+                    </SheetContent>
+                  </Sheet>
+                )}
+              </>
+            );
+          })()}
+
+            <section
+              className="ending-chat-transcript"
+              id={threadPanelId}
+              role={!isCrosslineGallery && threads.length > 0 ? 'tabpanel' : undefined}
+              aria-labelledby={!isCrosslineGallery && threads.length > 0 && activeThreadSelectionId
+                ? `${threadRailId}-${activeThreadSelectionId}`
+                : undefined}
+            >
               <div className="ending-chat-transcript-header">
                 <div>
                   <h3>{transcriptTitle}</h3>
@@ -1246,23 +1402,23 @@ export default function EndingChatModal({
 
             {!isCrosslineGallery && threads.length > 0 && (
               <div className="ending-chat-thread-rail" role="tablist" aria-label={isZh ? '追问线程' : 'Follow-up threads'}>
-                {threads.map((thread) => (
+                {threads.map((thread, index) => {
+                  const isActive = activeThreadSelectionId === thread.id;
+                  return (
                   <button
                     key={thread.id}
-                    type="button"
-                    className={`ending-chat-thread-chip ${(activeThread?.id ?? defaultThreadId) === thread.id ? 'is-active' : ''} ${thread.mode === 'room' ? 'is-room-thread' : ''} ${thread.interaction_mode === 'hotseat' ? 'is-hotseat-thread' : ''}`}
-                    onClick={() => {
-                      if (readOnly) {
-                        setReplayActiveThreadId(thread.id);
-                      } else {
-                        setActiveThread(thread.id);
-                        setInteractionMode(thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route');
-                      }
-                      setSelectedAgentId(thread.addressed_agent_ids_json?.[0] ?? null);
-                      if (!readOnly && thread.mode === 'followup') {
-                        void loadThread(thread.id);
-                      }
+                    id={`${threadRailId}-${thread.id}`}
+                    ref={(node) => {
+                      threadTabRefs.current[thread.id] = node;
                     }}
+                    type="button"
+                    role="tab"
+                    aria-controls={threadPanelId}
+                    aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    className={`ending-chat-thread-chip ${isActive ? 'is-active' : ''} ${thread.mode === 'room' ? 'is-room-thread' : ''} ${thread.interaction_mode === 'hotseat' ? 'is-hotseat-thread' : ''}`}
+                    onClick={() => handleThreadSelect(thread.id)}
+                    onKeyDown={(event) => handleThreadRailKeyDown(event, index)}
                   >
                     {thread.mode === 'room' && <span className="ending-chat-thread-chip__icon ending-chat-thread-chip__icon--archivist" aria-hidden="true" />}
                     <span className="ending-chat-thread-chip__label">{threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh)}</span>
@@ -1272,7 +1428,8 @@ export default function EndingChatModal({
                       </span>
                     )}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1473,6 +1630,19 @@ export default function EndingChatModal({
                   </button>
                 </div>
                 <span className="ending-chat-scope-notice">{transcriptSubtitle}</span>
+                {isMobile && composerEnabled && (
+                  <button
+                    type="button"
+                    className="ending-chat-inline-button ending-chat-epilogue-btn ending-chat-epilogue-btn--mobile"
+                    onClick={() => {
+                      setComposerDraft(t('ending_room.epilogue_prompt'));
+                      setInteractionMode('epilogue');
+                    }}
+                    title={t('ending_room.epilogue_hint')}
+                  >
+                    {t('ending_room.action_epilogue')}
+                  </button>
+                )}
               </div>
               <span className="ending-chat-mode-note">{interactionModeNote}</span>
 

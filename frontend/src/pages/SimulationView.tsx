@@ -6,6 +6,9 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { SimWarmupNarrative } from '../components/SimWarmupNarrative';
+import { TheaterCurtain } from '../components/TheaterCurtain';
+import '../components/SimWarmup.css';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
 import { useSimulationReplayState } from '../hooks/useSimulationReplayState';
@@ -324,14 +327,26 @@ export function SimulationView() {
       };
     });
   }, [branches, isSimulationComplete, isZh, replayRounds, scenario?.total_rounds, scenarioMeta?.betting.bets, scenarioMeta?.cards.usageLog, selectedReplayRound]);
-  const canPreviewGameplayCards = !isReplayMode && viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
-  const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const hasLiveRoundStarted =
+    currentRound > 0
+    || thinkingAgents.some((agent) => agent.round >= 1)
+    || messages.some((message) => (message.round ?? 0) >= 1);
   const isWarmupPhase =
     !isReplayMode
     && viewMode === 'theater'
     && !isSimulationComplete
     && status === 'simulating'
-    && currentRound === 0;
+    && !hasLiveRoundStarted;
+  const canPreviewGameplayCards =
+    !isReplayMode
+    && viewMode === 'theater'
+    && !isSimulationComplete
+    && branches.length > 0
+    && !isWarmupPhase;
+  const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const warmupNarrativePhase: 1 | 2 | 3 = agents.length === 0
+    ? (branches.length > 0 ? 2 : 1)
+    : 3;
   const isTailStatusSyncPhase =
     !isReplayMode
     && !isSimulationComplete
@@ -507,8 +522,8 @@ export function SimulationView() {
 
   useEffect(() => {
     const win = window as AutomationWindow;
-    const canOpenGameplayCards = !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
-    const canPreviewGameplayCardsNow = viewMode === 'theater' && !isSimulationComplete && branches.length > 0;
+    const canOpenGameplayCards = canUseGameplayCards;
+    const canPreviewGameplayCardsNow = canPreviewGameplayCards;
     const render = () => stringifyAutomationPayload(
       {
         question: scenario?.question ?? null,
@@ -659,6 +674,8 @@ export function SimulationView() {
     agents.length,
     messages.length,
     thinkingAgents,
+    canPreviewGameplayCards,
+    canUseGameplayCards,
     panelCollapsed,
     gameplayAutomation,
     predictionAutomation,
@@ -1364,6 +1381,12 @@ export function SimulationView() {
                     </div>
                   )}
                 </div>
+              )}
+              {isWarmupPhase && !isReplayMode && viewMode === 'theater' && (
+                <>
+                  <TheaterCurtain isVisible={isWarmupPhase} />
+                  <SimWarmupNarrative phase={warmupNarrativePhase} />
+                </>
               )}
               {isWarmupPhase && (
                 <div className="theater-panel__warmup" aria-label={t('sim.warmup.title')}>

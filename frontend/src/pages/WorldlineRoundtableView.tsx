@@ -93,6 +93,8 @@ import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
+import { AvatarRing } from '../components/ui/AvatarRing';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
 
@@ -122,8 +124,19 @@ export default function WorldlineRoundtableView() {
   const [editingRepresentatives, setEditingRepresentatives] = useState(false);
   const [launchingRoom, setLaunchingRoom] = useState(false);
   const [showMobileRoster, setShowMobileRoster] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => (
+    typeof window === 'undefined' ? 1024 : window.innerWidth
+  ));
   const mobileRosterTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileRosterDialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     if (!showMobileRoster) return;
@@ -137,6 +150,8 @@ export default function WorldlineRoundtableView() {
       trigger?.focus();
     };
   }, [showMobileRoster]);
+  const [rosterExpanded, setRosterExpanded] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
   const [briefCopied, setBriefCopied] = useState(false);
@@ -146,6 +161,7 @@ export default function WorldlineRoundtableView() {
   const transcriptHydratedRef = useRef(false);
   const transcriptListRef = useRef<HTMLDivElement>(null);
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
+  const prevTurnCountRef = useRef(0);
 
   const {
     snapshot,
@@ -181,6 +197,9 @@ export default function WorldlineRoundtableView() {
   const effectiveThreadOrder = replaySnapshot
     ? replaySnapshot.threads.map((thread) => thread.id)
     : threadOrder;
+  const isLiveRoom = Boolean(effectiveSnapshot && !replayPayload);
+  const isTabletViewport = viewportWidth <= 980;
+  const isMobileViewport = viewportWidth <= 640;
   const uiLanguage: 'zh' | 'en' = isZh ? 'zh' : 'en';
   const oracleProfile = useMemo(
     () => inferGameplayProfile(
@@ -700,6 +719,8 @@ export default function WorldlineRoundtableView() {
     transcriptHydratedRef.current = false;
     transcriptAutoStickRef.current = false;
     transcriptScrollSnapshotRef.current = null;
+    prevTurnCountRef.current = 0;
+    setNewMessageCount(0);
     setExpandedTurnKeys({});
   }, [activeThread?.id, effectiveSnapshot?.id]);
 
@@ -724,12 +745,28 @@ export default function WorldlineRoundtableView() {
         transcriptList,
         transcriptScrollSnapshotRef.current,
       );
-      if (displayedDrafts.length === 0) {
-        transcriptAutoStickRef.current = false;
-      }
     }
     transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptList);
   }, [activeThread?.id, currentTurns, displayedDrafts, effectiveSnapshot?.id]);
+
+  // D-13: Track new messages when user has scrolled up
+  useEffect(() => {
+    const turnCount = currentTurns.length;
+    if (prevTurnCountRef.current > 0 && turnCount > prevTurnCountRef.current && !transcriptAutoStickRef.current) {
+      setNewMessageCount((prev) => prev + (turnCount - prevTurnCountRef.current));
+    }
+    prevTurnCountRef.current = turnCount;
+  }, [currentTurns.length]);
+
+  const handleScrollToBottom = useCallback(() => {
+    const list = transcriptListRef.current;
+    if (list) {
+      list.scrollTop = list.scrollHeight;
+      transcriptAutoStickRef.current = true;
+    }
+    setNewMessageCount(0);
+  }, []);
+
   const addressedAgentIds = useMemo(
     () => (interactionMode === 'hotseat' && selectedRepresentativeId
       ? [selectedRepresentativeId]
@@ -850,6 +887,52 @@ export default function WorldlineRoundtableView() {
     setBriefCopied(true);
     window.setTimeout(() => setBriefCopied(false), 1800);
   }, [meetingBrief]);
+
+  const renderSummaryActions = (className = 'worldline-roundtable-summary__actions') => (
+    <div className={className}>
+      {!replayPayload && (
+        <>
+          <button
+            type="button"
+            className="ending-chat-inline-button ending-chat-summary-continue-btn"
+            onClick={() => activateAnchor(verdictAnchorAction)}
+            disabled={!composerEnabled}
+          >
+            {t('roundtable.action_continue')}
+          </button>
+          <button
+            type="button"
+            className="ending-chat-inline-button"
+            onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
+            disabled={!composerEnabled}
+          >
+            {t('roundtable.action_new_thread')}
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        className="ending-chat-inline-button"
+        onClick={() => void handleCopyBrief()}
+        disabled={!meetingBrief}
+      >
+        {briefCopied ? t('roundtable.action_brief_copied') : t('roundtable.action_copy_brief')}
+      </button>
+      {composerEnabled && (
+        <button
+          type="button"
+          className="ending-chat-inline-button ending-chat-epilogue-btn"
+          onClick={() => {
+            setComposerDraft(t('ending_room.epilogue_prompt'));
+            setInteractionMode('epilogue');
+          }}
+          title={t('ending_room.epilogue_hint')}
+        >
+          {t('ending_room.action_epilogue')}
+        </button>
+      )}
+    </div>
+  );
 
   const activateAnchor = useCallback((action: AnchorAction) => {
     setComposerDraft(action.prompt);
@@ -1285,6 +1368,12 @@ export default function WorldlineRoundtableView() {
   const handleTranscriptScroll = useCallback(() => {
     if (transcriptListRef.current) {
       transcriptScrollSnapshotRef.current = captureTranscriptScrollSnapshot(transcriptListRef.current);
+      const el = transcriptListRef.current;
+      const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      transcriptAutoStickRef.current = isAtBottom;
+      if (isAtBottom) {
+        setNewMessageCount(0);
+      }
     }
   }, []);
 
@@ -1395,7 +1484,7 @@ export default function WorldlineRoundtableView() {
 
   return (
     <div
-      className={`worldline-roundtable-view oracle-skin oracle-skin--${oracleProfile.id} ${effectiveSnapshot && !replayPayload ? 'is-live-room' : ''} ${showRepresentativePicker ? 'is-picker-open' : ''}`}
+      className={`worldline-roundtable-view oracle-skin oracle-skin--${oracleProfile.id} ${isLiveRoom ? 'is-live-room' : ''} ${showRepresentativePicker ? 'is-picker-open' : ''}`}
       data-profile={oracleProfile.id}
       style={{ '--oracle-profile-frame': `url(${oracleProfileFrameSrc})` } as CSSProperties}
     >
@@ -1404,7 +1493,10 @@ export default function WorldlineRoundtableView() {
           <button type="button" className="btn btn-ghost" onClick={handleBack}>
             {isZh ? '返回结果页' : 'Back to results'}
           </button>
-          <div className="worldline-roundtable-hero__actions">
+          <div
+            className="worldline-roundtable-hero__actions"
+            style={isLiveRoom ? { flexWrap: 'nowrap', overflowX: 'auto' } : undefined}
+          >
             {!replayPayload && effectiveSnapshot && (
               <button
                 type="button"
@@ -1550,7 +1642,11 @@ export default function WorldlineRoundtableView() {
       {!loading && !error && effectiveSnapshot && !showRepresentativePicker && (
         <div className="worldline-roundtable-shell">
           <aside className="worldline-roundtable-sidebar">
-            <details className="worldline-roundtable-sidebar__collapsible" aria-label={isZh ? '参与者详情' : 'Participant details'}>
+            <details
+              className="worldline-roundtable-sidebar__collapsible"
+              aria-label={isZh ? '参与者详情' : 'Participant details'}
+              open={!isTabletViewport}
+            >
               <summary className="worldline-roundtable-sidebar__summary">
                 <span>{isZh ? `${representatives.length} 位代表 · 展开详情` : `${representatives.length} reps · Expand details`}</span>
               </summary>
@@ -1569,49 +1665,7 @@ export default function WorldlineRoundtableView() {
                   <span className="worldline-roundtable-summary__eyebrow">{t('roundtable.phase_verdict')}</span>
                   <h2>{effectiveResult?.summary ?? t('roundtable.loading')}</h2>
                 </div>
-                <div className="worldline-roundtable-summary__actions">
-                  {!replayPayload && (
-                    <>
-                      <button
-                        type="button"
-                        className="ending-chat-inline-button"
-                        onClick={() => activateAnchor(verdictAnchorAction)}
-                        disabled={!composerEnabled}
-                      >
-                        {t('roundtable.action_continue')}
-                      </button>
-                      <button
-                        type="button"
-                        className="ending-chat-inline-button"
-                        onClick={() => void handleStartAnchoredThread(verdictAnchorAction)}
-                        disabled={!composerEnabled}
-                      >
-                        {t('roundtable.action_new_thread')}
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    className="ending-chat-inline-button"
-                    onClick={() => void handleCopyBrief()}
-                    disabled={!meetingBrief}
-                  >
-                    {briefCopied ? t('roundtable.action_brief_copied') : t('roundtable.action_copy_brief')}
-                  </button>
-                  {composerEnabled && (
-                    <button
-                      type="button"
-                      className="ending-chat-inline-button ending-chat-epilogue-btn"
-                      onClick={() => {
-                        setComposerDraft(t('ending_room.epilogue_prompt'));
-                        setInteractionMode('epilogue');
-                      }}
-                      title={t('ending_room.epilogue_hint')}
-                    >
-                      {t('ending_room.action_epilogue')}
-                    </button>
-                  )}
-                </div>
+                {renderSummaryActions()}
               </div>
               {effectiveResult?.archivist_note && <p>{effectiveResult.archivist_note}</p>}
             </section>
@@ -1623,7 +1677,44 @@ export default function WorldlineRoundtableView() {
                   <span>{representatives.length}</span>
                 </div>
               </div>
-              <div className="worldline-roundtable-roster">
+              {/* D-11: Collapsed avatar ring row */}
+              {!rosterExpanded && (
+                <div className="roundtable-avatar-ring-row">
+                  {participants.slice(0, 8).map((participant) => (
+                    <button
+                      key={participant.id}
+                      type="button"
+                      className="roundtable-avatar-ring-item"
+                      onClick={() => setRosterExpanded(true)}
+                    >
+                      <AvatarRing
+                        src={getParticipantSprite(participant)}
+                        alt={participant.display_name}
+                        size={42}
+                        isSpeaking={currentSpeakerParticipantId === participant.id}
+                      />
+                    </button>
+                  ))}
+                  {participants.length > 8 && (
+                    <button
+                      type="button"
+                      className="roundtable-avatar-ring-row__more-badge"
+                      onClick={() => setRosterExpanded(true)}
+                    >
+                      {t('common.more_count', { count: participants.length - 8 })}
+                    </button>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                className="roundtable-roster-toggle-btn"
+                onClick={() => setRosterExpanded((prev) => !prev)}
+              >
+                {rosterExpanded ? t('roundtable.collapse_roster') : t('roundtable.expand_roster')}
+              </button>
+              {/* D-11: Full roster — always in DOM, hidden via CSS when collapsed */}
+              <div className={`worldline-roundtable-roster ${!rosterExpanded ? 'roundtable-roster-hidden' : ''}`}>
                 {participants.map((participant) => {
                   const branch = participant.source_branch_id
                     ? branchesById.get(participant.source_branch_id)
@@ -1696,34 +1787,47 @@ export default function WorldlineRoundtableView() {
                 <div className="worldline-roundtable-card__heading">
                   <h3>{isZh ? '阶段洞察' : 'Phase insights'}</h3>
                 </div>
-                <div className="worldline-roundtable-insights">
+                <Accordion
+                  type="single"
+                  collapsible
+                  defaultValue={effectiveResult.phase_insights.length > 0
+                    ? `${effectiveResult.phase_insights[effectiveResult.phase_insights.length - 1].phase}-${effectiveResult.phase_insights.length - 1}`
+                    : undefined}
+                  aria-label={t('roundtable.phase_insights_label')}
+                >
                   {effectiveResult.phase_insights.map((insight, index) => (
-                    <article key={`${insight.phase}-${index}`} className="worldline-roundtable-insight">
-                      <strong>{getEndingRoomPhaseLabel(insight.phase, t)}</strong>
-                      <p>{insight.stakes}</p>
-                      {!replayPayload && (
-                        <div className="worldline-roundtable-insight__actions">
-                          <button
-                            type="button"
-                            className="ending-chat-inline-button"
-                            onClick={() => activateAnchor(phaseActionPrompts[index].action)}
-                            disabled={!composerEnabled}
-                          >
-                            {t('roundtable.action_follow_phase')}
-                          </button>
-                          <button
-                            type="button"
-                            className="ending-chat-inline-button"
-                            onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
-                            disabled={!composerEnabled}
-                          >
-                            {t('roundtable.action_new_thread')}
-                          </button>
-                        </div>
-                      )}
-                    </article>
+                    <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`}>
+                      <AccordionTrigger>
+                        {getEndingRoomPhaseLabel(insight.phase, t)}
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <article className="worldline-roundtable-insight">
+                          <p>{insight.stakes}</p>
+                          {!replayPayload && (
+                            <div className="worldline-roundtable-insight__actions">
+                              <button
+                                type="button"
+                                className="ending-chat-inline-button"
+                                onClick={() => activateAnchor(phaseActionPrompts[index].action)}
+                                disabled={!composerEnabled}
+                              >
+                                {t('roundtable.action_follow_phase')}
+                              </button>
+                              <button
+                                type="button"
+                                className="ending-chat-inline-button"
+                                onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
+                                disabled={!composerEnabled}
+                              >
+                                {t('roundtable.action_new_thread')}
+                              </button>
+                            </div>
+                          )}
+                        </article>
+                      </AccordionContent>
+                    </AccordionItem>
                   ))}
-                </div>
+                </Accordion>
               </section>
             ) : null}
             </details>
@@ -1738,6 +1842,9 @@ export default function WorldlineRoundtableView() {
                 )}
                 {effectiveResult.archivist_note && (
                   <p className="worldline-roundtable-synthesis__note">{effectiveResult.archivist_note}</p>
+                )}
+                {isLiveRoom && isMobileViewport && renderSummaryActions(
+                  'worldline-roundtable-summary__actions worldline-roundtable-summary__actions--synthesis',
                 )}
               </section>
             )}
@@ -1810,28 +1917,40 @@ export default function WorldlineRoundtableView() {
               </div>
             )}
 
-              <RoundtableTranscriptList
-                listRef={transcriptListRef}
-                onScroll={handleTranscriptScroll}
-                isZh={isZh}
-                currentTurns={currentTurns}
-                transcriptBubbleLayouts={transcriptBubbleLayouts}
-                activeThreadId={activeThread?.id ?? null}
-                activeSpeakerTurnKey={activeSpeakerTurnKey}
-                hotseatParticipantId={hotseatParticipantId}
-                expandedTurnKeys={expandedTurnKeys}
-                onToggleExpand={(turnKey) => setExpandedTurnKeys((current) => ({ ...current, [turnKey]: !(current[turnKey] ?? false) }))}
-                composerEnabled={composerEnabled}
-                isReplay={Boolean(replayPayload)}
-                displayedDrafts={displayedDrafts}
-                transcriptDraftLayouts={transcriptDraftLayouts}
-                participantsById={participantsById}
-                speakerIndexMap={speakerIndexMap}
-                factionMap={factionMap}
-                onHotseatQuote={handleHotseatQuote}
-                onFollowQuote={handleFollowQuote}
-                onQuoteThread={handleQuoteThread}
-              />
+              <div style={{ position: 'relative' }}>
+                <RoundtableTranscriptList
+                  listRef={transcriptListRef}
+                  onScroll={handleTranscriptScroll}
+                  isZh={isZh}
+                  currentTurns={currentTurns}
+                  transcriptBubbleLayouts={transcriptBubbleLayouts}
+                  activeThreadId={activeThread?.id ?? null}
+                  activeSpeakerTurnKey={activeSpeakerTurnKey}
+                  hotseatParticipantId={hotseatParticipantId}
+                  expandedTurnKeys={expandedTurnKeys}
+                  onToggleExpand={(turnKey) => setExpandedTurnKeys((current) => ({ ...current, [turnKey]: !(current[turnKey] ?? false) }))}
+                  composerEnabled={composerEnabled}
+                  isReplay={Boolean(replayPayload)}
+                  displayedDrafts={displayedDrafts}
+                  transcriptDraftLayouts={transcriptDraftLayouts}
+                  participantsById={participantsById}
+                  speakerIndexMap={speakerIndexMap}
+                  factionMap={factionMap}
+                  spotlightTurnKey={activeSpeakerTurnKey ?? undefined}
+                  onHotseatQuote={handleHotseatQuote}
+                  onFollowQuote={handleFollowQuote}
+                  onQuoteThread={handleQuoteThread}
+                />
+                {newMessageCount > 0 && (
+                  <button
+                    type="button"
+                    className="roundtable-new-message-pill"
+                    onClick={handleScrollToBottom}
+                  >
+                    {t('roundtable.new_messages', { count: newMessageCount })}
+                  </button>
+                )}
+              </div>
 
             <button
               ref={mobileRosterTriggerRef}

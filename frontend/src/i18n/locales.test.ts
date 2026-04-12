@@ -11,6 +11,19 @@ describe('i18n locale resources', () => {
     expect(zh.translation.common.close).toBe('关闭');
   });
 
+  it('provides Phase D labels for shared debate and Oracle surfaces', () => {
+    expect(en.translation.debate.strategy_accordion_label).toBe('Strategy panels');
+    expect(zh.translation.debate.strategy_accordion_label).toBe('策略面板');
+    expect(en.translation.ending_room.sidebar_mobile_label).toBe('Chamber sidebar');
+    expect(zh.translation.ending_room.sidebar_mobile_label).toBe('密室侧栏');
+    expect(en.translation.ending_room.sidebar_mobile_description).toBe('Quick actions and participant details for this chamber.');
+    expect(zh.translation.ending_room.sidebar_mobile_description).toBe('查看此密室的快捷操作与参与者详情。');
+    expect(en.translation.roundtable.phase_insights_label).toBe('Phase insights');
+    expect(zh.translation.roundtable.phase_insights_label).toBe('阶段洞察');
+    expect(en.translation.common.more_count).toBe('+{{count}} more');
+    expect(zh.translation.common.more_count).toBe('+{{count}} 更多');
+  });
+
   it('provides localized theater labels and hints for simulation controls', () => {
     expect(en.translation.home.viz_theater).toBe('Pixel Theater');
     expect(zh.translation.home.viz_theater).toBe('像素剧场');
@@ -56,5 +69,12 @@ describe('i18n locale resources', () => {
     expect(zh.translation.compare.title).toBe('反事实对比');
     expect(en.translation.compare.round).toBe('Round {{round}}');
     expect(zh.translation.compare.round).toBe('第 {{round}} 轮');
+  });
+
+  it('provides localized labels for ResultView Phase C action links', () => {
+    expect(en.translation.result.causal_graph_link).toBeTruthy();
+    expect(zh.translation.result.causal_graph_link).toBeTruthy();
+    expect(en.translation.result.compare_link).toBeTruthy();
+    expect(zh.translation.result.compare_link).toBeTruthy();
   });
 });

@@ -272,7 +272,6 @@ export default function RoundtablePickerPanel({
     const handleChange = (event: MediaQueryListEvent) => {
       setDragEnabled(event.matches);
     };
-    setDragEnabled(mediaQuery.matches);
     if (typeof mediaQuery.addEventListener === 'function') {
       mediaQuery.addEventListener('change', handleChange);
       return () => mediaQuery.removeEventListener('change', handleChange);

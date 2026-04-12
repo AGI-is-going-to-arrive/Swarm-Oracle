@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -411,6 +413,206 @@ describe('DebateArenaView', () => {
     expect(payload?.page?.debate?.counterplay?.kind).toBe('winner');
     expect(payload?.page?.debate?.counterplay?.target_value).toBe('opposition');
     expect(payload?.page?.debate?.counterplay_used).toBe(true);
+  });
+
+  it('blocks quick counterplay submission when a historical phase is locked', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      available_prediction_options: {
+        winner: ['proposition', 'opposition'],
+        verdict_tone: ['order', 'balance', 'rupture'],
+      },
+      score: { proposition: 8, opposition: 5, audience_meter: 2 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'opening',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Opening lead.',
+          score_delta: { proposition: 4, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'turn-2',
+          sequence: 2,
+          phase: 'crossfire',
+          speaker_side: 'opposition',
+          speaker_name: 'Opposition',
+          content: 'Crossfire pushback.',
+          score_delta: { proposition: 0, opposition: 5 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(2000);
+    });
+
+    await user.click(await screen.findByRole('tab', { name: /debate.phase_opening/ }));
+    const quickCounterplayButton = await screen.findByRole('button', { name: 'debate.counterplay_submit' });
+
+    expect(quickCounterplayButton).toBeDisabled();
+    await user.click(quickCounterplayButton);
+
+    expect(predictDebateMock).not.toHaveBeenCalled();
+  });
+
+  it('auto-expands the counterplay accordion when a counterplay plan appears after initial render', async () => {
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      available_prediction_options: {
+        winner: ['proposition', 'opposition'],
+        verdict_tone: ['order', 'rupture'],
+      },
+      score: { proposition: 6, opposition: 2, audience_meter: 1 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'opening',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Opening setup.',
+          score_delta: { proposition: 0, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'turn-2',
+          sequence: 2,
+          phase: 'crossfire',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Crossfire lead.',
+          score_delta: { proposition: 4, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('button', { name: 'debate.counterplay_submit' })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(2000);
+    });
+
+    const counterplayTrigger = await screen.findByRole('button', { name: /debate.counterplay_title/ });
+    expect(counterplayTrigger).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByRole('button', { name: 'debate.counterplay_submit' })).toBeInTheDocument();
+  });
+
+  it('renders feed focus and live cue copy from translation-backed labels', async () => {
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      score: { proposition: 6, opposition: 2, audience_meter: 1 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'opening',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Opening setup.',
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'turn-2',
+          sequence: 2,
+          phase: 'crossfire',
+          speaker_side: 'opposition',
+          speaker_name: 'Opposition',
+          content: 'Crossfire response.',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('debate-feed-focus')).toHaveTextContent('debate.room_state_floor');
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(2000);
+    });
+
+    expect(await screen.findByTestId('debate-live-cue')).toHaveTextContent('debate.stage_status_live');
+  });
+
+  it('exposes DebateStageRibbon as tabs and supports arrow-key navigation across unlocked phases', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(3000);
+    });
+
+    expect(await screen.findByRole('tablist', { name: 'debate.stage_ribbon_aria' })).toBeInTheDocument();
+
+    const openingTab = await screen.findByRole('tab', { name: /debate.phase_opening/ });
+    const verdictTab = await screen.findByRole('tab', { name: /debate.phase_verdict/ });
+    await user.click(openingTab);
+
+    expect(openingTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', openingTab.id);
+
+    openingTab.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(verdictTab).toHaveFocus();
+    expect(verdictTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', verdictTab.id);
+  });
+
+  it('reserves bottom space for the fixed mobile CTA rail in Debate Arena CSS', () => {
+    const css = readFileSync('src/pages/DebateArena.css', 'utf8');
+
+    expect(css).toContain('@media (max-width: 720px)');
+    expect(css).toContain('padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));');
+    expect(css).toContain('scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));');
   });
 
   it('maps structured betting errors to a localized notice', async () => {

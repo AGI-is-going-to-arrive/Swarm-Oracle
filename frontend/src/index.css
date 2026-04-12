@@ -2,8 +2,129 @@
    SwarmOracle — Impeccable Premium Editorial System
    ═══════════════════════════════════════════════════════════ */
 
-/* Font Loading: Cormorant Garamond / Noto Serif SC for headings, Instrument Sans / Noto Sans SC for body */
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300..700;1,300..700&family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Noto+Sans+SC:wght@400..700&family=Noto+Serif+SC:wght@300..700&display=swap');
+/* Tailwind v4 CSS-first: import theme + utilities only (NO preflight) */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+/* Map existing OKLCH design tokens to Tailwind semantic tokens.
+   Names intentionally differ from :root vars to avoid circular references. */
+@theme {
+  /* Brand colors — enables bg-primary, text-primary, border-danger, etc. */
+  --color-primary: oklch(55% 0.22 350);
+  --color-primary-dim: oklch(65% 0.18 350);
+  --color-danger: oklch(60% 0.18 25);
+  --color-success: oklch(65% 0.15 150);
+  --color-warning: oklch(75% 0.16 80);
+
+  /* Focus ring (C-2 fix) */
+  --color-ring: oklch(55% 0.22 350);
+
+  /* Surface / Background — enables bg-surface, bg-elevated, bg-base, bg-hover */
+  --color-surface: oklch(99% 0.002 80);
+  --color-elevated: oklch(100% 0 0);
+  --color-base: oklch(98% 0.005 80);
+  --color-hover: oklch(95% 0.01 80);
+
+  /* Text — enables text-text-primary, text-text-secondary, text-text-muted */
+  --color-text-primary: oklch(20% 0.01 80);
+  --color-text-secondary: oklch(45% 0.01 80);
+  --color-text-muted: oklch(65% 0.01 80);
+
+  /* Borders — enables border-border-subtle, border-border-default */
+  --color-border-subtle: oklch(90% 0.01 80);
+  --color-border-default: oklch(85% 0.01 80);
+
+  /* Radii — use explicit values to avoid self-reference */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows */
+  --shadow-card: 0 4px 20px oklch(0% 0 0 / 0.03);
+  --shadow-elevated: 0 12px 40px oklch(0% 0 0 / 0.06);
+
+  /* Fonts */
+  --font-heading: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  --font-body: 'Instrument Sans', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* ── shadcn/ui animation keyframes (C-1 fix) ── */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+/* shadcn animation keyframes */
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+
+/* shadcn enter/exit animations via tailwindcss-animate compatible utilities */
+@utility animate-in {
+  animation-name: enter;
+  animation-duration: var(--tw-animate-duration, 150ms);
+  --tw-enter-opacity: initial;
+  --tw-enter-scale: initial;
+  --tw-enter-rotate: initial;
+  --tw-enter-translate-x: initial;
+  --tw-enter-translate-y: initial;
+}
+@utility animate-out {
+  animation-name: exit;
+  animation-duration: var(--tw-animate-duration, 150ms);
+  --tw-exit-opacity: initial;
+  --tw-exit-scale: initial;
+  --tw-exit-rotate: initial;
+  --tw-exit-translate-x: initial;
+  --tw-exit-translate-y: initial;
+}
+
+@utility animate-duration-200 { --tw-animate-duration: 200ms; }
+@utility animate-duration-300 { --tw-animate-duration: 300ms; }
+@utility animate-duration-500 { --tw-animate-duration: 500ms; }
+
+@keyframes enter {
+  from {
+    opacity: var(--tw-enter-opacity, 1);
+    transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0)
+      scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1))
+      rotate(var(--tw-enter-rotate, 0));
+  }
+}
+@keyframes exit {
+  to {
+    opacity: var(--tw-exit-opacity, 1);
+    transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0)
+      scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), var(--tw-exit-scale, 1))
+      rotate(var(--tw-exit-rotate, 0));
+  }
+}
+
+@utility fade-in-0 { --tw-enter-opacity: 0; }
+@utility fade-out-0 { --tw-exit-opacity: 0; }
+@utility zoom-in-95 { --tw-enter-scale: .95; }
+@utility zoom-out-95 { --tw-exit-scale: .95; }
+@utility slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
+@utility slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
+@utility slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
+@utility slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
+@utility slide-out-to-top { --tw-exit-translate-y: -100%; }
+@utility slide-out-to-bottom { --tw-exit-translate-y: 100%; }
+@utility slide-out-to-left { --tw-exit-translate-x: -100%; }
+@utility slide-out-to-right { --tw-exit-translate-x: 100%; }
+@utility slide-in-from-top { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-bottom { --tw-enter-translate-y: 100%; }
+@utility slide-in-from-left { --tw-enter-translate-x: -100%; }
+@utility slide-in-from-right { --tw-enter-translate-x: 100%; }
+@utility slide-out-to-left-half { --tw-exit-translate-x: -50%; }
+@utility slide-out-to-top-48pct { --tw-exit-translate-y: -48%; }
+@utility slide-in-from-left-half { --tw-enter-translate-x: -50%; }
+@utility slide-in-from-top-48pct { --tw-enter-translate-y: -48%; }
 
 /* ── CSS Variables ────────────────────────────────────────── */
 /* Applying OKLCH fluid scale and strict tinted neutrals */
@@ -111,6 +232,67 @@
   --oracle-border-dim: oklch(95% 0.005 80 / 0.16);
   --oracle-glow-speaker: oklch(65% 0.18 350 / 0.18);
   --oracle-glow-active: oklch(75% 0.16 80 / 0.12);
+
+  /* ── Shared Component Tokens (Phase B) ── */
+  /* SpotlightTurnCard */
+  --spotlight-bg: color-mix(in oklab, var(--color-primary) 4%, var(--bg-surface));
+  --spotlight-border: var(--color-primary);
+  --spotlight-shadow: 0 2px 12px oklch(55% 0.22 350 / 0.08);
+  --spotlight-max-ch: 58ch;
+  --spotlight-max-ch-debate: 64ch;
+
+  /* FoldableTurn */
+  --foldable-collapsed-height: 44px;
+  --foldable-transition: max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  --foldable-expanded-max: 9999px;
+
+  /* AvatarRing */
+  --avatar-ring-color: var(--color-primary);
+  --avatar-ring-pulse-scale: 1.12;
+  --avatar-ring-pulse-duration: 1800ms;
+
+  /* ── Phase C Tokens ── */
+  /* InputView Staged Reveal */
+  --iv-hero-gap: var(--space-4);
+  --iv-hero-max-width: 700px;
+  --iv-config-trigger-border: var(--border-default);
+  --iv-config-body-bg: var(--bg-surface);
+
+  /* SimWarmup + Theater Curtain */
+  --warmup-text-color: rgba(245, 243, 255, 0.94);
+  --warmup-progress-bg: rgba(255, 255, 255, 0.08);
+  --warmup-progress-fill: rgba(159, 209, 255, 0.6);
+  --curtain-bg-from: var(--oracle-bg-dark, oklch(12% 0.01 60));
+
+  /* ResultView Action Band */
+  --action-band-bg: color-mix(in oklab, var(--color-primary) 3%, var(--bg-surface));
+  --card-primary-border: color-mix(in oklab, var(--color-primary) 20%, var(--border-default));
+  --card-primary-shadow: 0 2px 12px oklch(55% 0.22 350 / 0.06);
+
+  /* Director Notebook fold */
+  --notebook-fold-transition: grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Phase D Tokens ── */
+  /* Debate Hero */
+  --debate-hero-min-h: 200px;
+  --debate-hero-compact-min-h: 0;
+
+  /* Fold / Collapse */
+  --fold-line-height: 44px;
+  --fold-bg: oklch(98% 0.005 80 / 0.72);
+
+  /* New messages pill */
+  --new-message-bg: oklch(55% 0.16 350);
+  --new-message-text: oklch(100% 0 0);
+
+  /* Oracle sidebar */
+  --oracle-sidebar-width: 240px;
+  --oracle-participant-collapsed-h: 44px;
+
+  /* Bubble actions hover */
+  --bubble-actions-opacity: 0;
+  --bubble-actions-hover-opacity: 1;
+  --bubble-actions-transition: opacity 0.15s ease;
 }
 
 /* ── Reset & Globals ─────────────────────────────────────── */
@@ -419,11 +601,37 @@ body:has(.simulation-view--theater) .lang-switch--global {
   .stagger-enter > *,
   .skeleton,
   .number-tick,
-  .scale-reveal {
+  .scale-reveal,
+  .avatar-ring-speaking::after {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;
   }
+  /* Radix accordion/sheet data-state animations */
+  [data-state] {
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* ── AvatarRing (Phase B) ─────────────────────────────── */
+/* Uses ::after pseudo-element pulse instead of box-shadow (CONSTRAINT) */
+.avatar-ring {
+  position: relative;
+}
+.avatar-ring-speaking::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 2px solid var(--avatar-ring-color, var(--color-primary));
+  opacity: 0;
+  transform: scale(1);
+  animation: avatarPulse var(--avatar-ring-pulse-duration, 1800ms) ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes avatarPulse {
+  0%, 100% { opacity: 0; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(var(--avatar-ring-pulse-scale, 1.12)); }
 }
 
 /* Badge utility */

@@ -24,6 +24,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。
+- quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
 
 ### Oracle Chambers / 世界线圆桌
@@ -67,12 +68,23 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `current_speaker_participant_id`
   - `pending_drafts`
   - `stream_state`
-- ending-room / roundtable 的 replay/share/import 已完成专项签收。
+- Oracle 专项自动化当前分三层：
+  - `e2e-ending-room-suite` 负责结果页 picker -> live chamber / one-move-only 的基础 smoke
+  - `e2e-ending-room-followup-suite` 负责 ending-room follow-up / readonly replay / reload restore / import
+  - `e2e-worldline-roundtable-suite` 负责 roundtable live / readonly replay / reload restore / import
+- ending-room 基础 smoke、debate full 与 roundtable desktop replay restore 已完成本轮 post-fix 复验。
+- ending-room / roundtable 的 replay 回归当前都已收口到同一条自动化口径：
+  - header action 只在各自 header action 区域内定位
+  - 复用旧页面前先 revalidate live room
+  - readonly replay 必须同时满足 replay URL 与只读 UI 契约
+- ending-room replay helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面继续使用 `roomShare / roomLocal`，并兼容 `share / local` alias。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子。
+- `EndingChatModal` 的 mobile sidebar sheet 当前已补可访问标题/描述；sheet 打开时第一次 `Escape` 只收 sheet，不会直接关外层 chamber。
+- 结果页 live ending-room 当前把 English 只读保存入口统一为 `Save local read-only copy`；readonly replay 仍保留 `Import as Local Run`。
 
 ## 当前工程边界
 
@@ -83,23 +95,23 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `gameplay_state_json`
 - `scenarioMeta` 仍存在，但只承担缓存、兼容与 replay 输入职责。
 - replay 分享优先走后端 `ReplayArtifact`；当 artifact 不可用且 URL token 也过大时，Oracle replay 会回退为本地只读副本链接。
-- Oracle follow-up 当前已能通过默认 full signoff，但 `hotseat / all_present / evidence_card / anchored thread` 这类生命周期抓取在慢路径下仍可能回退到 `settled wait / API-driven wait`；这属于自动化与体验稳定性问题，不表示主链未接入。
+- Oracle / roundtable replay coverage 当前按 fail-closed 收口：
+  - replayCoverageError 或 readonly replay / reload restore / import 关键字段缺失会直接失败
+  - 不再以 best-effort `summary.json` 保底通过
+- 严格慢路径自动化当前仍在继续收口：
+  - ending-room follow-up 的 `full / mobile` 复跑仍可能超时或挂起
+  - roundtable `full` 的移动端链路仍可能卡在 result route 跳转
 
 ## 当前状态
 
 - 主闭环当前维持 `release-candidate` 级别。
-- 最近一次默认本地全链签收工件位于：
-  - `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
-- 最近一轮默认本地全链签收当前已覆盖：
-  - `corners / mobile / cross_browser / ending_room_followup / roundtable_full / debate_full`
-- 最近一轮 stricter cross-browser director-state 工件位于：
-  - `frontend/output/e2e/2026-04-12-review3-cross-browser/result.json`
-- 最近一轮 roundtable strict 桌面/移动工件位于：
-  - `frontend/output/e2e/2026-04-12-final9-roundtable-desktop/summary.json`
-  - `frontend/output/e2e/2026-04-12-final8-roundtable-mobile/summary.json`
-- 最近一轮 roundtable Firefox / WebKit scoped regression 工件位于：
-  - `frontend/output/e2e/2026-04-12-roundtable-firefox-final/summary.json`
-  - `frontend/output/e2e/2026-04-12-roundtable-webkit-final/summary.json`
+- 本轮 post-fix 定向复验已通过：
+  - `frontend/output/e2e/review-fix-ending-room-suite-full-rerun/summary.json`
+  - `frontend/output/e2e/review-fix-debate-full/result.json`
+  - `frontend/output/e2e/review-fix-roundtable-desktop/summary.json`
+- 本轮未记为稳定通过的专项链路：
+  - ending-room follow-up `full / mobile`
+  - roundtable `full` 的移动端链路
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

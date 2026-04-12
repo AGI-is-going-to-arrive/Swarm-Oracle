@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -1082,7 +1083,7 @@ describe('SimulationView replay automation output', () => {
     });
   });
 
-  it('publishes warmup preview state before director tools unlock', async () => {
+  it('keeps preview automation locked until warmup finishes', async () => {
     mockStore.status = 'simulating';
     mockStore.isSimulationComplete = false;
     mockStore.currentRound = 0;
@@ -1116,15 +1117,114 @@ describe('SimulationView replay automation output', () => {
       const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.controls?.can_open_gameplay_cards).toBe(false);
-      expect(payload?.page?.controls?.can_preview_gameplay_cards).toBe(true);
+      expect(payload?.page?.controls?.can_preview_gameplay_cards).toBe(false);
       expect(payload?.page?.warmup).toMatchObject({
         active: true,
         worldline_ready: true,
         agents_ready: false,
         director_ready: false,
-        preview_enabled: true,
+        preview_enabled: false,
       });
     });
+  });
+
+  it('ends warmup as soon as the first live turn starts before round_summary arrives', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 0;
+    mockStore.agents = [
+      { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
+    ];
+    mockStore.branches = [
+      {
+        id: 'b1',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '历史拐点',
+        summary: '',
+        story: '',
+        insight: '',
+        key_moments: [],
+        probability: 1,
+        status: 'ACTIVE' as const,
+      },
+    ];
+    mockStore.messages = [];
+    mockStore.thinkingAgents = [];
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('sim.warmup.title')).toBeInTheDocument();
+
+    mockStore.thinkingAgents = [
+      { agent: '奥勒留斯', agent_id: 'a1', branch: 'b1', round: 1 },
+    ];
+    rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('sim.warmup.title')).not.toBeInTheDocument();
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.warmup).toBeNull();
+    });
+  });
+
+  it('maps the warmup narrative to worldline and agent readiness in order', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 0;
+    mockStore.agents = [];
+    mockStore.branches = [
+      {
+        id: 'b1',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '历史拐点',
+        summary: '',
+        story: '',
+        insight: '',
+        key_moments: [],
+        probability: 1,
+        status: 'ACTIVE' as const,
+      },
+    ];
+    mockStore.messages = [];
+    mockStore.thinkingAgents = [];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const loadingStep = await screen.findByText('sim.warmup_narrative_phase_1');
+    const agentStep = screen.getByText('sim.warmup_narrative_phase_2');
+
+    expect(loadingStep.closest('.sim-warmup-narrative__step')).not.toHaveClass('is-active');
+    expect(agentStep.closest('.sim-warmup-narrative__step')).toHaveClass('is-active');
+  });
+
+  it('declares the warmup narrative above the theater curtain in CSS', () => {
+    const css = readFileSync('src/components/SimWarmup.css', 'utf8');
+    expect(css).toMatch(/\.sim-warmup-narrative\s*\{[\s\S]*?position:\s*relative;/);
+    expect(css).toMatch(/\.sim-warmup-narrative\s*\{[\s\S]*?z-index:\s*3;/);
+    expect(css).toMatch(/\.theater-curtain\s*\{[\s\S]*?z-index:\s*2;/);
   });
 
   it('switches capture modes in the UI and unlocks modal mode when a modal opens', async () => {

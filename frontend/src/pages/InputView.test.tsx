@@ -232,6 +232,16 @@ vi.mock('../components/QuickStartCards', () => ({
   QuickStartCards: () => <div>quick-start-cards</div>,
 }));
 
+async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
+  const trigger = screen.getByRole('button', {
+    name: /home\.advanced_settings|home\.advanced_settings_expanded/i,
+  });
+
+  if (trigger.getAttribute('aria-expanded') !== 'true') {
+    await user.click(trigger);
+  }
+}
+
 describe('InputView campaign progress', () => {
   const POLICY_STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
   const campaignProfile = {
@@ -527,6 +537,7 @@ describe('InputView campaign progress', () => {
     );
 
     await user.type(screen.getAllByRole('textbox')[0], 'Fork profile smoke test');
+    await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: 'home.runtime_preset_aggressive' }));
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
 
@@ -628,6 +639,7 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
+    await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
     await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
     await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');
@@ -645,6 +657,7 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
+    await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
 
     expect(screen.getByText('Paste your provider API key. It stays only in this tab session.')).toBeInTheDocument();
@@ -663,6 +676,7 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
+    await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
     await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
     await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');

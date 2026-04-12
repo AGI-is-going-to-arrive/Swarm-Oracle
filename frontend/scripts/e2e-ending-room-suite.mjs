@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { isLiveEndingRoomModalState } from "../src/lib/endingRoomReplayAutomation.js";
+import {
+  isEndingRoomModalUiReady,
+  openEndingRoomModalFromPicker,
+} from "../src/lib/endingRoomPickerAutomation.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -112,6 +117,72 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+async function waitForLiveEndingRoomModalReady(page, {
+  expectedRoomType = null,
+  timeout = 30000,
+  label = "ending-room live modal ready",
+} = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const payload = await readAutomation(page);
+    const modalState = payload?.page?.controls?.modal_state;
+    if (
+      payload?.page?.controls?.active_modal === "ending_room"
+      && modalState
+      && modalState.kind === "ending_room_modal"
+      && modalState.read_only !== true
+      && (!expectedRoomType || !modalState.room_type || modalState.room_type === expectedRoomType)
+      && modalState.room_id
+      && isLiveEndingRoomModalState(modalState, {
+        expectedRoomType,
+      })
+    ) {
+      return payload;
+    }
+
+    const uiReady = await page.evaluate(() => {
+      const modal = document.querySelector(".ending-chat-modal");
+      if (!(modal instanceof HTMLElement)) {
+        return null;
+      }
+      const text = modal.innerText || "";
+      const composer = modal.querySelector("textarea.ending-chat-composer__input");
+      const hasComposer = composer instanceof HTMLTextAreaElement;
+      const hasModePill = modal.querySelector(".ending-chat-mode-pill") instanceof HTMLElement;
+      const hasCloseButton = modal.querySelector(".ending-chat-close") instanceof HTMLElement;
+      return {
+        text,
+        hasComposer,
+        hasModePill,
+        hasCloseButton,
+      };
+    });
+    if (isEndingRoomModalUiReady(uiReady ?? undefined)) {
+      return {
+        page: {
+          controls: {
+            active_modal: "ending_room",
+            modal_state: {
+              kind: "ending_room_modal",
+              room_id: modalState?.room_id ?? null,
+              room_type: modalState?.room_type ?? expectedRoomType ?? null,
+              read_only: false,
+              status: modalState?.status ?? "done",
+              has_result: modalState?.has_result ?? true,
+              can_send: modalState?.can_send ?? true,
+              turn_count: modalState?.turn_count ?? 0,
+              thread_count: modalState?.thread_count ?? 0,
+              active_thread_id: modalState?.active_thread_id ?? null,
+            },
+          },
+        },
+      };
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   if (!response.ok) {
@@ -190,26 +261,13 @@ async function openPicker(page, branchIndex, roomButtonIndex, outputDir, label) 
 }
 
 async function confirmPicker(page, outputDir, label) {
-  await page.locator(".ending-room-picker__footer button").last().click();
-  await waitForAutomation(
-    page,
-    (state) => state.page?.controls?.active_modal === "ending_room" && state.page?.controls?.modal_state?.kind === "ending_room_modal",
-    30000,
-    `${label} modal open`,
-  );
-  const payload = await waitForAutomation(
-    page,
-    (state) => {
-      const modalState = state.page?.controls?.modal_state;
-      return state.page?.controls?.active_modal === "ending_room"
-        && modalState?.kind === "ending_room_modal"
-        && modalState?.has_result === true
-        && modalState?.can_send === true;
-    },
-    30000,
-    `${label} modal ready`,
-  );
-  await page.locator(".ending-chat-modal").waitFor({ state: "visible", timeout: 10000 });
+  await openEndingRoomModalFromPicker(page, {
+    buttonSelector: ".ending-room-picker__footer button",
+  });
+  const payload = await waitForLiveEndingRoomModalReady(page, {
+    timeout: 30000,
+    label: `${label} modal ready`,
+  });
   const modal = await collectModalDetails(page);
   await saveScreenshot(page, path.join(outputDir, `${label}-modal.png`));
   writeJson(path.join(outputDir, `${label}-modal.json`), { automation: payload.page.controls.modal_state, ...modal });
@@ -217,6 +275,10 @@ async function confirmPicker(page, outputDir, label) {
 }
 
 async function sendFollowup(page, outputDir, label, { modeIndex, hotseatIndex = 0, prompt }) {
+  await waitForLiveEndingRoomModalReady(page, {
+    timeout: 10000,
+    label: `${label} live modal preflight`,
+  });
   await page.locator(".ending-chat-mode-pill").nth(modeIndex).click();
   if (modeIndex === 1) {
     const hotseatPills = page.locator(".ending-chat-hotseat-pill");
@@ -238,20 +300,18 @@ async function sendFollowup(page, outputDir, label, { modeIndex, hotseatIndex = 
     const current = await readAutomation(page);
     const modalState = current?.page?.controls?.modal_state;
     const bubbleCount = await page.locator(".ending-chat-bubble").count();
-    if (modalState) {
-      const settled = modeIndex === 1
-        ? (
-          modalState.thread_count > beforeThreads
-          || modalState.active_thread_id !== beforeActiveThreadId
-          || bubbleCount > beforeBubbleCount
-        )
-        : (
-          modalState.turn_count > beforeTurns
-          || bubbleCount > beforeBubbleCount
-        );
-      if (settled) {
-        break;
-      }
+    const settled = modeIndex === 1
+      ? (
+        modalState?.thread_count > beforeThreads
+        || modalState?.active_thread_id !== beforeActiveThreadId
+        || bubbleCount > beforeBubbleCount
+      )
+      : (
+        modalState?.turn_count > beforeTurns
+        || bubbleCount > beforeBubbleCount
+      );
+    if (settled) {
+      break;
     }
     await page.waitForTimeout(250);
   }
@@ -262,6 +322,10 @@ async function sendFollowup(page, outputDir, label, { modeIndex, hotseatIndex = 
 }
 
 async function closeModal(page) {
+  await waitForLiveEndingRoomModalReady(page, {
+    timeout: 10000,
+    label: "ending-room close modal preflight",
+  });
   await page.locator(".ending-chat-close").click();
   await page.locator(".ending-chat-modal").waitFor({ state: "hidden", timeout: 10000 });
 }

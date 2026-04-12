@@ -281,7 +281,7 @@
 
 .ending-chat-body {
   display: grid;
-  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.18fr);
+  grid-template-columns: var(--oracle-sidebar-width, 240px) minmax(0, 1fr);
   gap: 20px;
   padding: 22px 32px 32px;
   flex: 1;
@@ -315,6 +315,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 10px;
 }
@@ -323,6 +324,11 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ending-chat-panel--summary .ending-chat-panel__actions {
+  width: 100%;
 }
 
 .ending-chat-panel h3,
@@ -403,6 +409,10 @@
 .ending-chat-evidence-btn:hover {
   opacity: 1;
   background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ending-chat-epilogue-btn--mobile {
+  margin-left: auto;
 }
 
 .ending-chat-evidence-drawer {
@@ -556,6 +566,86 @@
 
 .ending-chat-participant-flag--hotseat {
   color: color-mix(in oklab, var(--color-primary) 74%, var(--text-primary));
+}
+
+/* ── D-8: Participant strip collapse ───────────────── */
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card__copy > span {
+  display: none;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card__copy > small {
+  display: none;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-metrics {
+  display: none;
+}
+
+/* Exception: the currently speaking participant always shows full details */
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card.is-current-speaker .ending-chat-participant-card__copy > span {
+  display: initial;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card.is-current-speaker .ending-chat-participant-card__copy > small {
+  display: initial;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card.is-current-speaker .ending-chat-participant-metrics {
+  display: flex;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card__avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.ending-chat-participant-strip--collapsed .ending-chat-participant-card.is-current-speaker .ending-chat-participant-card__avatar {
+  width: 42px;
+  height: 42px;
+}
+
+.ending-chat-participant-expand-btn {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+  margin-top: 4px;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ending-chat-participant-expand-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-default);
+}
+
+/* ── D-9: Mobile sidebar sheet trigger ─────────────── */
+.ending-chat-sidebar-sheet-trigger {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .ending-chat-sidebar-sheet-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--bg-surface-elevated) 90%, transparent);
+    color: var(--text-secondary);
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .ending-chat-sidebar--inline {
+    display: none;
+  }
 }
 
 .ending-chat-participant-card.is-selected {
@@ -904,6 +994,15 @@
   margin-top: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.06));
+  visibility: visible;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ending-chat-bubble:hover .ending-chat-bubble__actions,
+.ending-chat-bubble:focus-within .ending-chat-bubble__actions,
+.ending-chat-bubble:active .ending-chat-bubble__actions {
+  opacity: 1;
 }
 
 .ending-chat-bubble__actions .ending-chat-inline-button {
@@ -1401,5 +1500,10 @@
 
   .ending-chat-participant-card.is-current-speaker {
     transform: none;
+  }
+
+  .ending-chat-bubble__actions {
+    opacity: 1;
+    transition: none;
   }
 }

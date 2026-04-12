@@ -42,6 +42,8 @@ interface Props {
   participantsById: Map<string, EndingRoomParticipant>;
   speakerIndexMap: Map<string, number>;
   factionMap?: Map<string, ParticipantFaction>;
+  /** D-13: turn key of the currently speaking turn to spotlight */
+  spotlightTurnKey?: string;
   onHotseatQuote: (participantId: string, speaker: string, content: string, anchorId: string) => void;
   onFollowQuote: (anchorId: string, speaker: string, content: string) => void;
   onQuoteThread: (anchorId: string, speaker: string, content: string) => void;
@@ -65,6 +67,7 @@ export default function RoundtableTranscriptList({
   participantsById,
   speakerIndexMap,
   factionMap,
+  spotlightTurnKey,
   onHotseatQuote,
   onFollowQuote,
   onQuoteThread,
@@ -107,7 +110,7 @@ export default function RoundtableTranscriptList({
               </h3>
             )}
             <article
-              className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''}`}
+              className={`ending-chat-bubble ${turn.roleSlot === 'archivist' ? 'is-archivist' : ''} ${turn.key === activeSpeakerTurnKey ? 'is-current-speaker' : ''} ${turn.participantId === hotseatParticipantId ? 'is-hotseat-target' : ''} ${showCollapsedTurn ? 'is-collapsed' : ''} ${turn.key === spotlightTurnKey ? 'ending-chat-bubble--spotlight' : ''}`}
               style={showCollapsedTurn ? undefined : { minHeight: `${bubbleLayout?.minHeightPx ?? 0}px` }}
               data-layout-lines={bubbleLayout?.lineCount ?? undefined}
               data-layout-overflow={bubbleLayout?.overflow ? 'true' : 'false'}
