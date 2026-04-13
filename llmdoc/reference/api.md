@@ -59,6 +59,17 @@
 关键约束：
 
 - `GET /api/scenario/{scenario_id}` 会在读取前尽量收敛 stale `simulating/narrating` 状态。
+- `POST /api/scenario` 当前也接受搜索增强字段：
+  - `web_search_enabled`
+  - `web_search_provider`
+  - `web_search_api_key`
+  - `web_search_base_url`
+- 这些字段的当前口径：
+  - 只有 `web_search_enabled=true` 时才会真正参与搜索
+  - `web_search_enabled=false` 时，override 字段会被忽略
+  - `web_search_base_url` 目前只接受官方 provider endpoint，以及和服务端 `SEARXNG_URL` 完全一致的 SearXNG 基址
+  - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key
+- 搜索成功时，scenario response 会带 `web_search_context`，并持久化到 `Scenario.web_context_json`。
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
@@ -137,7 +148,7 @@
 | `GET/POST` | `/api/scenario/{scenario_id}/social/{platform}` | 生成社交文案 |
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
-| `POST` | `/api/health/test` | provider 探测与预算预检 |
+| `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
 | `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 7-key capability registry (web_search + 6 Phase 3 功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
@@ -147,6 +158,7 @@
 - provider overrides 只能通过 `POST body` 传入，不能放在社交文案 `GET query` 中。
 - `export` 通过附件下载返回 Markdown 文件。
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
+- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 per-provider 探测结果。
 
 ## Debate
 

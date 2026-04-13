@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -474,6 +474,63 @@ describe('DebateArenaView', () => {
     await user.click(quickCounterplayButton);
 
     expect(predictDebateMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps earlier live turns available as foldable history on the current phase view', async () => {
+    const user = userEvent.setup();
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      status: 'live',
+      current_phase: 'crossfire',
+      result_ready: false,
+      score: { proposition: 8, opposition: 5, audience_meter: 2 },
+      turns: [
+        {
+          id: 'turn-1',
+          sequence: 1,
+          phase: 'opening',
+          speaker_side: 'proposition',
+          speaker_name: 'Proposition',
+          content: 'Opening lead.',
+          score_delta: { proposition: 4, opposition: 0 },
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'turn-2',
+          sequence: 2,
+          phase: 'crossfire',
+          speaker_side: 'opposition',
+          speaker_name: 'Opposition',
+          content: 'Crossfire pushback.',
+          score_delta: { proposition: 0, opposition: 5 },
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    mockDebateStore.status = 'live';
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      void (window as Window & { advanceTime?: (ms: number) => Promise<void> }).advanceTime?.(2000);
+    });
+
+    const historyToggle = await screen.findByRole('button', { name: /shared\.foldable\.show_full/i });
+    const historyCard = historyToggle.closest('article');
+
+    expect(historyCard).not.toBeNull();
+    expect(within(historyCard as HTMLElement).getByText('Opening lead.')).toBeInTheDocument();
+    expect(screen.getAllByText('Crossfire pushback.').length).toBeGreaterThan(0);
+
+    await user.click(historyToggle);
+
+    expect(await screen.findByRole('button', { name: /shared\.foldable\.collapse/i })).toBeInTheDocument();
   });
 
   it('auto-expands the counterplay accordion when a counterplay plan appears after initial render', async () => {

@@ -73,6 +73,35 @@ class TestCreateScenarioWithWebSearch:
             assert scenario.web_context_json is not None
             assert "pigs fly" in scenario.web_context_json
 
+    def test_web_search_custom_provider_overrides_forwarded(self, client):
+        mock_result = WebSearchResult(
+            query="What if custom search?",
+            snippets=[WebSearchSnippet(text="override result", source_url="https://exa.ai")],
+            provider="exa",
+            timestamp="2026-04-13T12:00:00Z",
+            cached=False,
+        )
+
+        with (
+            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock, return_value=mock_result) as mock_fetch,
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "What if custom search?",
+                "web_search_enabled": True,
+                "web_search_provider": "exa",
+                "web_search_api_key": "exa-test-key",
+                "web_search_base_url": "https://api.exa.ai/search",
+            })
+
+        assert resp.status_code == 200
+        mock_fetch.assert_awaited_once_with(
+            "What if custom search?",
+            provider_override="exa",
+            api_key_override="exa-test-key",
+            base_url_override="https://api.exa.ai/search",
+        )
+
     def test_web_search_disabled_no_fetch(self, client):
         """web_search_enabled=false → fetch_web_context never called."""
         with (
@@ -82,6 +111,21 @@ class TestCreateScenarioWithWebSearch:
             resp = client.post("/api/scenario", json={
                 "question": "What if no search?",
                 "web_search_enabled": False,
+            })
+
+        assert resp.status_code == 200
+        mock_fetch.assert_not_called()
+
+    def test_web_search_disabled_ignores_invalid_override_fields(self, client):
+        with (
+            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock) as mock_fetch,
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "What if disabled ignores override?",
+                "web_search_enabled": False,
+                "web_search_provider": "tavily",
+                "web_search_base_url": "https://not-allowed.example.com/search",
             })
 
         assert resp.status_code == 200

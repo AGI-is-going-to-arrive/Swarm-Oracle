@@ -75,6 +75,35 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
+### Web Search 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_config.py -q
+
+cd ../frontend
+npm test -- --run src/pages/InputView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+VITE_ENABLE_WEB_SEARCH=true npm run build
+npm run e2e:web-search -- --url http://127.0.0.1:18928 --output-dir output/e2e/review-web-search --provider tavily
+```
+
+说明：
+
+- 这组回归当前覆盖：
+  - `tavily / exa / xai / searxng` provider dispatch
+  - request-scoped `provider / API key / base URL`
+  - 首页 `沿用服务器默认 / 自定义覆盖`
+  - frontend custom override E2E 请求体校验
+- `e2e:web-search` 当前会额外校验 `/api/scenario` 请求体里是否真的带上：
+  - `web_search_enabled`
+  - `web_search_provider`
+  - `web_search_api_key`
+  - `web_search_base_url`
+- 如果要单独做真实 provider 烟测，可在 `backend/.venv` 下直接调用 `app.services.web_context.fetch_web_context()`。
+
 ### Backend 安全审计回归
 
 ```bash

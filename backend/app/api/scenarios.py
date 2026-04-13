@@ -70,6 +70,7 @@ from app.services.llm_client import (
 )
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.vector_store import get_vector_store
+from app.services.web_context import validate_web_search_base_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
@@ -527,6 +528,25 @@ async def create_scenario(
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 
+    if not req.web_search_enabled:
+        req.web_search_provider = None
+        req.web_search_api_key = None
+        req.web_search_base_url = None
+
+    if req.web_search_base_url:
+        effective_web_search_provider = req.web_search_provider or settings.WEB_SEARCH_PROVIDER
+        validated_search_url = validate_web_search_base_url(
+            effective_web_search_provider,
+            req.web_search_base_url,
+        )
+        if validated_search_url is None:
+            raise api_error(
+                400,
+                "WEB_SEARCH_BASE_URL_NOT_ALLOWED",
+                "Provided web_search_base_url is not in the allowed provider list",
+            )
+        req.web_search_base_url = validated_search_url
+
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
     if req.continuity_overrides and not effective_user_id:
         raise api_error(
@@ -588,12 +608,17 @@ async def create_scenario(
         },
     )
     # Web Search Enhancement: fetch context synchronously before response.
-    # Bounded by WEB_SEARCH_TIMEOUT_SECONDS (default 8s). Failure never blocks.
+    # Bounded by provider timeout settings. Failure never blocks scenario creation.
     web_context_json: str | None = None
     if req.web_search_enabled:
         try:
             from app.services.web_context import fetch_web_context
-            web_result = await fetch_web_context(question)
+            web_result = await fetch_web_context(
+                question,
+                provider_override=req.web_search_provider,
+                api_key_override=req.web_search_api_key,
+                base_url_override=req.web_search_base_url,
+            )
             if web_result is not None:
                 web_context_json = web_result.to_json()
         except Exception as exc:

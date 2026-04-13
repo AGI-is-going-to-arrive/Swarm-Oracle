@@ -15,15 +15,19 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 ### 主模式
 
-- 首页创建 scenario，支持 agent/rounds、BYOK、玩法档位与 quick starts。
+- 首页创建 scenario，支持 agent/rounds、BYOK、玩法档位、quick starts，以及 opt-in 的搜索增强推演。
+- 搜索增强当前在首页有两档入口：
+  - `沿用服务器默认`：直接复用服务端默认 provider
+  - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
-- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import。
+- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。
 
 ### Debate Arena
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。
+- 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉。
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。

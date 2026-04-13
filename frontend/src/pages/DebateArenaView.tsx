@@ -203,10 +203,12 @@ export function DebateArenaView() {
   );
 
   const currentPhase = visibleTurns.at(-1)?.phase ?? debate?.current_phase ?? 'opening';
-  const stageTurns = useMemo(
-    () => visibleTurns.filter((turn) => turn.phase === selectedPhase),
-    [selectedPhase, visibleTurns],
-  );
+  const stageTurns = useMemo(() => {
+    if (selectedPhase === currentPhase) {
+      return visibleTurns;
+    }
+    return visibleTurns.filter((turn) => turn.phase === selectedPhase);
+  }, [currentPhase, selectedPhase, visibleTurns]);
   const latestVisibleTurn = visibleTurns.at(-1) ?? null;
   const latestStageTurn = stageTurns.at(-1) ?? null;
   const phaseUnlockCount = unlockedPhases.length;

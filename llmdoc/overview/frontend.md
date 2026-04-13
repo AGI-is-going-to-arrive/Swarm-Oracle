@@ -19,7 +19,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、identity continuity preflight / confirm dialog |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、`沿用服务器默认 / 自定义覆盖` 切换、identity continuity preflight / confirm dialog |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口 |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -133,6 +133,7 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
+| `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 
@@ -141,6 +142,12 @@
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
 - InputView 当前会把 continuity 确认结果按 request-scoped `continuityOverrides` 传给 `POST /api/scenario`，只影响这次启动，不改本地缓存身份。
+- InputView 的搜索增强当前口径：
+  - `VITE_ENABLE_WEB_SEARCH=true` 时就显示 toggle，不再要求服务端默认搜索已就绪
+  - `GET /api/capabilities` 只决定 `沿用服务器默认` 是否可选，不决定整个 section 是否显示
+  - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
+  - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
+  - 输入搜索 API key / base URL 时不再反复重打 capability 探针
 - `SimulationView` 的 automation payload 当前已补：
   - `thinkingAgentCount`
   - `thinkingAgents`
@@ -169,6 +176,7 @@
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
+- `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`

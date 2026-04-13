@@ -36,6 +36,7 @@
 | Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
+| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
@@ -157,6 +158,13 @@
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
+- 搜索增强当前走 `web_context.py`：
+  - provider 支持 `tavily / exa / xai / searxng`
+  - `POST /api/scenario` 可传 request-scoped `web_search_provider / web_search_api_key / web_search_base_url`
+  - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
+  - custom provider override 不会再复用“另一个 provider”的服务端默认 key
+  - `xai` 走 Responses API + `web_search` tool，并使用独立 `XAI_WEB_SEARCH_TIMEOUT_SECONDS`
+  - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
 - Debate argument map 当前走两层抽取：
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类

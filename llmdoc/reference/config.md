@@ -166,11 +166,13 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_WEB_SEARCH` | `false` | 总开关，opt-in |
-| `WEB_SEARCH_PROVIDER` | `tavily` | 搜索提供商：`tavily` / `exa` / `searxng` / `brave` / `native` |
-| `WEB_SEARCH_API_KEY` | `""` | 搜索 API Key（`searxng` 和 `native` 模式不需要） |
-| `SEARXNG_URL` | `http://localhost:8888` | SearXNG 实例地址（仅 `WEB_SEARCH_PROVIDER=searxng` 时使用） |
+| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认搜索 provider：`tavily` / `exa` / `xai` / `searxng` |
+| `WEB_SEARCH_API_KEY` | `""` | 服务端默认搜索 API Key（`searxng` 不需要） |
+| `XAI_WEB_SEARCH_MODEL` | `grok-4.20-reasoning` | `xai` provider 使用的模型 |
+| `XAI_WEB_SEARCH_TIMEOUT_SECONDS` | `45` | `xai` provider 独立超时 |
+| `SEARXNG_URL` | `http://localhost:8888` | SearXNG 基址（`WEB_SEARCH_PROVIDER=searxng` 时使用） |
 | `WEB_SEARCH_MAX_RESULTS` | `5` | 每次搜索最大 snippet 数 |
-| `WEB_SEARCH_TIMEOUT_SECONDS` | `8` | 单次搜索超时 |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | `8` | `tavily / exa / searxng` 单次搜索超时 |
 | `WEB_SEARCH_CACHE_TTL_SECONDS` | `300` | 搜索结果缓存 TTL（5 分钟） |
 
 前端环境变量：
@@ -183,7 +185,17 @@
 
 - 搜索在场景创建时执行一次（Round 1 之前），结果存入 `Scenario.web_context_json`。
 - 搜索失败不阻断推演（graceful degradation）。
-- 前端 toggle 为 opt-in（默认关闭），仅当后端 `ENABLE_WEB_SEARCH=true` 且 `GET /api/capabilities` 返回 `web_search.server_enabled=true` 时显示。注意：该字段报告的是服务端全局配置（`scope: "server"`），不是当前 BYOK provider 的搜索能力。Per-provider 探测属于 V2。
+- 前端 toggle 为 opt-in（默认关闭）。当前只要 `VITE_ENABLE_WEB_SEARCH=true` 就会显示，不再要求服务端默认搜索已就绪。
+- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
+  - ready 时，首页可选 `沿用服务器默认`
+  - not ready 时，首页仍可选 `自定义覆盖`
+- 首页搜索增强当前有两档：
+  - `沿用服务器默认`：只发送 `web_search_enabled=true`
+  - `自定义覆盖`：额外发送 `web_search_provider / web_search_api_key / web_search_base_url`
+- request-scoped override 当前约束：
+  - `web_search_enabled=false` 时，override 字段会被忽略
+  - 如果 custom override 的 provider 与服务端默认 provider 不同，留空不会复用服务端默认 key，需要显式填写该 provider 的 key
+  - `web_search_base_url` 目前只接受官方 provider endpoint，以及和 `SEARXNG_URL` 完全一致的 SearXNG 基址
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## Phase 3 功能开关

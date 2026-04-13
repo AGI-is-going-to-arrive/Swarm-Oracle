@@ -23,13 +23,19 @@ import pytest
 
 from app.services.web_context import (
     WebSearchResult,
+    WebSearchRequestConfig,
     WebSearchSnippet,
+    _cache_key,
+    _resolve_request_config,
+    _search_exa,
+    _search_xai,
     _sanitize_url,
     _search_tavily,
     _search_searxng,
     clear_cache,
     fetch_web_context,
     format_context_block,
+    validate_web_search_base_url,
 )
 
 
@@ -179,6 +185,220 @@ class TestSearxngProvider:
 
         assert len(snippets) == 1
         assert snippets[0].source_url == "https://c.com"
+
+
+class TestRequestConfig:
+    def test_custom_provider_without_custom_key_does_not_reuse_server_key(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "server-tavily-key")
+
+        config = _resolve_request_config(
+            provider_override="exa",
+            api_key_override=None,
+            base_url_override="https://api.exa.ai/search",
+        )
+
+        assert config.provider == "exa"
+        assert config.api_key == ""
+        assert config.base_url == "https://api.exa.ai/search"
+
+    def test_default_provider_reuses_server_key(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "server-tavily-key")
+
+        config = _resolve_request_config()
+
+        assert config.provider == "tavily"
+        assert config.api_key == "server-tavily-key"
+        assert config.base_url == "https://api.tavily.com/search"
+
+    def test_cache_key_changes_when_xai_model_changes(self):
+        key_a = _cache_key(
+            "query",
+            _resolve_request_config(
+                provider_override="xai",
+                api_key_override="key",
+                base_url_override="https://api.x.ai/v1/responses",
+            ),
+        )
+        key_b = _cache_key(
+            "query",
+            WebSearchRequestConfig(
+                provider="xai",
+                api_key="key",
+                base_url="https://api.x.ai/v1/responses",
+                model="grok-4-fast-reasoning",
+                timeout_seconds=45.0,
+            ),
+        )
+        assert key_a != key_b
+
+
+class TestWebSearchBaseUrlValidation:
+    def test_searxng_only_accepts_configured_base_url(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888")
+
+        assert validate_web_search_base_url("searxng", "http://localhost:8888") == "http://localhost:8888"
+        assert validate_web_search_base_url("searxng", "http://localhost:9999") is None
+        assert validate_web_search_base_url("searxng", "http://localhost:8888/custom") is None
+
+    def test_official_providers_accept_matching_hosts(self):
+        assert validate_web_search_base_url("tavily", "https://api.tavily.com/search") == "https://api.tavily.com/search"
+        assert validate_web_search_base_url("exa", "https://api.exa.ai/search") == "https://api.exa.ai/search"
+        assert validate_web_search_base_url("xai", "https://api.x.ai/v1/responses") == "https://api.x.ai/v1/responses"
+
+
+class TestExaProvider:
+    @pytest.mark.asyncio
+    async def test_formats_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "exa-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "requestId": "req-1",
+                "results": [
+                    {
+                        "url": "https://exa.ai/post-1",
+                        "title": "Post 1",
+                        "text": None,
+                        "highlights": ["Highlight A", "Highlight B"],
+                    },
+                    {
+                        "url": "https://exa.ai/post-2",
+                        "title": "Post 2",
+                        "summary": "Summary C",
+                    },
+                ],
+            },
+            request=httpx.Request("POST", "https://api.exa.ai/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_exa("test query")
+
+        assert len(snippets) == 2
+        assert snippets[0].source_url == "https://exa.ai/post-1"
+        assert snippets[0].text == "Highlight A\n\nHighlight B"
+        assert snippets[1].source_url == "https://exa.ai/post-2"
+        assert snippets[1].text == "Summary C"
+
+    @pytest.mark.asyncio
+    async def test_no_api_key(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+
+        snippets = await _search_exa("test")
+        assert snippets == []
+
+
+class TestXaiProvider:
+    @pytest.mark.asyncio
+    async def test_formats_structured_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+        monkeypatch.setattr("app.services.web_context.settings.XAI_WEB_SEARCH_MODEL", "grok-4.20-reasoning")
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "snippets": [
+                                            {
+                                                "text": "Snippet A",
+                                                "source_url": "https://x.ai/source-a",
+                                            },
+                                            {
+                                                "text": "Snippet B",
+                                                "source_url": "https://x.ai/source-b",
+                                            },
+                                        ]
+                                    }
+                                ),
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://api.x.ai/v1/responses"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_xai("test query")
+
+        assert len(snippets) == 2
+        assert snippets[0].text == "Snippet A"
+        assert snippets[0].source_url == "https://x.ai/source-a"
+        assert snippets[1].text == "Snippet B"
+
+    @pytest.mark.asyncio
+    async def test_no_api_key(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+
+        snippets = await _search_xai("test")
+        assert snippets == []
+
+    @pytest.mark.asyncio
+    async def test_uses_provider_specific_timeout_setting(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 1)
+        monkeypatch.setattr("app.services.web_context.settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS", 45.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {"snippets": [{"text": "Snippet", "source_url": "https://x.ai/source"}]}
+                                ),
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://api.x.ai/v1/responses"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_xai("test query")
+
+        assert len(snippets) == 1
+        MockClient.assert_called_once_with(timeout=45.0)
 
 
 # ── format_context_block ────────────────────────────────

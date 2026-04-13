@@ -190,6 +190,9 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
+  webSearchProvider?: 'tavily' | 'exa' | 'xai' | 'searxng';
+  webSearchApiKey?: string;
+  webSearchBaseUrl?: string;
   customAgentIdentityIds?: string[];
   continuityOverrides?: ContinuityOverride[];
 }
@@ -266,6 +269,9 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     forkDetectorActiveBranchLimit,
     visualizationEnabled,
     webSearchEnabled,
+    webSearchProvider,
+    webSearchApiKey,
+    webSearchBaseUrl,
     userId,
     disableUserQuota,
     customAgentIdentityIds,
@@ -290,6 +296,9 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
     ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
     ...(webSearchEnabled && { web_search_enabled: true }),
+    ...(webSearchEnabled && webSearchProvider && { web_search_provider: webSearchProvider }),
+    ...(webSearchEnabled && webSearchApiKey && { web_search_api_key: webSearchApiKey }),
+    ...(webSearchEnabled && webSearchBaseUrl && { web_search_base_url: webSearchBaseUrl }),
     ...(userId && { user_id: userId }),
     ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
     ...(customAgentIdentityIds?.length && { custom_agent_identity_ids: customAgentIdentityIds }),

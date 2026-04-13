@@ -62,8 +62,10 @@ class Settings(BaseSettings):
 
     # ── Web Search Enhancement ────────────────────────────
     ENABLE_WEB_SEARCH: bool = False
-    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | searxng | brave | native
+    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | xai | searxng | brave | native
     WEB_SEARCH_API_KEY: str = ""
+    XAI_WEB_SEARCH_MODEL: str = "grok-4.20-reasoning"
+    XAI_WEB_SEARCH_TIMEOUT_SECONDS: float = 45.0
     WEB_SEARCH_MAX_RESULTS: int = 5
     WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
     WEB_SEARCH_CACHE_TTL_SECONDS: int = 300

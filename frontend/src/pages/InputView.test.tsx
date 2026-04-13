@@ -943,7 +943,7 @@ describe('InputView campaign progress', () => {
     });
   });
 
-  it('hides web search toggle when server hint says server_enabled=false', async () => {
+  it('keeps web search toggle visible when server hint says server_enabled=false', async () => {
     getCapabilitiesMock.mockResolvedValue({
       web_search: { scope: 'server', server_enabled: false, method: 'none', provider: null },
     });
@@ -956,7 +956,7 @@ describe('InputView campaign progress', () => {
 
     // Give time for healthCheck to resolve
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    expect(screen.queryByText('home.web_search_toggle')).not.toBeInTheDocument();
+    expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
   });
 
   it('hides web search toggle when VITE flag is disabled', async () => {
@@ -1011,6 +1011,146 @@ describe('InputView campaign progress', () => {
         }),
       );
     });
+
+    const lastCall = startSimulationMock.mock.calls[
+      startSimulationMock.mock.calls.length - 1
+    ] as unknown as [{
+      webSearchProvider?: string;
+      webSearchApiKey?: string;
+      webSearchBaseUrl?: string;
+    }] | undefined;
+    const payload = lastCall?.[0];
+    expect(payload?.webSearchProvider).toBeUndefined();
+    expect(payload?.webSearchApiKey).toBeUndefined();
+    expect(payload?.webSearchBaseUrl).toBeUndefined();
+  });
+
+  it('defaults to server mode and hides override fields until custom override is selected', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+
+    expect(screen.getByRole('button', { name: /home\.web_search_mode_server/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByLabelText('home.web_search_provider_label')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('home.web_search_api_key_label')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('home.web_search_base_url_label')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
+
+    expect(screen.getByLabelText('home.web_search_provider_label')).toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_api_key_label')).toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_base_url_label')).toBeInTheDocument();
+  });
+
+  it('falls back to custom override when server default is unavailable', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: false, method: 'none', provider: null },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+
+    expect(screen.getByRole('button', { name: /home\.web_search_mode_server/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /home\.web_search_mode_custom/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('home.web_search_provider_label')).toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_api_key_label')).toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_base_url_label')).toBeInTheDocument();
+  });
+
+  it('forwards web search provider overrides when custom fields are filled', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: false, method: 'none', provider: null },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+
+    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
+    await user.selectOptions(screen.getByLabelText('home.web_search_provider_label'), 'xai');
+    await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'xai-test-key');
+    await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://api.x.ai/v1/responses');
+    await user.type(screen.getAllByRole('textbox')[0], 'What if custom search?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if custom search?',
+          webSearchEnabled: true,
+          webSearchProvider: 'xai',
+          webSearchApiKey: 'xai-test-key',
+          webSearchBaseUrl: 'https://api.x.ai/v1/responses',
+        }),
+      );
+    });
+  });
+
+  it('does not refetch server capability while typing custom override fields', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const initialCalls = getCapabilitiesMock.mock.calls.length;
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+
+    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
+    await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'custom-key');
+    await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://api.tavily.com/search');
+
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(getCapabilitiesMock.mock.calls.length).toBe(initialCalls);
   });
 
   it('sends webSearchEnabled=false when toggle is unchecked', async () => {

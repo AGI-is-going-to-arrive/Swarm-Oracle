@@ -140,6 +140,16 @@ export function InputView() {
     handleTestConnection,
     webSearchEnabled,
     setWebSearchEnabled,
+    webSearchServerEnabled,
+    webSearchServerProvider,
+    webSearchMode,
+    setWebSearchMode,
+    webSearchProvider,
+    setWebSearchProvider,
+    webSearchApiKey,
+    setWebSearchApiKey,
+    webSearchBaseUrl,
+    setWebSearchBaseUrl,
     webSearchAvailable,
     webSearchStatus,
     setWebSearchStatus,
@@ -220,6 +230,20 @@ export function InputView() {
       exceedsRounds: rounds > recommendation.rounds_max,
     };
   }, [numAgents, probeResult, rounds]);
+  const webSearchBaseUrlPlaceholder = useMemo(() => {
+    switch (webSearchProvider) {
+      case 'exa':
+        return 'https://api.exa.ai/search';
+      case 'xai':
+        return 'https://api.x.ai/v1/responses';
+      case 'searxng':
+        return 'http://localhost:8888';
+      case 'tavily':
+      default:
+        return 'https://api.tavily.com/search';
+    }
+  }, [webSearchProvider]);
+  const webSearchUsesCustomOverride = webSearchEnabled && webSearchMode === 'custom_override';
   const byokBudgetRecommendation = useMemo(() => {
     if (byokRequestsPerMinute == null && byokTokensPerMinute == null) return null;
 
@@ -478,7 +502,10 @@ export function InputView() {
       visualizationEnabled: launch.nextVisualization,
       userId: directorIdentity.userId,
       disableUserQuota,
-      webSearchEnabled: webSearchEnabled && webSearchAvailable,
+      webSearchEnabled,
+      webSearchProvider: webSearchUsesCustomOverride ? webSearchProvider : undefined,
+      webSearchApiKey: webSearchUsesCustomOverride && webSearchApiKey.trim() ? webSearchApiKey.trim() : undefined,
+      webSearchBaseUrl: webSearchUsesCustomOverride && webSearchBaseUrl.trim() ? webSearchBaseUrl.trim() : undefined,
       continuityOverrides,
       ...buildScenarioRuntimePresetOptions(runtimePreset),
       ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
@@ -494,8 +521,11 @@ export function InputView() {
     llmModel,
     reasoningEffort,
     runtimePreset,
-    webSearchAvailable,
+    webSearchApiKey,
+    webSearchBaseUrl,
     webSearchEnabled,
+    webSearchProvider,
+    webSearchUsesCustomOverride,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -512,7 +542,7 @@ export function InputView() {
   ) => {
     setIsSubmitting(true);
     setContinuityError(null);
-    const wantsSearch = webSearchEnabled && webSearchAvailable;
+    const wantsSearch = webSearchEnabled;
     if (wantsSearch) setWebSearchStatus('searching');
     else setWebSearchStatus('skipped');
     try {
@@ -533,7 +563,6 @@ export function InputView() {
     navigate,
     setWebSearchStatus,
     startSimulation,
-    webSearchAvailable,
     webSearchEnabled,
   ]);
 
@@ -723,6 +752,16 @@ export function InputView() {
         byok_requests_per_minute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : null,
         byok_tokens_per_minute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : null,
         byok_disable_user_quota: disableUserQuota,
+        web_search: {
+          enabled: webSearchEnabled,
+          mode: webSearchMode,
+          server_enabled: webSearchServerEnabled,
+          server_provider: webSearchServerProvider,
+          provider: webSearchUsesCustomOverride ? webSearchProvider : null,
+          base_url_overridden: webSearchUsesCustomOverride && webSearchBaseUrl.trim().length > 0,
+          api_key_overridden: webSearchUsesCustomOverride && webSearchApiKey.trim().length > 0,
+          status: webSearchStatus,
+        },
         byok_probe: probeResult
           ? {
               estimated_parallelism: probeResult.estimated_parallelism,
@@ -846,6 +885,15 @@ export function InputView() {
     isSimulationBudgetBlocked,
     disableUserQuota,
     testError,
+    webSearchApiKey,
+    webSearchBaseUrl,
+    webSearchEnabled,
+    webSearchMode,
+    webSearchProvider,
+    webSearchServerEnabled,
+    webSearchServerProvider,
+    webSearchStatus,
+    webSearchUsesCustomOverride,
   ]);
 
   return (
@@ -989,11 +1037,17 @@ export function InputView() {
             {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
             {webSearchAvailable && (
               <div className="web-search-section">
-                <label className="web-search-toggle">
+                <label className={`web-search-toggle ${webSearchEnabled ? 'web-search-toggle--active' : ''}`}>
                   <input
                     type="checkbox"
                     checked={webSearchEnabled}
-                    onChange={(e) => setWebSearchEnabled(e.target.checked)}
+                    onChange={(e) => {
+                      const nextChecked = e.target.checked;
+                      setWebSearchEnabled(nextChecked);
+                      if (nextChecked && !webSearchServerEnabled) {
+                        setWebSearchMode('custom_override');
+                      }
+                    }}
                     disabled={isSubmitting}
                   />
                   <span className="web-search-toggle__copy">
@@ -1009,6 +1063,113 @@ export function InputView() {
                   >
                     {t(`home.web_search_status_${webSearchStatus}`)}
                   </span>
+                )}
+                {webSearchEnabled && (
+                  <div className="web-search-card">
+                    <div className="web-search-card__header">
+                      <div className="web-search-fields__meta">
+                        <span className={`web-search-provider-chip ${webSearchServerEnabled ? 'web-search-provider-chip--ready' : 'web-search-provider-chip--warning'}`}>
+                          {webSearchServerEnabled
+                            ? t('home.web_search_server_ready')
+                            : t('home.web_search_server_missing')}
+                        </span>
+                        {webSearchServerProvider && (
+                          <span className="web-search-provider-chip">
+                            {t('home.web_search_server_default', { provider: webSearchServerProvider })}
+                          </span>
+                        )}
+                      </div>
+                      <div className="web-search-mode-switch" role="group" aria-label={t('home.web_search_mode_label')}>
+                        <button
+                          type="button"
+                          className={`web-search-mode-btn ${webSearchMode === 'server_default' ? 'web-search-mode-btn--active' : ''}`}
+                          aria-pressed={webSearchMode === 'server_default'}
+                          onClick={() => setWebSearchMode('server_default')}
+                          disabled={isSubmitting || !webSearchServerEnabled}
+                        >
+                          <span className="web-search-mode-btn__title">{t('home.web_search_mode_server')}</span>
+                          <span className="web-search-mode-btn__hint">
+                            {webSearchServerEnabled
+                              ? t('home.web_search_mode_server_hint', { provider: webSearchServerProvider ?? 'server' })
+                              : t('home.web_search_mode_server_unavailable')}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`web-search-mode-btn ${webSearchMode === 'custom_override' ? 'web-search-mode-btn--active' : ''}`}
+                          aria-pressed={webSearchMode === 'custom_override'}
+                          onClick={() => setWebSearchMode('custom_override')}
+                          disabled={isSubmitting}
+                        >
+                          <span className="web-search-mode-btn__title">{t('home.web_search_mode_custom')}</span>
+                          <span className="web-search-mode-btn__hint">{t('home.web_search_mode_custom_hint')}</span>
+                        </button>
+                      </div>
+                    </div>
+                    {webSearchMode === 'server_default' ? (
+                      <div className="web-search-summary" role="note">
+                        <strong>{t('home.web_search_mode_server')}</strong>
+                        <span>
+                          {webSearchServerEnabled
+                            ? t('home.web_search_server_summary', { provider: webSearchServerProvider ?? 'server' })
+                            : t('home.web_search_mode_server_unavailable')}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="web-search-fields">
+                        <div className="web-search-grid">
+                          <div className="byok-field web-search-field">
+                            <label className="byok-label" htmlFor="web-search-provider">
+                              {t('home.web_search_provider_label')}
+                            </label>
+                            <select
+                              id="web-search-provider"
+                              className="input byok-input web-search-select"
+                              value={webSearchProvider}
+                              onChange={(e) => setWebSearchProvider(e.target.value as 'tavily' | 'exa' | 'xai' | 'searxng')}
+                              disabled={isSubmitting}
+                            >
+                              <option value="tavily">Tavily</option>
+                              <option value="exa">Exa</option>
+                              <option value="xai">xAI</option>
+                              <option value="searxng">SearXNG</option>
+                            </select>
+                            <span className="web-search-field-help">{t('home.web_search_provider_hint')}</span>
+                          </div>
+                          <div className="byok-field web-search-field">
+                            <label className="byok-label" htmlFor="web-search-api-key">
+                              {t('home.web_search_api_key_label')}
+                            </label>
+                            <input
+                              id="web-search-api-key"
+                              type="password"
+                              className="input byok-input"
+                              value={webSearchApiKey}
+                              onChange={(e) => setWebSearchApiKey(e.target.value)}
+                              placeholder={t('home.web_search_api_key_placeholder')}
+                              disabled={isSubmitting}
+                            />
+                            <span className="web-search-field-help">{t('home.web_search_api_key_hint')}</span>
+                          </div>
+                          <div className="byok-field web-search-field web-search-field--full">
+                            <label className="byok-label" htmlFor="web-search-base-url">
+                              {t('home.web_search_base_url_label')}
+                            </label>
+                            <input
+                              id="web-search-base-url"
+                              type="url"
+                              className="input byok-input"
+                              value={webSearchBaseUrl}
+                              onChange={(e) => setWebSearchBaseUrl(e.target.value)}
+                              placeholder={webSearchBaseUrlPlaceholder}
+                              disabled={isSubmitting}
+                            />
+                            <span className="web-search-field-help">{t('home.web_search_base_url_hint')}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}

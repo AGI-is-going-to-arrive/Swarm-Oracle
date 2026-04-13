@@ -84,6 +84,9 @@ class CreateScenarioRequest(BaseModel):
     visualization_enabled: bool | None = None  # Enable pixel theater mode
     # Web Search Enhancement: opt-in per-scenario
     web_search_enabled: bool = False  # Request web search before simulation (default off)
+    web_search_provider: str | None = None
+    web_search_api_key: str | None = None
+    web_search_base_url: str | None = None
     # Phase 3 F3: Custom agent identities to include in simulation
     custom_agent_identity_ids: list[str] | None = None
     continuity_overrides: list["ContinuityOverrideRequest"] | None = None
@@ -115,13 +118,29 @@ class CreateScenarioRequest(BaseModel):
             raise ValueError("question too long (max 1000 chars)")
         return normalized
 
-    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @field_validator(
+        "llm_api_key",
+        "llm_base_url",
+        "llm_model",
+        "web_search_api_key",
+        "web_search_base_url",
+    )
     @classmethod
     def normalize_optional_byok(cls, v: str | None) -> str | None:
         if v is None:
             return None
         cleaned = v.strip()
         return cleaned or None
+
+    @field_validator("web_search_provider")
+    @classmethod
+    def validate_web_search_provider(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip().lower()
+        if normalized not in {"tavily", "exa", "xai", "searxng"}:
+            raise ValueError("web_search_provider must be one of tavily, exa, xai, searxng")
+        return normalized
 
     @field_validator("user_id")
     @classmethod
