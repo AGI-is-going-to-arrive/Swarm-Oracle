@@ -29,6 +29,11 @@ const BROWSER_LAUNCH_OPTIONS = {
   args: ["--use-gl=angle", "--use-angle=swiftshader"],
 };
 
+// Lifecycle captures are best-effort evidence only. Keep the budget short so
+// mobile follow-up validation can quickly fall back to API-visible checks.
+const OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS = 12000;
+const OPTIONAL_EPILOGUE_CAPTURE_TIMEOUT_MS = 15000;
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -224,7 +229,13 @@ async function findScenarioIds(frontendUrl) {
   const singleCandidates = [];
   for (const scenario of list.scenarios ?? []) {
     const detail = await fetchJson(`${backendUrl}/api/scenario/${scenario.id}`);
-    const branchCount = Array.isArray(detail.branches) ? detail.branches.length : 0;
+    const branches = Array.isArray(detail.branches) ? detail.branches : [];
+    const branchCount = branches.length;
+    const allBranchesCompleted = branchCount > 0
+      && branches.every((branch) => branch?.status === "COMPLETED");
+    if (!allBranchesCompleted) {
+      continue;
+    }
     const candidate = {
       id: detail.id,
       branchCount,
@@ -238,12 +249,12 @@ async function findScenarioIds(frontendUrl) {
     }
   }
   multiCandidates.sort((left, right) => {
-    if (right.branchCount !== left.branchCount) {
-      return right.branchCount - left.branchCount;
+    if (right.createdAt !== left.createdAt) {
+      return right.createdAt.localeCompare(left.createdAt);
     }
-    return left.createdAt.localeCompare(right.createdAt);
+    return right.branchCount - left.branchCount;
   });
-  singleCandidates.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  singleCandidates.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const multiId = multiCandidates[0]?.id ?? null;
   const singleId = singleCandidates[0]?.id ?? null;
   if (!multiId || !singleId) {
@@ -341,6 +352,27 @@ async function captureStreamLifecycle(page, {
 
 function hasReachedCommittedTurnDelta(modalState, beforeModalState, minimumDelta) {
   return (modalState?.turn_count ?? 0) >= ((beforeModalState?.turn_count ?? 0) + minimumDelta);
+}
+
+function isFollowupCommitCandidate(modalState, beforeModalState, {
+  interactionMode,
+  expectedThreadId = null,
+  minimumTurnDelta = 0,
+  minimumTurnCount = 0,
+  requireAnchorIds = false,
+} = {}) {
+  if (!modalState) return false;
+  if (interactionMode && modalState.interaction_mode !== interactionMode) return false;
+  if (expectedThreadId && modalState.active_thread_id !== expectedThreadId) return false;
+  if ((modalState.pending_draft_count ?? 0) !== 0) return false;
+  if (requireAnchorIds && (modalState.question_anchor_ids?.length ?? 0) === 0) return false;
+  if (minimumTurnDelta > 0 && !hasReachedCommittedTurnDelta(modalState, beforeModalState, minimumTurnDelta)) {
+    return false;
+  }
+  if (minimumTurnCount > 0 && (modalState.turn_count ?? 0) < minimumTurnCount) {
+    return false;
+  }
+  return true;
 }
 
 async function armClipboardCapture(page) {
@@ -559,7 +591,7 @@ async function waitForLiveEndingRoomVisible(page, {
       timeout,
     );
   } catch (error) {
-    if (!expectedRoomId && !expectedRoomType) throw error;
+    if (expectedRoomId || !expectedRoomType) throw error;
     console.warn(`[ending-room] ${label} fell back to any ready room: ${error instanceof Error ? error.message : String(error)}`);
     return waitFor(
       page,
@@ -635,6 +667,166 @@ async function waitForModalSettled(page, label, timeout = 35000) {
   );
 }
 
+function buildFollowupExpectations(beforeModalState, apiPayload) {
+  const followupTurns = Array.isArray(apiPayload?.turns) ? apiPayload.turns : [];
+  const userTurns = followupTurns.filter((turn) => turn?.source === "user_turn");
+  const assistantTurns = followupTurns.filter((turn) => turn?.source !== "user_turn");
+  const expectedAssistantTurnCount = Math.max(
+    assistantTurns.length,
+    userTurns.length > 0 ? 1 : 0,
+  );
+  const expectedThreadId = apiPayload?.thread_id ?? beforeModalState?.active_thread_id ?? null;
+  const isNewThread = Boolean(
+    expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id,
+  );
+  const expectedTurnDelta = userTurns.length + expectedAssistantTurnCount;
+  const expectedTurnCount = isNewThread
+    ? expectedTurnDelta
+    : Math.max(
+      (beforeModalState?.turn_count ?? 0) + expectedTurnDelta,
+      expectedTurnDelta,
+    );
+  const expectedInteractionMode = assistantTurns.at(-1)?.interaction_mode
+    ?? followupTurns.at(-1)?.interaction_mode
+    ?? null;
+  const expectedThreadCount = isNewThread
+    ? (beforeModalState?.thread_count ?? 0) + 1
+    : (beforeModalState?.thread_count ?? 0);
+  const expectedSnapshotTurnCount = expectedTurnCount;
+  const expectedQuestionAnchorIds = followupTurns.find(
+    (turn) => Array.isArray(turn?.question_anchor_ids_json) && turn.question_anchor_ids_json.length > 0,
+  )?.question_anchor_ids_json ?? null;
+
+  return {
+    assistantTurns,
+    expectedAssistantTurnCount,
+    expectedThreadId,
+    expectedTurnCount,
+    expectedInteractionMode,
+    expectedThreadCount,
+    expectedSnapshotTurnCount,
+    expectedQuestionAnchorIds,
+    visibilityNeedles: buildFollowupVisibilityNeedles(apiPayload),
+  };
+}
+
+function isFollowupModalStateSatisfied(modalState, {
+  roomId = null,
+  expectedThreadId = null,
+  expectedInteractionMode = null,
+  expectedTurnCount = 0,
+  expectedThreadCount = 0,
+  expectedQuestionAnchorIds = null,
+} = {}) {
+  if (!modalState?.room_id) return false;
+  if (roomId && modalState.room_id !== roomId) return false;
+  if (expectedThreadId && modalState.active_thread_id !== expectedThreadId) return false;
+  if (expectedInteractionMode && modalState.interaction_mode !== expectedInteractionMode) return false;
+  const modalQuestionAnchorIds = modalState.question_anchor_ids ?? modalState.thread_question_anchor_ids_json ?? null;
+  if (expectedQuestionAnchorIds && !anchorIdsEqual(modalQuestionAnchorIds, expectedQuestionAnchorIds)) return false;
+  if ((modalState.pending_draft_count ?? 0) > 0) return false;
+  if (expectedTurnCount > 0 && (modalState.turn_count ?? 0) < expectedTurnCount) return false;
+  if (expectedThreadCount > 0 && (modalState.thread_count ?? 0) < expectedThreadCount) return false;
+  return true;
+}
+
+async function waitForExpectedFollowupSettled(page, {
+  label,
+  frontendUrl = null,
+  roomId,
+  expectedThreadId = null,
+  expectedInteractionMode = null,
+  expectedTurnCount = 0,
+  expectedThreadCount = 0,
+  expectedSnapshotTurnCount = 0,
+  expectedAssistantTurnCount = 0,
+  expectedQuestionAnchorIds = null,
+  timeout = 15000,
+}) {
+  return waitFor(
+    page,
+    async () => {
+      const current = await getAutomationState(page);
+      const modalState = current?.page?.controls?.modal_state;
+      if (modalState?.room_id) {
+        if (roomId && modalState.room_id !== roomId) return null;
+        if (modalState.sending) return null;
+        if ((modalState.pending_draft_count ?? 0) > 0) return null;
+        if (expectedThreadId && modalState.active_thread_id && modalState.active_thread_id !== expectedThreadId) return null;
+        if (expectedInteractionMode && modalState.interaction_mode && modalState.interaction_mode !== expectedInteractionMode) return null;
+        const modalQuestionAnchorIds = modalState.question_anchor_ids ?? modalState.thread_question_anchor_ids_json ?? null;
+        if (expectedQuestionAnchorIds && modalQuestionAnchorIds && !anchorIdsEqual(modalQuestionAnchorIds, expectedQuestionAnchorIds)) {
+          return null;
+        }
+        const hasTurnProgress = expectedTurnCount <= 0 || (modalState.turn_count ?? 0) >= expectedTurnCount;
+        const hasThreadProgress = expectedThreadCount <= 0 || (modalState.thread_count ?? 0) >= expectedThreadCount;
+        if (hasTurnProgress && hasThreadProgress) {
+          return current;
+        }
+      }
+
+      if (!frontendUrl || !roomId) return null;
+
+      let snapshot = null;
+      try {
+        snapshot = await fetchJson(`${resolveBackendUrl(frontendUrl)}/api/ending-room/${roomId}`);
+      } catch {
+        snapshot = null;
+      }
+      if (!snapshot) return null;
+
+      const threadExists = !expectedThreadId || (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
+      if (!threadExists) return null;
+
+      const threadTurns = (snapshot.turns ?? []).filter((turn) => !expectedThreadId || turn?.thread_id === expectedThreadId);
+      const assistantThreadTurns = threadTurns.filter((turn) => turn?.source !== "user_turn");
+      if (threadTurns.length < expectedSnapshotTurnCount) return null;
+      if (assistantThreadTurns.length < expectedAssistantTurnCount) return null;
+
+      const lastAssistantTurn = [...assistantThreadTurns].reverse().at(0) ?? null;
+      const snapshotThread = (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId) ?? null;
+      const snapshotInteractionMode = lastAssistantTurn?.interaction_mode
+        ?? snapshotThread?.interaction_mode
+        ?? null;
+      if (expectedInteractionMode && snapshotInteractionMode !== expectedInteractionMode) return null;
+      const snapshotQuestionAnchorIds = snapshotThread?.question_anchor_ids_json
+        ?? lastAssistantTurn?.question_anchor_ids_json
+        ?? threadTurns.find((turn) => Array.isArray(turn?.question_anchor_ids_json) && turn.question_anchor_ids_json.length > 0)?.question_anchor_ids_json
+        ?? null;
+      if (expectedQuestionAnchorIds && !anchorIdsEqual(snapshotQuestionAnchorIds, expectedQuestionAnchorIds)) {
+        return null;
+      }
+
+      const synthesized = {
+        page: {
+          controls: {
+            modal_state: {
+              room_id: roomId,
+              active_thread_id: expectedThreadId,
+              interaction_mode: expectedInteractionMode ?? snapshotInteractionMode,
+              question_anchor_ids: snapshotQuestionAnchorIds,
+              thread_question_anchor_ids_json: snapshotQuestionAnchorIds,
+              turn_count: threadTurns.length,
+              thread_count: snapshot.threads?.length ?? null,
+              pending_draft_count: 0,
+            },
+          },
+        },
+      };
+      return isFollowupModalStateSatisfied(current?.page?.controls?.modal_state, {
+          roomId,
+          expectedThreadId,
+          expectedInteractionMode,
+          expectedTurnCount,
+          expectedThreadCount,
+          expectedQuestionAnchorIds,
+        }) ? current : synthesized;
+    },
+    label,
+    timeout,
+  );
+}
+
 async function waitForApiDrivenFollowupVisible(page, {
   label,
   frontendUrl = null,
@@ -643,25 +835,16 @@ async function waitForApiDrivenFollowupVisible(page, {
   apiPayload,
   timeout = 45000,
 }) {
-  const assistantTurns = (apiPayload?.turns ?? []).filter((turn) => turn?.source !== "user_turn");
-  const expectedThreadId = apiPayload?.thread_id ?? beforeModalState?.active_thread_id ?? null;
-  const isNewThread = Boolean(
-    expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id,
-  );
-  const expectedTurnCount = isNewThread
-    ? assistantTurns.length
-    : Math.max(
-      (beforeModalState?.turn_count ?? 0) + assistantTurns.length,
-      assistantTurns.length,
-    );
-  const expectedInteractionMode = assistantTurns.at(-1)?.interaction_mode ?? null;
-  const expectedThreadCount = isNewThread
-    ? (beforeModalState?.thread_count ?? 0) + 1
-    : (beforeModalState?.thread_count ?? 0);
-  const expectedSnapshotTurnCount = expectedThreadId && expectedThreadId !== beforeModalState?.active_thread_id
-    ? Math.max(assistantTurns.length, 1)
-    : expectedTurnCount;
-  const visibilityNeedles = buildFollowupVisibilityNeedles(apiPayload);
+  const {
+    expectedThreadId,
+    expectedTurnCount,
+    expectedInteractionMode,
+    expectedThreadCount,
+    expectedSnapshotTurnCount,
+    expectedAssistantTurnCount,
+    expectedQuestionAnchorIds,
+    visibilityNeedles,
+  } = buildFollowupExpectations(beforeModalState, apiPayload);
   try {
     return await waitFor(
       page,
@@ -680,14 +863,21 @@ async function waitForApiDrivenFollowupVisible(page, {
         if (modalState && (modalState.pending_draft_count ?? 0) > 0) return null;
         if (expectedThreadId && modalState?.active_thread_id && modalState.active_thread_id !== expectedThreadId) return null;
         if (expectedInteractionMode && modalState?.interaction_mode && modalState.interaction_mode !== expectedInteractionMode) return null;
+        const modalQuestionAnchorIds = modalState?.question_anchor_ids ?? modalState?.thread_question_anchor_ids_json ?? null;
+        if (expectedQuestionAnchorIds && modalQuestionAnchorIds && !anchorIdsEqual(modalQuestionAnchorIds, expectedQuestionAnchorIds)) {
+          return null;
+        }
+        const expectsThreadGrowth = expectedThreadCount > (beforeModalState?.thread_count ?? 0);
+        const expectsThreadSwitch = Boolean(
+          expectedThreadId && expectedThreadId !== (beforeModalState?.active_thread_id ?? null),
+        );
         const hasTurnProgress = modalState
           ? (
-            (modalState.turn_count ?? 0) >= expectedTurnCount
-            || (modalState.thread_count ?? 0) >= expectedThreadCount
+            (expectedTurnCount > 0 && (modalState.turn_count ?? 0) >= expectedTurnCount)
+            || (expectsThreadGrowth && (modalState.thread_count ?? 0) >= expectedThreadCount)
             || (
-              expectedThreadId
+              expectsThreadSwitch
               && modalState.active_thread_id === expectedThreadId
-              && modalState.active_thread_id !== (beforeModalState?.active_thread_id ?? null)
             )
           )
           : false;
@@ -717,26 +907,47 @@ async function waitForApiDrivenFollowupVisible(page, {
         const threadExists = !expectedThreadId || (snapshot.threads ?? []).some((thread) => thread?.id === expectedThreadId);
         if (!threadExists) return null;
         const threadTurns = (snapshot.turns ?? []).filter((turn) => !expectedThreadId || turn?.thread_id === expectedThreadId);
+        const assistantThreadTurns = threadTurns.filter((turn) => turn?.source !== "user_turn");
         if (threadTurns.length < expectedSnapshotTurnCount) return null;
-        const lastAssistantTurn = [...threadTurns].reverse().find((turn) => turn?.source !== "user_turn") ?? null;
+        if (assistantThreadTurns.length < expectedAssistantTurnCount) return null;
+        const lastAssistantTurn = [...assistantThreadTurns].reverse().at(0) ?? null;
+        const snapshotThread = (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId) ?? null;
         const snapshotInteractionMode = lastAssistantTurn?.interaction_mode
-          ?? (snapshot.threads ?? []).find((thread) => thread?.id === expectedThreadId)?.interaction_mode
+          ?? snapshotThread?.interaction_mode
           ?? null;
         if (expectedInteractionMode && snapshotInteractionMode !== expectedInteractionMode) return null;
+        const snapshotQuestionAnchorIds = snapshotThread?.question_anchor_ids_json
+          ?? lastAssistantTurn?.question_anchor_ids_json
+          ?? threadTurns.find((turn) => Array.isArray(turn?.question_anchor_ids_json) && turn.question_anchor_ids_json.length > 0)?.question_anchor_ids_json
+          ?? null;
+        if (expectedQuestionAnchorIds && !anchorIdsEqual(snapshotQuestionAnchorIds, expectedQuestionAnchorIds)) {
+          return null;
+        }
 
-        return current ?? {
+        const synthesized = {
           page: {
             controls: {
               modal_state: {
                 room_id: roomId,
                 active_thread_id: expectedThreadId,
                 interaction_mode: expectedInteractionMode ?? snapshotInteractionMode,
+                question_anchor_ids: snapshotQuestionAnchorIds,
+                thread_question_anchor_ids_json: snapshotQuestionAnchorIds,
                 turn_count: threadTurns.length,
+                thread_count: snapshot.threads?.length ?? null,
                 pending_draft_count: 0,
               },
             },
           },
         };
+        return isFollowupModalStateSatisfied(current?.page?.controls?.modal_state, {
+          roomId,
+          expectedThreadId,
+          expectedInteractionMode,
+          expectedTurnCount,
+          expectedThreadCount,
+          expectedQuestionAnchorIds,
+        }) ? current : synthesized;
       },
       label,
       timeout,
@@ -745,8 +956,19 @@ async function waitForApiDrivenFollowupVisible(page, {
     console.warn(
       `[ending-room] ${label} fell back to settled modal wait: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return waitForModalSettled(page, `${label} settled fallback`, Math.min(timeout, 15000))
-      .catch(() => getAutomationState(page));
+    return waitForExpectedFollowupSettled(page, {
+      label: `${label} settled fallback`,
+      frontendUrl,
+      roomId,
+      expectedThreadId,
+      expectedInteractionMode,
+      expectedTurnCount,
+      expectedThreadCount,
+      expectedSnapshotTurnCount,
+      expectedAssistantTurnCount,
+      expectedQuestionAnchorIds,
+      timeout: Math.min(timeout, 15000),
+    });
   }
 }
 
@@ -1016,17 +1238,26 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] hotseat lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const hotseatApiPayload = await hotseatApiPromise;
-  if (page.isClosed()) {
-    page = await reopenLiveEndingRoomPage(
-      context,
-      directOpenUrl,
-      roomId,
-      "ending_chamber",
-      "hotseat room reopen",
-      DESKTOP_CONTEXT_OPTIONS,
-    );
-  }
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
+    roomId,
+    "ending_chamber",
+    "hotseat follow-up",
+    DESKTOP_CONTEXT_OPTIONS,
+  );
   let hotseatState = hotseatLifecycle?.payload ?? null;
+  const hotseatExpectations = buildFollowupExpectations(
+    beforeHotseat?.page?.controls?.modal_state ?? null,
+    hotseatApiPayload,
+  );
+  if (!isFollowupModalStateSatisfied(hotseatState?.page?.controls?.modal_state, {
+    roomId,
+    ...hotseatExpectations,
+  })) {
+    hotseatState = null;
+  }
   if (!hotseatState) {
     try {
       hotseatState = await waitForApiDrivenFollowupVisible(page, {
@@ -1039,8 +1270,26 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       });
     } catch (visibleError) {
       console.warn(`[ending-room] hotseat UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-      hotseatState = await waitForModalSettled(page, "hotseat settled fallback", 10000).catch(() => getAutomationState(page));
+      hotseatState = await waitForExpectedFollowupSettled(page, {
+        label: "hotseat settled fallback",
+        frontendUrl,
+        roomId,
+        ...hotseatExpectations,
+        timeout: 10000,
+      });
     }
+  }
+  if (!isFollowupModalStateSatisfied(hotseatState?.page?.controls?.modal_state, {
+    roomId,
+    ...hotseatExpectations,
+  })) {
+    writeJson(path.join(outputDir, "multi-chamber-A-hotseat-verification-failure.json"), {
+      state: hotseatState,
+      expectations: hotseatExpectations,
+      api_payload: hotseatApiPayload,
+      automation: await getAutomationState(page),
+    });
+    throw new Error("Unable to verify hotseat follow-up against the target thread");
   }
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-hotseat.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-hotseat.json"), {
@@ -1065,6 +1314,15 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   if (await allPresentPill.count() > 0) {
     await allPresentPill.scrollIntoViewIfNeeded().catch(() => {});
     await allPresentPill.click({ force: true }).catch(() => {});
+    await waitFor(
+      page,
+      async () => {
+        const current = await getAutomationState(page);
+        return current?.page?.controls?.modal_state?.interaction_mode === "all_present" ? current : null;
+      },
+      "all-present mode armed",
+      10000,
+    );
   }
   await fillComposerIfEditable(page, "如果让当前阵容都回应一次，他们会如何分工？");
   const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
@@ -1097,17 +1355,26 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] all-present lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const allPresentApiPayload = await allPresentApiPromise;
-  if (page.isClosed()) {
-    page = await reopenLiveEndingRoomPage(
-      context,
-      directOpenUrl,
-      roomId,
-      "ending_chamber",
-      "all-present room reopen",
-      DESKTOP_CONTEXT_OPTIONS,
-    );
-  }
+  page = await ensureLiveEndingRoomPage(
+    page,
+    context,
+    directOpenUrl,
+    roomId,
+    "ending_chamber",
+    "all-present follow-up",
+    DESKTOP_CONTEXT_OPTIONS,
+  );
   let allPresentState = allPresentLifecycle?.payload ?? null;
+  const allPresentExpectations = buildFollowupExpectations(
+    beforeAllPresentModal ?? null,
+    allPresentApiPayload,
+  );
+  if (!isFollowupModalStateSatisfied(allPresentState?.page?.controls?.modal_state, {
+    roomId,
+    ...allPresentExpectations,
+  })) {
+    allPresentState = null;
+  }
   if (!allPresentState) {
     try {
       allPresentState = await waitForApiDrivenFollowupVisible(page, {
@@ -1120,8 +1387,20 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       });
     } catch (visibleError) {
       console.warn(`[ending-room] all-present UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-      allPresentState = await waitForModalSettled(page, "all-present settled fallback", 10000).catch(() => getAutomationState(page));
+      allPresentState = await waitForExpectedFollowupSettled(page, {
+        label: "all-present settled fallback",
+        frontendUrl,
+        roomId,
+        ...allPresentExpectations,
+        timeout: 10000,
+      });
     }
+  }
+  if (!isFollowupModalStateSatisfied(allPresentState?.page?.controls?.modal_state, {
+    roomId,
+    ...allPresentExpectations,
+  })) {
+    throw new Error("Unable to verify all-present follow-up against the target thread");
   }
   await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-all-present.png"));
   writeJson(path.join(outputDir, "multi-chamber-A-all-present.json"), {
@@ -1164,18 +1443,27 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       console.warn(`[ending-room] epilogue lifecycle capture fell back to settled wait: ${error instanceof Error ? error.message : String(error)}`);
     }
     const epilogueApiPayload = await epilogueApiPromise;
-    if (page.isClosed()) {
-      page = await reopenLiveEndingRoomPage(
-        context,
-        directOpenUrl,
-        roomId,
-        "ending_chamber",
-        "epilogue room reopen",
-        DESKTOP_CONTEXT_OPTIONS,
-      );
-    }
-    epilogueState = epilogueLifecycle?.payload ?? null;
-    if (!epilogueState) {
+    page = await ensureLiveEndingRoomPage(
+      page,
+      context,
+      directOpenUrl,
+      roomId,
+      "ending_chamber",
+      "epilogue follow-up",
+      DESKTOP_CONTEXT_OPTIONS,
+    );
+  epilogueState = epilogueLifecycle?.payload ?? null;
+  const epilogueExpectations = buildFollowupExpectations(
+    beforeEpilogue?.page?.controls?.modal_state ?? null,
+    epilogueApiPayload,
+  );
+  if (!isFollowupModalStateSatisfied(epilogueState?.page?.controls?.modal_state, {
+    roomId,
+    ...epilogueExpectations,
+  })) {
+    epilogueState = null;
+  }
+  if (!epilogueState) {
       try {
         epilogueState = await waitForApiDrivenFollowupVisible(page, {
           label: "epilogue api-driven visible state",
@@ -1187,8 +1475,20 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
         });
       } catch (visibleError) {
         console.warn(`[ending-room] epilogue UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-        epilogueState = await waitForModalSettled(page, "epilogue settled fallback", 10000).catch(() => getAutomationState(page));
+        epilogueState = await waitForExpectedFollowupSettled(page, {
+          label: "epilogue settled fallback",
+          frontendUrl,
+          roomId,
+          ...epilogueExpectations,
+          timeout: 10000,
+        });
       }
+    }
+    if (!isFollowupModalStateSatisfied(epilogueState?.page?.controls?.modal_state, {
+      roomId,
+      ...epilogueExpectations,
+    })) {
+      throw new Error("Unable to verify epilogue follow-up against the target thread");
     }
     await saveScreenshot(page, path.join(outputDir, "multi-chamber-A-epilogue.png"));
     writeJson(path.join(outputDir, "multi-chamber-A-epilogue.json"), {
@@ -1561,12 +1861,16 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       label: "single ending anchored follow-up commit",
       outputDir,
       filePrefix: "single-mobile-anchored-thread",
-      timeout: 70000,
-      isCommitState: (modalState) => (
-        modalState?.interaction_mode === "thread_followup"
-        && (modalState?.active_thread_id ?? null) === createdThread.id
-        && (modalState?.pending_draft_count ?? 0) === 0
-        && (modalState?.question_anchor_ids?.length ?? 0) > 0
+      timeout: OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS,
+      isCommitState: (modalState) => isFollowupCommitCandidate(
+        modalState,
+        beforeAnchored?.page?.controls?.modal_state ?? null,
+        {
+          interactionMode: "thread_followup",
+          expectedThreadId: createdThread.id,
+          minimumTurnCount: 2,
+          requireAnchorIds: true,
+        },
       ),
     });
   } catch (error) {
@@ -1574,6 +1878,10 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     console.warn(`[ending-room] single anchored lifecycle capture fell back to API-driven wait: ${error instanceof Error ? error.message : String(error)}`);
   }
   const anchoredApiPayload = await anchoredApiPromise;
+  const anchoredExpectations = buildFollowupExpectations(
+    beforeAnchored?.page?.controls?.modal_state ?? null,
+    anchoredApiPayload,
+  );
   page = await ensureLiveEndingRoomPage(
     page,
     context,
@@ -1584,10 +1892,17 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     MOBILE_CONTEXT_OPTIONS,
   );
   let anchoredState = anchoredLifecycle?.payload ?? null;
+  if (!isFollowupModalStateSatisfied(anchoredState?.page?.controls?.modal_state, {
+    roomId,
+    ...anchoredExpectations,
+  })) {
+    anchoredState = null;
+  }
   if (!anchoredState) {
     try {
       anchoredState = await waitForApiDrivenFollowupVisible(page, {
         label: "single ending anchored api-driven visible state",
+        frontendUrl,
         roomId,
         beforeModalState: beforeAnchored?.page?.controls?.modal_state ?? null,
         apiPayload: anchoredApiPayload,
@@ -1598,13 +1913,23 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       const anchoredSnapshot = await waitForEndingRoomSnapshot(
         frontendUrl,
         roomId,
-        (current) => (
-          (current?.threads ?? []).some((thread) => thread?.id === createdThread.id)
-          && (current?.turns ?? []).some((turn) => turn?.thread_id === createdThread.id && turn?.source !== "user_turn")
-        ),
+        (current) => {
+          const anchoredThread = (current?.threads ?? []).find((thread) => thread?.id === createdThread.id) ?? null;
+          if (!anchoredThread) return false;
+          if (!anchorIdsEqual(anchoredThread.question_anchor_ids_json, anchoredExpectations.expectedQuestionAnchorIds)) {
+            return false;
+          }
+          const anchoredTurns = (current?.turns ?? []).filter((turn) => turn?.thread_id === createdThread.id);
+          const anchoredAssistantTurns = anchoredTurns.filter((turn) => turn?.source !== "user_turn");
+          return (
+            anchoredTurns.length >= anchoredExpectations.expectedSnapshotTurnCount
+            && anchoredAssistantTurns.length >= anchoredExpectations.expectedAssistantTurnCount
+          );
+        },
         60000,
         "single ending anchored backend snapshot",
       );
+      const anchoredThread = (anchoredSnapshot?.threads ?? []).find((thread) => thread?.id === createdThread.id) ?? null;
       anchoredState = {
         page: {
           controls: {
@@ -1612,7 +1937,8 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
               room_id: roomId,
               active_thread_id: createdThread.id,
               interaction_mode: "thread_followup",
-              question_anchor_ids: [verdictAnchorId],
+              question_anchor_ids: anchoredThread?.question_anchor_ids_json ?? anchoredExpectations.expectedQuestionAnchorIds,
+              thread_question_anchor_ids_json: anchoredThread?.question_anchor_ids_json ?? anchoredExpectations.expectedQuestionAnchorIds,
               pending_draft_count: 0,
               thread_count: anchoredSnapshot?.threads?.length ?? null,
               turn_count: (anchoredSnapshot?.turns ?? []).filter((turn) => turn?.thread_id === createdThread.id).length,
@@ -1621,6 +1947,18 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
         },
       };
     }
+  }
+  if (!isFollowupModalStateSatisfied(anchoredState?.page?.controls?.modal_state, {
+    roomId,
+    ...anchoredExpectations,
+  })) {
+    writeJson(path.join(outputDir, "single-mobile-anchored-thread-verification-failure.json"), {
+      state: anchoredState,
+      expectations: anchoredExpectations,
+      api_payload: anchoredApiPayload,
+      automation: await getAutomationState(page),
+    });
+    throw new Error("Unable to verify single anchored follow-up against the target thread");
   }
   await saveScreenshot(page, path.join(outputDir, "single-mobile-anchored-thread.png"));
   writeJson(path.join(outputDir, "single-mobile-anchored-thread.json"), {
@@ -1846,12 +2184,14 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       label: "mobile hotseat follow-up state",
       outputDir,
       filePrefix: "mobile-multi-hotseat",
-      timeout: 70000,
-      isCommitState: (modalState) => (
-        modalState?.interaction_mode === "hotseat"
-        && (modalState?.thread_count ?? 0) >= ((beforeHotseat?.page?.controls?.modal_state?.thread_count ?? 0))
-        && (modalState?.active_thread_id ?? null) !== (beforeHotseat?.page?.controls?.modal_state?.active_thread_id ?? null)
-        && (modalState?.pending_draft_count ?? 0) === 0
+      timeout: OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS,
+      isCommitState: (modalState) => isFollowupCommitCandidate(
+        modalState,
+        beforeHotseat?.page?.controls?.modal_state ?? null,
+        {
+          interactionMode: "hotseat",
+          minimumTurnDelta: 2,
+        },
       ),
     });
   } catch (error) {
@@ -1869,6 +2209,16 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     MOBILE_CONTEXT_OPTIONS,
   );
   let hotseatState = hotseatLifecycle?.payload ?? null;
+  const hotseatExpectations = buildFollowupExpectations(
+    beforeHotseat?.page?.controls?.modal_state ?? null,
+    hotseatApiPayload,
+  );
+  if (!isFollowupModalStateSatisfied(hotseatState?.page?.controls?.modal_state, {
+    roomId,
+    ...hotseatExpectations,
+  })) {
+    hotseatState = null;
+  }
   if (!hotseatState) {
     try {
       hotseatState = await waitForApiDrivenFollowupVisible(page, {
@@ -1881,8 +2231,26 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       });
     } catch (visibleError) {
       console.warn(`[ending-room] mobile hotseat UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-      hotseatState = await waitForModalSettled(page, "mobile hotseat settled fallback", 10000).catch(() => getAutomationState(page));
+      hotseatState = await waitForExpectedFollowupSettled(page, {
+        label: "mobile hotseat settled fallback",
+        frontendUrl,
+        roomId,
+        ...hotseatExpectations,
+        timeout: 10000,
+      });
     }
+  }
+  if (!isFollowupModalStateSatisfied(hotseatState?.page?.controls?.modal_state, {
+    roomId,
+    ...hotseatExpectations,
+  })) {
+    writeJson(path.join(outputDir, "mobile-multi-hotseat-verification-failure.json"), {
+      state: hotseatState,
+      expectations: hotseatExpectations,
+      api_payload: hotseatApiPayload,
+      automation: await getAutomationState(page),
+    });
+    throw new Error("Unable to verify mobile hotseat follow-up against the target thread");
   }
   await saveScreenshot(page, path.join(outputDir, "mobile-multi-hotseat.png"));
   writeJson(path.join(outputDir, "mobile-multi-hotseat.json"), {
@@ -1923,17 +2291,14 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         label: "mobile all-present follow-up state",
         outputDir,
         filePrefix: "mobile-multi-all-present",
-        timeout: 70000,
-        isCommitState: (modalState) => (
-          modalState?.interaction_mode === "all_present"
-          && (
-            hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
-            || (modalState?.active_thread_id ?? null) !== (beforeAllPresentModal?.active_thread_id ?? null)
-          )
-          && (
-            (modalState?.pending_draft_count ?? 0) === 0
-            || hasReachedCommittedTurnDelta(modalState, beforeAllPresentModal, 3)
-          )
+        timeout: OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS,
+        isCommitState: (modalState) => isFollowupCommitCandidate(
+          modalState,
+          beforeAllPresentModal,
+          {
+            interactionMode: "all_present",
+            minimumTurnDelta: 2,
+          },
         ),
       });
     } catch (error) {
@@ -1951,6 +2316,16 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       MOBILE_CONTEXT_OPTIONS,
     );
     allPresentSettled = allPresentLifecycle?.payload ?? null;
+    const allPresentExpectations = buildFollowupExpectations(
+      beforeAllPresentModal,
+      allPresentApiPayload,
+    );
+    if (!isFollowupModalStateSatisfied(allPresentSettled?.page?.controls?.modal_state, {
+      roomId,
+      ...allPresentExpectations,
+    })) {
+      allPresentSettled = null;
+    }
     if (!allPresentSettled) {
       try {
         allPresentSettled = await waitForApiDrivenFollowupVisible(page, {
@@ -1963,8 +2338,20 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         });
       } catch (visibleError) {
         console.warn(`[ending-room] mobile all-present UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-        allPresentSettled = await waitForModalSettled(page, "mobile all-present settled fallback", 10000).catch(() => getAutomationState(page));
+        allPresentSettled = await waitForExpectedFollowupSettled(page, {
+          label: "mobile all-present settled fallback",
+          frontendUrl,
+          roomId,
+          ...allPresentExpectations,
+          timeout: 10000,
+        });
       }
+    }
+    if (!isFollowupModalStateSatisfied(allPresentSettled?.page?.controls?.modal_state, {
+      roomId,
+      ...allPresentExpectations,
+    })) {
+      throw new Error("Unable to verify mobile all-present follow-up against the target thread");
     }
     page = await ensureLiveEndingRoomPage(
       page,
@@ -2007,11 +2394,14 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         label: "mobile epilogue follow-up state",
         outputDir,
         filePrefix: "mobile-multi-epilogue",
-        timeout: 90000,
-        isCommitState: (modalState) => (
-          modalState?.interaction_mode === "epilogue"
-          && (modalState?.turn_count ?? 0) > (beforeEpilogue?.page?.controls?.modal_state?.turn_count ?? 0)
-          && (modalState?.pending_draft_count ?? 0) === 0
+        timeout: OPTIONAL_EPILOGUE_CAPTURE_TIMEOUT_MS,
+        isCommitState: (modalState) => isFollowupCommitCandidate(
+          modalState,
+          beforeEpilogue?.page?.controls?.modal_state ?? null,
+          {
+            interactionMode: "epilogue",
+            minimumTurnDelta: 2,
+          },
         ),
       });
     } catch (error) {
@@ -2029,6 +2419,16 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       MOBILE_CONTEXT_OPTIONS,
     );
     epilogueState = epilogueLifecycle?.payload ?? null;
+    const epilogueExpectations = buildFollowupExpectations(
+      beforeEpilogue?.page?.controls?.modal_state ?? null,
+      epilogueApiPayload,
+    );
+    if (!isFollowupModalStateSatisfied(epilogueState?.page?.controls?.modal_state, {
+      roomId,
+      ...epilogueExpectations,
+    })) {
+      epilogueState = null;
+    }
     if (!epilogueState) {
       try {
         epilogueState = await waitForApiDrivenFollowupVisible(page, {
@@ -2041,8 +2441,20 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         });
       } catch (visibleError) {
         console.warn(`[ending-room] mobile epilogue UI visibility wait timed out, using settled state: ${visibleError instanceof Error ? visibleError.message : String(visibleError)}`);
-        epilogueState = await waitForModalSettled(page, "mobile epilogue settled fallback", 10000).catch(() => getAutomationState(page));
+        epilogueState = await waitForExpectedFollowupSettled(page, {
+          label: "mobile epilogue settled fallback",
+          frontendUrl,
+          roomId,
+          ...epilogueExpectations,
+          timeout: 10000,
+        });
       }
+    }
+    if (!isFollowupModalStateSatisfied(epilogueState?.page?.controls?.modal_state, {
+      roomId,
+      ...epilogueExpectations,
+    })) {
+      throw new Error("Unable to verify mobile epilogue follow-up against the target thread");
     }
     await saveScreenshot(page, path.join(outputDir, "mobile-multi-epilogue.png"));
     writeJson(path.join(outputDir, "mobile-multi-epilogue.json"), {
@@ -2121,7 +2533,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
           label: "mobile evidence-card follow-up state",
           outputDir,
           filePrefix: "mobile-gallery-evidence-card",
-          timeout: 70000,
+          timeout: OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS,
           isCommitState: (modalState) => (
             (modalState?.turn_count ?? 0) > (beforeEvidence?.page?.controls?.modal_state?.turn_count ?? 0)
             && (modalState?.pending_draft_count ?? 0) === 0

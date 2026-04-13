@@ -176,4 +176,15 @@ describe("SpotlightTurnCard", () => {
     expect(article).toBeInTheDocument();
     expect(article?.parentElement).toBe(container);
   });
+
+  it("does not expose live-region semantics itself when highlighted", () => {
+    renderSpotlightTurnCard({
+      speaker: "Agent",
+      content: "content",
+      isHighlighted: true,
+      "data-testid": "card",
+    });
+
+    expect(screen.getByTestId("card")).not.toHaveAttribute("aria-live");
+  });
 });

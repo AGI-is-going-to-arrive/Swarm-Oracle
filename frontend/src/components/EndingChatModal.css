@@ -1005,6 +1005,18 @@
   opacity: 1;
 }
 
+.ending-chat-bubble__actions--always-visible {
+  opacity: 1;
+  transition: none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .ending-chat-bubble__actions {
+    opacity: 1;
+    transition: none;
+  }
+}
+
 .ending-chat-bubble__actions .ending-chat-inline-button {
   color: oklch(45% 0.2 350);
   font-weight: 700;

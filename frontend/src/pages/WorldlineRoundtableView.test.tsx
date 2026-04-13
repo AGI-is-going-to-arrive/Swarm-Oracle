@@ -429,6 +429,20 @@ beforeEach(() => {
     writable: true,
     configurable: true,
   });
+  Object.defineProperty(window, 'matchMedia', {
+    value: vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    })),
+    writable: true,
+    configurable: true,
+  });
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -2902,6 +2916,63 @@ describe('WorldlineRoundtableView phase nav', () => {
 
     await user.click(pills[0]);
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+  });
+
+  it('uses auto scroll behavior when reduced motion is preferred', async () => {
+    const user = userEvent.setup({ delay: null });
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn((query: string) => ({
+        matches: query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      })),
+    });
+
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        { id: 'turn-open', room_id: 'room-1', thread_id: 'thread-room', sequence: 1, phase: 'opening', participant_id: 'rep-a', content: 'Opening.', emotion: 'focused', created_at: '2026-03-29T00:00:00Z' },
+        { id: 'turn-cross', room_id: 'room-1', thread_id: 'thread-room', sequence: 2, phase: 'crossfire', participant_id: 'rep-a', content: 'Crossfire.', emotion: 'focused', created_at: '2026-03-29T00:00:01Z' },
+      ],
+    } as EndingRoomSnapshot;
+    storeState.result = baseState.result;
+    storeState.threadsById = { 'thread-room': { ...baseState.threadsById['thread-room'], turns: storeState.snapshot.turns } } as Record<string, EndingRoomThreadSnapshot>;
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Opening.');
+    const divider = document.querySelector('[id^="phase-"]');
+    expect(divider).toBeTruthy();
+    const scrollSpy = vi.fn();
+    divider!.scrollIntoView = scrollSpy;
+
+    const pills = document.querySelectorAll('.roundtable-phase-nav__pill');
+    expect(pills.length).toBe(2);
+    await user.click(pills[0]);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
+
+    await user.click(screen.getByRole('button', { name: 'Reseat and reopen' }));
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
   });
 });
 

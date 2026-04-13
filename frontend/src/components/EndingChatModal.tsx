@@ -56,6 +56,14 @@ const EMPTY_SELECTED_BRANCH_IDS: string[] = [];
 const EMPTY_SELECTED_AGENT_IDS: string[] = [];
 const EMPTY_FALLBACK_MESSAGES: AgentMessage[] = [];
 
+function shouldAlwaysShowBubbleActions(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || window.matchMedia('(hover: none), (pointer: coarse)').matches;
+}
+
 interface EndingChatModalProps {
   open: boolean;
   scenarioId: string;
@@ -174,6 +182,7 @@ export default function EndingChatModal({
     ? replayState.snapshot.room_type
     : snapshot?.room_type) ?? roomType;
   const isCrosslineGallery = effectiveRoomType === 'crossline_gallery';
+  const alwaysShowBubbleActions = shouldAlwaysShowBubbleActions();
 
   useEndingRoomWS(
     snapshot?.id,
@@ -1558,7 +1567,10 @@ export default function EndingChatModal({
                   </header>
                   <p>{message.content}</p>
                   {composerEnabled && message.roleSlot !== 'user' && (
-                    <div className="ending-chat-bubble__actions">
+                    <div
+                      className={`ending-chat-bubble__actions${alwaysShowBubbleActions ? ' ending-chat-bubble__actions--always-visible' : ''}`}
+                      style={alwaysShowBubbleActions ? { opacity: 1, transition: 'none' } : undefined}
+                    >
                       <button
                         type="button"
                         className="ending-chat-inline-button"

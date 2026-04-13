@@ -24,6 +24,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。
+- 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
 
@@ -59,6 +60,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `evidence_card` 的 `cited_branch_id` 会做 scenario 级验证，防止跨场景引用。
 - `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
 - `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail 与 transcript header 显式显示当前 thread 的 anchor badge。
+- transcript `quote` 动作栏当前在触控设备上不再依赖 hover；粗指针设备会直接显示相关操作。
 - Oracle 自动化口径当前会输出：
   - `question_anchor_ids`
   - `thread_question_anchor_ids_json`
@@ -99,19 +101,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - replayCoverageError 或 readonly replay / reload restore / import 关键字段缺失会直接失败
   - 不再以 best-effort `summary.json` 保底通过
 - 严格慢路径自动化当前仍在继续收口：
-  - ending-room follow-up 的 `full / mobile` 复跑仍可能超时或挂起
-  - roundtable `full` 的移动端链路仍可能卡在 result route 跳转
+  - ending-room follow-up 的慢流式链路仍可能只落到 fallback 观测，不一定每次都能拿到完整 `turn_start / turn_delta / turn_commit`
+  - 但 `full / mobile` 当前已改成目标 `roomId + threadId + interaction_mode` 验真；single-ending anchored fallback 也会补校验 `questionAnchorIds` 与 assistant reply，不再接受旧线程空态或只有 user turn 的假阳性
+  - roundtable `full` 当前已补 result -> roundtable 入口重试；如果入口仍卡住，会直接落 `roundtable-entry-stall.json` 并失败
 
 ## 当前状态
 
 - 主闭环当前维持 `release-candidate` 级别。
-- 本轮 post-fix 定向复验已通过：
-  - `frontend/output/e2e/review-fix-ending-room-suite-full-rerun/summary.json`
-  - `frontend/output/e2e/review-fix-debate-full/result.json`
-  - `frontend/output/e2e/review-fix-roundtable-desktop/summary.json`
-- 本轮未记为稳定通过的专项链路：
-  - ending-room follow-up `full / mobile`
-  - roundtable `full` 的移动端链路
+- 本轮新增定向复验已通过：
+  - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

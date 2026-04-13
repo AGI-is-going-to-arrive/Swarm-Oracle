@@ -111,7 +111,7 @@ source .venv/bin/activate
 python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx
+npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
 node --test scripts/e2e-debate-suite.test.mjs
 node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless
 npx tsc --noEmit -p tsconfig.app.json
@@ -132,6 +132,7 @@ python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py
 
 cd ../frontend
 npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+node --test scripts/e2e-ending-room-followup-suite.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
@@ -173,6 +174,9 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
     - import
     - reload/restore
     - 任一关键字段缺失都会直接报错，不再 best-effort 保 `summary.json`
+  - `hotseat / all_present / epilogue` 当前会额外校验目标 `roomId + threadId + interaction_mode`
+    - 不再只看当前可见线程的局部 `modal_state`
+    - fallback 优先走 API-driven / snapshot / settled 验真
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
     - `current_speaker_turn_key / current_speaker_participant_id`
@@ -185,10 +189,13 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 - `e2e-ending-room-followup-suite.mjs mobile`
   - 覆盖 mobile `single-ending verdict-anchor thread / artifact readonly / local readonly / reload restore / import`
   - 同时覆盖 mobile multi-ending 的 `hotseat / all_present / epilogue / crossline gallery / evidence_card / readonly replay / restore / import`
+  - fixture 选择当前会优先取最新、且 branches 全部 `COMPLETED` 的 `single / multi done scenario`
   - `single-ending` anchored thread 当前会使用唯一 thread title；如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
+  - anchored fallback 也会补校验 `threadId + questionAnchorIds + assistant reply`，不再把 `state: null` 或只有 user turn 的快照当成成功
 - `e2e-ending-room-followup-suite.mjs full / mobile`
   - 当前更适合专项 follow-up 回归
-  - 本轮真实复跑里慢路径仍可能 fallback、超时或挂起
+  - 当前最新 mobile rerun 已通过：`frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
+  - 慢流式场景仍可能只落到 fallback 观测，不一定每次都有完整 lifecycle 工件
   - 如果目标只是基础 smoke，优先跑 `e2e-ending-room-suite.mjs full`
 - `single-ending`
   - mobile 的 `verdict-anchor thread -> readonly replay -> reload restore -> import` 仍是目标覆盖链路
@@ -215,8 +222,8 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - 覆盖桌面 + mobile 的 `representative / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented / hotseat`
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
   - current summary 会落出 `transcript_layout`
-  - 本轮真实复跑里，移动端链路仍可能卡在 result 页面 goto timeout
-  - 当前严格签收以 desktop scoped rerun 为准
+  - result -> roundtable 入口当前会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
+  - 当前 fresh full rerun 已通过 desktop + mobile
 - `e2e-worldline-roundtable-suite.mjs mobile`
   - 只跑移动端圆桌链路，适合单独复核 recipe 切换、touch `click-to-seat`、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
   - mobile rerun 当前也已重新抓回 anchored thread 的 `turn_delta`

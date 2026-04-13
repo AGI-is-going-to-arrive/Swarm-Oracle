@@ -369,6 +369,30 @@ async function waitFor(page, predicate, label, timeout = 15000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+function isRetryableGotoError(error) {
+  if (!(error instanceof Error)) return false;
+  return error.name === "TimeoutError"
+    || error.message.includes("page.goto: Timeout")
+    || error.message.includes("ERR_HTTP_RESPONSE_CODE_FAILURE");
+}
+
+async function gotoWithRetry(page, url, options = {}, retries = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      await page.goto(url, options);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGotoError(error) || attempt === retries) {
+        throw error;
+      }
+      await page.waitForTimeout(500 * attempt);
+    }
+  }
+  throw lastError ?? new Error(`Failed to navigate to ${url}`);
+}
+
 async function captureStreamLifecycle(page, {
   label,
   outputDir,
@@ -411,9 +435,14 @@ async function captureStreamLifecycle(page, {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function openRoundtable(page, baseUrl, scenarioId) {
-  await page.goto(`${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: /Start Roundtable|发起圆桌/i }).click();
+async function openRoundtable(page, baseUrl, scenarioId, outputDir) {
+  const resultUrl = `${baseUrl}/result/${scenarioId}`;
+  const resultRoutePattern = new RegExp(`/result/${scenarioId}(?:[?#].*)?$`);
+  const roundtableRoutePattern = new RegExp(`/roundtable/${scenarioId}(?:[/?#].*)?$`);
+  await gotoWithRetry(page, resultUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+  const entryButton = page.getByRole("button", { name: /Start Roundtable|发起圆桌/i }).first();
+  await entryButton.waitFor({ state: "visible", timeout: 30000 });
+  await clickActionable(entryButton, "roundtable entry CTA");
   const launchButton = page.getByRole("button", { name: /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i }).first();
   const start = Date.now();
   while (Date.now() - start < 45000) {
@@ -421,11 +450,21 @@ async function openRoundtable(page, baseUrl, scenarioId) {
     if (automation?.page?.kind === "worldline_roundtable" && automation?.page?.controls?.has_result === true) {
       return automation;
     }
-    if (await launchButton.isVisible().catch(() => false)) {
-      await launchButton.click().catch(() => {});
+    if (roundtableRoutePattern.test(page.url())) {
+      if (await launchButton.isVisible().catch(() => false)) {
+        await clickActionable(launchButton, "roundtable launch lineup").catch(() => {});
+      }
+    } else if (resultRoutePattern.test(page.url())) {
+      if (await entryButton.isVisible().catch(() => false)) {
+        await clickActionable(entryButton, "roundtable entry CTA retry").catch(() => {});
+      }
     }
     await page.waitForTimeout(500);
   }
+  writeJson(path.join(outputDir, "roundtable-entry-stall.json"), {
+    url: page.url(),
+    automation: await readAutomation(page),
+  });
   throw new Error("Timed out waiting for roundtable ready");
 }
 
@@ -1179,7 +1218,7 @@ async function reopenWithSelectionMode(page, {
 
 async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId);
+  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), ready);
 
@@ -1414,7 +1453,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
     hasTouch: true,
   });
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId);
+  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir);
   const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit });

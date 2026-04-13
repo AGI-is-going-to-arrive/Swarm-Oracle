@@ -350,6 +350,9 @@ describe('DebateArenaView', () => {
     expect(await screen.findByText('debate.bet_title')).toBeInTheDocument();
     expect(screen.getByTestId('debate-feed-focus')).toBeInTheDocument();
     expect(screen.getByTestId('debate-live-turn')).toBeInTheDocument();
+    const politeRegions = document.querySelectorAll('[aria-live="polite"]');
+    expect(politeRegions).toHaveLength(1);
+    expect(politeRegions[0]).toHaveAttribute('data-testid', 'debate-live-cue');
     expect(screen.getByText('debate.overview_room_title')).toBeInTheDocument();
     expect(screen.getByText('debate.stage_map_title')).toBeInTheDocument();
 

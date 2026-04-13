@@ -196,14 +196,17 @@ describe('EndingChatModal', () => {
   const installMatchMedia = ({
     mobile = false,
     reducedMotion = false,
+    coarsePointer = false,
   }: {
     mobile?: boolean;
     reducedMotion?: boolean;
+    coarsePointer?: boolean;
   } = {}) => {
     const matchMedia = vi.fn((query: string) => ({
       matches:
         (query === '(max-width: 560px)' && mobile)
-        || (query === '(prefers-reduced-motion: reduce)' && reducedMotion),
+        || (query === '(prefers-reduced-motion: reduce)' && reducedMotion)
+        || (query === '(hover: none), (pointer: coarse)' && coarsePointer),
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -628,6 +631,33 @@ describe('EndingChatModal', () => {
 
     expect(committedPrediction.overflow).toBe(false);
     expect(draftHeight).toBeGreaterThanOrEqual(committedHeight);
+  });
+
+  it('keeps transcript quote actions visible for reduced motion and coarse pointers', async () => {
+    installMatchMedia({ reducedMotion: true, coarsePointer: true });
+    buildLiveSnapshot();
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const quoteActions = await waitFor(() => {
+      const element = document.querySelector('.ending-chat-bubble__actions');
+      expect(element).toBeTruthy();
+      return element as HTMLDivElement;
+    });
+
+    expect(quoteActions).toHaveClass('ending-chat-bubble__actions--always-visible');
+    expect(window.getComputedStyle(quoteActions).opacity).toBe('1');
   });
 
   it('renders crossline gallery as a summary-only view', () => {

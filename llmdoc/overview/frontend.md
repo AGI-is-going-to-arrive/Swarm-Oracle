@@ -164,10 +164,12 @@
 - `EndingChatModal` 当前已补：
   - `继续追问 / 另开线程 / 复制纪要 / 追问洞察`
   - transcript `quote` 级 `沿这句追问 / 另开线程`
+  - transcript `quote` 动作栏在触控设备上默认可见，不再要求 hover
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
+- Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
@@ -176,6 +178,7 @@
   - committed transcript 长段折叠 / 展开
   - `后续三回合` 按钮
   - mobile roster modal 当前会区分 `archivist / witness / representative`，不再把 witness 回落成普通代表标签
+  - `Reseat and reopen` 与阶段导航当前会跟随 `prefers-reduced-motion` 切到 `auto` scroll，不再强制 smooth scroll
 - Oracle 当前锚点规则：
   - `EndingChatModal`
     - `verdict / insight / key_moment / quote`
@@ -244,8 +247,13 @@
 - `e2e-ending-room-followup-suite.mjs` 当前对 replay/import/reload restore 走 fail-closed：
   - 关键字段缺失会直接失败
   - 不再以 best-effort `summary.json` 保底通过
+- `e2e-ending-room-followup-suite.mjs` 当前对 `hotseat / all_present / epilogue` 额外做了目标线程验真：
+  - 以 `roomId + threadId + interaction_mode` 为准
+  - fallback 会优先回到 API-driven / snapshot 校验，而不是只看当前可见线程的局部 `modal_state`
 - `e2e-ending-room-followup-suite.mjs full / mobile` 当前更适合专项 follow-up 回归：
-  - 本轮真实复跑里慢路径仍可能超时或挂起
+  - fixture 选择当前会优先取最新、且 branches 全部 `COMPLETED` 的 `single / multi done scenario`，不再命中陈旧脏数据
+  - 当前 fresh rerun 已通过 desktop / mobile
+  - 慢 provider 下仍可能只落到 fallback 观测，不一定每次都能抓到完整 lifecycle 工件
   - 基础 smoke 仍以 `e2e-ending-room-suite.mjs full` 为准
 - `e2e-ending-room-followup-suite.mjs` 当前也会在命中的 follow-up 场景下额外落：
   - `turn-start`
@@ -256,6 +264,7 @@
 - `single-ending` 的 mobile verdict-anchor thread 当前也走 deterministic 兜底：
   - thread title 每次唯一，避免复用同一 room 时点到旧 thread
   - 如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
+  - fallback 也必须命中目标 `threadId + questionAnchorIds`，并至少看到 1 条 assistant reply；不再接受 `state: null` 或只有 user turn 的伪成功
 - `e2e-worldline-roundtable-suite.mjs` 当前已补：
   - 更稳的 quote-anchor thread 交互链
   - hotseat settle / anchored send 的慢路径等待
@@ -266,15 +275,16 @@
   - replay `Copy / Save / Import` 统一走 hero/header action scoped locator
   - live room page 复用前会先做 revalidate；readonly replay 也会校验 replay URL 契约
   - artifact/local readonly replay 都会额外校验 reload restore；缺字段直接失败
+  - result -> roundtable 入口当前也会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
 - roundtable anchored follow-up 的 desktop rerun 当前已能稳定落：
   - hotseat `turn_start / turn_delta / turn_commit`
   - anchored thread `turn_start / turn_delta / turn_commit`
 - roundtable 的 `full` 当前仍可能受 provider 慢路径波动影响；如果目标只是 Oracle transcript `P2` 布局签收，当前更稳的口径是：
   - desktop 一份 summary
   - mobile 一份 summary
-- roundtable `full` 本轮真实复跑没有作为稳定通过口径：
-  - 已确认通过的是 desktop scoped rerun
-  - mobile 慢路径当前仍可能卡在 result route 跳转
+- roundtable `full` 当前 fresh rerun 已通过 desktop + mobile：
+  - 如果入口链路再退化，会直接落 `roundtable-entry-stall.json`
+  - transcript 布局专项签收时，desktop / mobile 分端 summary 仍然更快读
 - roundtable desktop live room 当前已补一轮轻量可读性收口：
   - 左栏更窄
   - summary card sticky

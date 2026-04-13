@@ -98,6 +98,17 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '..
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
 
+function getPreferredScrollBehavior(): ScrollBehavior {
+  if (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    return 'auto';
+  }
+  return 'smooth';
+}
+
 export default function WorldlineRoundtableView() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -1285,7 +1296,7 @@ export default function WorldlineRoundtableView() {
     setEditingRepresentatives(true);
     if (typeof window.scrollTo === 'function') {
       try {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: getPreferredScrollBehavior() });
       } catch {
         // jsdom does not implement window.scrollTo; ignore in tests.
       }
@@ -1876,7 +1887,7 @@ export default function WorldlineRoundtableView() {
                     onClick={() => {
                       const slug = phase.replace(/\s+/g, '-').toLowerCase();
                       const target = transcriptListRef.current?.querySelector(`#phase-${CSS.escape(slug)}`);
-                      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      target?.scrollIntoView({ behavior: getPreferredScrollBehavior(), block: 'start' });
                     }}
                   >
                     {phase}
