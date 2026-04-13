@@ -5,6 +5,8 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const fitViewMock = vi.fn();
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string) => fallback ?? key,
@@ -12,39 +14,52 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: (props: Record<string, unknown>) => {
-    const nodes = props.nodes as Array<{ id: string }> | undefined;
-    const edges = props.edges as Array<Record<string, unknown>> | undefined;
-    const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
-    const firstEdge = edges?.[0];
-    return (
-      <div
-        data-testid="reactflow"
-        data-nodes={nodes?.length}
-        data-edges={edges?.length}
-        data-edge-stroke={String((firstEdge?.style as Record<string, unknown> | undefined)?.stroke ?? '')}
-        data-edge-dash={String((firstEdge?.style as Record<string, unknown> | undefined)?.strokeDasharray ?? '')}
-        data-edge-animated={String(firstEdge?.animated ?? false)}
-        data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
-      >
-        {/* Expose clickable elements per node for testing onNodeClick */}
-        {nodes?.map(n => (
-          <button key={n.id} data-testid={`rf-node-${n.id}`} onClick={(e) => onNodeClick?.(e, n)} />
-        ))}
-      </div>
-    );
-  },
-  Background: () => null,
-  Controls: () => null,
-  MiniMap: () => null,
-  Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
-  MarkerType: { ArrowClosed: 'arrowclosed' },
-}));
+vi.mock('@xyflow/react', async () => {
+  const React = await import('react');
+  return {
+    ReactFlow: (props: Record<string, unknown>) => {
+      const nodes = props.nodes as Array<{ id: string }> | undefined;
+      const edges = props.edges as Array<Record<string, unknown>> | undefined;
+      const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
+      const onInit = props.onInit as ((instance: { fitView: typeof fitViewMock }) => void) | undefined;
+      const firstEdge = edges?.[0];
+
+      React.useEffect(() => {
+        onInit?.({ fitView: fitViewMock });
+      }, [onInit]);
+
+      return (
+        <div
+          data-testid="reactflow"
+          data-nodes={nodes?.length}
+          data-edges={edges?.length}
+          data-edge-stroke={String((firstEdge?.style as Record<string, unknown> | undefined)?.stroke ?? '')}
+          data-edge-dash={String((firstEdge?.style as Record<string, unknown> | undefined)?.strokeDasharray ?? '')}
+          data-edge-animated={String(firstEdge?.animated ?? false)}
+          data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
+        >
+          {/* Expose clickable elements per node for testing onNodeClick */}
+          {nodes?.map(n => (
+            <button key={n.id} data-testid={`rf-node-${n.id}`} onClick={(e) => onNodeClick?.(e, n)} />
+          ))}
+        </div>
+      );
+    },
+    Background: () => null,
+    Controls: () => null,
+    MiniMap: () => null,
+    Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+    MarkerType: { ArrowClosed: 'arrowclosed' },
+  };
+});
 
 import { ArgumentMap, ArgumentStrengthMeter, type ArgumentUnit } from './ArgumentMap';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  fitViewMock.mockReset();
+  vi.restoreAllMocks();
+});
 
 // ── ArgumentMap main component ──────────────────────────────
 
@@ -69,6 +84,30 @@ describe('ArgumentMap', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     const msg = await screen.findByText(/No argument map/);
     expect(msg).toBeInTheDocument();
+  });
+
+  it('shows filter-specific empty state when no units match the selected statuses', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-empty-filter',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Only standing', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Only standing', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+
+    await user.click(screen.getByRole('button', { name: 'Accepted' }));
+
+    expect(await screen.findByText('No argument units match the selected filters.')).toBeInTheDocument();
+    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
   });
 
   it('renders ReactFlow component when data has units (fallback layout)', async () => {
@@ -173,6 +212,25 @@ describe('ArgumentMap', () => {
     expect(screen.getByText(/1 units/)).toBeInTheDocument();
   });
 
+  it('renders the rejected status filter when backend data uses that status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-rejected',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Rejected claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'rejected', text: 'Rejected claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    expect(screen.getByRole('button', { name: 'Rejected' })).toBeInTheDocument();
+  });
+
   it('renders screen reader fallback list with all units', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -239,6 +297,32 @@ describe('ArgumentMap', () => {
     // After re-fetch, detail panel should be gone
     await screen.findByTestId('reactflow');
     expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+  });
+
+  it('refits the viewport after status filters change the graph', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-fit',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Claim A', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'Evidence B', round: 1, payload: null },
+        ],
+        edges: [{ id: 'e1', source: 'n2', target: 'n1', type: 'supports', weight: 1, label: null }],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Claim A', turn_id: 't1', node_id: 'n1' },
+          { id: 'u2', type: 'evidence', status: 'accepted', text: 'Evidence B', turn_id: 't1', node_id: 'n2' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    const initialCalls = fitViewMock.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: 'Accepted' }));
+
+    expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
   });
 });
 

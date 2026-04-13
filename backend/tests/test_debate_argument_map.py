@@ -307,6 +307,59 @@ async def test_enrich_argument_units_for_turn_removes_stale_edges_after_type_cha
 
 
 @pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_removes_cross_turn_stale_rebuttal_edges():
+    extract_argument_units(
+        debate_id="d-enrich-cross-turn",
+        turn_id="t1",
+        content="This is the original claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-enrich-cross-turn",
+        turn_id="t2",
+        content="However this fails.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    initial = get_argument_map("d-enrich-cross-turn")
+    assert [edge for edge in initial["edges"] if edge["type"] == "rebuts"]
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "This is the original claim.",
+                            "type": "evidence",
+                            "stance": "supports_proposition",
+                            "confidence": 0.81,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-cross-turn",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 1
+    result = get_argument_map("d-enrich-cross-turn")
+    rebuts = [edge for edge in result["edges"] if edge["type"] == "rebuts"]
+    assert rebuts == []
+
+
+@pytest.mark.asyncio
 async def test_enrich_argument_units_for_turn_keeps_rule_based_units_on_invalid_output():
     extract_argument_units(
         debate_id="d-enrich-invalid",

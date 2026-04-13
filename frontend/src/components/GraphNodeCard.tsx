@@ -12,6 +12,7 @@ import {
   Clock, Gavel, Flag, FileCheck, ShieldAlert, Swords,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { isBrightGraphBackground } from '../lib/graphTokens';
 
 // ── Icon resolution ────────────────────────────────────────
 
@@ -49,10 +50,6 @@ function resolvePos(v: unknown, fallback: Position): Position {
   return fallback;
 }
 
-// ── Contrast helper ─────────────────────────────────────────
-// Bright HEX backgrounds need dark text for WCAG AA compliance.
-const BRIGHT_BACKGROUNDS = new Set(['#f1c40f', '#2ecc71']);
-
 // ── Component ──────────────────────────────────────────────
 
 const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
@@ -64,7 +61,7 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
   const targetPos = resolvePos(d.targetPos, Position.Top);
   const sourcePos = resolvePos(d.sourcePos, Position.Bottom);
 
-  const isBright = BRIGHT_BACKGROUNDS.has(d.bgColor);
+  const isBright = isBrightGraphBackground(d.bgColor);
 
   const card = (
     <button

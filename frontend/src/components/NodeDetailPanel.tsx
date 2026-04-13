@@ -5,7 +5,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useTranslation } from 'react-i18next';
-import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX } from '../lib/graphTokens';
+import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
 
 export interface NodeDetail {
   id: string;
@@ -33,6 +33,7 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   if (!node) return null;
 
   const typeColor = TYPE_COLORS[node.type] ?? '#888';
+  const typeTextColor = isBrightGraphBackground(typeColor) ? '#111' : '#fff';
   const hasPayload = node.payload !== null && node.payload !== undefined;
 
   return (
@@ -85,7 +86,7 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
             borderRadius: 4,
             fontSize: '0.75rem',
             background: typeColor,
-            color: '#fff',
+            color: typeTextColor,
           }}
         >
           {t(`node_detail.type_${node.type}`, node.type)}

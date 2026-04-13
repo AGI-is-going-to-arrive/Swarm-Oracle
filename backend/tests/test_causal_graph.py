@@ -235,6 +235,21 @@ class TestBuildSnapshot:
         assert result_br1["nodes"][0]["payload"]["branch_id"] == "br1"
         assert result_br2["nodes"][0]["payload"]["branch_id"] == "br2"
 
+    def test_branch_filter_keeps_available_branches_for_selector_and_fork_children(self):
+        append_round_nodes("sc6b", "br1", 1, [MockMessage(emotion="calm", agent_id="a1", id="m1")])
+        append_round_nodes("sc6b", "br2", 2, [MockMessage(emotion="angry", agent_id="a2", id="m2")])
+        append_round_nodes(
+            "sc6b",
+            "br_parent",
+            3,
+            [MockMessage(emotion="neutral", agent_id="a3", id="m3")],
+            fork_event={"branch_id": "br_parent", "children": ["br_child"], "reason": "forked"},
+        )
+
+        result = build_snapshot("sc6b", branch_id="br1")
+
+        assert set(result["available_branches"]) == {"br1", "br2", "br_parent", "br_child"}
+
 
 # ── Dict-format message compatibility (simulator output) ──
 

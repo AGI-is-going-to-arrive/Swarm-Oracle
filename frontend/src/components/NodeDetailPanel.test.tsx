@@ -55,6 +55,17 @@ describe('NodeDetailPanel', () => {
     expect(screen.getByText(/Turn.*turn-3/)).toBeInTheDocument();
   });
 
+  it('uses dark text on bright type badges for readability', () => {
+    const node: NodeDetail = {
+      id: 'n-bright',
+      label: 'Verdict',
+      type: 'verdict',
+      payload: null,
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('verdict')).toHaveStyle({ color: '#111' });
+  });
+
   it('renders payload as JSON when present', () => {
     const node: NodeDetail = {
       id: 'n2',

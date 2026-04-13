@@ -85,6 +85,7 @@ export const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   rebutted: ['argument.status_rebutted', 'Rebutted'],
   unaddressed: ['argument.status_unaddressed', 'Unaddressed'],
   accepted: ['argument.status_accepted', 'Accepted'],
+  rejected: ['argument.status_rejected', 'Rejected'],
 };
 
 // ── Hex Fallbacks (for contexts that don't support OKLCH) ───
@@ -107,4 +108,11 @@ export const STATUS_COLORS_HEX: Record<string, string> = {
   rebutted: '#e74c3c',
   unaddressed: '#888',
   accepted: '#4a90d9',
+  rejected: '#e74c3c',
 };
+
+const BRIGHT_GRAPH_BACKGROUNDS = new Set(['#f1c40f', '#2ecc71']);
+
+export function isBrightGraphBackground(color: string | undefined): boolean {
+  return typeof color === 'string' && BRIGHT_GRAPH_BACKGROUNDS.has(color);
+}

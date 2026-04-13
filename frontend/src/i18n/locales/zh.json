@@ -934,6 +934,7 @@
     },
     "argument": {
       "empty": "暂无论证图谱数据。",
+      "no_results": "当前筛选条件下没有匹配的论证单元。",
       "claim": "论点",
       "evidence": "证据",
       "rebuttal": "反驳",

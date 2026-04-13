@@ -6,7 +6,7 @@
             tooltips, status filter.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
 import dagre from 'dagre';
@@ -152,12 +152,13 @@ interface StrengthMeterProps {
   compact?: boolean;
 }
 
-const STATUS_ORDER = ['accepted', 'standing', 'unaddressed', 'rebutted'] as const;
+const STATUS_ORDER = ['accepted', 'standing', 'unaddressed', 'rebutted', 'rejected'] as const;
 const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   standing: GRAPH_STATUS_LABEL_I18N.standing,
   rebutted: GRAPH_STATUS_LABEL_I18N.rebutted,
   unaddressed: GRAPH_STATUS_LABEL_I18N.unaddressed,
   accepted: GRAPH_STATUS_LABEL_I18N.accepted,
+  rejected: GRAPH_STATUS_LABEL_I18N.rejected,
 };
 
 export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
@@ -324,6 +325,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
+  const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -421,6 +423,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     }));
   }, [layoutEdges, neighborSet]);
 
+  useEffect(() => {
+    if (!reactFlowRef.current || (nodes.length === 0 && edges.length === 0)) return;
+    reactFlowRef.current.fitView?.();
+  }, [nodes, edges]);
+
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
 
@@ -484,6 +491,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   if (!data || (data.units.length === 0 && data.nodes.length === 0)) {
     return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.empty', 'No argument map available.')}</p>;
   }
+  if (statusFilter.size > 0 && filteredData && filteredData.units.length === 0) {
+    return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.no_results', 'No argument units match the selected filters.')}</p>;
+  }
 
   return (
     <Tooltip.Provider delayDuration={300}>
@@ -546,6 +556,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             onEdgesChange={onEdgesChange}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onInit={(instance) => {
+              reactFlowRef.current = instance;
+            }}
             fitView
             proOptions={{ hideAttribution: true }}
           >

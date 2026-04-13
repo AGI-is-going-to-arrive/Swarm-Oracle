@@ -6,7 +6,7 @@
             tooltips, agent search.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
@@ -59,6 +59,7 @@ interface CausalGraphData {
   id: string;
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
+  available_branches?: string[];
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -69,6 +70,29 @@ const PERF_ANIMATION_LIMIT = 150;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
+
+function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'available_branches'>): string[] {
+  const explicit = Array.isArray(data.available_branches)
+    ? data.available_branches.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    : [];
+  if (explicit.length > 0) return [...new Set(explicit)].sort();
+
+  const branchSet = new Set<string>();
+  for (const node of data.nodes ?? []) {
+    const payload = (typeof node.payload === 'object' && node.payload && !Array.isArray(node.payload))
+      ? node.payload as Record<string, unknown>
+      : {};
+    const branch = payload.branch_id;
+    if (typeof branch === 'string' && branch) branchSet.add(branch);
+    const children = payload.children;
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        if (typeof child === 'string' && child) branchSet.add(child);
+      }
+    }
+  }
+  return [...branchSet].sort();
+}
 
 // ── Layout ──────────────────────────────────────────────────
 
@@ -140,6 +164,7 @@ export function CausalReviewView() {
   const [legendOpen, setLegendOpen] = useState(false);
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
+  const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
 
   const fetchGraph = useCallback(async () => {
     setLoading(true);
@@ -154,12 +179,7 @@ export function CausalReviewView() {
       const data = await res.json();
       setGraphData(data);
       setError(null);
-      const branchSet = new Set<string>();
-      for (const n of data.nodes ?? []) {
-        const bid = (n.payload as Record<string, unknown>)?.branch_id;
-        if (typeof bid === 'string' && bid) branchSet.add(bid);
-      }
-      setBranches([...branchSet].sort());
+      setBranches(extractAvailableBranches(data));
     } catch (err) { setError((err as Error).message); }
     setLoading(false);
   }, [id, branchId]);
@@ -243,6 +263,11 @@ export function CausalReviewView() {
 
   const nodes = flowNodes;
   const edges = flowEdges;
+
+  useEffect(() => {
+    if (!reactFlowRef.current || (flowNodes.length === 0 && flowEdges.length === 0)) return;
+    reactFlowRef.current.fitView?.();
+  }, [flowNodes, flowEdges]);
 
   const rawNodeMap = useMemo(() => {
     const m = new Map<string, GraphNodeData>();
@@ -395,6 +420,9 @@ export function CausalReviewView() {
               onEdgesChange={onEdgesChange}
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
+              onInit={(instance) => {
+                reactFlowRef.current = instance;
+              }}
               fitView
               proOptions={{ hideAttribution: true }}
             >

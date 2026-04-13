@@ -134,50 +134,65 @@ def _load_units_for_enrichment_sync(
     ]
 
 
-def _rebuild_turn_edges_sync(
+def _rebuild_snapshot_edges_sync(
     session: Session,
     *,
     snapshot_id: str,
-    speaker_side: str,
-    unit_refs: list[dict[str, str]],
 ) -> None:
-    source_node_ids = [
-        ref["node_id"]
-        for ref in unit_refs
-        if ref.get("node_id")
-    ]
-    if not source_node_ids:
-        return
-
     existing_edges = session.exec(
         select(GraphEdge).where(
             GraphEdge.snapshot_id == snapshot_id,
-            GraphEdge.source_node_id.in_(source_node_ids),
             GraphEdge.edge_type.in_(["supports", "rebuts"]),
         )
     ).all()
     for edge in existing_edges:
         session.delete(edge)
 
+    units = session.exec(
+        select(DebateArgumentUnit)
+        .join(GraphNode, GraphNode.id == DebateArgumentUnit.node_id)
+        .where(GraphNode.snapshot_id == snapshot_id)
+        .order_by(GraphNode.round_number.asc(), DebateArgumentUnit.created_at.asc(), DebateArgumentUnit.id.asc())
+    ).all()
+
+    if not units:
+        return
+
+    processed_claims: list[tuple[str, str]] = []
+    current_turn_id: str | None = None
     last_claim_id: str | None = None
-    for ref in unit_refs:
-        unit = session.get(DebateArgumentUnit, ref["id"])
-        node = session.get(GraphNode, ref["node_id"])
+    for unit in units:
+        node = session.get(GraphNode, unit.node_id)
         if unit is None or node is None:
             continue
 
+        payload = _load_payload(node.payload_json)
+        speaker_side = str(payload.get("side") or "")
+
+        if unit.turn_id != current_turn_id:
+            current_turn_id = unit.turn_id
+            last_claim_id = None
+
         if unit.unit_type == "claim":
             last_claim_id = node.id
+            processed_claims.append((node.id, speaker_side))
         elif unit.unit_type == "evidence" and last_claim_id is not None:
             session.add(GraphEdge(
                 snapshot_id=snapshot_id,
                 source_node_id=node.id,
                 target_node_id=last_claim_id,
                 edge_type="supports",
-                weight=0.7,
+                    weight=0.7,
             ))
         elif unit.unit_type == "rebuttal":
-            opp_claim = _find_opponent_last_claim(session, snapshot_id, speaker_side)
+            opp_claim = next(
+                (
+                    claim_id
+                    for claim_id, claim_side in reversed(processed_claims)
+                    if claim_side and claim_side != speaker_side
+                ),
+                None,
+            )
             if opp_claim:
                 session.add(GraphEdge(
                     snapshot_id=snapshot_id,
@@ -239,11 +254,9 @@ def _apply_enriched_units_sync(
 
         if updated:
             if snapshot_id is not None:
-                _rebuild_turn_edges_sync(
+                _rebuild_snapshot_edges_sync(
                     session,
                     snapshot_id=snapshot_id,
-                    speaker_side=speaker_side,
-                    unit_refs=unit_refs,
                 )
             session.commit()
     return updated

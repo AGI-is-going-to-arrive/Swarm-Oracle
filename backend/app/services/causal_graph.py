@@ -39,6 +39,22 @@ def _safe_parse_payload(s: str | None) -> dict[str, Any]:
         return {}
 
 
+def _collect_available_branches(nodes: list[GraphNode]) -> list[str]:
+    branch_ids: set[str] = set()
+    for node in nodes:
+        payload = _safe_parse_payload(node.payload_json)
+        branch_id = payload.get("branch_id")
+        if isinstance(branch_id, str) and branch_id:
+            branch_ids.add(branch_id)
+
+        children = payload.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, str) and child:
+                    branch_ids.add(child)
+    return sorted(branch_ids)
+
+
 def derive_stance_score(message) -> float:
     """v1 provisional heuristic — not a stable contract."""
     score = 0.0
@@ -273,6 +289,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         # Load nodes
         node_stmt = select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
         nodes = session.exec(node_stmt).all()
+        available_branches = _collect_available_branches(nodes)
 
         # Optionally filter by branch_id via payload
         if branch_id is not None:
@@ -302,6 +319,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
 
         return {
             "id": snapshot.id,
+            "available_branches": available_branches,
             "nodes": [
                 {
                     "id": n.id,

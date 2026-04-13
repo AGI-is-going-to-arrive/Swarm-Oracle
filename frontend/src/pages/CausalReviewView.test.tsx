@@ -6,6 +6,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
+const fitViewMock = vi.fn();
+
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
 }));
@@ -19,12 +21,22 @@ vi.mock('react-i18next', () => ({
 }));
 
 // Mock @xyflow/react to avoid canvas errors in jsdom
-vi.mock('@xyflow/react', () => {
+vi.mock('@xyflow/react', async () => {
+  const React = await import('react');
   const identity = <T,>(items: T[]) => [items, vi.fn(), vi.fn()] as const;
   return {
-    ReactFlow: ({ children }: { children?: React.ReactNode }) => (
-      <div data-testid="reactflow">{children}</div>
-    ),
+    ReactFlow: ({
+      children,
+      onInit,
+    }: {
+      children?: React.ReactNode;
+      onInit?: (instance: { fitView: typeof fitViewMock }) => void;
+    }) => {
+      React.useEffect(() => {
+        onInit?.({ fitView: fitViewMock });
+      }, [onInit]);
+      return <div data-testid="reactflow">{children}</div>;
+    },
     Background: () => null,
     Controls: () => null,
     MiniMap: () => null,
@@ -38,7 +50,10 @@ vi.mock('@xyflow/react', () => {
 import { Route, Routes } from 'react-router-dom';
 import { CausalReviewView } from './CausalReviewView';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  fitViewMock.mockReset();
+});
 
 const renderView = (path = '/sim/test-id/causal-map') =>
   render(
@@ -135,11 +150,12 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the branch selector visible when a branch filter is active', async () => {
+  it('keeps sibling branch options available when a branch filter is active', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         id: 'g1',
+        available_branches: ['br1', 'br2'],
         nodes: [
           {
             id: 'n1',
@@ -157,6 +173,33 @@ describe('CausalReviewView', () => {
     await screen.findByTestId('reactflow');
     expect(screen.getByLabelText('Select branch')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'All branches' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /br2/ })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('refits the viewport after search filtering changes the node set', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-fit',
+        available_branches: ['br1'],
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Agent Beta speaks', round: 1, payload: { agent_id: 'beta', branch_id: 'br1' } },
+        ],
+        edges: [],
+      }),
+    } as Response);
+    renderView();
+    await screen.findByTestId('reactflow');
+    const initialCalls = fitViewMock.mock.calls.length;
+
+    await user.type(screen.getByPlaceholderText('Search agent...'), 'beta');
+
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
     vi.restoreAllMocks();
   });
 

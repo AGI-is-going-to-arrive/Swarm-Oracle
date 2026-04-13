@@ -934,6 +934,7 @@
     },
     "argument": {
       "empty": "No argument map available.",
+      "no_results": "No argument units match the selected filters.",
       "claim": "Claim",
       "evidence": "Evidence",
       "rebuttal": "Rebuttal",

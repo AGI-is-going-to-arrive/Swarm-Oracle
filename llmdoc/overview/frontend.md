@@ -14,6 +14,7 @@
 - Playwright-based E2E
 
 当前默认构建/测试路径会把 `phaser` alias 到本地精简入口 `frontend/experiments/phaser-custom/entry.mjs`，用于降低默认包体。
+- `Vite manualChunks` 当前把 React 留在共享 `vendor`，不再单独拆 `react-vendor`；production preview 不再因为 vendor 循环 import 出现首页或图谱页白屏。
 
 ## 页面地图
 
@@ -133,6 +134,7 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
+| `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前用于约束 React 保持在共享 `vendor`，避免 preview 白屏 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
@@ -240,8 +242,11 @@
   - `GraphNodeCard`
   - `NodeDetailPanel`
   - `graphTokens`
-- `CausalReviewView` 当前在 `branch_id` 过滤生效时仍保留分支切换入口；即使当前只剩单分支数据，也能切回 `All branches`
+- `CausalReviewView` 当前通过后端 `available_branches` 保持分支 selector；即使当前带 `branch_id` 过滤，兄弟分支和 fork child branch 也不会从下拉里消失
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态
+- `CausalReviewView` 与 `ArgumentMap` 当前在 search / status filter / branch 切换后都会重新 `fitView()`，不会把视口停在旧图位置
+- `ArgumentMap` 当前在筛选结果为空时会显式显示空态文案，不再只留下空白 canvas
+- `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦
   - 保留 pointer click 打开详情

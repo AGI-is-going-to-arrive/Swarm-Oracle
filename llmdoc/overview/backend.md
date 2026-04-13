@@ -70,6 +70,7 @@
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
+- causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 
 ### Ending Room
 
@@ -170,7 +171,7 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
-  - 如果 enrichment 改写了同一 turn 内的 unit type，会同步重建这一 turn 的 `supports / rebuts` 边，避免节点类型和边语义脱节
+  - 如果 enrichment 改写了 unit type，会按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn，避免跨 turn 遗留陈旧 `rebuts`
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。

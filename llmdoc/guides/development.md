@@ -132,24 +132,28 @@ source .venv/bin/activate
 python -m pytest tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
 
 cd ../frontend
-npm test -- --run src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/lib/manualChunks.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
 # These two scripts use page.route() fixtures.
 # They do not need a live backend, but they do need a reachable frontend host.
-SWARM_URL=http://127.0.0.1:18928 node scripts/e2e-phase3-batch-a.mjs desktop
-SWARM_URL=http://127.0.0.1:18928 node scripts/e2e-phase3-batch-b.mjs desktop
+npm run preview -- --host 127.0.0.1 --port 18930
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 ```
 
 说明：
 
 - 这组回归当前覆盖：
+  - `manualChunks` production 分块回归（React 保持在共享 `vendor`）
   - `CausalReviewView`
   - `ArgumentMap`
+  - `NodeDetailPanel`
   - `GraphNodeCard`
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路
+- `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView`
   - graph export
@@ -159,6 +163,7 @@ SWARM_URL=http://127.0.0.1:18928 node scripts/e2e-phase3-batch-b.mjs desktop
   - strength meter
   - legend / empty-state 口径
   - 与结果页图谱接线是否还活着
+- 两条 `phase3` 脚本当前都走 `page.route()` fixtures；即使 preview 代理到 `backend` 返回 `ECONNREFUSED` 噪音，只要脚本 summary 是 `allPassed: true` 就按通过处理
 
 ### Resume / P1-9 定向回归
 
