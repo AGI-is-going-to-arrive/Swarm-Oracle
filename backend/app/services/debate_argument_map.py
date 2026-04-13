@@ -13,6 +13,8 @@ import logging
 import re
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -88,6 +90,16 @@ def _normalize_confidence(value: Any) -> float:
     return max(0.0, min(1.0, numeric))
 
 
+def _safe_parse_json(s: str | None):
+    """Parse JSON safely; return None on failure."""
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def _load_payload(payload_json: str | None) -> dict[str, Any]:
     if not payload_json:
         return {}
@@ -108,6 +120,7 @@ def _load_units_for_enrichment_sync(
                 DebateArgumentUnit.debate_id == debate_id,
                 DebateArgumentUnit.turn_id == turn_id,
             )
+            .order_by(DebateArgumentUnit.created_at, DebateArgumentUnit.id)
         ).all()
     return [
         {
@@ -121,13 +134,69 @@ def _load_units_for_enrichment_sync(
     ]
 
 
+def _rebuild_turn_edges_sync(
+    session: Session,
+    *,
+    snapshot_id: str,
+    speaker_side: str,
+    unit_refs: list[dict[str, str]],
+) -> None:
+    source_node_ids = [
+        ref["node_id"]
+        for ref in unit_refs
+        if ref.get("node_id")
+    ]
+    if not source_node_ids:
+        return
+
+    existing_edges = session.exec(
+        select(GraphEdge).where(
+            GraphEdge.snapshot_id == snapshot_id,
+            GraphEdge.source_node_id.in_(source_node_ids),
+            GraphEdge.edge_type.in_(["supports", "rebuts"]),
+        )
+    ).all()
+    for edge in existing_edges:
+        session.delete(edge)
+
+    last_claim_id: str | None = None
+    for ref in unit_refs:
+        unit = session.get(DebateArgumentUnit, ref["id"])
+        node = session.get(GraphNode, ref["node_id"])
+        if unit is None or node is None:
+            continue
+
+        if unit.unit_type == "claim":
+            last_claim_id = node.id
+        elif unit.unit_type == "evidence" and last_claim_id is not None:
+            session.add(GraphEdge(
+                snapshot_id=snapshot_id,
+                source_node_id=node.id,
+                target_node_id=last_claim_id,
+                edge_type="supports",
+                weight=0.7,
+            ))
+        elif unit.unit_type == "rebuttal":
+            opp_claim = _find_opponent_last_claim(session, snapshot_id, speaker_side)
+            if opp_claim:
+                session.add(GraphEdge(
+                    snapshot_id=snapshot_id,
+                    source_node_id=node.id,
+                    target_node_id=opp_claim,
+                    edge_type="rebuts",
+                    weight=0.8,
+                ))
+
+
 def _apply_enriched_units_sync(
     *,
     speaker_side: str,
     unit_refs_by_text: dict[str, dict[str, str]],
+    unit_refs: list[dict[str, str]],
     enriched_units: list[dict[str, Any]],
 ) -> int:
     updated = 0
+    snapshot_id: str | None = None
     with Session(get_engine()) as session:
         for item in enriched_units:
             if not isinstance(item, dict):
@@ -151,6 +220,8 @@ def _apply_enriched_units_sync(
             node = session.get(GraphNode, original_unit["node_id"])
             if node is None:
                 continue
+            if snapshot_id is None:
+                snapshot_id = node.snapshot_id
 
             unit.unit_type = next_type
             node.node_type = next_type
@@ -167,6 +238,13 @@ def _apply_enriched_units_sync(
             updated += 1
 
         if updated:
+            if snapshot_id is not None:
+                _rebuild_turn_edges_sync(
+                    session,
+                    snapshot_id=snapshot_id,
+                    speaker_side=speaker_side,
+                    unit_refs=unit_refs,
+                )
             session.commit()
     return updated
 
@@ -202,6 +280,34 @@ def _build_enrichment_prompt(
     )
 
 
+def _find_opponent_last_claim(
+    session: Session, snapshot_id: str, current_side: str,
+) -> str | None:
+    """Find most recent opposing claim. V1 heuristic.
+
+    Strategy: highest round_number wins (= most recent turn).
+    Same-round tiebreak: lowest node_key ASC (stable arbitrary;
+    node_key is SHA-256 hash of sentence text, deterministic but
+    NOT positional).
+    """
+    stmt = (
+        select(GraphNode)
+        .where(
+            GraphNode.snapshot_id == snapshot_id,
+            GraphNode.node_type == "claim",
+        )
+        .order_by(
+            GraphNode.round_number.desc().nulls_last(),
+            GraphNode.node_key.asc(),
+        )
+    )
+    for node in session.exec(stmt):
+        payload = _safe_parse_json(node.payload_json)
+        if payload and payload.get("side") and payload["side"] != current_side:
+            return node.id
+    return None
+
+
 def _get_or_create_snapshot(
     session: Session, debate_id: str,
 ) -> GraphSnapshot:
@@ -225,6 +331,7 @@ def _get_or_create_snapshot(
 
 def extract_argument_units(
     debate_id: str, turn_id: str, content: str, speaker_side: str,
+    *, turn_sequence: int | None = None,
 ) -> list[str]:
     """Extract argument units from a debate turn, return created unit IDs.
 
@@ -248,38 +355,72 @@ def extract_argument_units(
         )
         existing_hashes: set[str] = set(session.exec(existing_stmt).all())
 
+        turn_nodes: list[tuple[str, str]] = []  # (node_id, unit_type)
+
         for sentence in sentences:
             h = _semantic_hash(sentence)
             if h in existing_hashes:
                 continue
-            existing_hashes.add(h)
 
             unit_type = _classify_sentence(sentence)
 
-            node = GraphNode(
-                snapshot_id=snapshot.id,
-                node_key=h,
-                node_type=unit_type,
-                label=sentence[:120],
-                ref_model="debate_turn",
-                ref_id=turn_id,
-                payload_json=f'{{"side":"{speaker_side}"}}',
-            )
-            session.add(node)
-            session.flush()
+            try:
+                with session.begin_nested():
+                    node = GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key=h,
+                        node_type=unit_type,
+                        label=sentence[:120],
+                        round_number=turn_sequence,
+                        ref_model="debate_turn",
+                        ref_id=turn_id,
+                        payload_json=f'{{"side":"{speaker_side}"}}',
+                    )
+                    session.add(node)
+                    session.flush()
 
-            unit = DebateArgumentUnit(
-                debate_id=debate_id,
-                turn_id=turn_id,
-                node_id=node.id,
-                unit_type=unit_type,
-                status="standing",
-                canonical_text=sentence,
-                semantic_hash=h,
-            )
-            session.add(unit)
-            session.flush()
+                    unit = DebateArgumentUnit(
+                        debate_id=debate_id,
+                        turn_id=turn_id,
+                        node_id=node.id,
+                        unit_type=unit_type,
+                        status="standing",
+                        canonical_text=sentence,
+                        semantic_hash=h,
+                    )
+                    session.add(unit)
+                    session.flush()
+            except IntegrityError as exc:
+                exc_msg = str(getattr(exc, "orig", exc)).lower()
+                if "uq_debate_argument_unit_debate_hash" in exc_msg or "semantic_hash" in exc_msg:
+                    logger.info(
+                        "extract_argument_units dedup race debate=%s turn=%s hash=%s",
+                        debate_id, turn_id, h,
+                    )
+                    continue
+                raise
+
+            existing_hashes.add(h)
             created_ids.append(unit.id)
+            turn_nodes.append((node.id, unit_type))
+
+        # A7: Same-turn intra-edges (evidence→claim, rebuttal→opponent claim)
+        last_claim_id: str | None = None
+        for nid, utype in turn_nodes:
+            if utype == "claim":
+                last_claim_id = nid
+            elif utype == "evidence" and last_claim_id is not None:
+                session.add(GraphEdge(
+                    snapshot_id=snapshot.id, source_node_id=nid,
+                    target_node_id=last_claim_id, edge_type="supports", weight=0.7,
+                ))
+            elif utype == "rebuttal":
+                opp_claim = _find_opponent_last_claim(session, snapshot.id, speaker_side)
+                if opp_claim:
+                    session.add(GraphEdge(
+                        snapshot_id=snapshot.id, source_node_id=nid,
+                        target_node_id=opp_claim, edge_type="rebuts", weight=0.8,
+                    ))
 
         session.commit()
 
@@ -355,6 +496,7 @@ async def enrich_argument_units_for_turn(
         _apply_enriched_units_sync,
         speaker_side=speaker_side,
         unit_refs_by_text=by_text,
+        unit_refs=units,
         enriched_units=enriched_units,
     )
 
@@ -407,15 +549,12 @@ def schedule_argument_enrichment_for_turn(
 
 
 def link_verdict(debate_id: str, verdict_data: dict) -> None:
-    """Link a verdict to the argument map — mark accepted/unaddressed units.
+    """Link a verdict to the argument map — truly idempotent.
 
-    If verdict_data has ``supporting_turns`` (list of turn_ids), units from
-    those turns are marked ``accepted``; remaining ``standing`` units become
-    ``unaddressed``.
+    Re-queries ALL units (not just standing), resets all statuses,
+    creates/reuses verdict node, clears+rebuilds verdict edges.
+    unit.status and edge_type are always aligned (no dual semantics).
     """
-    # Extract supporting turn IDs from judge_rationale.
-    # verdict_data may be finalized_summary (with nested judge_rationale)
-    # or judge_rationale directly. supporting_turns may be list[str] or list[dict].
     rationale = verdict_data.get("judge_rationale") or verdict_data
     raw_turns = rationale.get("supporting_turns", [])
     supporting_turn_ids: set[str] = set()
@@ -426,24 +565,80 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
             supporting_turn_ids.add(item)
 
     with Session(get_engine()) as session:
-        stmt = select(DebateArgumentUnit).where(
+        # Step 1: Re-query ALL units for full re-evaluation
+        all_units_stmt = select(DebateArgumentUnit).where(
             DebateArgumentUnit.debate_id == debate_id,
-            DebateArgumentUnit.status == "standing",
         )
-        standing_units = session.exec(stmt).all()
+        all_units = session.exec(all_units_stmt).all()
 
-        for unit in standing_units:
+        # Step 2: Reset ALL unit statuses — aligned with edge types below
+        for unit in all_units:
             if unit.turn_id in supporting_turn_ids:
                 unit.status = "accepted"
             else:
                 unit.status = "unaddressed"
             session.add(unit)
 
+        # Step 3: Idempotent verdict node (reuse by fixed node_key)
+        snapshot = _get_or_create_snapshot(session, debate_id)
+        verdict_key = f"verdict_{debate_id}"
+        existing_verdict = session.exec(
+            select(GraphNode).where(
+                GraphNode.snapshot_id == snapshot.id,
+                GraphNode.node_key == verdict_key,
+            )
+        ).first()
+
+        if existing_verdict:
+            verdict_node = existing_verdict
+            verdict_node.label = str(verdict_data.get("verdict_tone", "Verdict"))[:120]
+            verdict_node.payload_json = json.dumps({
+                "winner": verdict_data.get("winner"),
+                "verdict_tone": verdict_data.get("verdict_tone"),
+            })
+            session.add(verdict_node)
+            # Clear ALL edges from verdict node before rebuild (covers legacy types)
+            old_edges = session.exec(
+                select(GraphEdge).where(
+                    GraphEdge.snapshot_id == snapshot.id,
+                    GraphEdge.source_node_id == verdict_node.id,
+                )
+            ).all()
+            for oe in old_edges:
+                session.delete(oe)
+            session.flush()
+        else:
+            verdict_label = verdict_data.get("verdict_tone", "Verdict")
+            verdict_node = GraphNode(
+                snapshot_id=snapshot.id,
+                node_key=verdict_key,
+                node_type="verdict",
+                label=str(verdict_label)[:120],
+                payload_json=json.dumps({
+                    "winner": verdict_data.get("winner"),
+                    "verdict_tone": verdict_data.get("verdict_tone"),
+                }),
+            )
+            session.add(verdict_node)
+            session.flush()
+
+        # Step 4: Rebuild edges — edge_type MATCHES unit.status
+        for unit in all_units:
+            if not unit.node_id:
+                continue
+            edge_type = "accepted" if unit.turn_id in supporting_turn_ids else "unaddressed"
+            session.add(GraphEdge(
+                snapshot_id=snapshot.id,
+                source_node_id=verdict_node.id,
+                target_node_id=unit.node_id,
+                edge_type=edge_type, weight=1.0,
+            ))
+
         session.commit()
 
     logger.info(
-        "link_verdict debate=%s supporting_turn_ids=%s standing=%d",
-        debate_id, supporting_turn_ids, len(standing_units),
+        "link_verdict debate=%s supporting_turn_ids=%s units=%d",
+        debate_id, supporting_turn_ids, len(all_units),
     )
 
 
@@ -485,20 +680,20 @@ def get_argument_map(debate_id: str) -> dict:
             "nodes": [
                 {
                     "id": n.id,
-                    "node_key": n.node_key,
-                    "node_type": n.node_type,
+                    "key": n.node_key,
+                    "type": n.node_type,
                     "label": n.label,
-                    "ref_id": n.ref_id,
-                    "payload_json": n.payload_json,
+                    "round": n.round_number,
+                    "payload": _safe_parse_json(n.payload_json),
                 }
                 for n in nodes
             ],
             "edges": [
                 {
                     "id": e.id,
-                    "source_node_id": e.source_node_id,
-                    "target_node_id": e.target_node_id,
-                    "edge_type": e.edge_type,
+                    "source": e.source_node_id,
+                    "target": e.target_node_id,
+                    "type": e.edge_type,
                     "weight": e.weight,
                     "label": e.label,
                 }
@@ -511,6 +706,7 @@ def get_argument_map(debate_id: str) -> dict:
                     "status": u.status,
                     "text": u.canonical_text,
                     "turn_id": u.turn_id,
+                    "node_id": u.node_id,
                 }
                 for u in units
             ],

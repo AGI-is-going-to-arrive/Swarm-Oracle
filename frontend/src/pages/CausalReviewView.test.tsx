@@ -1,7 +1,8 @@
 /**
  * Phase C1 — CausalReviewView tests
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -18,14 +19,21 @@ vi.mock('react-i18next', () => ({
 }));
 
 // Mock @xyflow/react to avoid canvas errors in jsdom
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="reactflow">{children}</div>
-  ),
-  Background: () => null,
-  Controls: () => null,
-  Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
-}));
+vi.mock('@xyflow/react', () => {
+  const identity = <T,>(items: T[]) => [items, vi.fn(), vi.fn()] as const;
+  return {
+    ReactFlow: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="reactflow">{children}</div>
+    ),
+    Background: () => null,
+    Controls: () => null,
+    MiniMap: () => null,
+    useNodesState: identity,
+    useEdgesState: identity,
+    Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+    MarkerType: { ArrowClosed: 'arrowclosed' },
+  };
+});
 
 import { Route, Routes } from 'react-router-dom';
 import { CausalReviewView } from './CausalReviewView';
@@ -108,6 +116,71 @@ describe('CausalReviewView', () => {
     renderView();
     await screen.findByText(/No causal graph data/);
     expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('renders agent search input (C5)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g1',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha' } }],
+        edges: [],
+      }),
+    } as Response);
+    renderView();
+    await screen.findByTestId('reactflow');
+    const searchInput = screen.getByPlaceholderText('Search agent...');
+    expect(searchInput).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the branch selector visible when a branch filter is active', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g1',
+        nodes: [
+          {
+            id: 'n1',
+            key: 'e1',
+            type: 'event',
+            label: 'Filtered branch node',
+            round: 1,
+            payload: { branch_id: 'br1' },
+          },
+        ],
+        edges: [],
+      }),
+    } as Response);
+    renderView('/sim/test-id/causal-map?branch_id=br1');
+    await screen.findByTestId('reactflow');
+    expect(screen.getByLabelText('Select branch')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'All branches' })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('recovers after retrying a failed fetch', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g1',
+          nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Recovered', round: 1, payload: null }],
+          edges: [],
+        }),
+      } as Response);
+
+    renderView();
+
+    await screen.findByRole('alert');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
     vi.restoreAllMocks();
   });
 

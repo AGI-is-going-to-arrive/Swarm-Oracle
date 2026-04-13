@@ -1,11 +1,18 @@
-"""Tests for causal graph service — F2 Phase C1."""
+"""Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
+
+import json
 
 import pytest
 from sqlmodel import Session, select
 
 from app.models.database import get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
-from app.services.causal_graph import append_round_nodes, build_snapshot, derive_stance_score
+from app.services.causal_graph import (
+    _safe_parse_payload,
+    append_round_nodes,
+    build_snapshot,
+    derive_stance_score,
+)
 
 
 # ── Mock message ────────────────────────────────────────
@@ -252,3 +259,195 @@ class TestDictMessageCompat:
         result = build_snapshot("sc_dict")
         assert len(result["nodes"]) == 2
         assert result["nodes"][0]["payload"]["agent_id"] == "a1"
+
+
+# ── _safe_parse_payload (A5) ───────────────────────────────
+
+
+class TestSafeParsePayload:
+    def test_valid_json(self):
+        assert _safe_parse_payload('{"a": 1}') == {"a": 1}
+
+    def test_none_returns_empty(self):
+        assert _safe_parse_payload(None) == {}
+
+    def test_empty_string_returns_empty(self):
+        assert _safe_parse_payload("") == {}
+
+    def test_invalid_json_returns_empty(self):
+        assert _safe_parse_payload("not json") == {}
+
+    def test_non_dict_json_returns_empty(self):
+        assert _safe_parse_payload("[1, 2, 3]") == {}
+
+
+# ── build_snapshot safe parse (A5) ─────────────────────────
+
+
+class TestBuildSnapshotSafeParse:
+    def test_excludes_fork_on_invalid_json(self):
+        """Fork node with corrupt payload_json should be excluded from branch filter."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
+        append_round_nodes("sc_sp1", "br1", 1, m1)
+        # Manually corrupt a fork node's payload
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_sp1")
+            ).first()
+            fork = GraphNode(
+                snapshot_id=snapshot.id,
+                node_key="fork_corrupt",
+                node_type="fork",
+                label="bad fork",
+                round_number=1,
+                payload_json="NOT_JSON",
+            )
+            session.add(fork)
+            session.commit()
+
+        result = build_snapshot("sc_sp1", branch_id="br1")
+        fork_nodes = [n for n in result["nodes"] if n["type"] == "fork"]
+        assert len(fork_nodes) == 0  # excluded due to corrupt payload
+
+    def test_survives_corrupt_event_payload(self):
+        """Event node with corrupt payload_json returns empty dict payload."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
+        append_round_nodes("sc_sp2", "br1", 1, m1)
+        # Corrupt the event node's payload
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_sp2")
+            ).first()
+            node = session.exec(
+                select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
+            ).first()
+            node.payload_json = "CORRUPT"
+            session.add(node)
+            session.commit()
+
+        result = build_snapshot("sc_sp2")
+        assert len(result["nodes"]) == 1
+        assert result["nodes"][0]["payload"] == {}
+
+    def test_includes_fork_for_child_branch(self):
+        """Fork node should be included when branch_id is in children list."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
+        fork = {"branch_id": "br_parent", "children": ["br_child1", "br_child2"], "reason": "split"}
+        append_round_nodes("sc_sp3", "br_parent", 1, m1, fork_event=fork)
+
+        result = build_snapshot("sc_sp3", branch_id="br_child1")
+        fork_nodes = [n for n in result["nodes"] if n["type"] == "fork"]
+        assert len(fork_nodes) == 1
+
+
+# ── Temporal edges (A1) ────────────────────────────────────
+
+
+class TestTemporalEdges:
+    def test_temporal_edges_created(self):
+        """Same agent across consecutive rounds should get temporal edge."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m_t1")]
+        m2 = [MockMessage(emotion="angry", agent_id="a1", id="m_t2")]
+        append_round_nodes("sc_te1", "br1", 1, m1)
+        append_round_nodes("sc_te1", "br1", 2, m2)
+
+        result = build_snapshot("sc_te1")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 1
+
+    def test_first_round_no_temporal(self):
+        """Round 1 should not create temporal edges."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m_fr1")]
+        append_round_nodes("sc_te2", "br1", 1, m1)
+
+        result = build_snapshot("sc_te2")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 0
+
+    def test_single_agent_chain(self):
+        """3 rounds same agent → 2 temporal edges."""
+        for r in range(1, 4):
+            m = [MockMessage(emotion="calm", agent_id="a1", id=f"m_sac{r}")]
+            append_round_nodes("sc_te3", "br1", r, m)
+
+        result = build_snapshot("sc_te3")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 2
+
+    def test_multi_branch_isolation(self):
+        """Temporal edges should not cross branches."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m_mbi1")]
+        m2 = [MockMessage(emotion="angry", agent_id="a1", id="m_mbi2")]
+        append_round_nodes("sc_te4", "br1", 1, m1)
+        append_round_nodes("sc_te4", "br2", 2, m2)  # different branch
+
+        result = build_snapshot("sc_te4")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 0  # no cross-branch temporal
+
+
+# ── Fork edge fallback (A2) ───────────────────────────────
+
+
+class TestForkEdgeFallback:
+    def test_fork_edges_fallback_query(self):
+        """Without trigger_node_ids, fork edges should connect same-round events."""
+        m = [MockMessage(emotion="calm", agent_id="a1", id="m_fef1")]
+        fork = {"branch_id": "br_new", "reason": "fallback test"}
+        append_round_nodes("sc_fef1", "br1", 2, m, fork_event=fork)
+
+        result = build_snapshot("sc_fef1")
+        caused = [e for e in result["edges"] if e["type"] == "caused"]
+        assert len(caused) >= 1
+
+    def test_fork_empty_messages_no_same_round(self):
+        """Fork with no messages and no trigger_ids should create no edges."""
+        fork = {"branch_id": "br_empty", "reason": "orphan fork"}
+        append_round_nodes("sc_fef2", "br1", 1, [], fork_event=fork)
+
+        result = build_snapshot("sc_fef2")
+        caused = [e for e in result["edges"] if e["type"] == "caused"]
+        assert len(caused) == 0
+
+
+# ── Stance shift (A3) ─────────────────────────────────────
+
+
+class TestStanceShift:
+    def test_above_threshold(self):
+        """Stance shift >= 0.4 should create stance_shift node."""
+        m1 = [MockMessage(emotion="cooperative", agent_id="a1", id="m_ss1")]  # 0.5
+        m2 = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss2")]  # -0.7
+        append_round_nodes("sc_ss1", "br1", 1, m1)
+        append_round_nodes("sc_ss1", "br1", 2, m2)
+
+        result = build_snapshot("sc_ss1")
+        shifts = [n for n in result["nodes"] if n["type"] == "stance_shift"]
+        assert len(shifts) == 1
+
+    def test_below_threshold(self):
+        """Small stance change should not create stance_shift node."""
+        m1 = [MockMessage(emotion="calm", agent_id="a1", id="m_ss3")]  # 0.1
+        m2 = [MockMessage(emotion="neutral", agent_id="a1", id="m_ss4")]  # 0.0
+        append_round_nodes("sc_ss2", "br1", 1, m1)
+        append_round_nodes("sc_ss2", "br1", 2, m2)
+
+        result = build_snapshot("sc_ss2")
+        shifts = [n for n in result["nodes"] if n["type"] == "stance_shift"]
+        assert len(shifts) == 0
+
+    def test_payload_contains_scores(self):
+        """Stance shift payload should include prev/new/delta scores."""
+        m1 = [MockMessage(emotion="confident", agent_id="a1", id="m_ss5")]  # 0.7
+        m2 = [MockMessage(emotion="angry", agent_id="a1", id="m_ss6")]  # -0.5
+        append_round_nodes("sc_ss3", "br1", 1, m1)
+        append_round_nodes("sc_ss3", "br1", 2, m2)
+
+        result = build_snapshot("sc_ss3")
+        shifts = [n for n in result["nodes"] if n["type"] == "stance_shift"]
+        assert len(shifts) == 1
+        p = shifts[0]["payload"]
+        assert "prev_score" in p
+        assert "new_score" in p
+        assert "delta" in p
+        assert p["delta"] >= 0.4

@@ -1555,6 +1555,7 @@ async def run_debate_background(
                             persisted_turn["id"],
                             content,
                             side.value,
+                            turn_sequence=persisted_turn["sequence"],
                         )
                         _argmap_schedule_enrichment(
                             debate_id=debate_id,
@@ -1664,6 +1665,7 @@ async def run_debate_background(
                     persisted_turn["id"],
                     content,
                     side.value,
+                    turn_sequence=persisted_turn["sequence"],
                 )
                 _argmap_schedule_enrichment(
                     debate_id=debate_id,

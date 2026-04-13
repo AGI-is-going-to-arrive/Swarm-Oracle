@@ -199,8 +199,7 @@ def test_get_argument_map_populated_after_extraction():
     # Every unit should have a corresponding node
     node_ids = {n["id"] for n in result["nodes"]}
     for unit in result["units"]:
-        # unit node_id is stored in the DebateArgumentUnit but surfaced via
-        # GraphNode; verify the node_key matches the unit's semantic hash
+        assert unit["node_id"] in node_ids
         assert unit["turn_id"] == "t1"
 
 
@@ -248,15 +247,63 @@ async def test_enrich_argument_units_for_turn_updates_types_and_payload():
 
     assert updated == 2
     result = get_argument_map("d-enrich")
-    node_types = {node["label"]: node["node_type"] for node in result["nodes"]}
+    node_types = {node["label"]: node["type"] for node in result["nodes"]}
     assert node_types["A 2024 study shows improvement."] == "evidence"
     assert node_types["However the rollout remains fragile."] == "rebuttal"
     payloads = {
-        node["label"]: node["payload_json"]
+        node["label"]: node["payload"]
         for node in result["nodes"]
     }
-    assert "\"stance\": \"supports_proposition\"" in payloads["A 2024 study shows improvement."]
-    assert "\"enriched_by\": \"llm\"" in payloads["However the rollout remains fragile."]
+    assert payloads["A 2024 study shows improvement."]["stance"] == "supports_proposition"
+    assert payloads["However the rollout remains fragile."]["enriched_by"] == "llm"
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_removes_stale_edges_after_type_changes():
+    extract_argument_units(
+        debate_id="d-enrich-edges",
+        turn_id="t1",
+        content="This is the supporting evidence. This is the claim.",
+        speaker_side="proposition",
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "This is the supporting evidence.",
+                            "type": "evidence",
+                            "stance": "supports_proposition",
+                            "confidence": 0.91,
+                        },
+                        {
+                            "text": "This is the claim.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.77,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-edges",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 2
+    result = get_argument_map("d-enrich-edges")
+    supports = [edge for edge in result["edges"] if edge["type"] == "supports"]
+    assert supports == []
 
 
 @pytest.mark.asyncio
@@ -289,3 +336,196 @@ async def test_enrich_argument_units_for_turn_keeps_rule_based_units_on_invalid_
     unit_types = {unit["text"]: unit["type"] for unit in result["units"]}
     assert unit_types["This is a claim."] == "claim"
     assert unit_types["Data confirms the trend."] == "evidence"
+
+
+# ── A9: Serialization new field names ──────────────────────
+
+
+def test_get_argument_map_uses_new_field_names():
+    """Nodes should use key/type/round/payload; edges should use source/target/type."""
+    extract_argument_units(
+        debate_id="d-serial", turn_id="t1",
+        content="AI will improve things.",
+        speaker_side="proposition",
+    )
+    result = get_argument_map("d-serial")
+    node = result["nodes"][0]
+    assert "key" in node
+    assert "type" in node
+    assert "round" in node
+    assert "payload" in node
+    # Old field names should NOT exist
+    assert "node_key" not in node
+    assert "node_type" not in node
+    assert "payload_json" not in node
+
+
+def test_get_argument_map_edges_use_new_field_names():
+    """Edges should use source/target/type instead of source_node_id/target_node_id/edge_type."""
+    extract_argument_units(
+        debate_id="d-serial-e", turn_id="t1",
+        content="This is a claim. A study shows evidence.",
+        speaker_side="proposition",
+    )
+    result = get_argument_map("d-serial-e")
+    assert result["edges"]
+    edge = result["edges"][0]
+    assert "source" in edge
+    assert "target" in edge
+    assert "type" in edge
+    assert "source_node_id" not in edge
+    assert "target_node_id" not in edge
+    assert "edge_type" not in edge
+
+
+def test_get_argument_map_units_have_node_id():
+    """Units should include node_id field."""
+    extract_argument_units(
+        debate_id="d-serial-u", turn_id="t1",
+        content="Some statement.",
+        speaker_side="proposition",
+    )
+    result = get_argument_map("d-serial-u")
+    assert len(result["units"]) == 1
+    assert "node_id" in result["units"][0]
+    assert result["units"][0]["node_id"] is not None
+
+
+# ── A7: Same-turn edges (supports/rebuts) ──────────────────
+
+
+def test_evidence_supports_claim():
+    """Evidence following a claim should create a supports edge."""
+    extract_argument_units(
+        debate_id="d-edge1", turn_id="t1",
+        content="AI is beneficial. A study shows 80% improvement.",
+        speaker_side="proposition",
+    )
+    result = get_argument_map("d-edge1")
+    supports = [e for e in result["edges"] if e["type"] == "supports"]
+    assert len(supports) >= 1
+
+
+def test_rebuttal_rebuts_opponent():
+    """Rebuttal should link to opponent's claim."""
+    # First: proposition makes a claim
+    extract_argument_units(
+        debate_id="d-edge2", turn_id="t1",
+        content="AI is great.",
+        speaker_side="proposition",
+    )
+    # Then: opposition rebuts
+    extract_argument_units(
+        debate_id="d-edge2", turn_id="t2",
+        content="However the cost is prohibitive.",
+        speaker_side="opposition",
+    )
+    result = get_argument_map("d-edge2")
+    rebuts = [e for e in result["edges"] if e["type"] == "rebuts"]
+    assert len(rebuts) >= 1
+
+
+# ── A10: round_number from turn_sequence ───────────────────
+
+
+def test_round_number_set_from_turn_sequence():
+    """GraphNode.round_number should be set when turn_sequence is provided."""
+    extract_argument_units(
+        debate_id="d-rn1", turn_id="t1",
+        content="First round claim.",
+        speaker_side="proposition",
+        turn_sequence=3,
+    )
+    result = get_argument_map("d-rn1")
+    assert result["nodes"][0]["round"] == 3
+
+
+# ── A8: Verdict idempotent ─────────────────────────────────
+
+
+def test_verdict_idempotent():
+    """Calling link_verdict twice with different supporting_turns re-evaluates all."""
+    extract_argument_units(
+        debate_id="d-videm", turn_id="t1",
+        content="Claim A.",
+        speaker_side="proposition",
+    )
+    extract_argument_units(
+        debate_id="d-videm", turn_id="t2",
+        content="Claim B.",
+        speaker_side="opposition",
+    )
+
+    # First verdict: t1 is supported
+    link_verdict("d-videm", {"supporting_turns": ["t1"]})
+    result1 = get_argument_map("d-videm")
+    statuses1 = {u["turn_id"]: u["status"] for u in result1["units"]}
+    assert statuses1["t1"] == "accepted"
+    assert statuses1["t2"] == "unaddressed"
+
+    # Second verdict: t2 is supported instead
+    link_verdict("d-videm", {"supporting_turns": ["t2"]})
+    result2 = get_argument_map("d-videm")
+    statuses2 = {u["turn_id"]: u["status"] for u in result2["units"]}
+    assert statuses2["t1"] == "unaddressed"
+    assert statuses2["t2"] == "accepted"
+
+
+def test_verdict_idempotent_updates_verdict_node_metadata():
+    extract_argument_units(
+        debate_id="d-vmeta", turn_id="t1",
+        content="Claim A.",
+        speaker_side="proposition",
+    )
+    extract_argument_units(
+        debate_id="d-vmeta", turn_id="t2",
+        content="Claim B.",
+        speaker_side="opposition",
+    )
+
+    link_verdict("d-vmeta", {"supporting_turns": ["t1"], "winner": "proposition", "verdict_tone": "Measured"})
+    link_verdict("d-vmeta", {"supporting_turns": ["t2"], "winner": "opposition", "verdict_tone": "Decisive"})
+
+    result = get_argument_map("d-vmeta")
+    verdict_nodes = [n for n in result["nodes"] if n["type"] == "verdict"]
+    assert len(verdict_nodes) == 1
+    assert verdict_nodes[0]["label"] == "Decisive"
+    assert verdict_nodes[0]["payload"]["winner"] == "opposition"
+    assert verdict_nodes[0]["payload"]["verdict_tone"] == "Decisive"
+
+
+def test_verdict_creates_verdict_node():
+    """link_verdict should create a verdict node in the graph."""
+    extract_argument_units(
+        debate_id="d-vnode", turn_id="t1",
+        content="Some claim.",
+        speaker_side="proposition",
+    )
+    link_verdict("d-vnode", {"supporting_turns": ["t1"], "verdict_tone": "Decisive"})
+    result = get_argument_map("d-vnode")
+    verdict_nodes = [n for n in result["nodes"] if n["type"] == "verdict"]
+    assert len(verdict_nodes) == 1
+    assert "Decisive" in verdict_nodes[0]["label"]
+
+
+def test_verdict_edges_match_unit_status():
+    """Verdict edge_type should match unit.status (no dual semantics)."""
+    extract_argument_units(
+        debate_id="d-vedge", turn_id="t1",
+        content="Accepted claim.",
+        speaker_side="proposition",
+    )
+    extract_argument_units(
+        debate_id="d-vedge", turn_id="t2",
+        content="Unaddressed claim.",
+        speaker_side="opposition",
+    )
+    link_verdict("d-vedge", {"supporting_turns": ["t1"]})
+
+    result = get_argument_map("d-vedge")
+    verdict_edges = [e for e in result["edges"]
+                     if e["type"] in ("accepted", "unaddressed")]
+    assert len(verdict_edges) >= 2
+    edge_types = {e["type"] for e in verdict_edges}
+    assert "accepted" in edge_types
+    assert "unaddressed" in edge_types

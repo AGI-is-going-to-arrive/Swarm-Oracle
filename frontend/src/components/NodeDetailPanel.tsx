@@ -5,6 +5,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useTranslation } from 'react-i18next';
+import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX } from '../lib/graphTokens';
 
 export interface NodeDetail {
   id: string;
@@ -23,28 +24,8 @@ interface NodeDetailPanelProps {
   onClose: () => void;
 }
 
-const TYPE_COLORS: Record<string, string> = {
-  // Causal node types
-  event: '#4a90d9',
-  intervention: '#e67e22',
-  stance_shift: '#9b59b6',
-  fork: '#e74c3c',
-  round: '#2ecc71',
-  verdict: '#f1c40f',
-  // Argument unit types
-  claim: '#4a90d9',
-  evidence: '#2ecc71',
-  rebuttal: '#e74c3c',
-  counter: '#e67e22',
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  standing: '#2ecc71',
-  rebutted: '#e74c3c',
-  unaddressed: '#888',
-  accepted: '#4a90d9',
-  rejected: '#e74c3c',
-};
+const TYPE_COLORS = NODE_TYPE_COLORS_HEX;
+const STATUS_COLORS = STATUS_COLORS_HEX;
 
 export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   const { t } = useTranslation();
@@ -154,28 +135,51 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
         </div>
       )}
 
-      {/* Payload (raw JSON for causal nodes) */}
-      {hasPayload && (
-        <div style={{ marginBottom: '0.5rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 4 }}>
-            {t('node_detail.payload', 'Payload')}
+      {/* Payload — semantic fields first, raw fallback */}
+      {hasPayload && (() => {
+        const p = typeof node.payload === 'object' && node.payload ? node.payload as Record<string, unknown> : null;
+        const agentName = p?.agent_id ?? p?.agent_name;
+        const emotion = p?.emotion;
+        const stance = p?.stance_score ?? p?.stance;
+        const side = p?.side;
+        const hasSemanticFields = agentName || emotion || stance !== undefined || side;
+        return (
+          <div style={{ marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 4 }}>
+              {t('node_detail.payload', 'Payload')}
+            </div>
+            {hasSemanticFields ? (
+              <div style={{ fontSize: '0.8rem', color: '#ccc', background: '#252540', padding: '8px', borderRadius: 4 }}>
+                {agentName != null && <div>{t('node_detail.agent', 'Agent')}: <strong>{String(agentName)}</strong></div>}
+                {emotion != null && <div>{t('node_detail.emotion', 'Emotion')}: {String(emotion)}</div>}
+                {stance != null && <div>{t('node_detail.stance', 'Stance')}: {String(stance)}</div>}
+                {side != null && <div>{t('node_detail.side', 'Side')}: {String(side)}</div>}
+              </div>
+            ) : (
+              <pre style={{
+                fontSize: '0.7rem', color: '#aaa', background: '#252540',
+                padding: '8px', borderRadius: 4, margin: 0,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                maxHeight: 160, overflow: 'auto',
+              }}>
+                {typeof node.payload === 'string' ? node.payload : JSON.stringify(node.payload, null, 2)}
+              </pre>
+            )}
           </div>
-          <pre style={{
-            fontSize: '0.7rem',
-            color: '#aaa',
-            background: '#252540',
-            padding: '8px',
-            borderRadius: 4,
-            margin: 0,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            maxHeight: 160,
-            overflow: 'auto',
-          }}>
-            {typeof node.payload === 'string' ? node.payload : JSON.stringify(node.payload, null, 2)}
-          </pre>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* B8: Copy Reference */}
+      <button
+        onClick={() => navigator.clipboard?.writeText(node.id)}
+        style={{
+          padding: '4px 10px', borderRadius: 4, border: '1px solid #555',
+          background: 'transparent', color: '#8ab4f8', cursor: 'pointer',
+          fontSize: '0.75rem', marginTop: '0.25rem',
+        }}
+      >
+        {t('node_detail.copy_ref', 'Copy Reference')}
+      </button>
     </div>
   );
 }

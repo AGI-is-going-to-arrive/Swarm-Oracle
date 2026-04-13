@@ -965,8 +965,9 @@ async def get_debate_argument_map(
         return await asyncio.to_thread(_load_debate_argument_map_sync, debate_id, principal)
     except HTTPException:
         raise
-    except Exception:
-        return {"snapshot_id": None, "nodes": [], "edges": [], "units": []}
+    except Exception as exc:
+        logger.warning("argument_map load failed debate=%s: %s", debate_id, exc, exc_info=True)
+        return {"snapshot_id": None, "nodes": [], "edges": [], "units": [], "error": "ARGUMENT_MAP_LOAD_FAILED"}
 
 
 @router.post("/api/debate/{debate_id}/predict")

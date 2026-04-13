@@ -2,6 +2,8 @@
    Phase 3 F2 — Causal Review View
    Displays a DAG of causal events extracted from a simulation.
    Uses @xyflow/react (already a dependency) with dagre layout.
+   Phase C: icons, OKLCH cards, edge styling, neighbor highlight,
+            tooltips, agent search.
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -11,15 +13,29 @@ import { buildSessionHeaders } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
+import GraphNodeCard from '../components/GraphNodeCard';
+import dagre from 'dagre';
+import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   ReactFlow,
   Background,
   Controls,
+  MiniMap,
+  MarkerType,
+  useNodesState,
+  useEdgesState,
   type Node,
   type Edge,
-  Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { useSearchParams } from 'react-router-dom';
+import { NODE_TYPE_COLORS_HEX, EDGE_STYLES, NODE_ICONS } from '../lib/graphTokens';
+
+// ── Custom node type (stable reference) ────────────────────
+
+const nodeTypes = { graphCard: GraphNodeCard };
+
+// ── Types ───────────────────────────────────────────────────
 
 interface GraphNodeData {
   id: string;
@@ -45,104 +61,199 @@ interface CausalGraphData {
   edges: GraphEdgeData[];
 }
 
-const NODE_TYPE_COLORS: Record<string, string> = {
-  event: '#4a90d9',
-  intervention: '#e67e22',
-  stance_shift: '#9b59b6',
-  fork: '#e74c3c',
-  round: '#2ecc71',
-  verdict: '#f1c40f',
-};
+// ── Constants ───────────────────────────────────────────────
+
+const NODE_W = 200;
+const NODE_H = 50;
+const PERF_ANIMATION_LIMIT = 150;
+const PERF_TOOLTIP_LIMIT = 150;
+const PERF_TEXT_FALLBACK_LIMIT = 500;
+const NO_ARROW_TYPES = new Set(['temporal']);
+
+// ── Layout ──────────────────────────────────────────────────
 
 function layoutDagre(nodes: GraphNodeData[], edges: GraphEdgeData[]): { nodes: Node[]; edges: Edge[] } {
-  // Simple left-to-right layout by round number
-  const sorted = [...nodes].sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
-  const roundGroups = new Map<number, GraphNodeData[]>();
-  for (const n of sorted) {
-    const r = n.round ?? 0;
-    if (!roundGroups.has(r)) roundGroups.set(r, []);
-    roundGroups.get(r)!.push(n);
-  }
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: 'LR', ranksep: 80, nodesep: 40 });
 
-  const flowNodes: Node[] = [];
-  let x = 0;
-  for (const [, group] of [...roundGroups.entries()].sort((a, b) => a[0] - b[0])) {
-    let y = 0;
-    for (const n of group) {
-      flowNodes.push({
-        id: n.id,
-        position: { x, y },
-        data: { label: n.label || n.key },
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
-        style: {
-          background: NODE_TYPE_COLORS[n.type] ?? '#555',
-          color: '#fff',
-          borderRadius: 6,
-          padding: '8px 12px',
-          fontSize: '0.8rem',
-          border: 'none',
-          maxWidth: 180,
-        },
-      });
-      y += 80;
-    }
-    x += 240;
-  }
+  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  for (const e of edges) g.setEdge(e.source, e.target);
+  dagre.layout(g);
 
-  const flowEdges: Edge[] = edges.map(e => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    label: e.label ?? undefined,
-    animated: e.type === 'caused',
-    style: { stroke: '#888' },
-  }));
+  const disableAnim = nodes.length > PERF_ANIMATION_LIMIT;
+  const tooltipDisabled = nodes.length > PERF_TOOLTIP_LIMIT;
+
+  const flowNodes: Node[] = nodes.map(n => {
+    const pos = g.node(n.id);
+    const fullLabel = n.label || n.key;
+    const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '\u2026' : fullLabel;
+    return {
+      id: n.id,
+      type: 'graphCard',
+      position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
+      data: {
+        label,
+        fullLabel,
+        iconName: NODE_ICONS[n.type] ?? '',
+        bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? '#555',
+        borderColor: '',
+        dimmed: false,
+        tooltipDisabled,
+        sourcePos: 'right',
+        targetPos: 'left',
+      },
+    };
+  });
+
+  // C2: Edge styling from EDGE_STYLES
+  const flowEdges: Edge[] = edges.map(e => {
+    const style = EDGE_STYLES[e.type];
+    const stroke = style?.stroke ?? '#888';
+    return {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      label: e.label ?? undefined,
+      animated: !disableAnim && (style?.animated ?? false),
+      style: { stroke, strokeDasharray: style?.strokeDasharray },
+      markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
+    };
+  });
 
   return { nodes: flowNodes, edges: flowEdges };
 }
+
+// ── Component ───────────────────────────────────────────────
 
 export function CausalReviewView() {
   const { t } = useTranslation();
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const branchId = searchParams.get('branch_id') ?? undefined;
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
+  const [branches, setBranches] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  const [legendOpen, setLegendOpen] = useState(false);
+  // C5: Agent search
+  const [agentSearch, setAgentSearch] = useState('');
 
   const fetchGraph = useCallback(async () => {
     setLoading(true);
     setSelectedNode(null);
+    setError(null);
     try {
-      const res = await fetch(`/api/scenario/${id}/causal-graph`, {
-        headers: buildSessionHeaders(),
-      });
+      const url = branchId
+        ? `/api/scenario/${id}/causal-graph?branch_id=${encodeURIComponent(branchId)}`
+        : `/api/scenario/${id}/causal-graph`;
+      const res = await fetch(url, { headers: buildSessionHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setGraphData(data);
+      setError(null);
+      const branchSet = new Set<string>();
+      for (const n of data.nodes ?? []) {
+        const bid = (n.payload as Record<string, unknown>)?.branch_id;
+        if (typeof bid === 'string' && bid) branchSet.add(bid);
+      }
+      setBranches([...branchSet].sort());
     } catch (err) { setError((err as Error).message); }
     setLoading(false);
-  }, [id]);
+  }, [id, branchId]);
 
   useEffect(() => {
     if (!id || !enabled) return;
     fetchGraph();
   }, [id, fetchGraph, enabled]);
 
-  const { nodes, edges } = useMemo(() => {
-    if (!graphData || graphData.nodes.length === 0) return { nodes: [], edges: [] };
-    return layoutDagre(graphData.nodes, graphData.edges);
-  }, [graphData]);
+  // C5: Filtered data based on agent search
+  const filteredData = useMemo(() => {
+    if (!graphData || !agentSearch.trim()) return graphData;
+    const search = agentSearch.toLowerCase();
+    const matchingNodes = graphData.nodes.filter(n => {
+      const p = (typeof n.payload === 'object' && n.payload ? n.payload : {}) as Record<string, unknown>;
+      const agentId = String(p.agent_id ?? '').toLowerCase();
+      const agentName = String(p.agent_name ?? '').toLowerCase();
+      const label = n.label.toLowerCase();
+      return agentId.includes(search) || agentName.includes(search) || label.includes(search);
+    });
+    const nodeIds = new Set(matchingNodes.map(n => n.id));
+    const matchingEdges = graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+    return { ...graphData, nodes: matchingNodes, edges: matchingEdges };
+  }, [graphData, agentSearch]);
 
-  const onNodesChange = useCallback(() => {}, []);
-  const onEdgesChange = useCallback(() => {}, []);
+  const layoutResult = useMemo(() => {
+    if (!filteredData || filteredData.nodes.length === 0) return { nodes: [], edges: [] };
+    return layoutDagre(filteredData.nodes, filteredData.edges);
+  }, [filteredData]);
+
+  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(layoutResult.nodes);
+  const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(layoutResult.edges);
+
+  // Sync layout result into state when data/filter changes
+  useEffect(() => {
+    setFlowNodes(layoutResult.nodes);
+    setFlowEdges(layoutResult.edges);
+  }, [layoutResult, setFlowNodes, setFlowEdges]);
+
+  // Clear stale selection when filtered node disappears
+  useEffect(() => {
+    if (!selectedNode || !filteredData) return;
+    if (!filteredData.nodes.some(n => n.id === selectedNode.id)) setSelectedNode(null);
+  }, [selectedNode, filteredData]);
+
+  // C3: Neighbor highlight based on selected node
+  const neighborSet = useMemo(() => {
+    if (!selectedNode || !filteredData) return null;
+    const set = new Set<string>([selectedNode.id]);
+    for (const e of filteredData.edges) {
+      if (e.source === selectedNode.id) set.add(e.target);
+      if (e.target === selectedNode.id) set.add(e.source);
+    }
+    return set;
+  }, [selectedNode, filteredData]);
+
+  // Apply highlight to flow nodes
+  useEffect(() => {
+    setFlowNodes(prev => prev.map(n => ({
+      ...n,
+      data: {
+        ...n.data,
+        dimmed: neighborSet ? !neighborSet.has(n.id) : false,
+      },
+    })));
+  }, [neighborSet, setFlowNodes]);
+
+  // Apply highlight to flow edges
+  useEffect(() => {
+    setFlowEdges(prev => {
+      if (!neighborSet) return prev.map(e => ({ ...e, style: { ...e.style, opacity: 1 } }));
+      return prev.map(e => ({
+        ...e,
+        style: {
+          ...e.style,
+          opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.1,
+        },
+      }));
+    });
+  }, [neighborSet, setFlowEdges]);
+
+  const nodes = flowNodes;
+  const edges = flowEdges;
 
   const rawNodeMap = useMemo(() => {
     const m = new Map<string, GraphNodeData>();
-    if (graphData) for (const n of graphData.nodes) m.set(n.id, n);
+    if (filteredData) for (const n of filteredData.nodes) m.set(n.id, n);
     return m;
-  }, [graphData]);
+  }, [filteredData]);
+
+  const availableBranches = useMemo(() => {
+    if (!branchId) return branches;
+    return branches.includes(branchId) ? branches : [branchId, ...branches];
+  }, [branchId, branches]);
 
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const raw = rawNodeMap.get(node.id);
@@ -155,6 +266,9 @@ export function CausalReviewView() {
       payload: raw.payload,
     });
   }, [rawNodeMap]);
+
+  // C3: Background click resets highlight + closes detail panel
+  const onPaneClick = useCallback(() => setSelectedNode(null), []);
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
@@ -177,6 +291,12 @@ export function CausalReviewView() {
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}>
         <h1>{t('causal.title', 'Causal Graph')}</h1>
         <p role="alert" style={{ color: '#e74c3c' }}>{error}</p>
+        <button
+          onClick={() => void fetchGraph()}
+          style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', marginRight: '0.75rem' }}
+        >
+          {t('common.retry', 'Retry')}
+        </button>
         <Link to={`/result/${id}`} style={{ color: '#8ab4f8' }}>
           {t('common.back_to_result', 'Back to Result')}
         </Link>
@@ -185,51 +305,117 @@ export function CausalReviewView() {
   }
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333' }}>
-        <Link to={`/result/${id}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
-          ← {t('common.back_to_result', 'Back to Result')}
-        </Link>
-        <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{t('causal.title', 'Causal Graph')}</h1>
-        <span style={{ color: '#888', fontSize: '0.85rem' }}>
-          {nodes.length} {t('causal.nodes', 'nodes')} · {edges.length} {t('causal.edges', 'edges')}
-        </span>
-        {nodes.length > 0 && (
-          <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
-        )}
-      </div>
-
-      {nodes.length === 0 ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <p style={{ color: '#888' }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
-        </div>
-      ) : (
-        <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick}
-            fitView
-            proOptions={{ hideAttribution: true }}
+    <Tooltip.Provider delayDuration={300}>
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
+          <Link to={`/result/${id}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
+            &larr; {t('common.back_to_result', 'Back to Result')}
+          </Link>
+          <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{t('causal.title', 'Causal Graph')}</h1>
+          <span style={{ color: '#888', fontSize: '0.85rem' }}>
+            {nodes.length} {t('causal.nodes', 'nodes')} &middot; {edges.length} {t('causal.edges', 'edges')}
+          </span>
+          {/* B6: Branch selector */}
+          {(availableBranches.length > 1 || Boolean(branchId)) && (
+            <select
+              value={branchId ?? ''}
+              onChange={e => {
+                const val = e.target.value;
+                if (val) setSearchParams({ branch_id: val });
+                else setSearchParams({});
+              }}
+              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff', fontSize: '0.8rem' }}
+              aria-label={t('causal.branch_select', 'Select branch')}
+            >
+              <option value="">{t('causal.all_branches', 'All branches')}</option>
+              {availableBranches.map(b => <option key={b} value={b}>{b.slice(0, 8)}&hellip;</option>)}
+            </select>
+          )}
+          {/* C5: Agent search */}
+          <input
+            type="search"
+            value={agentSearch}
+            onChange={e => setAgentSearch(e.target.value)}
+            placeholder={t('causal.search_agent', 'Search agent...')}
+            aria-label={t('causal.search_agent', 'Search agent...')}
+            style={{
+              padding: '4px 8px', borderRadius: 4, border: '1px solid #555',
+              background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
+            }}
+          />
+          {nodes.length > 0 && (
+            <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
+          )}
+          {/* B6: Legend toggle */}
+          <button
+            onClick={() => setLegendOpen(v => !v)}
+            style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
           >
-            <Background />
-            <Controls />
-          </ReactFlow>
-          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+            {legendOpen ? t('causal.hide_legend', 'Hide Legend') : t('causal.show_legend', 'Legend')}
+          </button>
         </div>
-      )}
-
-      {/* a11y: screen reader fallback list (Gemini review recommendation) */}
-      <div className="sr-only" role="list" aria-label={t('causal.a11y_list', 'Causal events list')}>
-        {graphData?.nodes.map(n => (
-          <div key={n.id} role="listitem">
-            {n.type}: {n.label} ({t('causal.round_label', 'Round')} {n.round ?? '?'})
+        {/* B6: Collapsible Legend */}
+        {legendOpen && (
+          <div style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888', borderBottom: '1px solid #333' }}>
+            {Object.entries(NODE_TYPE_COLORS_HEX).filter(([k]) => ['event', 'intervention', 'stance_shift', 'fork', 'verdict'].includes(k)).map(([type, color]) => (
+              <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />
+                {t(`causal.type_${type}`, type.replace('_', ' '))}
+              </span>
+            ))}
           </div>
-        ))}
+        )}
+
+        {nodes.length === 0 && !agentSearch ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <p style={{ color: '#888' }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
+          </div>
+        ) : nodes.length === 0 && agentSearch ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <p style={{ color: '#888' }}>{t('causal.no_results', 'No nodes match your search.')}</p>
+          </div>
+        ) : nodes.length > PERF_TEXT_FALLBACK_LIMIT ? (
+          <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }}>
+            <p style={{ color: '#888', marginBottom: '0.5rem' }}>{t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')}</p>
+            <div role="list">
+              {filteredData?.nodes.map(n => (
+                <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
+                  [{n.type}] {n.label} (R{n.round ?? '?'})
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeClick={onNodeClick}
+              onPaneClick={onPaneClick}
+              fitView
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background />
+              <Controls />
+              <MiniMap nodeColor={(n) => (n.data?.bgColor as string) || '#555'} nodeStrokeWidth={3} style={{ background: '#1a1a2e' }} />
+            </ReactFlow>
+            <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+          </div>
+        )}
+
+        {/* a11y: screen reader fallback list */}
+        <div className="sr-only" role="list" aria-label={t('causal.a11y_list', 'Causal events list')}>
+          {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
+            <div key={n.id} role="listitem">
+              {n.type}: {n.label} ({t('causal.round_label', 'Round')} {n.round ?? '?'})
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </Tooltip.Provider>
   );
 }
 

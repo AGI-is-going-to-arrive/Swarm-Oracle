@@ -908,7 +908,19 @@
       "empty": "No causal graph data available for this scenario.",
       "a11y_list": "Causal events list",
       "feature_disabled": "Causal graph feature is not enabled.",
-      "round_label": "Round"
+      "round_label": "Round",
+      "search_agent": "Search agent...",
+      "no_results": "No nodes match your search.",
+      "branch_select": "Select branch",
+      "all_branches": "All branches",
+      "show_legend": "Legend",
+      "hide_legend": "Hide Legend",
+      "text_fallback": "Graph too large for interactive view. Showing text list.",
+      "type_event": "Event",
+      "type_intervention": "Intervention",
+      "type_stance_shift": "Stance Shift",
+      "type_fork": "Fork",
+      "type_verdict": "Verdict"
     },
     "compare": {
       "title": "Counterfactual Compare",
@@ -937,7 +949,17 @@
       "status_rejected": "Rejected",
       "live_title": "Argument Map",
       "live_collapse": "Collapse",
-      "live_expand": "Expand"
+      "live_expand": "Expand",
+      "filter_status": "Filter:",
+      "error": {
+        "unauthorized": "No permission to view this map",
+        "disabled": "Feature not enabled",
+        "not_found": "Data not found",
+        "server": "Server error",
+        "network": "Network error",
+        "too_large": "Too many nodes to display",
+        "load_failed": "Failed to load argument map"
+      }
     },
     "agent_profile": {
       "dialog_label": "Agent Profile",
@@ -979,7 +1001,23 @@
       "type_evidence": "Evidence",
       "type_rebuttal": "Rebuttal",
       "type_counter": "Counter",
-      "turn": "Turn"
+      "turn": "Turn",
+      "agent": "Agent",
+      "emotion": "Emotion",
+      "stance": "Stance",
+      "side": "Side",
+      "copy_ref": "Copy Reference"
+    },
+    "counterfactual": {
+      "title": "What-If Replay",
+      "agent": "Agent",
+      "select_agent": "-- Select --",
+      "round": "Round",
+      "replacement": "Alternative statement",
+      "placeholder": "What should this agent have said instead?",
+      "created": "Counterfactual branch created!",
+      "submit": "Create What-If",
+      "limit_reached": "Maximum 3 counterfactuals per scenario"
     },
     "resume": {
       "title": "Resume Simulation",

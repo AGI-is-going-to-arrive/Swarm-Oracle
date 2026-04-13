@@ -2,31 +2,47 @@
    Phase 3 F6 — Debate Argument Map Panel
    Displays argument units as an interactive DAG using @xyflow/react.
    Upgraded from flat tree to ReactFlow graph (P1-6).
+   Phase C: icons, OKLCH cards, edge styling, neighbor highlight,
+            tooltips, status filter.
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
 import dagre from 'dagre';
+import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
+  MarkerType,
   type Node,
   type Edge,
-  Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { ExportPanel } from './ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
+import GraphNodeCard from './GraphNodeCard';
+import {
+  NODE_TYPE_COLORS_HEX,
+  STATUS_COLORS_HEX,
+  EDGE_STYLES,
+  NODE_ICONS,
+  TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
+  STATUS_LABEL_I18N as GRAPH_STATUS_LABEL_I18N,
+} from '../lib/graphTokens';
+
+// ── Custom node type (stable reference) ────────────────────
+
+const nodeTypes = { graphCard: GraphNodeCard };
 
 // ── Data Types ──────────────────────────────────────────────
 
 interface ArgumentUnit {
   id: string;
-  type: string;  // claim | evidence | rebuttal | counter
-  status: string; // standing | rebutted | unaddressed | accepted | rejected
+  type: string;
+  status: string;
   text: string;
   turn_id: string;
   node_id?: string;
@@ -55,38 +71,79 @@ interface ArgumentMapData {
   nodes: GraphNodeRaw[];
   edges: GraphEdgeRaw[];
   units: ArgumentUnit[];
+  error?: string;
 }
+
+// ── B1: Safe adapters ───────────────────────────────────────
+
+function safeParsePayload(v: unknown): Record<string, unknown> {
+  if (v === null || v === undefined) return {};
+  if (typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+  if (typeof v === 'string') {
+    try { const parsed = JSON.parse(v); return typeof parsed === 'object' && parsed && !Array.isArray(parsed) ? parsed : {}; }
+    catch { return {}; }
+  }
+  return {};
+}
+
+function mapBackendNode(raw: Record<string, unknown>): GraphNodeRaw {
+  return {
+    id: String(raw.id ?? ''),
+    key: String(raw.key ?? raw.node_key ?? ''),
+    type: String(raw.type ?? raw.node_type ?? 'unknown'),
+    label: String(raw.label ?? ''),
+    round: typeof raw.round === 'number' ? raw.round : (typeof raw.round_number === 'number' ? raw.round_number : null),
+    payload: safeParsePayload(raw.payload ?? raw.payload_json),
+  };
+}
+
+function mapBackendEdge(raw: Record<string, unknown>): GraphEdgeRaw {
+  return {
+    id: String(raw.id ?? ''),
+    source: String(raw.source ?? raw.source_node_id ?? ''),
+    target: String(raw.target ?? raw.target_node_id ?? ''),
+    type: String(raw.type ?? raw.edge_type ?? ''),
+    weight: typeof raw.weight === 'number' ? raw.weight : null,
+    label: typeof raw.label === 'string' ? raw.label : null,
+  };
+}
+
+function mapBackendUnit(raw: Record<string, unknown>): ArgumentUnit {
+  return {
+    id: String(raw.id ?? ''),
+    type: String(raw.type ?? raw.unit_type ?? 'claim'),
+    status: String(raw.status ?? 'standing'),
+    text: String(raw.text ?? raw.canonical_text ?? ''),
+    turn_id: String(raw.turn_id ?? ''),
+    node_id: typeof raw.node_id === 'string' ? raw.node_id : undefined,
+  };
+}
+
+// ── B2: Error tiers ─────────────────────────────────────────
+
+type ErrorTier = 'unauthorized' | 'disabled' | 'not_found' | 'server_error' | 'network' | 'too_large' | 'load_failed' | null;
+
+const ERROR_I18N: Record<string, [string, string]> = {
+  unauthorized: ['argument.error.unauthorized', 'No permission'],
+  disabled: ['argument.error.disabled', 'Feature not enabled'],
+  not_found: ['argument.error.not_found', 'Data not found'],
+  server_error: ['argument.error.server', 'Server error'],
+  network: ['argument.error.network', 'Network error'],
+  too_large: ['argument.error.too_large', 'Too many nodes'],
+  load_failed: ['argument.error.load_failed', 'Load failed'],
+};
 
 // ── Style Constants ─────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
-  standing: '#2ecc71',
-  rebutted: '#e74c3c',
-  unaddressed: '#888',
-  accepted: '#4a90d9',
-  rejected: '#e74c3c',
-};
-
-const TYPE_COLORS: Record<string, string> = {
-  claim: '#4a90d9',
-  evidence: '#2ecc71',
-  rebuttal: '#e74c3c',
-  counter: '#e67e22',
-};
-
-// Labels resolved via i18n in render — key → [i18n_key, fallback]
 const TYPE_LABEL_I18N: Record<string, [string, string]> = {
-  claim: ['argument.claim', 'Claim'],
-  evidence: ['argument.evidence', 'Evidence'],
-  rebuttal: ['argument.rebuttal', 'Rebuttal'],
-  counter: ['argument.counter', 'Counter'],
+  claim: GRAPH_TYPE_LABEL_I18N.claim,
+  evidence: GRAPH_TYPE_LABEL_I18N.evidence,
+  rebuttal: GRAPH_TYPE_LABEL_I18N.rebuttal,
+  counter: GRAPH_TYPE_LABEL_I18N.counter,
 };
 
-const EDGE_STYLE_MAP: Record<string, { stroke: string; animated: boolean }> = {
-  supports: { stroke: '#2ecc71', animated: false },
-  attacks: { stroke: '#e74c3c', animated: true },
-  rebuts: { stroke: '#e67e22', animated: true },
-};
+const PERF_TOOLTIP_LIMIT = 150;
+const NO_ARROW_TYPES = new Set(['temporal']);
 
 // ── Strength Meter (P1-7) ───────────────────────────────────
 
@@ -95,13 +152,12 @@ interface StrengthMeterProps {
   compact?: boolean;
 }
 
-const STATUS_ORDER = ['accepted', 'standing', 'unaddressed', 'rebutted', 'rejected'] as const;
+const STATUS_ORDER = ['accepted', 'standing', 'unaddressed', 'rebutted'] as const;
 const STATUS_LABEL_I18N: Record<string, [string, string]> = {
-  standing: ['argument.status_standing', 'Standing'],
-  rebutted: ['argument.status_rebutted', 'Rebutted'],
-  unaddressed: ['argument.status_unaddressed', 'Unaddressed'],
-  accepted: ['argument.status_accepted', 'Accepted'],
-  rejected: ['argument.status_rejected', 'Rejected'],
+  standing: GRAPH_STATUS_LABEL_I18N.standing,
+  rebutted: GRAPH_STATUS_LABEL_I18N.rebutted,
+  unaddressed: GRAPH_STATUS_LABEL_I18N.unaddressed,
+  accepted: GRAPH_STATUS_LABEL_I18N.accepted,
 };
 
 export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
@@ -139,7 +195,7 @@ export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
             title={`${t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}: ${count}/${total}`}
             style={{
               width: `${pct}%`,
-              background: STATUS_COLORS[status] ?? '#555',
+              background: STATUS_COLORS_HEX[status] ?? '#555',
               transition: 'width 0.3s ease',
             }}
           />
@@ -157,104 +213,95 @@ function layoutArgumentDag(
   units: ArgumentUnit[],
   t: (key: string, fallback: string) => string,
 ): { nodes: Node[]; edges: Edge[] } {
-  // Build unit lookup by node_id for status enrichment
   const unitByNodeId = new Map<string, ArgumentUnit>();
   for (const u of units) {
     if (u.node_id) unitByNodeId.set(u.node_id, u);
   }
 
-  // If no graph nodes, synthesise from units
   const hasGraphNodes = rawNodes.length > 0;
-
   const nodeWidth = 220;
   const nodeHeight = 60;
 
-  // Build dagre graph
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30 });
 
   if (!hasGraphNodes) {
-    // Fallback: create synthetic nodes from units
-    for (const u of units) {
-      g.setNode(u.id, { width: nodeWidth, height: nodeHeight });
-    }
-    // No edges in fallback
+    for (const u of units) g.setNode(u.id, { width: nodeWidth, height: nodeHeight });
   } else {
-    for (const n of rawNodes) {
-      g.setNode(n.id, { width: nodeWidth, height: nodeHeight });
-    }
-    for (const e of rawEdges) {
-      g.setEdge(e.source, e.target);
-    }
+    for (const n of rawNodes) g.setNode(n.id, { width: nodeWidth, height: nodeHeight });
+    for (const e of rawEdges) g.setEdge(e.source, e.target);
   }
 
   dagre.layout(g);
 
-  // Convert to ReactFlow nodes
   const flowNodes: Node[] = [];
 
   if (!hasGraphNodes) {
     for (const u of units) {
       const pos = g.node(u.id);
-      const label = u.text.length > 60 ? u.text.slice(0, 60) + '…' : u.text;
+      const fullLabel = u.text;
+      const label = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
       flowNodes.push({
         id: u.id,
+        type: 'graphCard',
         position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
-        data: { label },
-        sourcePosition: Position.Bottom,
-        targetPosition: Position.Top,
-        style: {
-          background: TYPE_COLORS[u.type] ?? '#555',
-          color: '#fff',
-          borderRadius: 6,
-          padding: '6px 10px',
-          fontSize: '0.75rem',
-          maxWidth: nodeWidth,
-          border: `2px solid ${STATUS_COLORS[u.status] ?? '#555'}`,
+        data: {
+          label,
+          fullLabel,
+          iconName: NODE_ICONS[u.type] ?? '',
+          bgColor: NODE_TYPE_COLORS_HEX[u.type] ?? '#555',
+          borderColor: STATUS_COLORS_HEX[u.status] ?? '',
+          dimmed: false,
+          tooltipDisabled: false,
+          sourcePos: 'bottom',
+          targetPos: 'top',
         },
       });
     }
     return { nodes: flowNodes, edges: [] };
   }
 
-  // Primary path: graph nodes laid out by dagre
   for (const n of rawNodes) {
     const pos = g.node(n.id);
     const unit = unitByNodeId.get(n.id);
     const typeKey = unit?.type ?? n.type;
-    const statusKey = unit?.status ?? 'standing';
+    const statusKey = unit?.status ?? '';
     const typePair = TYPE_LABEL_I18N[typeKey];
     const typeLabel = typePair ? t(typePair[0], typePair[1]) : typeKey;
-    const displayLabel = n.label.length > 60 ? n.label.slice(0, 60) + '…' : n.label;
+    const fullLabel = `[${typeLabel}] ${n.label}`;
+    const displayLabel = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
 
     flowNodes.push({
       id: n.id,
+      type: 'graphCard',
       position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
-      data: { label: `[${typeLabel}] ${displayLabel}` },
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
-      style: {
-        background: TYPE_COLORS[typeKey] ?? '#555',
-        color: '#fff',
-        borderRadius: 6,
-        padding: '8px 12px',
-        fontSize: '0.75rem',
-        maxWidth: nodeWidth,
-        border: `2px solid ${STATUS_COLORS[statusKey] ?? '#555'}`,
+      data: {
+        label: displayLabel,
+        fullLabel,
+        iconName: NODE_ICONS[typeKey] ?? '',
+        bgColor: NODE_TYPE_COLORS_HEX[typeKey] ?? '#555',
+        borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',
+        dimmed: false,
+        tooltipDisabled: false,
+        sourcePos: 'bottom',
+        targetPos: 'top',
       },
     });
   }
 
+  // C2: Edge styling from EDGE_STYLES
   const flowEdges: Edge[] = rawEdges.map(e => {
-    const edgeStyle = EDGE_STYLE_MAP[e.type] ?? { stroke: '#888', animated: false };
+    const style = EDGE_STYLES[e.type];
+    const stroke = style?.stroke ?? '#888';
     return {
       id: e.id,
       source: e.source,
       target: e.target,
       label: e.label ?? undefined,
-      animated: edgeStyle.animated,
-      style: { stroke: edgeStyle.stroke },
+      animated: style?.animated ?? false,
+      style: { stroke, strokeDasharray: style?.strokeDasharray },
+      markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
     };
   });
 
@@ -266,7 +313,6 @@ function layoutArgumentDag(
 interface Props {
   debateId: string;
   visible: boolean;
-  /** Increment to trigger a re-fetch without remounting the component */
   refreshTrigger?: number;
 }
 
@@ -274,21 +320,39 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [errorTier, setErrorTier] = useState<ErrorTier>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  // C5: Status filter
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setSelectedNode(null);
+    setErrorTier(null);
     try {
       const res = await fetch(`/api/debate/${debateId}/argument-map`, {
         headers: buildSessionHeaders(),
       });
-      if (res.status === 501) { setData(null); setLoading(false); return; }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const d = await res.json();
-      setData(d);
-    } catch { setData(null); }
-    setLoading(false);
+      if (res.status === 401 || res.status === 403) { setErrorTier('unauthorized'); return; }
+      if (res.status === 404) {
+        const body = await res.json().catch(() => ({}));
+        setErrorTier(body?.detail?.code === 'FEATURE_DISABLED' ? 'disabled' : 'not_found');
+        return;
+      }
+      if (res.status === 501) { setErrorTier('disabled'); return; }
+      if (res.status >= 500) { setErrorTier('server_error'); return; }
+      if (!res.ok) { setErrorTier('server_error'); return; }
+      const json = await res.json();
+      if (json.error) { setErrorTier('load_failed'); setData(null); return; }
+      const mapped: ArgumentMapData = {
+        snapshot_id: json.snapshot_id,
+        nodes: Array.isArray(json.nodes) ? json.nodes.map((n: Record<string, unknown>) => mapBackendNode(n)) : [],
+        edges: Array.isArray(json.edges) ? json.edges.map((e: Record<string, unknown>) => mapBackendEdge(e)) : [],
+        units: Array.isArray(json.units) ? json.units.map((u: Record<string, unknown>) => mapBackendUnit(u)) : [],
+      };
+      if (mapped.nodes.length > 2000) { setErrorTier('too_large'); return; }
+      setData(mapped);
+    } catch { setErrorTier('network'); } finally { setLoading(false); }
   }, [debateId]);
 
   useEffect(() => {
@@ -296,28 +360,83 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     fetchData();
   }, [debateId, visible, fetchData, refreshTrigger]);
 
-  const { nodes, edges } = useMemo(() => {
-    if (!data) return { nodes: [], edges: [] };
-    return layoutArgumentDag(data.nodes, data.edges, data.units, t);
-  }, [data, t]);
+  // C5: Filtered data based on status filter
+  const filteredData = useMemo(() => {
+    if (!data || statusFilter.size === 0) return data;
+    const filteredUnits = data.units.filter(u => statusFilter.has(u.status));
+    const unitNodeIds = new Set(filteredUnits.map(u => u.node_id).filter(Boolean));
+    // Keep nodes linked to matching units + verdict/non-unit nodes
+    const filteredNodes = data.nodes.filter(n =>
+      unitNodeIds.has(n.id) || n.type === 'verdict' || !data.units.some(u => u.node_id === n.id),
+    );
+    const nodeIds = new Set(filteredNodes.map(n => n.id));
+    const filteredEdges = data.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+    return { ...data, nodes: filteredNodes, edges: filteredEdges, units: filteredUnits };
+  }, [data, statusFilter]);
+
+  const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
+    if (!filteredData) return { nodes: [], edges: [] };
+    return layoutArgumentDag(filteredData.nodes, filteredData.edges, filteredData.units, t);
+  }, [filteredData, t]);
+
+  // Clear stale selection when filtered node disappears
+  useEffect(() => {
+    if (!selectedNode || !filteredData) return;
+    const stillVisible = filteredData.nodes.some(n => n.id === selectedNode.id)
+      || filteredData.units.some(u => u.id === selectedNode.id);
+    if (!stillVisible) setSelectedNode(null);
+  }, [selectedNode, filteredData]);
+
+  // C3: Neighbor highlight based on selected node
+  const neighborSet = useMemo(() => {
+    if (!selectedNode || !filteredData) return null;
+    const set = new Set<string>([selectedNode.id]);
+    for (const e of filteredData.edges) {
+      if (e.source === selectedNode.id) set.add(e.target);
+      if (e.target === selectedNode.id) set.add(e.source);
+    }
+    return set;
+  }, [selectedNode, filteredData]);
+
+  const nodes = useMemo(() => {
+    const tooltipDisabled = layoutNodes.length > PERF_TOOLTIP_LIMIT;
+    return layoutNodes.map(n => ({
+      ...n,
+      data: {
+        ...n.data,
+        dimmed: neighborSet ? !neighborSet.has(n.id) : false,
+        tooltipDisabled,
+      },
+    }));
+  }, [layoutNodes, neighborSet]);
+
+  const edges = useMemo(() => {
+    if (!neighborSet) return layoutEdges;
+    return layoutEdges.map(e => ({
+      ...e,
+      style: {
+        ...e.style,
+        opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.1,
+      },
+    }));
+  }, [layoutEdges, neighborSet]);
 
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
 
-  // Build lookup maps for node click → detail
   const { rawNodeMap, unitByNodeId, unitById } = useMemo(() => {
     const rnm = new Map<string, GraphNodeRaw>();
     const ubn = new Map<string, ArgumentUnit>();
     const ubi = new Map<string, ArgumentUnit>();
-    if (data) {
-      for (const n of data.nodes) rnm.set(n.id, n);
-      for (const u of data.units) {
+    if (filteredData) {
+      for (const n of filteredData.nodes) rnm.set(n.id, n);
+      for (const u of filteredData.units) {
         if (u.node_id) ubn.set(u.node_id, u);
         ubi.set(u.id, u);
       }
     }
     return { rawNodeMap: rnm, unitByNodeId: ubn, unitById: ubi };
-  }, [data]);
+  }, [filteredData]);
 
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const raw = rawNodeMap.get(node.id);
@@ -334,71 +453,142 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     });
   }, [rawNodeMap, unitByNodeId, unitById]);
 
+  // C3: Background click resets highlight + closes detail panel
+  const onPaneClick = useCallback(() => setSelectedNode(null), []);
+
+  // C5: Toggle status filter
+  const toggleStatus = useCallback((status: string) => {
+    setStatusFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }, []);
+
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
+  if (errorTier) {
+    const pair = ERROR_I18N[errorTier];
+    return (
+      <div role="alert" style={{ fontSize: '0.85rem', color: '#888', textAlign: 'center', padding: '1rem' }}>
+        <p>{pair ? t(pair[0], pair[1]) : errorTier}</p>
+        {(errorTier === 'network' || errorTier === 'server_error' || errorTier === 'load_failed') && (
+          <button onClick={fetchData} style={{ marginTop: 8, padding: '4px 12px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer' }}>
+            {t('common.retry', 'Retry')}
+          </button>
+        )}
+      </div>
+    );
+  }
   if (!data || (data.units.length === 0 && data.nodes.length === 0)) {
     return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.empty', 'No argument map available.')}</p>;
   }
 
   return (
-    <div
-      aria-label={t('argument.a11y_label', 'Debate argument map')}
-      style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
-    >
-      {/* P1-7: Strength meter summary */}
-      <ArgumentStrengthMeter units={data.units} />
+    <Tooltip.Provider delayDuration={300}>
+      <div
+        aria-label={t('argument.a11y_label', 'Debate argument map')}
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
+      >
+        {/* P1-7: Strength meter summary */}
+        <ArgumentStrengthMeter units={data.units} />
 
-      {/* Export controls (P1-3) */}
-      <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
+        {/* C5: Status filter chips */}
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.7rem', color: '#888', marginRight: 4 }}>
+            {t('argument.filter_status', 'Filter:')}
+          </span>
+          {STATUS_ORDER.map(status => {
+            const active = statusFilter.has(status);
+            const color = STATUS_COLORS_HEX[status] ?? '#888';
+            const chipBright = color === '#2ecc71' || color === '#f1c40f';
+            return (
+              <button
+                key={status}
+                onClick={() => toggleStatus(status)}
+                aria-pressed={active}
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 12,
+                  border: `1px solid ${color}`,
+                  background: active ? color : 'transparent',
+                  color: active ? (chipBright ? '#111' : '#fff') : color,
+                  cursor: 'pointer',
+                  fontSize: '0.65rem',
+                  lineHeight: 1.4,
+                }}
+              >
+                {t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}
+              </button>
+            );
+          })}
+          {statusFilter.size > 0 && (
+            <button
+              onClick={() => setStatusFilter(new Set())}
+              style={{ fontSize: '0.65rem', color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+            >
+              {t('common.clear', 'Clear')}
+            </button>
+          )}
+        </div>
 
-      {/* DAG container */}
-      <div style={{ height: 360, border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onNodeClick={onNodeClick}
-          fitView
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background />
-          <Controls />
-          <MiniMap
-            nodeStrokeWidth={3}
-            style={{ background: '#1a1a2e' }}
-          />
-        </ReactFlow>
-        <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+        {/* Export controls (P1-3) */}
+        <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
+
+        {/* DAG container */}
+        <div style={{ height: 'min(50vh, 480px)', border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
+            fitView
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background />
+            <Controls />
+            <MiniMap
+              nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+              nodeStrokeWidth={3}
+              style={{ background: '#1a1a2e' }}
+            />
+          </ReactFlow>
+          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+        </div>
+
+        {/* Legend */}
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888' }}>
+          {(['claim', 'evidence', 'rebuttal', 'counter'] as const).map(type => {
+            const pair = TYPE_LABEL_I18N[type];
+            return (
+              <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: NODE_TYPE_COLORS_HEX[type], display: 'inline-block' }} />
+                {t(pair[0], pair[1])}
+              </span>
+            );
+          })}
+          <span style={{ marginLeft: 'auto' }}>
+            {filteredData?.units.length ?? 0} {t('argument.total_units', 'units')}
+          </span>
+        </div>
+
+        {/* a11y: screen reader fallback list */}
+        <div className="sr-only" role="list" aria-label={t('argument.a11y_list', 'Argument units list')}>
+          {(filteredData?.units ?? data.units).map(u => (
+            <div key={u.id} role="listitem">
+              {u.type}: {u.text} [{u.status}]
+            </div>
+          ))}
+        </div>
       </div>
-
-      {/* Legend */}
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888' }}>
-        {(['claim', 'evidence', 'rebuttal', 'counter'] as const).map(type => {
-          const pair = TYPE_LABEL_I18N[type];
-          return (
-            <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 2, background: TYPE_COLORS[type], display: 'inline-block' }} />
-              {t(pair[0], pair[1])}
-            </span>
-          );
-        })}
-        <span style={{ marginLeft: 'auto' }}>
-          {data.units.length} {t('argument.total_units', 'units')}
-        </span>
-      </div>
-
-      {/* a11y: screen reader fallback list */}
-      <div className="sr-only" role="list" aria-label={t('argument.a11y_list', 'Argument units list')}>
-        {data.units.map(u => (
-          <div key={u.id} role="listitem">
-            {u.type}: {u.text} [{u.status}]
-          </div>
-        ))}
-      </div>
-    </div>
+    </Tooltip.Provider>
   );
 }
 
-export { STATUS_COLORS, TYPE_LABEL_I18N };
-export type { ArgumentUnit, ArgumentMapData };
+// eslint-disable-next-line react-refresh/only-export-components
+export { STATUS_COLORS_HEX as STATUS_COLORS, TYPE_LABEL_I18N, safeParsePayload, mapBackendNode, mapBackendEdge, mapBackendUnit };
+export type { ArgumentUnit, ArgumentMapData, ErrorTier };

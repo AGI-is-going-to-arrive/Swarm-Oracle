@@ -15,12 +15,18 @@ vi.mock('react-i18next', () => ({
 vi.mock('@xyflow/react', () => ({
   ReactFlow: (props: Record<string, unknown>) => {
     const nodes = props.nodes as Array<{ id: string }> | undefined;
+    const edges = props.edges as Array<Record<string, unknown>> | undefined;
     const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
+    const firstEdge = edges?.[0];
     return (
       <div
         data-testid="reactflow"
         data-nodes={nodes?.length}
-        data-edges={(props.edges as unknown[])?.length}
+        data-edges={edges?.length}
+        data-edge-stroke={String((firstEdge?.style as Record<string, unknown> | undefined)?.stroke ?? '')}
+        data-edge-dash={String((firstEdge?.style as Record<string, unknown> | undefined)?.strokeDasharray ?? '')}
+        data-edge-animated={String(firstEdge?.animated ?? false)}
+        data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
       >
         {/* Expose clickable elements per node for testing onNodeClick */}
         {nodes?.map(n => (
@@ -33,6 +39,7 @@ vi.mock('@xyflow/react', () => ({
   Controls: () => null,
   MiniMap: () => null,
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+  MarkerType: { ArrowClosed: 'arrowclosed' },
 }));
 
 import { ArgumentMap, ArgumentStrengthMeter, type ArgumentUnit } from './ArgumentMap';
@@ -116,14 +123,14 @@ describe('ArgumentMap', () => {
       json: async () => ({}),
     } as Response);
     render(<ArgumentMap debateId="d1" visible={true} />);
-    const msg = await screen.findByText(/No argument map/);
+    const msg = await screen.findByText(/Feature not enabled|not enabled/i);
     expect(msg).toBeInTheDocument();
   });
 
   it('handles network error gracefully', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network failed'));
     render(<ArgumentMap debateId="d1" visible={true} />);
-    const msg = await screen.findByText(/No argument map/);
+    const msg = await screen.findByText(/Network error/i);
     expect(msg).toBeInTheDocument();
   });
 
@@ -232,6 +239,115 @@ describe('ArgumentMap', () => {
     // After re-fetch, detail panel should be gone
     await screen.findByTestId('reactflow');
     expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+  });
+});
+
+// ── Phase C: Status filter (C5) ─────────────────────────────
+
+describe('ArgumentMap status filter (C5)', () => {
+  const dataWithStatuses = {
+    snapshot_id: 's1',
+    nodes: [
+      { id: 'n1', key: 'k1', type: 'claim', label: 'Claim A', round: 1, payload: null },
+      { id: 'n2', key: 'k2', type: 'evidence', label: 'Evidence B', round: 1, payload: null },
+    ],
+    edges: [{ id: 'e1', source: 'n1', target: 'n2', type: 'supports', weight: 1, label: null }],
+    units: [
+      { id: 'u1', type: 'claim', status: 'standing', text: 'Claim A', turn_id: 't1', node_id: 'n1' },
+      { id: 'u2', type: 'evidence', status: 'accepted', text: 'Evidence B', turn_id: 't2', node_id: 'n2' },
+    ],
+  };
+
+  it('renders filter chips for all statuses', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true, json: async () => dataWithStatuses,
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    expect(screen.getByRole('button', { name: 'Accepted' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Standing' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unaddressed' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rebutted' })).toBeInTheDocument();
+  });
+
+  it('shows clear button when filter is active', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true, json: async () => dataWithStatuses,
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+
+    // Initially no clear button
+    expect(screen.queryByText('Clear')).not.toBeInTheDocument();
+
+    // Click a filter chip
+    await user.click(screen.getByRole('button', { name: 'Standing' }));
+
+    // Clear button should appear
+    expect(screen.getByText('Clear')).toBeInTheDocument();
+  });
+
+  it('filters displayed nodes by status', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true, json: async () => dataWithStatuses,
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-nodes')).toBe('2');
+
+    // Filter to only 'accepted' — should show 1 node (n2 with accepted unit)
+    await user.click(screen.getByRole('button', { name: 'Accepted' }));
+    expect(flow.getAttribute('data-nodes')).toBe('1');
+  });
+});
+
+// ── Phase C: Edge styling (C2) ──────────────────────────────
+
+describe('ArgumentMap edge styling (C2)', () => {
+  it('edges use EDGE_STYLES colors from graphTokens', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's2',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'A', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'B', round: 1, payload: null },
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', type: 'supports', weight: 1, label: null },
+        ],
+        units: [],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-edges')).toBe('1');
+    expect(flow.getAttribute('data-edge-stroke')).toBe('#2ecc71');
+    expect(flow.getAttribute('data-edge-animated')).toBe('false');
+    expect(flow.getAttribute('data-edge-marker')).toContain('arrowclosed');
+  });
+
+  it('temporal edges omit arrow markers and use dashed styling', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's3',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'A', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'claim', label: 'B', round: 2, payload: null },
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', type: 'temporal', weight: 0.5, label: null },
+        ],
+        units: [],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-edge-dash')).toBe('4 4');
+    expect(flow.getAttribute('data-edge-marker')).toBe('null');
   });
 });
 

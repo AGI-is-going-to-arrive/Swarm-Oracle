@@ -133,6 +133,9 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
+| `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
+| `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
+| `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
@@ -233,6 +236,16 @@
   - `CounterfactualPanel`
   - `ResumePanel`
   - `FactionTimeline`
+- `CausalReviewView` 与 `ArgumentMap` 当前共用：
+  - `GraphNodeCard`
+  - `NodeDetailPanel`
+  - `graphTokens`
+- `CausalReviewView` 当前在 `branch_id` 过滤生效时仍保留分支切换入口；即使当前只剩单分支数据，也能切回 `All branches`
+- `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态
+- 两个图面的节点卡当前都按 button 口径渲染：
+  - 可键盘聚焦
+  - 保留 pointer click 打开详情
+  - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -56,7 +57,7 @@ async def get_causal_graph(
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
 
-    graph = build_snapshot(scenario_id, branch_id=branch_id)
+    graph = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=branch_id)
     return graph
 
 

@@ -24,6 +24,7 @@ vi.mock('@xyflow/react', () => ({
   Controls: () => null,
   MiniMap: () => null,
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+  MarkerType: { ArrowClosed: 'arrowclosed' },
 }));
 
 vi.mock('dagre', () => {
@@ -52,7 +53,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe('X-4: Phase 3 components with missing/empty data', () => {
   // ── ArgumentMap: simulates debate replay where API returns 404 ──
   describe('ArgumentMap (debate replay context)', () => {
-    it('shows empty state when fetch returns 404', async () => {
+    it('shows error tier when fetch returns 404', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
         ok: false,
         status: 404,
@@ -62,11 +63,11 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
       render(<ArgumentMap debateId="replay-id-123" visible={true} />);
 
       expect(
-        await screen.findByText('No argument map available.'),
+        await screen.findByText(/Data not found|not found/i),
       ).toBeInTheDocument();
     });
 
-    it('shows empty state when fetch returns 501 (feature disabled)', async () => {
+    it('shows error tier when fetch returns 501 (feature disabled)', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
         ok: false,
         status: 501,
@@ -76,7 +77,7 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
       render(<ArgumentMap debateId="replay-id-456" visible={true} />);
 
       expect(
-        await screen.findByText('No argument map available.'),
+        await screen.findByText(/Feature not enabled|not enabled/i),
       ).toBeInTheDocument();
     });
 

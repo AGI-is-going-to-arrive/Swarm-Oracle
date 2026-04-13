@@ -31,6 +31,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
+- debate argument map 在 enrichment 改写 unit type 后会同步重建同 turn 图边；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
 
 ### Oracle Chambers / 世界线圆桌
 
@@ -114,6 +115,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主闭环当前维持 `release-candidate` 级别。
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
+- 本轮 graph-viz 定向回归也已通过：
+  - backend 相关回归 `166` 条
+  - frontend 图谱/locale 定向回归 `58` 条
+  - `phase3a-desktop` `17/17`
+  - `phase3b-desktop` `14/14`
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

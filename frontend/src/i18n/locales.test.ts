@@ -77,4 +77,22 @@ describe('i18n locale resources', () => {
     expect(en.translation.result.compare_link).toBeTruthy();
     expect(zh.translation.result.compare_link).toBeTruthy();
   });
+
+  it('provides localized graph node detail labels and counterfactual labels', () => {
+    expect(en.translation.node_detail.agent).toBe('Agent');
+    expect(zh.translation.node_detail.agent).toBe('Agent');
+    expect(en.translation.node_detail.emotion).toBe('Emotion');
+    expect(zh.translation.node_detail.emotion).toBe('情绪');
+    expect(en.translation.node_detail.stance).toBe('Stance');
+    expect(zh.translation.node_detail.stance).toBe('立场');
+    expect(en.translation.node_detail.side).toBe('Side');
+    expect(zh.translation.node_detail.side).toBe('立场方');
+    expect(en.translation.node_detail.copy_ref).toBe('Copy Reference');
+    expect(zh.translation.node_detail.copy_ref).toBe('复制引用');
+
+    expect(en.translation.counterfactual.title).toBe('What-If Replay');
+    expect(zh.translation.counterfactual.title).toBe('假设重演');
+    expect(en.translation.counterfactual.submit).toBe('Create What-If');
+    expect(zh.translation.counterfactual.submit).toBe('创建假设分支');
+  });
 });

@@ -48,6 +48,9 @@
 - 已实现的前端拆分
   - `frontend/src/pages/DebateArenaView.tsx`
   - `frontend/src/pages/DebateResultView.tsx`
+  - `frontend/src/components/ArgumentMap.tsx`
+  - `frontend/src/components/GraphNodeCard.tsx`
+  - `frontend/src/components/NodeDetailPanel.tsx`
   - `frontend/src/components/DebateStageRibbon.tsx`
   - `frontend/src/components/DebateMomentumBar.tsx`
   - `frontend/src/components/DebateScoreCard.tsx`
@@ -57,6 +60,7 @@
   - `frontend/src/hooks/useDebateWS.ts`
   - `frontend/src/lib/debateLabels.ts`
   - `frontend/src/lib/debateShare.ts`
+  - `frontend/src/lib/graphTokens.ts`
 - 当前真实 API / 协议口径
   - `POST /api/debate`：接收 `question` 与可选 `profile_hint`
   - `GET /api/debate/{id}`
@@ -68,7 +72,7 @@
   - live 页会输出 `selected_phase / is_phase_locked / unlocked_phases / active_modal / modal_state / bet_window_open / counterplay`
 - 当前真实测试与工件
   - 后端：`backend/tests/test_debate_service.py`、`backend/tests/test_debate_api.py`
-  - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`、`debateCounterplay.test.ts`
+  - 前端：`DebateArenaView.test.tsx`、`DebateResultView.test.tsx`、`DebateBetModal.test.tsx`、`DebateShareModal.test.tsx`、`useDebateWS.test.tsx`、`debateCounterplay.test.ts`、`ArgumentMap.test.tsx`、`GraphNodeCard.test.tsx`
   - E2E：`frontend/output/e2e/20260318-post-b2-debate-full/result.json`
   - 本轮补充 smoke：`frontend/output/e2e/20260318-b2-debate-smoke/result.json`
   - 本轮补充移动端 `430x932`：`frontend/output/e2e/20260318-debate-mobile-430x932-v2/result.json`
@@ -81,6 +85,15 @@
     - `frontend/output/e2e/release-signoff-summary-dry-run/summary.json`：`summary.json` 落盘通过
     - `frontend/output/e2e/post-fix-release-signoff/summary.json`：已确认会按步骤增量更新；这次没有等待整条链路跑完，所以不要把这次复跑写成“通过”
     - `POST /api/debate/import-replay` 当前会保留输入里的 `phase_insights`；导入后的 live/result 会优先回放这份阶段洞察，而不是只靠重算
+  - 2026-04-13 graph-viz 定向回归：
+    - backend 相关回归 `166` 条通过
+    - frontend 图谱/locale 定向回归 `58` 条通过
+    - `frontend/output/e2e/2026-04-13T09-53-38-009Z-phase3a-desktop/result.json` 通过
+    - `frontend/output/e2e/2026-04-13T09-53-38-009Z-phase3b-desktop/result.json` 通过
+  - 当前图谱口径补充：
+    - LLM enrichment 如果改写了 unit type，会同步重建同一 turn 的 `supports / rebuts` 边
+    - `link_verdict()` 重算 verdict 时会同步刷新 verdict node 的 `label / winner / verdict_tone`
+    - Debate result 里的图节点卡当前已按 button 口径渲染，可键盘聚焦并继续复用同一套 detail panel
 
 ---
 

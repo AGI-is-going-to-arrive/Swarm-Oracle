@@ -94,7 +94,12 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
             min={1}
             max={totalRounds}
             value={selectedRound}
-            onChange={e => setSelectedRound(Number(e.target.value))}
+            onChange={e => {
+              const raw = Number(e.target.value);
+              const clamped = Math.max(1, Math.min(totalRounds, Math.round(raw)));
+              setSelectedRound(Number.isInteger(raw) ? clamped : selectedRound);
+            }}
+            aria-invalid={!Number.isInteger(selectedRound) || selectedRound < 1 || selectedRound > totalRounds}
             style={{ width: 60, padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
           />
         </div>

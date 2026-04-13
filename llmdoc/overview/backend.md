@@ -170,6 +170,9 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
+  - 如果 enrichment 改写了同一 turn 内的 unit type，会同步重建这一 turn 的 `supports / rebuts` 边，避免节点类型和边语义脱节
+  - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
+  - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。

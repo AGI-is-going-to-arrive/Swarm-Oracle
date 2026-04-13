@@ -908,7 +908,19 @@
       "empty": "当前场景暂无可用的因果图数据。",
       "a11y_list": "因果事件列表",
       "feature_disabled": "因果图谱功能未启用。",
-      "round_label": "回合"
+      "round_label": "回合",
+      "search_agent": "搜索代理...",
+      "no_results": "未找到匹配的节点。",
+      "branch_select": "选择分支",
+      "all_branches": "所有分支",
+      "show_legend": "图例",
+      "hide_legend": "隐藏图例",
+      "text_fallback": "图谱过大，无法交互展示。显示文本列表。",
+      "type_event": "事件",
+      "type_intervention": "干预",
+      "type_stance_shift": "立场转变",
+      "type_fork": "分支",
+      "type_verdict": "裁决"
     },
     "compare": {
       "title": "反事实对比",
@@ -937,7 +949,17 @@
       "status_rejected": "已驳回",
       "live_title": "论证图谱",
       "live_collapse": "收起",
-      "live_expand": "展开"
+      "live_expand": "展开",
+      "filter_status": "筛选：",
+      "error": {
+        "unauthorized": "无权限查看此图谱",
+        "disabled": "功能未启用",
+        "not_found": "未找到数据",
+        "server": "服务器错误",
+        "network": "网络连接失败",
+        "too_large": "节点过多，无法显示",
+        "load_failed": "论证图谱加载失败"
+      }
     },
     "agent_profile": {
       "dialog_label": "Agent 档案",
@@ -979,7 +1001,23 @@
       "type_evidence": "证据",
       "type_rebuttal": "反驳",
       "type_counter": "反击",
-      "turn": "回合"
+      "turn": "回合",
+      "agent": "Agent",
+      "emotion": "情绪",
+      "stance": "立场",
+      "side": "立场方",
+      "copy_ref": "复制引用"
+    },
+    "counterfactual": {
+      "title": "假设重演",
+      "agent": "Agent",
+      "select_agent": "请选择",
+      "round": "回合",
+      "replacement": "替代发言",
+      "placeholder": "这个 Agent 当时应该改说什么？",
+      "created": "假设分支已创建！",
+      "submit": "创建假设分支",
+      "limit_reached": "每个场景最多 3 条反事实分支"
     },
     "resume": {
       "title": "续跑模拟",

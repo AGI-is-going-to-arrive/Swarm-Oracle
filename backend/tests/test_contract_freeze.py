@@ -316,3 +316,24 @@ class TestServerSideGates:
         assert resp.status_code == 404
         data = resp.json()
         assert data["detail"]["code"] == "FEATURE_DISABLED"
+
+    async def test_argument_map_fail_soft_returns_error_field(self, client):
+        """A11: When argument map loading crashes, response includes error field."""
+        from unittest.mock import patch
+        from app.config import settings
+        settings.FEATURE_ARGUMENT_MAP = True
+        try:
+            with patch(
+                "app.api.debate._load_debate_argument_map_sync",
+                side_effect=RuntimeError("db corrupt"),
+            ):
+                resp = await client.get("/api/debate/fake-id/argument-map")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["error"] == "ARGUMENT_MAP_LOAD_FAILED"
+            assert "db corrupt" not in resp.text  # no exception text leakage
+            assert data["nodes"] == []
+            assert data["edges"] == []
+            assert data["units"] == []
+        finally:
+            settings.FEATURE_ARGUMENT_MAP = False

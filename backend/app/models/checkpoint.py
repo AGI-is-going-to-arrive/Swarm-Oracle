@@ -105,6 +105,12 @@ class DebateArgumentUnit(SQLModel, table=True):
     """An argument unit extracted from a debate turn (F6)."""
 
     __tablename__ = "debate_argument_unit"
+    __table_args__ = (
+        UniqueConstraint(
+            "debate_id", "semantic_hash",
+            name="uq_debate_argument_unit_debate_hash",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     debate_id: str = Field(index=True)

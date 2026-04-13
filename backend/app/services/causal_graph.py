@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -25,6 +26,17 @@ def _getfield(msg, key, default=None):
     if isinstance(msg, dict):
         return msg.get(key, default)
     return getattr(msg, key, default)
+
+
+def _safe_parse_payload(s: str | None) -> dict[str, Any]:
+    """Parse payload JSON safely; return empty dict on any failure."""
+    if not s:
+        return {}
+    try:
+        result = json.loads(s)
+        return result if isinstance(result, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def derive_stance_score(message) -> float:
@@ -130,6 +142,71 @@ def append_round_nodes(
             session.flush()
             created_node_ids.append(node.id)
 
+        # A1: Inter-round temporal edges (same agent across consecutive rounds)
+        if round_number > 1 and messages:
+            prev_stmt = select(GraphNode).where(
+                GraphNode.snapshot_id == snapshot.id,
+                GraphNode.node_type == "event",
+                GraphNode.round_number == round_number - 1,
+            )
+            prev_nodes = session.exec(prev_stmt).all()
+            prev_by_agent: dict[str, str] = {}
+            for pn in prev_nodes:
+                payload = _safe_parse_payload(pn.payload_json)
+                if payload.get("branch_id") == branch_id:
+                    prev_by_agent[payload.get("agent_id", "")] = pn.id
+
+            for msg, nid in zip(messages, created_node_ids):
+                aid = _getfield(msg, "agent_id", "unknown")
+                if aid in prev_by_agent:
+                    session.add(GraphEdge(
+                        snapshot_id=snapshot.id,
+                        source_node_id=prev_by_agent[aid],
+                        target_node_id=nid,
+                        edge_type="temporal", weight=0.5,
+                    ))
+
+        # A3: Stance shift detection (same agent, significant score change)
+        if round_number > 1 and messages:
+            prev_frames_stmt = select(AgentStateFrame).where(
+                AgentStateFrame.scenario_id == scenario_id,
+                AgentStateFrame.branch_id == branch_id,
+                AgentStateFrame.round_number == round_number - 1,
+            )
+            prev_frames_by_agent = {
+                f.agent_id: f for f in session.exec(prev_frames_stmt).all()
+            }
+            for msg, nid in zip(messages, created_node_ids):
+                aid = _getfield(msg, "agent_id", "unknown")
+                current_stance = derive_stance_score(msg)
+                prev_frame = prev_frames_by_agent.get(aid)
+                if prev_frame is not None:
+                    delta = abs(current_stance - prev_frame.stance_score)
+                    if delta >= 0.4:
+                        shift_node = GraphNode(
+                            snapshot_id=snapshot.id,
+                            node_key=f"stance_r{round_number}_{aid}",
+                            node_type="stance_shift",
+                            label=f"{aid} stance shifted",
+                            round_number=round_number,
+                            payload_json=json.dumps({
+                                "agent_id": aid,
+                                "branch_id": branch_id,
+                                "prev_score": prev_frame.stance_score,
+                                "new_score": current_stance,
+                                "delta": delta,
+                            }),
+                        )
+                        session.add(shift_node)
+                        session.flush()
+                        session.add(GraphEdge(
+                            snapshot_id=snapshot.id,
+                            source_node_id=nid,
+                            target_node_id=shift_node.id,
+                            edge_type="caused", weight=0.8,
+                            label="stance shift",
+                        ))
+
         # Fork node + edges
         if fork_event is not None:
             fork_node = GraphNode(
@@ -146,17 +223,26 @@ def append_round_nodes(
             session.flush()
 
             # Edges from triggering message nodes to the fork
-            trigger_ids = fork_event.get("trigger_node_ids", created_node_ids)
+            trigger_ids = list(fork_event.get("trigger_node_ids") or [])
+            if not trigger_ids:
+                same_round_stmt = select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_type == "event",
+                    GraphNode.round_number == round_number,
+                )
+                same_round_nodes = session.exec(same_round_stmt).all()
+                trigger_ids = [
+                    n.id for n in same_round_nodes
+                    if _safe_parse_payload(n.payload_json).get("branch_id") == branch_id
+                ]
             for src_id in trigger_ids:
-                edge = GraphEdge(
+                session.add(GraphEdge(
                     snapshot_id=snapshot.id,
                     source_node_id=src_id,
                     target_node_id=fork_node.id,
-                    edge_type="caused",
-                    weight=1.0,
+                    edge_type="caused", weight=1.0,
                     label="triggered fork",
-                )
-                session.add(edge)
+                ))
 
         session.commit()
         logger.info(
@@ -192,16 +278,13 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         if branch_id is not None:
             filtered = []
             for n in nodes:
-                if n.payload_json:
-                    try:
-                        payload = json.loads(n.payload_json)
-                        if payload.get("branch_id") == branch_id:
-                            filtered.append(n)
-                            continue
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                # Include fork nodes and nodes without branch info
+                payload = _safe_parse_payload(n.payload_json)
                 if n.node_type == "fork":
+                    fork_branch = payload.get("branch_id")
+                    fork_children = payload.get("children", [])
+                    if fork_branch == branch_id or branch_id in fork_children:
+                        filtered.append(n)
+                elif payload.get("branch_id") == branch_id:
                     filtered.append(n)
             nodes = filtered
 
@@ -226,11 +309,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                     "type": n.node_type,
                     "label": n.label,
                     "round": n.round_number,
-                    "payload": (
-                        json.loads(n.payload_json)
-                        if n.payload_json
-                        else None
-                    ),
+                    "payload": _safe_parse_payload(n.payload_json),
                 }
                 for n in nodes
             ],
