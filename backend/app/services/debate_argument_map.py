@@ -14,12 +14,12 @@ import re
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
-
 from sqlmodel import Session, select
 
 from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
+from app.models.debate import DebateTurn
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.llm_client import (
     format_untrusted_text_block,
@@ -42,8 +42,9 @@ _EVIDENCE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-# Sentence-split pattern: period-space, Chinese period, or newline
-_SENTENCE_SPLIT = re.compile(r"(?<=\.)\s+|。|\n")
+# Sentence-split pattern: ASCII sentence punctuation + whitespace,
+# Chinese sentence punctuation, or newline.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|[。！？]|\n+")
 _VALID_UNIT_TYPES = {"claim", "evidence", "rebuttal", "counter"}
 _VALID_STANCES = {"supports_proposition", "supports_opposition", "neutral"}
 _enrichment_tasks: set[asyncio.Task[Any]] = set()
@@ -90,6 +91,35 @@ def _normalize_confidence(value: Any) -> float:
     return max(0.0, min(1.0, numeric))
 
 
+def _claim_priority_key(
+    *,
+    round_number: int | None,
+    node_key: str,
+) -> tuple[bool, int, str]:
+    return (round_number is None, -(round_number or 0), node_key)
+
+
+def _select_opponent_claim_id(
+    claims: list[dict[str, Any]],
+    current_side: str,
+) -> str | None:
+    candidates = [
+        claim
+        for claim in claims
+        if claim.get("speaker_side") and claim["speaker_side"] != current_side
+    ]
+    if not candidates:
+        return None
+    selected = min(
+        candidates,
+        key=lambda claim: _claim_priority_key(
+            round_number=claim.get("round_number"),
+            node_key=str(claim.get("node_key") or ""),
+        ),
+    )
+    return str(selected["node_id"])
+
+
 def _safe_parse_json(s: str | None):
     """Parse JSON safely; return None on failure."""
     if not s:
@@ -108,6 +138,86 @@ def _load_payload(payload_json: str | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _build_turn_metadata(
+    session: Session,
+    turn_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    if not turn_ids:
+        return {}
+
+    turns = session.exec(
+        select(DebateTurn).where(DebateTurn.id.in_(turn_ids))
+    ).all()
+    metadata: dict[str, dict[str, Any]] = {}
+    for turn in turns:
+        sentence_positions: dict[str, int] = {}
+        for index, sentence in enumerate(_split_sentences(turn.content or "")):
+            sentence_positions.setdefault(_semantic_hash(sentence), index)
+        metadata[turn.id] = {
+            "sequence": turn.sequence,
+            "sentence_positions": sentence_positions,
+        }
+    return metadata
+
+
+def _unit_rebuild_sort_key(
+    *,
+    unit: DebateArgumentUnit,
+    node: GraphNode,
+    turn_metadata: dict[str, dict[str, Any]],
+) -> tuple[bool, int, bool, int, Any, str, str]:
+    metadata = turn_metadata.get(unit.turn_id, {})
+    turn_order = metadata.get("sequence")
+    if turn_order is None:
+        turn_order = node.round_number
+    sentence_index = metadata.get("sentence_positions", {}).get(unit.semantic_hash)
+    return (
+        turn_order is None,
+        turn_order or 0,
+        sentence_index is None,
+        sentence_index or 0,
+        unit.created_at,
+        node.node_key,
+        unit.id,
+    )
+
+
+def _reusable_support_target(
+    *,
+    source_node_id: str,
+    existing_edge_targets: dict[tuple[str, str], str],
+    units_by_node_id: dict[str, DebateArgumentUnit],
+) -> str | None:
+    target_id = existing_edge_targets.get(("supports", source_node_id))
+    if not target_id:
+        return None
+    target_unit = units_by_node_id.get(target_id)
+    if target_unit is None or target_unit.unit_type != "claim":
+        return None
+    return target_id
+
+
+def _reusable_rebuttal_target(
+    *,
+    source_node_id: str,
+    speaker_side: str,
+    existing_edge_targets: dict[tuple[str, str], str],
+    units_by_node_id: dict[str, DebateArgumentUnit],
+    nodes_by_id: dict[str, GraphNode],
+) -> str | None:
+    target_id = existing_edge_targets.get(("rebuts", source_node_id))
+    if not target_id:
+        return None
+    target_unit = units_by_node_id.get(target_id)
+    target_node = nodes_by_id.get(target_id)
+    if target_unit is None or target_unit.unit_type != "claim" or target_node is None:
+        return None
+    target_side = str(_load_payload(target_node.payload_json).get("side") or "")
+    if not target_side or target_side == speaker_side:
+        return None
+    return target_id
 
 
 def _load_units_for_enrichment_sync(
@@ -145,27 +255,40 @@ def _rebuild_snapshot_edges_sync(
             GraphEdge.edge_type.in_(["supports", "rebuts"]),
         )
     ).all()
+    existing_edge_targets = {
+        (edge.edge_type, edge.source_node_id): edge.target_node_id
+        for edge in existing_edges
+    }
     for edge in existing_edges:
         session.delete(edge)
 
-    units = session.exec(
-        select(DebateArgumentUnit)
+    unit_rows = session.exec(
+        select(DebateArgumentUnit, GraphNode)
         .join(GraphNode, GraphNode.id == DebateArgumentUnit.node_id)
         .where(GraphNode.snapshot_id == snapshot_id)
-        .order_by(GraphNode.round_number.asc(), DebateArgumentUnit.created_at.asc(), DebateArgumentUnit.id.asc())
     ).all()
 
-    if not units:
+    if not unit_rows:
         return
 
-    processed_claims: list[tuple[str, str]] = []
+    nodes_by_id = {node.id: node for _, node in unit_rows}
+    units_by_node_id = {unit.node_id: unit for unit, _ in unit_rows}
+    turn_metadata = _build_turn_metadata(
+        session,
+        {unit.turn_id for unit, _ in unit_rows if unit.turn_id},
+    )
+    unit_rows.sort(
+        key=lambda row: _unit_rebuild_sort_key(
+            unit=row[0],
+            node=row[1],
+            turn_metadata=turn_metadata,
+        )
+    )
+
+    processed_claims: list[dict[str, Any]] = []
     current_turn_id: str | None = None
     last_claim_id: str | None = None
-    for unit in units:
-        node = session.get(GraphNode, unit.node_id)
-        if unit is None or node is None:
-            continue
-
+    for unit, node in unit_rows:
         payload = _load_payload(node.payload_json)
         speaker_side = str(payload.get("side") or "")
 
@@ -175,24 +298,39 @@ def _rebuild_snapshot_edges_sync(
 
         if unit.unit_type == "claim":
             last_claim_id = node.id
-            processed_claims.append((node.id, speaker_side))
-        elif unit.unit_type == "evidence" and last_claim_id is not None:
+            processed_claims.append({
+                "node_id": node.id,
+                "speaker_side": speaker_side,
+                "round_number": node.round_number,
+                "node_key": node.node_key,
+            })
+        elif unit.unit_type == "evidence":
+            target_id = _reusable_support_target(
+                source_node_id=node.id,
+                existing_edge_targets=existing_edge_targets,
+                units_by_node_id=units_by_node_id,
+            )
+            if target_id is None:
+                target_id = last_claim_id
+            if target_id is None:
+                continue
             session.add(GraphEdge(
                 snapshot_id=snapshot_id,
                 source_node_id=node.id,
-                target_node_id=last_claim_id,
+                target_node_id=target_id,
                 edge_type="supports",
-                    weight=0.7,
+                weight=0.7,
             ))
         elif unit.unit_type == "rebuttal":
-            opp_claim = next(
-                (
-                    claim_id
-                    for claim_id, claim_side in reversed(processed_claims)
-                    if claim_side and claim_side != speaker_side
-                ),
-                None,
+            opp_claim = _reusable_rebuttal_target(
+                source_node_id=node.id,
+                speaker_side=speaker_side,
+                existing_edge_targets=existing_edge_targets,
+                units_by_node_id=units_by_node_id,
+                nodes_by_id=nodes_by_id,
             )
+            if opp_claim is None:
+                opp_claim = _select_opponent_claim_id(processed_claims, speaker_side)
             if opp_claim:
                 session.add(GraphEdge(
                     snapshot_id=snapshot_id,
@@ -314,11 +452,16 @@ def _find_opponent_last_claim(
             GraphNode.node_key.asc(),
         )
     )
+    candidates: list[dict[str, Any]] = []
     for node in session.exec(stmt):
         payload = _safe_parse_json(node.payload_json)
-        if payload and payload.get("side") and payload["side"] != current_side:
-            return node.id
-    return None
+        candidates.append({
+            "node_id": node.id,
+            "speaker_side": str(payload.get("side") or "") if payload else "",
+            "round_number": node.round_number,
+            "node_key": node.node_key,
+        })
+    return _select_opponent_claim_id(candidates, current_side)
 
 
 def _get_or_create_snapshot(

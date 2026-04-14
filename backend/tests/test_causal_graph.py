@@ -1,7 +1,5 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
-import json
-
 import pytest
 from sqlmodel import Session, select
 
@@ -13,7 +11,6 @@ from app.services.causal_graph import (
     build_snapshot,
     derive_stance_score,
 )
-
 
 # ── Mock message ────────────────────────────────────────
 
@@ -180,6 +177,78 @@ class TestAppendRoundNodes:
             ).all()
             assert len(nodes) == 2  # one per call
 
+    def test_same_agent_multiple_messages_in_round_do_not_rollback(self):
+        messages = [
+            MockMessage(emotion="calm", agent_id="a1", id="m1", content="first point"),
+            MockMessage(emotion="angry", agent_id="a1", id="m2", content="follow-up point"),
+        ]
+
+        append_round_nodes("sc3b", "br1", 1, messages)
+
+        with Session(get_engine()) as session:
+            frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc3b",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 1,
+                )
+            ).all()
+            assert len(frames) == 1
+            assert frames[0].agent_id == "a1"
+            assert frames[0].summary_excerpt == "follow-up point"
+
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc3b")
+            ).first()
+            assert snapshot is not None
+
+            nodes = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_type == "event",
+                )
+            ).all()
+            assert len(nodes) == 2
+            assert {node.ref_id for node in nodes} == {"m1", "m2"}
+
+    def test_repeated_round_append_reuses_existing_state_and_nodes(self):
+        messages = [
+            MockMessage(emotion="calm", agent_id="a1", id="m1", content="repeat me"),
+        ]
+        fork_event = {"branch_id": "br_child", "reason": "fork once"}
+
+        append_round_nodes("sc3c", "br1", 2, messages, fork_event=fork_event)
+        append_round_nodes("sc3c", "br1", 2, messages, fork_event=fork_event)
+
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc3c")
+            ).first()
+            assert snapshot is not None
+
+            frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc3c",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 2,
+                )
+            ).all()
+            assert len(frames) == 1
+
+            nodes = session.exec(
+                select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
+            ).all()
+            event_nodes = [node for node in nodes if node.node_type == "event"]
+            fork_nodes = [node for node in nodes if node.node_type == "fork"]
+            assert len(event_nodes) == 1
+            assert len(fork_nodes) == 1
+
+            edges = session.exec(
+                select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
+            ).all()
+            assert len(edges) == 1
+            assert edges[0].edge_type == "caused"
+
 
 # ── build_snapshot ──────────────────────────────────────
 
@@ -249,6 +318,107 @@ class TestBuildSnapshot:
         result = build_snapshot("sc6b", branch_id="br1")
 
         assert set(result["available_branches"]) == {"br1", "br2", "br_parent", "br_child"}
+
+    def test_child_branch_filter_keeps_fork_provenance_source_and_edge(self):
+        append_round_nodes(
+            "sc6c",
+            "br_parent",
+            3,
+            [MockMessage(emotion="neutral", agent_id="a3", id="m3", content="fork trigger")],
+            fork_event={
+                "branch_id": "br_parent",
+                "children": ["br_child"],
+                "reason": "forked",
+            },
+        )
+        append_round_nodes(
+            "sc6c",
+            "br_child",
+            4,
+            [MockMessage(emotion="hopeful", agent_id="a4", id="m4", content="child event")],
+        )
+
+        result = build_snapshot("sc6c", branch_id="br_child")
+
+        node_types = {node["type"] for node in result["nodes"]}
+        assert node_types == {"event", "fork"}
+
+        parent_event = next(
+            node for node in result["nodes"]
+            if node["type"] == "event" and node["payload"]["branch_id"] == "br_parent"
+        )
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        child_event = next(
+            node for node in result["nodes"]
+            if node["type"] == "event" and node["payload"]["branch_id"] == "br_child"
+        )
+        assert parent_event["label"] == "fork trigger"
+        assert child_event["label"] == "child event"
+
+        caused_edges = [
+            edge for edge in result["edges"]
+            if edge["type"] == "caused" and edge["target"] == fork_node["id"]
+        ]
+        assert len(caused_edges) == 1
+        assert caused_edges[0]["source"] == parent_event["id"]
+        assert caused_edges[0]["label"] == "triggered fork"
+
+    def test_child_branch_filter_keeps_explicit_trigger_ids_provenance(self):
+        append_round_nodes(
+            "sc6d",
+            "br_parent",
+            1,
+            [MockMessage(emotion="neutral", agent_id="a1", id="m1", content="origin event")],
+        )
+
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc6d")
+            ).first()
+            assert snapshot is not None
+            origin_node = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_type == "event",
+                    GraphNode.ref_id == "m1",
+                )
+            ).first()
+            assert origin_node is not None
+
+        append_round_nodes(
+            "sc6d",
+            "br_parent",
+            2,
+            [MockMessage(emotion="angry", agent_id="a2", id="m2", content="fork round")],
+            fork_event={
+                "branch_id": "br_parent",
+                "children": ["br_child"],
+                "reason": "forked",
+                "trigger_node_ids": [origin_node.id],
+            },
+        )
+        append_round_nodes(
+            "sc6d",
+            "br_child",
+            3,
+            [MockMessage(emotion="hopeful", agent_id="a3", id="m3", content="child follow-up")],
+        )
+
+        result = build_snapshot("sc6d", branch_id="br_child")
+
+        origin_event = next(
+            node for node in result["nodes"]
+            if node["type"] == "event" and node["payload"]["branch_id"] == "br_parent"
+        )
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+
+        caused_edges = [
+            edge for edge in result["edges"]
+            if edge["type"] == "caused" and edge["target"] == fork_node["id"]
+        ]
+        assert len(caused_edges) == 1
+        assert caused_edges[0]["source"] == origin_event["id"]
+        assert caused_edges[0]["label"] == "triggered fork"
 
 
 # ── Dict-format message compatibility (simulator output) ──

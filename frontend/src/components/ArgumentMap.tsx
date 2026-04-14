@@ -380,6 +380,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     if (!filteredData) return { nodes: [], edges: [] };
     return layoutArgumentDag(filteredData.nodes, filteredData.edges, filteredData.units, t);
   }, [filteredData, t]);
+  const layoutSignature = useMemo(() => (
+    `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
+  ), [layoutNodes, layoutEdges]);
+
+  const noFilterResults = statusFilter.size > 0 && filteredData ? filteredData.units.length === 0 : false;
 
   // Clear stale selection when filtered node disappears
   useEffect(() => {
@@ -424,9 +429,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   }, [layoutEdges, neighborSet]);
 
   useEffect(() => {
-    if (!reactFlowRef.current || (nodes.length === 0 && edges.length === 0)) return;
+    if (!reactFlowRef.current || noFilterResults || (layoutNodes.length === 0 && layoutEdges.length === 0)) return;
     reactFlowRef.current.fitView?.();
-  }, [nodes, edges]);
+  }, [layoutEdges.length, layoutNodes.length, layoutSignature, noFilterResults]);
 
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
@@ -491,9 +496,6 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   if (!data || (data.units.length === 0 && data.nodes.length === 0)) {
     return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.empty', 'No argument map available.')}</p>;
   }
-  if (statusFilter.size > 0 && filteredData && filteredData.units.length === 0) {
-    return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.no_results', 'No argument units match the selected filters.')}</p>;
-  }
 
   return (
     <Tooltip.Provider delayDuration={300}>
@@ -543,35 +545,43 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
           )}
         </div>
 
-        {/* Export controls (P1-3) */}
-        <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
+        {noFilterResults ? (
+          <p style={{ fontSize: '0.85rem', color: '#888' }}>
+            {t('argument.no_results', 'No argument units match the selected filters.')}
+          </p>
+        ) : (
+          <>
+            {/* Export controls (P1-3) */}
+            <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
 
-        {/* DAG container */}
-        <div style={{ height: 'min(50vh, 480px)', border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            onInit={(instance) => {
-              reactFlowRef.current = instance;
-            }}
-            fitView
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background />
-            <Controls />
-            <MiniMap
-              nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
-              nodeStrokeWidth={3}
-              style={{ background: '#1a1a2e' }}
-            />
-          </ReactFlow>
-          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
-        </div>
+            {/* DAG container */}
+            <div style={{ height: 'min(50vh, 480px)', border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                onPaneClick={onPaneClick}
+                onInit={(instance) => {
+                  reactFlowRef.current = instance;
+                }}
+                fitView
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background />
+                <Controls />
+                <MiniMap
+                  nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+                  nodeStrokeWidth={3}
+                  style={{ background: '#1a1a2e' }}
+                />
+              </ReactFlow>
+              <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+            </div>
+          </>
+        )}
 
         {/* Legend */}
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888' }}>

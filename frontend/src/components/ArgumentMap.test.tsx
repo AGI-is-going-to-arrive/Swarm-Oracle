@@ -1,7 +1,7 @@
 /**
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +21,7 @@ vi.mock('@xyflow/react', async () => {
       const nodes = props.nodes as Array<{ id: string }> | undefined;
       const edges = props.edges as Array<Record<string, unknown>> | undefined;
       const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
+      const onPaneClick = props.onPaneClick as (() => void) | undefined;
       const onInit = props.onInit as ((instance: { fitView: typeof fitViewMock }) => void) | undefined;
       const firstEdge = edges?.[0];
 
@@ -42,6 +43,7 @@ vi.mock('@xyflow/react', async () => {
           {nodes?.map(n => (
             <button key={n.id} data-testid={`rf-node-${n.id}`} onClick={(e) => onNodeClick?.(e, n)} />
           ))}
+          <button data-testid="rf-pane" onClick={() => onPaneClick?.()} />
         </div>
       );
     },
@@ -86,7 +88,7 @@ describe('ArgumentMap', () => {
     expect(msg).toBeInTheDocument();
   });
 
-  it('shows filter-specific empty state when no units match the selected statuses', async () => {
+  it('keeps filter controls available when no units match the selected statuses', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -107,7 +109,14 @@ describe('ArgumentMap', () => {
     await user.click(screen.getByRole('button', { name: 'Accepted' }));
 
     expect(await screen.findByText('No argument units match the selected filters.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Standing' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    expect(screen.queryByText('No argument units match the selected filters.')).not.toBeInTheDocument();
   });
 
   it('renders ReactFlow component when data has units (fallback layout)', async () => {
@@ -323,6 +332,40 @@ describe('ArgumentMap', () => {
     await user.click(screen.getByRole('button', { name: 'Accepted' }));
 
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+  });
+
+  it('does not refit the viewport when selecting or clearing a node highlight', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-select',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Claim A', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'Evidence B', round: 1, payload: null },
+        ],
+        edges: [{ id: 'e1', source: 'n1', target: 'n2', type: 'supports', weight: 1, label: null }],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Claim A', turn_id: 't1', node_id: 'n1' },
+          { id: 'u2', type: 'evidence', status: 'accepted', text: 'Evidence B', turn_id: 't1', node_id: 'n2' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    const initialCalls = fitViewMock.mock.calls.length;
+
+    await user.click(screen.getByTestId('rf-node-n1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+    });
+    expect(fitViewMock.mock.calls.length).toBe(initialCalls);
+
+    await user.click(screen.getByTestId('rf-pane'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+    });
+    expect(fitViewMock.mock.calls.length).toBe(initialCalls);
   });
 });
 

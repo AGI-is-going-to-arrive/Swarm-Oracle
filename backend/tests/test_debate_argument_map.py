@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-import pytest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from sqlmodel import Session, select
+
+from app.config import settings
+from app.models.checkpoint import DebateArgumentUnit
+from app.models.database import get_engine
 from app.services.debate_argument_map import (
     enrich_argument_units_for_turn,
     extract_argument_units,
     get_argument_map,
     link_verdict,
 )
-from app.config import settings
-
 
 # ── extract_argument_units ──────────────────────────────────
 
@@ -67,6 +71,38 @@ def test_extract_detects_evidence_keywords():
     result = get_argument_map("d-evi")
     evidence_count = sum(1 for u in result["units"] if u["type"] == "evidence")
     assert evidence_count == 2
+
+
+def test_extract_splits_question_and_exclamation_sentences_in_english():
+    ids = extract_argument_units(
+        debate_id="d-punct-en",
+        turn_id="t1",
+        content="Will this work? Yes! It should.",
+        speaker_side="proposition",
+    )
+
+    assert len(ids) == 3
+    result = get_argument_map("d-punct-en")
+    texts = {unit["text"] for unit in result["units"]}
+    assert "Will this work?" in texts
+    assert "Yes!" in texts
+    assert "It should." in texts
+
+
+def test_extract_splits_question_and_exclamation_sentences_in_chinese():
+    ids = extract_argument_units(
+        debate_id="d-punct-zh",
+        turn_id="t1",
+        content="这会成功吗？会！当然会。",
+        speaker_side="proposition",
+    )
+
+    assert len(ids) == 3
+    result = get_argument_map("d-punct-zh")
+    texts = {unit["text"] for unit in result["units"]}
+    assert "这会成功吗" in texts
+    assert "会" in texts
+    assert "当然会" in texts
 
 
 def test_extract_deduplicates_by_semantic_hash():
@@ -135,7 +171,7 @@ def test_link_verdict_no_supporting_turns_marks_all_unaddressed():
 
 
 def test_link_verdict_with_finalized_summary_dict_shape():
-    """Verdict linking works when called with finalized_summary (dict objects in supporting_turns)."""
+    """Verdict linking works with finalized_summary dict items in supporting_turns."""
     extract_argument_units(
         debate_id="d-vdict", turn_id="t10",
         content="AI improves productivity.",
@@ -360,6 +396,140 @@ async def test_enrich_argument_units_for_turn_removes_cross_turn_stale_rebuttal_
 
 
 @pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_keeps_rebuttal_target_stable_after_rebuild():
+    extract_argument_units(
+        debate_id="d-enrich-stable-rebuttal",
+        turn_id="t1",
+        content="Alpha claim. Beta claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-enrich-stable-rebuttal",
+        turn_id="t2",
+        content="However this fails.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    initial = get_argument_map("d-enrich-stable-rebuttal")
+    labels_by_node = {node["id"]: node["label"] for node in initial["nodes"]}
+    initial_rebuttal = next(edge for edge in initial["edges"] if edge["type"] == "rebuts")
+    initial_target_label = labels_by_node[initial_rebuttal["target"]]
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "Alpha claim.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.61,
+                        },
+                        {
+                            "text": "Beta claim.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.63,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-stable-rebuttal",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 2
+    result = get_argument_map("d-enrich-stable-rebuttal")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    rebuttal = next(edge for edge in result["edges"] if edge["type"] == "rebuts")
+    assert labels_by_node[rebuttal["target"]] == initial_target_label
+
+
+@pytest.mark.asyncio
+async def test_enrich_rebuild_preserves_support_edge_with_tied_timestamps():
+    extract_argument_units(
+        debate_id="d-enrich-stable-order",
+        turn_id="t1",
+        content="Claim first. Data confirms it.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+
+    with Session(get_engine()) as session:
+        units = {
+            unit.canonical_text: unit
+            for unit in session.exec(
+                select(DebateArgumentUnit).where(
+                    DebateArgumentUnit.debate_id == "d-enrich-stable-order",
+                )
+            ).all()
+        }
+        tied_timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        claim_unit = units["Claim first."]
+        evidence_unit = units["Data confirms it."]
+        claim_unit.created_at = tied_timestamp
+        evidence_unit.created_at = tied_timestamp
+        claim_unit.id = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+        evidence_unit.id = "00000000-0000-0000-0000-000000000000"
+        session.add(claim_unit)
+        session.add(evidence_unit)
+        session.commit()
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "Claim first.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.72,
+                        },
+                        {
+                            "text": "Data confirms it.",
+                            "type": "evidence",
+                            "stance": "supports_proposition",
+                            "confidence": 0.84,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-stable-order",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 2
+    result = get_argument_map("d-enrich-stable-order")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    supports = [edge for edge in result["edges"] if edge["type"] == "supports"]
+    assert len(supports) == 1
+    assert labels_by_node[supports[0]["source"]] == "Data confirms it."
+    assert labels_by_node[supports[0]["target"]] == "Claim first."
+
+
+@pytest.mark.asyncio
 async def test_enrich_argument_units_for_turn_keeps_rule_based_units_on_invalid_output():
     extract_argument_units(
         debate_id="d-enrich-invalid",
@@ -536,8 +706,22 @@ def test_verdict_idempotent_updates_verdict_node_metadata():
         speaker_side="opposition",
     )
 
-    link_verdict("d-vmeta", {"supporting_turns": ["t1"], "winner": "proposition", "verdict_tone": "Measured"})
-    link_verdict("d-vmeta", {"supporting_turns": ["t2"], "winner": "opposition", "verdict_tone": "Decisive"})
+    link_verdict(
+        "d-vmeta",
+        {
+            "supporting_turns": ["t1"],
+            "winner": "proposition",
+            "verdict_tone": "Measured",
+        },
+    )
+    link_verdict(
+        "d-vmeta",
+        {
+            "supporting_turns": ["t2"],
+            "winner": "opposition",
+            "verdict_tone": "Decisive",
+        },
+    )
 
     result = get_argument_map("d-vmeta")
     verdict_nodes = [n for n in result["nodes"] if n["type"] == "verdict"]

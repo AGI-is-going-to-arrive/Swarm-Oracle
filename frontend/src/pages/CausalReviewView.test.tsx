@@ -23,25 +23,46 @@ vi.mock('react-i18next', () => ({
 // Mock @xyflow/react to avoid canvas errors in jsdom
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
-  const identity = <T,>(items: T[]) => [items, vi.fn(), vi.fn()] as const;
+  const useStatefulFlow = <T,>(items: T[]) => {
+    const [state, setState] = React.useState(items);
+    return [state, setState, vi.fn()] as const;
+  };
   return {
     ReactFlow: ({
       children,
+      nodes,
       onInit,
+      onNodeClick,
+      onPaneClick,
     }: {
       children?: React.ReactNode;
+      nodes?: Array<{ id: string }>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
+      onNodeClick?: (event: unknown, node: { id: string }) => void;
+      onPaneClick?: () => void;
     }) => {
       React.useEffect(() => {
         onInit?.({ fitView: fitViewMock });
       }, [onInit]);
-      return <div data-testid="reactflow">{children}</div>;
+      return (
+        <div data-testid="reactflow">
+          {nodes?.map((node) => (
+            <button
+              key={node.id}
+              data-testid={`rf-node-${node.id}`}
+              onClick={(event) => onNodeClick?.(event, node)}
+            />
+          ))}
+          <button data-testid="rf-pane" onClick={() => onPaneClick?.()} />
+          {children}
+        </div>
+      );
     },
     Background: () => null,
     Controls: () => null,
     MiniMap: () => null,
-    useNodesState: identity,
-    useEdgesState: identity,
+    useNodesState: useStatefulFlow,
+    useEdgesState: useStatefulFlow,
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
     MarkerType: { ArrowClosed: 'arrowclosed' },
   };
@@ -177,6 +198,42 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('reconstructs branch options from payload branch ids and fork children when available_branches is missing', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-fallback-branches',
+        nodes: [
+          {
+            id: 'fork-1',
+            key: 'fork-parent',
+            type: 'fork',
+            label: 'Forked branch',
+            round: 1,
+            payload: { branch_id: 'br-parent', children: ['br-child', 'br-sibling'] },
+          },
+          {
+            id: 'child-event',
+            key: 'event-child',
+            type: 'event',
+            label: 'Child branch event',
+            round: 2,
+            payload: { branch_id: 'br-child', agent_id: 'alpha' },
+          },
+        ],
+        edges: [],
+      }),
+    } as Response);
+    renderView('/sim/test-id/causal-map?branch_id=br-child');
+    await screen.findByTestId('reactflow');
+
+    expect(screen.getByLabelText('Select branch')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'All branches' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /br-paren/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /br-sibli/ })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
   it('refits the viewport after search filtering changes the node set', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
@@ -200,6 +257,38 @@ describe('CausalReviewView', () => {
     await waitFor(() => {
       expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
     });
+    vi.restoreAllMocks();
+  });
+
+  it('does not refit the viewport when selecting or clearing a highlighted node', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-select',
+        available_branches: ['br1'],
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Agent Beta speaks', round: 1, payload: { agent_id: 'beta', branch_id: 'br1' } },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+    renderView();
+    await screen.findByTestId('reactflow');
+    const initialCalls = fitViewMock.mock.calls.length;
+
+    await user.click(screen.getByTestId('rf-node-n1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+    });
+    expect(fitViewMock.mock.calls.length).toBe(initialCalls);
+
+    await user.click(screen.getByTestId('rf-pane'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+    });
+    expect(fitViewMock.mock.calls.length).toBe(initialCalls);
     vi.restoreAllMocks();
   });
 

@@ -165,6 +165,7 @@ export function CausalReviewView() {
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
+  const pendingFitSignatureRef = useRef<string | null>(null);
 
   const fetchGraph = useCallback(async () => {
     setLoading(true);
@@ -210,14 +211,22 @@ export function CausalReviewView() {
     return layoutDagre(filteredData.nodes, filteredData.edges);
   }, [filteredData]);
 
+  const layoutSignature = useMemo(() => (
+    `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
+  ), [layoutResult]);
+
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(layoutResult.nodes);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(layoutResult.edges);
+  const flowSignature = useMemo(() => (
+    `${flowNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${flowEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
+  ), [flowNodes, flowEdges]);
 
   // Sync layout result into state when data/filter changes
   useEffect(() => {
+    pendingFitSignatureRef.current = layoutSignature;
     setFlowNodes(layoutResult.nodes);
     setFlowEdges(layoutResult.edges);
-  }, [layoutResult, setFlowNodes, setFlowEdges]);
+  }, [layoutResult, layoutSignature, setFlowNodes, setFlowEdges]);
 
   // Clear stale selection when filtered node disappears
   useEffect(() => {
@@ -265,9 +274,15 @@ export function CausalReviewView() {
   const edges = flowEdges;
 
   useEffect(() => {
-    if (!reactFlowRef.current || (flowNodes.length === 0 && flowEdges.length === 0)) return;
+    if (!pendingFitSignatureRef.current || pendingFitSignatureRef.current !== flowSignature) return;
+    if (flowNodes.length === 0 || flowNodes.length > PERF_TEXT_FALLBACK_LIMIT) {
+      pendingFitSignatureRef.current = null;
+      return;
+    }
+    if (!reactFlowRef.current) return;
+    pendingFitSignatureRef.current = null;
     reactFlowRef.current.fitView?.();
-  }, [flowNodes, flowEdges]);
+  }, [flowNodes, flowEdges, flowSignature]);
 
   const rawNodeMap = useMemo(() => {
     const m = new Map<string, GraphNodeData>();
