@@ -249,6 +249,31 @@ class TestAppendRoundNodes:
             assert len(edges) == 1
             assert edges[0].edge_type == "caused"
 
+    def test_same_branch_round_agent_across_scenarios_do_not_conflict(self):
+        append_round_nodes(
+            "sc3c_a",
+            "shared_branch",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="first scenario")],
+        )
+        append_round_nodes(
+            "sc3c_b",
+            "shared_branch",
+            1,
+            [MockMessage(emotion="angry", agent_id="a1", id="m2", content="second scenario")],
+        )
+
+        with Session(get_engine()) as session:
+            frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.branch_id == "shared_branch",
+                    AgentStateFrame.round_number == 1,
+                    AgentStateFrame.agent_id == "a1",
+                )
+            ).all()
+
+        assert sorted(frame.scenario_id for frame in frames) == ["sc3c_a", "sc3c_b"]
+
     def test_same_round_nodes_are_isolated_per_branch(self):
         """Same-round nodes from different branches must not reuse the same event node."""
         append_round_nodes(

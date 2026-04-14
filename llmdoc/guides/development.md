@@ -67,6 +67,17 @@ cp .env.example backend/.env
 
 ## 常用验证
 
+### 全仓回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest -q
+
+cd ../frontend
+npm test
+```
+
 ### Backend 定向回归
 
 ```bash
@@ -114,6 +125,27 @@ python -m pytest tests/test_audit_fixes.py -v
 
 覆盖：输入长度验证、BYOK key 脱敏、OpenAPI 暴露开关、SQLite WAL、WS 消息大小限制、fork prompt 模板一致性、语言检测收口。共 65 个测试。
 
+### Config Reload / Feature Gate / 时间敏感存储回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_audit_fixes.py tests/test_contract_freeze.py tests/test_counterfactual.py tests/test_growth_events_endpoint.py -q
+python -m pytest tests/test_corner_cases.py -k 'init_db_reuses_engine_managed_connection_for_sqlite_migrations or init_db_adds_agent_group_scenario_index' -q
+
+cd ../frontend
+npm test -- --run src/lib/dailyChallenge.test.ts
+```
+
+说明：
+
+- backend 这组回归当前主要看：
+  - `app.config` / `app.main` reload 之后，缓存过 `from app.config import settings` 的模块要重新绑回当前 `settings`，避免拿旧对象继续断言
+  - feature gate 测试直接 patch live router module 的 `settings`，不要 patch 测试文件顶层缓存的旧对象
+  - 如果目标是 `_init_db_lightweight()` fallback 语义，测试里先显式 `monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)`，再断言 SQLite engine-managed migration / index 创建行为
+- frontend 这组回归当前主要看：
+  - 像 `dailyChallenge` 这种既吃传入 `date`、又会读 `Date.now()` 的存储逻辑，测试 setup 里统一 `vi.useFakeTimers()` + `vi.setSystemTime(fixedDate)`，避免 TTL prune 把固定历史 bucket 提前清掉
+
 ### Frontend 定向回归
 
 ```bash
@@ -130,6 +162,7 @@ npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.tes
 cd backend
 source .venv/bin/activate
 python -m pytest tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
+# 更宽一点的 backend smoke，用来兜住相邻 API / service 回归；不是 graph 专项断言
 python -m pytest tests/test_api.py tests/test_debate_service.py -q
 python -m ruff check app/services/causal_graph.py app/services/debate_argument_map.py tests/test_causal_graph.py tests/test_debate_argument_map.py
 
@@ -166,15 +199,16 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
     - enrichment 后 stable rebuttal / support edge rebuild（含 `DebateTurn.content` 句子顺序路径）
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
-  - `CausalReviewView`
-  - graph export
-  - node/detail 基础交互
+  - `CausalReviewView` 基础渲染
+  - graph export 按钮可见，且 `Export SVG` 实际触发下载
+  - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
 - `phase3-batch-b` 主要看：
-  - `ArgumentMap`
+  - `ArgumentMap` 基础渲染
   - strength meter
-  - legend / empty-state 口径
+  - legend 可见
+  - status filter 走到空态分支，并可 `Clear` 恢复图谱
   - 与结果页图谱接线是否还活着
-- 两条 `phase3` 脚本当前都走 `page.route()` fixtures；即使 preview 代理到 `backend` 返回 `ECONNREFUSED` 噪音，只要脚本 summary 是 `allPassed: true` 就按通过处理
+- 两条 `phase3` 脚本当前都走 `page.route()` fixtures；即使 preview 代理到 `backend` 返回 `ECONNREFUSED` 噪音，也只有在断言全部通过、没有 test 级未处理异常、且 overall summary 为 `allPassed: true` 时才按通过处理；任一 surface/test 失败都会反映到 summary 和退出码
 
 ### Resume / P1-9 定向回归
 

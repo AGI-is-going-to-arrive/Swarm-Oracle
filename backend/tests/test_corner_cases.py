@@ -396,6 +396,7 @@ class TestSQLitePathParsing:
         fake_engine = _FakeEngine(connection)
 
         monkeypatch.setattr(database_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)
         monkeypatch.setattr(database_module.SQLModel.metadata, "create_all", lambda _engine: None)
         monkeypatch.setattr(
             database_module,
@@ -451,6 +452,7 @@ class TestSQLitePathParsing:
         fake_engine = _FakeEngine(connection)
 
         monkeypatch.setattr(database_module, "get_engine", lambda: fake_engine)
+        monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)
         monkeypatch.setattr(database_module.SQLModel.metadata, "create_all", lambda _engine: None)
         monkeypatch.setattr(database_module, "_migrate_add_column", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(

@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +29,8 @@ from app.services.llm_client import (
 )
 
 logger = logging.getLogger(__name__)
+_snapshot_index_lock = threading.Lock()
+_snapshot_index_urls: set[str] = set()
 
 # ── Keyword sets for rule-based classification ──────────────
 
@@ -475,6 +478,109 @@ def _find_opponent_last_claim(
     return _select_opponent_claim_id(candidates, current_side)
 
 
+def _has_unique_index_columns(
+    session: Session,
+    *,
+    table_name: str,
+    expected_columns: tuple[str, ...],
+) -> bool:
+    indexes = session.connection().exec_driver_sql(
+        f"PRAGMA index_list('{table_name}')"
+    ).fetchall()
+    for index in indexes:
+        if not index[2]:
+            continue
+        index_name = index[1]
+        columns = session.connection().exec_driver_sql(
+            f"PRAGMA index_info('{index_name}')"
+        ).fetchall()
+        if tuple(row[2] for row in columns) == expected_columns:
+            return True
+    return False
+
+
+def _dedupe_argument_map_snapshots(session: Session) -> None:
+    duplicate_groups = session.connection().exec_driver_sql(
+        """
+        SELECT owner_type, owner_id, graph_kind
+        FROM graph_snapshot
+        GROUP BY owner_type, owner_id, graph_kind
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+
+    for owner_type, owner_id, graph_kind in duplicate_groups:
+        snapshot_ids = [
+            row[0]
+            for row in session.connection().exec_driver_sql(
+                """
+                SELECT id
+                FROM graph_snapshot
+                WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (owner_type, owner_id, graph_kind),
+            ).fetchall()
+        ]
+        if len(snapshot_ids) < 2:
+            continue
+
+        canonical_id, duplicate_ids = snapshot_ids[0], snapshot_ids[1:]
+        for duplicate_id in duplicate_ids:
+            session.connection().exec_driver_sql(
+                "UPDATE graph_node SET snapshot_id = ? WHERE snapshot_id = ?",
+                (canonical_id, duplicate_id),
+            )
+            session.connection().exec_driver_sql(
+                "UPDATE graph_edge SET snapshot_id = ? WHERE snapshot_id = ?",
+                (canonical_id, duplicate_id),
+            )
+            session.connection().exec_driver_sql(
+                "DELETE FROM graph_snapshot WHERE id = ?",
+                (duplicate_id,),
+            )
+
+
+def _ensure_argument_map_snapshot_index(engine) -> None:
+    db_key = str(engine.url)
+    with _snapshot_index_lock:
+        if db_key in _snapshot_index_urls:
+            return
+
+        with Session(engine) as session:
+            if session.connection().dialect.name == "sqlite":
+                try:
+                    if not _has_unique_index_columns(
+                        session,
+                        table_name="graph_snapshot",
+                        expected_columns=("owner_type", "owner_id", "graph_kind"),
+                    ):
+                        _dedupe_argument_map_snapshots(session)
+                        session.connection().exec_driver_sql(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_graph_snapshot_owner_kind "
+                            "ON graph_snapshot (owner_type, owner_id, graph_kind)"
+                        )
+                        session.commit()
+
+                    if _has_unique_index_columns(
+                        session,
+                        table_name="graph_snapshot",
+                        expected_columns=("owner_type", "owner_id", "graph_kind"),
+                    ):
+                        _snapshot_index_urls.add(db_key)
+                        return
+                    session.rollback()
+                except Exception:
+                    session.rollback()
+                    logger.debug(
+                        "argument_map snapshot unique index ensure failed",
+                        exc_info=True,
+                    )
+                    return
+
+        _snapshot_index_urls.add(db_key)
+
+
 def _get_or_create_snapshot(
     session: Session, debate_id: str,
 ) -> GraphSnapshot:
@@ -483,16 +589,22 @@ def _get_or_create_snapshot(
         GraphSnapshot.owner_type == "debate",
         GraphSnapshot.owner_id == debate_id,
         GraphSnapshot.graph_kind == "argument_map",
-    )
+    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
     snapshot = session.exec(stmt).first()
     if snapshot is None:
-        snapshot = GraphSnapshot(
-            owner_type="debate",
-            owner_id=debate_id,
-            graph_kind="argument_map",
-        )
-        session.add(snapshot)
-        session.flush()  # ensure id is populated
+        try:
+            with session.begin_nested():
+                snapshot = GraphSnapshot(
+                    owner_type="debate",
+                    owner_id=debate_id,
+                    graph_kind="argument_map",
+                )
+                session.add(snapshot)
+                session.flush()  # ensure id is populated
+        except IntegrityError:
+            snapshot = session.exec(stmt).first()
+            if snapshot is None:
+                raise
     return snapshot
 
 
@@ -513,7 +625,9 @@ def extract_argument_units(
         return []
 
     created_ids: list[str] = []
-    with Session(get_engine()) as session:
+    engine = get_engine()
+    _ensure_argument_map_snapshot_index(engine)
+    with Session(engine) as session:
         snapshot = _get_or_create_snapshot(session, debate_id)
 
         # Load existing hashes for dedup within this debate
@@ -734,7 +848,9 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
         elif isinstance(item, str):
             supporting_turn_ids.add(item)
 
-    with Session(get_engine()) as session:
+    engine = get_engine()
+    _ensure_argument_map_snapshot_index(engine)
+    with Session(engine) as session:
         # Step 1: Re-query ALL units for full re-evaluation
         all_units_stmt = select(DebateArgumentUnit).where(
             DebateArgumentUnit.debate_id == debate_id,
@@ -820,12 +936,14 @@ def get_argument_map(debate_id: str) -> dict:
     """
     empty: dict = {"snapshot_id": None, "nodes": [], "edges": [], "units": []}
 
-    with Session(get_engine()) as session:
+    engine = get_engine()
+    _ensure_argument_map_snapshot_index(engine)
+    with Session(engine) as session:
         stmt = select(GraphSnapshot).where(
             GraphSnapshot.owner_type == "debate",
             GraphSnapshot.owner_id == debate_id,
             GraphSnapshot.graph_kind == "argument_map",
-        )
+        ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
         snapshot = session.exec(stmt).first()
         if snapshot is None:
             return empty
@@ -840,8 +958,13 @@ def get_argument_map(debate_id: str) -> dict:
         )
         edges = session.exec(edges_stmt).all()
 
-        units_stmt = select(DebateArgumentUnit).where(
-            DebateArgumentUnit.debate_id == debate_id,
+        units_stmt = (
+            select(DebateArgumentUnit)
+            .join(GraphNode, GraphNode.id == DebateArgumentUnit.node_id)
+            .where(
+                DebateArgumentUnit.debate_id == debate_id,
+                GraphNode.snapshot_id == snapshot.id,
+            )
         )
         units = session.exec(units_stmt).all()
 

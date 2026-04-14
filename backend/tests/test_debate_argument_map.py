@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +14,7 @@ from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
 from app.models.debate import DebateTurn
+from app.models.graph import GraphNode, GraphSnapshot
 from app.services.debate_argument_map import (
     enrich_argument_units_for_turn,
     extract_argument_units,
@@ -238,6 +241,125 @@ def test_get_argument_map_populated_after_extraction():
     for unit in result["units"]:
         assert unit["node_id"] in node_ids
         assert unit["turn_id"] == "t1"
+
+
+def test_concurrent_first_extract_reuses_single_snapshot_and_returns_consistent_map(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    debate_id = "d-concurrent-snapshot"
+    barrier = threading.Barrier(2)
+    original_init = GraphSnapshot.__init__
+
+    def synced_init(self, *args, **kwargs):
+        if (
+            kwargs.get("owner_type") == "debate"
+            and kwargs.get("owner_id") == debate_id
+            and kwargs.get("graph_kind") == "argument_map"
+        ):
+            barrier.wait(timeout=5)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(GraphSnapshot, "__init__", synced_init)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                extract_argument_units,
+                debate_id,
+                "t1",
+                "Alpha claim.",
+                "proposition",
+            ),
+            executor.submit(
+                extract_argument_units,
+                debate_id,
+                "t2",
+                "Beta claim.",
+                "opposition",
+            ),
+        ]
+        created_ids = [future.result(timeout=5) for future in futures]
+
+    assert sum(len(ids) for ids in created_ids) == 2
+
+    with Session(get_engine()) as session:
+        snapshots = session.exec(
+            select(GraphSnapshot).where(
+                GraphSnapshot.owner_type == "debate",
+                GraphSnapshot.owner_id == debate_id,
+                GraphSnapshot.graph_kind == "argument_map",
+            )
+        ).all()
+
+    assert len(snapshots) == 1
+
+    result = get_argument_map(debate_id)
+    node_ids = {node["id"] for node in result["nodes"]}
+
+    assert result["snapshot_id"] == snapshots[0].id
+    assert node_ids
+    assert {unit["node_id"] for unit in result["units"]} <= node_ids
+    assert all(edge["source"] in node_ids for edge in result["edges"])
+    assert all(edge["target"] in node_ids for edge in result["edges"])
+
+
+def test_get_argument_map_reads_nodes_edges_and_units_from_one_snapshot_only():
+    extract_argument_units(
+        debate_id="d-single-snapshot-only",
+        turn_id="t1",
+        content="Primary claim.",
+        speaker_side="proposition",
+    )
+
+    with Session(get_engine()) as session:
+        current_snapshot = session.exec(
+            select(GraphSnapshot).where(
+                GraphSnapshot.owner_type == "debate",
+                GraphSnapshot.owner_id == "d-single-snapshot-only",
+                GraphSnapshot.graph_kind == "argument_map",
+            )
+        ).first()
+        assert current_snapshot is not None
+        current_snapshot_id = current_snapshot.id
+
+        unrelated_snapshot = GraphSnapshot(
+            owner_type="debate",
+            owner_id="d-other-owner",
+            graph_kind="argument_map",
+        )
+        session.add(unrelated_snapshot)
+        session.flush()
+        stale_node = GraphNode(
+            snapshot_id=unrelated_snapshot.id,
+            node_key="stale-node",
+            node_type="claim",
+            label="Stale claim.",
+            ref_model="debate_turn",
+            ref_id="t-stale",
+            payload_json='{"side":"opposition"}',
+        )
+        session.add(stale_node)
+        session.flush()
+        session.add(
+            DebateArgumentUnit(
+                debate_id="d-single-snapshot-only",
+                turn_id="t-stale",
+                node_id=stale_node.id,
+                unit_type="claim",
+                status="standing",
+                canonical_text="Stale claim.",
+                semantic_hash="stalehash12345678",
+            )
+        )
+        session.commit()
+
+    result = get_argument_map("d-single-snapshot-only")
+    node_ids = {node["id"] for node in result["nodes"]}
+
+    assert result["snapshot_id"] == current_snapshot_id
+    assert "Stale claim." not in {node["label"] for node in result["nodes"]}
+    assert "Stale claim." not in {unit["text"] for unit in result["units"]}
+    assert {unit["node_id"] for unit in result["units"]} <= node_ids
 
 
 @pytest.mark.asyncio

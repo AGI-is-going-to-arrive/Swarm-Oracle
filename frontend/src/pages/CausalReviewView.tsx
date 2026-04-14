@@ -206,10 +206,14 @@ export function CausalReviewView() {
     return { ...graphData, nodes: matchingNodes, edges: matchingEdges };
   }, [graphData, agentSearch]);
 
+  const nodeCount = filteredData?.nodes.length ?? 0;
+  const edgeCount = filteredData?.edges.length ?? 0;
+  const isTextFallback = nodeCount > PERF_TEXT_FALLBACK_LIMIT;
+
   const layoutResult = useMemo(() => {
-    if (!filteredData || filteredData.nodes.length === 0) return { nodes: [], edges: [] };
+    if (!filteredData || filteredData.nodes.length === 0 || isTextFallback) return { nodes: [], edges: [] };
     return layoutDagre(filteredData.nodes, filteredData.edges);
-  }, [filteredData]);
+  }, [filteredData, isTextFallback]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -353,7 +357,7 @@ export function CausalReviewView() {
           </Link>
           <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{t('causal.title', 'Causal Graph')}</h1>
           <span style={{ color: '#888', fontSize: '0.85rem' }}>
-            {nodes.length} {t('causal.nodes', 'nodes')} &middot; {edges.length} {t('causal.edges', 'edges')}
+            {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
           </span>
           {/* B6: Branch selector */}
           {(availableBranches.length > 1 || Boolean(branchId)) && (
@@ -383,7 +387,7 @@ export function CausalReviewView() {
               background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
             }}
           />
-          {nodes.length > 0 && (
+          {nodeCount > 0 && (
             <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
           )}
           {/* B6: Legend toggle */}
@@ -406,16 +410,16 @@ export function CausalReviewView() {
           </div>
         )}
 
-        {nodes.length === 0 && !agentSearch ? (
+        {nodeCount === 0 && !agentSearch ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <p style={{ color: '#888' }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
           </div>
-        ) : nodes.length === 0 && agentSearch ? (
+        ) : nodeCount === 0 && agentSearch ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <p style={{ color: '#888' }}>{t('causal.no_results', 'No nodes match your search.')}</p>
           </div>
-        ) : nodes.length > PERF_TEXT_FALLBACK_LIMIT ? (
-          <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }}>
+        ) : isTextFallback ? (
+          <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }} className="causal-graph-container">
             <p style={{ color: '#888', marginBottom: '0.5rem' }}>{t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')}</p>
             <div role="list">
               {filteredData?.nodes.map(n => (

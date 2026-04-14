@@ -28,6 +28,59 @@ async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
 }
 
+function toErrorMessage(err) {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+async function runNamedTest(testName, page, outputDir, runner) {
+  try {
+    const result = await runner();
+    const steps = Array.isArray(result?.steps) ? result.steps : [];
+    return {
+      steps,
+      passed: result?.passed ?? steps.every((step) => step?.passed),
+      error: result?.error ?? null,
+    };
+  } catch (err) {
+    const message = toErrorMessage(err);
+    await saveScreenshot(page, path.join(outputDir, `${testName}-crash.png`));
+    return {
+      steps: [{ name: "unhandled-error", passed: false, error: message }],
+      passed: false,
+      error: message,
+    };
+  }
+}
+
+function summarizeRun(allResults) {
+  let totalSteps = 0;
+  let passedSteps = 0;
+  const failedTests = [];
+
+  for (const [testName, test] of Object.entries(allResults.tests)) {
+    const steps = Array.isArray(test?.steps) ? test.steps : [];
+    for (const step of steps) {
+      totalSteps++;
+      if (step?.passed) {
+        passedSteps++;
+      }
+    }
+    if (test?.passed === false || test?.error) {
+      failedTests.push(testName);
+    }
+  }
+
+  return {
+    totalSteps,
+    passedSteps,
+    failedSteps: totalSteps - passedSteps,
+    failedTests,
+    runError: allResults.error ?? null,
+    allPassed: totalSteps > 0 && failedTests.length === 0 && !allResults.error && passedSteps === totalSteps,
+  };
+}
+
 // ── Fixtures ─────────────────────────────────────────────
 
 const FIXTURE_SCENARIO_ID = "sc-e2e-batch-b";
@@ -411,6 +464,27 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const hasEmpty = await emptyMsg.isVisible().catch(() => false);
   results.steps.push({ name: "no-empty-state", passed: !hasEmpty });
 
+  const rejectedFilter = page.getByRole("button", { name: /Rejected|驳回|拒绝/i }).first();
+  const hasRejectedFilter = await rejectedFilter.isVisible().catch(() => false);
+  results.steps.push({ name: "status-filter-visible", passed: hasRejectedFilter });
+  if (hasRejectedFilter) {
+    await rejectedFilter.click();
+    const filterEmptyState = page.getByText(/No argument units match the selected filters|所选筛选条件下没有论证单元/i).first();
+    const hasFilterEmptyState = await filterEmptyState.isVisible({ timeout: 3000 }).catch(() => false);
+    await saveScreenshot(page, path.join(stepDir, "02-argument-map-filter-empty.png"));
+    results.steps.push({ name: "status-filter-empty-state-visible", passed: hasFilterEmptyState });
+
+    const clearBtn = page.getByRole("button", { name: /Clear|清除/i }).first();
+    const hasClearBtn = await clearBtn.isVisible().catch(() => false);
+    results.steps.push({ name: "status-filter-clear-visible", passed: hasClearBtn });
+    if (hasClearBtn) {
+      await clearBtn.click();
+      const mapRestored = await reactFlowEl.isVisible({ timeout: 3000 }).catch(() => false);
+      await saveScreenshot(page, path.join(stepDir, "03-argument-map-filter-cleared.png"));
+      results.steps.push({ name: "status-filter-clear-restores-map", passed: mapRestored });
+    }
+  }
+
   return results;
 }
 
@@ -482,7 +556,7 @@ async function runSurface(mode, viewport) {
   ensureDir(outputDir);
 
   const browser = await chromium.launch({ headless: process.env.HEADLESS !== "0" });
-  const context = await browser.newContext({ viewport });
+  const context = await browser.newContext({ viewport, acceptDownloads: true });
   const page = await context.newPage();
 
   await installFixtures(page);
@@ -490,11 +564,26 @@ async function runSurface(mode, viewport) {
   const allResults = { mode, viewport, tests: {} };
 
   try {
-    allResults.tests.argumentMap = await testArgumentMap(page, baseUrl, outputDir);
-    allResults.tests.factionTimeline = await testFactionTimeline(page, baseUrl, outputDir);
-    allResults.tests.compareDigest = await testCompareDigest(page, baseUrl, outputDir);
+    allResults.tests.argumentMap = await runNamedTest(
+      "argument-map",
+      page,
+      outputDir,
+      () => testArgumentMap(page, baseUrl, outputDir),
+    );
+    allResults.tests.factionTimeline = await runNamedTest(
+      "faction-timeline",
+      page,
+      outputDir,
+      () => testFactionTimeline(page, baseUrl, outputDir),
+    );
+    allResults.tests.compareDigest = await runNamedTest(
+      "compare-digest",
+      page,
+      outputDir,
+      () => testCompareDigest(page, baseUrl, outputDir),
+    );
   } catch (err) {
-    allResults.error = err.message;
+    allResults.error = toErrorMessage(err);
     await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
     await page.close().catch(() => {});
@@ -502,15 +591,7 @@ async function runSurface(mode, viewport) {
     await browser.close().catch(() => {});
   }
 
-  let totalSteps = 0;
-  let passedSteps = 0;
-  for (const test of Object.values(allResults.tests)) {
-    for (const step of test.steps) {
-      totalSteps++;
-      if (step.passed) passedSteps++;
-    }
-  }
-  allResults.summary = { totalSteps, passedSteps, allPassed: passedSteps === totalSteps };
+  allResults.summary = summarizeRun(allResults);
 
   writeJson(path.join(outputDir, "result.json"), allResults);
   console.log(JSON.stringify(allResults.summary));
@@ -524,15 +605,29 @@ const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
 async function main() {
   const mode = process.argv[2] || "desktop";
+  const surfaceResults = [];
 
   if (mode === "desktop" || mode === "full") {
     const r = await runSurface("desktop", DESKTOP_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
+    surfaceResults.push(r);
   }
   if (mode === "mobile" || mode === "full") {
     const r = await runSurface("mobile", MOBILE_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
+    surfaceResults.push(r);
   }
+
+  const overallSummary = {
+    mode,
+    surfaces: surfaceResults.map((result) => ({
+      mode: result.mode,
+      allPassed: result.summary.allPassed,
+      failedTests: result.summary.failedTests,
+      runError: result.summary.runError,
+    })),
+    allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
+  };
+  console.log(JSON.stringify({ overall: overallSummary }));
+  if (!overallSummary.allPassed) process.exitCode = 1;
 }
 
 main().catch((err) => {

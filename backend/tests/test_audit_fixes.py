@@ -58,10 +58,15 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
         # Re-bind settings in all modules that cache it via
         # ``from app.config import settings`` at import time.
         import app.api.helpers as _hlp
+        import app.api.agents as _agt
+        import app.api.debate as _api_deb
+        import app.api.graphs as _grf
         import app.api.scenarios as _scn
         import app.api.schemas as _sch
+        import app.api.ws as _api_ws
         import app.models.database as _db
         import app.services.debate as _deb
+        import app.services.debate_argument_map as _deb_arg
         import app.services.ending_room_service as _ers
         import app.services.ending_room_service._content as _ers_c
         import app.services.ending_room_service._threads as _ers_t
@@ -71,7 +76,9 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
         import app.services.simulator as _sim
         import app.services.vector_store as _vec
         for _mod in (
+            _agt, _api_deb, _grf, _api_ws,
             _llm, _sim, _deb, _mem, _vec, _rl,
+            _deb_arg,
             _ers, _ers_c, _ers_t,
             _db, _scn, _sch, _hlp,
         ):

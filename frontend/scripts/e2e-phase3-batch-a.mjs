@@ -29,6 +29,59 @@ async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
 }
 
+function toErrorMessage(err) {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+async function runNamedTest(testName, page, outputDir, runner) {
+  try {
+    const result = await runner();
+    const steps = Array.isArray(result?.steps) ? result.steps : [];
+    return {
+      steps,
+      passed: result?.passed ?? steps.every((step) => step?.passed),
+      error: result?.error ?? null,
+    };
+  } catch (err) {
+    const message = toErrorMessage(err);
+    await saveScreenshot(page, path.join(outputDir, `${testName}-crash.png`));
+    return {
+      steps: [{ name: "unhandled-error", passed: false, error: message }],
+      passed: false,
+      error: message,
+    };
+  }
+}
+
+function summarizeRun(allResults) {
+  let totalSteps = 0;
+  let passedSteps = 0;
+  const failedTests = [];
+
+  for (const [testName, test] of Object.entries(allResults.tests)) {
+    const steps = Array.isArray(test?.steps) ? test.steps : [];
+    for (const step of steps) {
+      totalSteps++;
+      if (step?.passed) {
+        passedSteps++;
+      }
+    }
+    if (test?.passed === false || test?.error) {
+      failedTests.push(testName);
+    }
+  }
+
+  return {
+    totalSteps,
+    passedSteps,
+    failedSteps: totalSteps - passedSteps,
+    failedTests,
+    runError: allResults.error ?? null,
+    allPassed: totalSteps > 0 && failedTests.length === 0 && !allResults.error && passedSteps === totalSteps,
+  };
+}
+
 // ── Fixtures ─────────────────────────────────────────────
 
 const FIXTURE_USER_ID = "e2e-test-user";
@@ -78,9 +131,30 @@ const GROWTH_EVENTS_FIXTURE = {
 const CAUSAL_GRAPH_FIXTURE = {
   id: "cg-e2e-001",
   nodes: [
-    { id: "n1", key: "trade_shock", type: "event", label: "Trade shock announced", round: 1, payload: null },
-    { id: "n2", key: "stance_shift", type: "stance_shift", label: "Analysts shift dovish", round: 2, payload: null },
-    { id: "n3", key: "policy_change", type: "event", label: "Central bank responds", round: 3, payload: null },
+    {
+      id: "n1",
+      key: "trade_shock",
+      type: "event",
+      label: "Trade shock announced",
+      round: 1,
+      payload: { agent_id: "macro-desk", emotion: "alert", stance_score: -0.2 },
+    },
+    {
+      id: "n2",
+      key: "stance_shift",
+      type: "stance_shift",
+      label: "Analysts shift dovish",
+      round: 2,
+      payload: { agent_id: "macro-desk", emotion: "cautious", stance_score: -0.45 },
+    },
+    {
+      id: "n3",
+      key: "policy_change",
+      type: "event",
+      label: "Central bank responds",
+      round: 3,
+      payload: { agent_id: "policy-board", emotion: "decisive", stance_score: 0.6 },
+    },
   ],
   edges: [
     { id: "e1", source: "n1", target: "n2", type: "caused", weight: 0.9, label: "triggered" },
@@ -259,6 +333,55 @@ async function testCausalMap(page, baseUrl, outputDir) {
   const hasEdgeCount = await edgeCount.isVisible().catch(() => false);
   results.steps.push({ name: "edge-count-correct", passed: hasEdgeCount });
 
+  const exportPanel = page.getByTestId("export-panel");
+  const hasExportPanel = await exportPanel.isVisible().catch(() => false);
+  results.steps.push({ name: "export-panel-visible", passed: hasExportPanel });
+
+  const exportSvgButton = page.getByRole("button", { name: /Export SVG|导出 SVG/i }).first();
+  const hasExportSvgButton = await exportSvgButton.isVisible().catch(() => false);
+  results.steps.push({ name: "export-svg-button-visible", passed: hasExportSvgButton });
+  if (hasExportSvgButton) {
+    let svgDownloadPassed = false;
+    try {
+      const [download] = await Promise.all([
+        page.waitForEvent("download", { timeout: 5000 }),
+        exportSvgButton.click(),
+      ]);
+      const filename = download.suggestedFilename();
+      await download.path().catch(() => null);
+      svgDownloadPassed = filename.startsWith("causal-graph_") && filename.endsWith(".svg");
+      await saveScreenshot(page, path.join(stepDir, "02-causal-map-exported.png"));
+    } catch {
+      svgDownloadPassed = false;
+    }
+    results.steps.push({ name: "export-svg-download-succeeds", passed: svgDownloadPassed });
+  }
+
+  const firstNode = page.getByRole("button", { name: "Trade shock announced" }).first();
+  const hasFirstNode = await firstNode.isVisible().catch(() => false);
+  results.steps.push({ name: "graph-node-visible", passed: hasFirstNode });
+  if (hasFirstNode) {
+    await firstNode.click();
+    const detailPanel = page.getByTestId("node-detail-panel");
+    const hasDetailPanel = await detailPanel.isVisible({ timeout: 3000 }).catch(() => false);
+    results.steps.push({ name: "node-detail-panel-opens", passed: hasDetailPanel });
+
+    const hasPayloadDetails = hasDetailPanel
+      ? await detailPanel.getByText(/macro-desk/i).isVisible().catch(() => false)
+      : false;
+    results.steps.push({ name: "node-detail-payload-visible", passed: hasPayloadDetails });
+
+    const closeBtn = detailPanel.getByRole("button", { name: /Close|关闭/i }).first();
+    const hasCloseBtn = hasDetailPanel ? await closeBtn.isVisible().catch(() => false) : false;
+    results.steps.push({ name: "node-detail-close-visible", passed: hasCloseBtn });
+    if (hasCloseBtn) {
+      await closeBtn.click();
+      const panelClosed = await detailPanel.isHidden().catch(() => false);
+      await saveScreenshot(page, path.join(stepDir, "03-causal-map-detail-closed.png"));
+      results.steps.push({ name: "node-detail-panel-closes", passed: panelClosed });
+    }
+  }
+
   // Check back link
   const backLink = page.getByText(/Back to Result|返回结果/);
   const hasBack = await backLink.isVisible().catch(() => false);
@@ -286,7 +409,7 @@ async function runSurface(mode, viewport) {
   const browser = await chromium.launch({
     headless: process.env.HEADLESS !== "0",
   });
-  const context = await browser.newContext({ viewport });
+  const context = await browser.newContext({ viewport, acceptDownloads: true });
   const page = await context.newPage();
 
   await installFixtures(page);
@@ -294,11 +417,26 @@ async function runSurface(mode, viewport) {
   const allResults = { mode, viewport, tests: {} };
 
   try {
-    allResults.tests.agentWorkshop = await testAgentWorkshop(page, baseUrl, outputDir);
-    allResults.tests.agentLibraryProfile = await testAgentLibraryAndProfile(page, baseUrl, outputDir);
-    allResults.tests.causalMap = await testCausalMap(page, baseUrl, outputDir);
+    allResults.tests.agentWorkshop = await runNamedTest(
+      "agent-workshop",
+      page,
+      outputDir,
+      () => testAgentWorkshop(page, baseUrl, outputDir),
+    );
+    allResults.tests.agentLibraryProfile = await runNamedTest(
+      "agent-library-profile",
+      page,
+      outputDir,
+      () => testAgentLibraryAndProfile(page, baseUrl, outputDir),
+    );
+    allResults.tests.causalMap = await runNamedTest(
+      "causal-map",
+      page,
+      outputDir,
+      () => testCausalMap(page, baseUrl, outputDir),
+    );
   } catch (err) {
-    allResults.error = err.message;
+    allResults.error = toErrorMessage(err);
     await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
     await page.close().catch(() => {});
@@ -306,16 +444,7 @@ async function runSurface(mode, viewport) {
     await browser.close().catch(() => {});
   }
 
-  // Summary
-  let totalSteps = 0;
-  let passedSteps = 0;
-  for (const test of Object.values(allResults.tests)) {
-    for (const step of test.steps) {
-      totalSteps++;
-      if (step.passed) passedSteps++;
-    }
-  }
-  allResults.summary = { totalSteps, passedSteps, allPassed: passedSteps === totalSteps };
+  allResults.summary = summarizeRun(allResults);
 
   writeJson(path.join(outputDir, "result.json"), allResults);
   console.log(JSON.stringify(allResults.summary));
@@ -329,15 +458,29 @@ const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
 async function main() {
   const mode = process.argv[2] || "desktop";
+  const surfaceResults = [];
 
   if (mode === "desktop" || mode === "full") {
     const r = await runSurface("desktop", DESKTOP_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
+    surfaceResults.push(r);
   }
   if (mode === "mobile" || mode === "full") {
     const r = await runSurface("mobile", MOBILE_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
+    surfaceResults.push(r);
   }
+
+  const overallSummary = {
+    mode,
+    surfaces: surfaceResults.map((result) => ({
+      mode: result.mode,
+      allPassed: result.summary.allPassed,
+      failedTests: result.summary.failedTests,
+      runError: result.summary.runError,
+    })),
+    allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
+  };
+  console.log(JSON.stringify({ overall: overallSummary }));
+  if (!overallSummary.allPassed) process.exitCode = 1;
 }
 
 main().catch((err) => {

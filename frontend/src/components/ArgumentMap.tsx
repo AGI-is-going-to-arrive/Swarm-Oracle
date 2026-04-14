@@ -129,7 +129,7 @@ const ERROR_I18N: Record<string, [string, string]> = {
   not_found: ['argument.error.not_found', 'Data not found'],
   server_error: ['argument.error.server', 'Server error'],
   network: ['argument.error.network', 'Network error'],
-  too_large: ['argument.error.too_large', 'Too many nodes'],
+  too_large: ['argument.error.too_large', 'Too many nodes to display'],
   load_failed: ['argument.error.load_failed', 'Load failed'],
 };
 
@@ -352,7 +352,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         edges: Array.isArray(json.edges) ? json.edges.map((e: Record<string, unknown>) => mapBackendEdge(e)) : [],
         units: Array.isArray(json.units) ? json.units.map((u: Record<string, unknown>) => mapBackendUnit(u)) : [],
       };
-      if (mapped.nodes.length > 2000) { setErrorTier('too_large'); return; }
+      const visualNodeCount = mapped.nodes.length > 0 ? mapped.nodes.length : mapped.units.length;
+      if (visualNodeCount > 2000) { setErrorTier('too_large'); return; }
       setData(mapped);
     } catch { setErrorTier('network'); } finally { setLoading(false); }
   }, [debateId]);

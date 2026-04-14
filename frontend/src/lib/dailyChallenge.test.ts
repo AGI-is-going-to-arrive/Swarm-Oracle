@@ -32,6 +32,9 @@ function createStorageMock() {
 
 describe('dailyChallenge progress storage', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedDate);
+
     Object.defineProperty(window, 'localStorage', {
       value: createStorageMock(),
       configurable: true,

@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.config import settings
 from app.main import app
 from app.models.database import (
     Agent,
@@ -20,10 +19,11 @@ from app.services.replay import write_checkpoint
 
 
 @pytest.fixture(autouse=True)
-def _enable_feature():
-    settings.FEATURE_COUNTERFACTUAL_REPLAY = True
+def _enable_feature(monkeypatch):
+    from app.api import graphs as graphs_module
+
+    monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
     yield
-    settings.FEATURE_COUNTERFACTUAL_REPLAY = False
 
 
 @pytest.fixture

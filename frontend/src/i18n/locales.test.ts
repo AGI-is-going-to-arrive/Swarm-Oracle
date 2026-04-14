@@ -95,4 +95,15 @@ describe('i18n locale resources', () => {
     expect(en.translation.counterfactual.submit).toBe('Create What-If');
     expect(zh.translation.counterfactual.submit).toBe('创建假设分支');
   });
+
+  it('provides shared retry, clear, submitting, and causal round labels used by graph views', () => {
+    expect(en.translation.common.retry).toBe('Retry');
+    expect(zh.translation.common.retry).toBe('重试');
+    expect(en.translation.common.clear).toBe('Clear');
+    expect(zh.translation.common.clear).toBe('清除');
+    expect(en.translation.common.submitting).toBe('Submitting...');
+    expect(zh.translation.common.submitting).toBe('提交中...');
+    expect(en.translation.causal.type_round).toBe('Round');
+    expect(zh.translation.causal.type_round).toBe('回合');
+  });
 });

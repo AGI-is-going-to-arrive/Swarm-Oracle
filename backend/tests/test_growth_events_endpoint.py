@@ -4,7 +4,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session
 
-from app.config import settings
 from app.main import app
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine, init_db
@@ -13,13 +12,13 @@ TEST_USER = "test-user-ge"
 
 
 @pytest.fixture(autouse=True)
-def _init():
+def _init(monkeypatch):
+    from app.api import agents as agents_api
+
     init_db()
-    settings.FEATURE_CUSTOM_AGENTS = True
-    settings.FEATURE_AGENT_IDENTITY = True
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(agents_api.settings, "FEATURE_AGENT_IDENTITY", True)
     yield
-    settings.FEATURE_CUSTOM_AGENTS = False
-    settings.FEATURE_AGENT_IDENTITY = False
 
 
 @pytest.fixture
@@ -121,7 +120,9 @@ class TestGrowthEventsEndpoint:
 
     async def test_returns_404_when_feature_disabled(self, client: AsyncClient):
         """Endpoint returns 404 when FEATURE_AGENT_IDENTITY is off."""
-        settings.FEATURE_AGENT_IDENTITY = False
+        from app.api import agents as agents_api
+
+        agents_api.settings.FEATURE_AGENT_IDENTITY = False
         resp = await client.get(
             "/api/agents/identities/any-id/growth-events",
             params={"user_id": TEST_USER},

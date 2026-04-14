@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import dagre from 'dagre';
 
 const fitViewMock = vi.fn();
 
@@ -250,6 +251,9 @@ describe('CausalReviewView', () => {
     } as Response);
     renderView();
     await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThan(0);
+    });
     const initialCalls = fitViewMock.mock.calls.length;
 
     await user.type(screen.getByPlaceholderText('Search agent...'), 'beta');
@@ -276,6 +280,9 @@ describe('CausalReviewView', () => {
     } as Response);
     renderView();
     await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThan(0);
+    });
     const initialCalls = fitViewMock.mock.calls.length;
 
     await user.click(screen.getByTestId('rf-node-n1'));
@@ -314,6 +321,54 @@ describe('CausalReviewView', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
     vi.restoreAllMocks();
+  });
+
+  it('keeps an export target container when large graphs fall back to the text list', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-fallback-export',
+        nodes: Array.from({ length: 501 }, (_, index) => ({
+          id: `n${index}`,
+          key: `e${index}`,
+          type: 'event',
+          label: `Large node ${index}`,
+          round: 1,
+          payload: null,
+        })),
+        edges: [],
+      }),
+    } as Response);
+
+    renderView();
+
+    await screen.findByText('Graph too large for interactive view. Showing text list.');
+    expect(screen.getByTestId('export-panel')).toBeInTheDocument();
+    expect(document.querySelector('.causal-graph-container')).not.toBeNull();
+  });
+
+  it('skips dagre layout work when large graphs render through the text fallback path', async () => {
+    const layoutSpy = vi.spyOn(dagre, 'layout');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-fallback-layout',
+        nodes: Array.from({ length: 501 }, (_, index) => ({
+          id: `n${index}`,
+          key: `e${index}`,
+          type: 'event',
+          label: `Large node ${index}`,
+          round: 1,
+          payload: null,
+        })),
+        edges: [],
+      }),
+    } as Response);
+
+    renderView();
+
+    await screen.findByText('Graph too large for interactive view. Showing text list.');
+    expect(layoutSpy).not.toHaveBeenCalled();
   });
 
   it('includes a11y screen reader list', async () => {

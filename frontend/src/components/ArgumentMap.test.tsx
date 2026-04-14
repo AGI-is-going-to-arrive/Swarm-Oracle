@@ -175,6 +175,29 @@ describe('ArgumentMap', () => {
     expect(msg).toBeInTheDocument();
   });
 
+  it('applies the too_large guard when fallback data contains many units but no raw graph nodes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-too-large-fallback',
+        nodes: [],
+        edges: [],
+        units: Array.from({ length: 2001 }, (_, index) => ({
+          id: `u${index}`,
+          type: 'claim',
+          status: 'standing',
+          text: `Claim ${index}`,
+          turn_id: `t${index}`,
+        })),
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    expect(await screen.findByText('Too many nodes to display')).toBeInTheDocument();
+    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+  });
+
   it('handles network error gracefully', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network failed'));
     render(<ArgumentMap debateId="d1" visible={true} />);

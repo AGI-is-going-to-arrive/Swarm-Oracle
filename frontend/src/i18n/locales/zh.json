@@ -920,6 +920,7 @@
       "type_intervention": "干预",
       "type_stance_shift": "立场转变",
       "type_fork": "分支",
+      "type_round": "回合",
       "type_verdict": "裁决"
     },
     "compare": {
@@ -1035,7 +1036,10 @@
       "loading": "加载中…",
       "back_home": "返回首页",
       "cancel": "取消",
+      "retry": "重试",
+      "clear": "清除",
       "close": "关闭",
+      "submitting": "提交中...",
       "saving": "保存中...",
       "delete": "删除",
       "not_applicable": "不适用",

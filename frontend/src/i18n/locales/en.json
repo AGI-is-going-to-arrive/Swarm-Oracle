@@ -920,6 +920,7 @@
       "type_intervention": "Intervention",
       "type_stance_shift": "Stance Shift",
       "type_fork": "Fork",
+      "type_round": "Round",
       "type_verdict": "Verdict"
     },
     "compare": {
@@ -1035,7 +1036,10 @@
       "loading": "Loading…",
       "back_home": "Back to Home",
       "cancel": "Cancel",
+      "retry": "Retry",
+      "clear": "Clear",
       "close": "Close",
+      "submitting": "Submitting...",
       "saving": "Saving...",
       "delete": "Delete",
       "not_applicable": "N/A",

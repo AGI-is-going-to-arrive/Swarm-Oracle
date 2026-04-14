@@ -25,6 +25,14 @@ class GraphSnapshot(SQLModel, table=True):
     """A versioned graph snapshot — reused by F2 (causal) and F6 (argument)."""
 
     __tablename__ = "graph_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_type",
+            "owner_id",
+            "graph_kind",
+            name="uq_graph_snapshot_owner_kind",
+        ),
+    )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     owner_type: str  # "scenario" | "debate"
@@ -76,10 +84,11 @@ class AgentStateFrame(SQLModel, table=True):
     __tablename__ = "agent_state_frame"
     __table_args__ = (
         UniqueConstraint(
+            "scenario_id",
             "branch_id",
             "round_number",
             "agent_id",
-            name="uq_state_frame_branch_round_agent",
+            name="uq_state_frame_scenario_branch_round_agent",
         ),
     )
 

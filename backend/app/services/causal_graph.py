@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.models.database import get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 
 logger = logging.getLogger(__name__)
+_schema_lock = threading.Lock()
+_repaired_agent_state_frame_urls: set[str] = set()
 
 
 # ── Heuristics ──────────────────────────────────────────
@@ -53,6 +57,119 @@ def _collect_available_branches(nodes: list[GraphNode]) -> list[str]:
                 if isinstance(child, str) and child:
                     branch_ids.add(child)
     return sorted(branch_ids)
+
+
+def _has_unique_index_columns(
+    session: Session,
+    *,
+    table_name: str,
+    expected_columns: tuple[str, ...],
+) -> bool:
+    indexes = session.connection().exec_driver_sql(
+        f"PRAGMA index_list('{table_name}')"
+    ).fetchall()
+    for index in indexes:
+        if not index[2]:
+            continue
+        index_name = index[1]
+        columns = session.connection().exec_driver_sql(
+            f"PRAGMA index_info('{index_name}')"
+        ).fetchall()
+        if tuple(row[2] for row in columns) == expected_columns:
+            return True
+    return False
+
+
+def _ensure_agent_state_frame_schema(engine) -> None:
+    db_key = str(engine.url)
+    with _schema_lock:
+        if db_key in _repaired_agent_state_frame_urls:
+            return
+
+        with Session(engine) as session:
+            if session.connection().dialect.name != "sqlite":
+                _repaired_agent_state_frame_urls.add(db_key)
+                return
+
+            table_names = {
+                row[0]
+                for row in session.connection().exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "agent_state_frame" not in table_names:
+                _repaired_agent_state_frame_urls.add(db_key)
+                return
+
+            if _has_unique_index_columns(
+                session,
+                table_name="agent_state_frame",
+                expected_columns=("scenario_id", "branch_id", "round_number", "agent_id"),
+            ):
+                _repaired_agent_state_frame_urls.add(db_key)
+                return
+
+            session.connection().exec_driver_sql(
+                "ALTER TABLE agent_state_frame RENAME TO agent_state_frame__legacy"
+            )
+            session.connection().exec_driver_sql(
+                """
+                CREATE TABLE agent_state_frame (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    scenario_id TEXT NOT NULL,
+                    branch_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    stance_score FLOAT NOT NULL DEFAULT 0.0,
+                    stance_label TEXT,
+                    emotion TEXT,
+                    summary_excerpt TEXT,
+                    created_at DATETIME NOT NULL,
+                    CONSTRAINT uq_state_frame_scenario_branch_round_agent
+                    UNIQUE (scenario_id, branch_id, round_number, agent_id)
+                )
+                """
+            )
+            session.connection().exec_driver_sql(
+                """
+                INSERT INTO agent_state_frame (
+                    id,
+                    scenario_id,
+                    branch_id,
+                    round_number,
+                    agent_id,
+                    stance_score,
+                    stance_label,
+                    emotion,
+                    summary_excerpt,
+                    created_at
+                )
+                SELECT
+                    id,
+                    scenario_id,
+                    branch_id,
+                    round_number,
+                    agent_id,
+                    stance_score,
+                    stance_label,
+                    emotion,
+                    summary_excerpt,
+                    created_at
+                FROM agent_state_frame__legacy
+                """
+            )
+            session.connection().exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_agent_state_frame_scenario_id "
+                "ON agent_state_frame (scenario_id)"
+            )
+            session.connection().exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_agent_state_frame_branch_id "
+                "ON agent_state_frame (branch_id)"
+            )
+            session.connection().exec_driver_sql("DROP TABLE agent_state_frame__legacy")
+            session.commit()
+
+        _repaired_agent_state_frame_urls.add(db_key)
 
 
 def _node_branch_id(node: GraphNode) -> str | None:
@@ -137,17 +254,41 @@ def _get_or_create_snapshot(
         GraphSnapshot.owner_type == "scenario",
         GraphSnapshot.owner_id == scenario_id,
         GraphSnapshot.graph_kind == "causal_review",
-    )
+    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
     snapshot = session.exec(stmt).first()
     if snapshot is None:
-        snapshot = GraphSnapshot(
-            owner_type="scenario",
-            owner_id=scenario_id,
-            graph_kind="causal_review",
-        )
-        session.add(snapshot)
-        session.flush()  # ensure id is populated
+        try:
+            with session.begin_nested():
+                snapshot = GraphSnapshot(
+                    owner_type="scenario",
+                    owner_id=scenario_id,
+                    graph_kind="causal_review",
+                )
+                session.add(snapshot)
+                session.flush()  # ensure id is populated
+        except IntegrityError:
+            snapshot = session.exec(stmt).first()
+            if snapshot is None:
+                raise
     return snapshot
+
+
+def _load_state_frame(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+    agent_id: str,
+) -> AgentStateFrame | None:
+    return session.exec(
+        select(AgentStateFrame).where(
+            AgentStateFrame.scenario_id == scenario_id,
+            AgentStateFrame.branch_id == branch_id,
+            AgentStateFrame.round_number == round_number,
+            AgentStateFrame.agent_id == agent_id,
+        )
+    ).first()
 
 
 def append_round_nodes(
@@ -158,7 +299,9 @@ def append_round_nodes(
     fork_event: dict | None = None,
 ) -> None:
     """Append graph nodes/edges for a completed simulation round."""
-    with Session(get_engine()) as session:
+    engine = get_engine()
+    _ensure_agent_state_frame_schema(engine)
+    with Session(engine) as session:
         snapshot = _get_or_create_snapshot(session, scenario_id)
 
         round_nodes_stmt = select(GraphNode).where(
@@ -253,21 +396,35 @@ def append_round_nodes(
         for agent_id, record in latest_record_by_agent.items():
             frame = frames_by_agent.get(agent_id)
             if frame is None:
-                frame = AgentStateFrame(
-                    scenario_id=scenario_id,
-                    branch_id=branch_id,
-                    round_number=round_number,
-                    agent_id=agent_id,
-                    stance_score=record["stance"],
-                    emotion=record["emotion"],
-                    summary_excerpt=record["content"][:120],
-                )
-                session.add(frame)
-                frames_by_agent[agent_id] = frame
-            else:
-                frame.stance_score = record["stance"]
-                frame.emotion = record["emotion"]
-                frame.summary_excerpt = record["content"][:120]
+                try:
+                    with session.begin_nested():
+                        frame = AgentStateFrame(
+                            scenario_id=scenario_id,
+                            branch_id=branch_id,
+                            round_number=round_number,
+                            agent_id=agent_id,
+                            stance_score=record["stance"],
+                            emotion=record["emotion"],
+                            summary_excerpt=record["content"][:120],
+                        )
+                        session.add(frame)
+                        session.flush()
+                except IntegrityError:
+                    frame = _load_state_frame(
+                        session,
+                        scenario_id=scenario_id,
+                        branch_id=branch_id,
+                        round_number=round_number,
+                        agent_id=agent_id,
+                    )
+                    if frame is None:
+                        raise
+
+            frame.stance_score = record["stance"]
+            frame.emotion = record["emotion"]
+            frame.summary_excerpt = record["content"][:120]
+            session.add(frame)
+            frames_by_agent[agent_id] = frame
 
         # A1: Inter-round temporal edges (same agent across consecutive rounds)
         if round_number > 1 and message_records:
