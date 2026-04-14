@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 import threading
+import time
 
 import pytest
 from sqlmodel import Session
 
 import app.services.debate as debate_module
+import app.services.runtime_lock as runtime_lock_module
 from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
 from app.models.database import get_engine
 from app.services.debate import (
@@ -23,7 +27,12 @@ from app.services.debate_scoring import (
     _build_phase_deltas,
     _profile_dimension_bias,
 )
-from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
+from app.services.runtime_lock import (
+    RuntimeLockLease,
+    acquire_runtime_lock,
+    debate_lock_key,
+    release_runtime_lock,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -200,6 +209,278 @@ async def test_run_debate_background_uses_shorter_runtime_lock_lease(monkeypatch
 
     assert captured["lock_key"] == debate_lock_key(debate.id)
     assert captured["lease_seconds"] == 15 * 60
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_refreshes_runtime_lock_while_running(monkeypatch):
+    debate = create_debate_record("如果一场辩论运行得足够久，运行时锁也应继续续租吗？")
+    pushed_events: list[dict] = []
+    lease_seconds = 0.02
+    initial_lease = RuntimeLockLease(
+        lock_key=debate_lock_key(debate.id),
+        owner_id="debate-owner",
+        db_path=None,
+        expires_at=time.time() + lease_seconds,
+    )
+    refreshed_leases: list[RuntimeLockLease] = []
+    released_leases: list[RuntimeLockLease | None] = []
+    original_generate_turn_content = debate_module._generate_turn_content
+
+    monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
+
+    def _fake_acquire_runtime_lock(lock_key: str, *, lease_seconds: float):
+        assert lock_key == debate_lock_key(debate.id)
+        assert lease_seconds == pytest.approx(0.02)
+        return initial_lease
+
+    def _fake_refresh_runtime_lock(
+        lease: RuntimeLockLease | None,
+        *,
+        lease_seconds: float,
+    ) -> RuntimeLockLease | None:
+        assert lease is not None
+        refreshed = RuntimeLockLease(
+            lock_key=lease.lock_key,
+            owner_id=lease.owner_id,
+            db_path=lease.db_path,
+            expires_at=time.time() + lease_seconds,
+        )
+        refreshed_leases.append(refreshed)
+        return refreshed
+
+    def _fake_release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
+        released_leases.append(lease)
+        return True
+
+    async def _slow_generate_turn_content(*args, **kwargs):
+        await asyncio.sleep(lease_seconds * 3)
+        return await original_generate_turn_content(*args, **kwargs)
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "acquire_runtime_lock", _fake_acquire_runtime_lock)
+    monkeypatch.setattr(
+        debate_module,
+        "refresh_runtime_lock",
+        _fake_refresh_runtime_lock,
+        raising=False,
+    )
+    monkeypatch.setattr(debate_module, "release_runtime_lock", _fake_release_runtime_lock)
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _slow_generate_turn_content)
+
+    await run_debate_background(debate.id, ws_callback=_push)
+
+    assert refreshed_leases
+    assert released_leases[-1] == refreshed_leases[-1]
+    assert any(event["type"] == "debate_verdict" for event in pushed_events)
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_fails_closed_when_runtime_lock_refresh_is_lost(
+    monkeypatch,
+):
+    debate = create_debate_record("如果运行时锁在长辩论中途失效，后台任务应立即停下吗？")
+    pushed_events: list[dict] = []
+    lease_seconds = 0.02
+    initial_lease = RuntimeLockLease(
+        lock_key=debate_lock_key(debate.id),
+        owner_id="debate-owner",
+        db_path=None,
+        expires_at=time.time() + lease_seconds,
+    )
+    refresh_attempts: list[float] = []
+    original_generate_turn_content = debate_module._generate_turn_content
+
+    monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
+
+    def _fake_acquire_runtime_lock(lock_key: str, *, lease_seconds: float):
+        assert lock_key == debate_lock_key(debate.id)
+        assert lease_seconds == pytest.approx(0.02)
+        return initial_lease
+
+    def _fake_refresh_runtime_lock(
+        lease: RuntimeLockLease | None,
+        *,
+        lease_seconds: float,
+    ) -> RuntimeLockLease | None:
+        assert lease is not None
+        refresh_attempts.append(lease_seconds)
+        return None
+
+    async def _slow_generate_turn_content(*args, **kwargs):
+        await asyncio.sleep(lease_seconds * 3)
+        return await original_generate_turn_content(*args, **kwargs)
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "acquire_runtime_lock", _fake_acquire_runtime_lock)
+    monkeypatch.setattr(
+        debate_module,
+        "refresh_runtime_lock",
+        _fake_refresh_runtime_lock,
+        raising=False,
+    )
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _slow_generate_turn_content)
+
+    with pytest.raises(RuntimeError, match="runtime lock"):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+    assert refresh_attempts
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_fails_closed_when_runtime_lock_refresh_raises(
+    monkeypatch,
+):
+    debate = create_debate_record("如果运行时锁续租线程直接抛异常，后台任务也应立即停下吗？")
+    pushed_events: list[dict] = []
+    lease_seconds = 0.02
+    initial_lease = RuntimeLockLease(
+        lock_key=debate_lock_key(debate.id),
+        owner_id="debate-owner",
+        db_path=None,
+        expires_at=time.time() + lease_seconds,
+    )
+    refresh_attempts: list[float] = []
+    original_generate_turn_content = debate_module._generate_turn_content
+
+    monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
+
+    def _fake_acquire_runtime_lock(lock_key: str, *, lease_seconds: float):
+        assert lock_key == debate_lock_key(debate.id)
+        return initial_lease
+
+    def _raising_refresh_runtime_lock(
+        lease: RuntimeLockLease | None,
+        *,
+        lease_seconds: float,
+    ) -> RuntimeLockLease | None:
+        assert lease is not None
+        refresh_attempts.append(lease_seconds)
+        raise RuntimeError("refresh boom")
+
+    async def _slow_generate_turn_content(*args, **kwargs):
+        await asyncio.sleep(lease_seconds * 3)
+        return await original_generate_turn_content(*args, **kwargs)
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "acquire_runtime_lock", _fake_acquire_runtime_lock)
+    monkeypatch.setattr(
+        debate_module,
+        "refresh_runtime_lock",
+        _raising_refresh_runtime_lock,
+        raising=False,
+    )
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _slow_generate_turn_content)
+
+    with pytest.raises(RuntimeError, match="runtime lock"):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+    assert refresh_attempts
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_fails_closed_when_sqlite_runtime_lock_refresh_raises_across_threads(  # noqa: E501
+    monkeypatch,
+    tmp_path,
+):
+    debate = create_debate_record("如果真实 SQLite 续租线程跨线程抛异常，后台任务也应立即停下吗？")
+    pushed_events: list[dict] = []
+    lease_seconds = 0.02
+    db_path = tmp_path / "debate-runtime-lock.db"
+    heartbeat_attempted = threading.Event()
+    heartbeat_failed = threading.Event()
+    original_get_sqlite_connection = runtime_lock_module._get_sqlite_connection
+    original_generate_turn_content = debate_module._generate_turn_content
+
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+    monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
+
+    runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+    runtime_lock_module._close_threadlocal_sqlite_connections()
+
+    class _BoomingConnection:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, statement, params=()):
+            if str(statement).strip().upper() == "BEGIN IMMEDIATE":
+                heartbeat_failed.set()
+                raise sqlite3.OperationalError("sqlite heartbeat boom")
+            return self._conn.execute(statement, params)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    def _thread_aware_get_sqlite_connection(path: str):
+        conn = original_get_sqlite_connection(path)
+        if threading.current_thread().name.endswith("runtime-lock-heartbeat"):
+            heartbeat_attempted.set()
+            return _BoomingConnection(conn)
+        return conn
+
+    async def _slow_generate_turn_content(*args, **kwargs):
+        deadline = time.monotonic() + 0.5
+        while not heartbeat_failed.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(lease_seconds)
+        return await original_generate_turn_content(*args, **kwargs)
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_get_sqlite_connection",
+        _thread_aware_get_sqlite_connection,
+    )
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _slow_generate_turn_content)
+
+    try:
+        with pytest.raises(RuntimeError, match="runtime lock"):
+            await run_debate_background(debate.id, ws_callback=_push)
+    finally:
+        runtime_lock_module._close_threadlocal_sqlite_connections()
+        runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+    assert heartbeat_attempted.is_set()
+    assert heartbeat_failed.is_set()
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
 
 
 @pytest.mark.asyncio

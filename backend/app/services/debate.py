@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -45,7 +46,13 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
-from app.services.runtime_lock import acquire_runtime_lock, debate_lock_key, release_runtime_lock
+from app.services.runtime_lock import (
+    RuntimeLockLease,
+    acquire_runtime_lock,
+    debate_lock_key,
+    refresh_runtime_lock,
+    release_runtime_lock,
+)
 
 # Phase 3 F6: Argument map extraction (non-blocking)
 try:
@@ -98,6 +105,8 @@ _DEBATE_PREDICTION_OPTIONS = {
     "verdict_tone": ("order", "balance", "rupture"),
 }
 _DEBATE_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
+_DEBATE_RUNTIME_LOCK_REFRESH_FRACTION = 0.33
+_DEBATE_RUNTIME_LOCK_LOST_MESSAGE = "Debate runtime lock was lost during execution"
 
 
 @dataclass(frozen=True)
@@ -164,6 +173,58 @@ def _empty_turn_fallback(language: str, kind: str) -> str:
     if kind == "argument":
         return "No decisive argument was recorded."
     return "No decisive rebuttal was recorded."
+
+
+def _start_runtime_lock_heartbeat(
+    lease_holder: list[RuntimeLockLease | None],
+    *,
+    lease_seconds: float,
+    lock_label: str,
+) -> tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+
+    def _heartbeat() -> None:
+        while True:
+            current_lease = lease_holder[0]
+            try:
+                refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            except Exception:
+                lease_holder[0] = None
+                logger.exception("%s runtime lock lease refresh failed", lock_label)
+                return
+            if refreshed is None:
+                lease_holder[0] = None
+                logger.warning("%s runtime lock lease could not be refreshed", lock_label)
+                return
+            lease_holder[0] = refreshed
+            refresh_interval = max(
+                0.01,
+                min(5.0, lease_seconds * _DEBATE_RUNTIME_LOCK_REFRESH_FRACTION),
+            )
+            if stop_event.wait(refresh_interval):
+                return
+
+    thread = threading.Thread(
+        target=_heartbeat,
+        name=f"{lock_label}-runtime-lock-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.Thread) -> None:
+    stop_event.set()
+    thread.join(timeout=1.0)
+
+
+def _require_debate_runtime_lock_alive(lease_holder: list[RuntimeLockLease | None]) -> None:
+    lease = lease_holder[0]
+    if lease is None:
+        raise RuntimeError(_DEBATE_RUNTIME_LOCK_LOST_MESSAGE)
+    if lease.expires_at <= time.time():
+        lease_holder[0] = None
+        raise RuntimeError(_DEBATE_RUNTIME_LOCK_LOST_MESSAGE)
 
 
 def _now() -> datetime:
@@ -1485,6 +1546,9 @@ async def run_debate_background(
         logger.warning("Debate %s already running; skipping duplicate execution", debate_id)
         return
     lock_lease = None
+    lock_lease_holder: list[RuntimeLockLease | None] = [None]
+    lock_heartbeat_stop: threading.Event | None = None
+    lock_heartbeat_thread: threading.Thread | None = None
 
     try:
         lock_lease = acquire_runtime_lock(
@@ -1497,6 +1561,12 @@ async def run_debate_background(
                 debate_id,
             )
             return
+        lock_lease_holder[0] = lock_lease
+        lock_heartbeat_stop, lock_heartbeat_thread = _start_runtime_lock_heartbeat(
+            lock_lease_holder,
+            lease_seconds=_DEBATE_RUNTIME_LOCK_LEASE_SECONDS,
+            lock_label=f"debate:{debate_id}",
+        )
 
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})  # noqa: E501
         engine = get_engine()
@@ -1513,6 +1583,7 @@ async def run_debate_background(
         recent_turns: list[dict[str, str]] = []
         for phase in PHASES_WITH_SPEAKERS:
             for side in (DebateSide.PROPOSITION, DebateSide.OPPOSITION):
+                _require_debate_runtime_lock_alive(lock_lease_holder)
                 speaker_name = (
                     debate.proposition_name
                     if side == DebateSide.PROPOSITION
@@ -1528,6 +1599,7 @@ async def run_debate_background(
                     llm_overrides=llm_overrides,
                     quota_key=quota_key,
                 )
+                _require_debate_runtime_lock_alive(lock_lease_holder)
                 score_delta = plan.phase_deltas[phase][side.value]
                 if phase != current_phase:
                     current_phase = phase
@@ -1608,10 +1680,11 @@ async def run_debate_background(
                                 "audience_meter": _audience_meter(running_score),
                             },
                         },
-                    )
+                )
                 sequence += 1
                 await asyncio.sleep(0)
 
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         judge_analysis = await _generate_judge_analysis(
             debate_id=debate_id,
             debate=debate,
@@ -1619,6 +1692,7 @@ async def run_debate_background(
             llm_overrides=llm_overrides,
             quota_key=quota_key,
         )
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         final_plan, adjudication_mode = _build_hybrid_plan(
             plan,
             judge_analysis.get("adjudication"),
@@ -1627,6 +1701,7 @@ async def run_debate_background(
         phase = DebatePhase.VERDICT
         side = DebateSide.JUDGE
         speaker_name = debate.judge_name
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         content = await _generate_turn_content(
             debate=debate,
             plan=final_plan,
@@ -1637,6 +1712,7 @@ async def run_debate_background(
             llm_overrides=llm_overrides,
             quota_key=quota_key,
         )
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         score_delta = None
 
         if phase != current_phase:
@@ -1700,6 +1776,7 @@ async def run_debate_background(
             },
         )
 
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         finalized = await asyncio.to_thread(
             _finalize_debate,
             debate_id,
@@ -1707,6 +1784,7 @@ async def run_debate_background(
             judge_analysis=judge_analysis,
             adjudication_mode=adjudication_mode,
         )
+        _require_debate_runtime_lock_alive(lock_lease_holder)
         result_payload = await asyncio.to_thread(load_debate_result_payload, debate_id)
         await ws_callback(
             debate_id,
@@ -1741,7 +1819,9 @@ async def run_debate_background(
         )
         raise
     finally:
-        release_runtime_lock(lock_lease)
+        if lock_heartbeat_stop is not None and lock_heartbeat_thread is not None:
+            _stop_runtime_lock_heartbeat(lock_heartbeat_stop, lock_heartbeat_thread)
+        release_runtime_lock(lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease)
         _clear_running_debate(debate_id)
 
 

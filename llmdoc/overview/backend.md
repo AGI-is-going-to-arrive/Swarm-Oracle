@@ -68,6 +68,10 @@
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
+- replay branch runtime lock 当前按 fail-closed 收口：
+  - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，`counterfactual / resume` 都不会继续 clone / seed / schedule
+  - 如果锁丢失前，别的请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+  - heartbeat 会在请求侧校验完成后才启动，避免同一请求自己的 SQLite 校验事务和 heartbeat 抢锁
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
@@ -136,9 +140,13 @@
 ## 运行时约束
 
 - 主模式与 Debate 的后台任务都通过 `runtime_lock` 做跨 worker 防重入。
+- Debate live 当前会启动 runtime-lock heartbeat，并在每个长 await 前后校验本地 lease 是否仍有效：
+  - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会在下一个 guard 点 fail-closed 并把 debate 标成 `error`
+  - 不会再继续落库或广播后续 turn，也不会继续 verdict / finalize；如果锁在单次生成途中丢失，会在下一次 guard 点被拦下
 - replay branch 路径当前也走 runtime lock：
-  - `counterfactual / resume` 在 clone / seed / schedule 期间持有同一把 scenario 级 replay 锁
-  - 这把锁会按固定间隔续租，避免长请求把 lease 跑过期后被第二个请求插队
+  - `counterfactual / resume` 会先完成请求侧校验，再在进入 `clone / seed / schedule` 前启动同一把 scenario 级 replay lock heartbeat
+  - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，请求会直接 fail-closed，不会继续 clone / seed / schedule
+  - 如果锁丢失前，并发请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
 - `VectorStore` 读取默认按 branch 或 allowed-branch scope 收口，不再放宽到整个 scenario。
 - `llm_client` 负责：
   - 进程内 semaphore

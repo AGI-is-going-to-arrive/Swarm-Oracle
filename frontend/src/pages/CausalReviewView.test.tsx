@@ -1,25 +1,126 @@
 /**
  * Phase C1 — CausalReviewView tests
  */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import dagre from 'dagre';
 
-const fitViewMock = vi.fn();
+type TestLocale = 'en' | 'zh';
+const {
+  changeTestLanguage,
+  fitViewMock,
+  getCurrentLocale,
+  getLocaleVersion,
+  i18nMock,
+  resetTestI18n,
+  setTestLocale: applyTestLocale,
+  subscribeToLocaleChange,
+} = vi.hoisted(() => {
+  let currentLocale: TestLocale = 'en';
+  let localeVersion = 0;
+  const listeners = new Set<() => void>();
+  const fitViewMock = vi.fn();
+
+  const emitLocaleChange = () => {
+    localeVersion += 1;
+    for (const listener of listeners) listener();
+  };
+
+  const setTestLocale = (locale: TestLocale) => {
+    if (currentLocale === locale) return;
+    currentLocale = locale;
+    emitLocaleChange();
+  };
+
+  const changeTestLanguage = vi.fn(async (locale: string) => {
+    if (locale === 'en' || locale === 'zh') setTestLocale(locale);
+  });
+
+  const i18nMock = {
+    changeLanguage: changeTestLanguage,
+    get language() {
+      return currentLocale;
+    },
+  };
+
+  return {
+    changeTestLanguage,
+    fitViewMock,
+    getCurrentLocale: () => currentLocale,
+    getLocaleVersion: () => localeVersion,
+    i18nMock,
+    resetTestI18n: () => {
+      currentLocale = 'en';
+      localeVersion = 0;
+      listeners.clear();
+      changeTestLanguage.mockClear();
+    },
+    setTestLocale,
+    subscribeToLocaleChange: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+});
+
+const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
+  en: {
+    'causal.type_event': 'Event',
+    'causal.a11y_list': 'Causal events list',
+    'causal.error.network': 'Unable to load the causal graph. Check your connection and try again.',
+    'causal.error.branch_not_found': 'The selected branch is no longer available for this scenario.',
+    'causal.error.unauthorized': 'You do not have permission to view this causal graph.',
+    'causal.error.server': 'The server could not load the causal graph right now.',
+    'causal.error.load_failed': 'Unable to load the causal graph right now. Please retry.',
+    'common.graph_controls': 'Graph controls',
+    'common.graph_zoom_in': 'Zoom in',
+    'common.graph_zoom_out': 'Zoom out',
+    'common.graph_fit_view': 'Fit view',
+    'common.graph_toggle_interactivity': 'Toggle interactivity',
+    'common.graph_minimap': 'Mini map',
+  },
+  zh: {
+    'causal.type_event': '事件',
+    'causal.a11y_list': '因果事件列表',
+    'causal.error.network': '因果图谱加载失败，请检查网络后重试。',
+    'causal.error.branch_not_found': '所选分支已不在当前场景中。',
+    'causal.error.unauthorized': '你没有权限查看这个因果图谱。',
+    'causal.error.server': '服务器当前无法加载这个因果图谱。',
+    'causal.error.load_failed': '当前无法加载这个因果图谱，请稍后重试。',
+    'common.graph_controls': '图谱控件',
+    'common.graph_zoom_in': '放大',
+    'common.graph_zoom_out': '缩小',
+    'common.graph_fit_view': '适配视图',
+    'common.graph_toggle_interactivity': '切换交互状态',
+    'common.graph_minimap': '缩略图',
+  },
+};
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string | Record<string, unknown>) =>
-      typeof fallback === 'string' ? fallback : key,
-    i18n: { changeLanguage: vi.fn(), language: 'en' },
-  }),
-}));
+vi.mock('react-i18next', async () => {
+  const React = await import('react');
+  return {
+    useTranslation: () => {
+      const localeVersion = React.useSyncExternalStore(
+        subscribeToLocaleChange,
+        getLocaleVersion,
+      );
+      const t = React.useMemo(() => {
+        void localeVersion;
+        return (key: string, fallback?: string | Record<string, unknown>) => (
+          TEST_TRANSLATIONS[getCurrentLocale()][key]
+          ?? (typeof fallback === 'string' ? fallback : key)
+        );
+      }, [localeVersion]);
+      return { t, i18n: i18nMock };
+    },
+  };
+});
 
 // Mock @xyflow/react to avoid canvas errors in jsdom
 vi.mock('@xyflow/react', async () => {
@@ -32,21 +133,29 @@ vi.mock('@xyflow/react', async () => {
     ReactFlow: ({
       children,
       nodes,
+      ariaLabelConfig,
       onInit,
       onNodeClick,
       onPaneClick,
     }: {
       children?: React.ReactNode;
-      nodes?: Array<{ id: string }>;
+      nodes?: Array<{ id: string; ariaLabel?: string | null }>;
+      ariaLabelConfig?: Record<string, string>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
       onNodeClick?: (event: unknown, node: { id: string }) => void;
       onPaneClick?: () => void;
     }) => {
+      const firstNode = nodes?.[0];
+      const onInitRef = React.useRef(onInit);
       React.useEffect(() => {
-        onInit?.({ fitView: fitViewMock });
-      }, [onInit]);
+        onInitRef.current?.({ fitView: fitViewMock });
+      }, []);
       return (
-        <div data-testid="reactflow">
+        <div
+          data-testid="reactflow"
+          data-node-aria-label={firstNode?.ariaLabel ?? ''}
+          data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
+        >
           {nodes?.map((node) => (
             <button
               key={node.id}
@@ -76,7 +185,9 @@ import { CausalReviewView } from './CausalReviewView';
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   fitViewMock.mockReset();
+  resetTestI18n();
 });
 
 const renderView = (path = '/sim/test-id/causal-map') =>
@@ -109,6 +220,16 @@ function BranchNavigationHarness() {
   );
 }
 
+const countCausalGraphRequests = (fetchSpy: { mock: { calls: Array<[unknown, ...unknown[]]> } }) => (
+  fetchSpy.mock.calls.filter(([request]) => String(request).includes('/causal-graph')).length
+);
+
+const changeUiLanguage = async (locale: TestLocale) => {
+  await act(async () => {
+    await changeTestLanguage(locale);
+  });
+};
+
 describe('CausalReviewView', () => {
   it('shows loading state initially', () => {
     // Mock fetch to never resolve
@@ -118,16 +239,16 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows error when fetch fails', async () => {
+  it('shows a localized error when fetch fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network error'));
     renderView();
     // Wait for error to appear
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Network error');
+    expect(alert).toHaveTextContent('Unable to load the causal graph. Check your connection and try again.');
     vi.restoreAllMocks();
   });
 
-  it('surfaces structured backend error details for invalid branch filters', async () => {
+  it('maps invalid branch filters to localized error copy', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: false,
       status: 404,
@@ -141,8 +262,39 @@ describe('CausalReviewView', () => {
     renderView('/sim/test-id/causal-map?branch_id=missing-branch');
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Branch missing-branch not found in scenario');
+    expect(alert).toHaveTextContent('The selected branch is no longer available for this scenario.');
     vi.restoreAllMocks();
+  });
+
+  it('localizes known causal graph network errors instead of leaking raw browser text', async () => {
+    applyTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network error'));
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('因果图谱加载失败，请检查网络后重试。');
+    expect(alert).not.toHaveTextContent('Network error');
+  });
+
+  it('localizes branch-not-found errors from backend codes', async () => {
+    applyTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({
+        detail: {
+          code: 'BRANCH_NOT_FOUND',
+          message: 'Branch missing-branch not found in scenario',
+        },
+      }),
+    } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=missing-branch');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('所选分支已不在当前场景中。');
+    expect(alert).not.toHaveTextContent('Branch missing-branch not found in scenario');
   });
 
   it('shows empty state when graph has no nodes', async () => {
@@ -234,6 +386,133 @@ describe('CausalReviewView', () => {
     const searchInput = screen.getByPlaceholderText('Search Agent...');
     expect(searchInput).toBeInTheDocument();
     vi.restoreAllMocks();
+  });
+
+  it('recomputes graph node accessibility labels when the UI language changes at runtime', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      if (String(request).includes('/causal-graph')) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'g-runtime-i18n',
+            nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Timeline split', round: 1, payload: null }],
+            edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+          }),
+        } as Response;
+      }
+      throw new Error('scenario lookup disabled for test');
+    });
+
+    renderView();
+    await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow').getAttribute('data-node-aria-label')).toContain('Event');
+    });
+    expect(JSON.parse(screen.getByTestId('reactflow').getAttribute('data-aria-label-config') ?? '{}')).toMatchObject({
+      'controls.zoomIn.ariaLabel': 'Zoom in',
+      'minimap.ariaLabel': 'Mini map',
+    });
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+
+    await changeUiLanguage('zh');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow').getAttribute('data-node-aria-label')).toContain('事件');
+    });
+    expect(JSON.parse(screen.getByTestId('reactflow').getAttribute('data-aria-label-config') ?? '{}')).toMatchObject({
+      'controls.zoomIn.ariaLabel': '放大',
+      'minimap.ariaLabel': '缩略图',
+    });
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+  });
+
+  it.each([401, 403])('maps unauthorized status %i to localized error copy', async (status) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status,
+      json: async () => ({ detail: { message: 'Forbidden' } }),
+    } as Response);
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('You do not have permission to view this causal graph.');
+  });
+
+  it('maps 5xx responses to localized server error copy', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: { message: 'Server exploded' } }),
+    } as Response);
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The server could not load the causal graph right now.');
+  });
+
+  it('falls back to localized generic error copy for uncategorized HTTP failures', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 418,
+      json: async () => ({ detail: { message: 'Teapot' } }),
+    } as Response);
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Unable to load the causal graph right now. Please retry.');
+  });
+
+  it('rerenders unauthorized error copy when the UI language changes without refetching', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: { message: 'Unauthorized' } }),
+    } as Response);
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('You do not have permission to view this causal graph.');
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+
+    await changeUiLanguage('zh');
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('你没有权限查看这个因果图谱。');
+    });
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+  });
+
+  it('keeps the interactive graph visible when search leaves multiple nodes but zero edges', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-search-zero-edges',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha move', round: 1, payload: { agent_id: 'alpha' } },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Agent Beta move', round: 1, payload: { agent_id: 'beta' } },
+          { id: 'n3', key: 'e3', type: 'event', label: 'Agent Alpha reply', round: 2, payload: { agent_id: 'alpha' } },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+    await screen.findByTestId('reactflow');
+
+    await user.type(screen.getByPlaceholderText('Search Agent...'), 'alpha');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('export-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('rf-node-n1')).toBeInTheDocument();
+    expect(screen.getByTestId('rf-node-n3')).toBeInTheDocument();
   });
 
   it('renders the minimap as a non-interactive overlay', async () => {

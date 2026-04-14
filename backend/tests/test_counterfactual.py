@@ -1,5 +1,8 @@
 """API-level tests for counterfactual replay endpoints."""
 
+import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from unittest.mock import MagicMock
@@ -8,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+import app.services.runtime_lock as runtime_lock_module
 from app.main import app
 from app.models.database import (
     Agent,
@@ -290,6 +294,62 @@ class TestCreateCounterfactual:
             ).all()
         assert len(replay_branches) == 3
 
+    def test_lock_loss_after_competing_branch_fills_last_slot_returns_limit(
+        self, client, monkeypatch,
+    ):
+        """Losing the replay lock after another request consumes the last slot should map to 429."""
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        for i in range(2):
+            _seed_branch(engine, sid, title=f"CF-{i}", replay_kind="counterfactual")
+
+        lease_holders = []
+        seed_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args, **_kwargs: True)
+
+        def fake_heartbeat(lease_holder, *, lease_seconds, lock_label):
+            lease_holders.append(lease_holder)
+            return MagicMock(), MagicMock()
+
+        def fake_clone_until_round(*_args, ensure_lock=None, **_kwargs):
+            _seed_branch(engine, sid, title="CF-competitor", replay_kind="counterfactual")
+            lease_holders[0][0] = None
+            assert ensure_lock is not None
+            ensure_lock()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr("app.api.graphs._start_runtime_lock_heartbeat", fake_heartbeat)
+        monkeypatch.setattr("app.api.graphs.clone_until_round", fake_clone_until_round)
+        monkeypatch.setattr("app.api.graphs.seed_counterfactual", seed_mock)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "replacement_content": "race test",
+        })
+
+        assert resp.status_code == 429
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LIMIT_REACHED",
+            "message": "Maximum 3 replay branches per scenario",
+        }
+        seed_mock.assert_not_called()
+
+        with Session(engine) as session:
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
+                )
+            ).all()
+        assert len(replay_branches) == 3
+
     def test_seed_failure_cleans_up_created_branch(self, client, monkeypatch):
         engine = get_engine()
         sid, bid, aid = _setup_full_scenario(engine)
@@ -381,7 +441,124 @@ class TestCreateCounterfactual:
             "code": "REPLAY_BRANCH_LOCK_LOST",
             "message": "Replay branch lock was lost before cloning or seeding",
         }
-        clone_mock.assert_not_called()
+        seed_mock.assert_not_called()
+
+    def test_refresh_exception_fails_closed(self, client, monkeypatch):
+        from threading import Event
+
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        refresh_failed = Event()
+        clone_mock = MagicMock(return_value="new-branch-id")
+        seed_mock = MagicMock()
+        lease = MagicMock()
+        lease.expires_at = time.time() + 60
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: lease,
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr("app.api.graphs.clone_until_round", clone_mock)
+        monkeypatch.setattr("app.api.graphs.seed_counterfactual", seed_mock)
+
+        def _raise_refresh(*_args, **_kwargs):
+            refresh_failed.set()
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("app.api.graphs.refresh_runtime_lock", _raise_refresh)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "replacement_content": "race test",
+        })
+
+        assert refresh_failed.wait(timeout=1.0)
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LOCK_LOST",
+            "message": "Replay branch lock was lost before cloning or seeding",
+        }
+
+    def test_sqlite_refresh_exception_fails_closed_across_threads(
+        self, client, monkeypatch, tmp_path,
+    ):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        db_path = tmp_path / "counterfactual-runtime-lock.db"
+        heartbeat_attempted = threading.Event()
+        heartbeat_failed = threading.Event()
+        seed_mock = MagicMock()
+        original_get_sqlite_connection = runtime_lock_module._get_sqlite_connection
+
+        monkeypatch.setattr(
+            "app.services.runtime_lock.settings.DATABASE_URL",
+            f"sqlite:///{db_path}",
+        )
+
+        runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+        runtime_lock_module._close_threadlocal_sqlite_connections()
+
+        class _BoomingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, statement, params=()):
+                if str(statement).strip().upper() == "BEGIN IMMEDIATE":
+                    heartbeat_failed.set()
+                    raise sqlite3.OperationalError("sqlite heartbeat boom")
+                return self._conn.execute(statement, params)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        def _thread_aware_get_sqlite_connection(path: str):
+            conn = original_get_sqlite_connection(path)
+            if threading.current_thread().name.endswith("runtime-lock-heartbeat"):
+                heartbeat_attempted.set()
+                return _BoomingConnection(conn)
+            return conn
+
+        def _fake_clone_until_round(*_args, ensure_lock=None, **_kwargs):
+            assert ensure_lock is not None
+            assert heartbeat_failed.wait(timeout=1.0)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                try:
+                    ensure_lock()
+                except Exception:
+                    raise
+                sleep(0.01)
+            raise AssertionError("replay lock stayed alive after refresh failure")
+
+        monkeypatch.setattr(
+            runtime_lock_module,
+            "_get_sqlite_connection",
+            _thread_aware_get_sqlite_connection,
+        )
+        monkeypatch.setattr("app.api.graphs.clone_until_round", _fake_clone_until_round)
+        monkeypatch.setattr("app.api.graphs.seed_counterfactual", seed_mock)
+
+        try:
+            resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+                "source_branch_id": bid,
+                "round_number": 1,
+                "agent_id": aid,
+                "replacement_content": "sqlite refresh failure",
+            })
+        finally:
+            runtime_lock_module._close_threadlocal_sqlite_connections()
+            runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+
+        assert heartbeat_attempted.is_set()
+        assert heartbeat_failed.is_set()
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LOCK_LOST",
+            "message": "Replay branch lock was lost before cloning or seeding",
+        }
         seed_mock.assert_not_called()
 
     def test_rewrites_latest_agent_message_when_round_has_multiple_messages(self, client):

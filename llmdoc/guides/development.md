@@ -191,30 +191,41 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay / migration 定向 `262 passed`
-  - backend 相邻 `api / service` smoke `154 passed`
+  - backend graph / replay / migration 定向 `268 passed`
+  - backend 相邻 `api / service` smoke `158 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `114 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
-  - `phase3-batch-a full` `35/35`，default / `zh-CN` locale 都通过
-  - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
+  - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
+  - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
-  - backend 全量 `python -m pytest -q` 本轮实测 `2039 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `989 passed`
+  - backend 全量 `python -m pytest -q` 本轮实测 `2049 passed, 2 skipped`
+  - frontend 全量 `npm test` 本轮实测 `1001 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
+  - replay branch runtime lock 当前已补：
+    - `counterfactual / resume` 的 mock 续租异常 fail-closed
+    - 真实 SQLite 跨线程 heartbeat 续租异常 fail-closed
+    - 锁丢失后被并发请求吃满最后一个 branch slot 时回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+  - debate runtime lock 当前已补：
+    - 长运行续租
+    - 续租返回 `None`
+    - 续租抛异常
+    - 真实 SQLite 跨线程 heartbeat 续租异常
+    - 以上路径都会 fail-closed，把 debate 落成 `error`
   - `CausalReviewView` 分支 selector：
     - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
     - 较旧分支请求的返回不会覆盖较新的分支结果
     - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
     - 非交互 fallback 路径会隐藏 export controls，并只保留一条具名的 a11y list；relationless snapshot fallback 也会走本地化提示
-    - 结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`
+    - 错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
+    图节点可访问名称，以及 React Flow controls / minimap 文案也会跟随 UI 语言实时更新；切语言不会重打图请求。
   - `ArgumentMap`
     - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
     - `verdict` 节点当前也走共享 graph i18n label，不再把可访问名称写死成英文
+    - node-only 图当前也会保留 sr-only list，并可通过 graph node button 键盘打开 `NodeDetailPanel`
   - `NodeDetailPanel`
     - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
     - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`

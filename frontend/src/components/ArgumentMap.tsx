@@ -368,7 +368,6 @@ interface Props {
 export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
-  const translateRef = useRef(t);
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
@@ -379,13 +378,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const latestRequestIdRef = useRef(0);
 
-  useEffect(() => {
-    translateRef.current = t;
-  }, [t]);
-
   const translate = useCallback((key: string, fallback: string) => (
-    translateRef.current(key, fallback)
-  ), []);
+    t(key, fallback)
+  ), [t]);
 
   const fetchData = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -551,6 +546,15 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     });
   }, []);
 
+  const graphAriaLabelConfig = useMemo(() => ({
+    'controls.ariaLabel': t('common.graph_controls', 'Graph controls'),
+    'controls.zoomIn.ariaLabel': t('common.graph_zoom_in', 'Zoom in'),
+    'controls.zoomOut.ariaLabel': t('common.graph_zoom_out', 'Zoom out'),
+    'controls.fitView.ariaLabel': t('common.graph_fit_view', 'Fit view'),
+    'controls.interactive.ariaLabel': t('common.graph_toggle_interactivity', 'Toggle interactivity'),
+    'minimap.ariaLabel': t('common.graph_minimap', 'Mini map'),
+  }), [t]);
+
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
   if (errorTier) {
@@ -651,6 +655,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                 <ReactFlow
                   nodes={nodes}
                   edges={edges}
+                  ariaLabelConfig={graphAriaLabelConfig}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
@@ -697,11 +702,17 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
 
         {/* a11y: screen reader fallback list */}
         <div className="sr-only" role="list" aria-label={t('argument.a11y_list', 'Argument units list')}>
-          {(filteredData?.units ?? data.units).map(u => (
-            <div key={u.id} role="listitem">
-              {`${getArgumentTypeLabel(u.type, t)}: ${u.text} [${getArgumentStatusLabel(u.status, t)}]`}
-            </div>
-          ))}
+          {(filteredData?.units.length ?? data.units.length) > 0
+            ? (filteredData?.units ?? data.units).map(u => (
+                <div key={u.id} role="listitem">
+                  {`${getArgumentTypeLabel(u.type, t)}: ${u.text} [${getArgumentStatusLabel(u.status, t)}]`}
+                </div>
+              ))
+            : (filteredData?.nodes ?? data.nodes).map((node) => (
+                <div key={node.id} role="listitem">
+                  {`${getArgumentTypeLabel(node.type, t)}: ${node.label}`}
+                </div>
+              ))}
         </div>
       </div>
     </Tooltip.Provider>

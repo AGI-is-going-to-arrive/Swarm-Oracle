@@ -73,30 +73,52 @@ interface ScenarioBranchOption {
   probability: number | null;
 }
 
-function extractApiErrorMessage(payload: unknown, status: number): string {
+interface CausalGraphErrorState {
+  code: string | null;
+  status: number | null;
+}
+
+function extractApiErrorState(payload: unknown, status: number): CausalGraphErrorState {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
     const detail = record.detail;
-    if (typeof detail === 'string' && detail.trim()) {
-      return detail.trim();
-    }
     if (detail && typeof detail === 'object') {
       const detailRecord = detail as Record<string, unknown>;
-      const message = detailRecord.message;
-      if (typeof message === 'string' && message.trim()) {
-        return message.trim();
-      }
       const code = detailRecord.code;
       if (typeof code === 'string' && code.trim()) {
-        return code.trim();
+        return { code: code.trim(), status };
       }
     }
-    const message = record.message;
-    if (typeof message === 'string' && message.trim()) {
-      return message.trim();
+    const code = record.code;
+    if (typeof code === 'string' && code.trim()) {
+      return { code: code.trim(), status };
     }
   }
-  return `HTTP ${status}`;
+  return { code: null, status };
+}
+
+function getCausalErrorMessage(
+  error: CausalGraphErrorState,
+  t: (key: string, fallback: string) => string,
+): string {
+  switch (error.code) {
+    case 'NETWORK_ERROR':
+      return t('causal.error.network', 'Unable to load the causal graph. Check your connection and try again.');
+    case 'BRANCH_NOT_FOUND':
+      return t('causal.error.branch_not_found', 'The selected branch is no longer available for this scenario.');
+    case 'FEATURE_DISABLED':
+      return t('causal.feature_disabled', 'Causal graph feature is not enabled.');
+    default:
+      break;
+  }
+
+  if (error.status === 401 || error.status === 403) {
+    return t('causal.error.unauthorized', 'You do not have permission to view this causal graph.');
+  }
+  if (error.status != null && error.status >= 500) {
+    return t('causal.error.server', 'The server could not load the causal graph right now.');
+  }
+  return t('causal.error.load_failed', 'Unable to load the causal graph right now. Please retry.');
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -232,7 +254,6 @@ function layoutDagre(
 export function CausalReviewView() {
   const { t } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
-  const translateRef = useRef(t);
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -242,7 +263,7 @@ export function CausalReviewView() {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchOptions, setBranchOptions] = useState<ScenarioBranchOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CausalGraphErrorState | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   // C5: Agent search
@@ -252,13 +273,9 @@ export function CausalReviewView() {
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
 
-  useEffect(() => {
-    translateRef.current = t;
-  }, [t]);
-
   const translate = useCallback((key: string, fallback: string) => (
-    translateRef.current(key, fallback)
-  ), []);
+    t(key, fallback)
+  ), [t]);
 
   const fetchGraph = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -279,7 +296,7 @@ export function CausalReviewView() {
         } catch {
           payload = null;
         }
-        throw new Error(extractApiErrorMessage(payload, res.status));
+        throw extractApiErrorState(payload, res.status);
       }
       const data = await res.json();
       let scenarioBranchOptions: ScenarioBranchOption[] = [];
@@ -314,7 +331,15 @@ export function CausalReviewView() {
       setBranchOptions(scenarioBranchOptions);
     } catch (err) {
       if (requestId !== latestRequestIdRef.current) return;
-      setError((err as Error).message);
+      if (err && typeof err === 'object' && ('code' in err || 'status' in err)) {
+        const record = err as Partial<CausalGraphErrorState>;
+        setError({
+          code: typeof record.code === 'string' ? record.code : null,
+          status: typeof record.status === 'number' ? record.status : null,
+        });
+      } else {
+        setError({ code: 'NETWORK_ERROR', status: null });
+      }
     } finally {
       if (requestId === latestRequestIdRef.current) setLoading(false);
     }
@@ -344,7 +369,8 @@ export function CausalReviewView() {
   const nodeCount = filteredData?.nodes.length ?? 0;
   const edgeCount = filteredData?.edges.length ?? 0;
   const isTextFallback = nodeCount > PERF_TEXT_FALLBACK_LIMIT;
-  const isRelationlessFallback = nodeCount > 1 && edgeCount === 0;
+  const hasSourceEdges = (graphData?.edges.length ?? 0) > 0;
+  const isRelationlessFallback = nodeCount > 1 && edgeCount === 0 && !hasSourceEdges;
   const isNonInteractiveFallback = isTextFallback || isRelationlessFallback;
   const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
 
@@ -457,6 +483,15 @@ export function CausalReviewView() {
     return `${option.title} · ${(option.probability * 100).toFixed(1)}%`;
   }, []);
 
+  const graphAriaLabelConfig = useMemo(() => ({
+    'controls.ariaLabel': t('common.graph_controls', 'Graph controls'),
+    'controls.zoomIn.ariaLabel': t('common.graph_zoom_in', 'Zoom in'),
+    'controls.zoomOut.ariaLabel': t('common.graph_zoom_out', 'Zoom out'),
+    'controls.fitView.ariaLabel': t('common.graph_fit_view', 'Fit view'),
+    'controls.interactive.ariaLabel': t('common.graph_toggle_interactivity', 'Toggle interactivity'),
+    'minimap.ariaLabel': t('common.graph_minimap', 'Mini map'),
+  }), [t]);
+
   const openNodeDetail = useCallback((nodeId: string) => {
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
@@ -496,7 +531,7 @@ export function CausalReviewView() {
     return (
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}>
         <h1>{t('causal.title', 'Causal Graph')}</h1>
-        <p role="alert" style={{ color: '#e74c3c' }}>{error}</p>
+        <p role="alert" style={{ color: '#e74c3c' }}>{getCausalErrorMessage(error, t)}</p>
         <button
           onClick={() => void fetchGraph()}
           style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', marginRight: '0.75rem' }}
@@ -632,6 +667,7 @@ export function CausalReviewView() {
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
+                ariaLabelConfig={graphAriaLabelConfig}
                 nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}

@@ -22,8 +22,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。
-- replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。
-- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；多节点但 0 edges 时会直接切到本地化的 event snapshot fallback，不再把它伪装成可交互 DAG；非交互 fallback 只保留一条具名的 a11y 列表；导出失败会显示明确提示；图面 minimap 改为非交互 overlay，移动端不会再挡住节点点击。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`。
+- replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。
+- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留。错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 显示本地化文案；图节点可访问名称和 React Flow controls / minimap 文案会跟随当前 UI 语言实时更新。`ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`。
 
 ### Debate Arena
 
@@ -36,6 +36,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
 - debate argument map 的 enrichment apply / rebuild 当前按串行收口；改写 unit type 后会按最新 claim 状态重建 `rebuts / supports` target。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
 - debate argument map 的 fail-soft 当前会显示明确失败文案和 `Retry`，不会再被误判成普通空态。
+- debate runtime lock 当前会在长运行期间持续续租；续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会 fail-closed 并把 debate 标成 `error`，不会继续生成后续内容。
 - Debate 页面壳当前继续跟随用户自己的 UI 语言，不会再因为 `debate.language` 或结果 payload 反向切全局语言；结果页的 mixed-language fallback 已覆盖 `phase commentary / replay quote / prediction score reason` 这些长文案来源，命中时会显示明确 fallback note，并保留原文展示。
 
 ### Oracle Chambers / 世界线圆桌
@@ -121,17 +122,16 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 本轮 graph-viz / replay hardening 定向回归也已通过：
-  - backend graph / replay / migration suite `262 passed`
-  - backend 相邻 API / service smoke `154 passed`
+  - backend graph / replay / migration suite `268 passed`
+  - backend 相邻 API / service smoke `158 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `114 passed`
   - frontend `typecheck / lint / build / perf budget` 通过
-  - frontend 全量 vitest `989 passed`
-  - backend 全量 `2039 passed, 2 skipped`
+  - frontend 全量 vitest `1001 passed`
+  - backend 全量 `2049 passed, 2 skipped`
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
   - phase3 compare fixture 当前已带真实 `agents / messages`，compare theater 不再空载
-  - `phase3-batch-a full` `35/35`，default / `zh-CN` locale 都通过
-  - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
+  - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
+  - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 也已通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
   - `e2e-debate-suite full` 通过
   - `e2e-ending-room-followup-suite full` 通过

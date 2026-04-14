@@ -9,14 +9,19 @@ from __future__ import annotations
 import copy
 import gc
 import json
+import sqlite3
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+import app.services.runtime_lock as runtime_lock_module
 from app.main import app
 from app.models.database import Branch, Round, Scenario, ScenarioStatus, get_engine
+from app.services.runtime_lock import RuntimeLockLease
 
 
 def _seed_resume_scenario(engine, *, status: ScenarioStatus = ScenarioStatus.DONE):
@@ -641,7 +646,202 @@ class TestResumeEndpoint:
             "code": "REPLAY_BRANCH_LOCK_LOST",
             "message": "Replay branch lock was lost before cloning or seeding",
         }
-        clone_mock.assert_not_called()
+
+    def test_lock_loss_after_competing_branch_fills_last_slot_returns_limit(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        for i in range(2):
+            with Session(engine) as session:
+                replay_branch = Branch(
+                    scenario_id=sid,
+                    title=f"resume-{i}",
+                    replay_kind="resume",
+                )
+                session.add(replay_branch)
+                session.commit()
+
+        lease_holders = []
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", lambda *_args, **_kwargs: True)
+
+        def fake_heartbeat(lease_holder, *, lease_seconds, lock_label):
+            lease_holders.append(lease_holder)
+            return MagicMock(), MagicMock()
+
+        def fake_clone_until_round(*_args, ensure_lock=None, **_kwargs):
+            with Session(engine) as session:
+                replay_branch = Branch(
+                    scenario_id=sid,
+                    title="resume-competitor",
+                    replay_kind="counterfactual",
+                )
+                session.add(replay_branch)
+                session.commit()
+            lease_holders[0][0] = None
+            assert ensure_lock is not None
+            ensure_lock()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(graphs_module, "_start_runtime_lock_heartbeat", fake_heartbeat)
+        monkeypatch.setattr(graphs_module, "clone_until_round", fake_clone_until_round)
+
+        local_app = FastAPI()
+        local_app.include_router(graphs_module.router)
+        client = TestClient(local_app)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/resume",
+            json={"source_branch_id": bid, "round_number": 1},
+        )
+
+        assert resp.status_code == 429
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LIMIT_REACHED",
+            "message": "Maximum 3 replay branches per scenario",
+        }
+
+    def test_refresh_exception_fails_closed(self, monkeypatch):
+        from threading import Event
+
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        refresh_failed = Event()
+        clone_mock = MagicMock(return_value="new-branch-id")
+        lease = RuntimeLockLease(
+            lock_key=f"replay-branch:{sid}",
+            owner_id="owner",
+            db_path=None,
+            expires_at=time.time() + 60,
+        )
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(graphs_module, "clone_until_round", clone_mock)
+
+        def _raise_refresh(*_args, **_kwargs):
+            refresh_failed.set()
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(graphs_module, "refresh_runtime_lock", _raise_refresh)
+
+        local_app = FastAPI()
+        local_app.include_router(graphs_module.router)
+        client = TestClient(local_app)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/resume",
+            json={"source_branch_id": bid, "round_number": 1},
+        )
+
+        assert refresh_failed.wait(timeout=1.0)
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LOCK_LOST",
+            "message": "Replay branch lock was lost before cloning or seeding",
+        }
+
+    def test_sqlite_refresh_exception_fails_closed_across_threads(self, monkeypatch, tmp_path):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        db_path = tmp_path / "resume-runtime-lock.db"
+        heartbeat_attempted = threading.Event()
+        heartbeat_failed = threading.Event()
+        original_get_sqlite_connection = runtime_lock_module._get_sqlite_connection
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            "app.services.runtime_lock.settings.DATABASE_URL",
+            f"sqlite:///{db_path}",
+        )
+
+        runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+        runtime_lock_module._close_threadlocal_sqlite_connections()
+
+        class _BoomingConnection:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, statement, params=()):
+                if str(statement).strip().upper() == "BEGIN IMMEDIATE":
+                    heartbeat_failed.set()
+                    raise sqlite3.OperationalError("sqlite heartbeat boom")
+                return self._conn.execute(statement, params)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        def _thread_aware_get_sqlite_connection(path: str):
+            conn = original_get_sqlite_connection(path)
+            if threading.current_thread().name.endswith("runtime-lock-heartbeat"):
+                heartbeat_attempted.set()
+                return _BoomingConnection(conn)
+            return conn
+
+        def _fake_clone_until_round(*_args, ensure_lock=None, **_kwargs):
+            assert ensure_lock is not None
+            assert heartbeat_failed.wait(timeout=1.0)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                try:
+                    ensure_lock()
+                except Exception:
+                    raise
+                time.sleep(0.01)
+            raise AssertionError("replay lock stayed alive after refresh failure")
+
+        monkeypatch.setattr(
+            runtime_lock_module,
+            "_get_sqlite_connection",
+            _thread_aware_get_sqlite_connection,
+        )
+        monkeypatch.setattr(graphs_module, "clone_until_round", _fake_clone_until_round)
+
+        local_app = FastAPI()
+        local_app.include_router(graphs_module.router)
+        client = TestClient(local_app)
+
+        try:
+            resp = client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": bid, "round_number": 1},
+            )
+        finally:
+            runtime_lock_module._close_threadlocal_sqlite_connections()
+            runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
+
+        assert heartbeat_attempted.is_set()
+        assert heartbeat_failed.is_set()
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LOCK_LOST",
+            "message": "Replay branch lock was lost before cloning or seeding",
+        }
 
 
 # ── TestBranchLimitShared ───────────────────────────────

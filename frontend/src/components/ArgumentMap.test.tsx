@@ -6,11 +6,55 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const fitViewMock = vi.fn();
+type TestLocale = 'en' | 'zh';
+let currentLocale: TestLocale = 'en';
+
+const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
+  en: {
+    'argument.claim': 'Claim',
+    'argument.evidence': 'Evidence',
+    'argument.rebuttal': 'Rebuttal',
+    'argument.counter': 'Counter',
+    'argument.a11y_label': 'Debate argument map',
+    'argument.a11y_list': 'Argument units list',
+    'argument.open_details': 'Open details',
+    'common.graph_controls': 'Graph controls',
+    'common.graph_zoom_in': 'Zoom in',
+    'common.graph_zoom_out': 'Zoom out',
+    'common.graph_fit_view': 'Fit view',
+    'common.graph_toggle_interactivity': 'Toggle interactivity',
+    'common.graph_minimap': 'Mini map',
+  },
+  zh: {
+    'argument.claim': '论点',
+    'argument.evidence': '证据',
+    'argument.rebuttal': '反驳',
+    'argument.counter': '反击',
+    'argument.a11y_label': '辩论论证图谱',
+    'argument.a11y_list': '论证单元列表',
+    'argument.open_details': '打开详情',
+    'common.graph_controls': '图谱控件',
+    'common.graph_zoom_in': '放大',
+    'common.graph_zoom_out': '缩小',
+    'common.graph_fit_view': '适配视图',
+    'common.graph_toggle_interactivity': '切换交互状态',
+    'common.graph_minimap': '缩略图',
+  },
+};
+
+function setTestLocale(locale: TestLocale) {
+  currentLocale = locale;
+}
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
-    i18n: { changeLanguage: vi.fn(), language: 'en' },
+    t: (key: string, fallback?: string) => TEST_TRANSLATIONS[currentLocale][key] ?? fallback ?? key,
+    i18n: {
+      changeLanguage: vi.fn(async (locale: string) => {
+        if (locale === 'en' || locale === 'zh') currentLocale = locale;
+      }),
+      language: currentLocale,
+    },
   }),
 }));
 
@@ -20,6 +64,7 @@ vi.mock('@xyflow/react', async () => {
     ReactFlow: (props: Record<string, unknown>) => {
       const nodes = props.nodes as Array<{ id: string; focusable?: boolean; ariaLabel?: string | null }> | undefined;
       const edges = props.edges as Array<Record<string, unknown>> | undefined;
+      const ariaLabelConfig = props.ariaLabelConfig as Record<string, string> | undefined;
       const children = props.children as React.ReactNode;
       const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
       const onPaneClick = props.onPaneClick as (() => void) | undefined;
@@ -42,6 +87,7 @@ vi.mock('@xyflow/react', async () => {
           data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
           data-node-focusable={String(firstNode?.focusable ?? '')}
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
+          data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
         >
           {/* Expose clickable elements per node for testing onNodeClick */}
           {nodes?.map(n => (
@@ -67,6 +113,7 @@ import { ArgumentMap, ArgumentStrengthMeter, type ArgumentUnit } from './Argumen
 afterEach(() => {
   cleanup();
   fitViewMock.mockReset();
+  currentLocale = 'en';
   vi.restoreAllMocks();
 });
 
@@ -197,6 +244,42 @@ describe('ArgumentMap', () => {
     const flow = await screen.findByTestId('reactflow');
     expect(flow.getAttribute('data-node-aria-label')).toContain('Verdict');
     expect(flow.getAttribute('data-node-aria-label')).toContain('order');
+  });
+
+  it('recomputes argument node accessibility labels when the UI language changes at runtime', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-runtime-i18n',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    const view = render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-node-aria-label')).toContain('Claim');
+    expect(JSON.parse(flow.getAttribute('data-aria-label-config') ?? '{}')).toMatchObject({
+      'controls.zoomIn.ariaLabel': 'Zoom in',
+      'minimap.ariaLabel': 'Mini map',
+    });
+
+    setTestLocale('zh');
+    view.rerender(<ArgumentMap debateId="d1" visible={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow').getAttribute('data-node-aria-label')).toContain('论点');
+    });
+    expect(JSON.parse(screen.getByTestId('reactflow').getAttribute('data-aria-label-config') ?? '{}')).toMatchObject({
+      'controls.zoomIn.ariaLabel': '放大',
+      'minimap.ariaLabel': '缩略图',
+    });
   });
 
   it('handles 501 gracefully', async () => {
@@ -442,6 +525,56 @@ describe('ArgumentMap', () => {
     expect(items[0].textContent).toContain('Claim');
     expect(items[0].textContent).toContain('A claim');
     expect(items[0].textContent).toContain('Standing');
+  });
+
+  it('renders screen reader fallback items for node-only maps with no units', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-node-only',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Node only claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+
+    const srList = screen.getByRole('list', { name: 'Argument units list' });
+    const items = within(srList).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain('Claim');
+    expect(items[0].textContent).toContain('Node only claim');
+  });
+
+  it('keeps node-only maps keyboard-accessible through the rendered graph node button', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-node-only-keyboard',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Node only claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+
+    const nodeButton = screen.getByTestId('rf-node-n1');
+    nodeButton.focus();
+    expect(nodeButton).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+
+    const detailPanel = await screen.findByTestId('node-detail-panel');
+    expect(detailPanel).toHaveTextContent('Node only claim');
   });
 
   it('renders aria-label on map container', async () => {
