@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlmodel import Session
 
 from app.api import helpers as helpers_module
+from app.api import ws as ws_module
 from app.models import database as database_module
+from app.models.database import Scenario, ScenarioStatus, get_engine
 from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
@@ -299,3 +304,49 @@ async def test_run_sim_background_skips_when_sqlite_runtime_lock_is_held(monkeyp
         helpers_module._running_simulations.clear()
 
     fake_run_simulation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_keeps_pre_acquired_lock_alive_until_completion(monkeypatch):
+    helpers_module._running_simulations.clear()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="keep lease alive", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+
+    lock_key = simulation_lock_key(scenario.id)
+    pre_acquired_lease = acquire_runtime_lock(lock_key, lease_seconds=0.05)
+    assert pre_acquired_lease is not None
+
+    midflight_reacquire: dict[str, object | None] = {"lease": None}
+
+    async def fake_run_simulation(**_kwargs):
+        await asyncio.sleep(0.08)
+        midflight_reacquire["lease"] = acquire_runtime_lock(lock_key, lease_seconds=0.05)
+        await asyncio.sleep(0.02)
+
+    monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+
+    try:
+        await helpers_module.run_sim_background(
+            scenario.id,
+            pre_acquired_lock_lease=pre_acquired_lease,
+        )
+
+        assert midflight_reacquire["lease"] is None
+
+        reacquired_after_completion = acquire_runtime_lock(lock_key, lease_seconds=0.05)
+        assert reacquired_after_completion is not None
+        assert release_runtime_lock(reacquired_after_completion) is True
+    finally:
+        leaked_lease = midflight_reacquire["lease"]
+        if leaked_lease is not None:
+            release_runtime_lock(leaked_lease)
+        helpers_module._running_simulations.clear()

@@ -85,14 +85,16 @@ describe('ExportPanel', () => {
     // No crash, button is re-enabled
     expect(screen.getByText('Export PNG')).not.toBeDisabled();
     expect(mockCaptureElementBlob).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to export PNG. Try again.');
     document.body.removeChild(container);
   });
 
-  it('SVG button does not crash when container is missing', async () => {
+  it('SVG button shows a visible failure hint when container is missing', async () => {
     const user = userEvent.setup();
     render(<ExportPanel containerSelector=".nonexistent" />);
     await user.click(screen.getByText('Export SVG'));
     expect(screen.getByText('Export SVG')).not.toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to export SVG. Try again.');
   });
 
   it('SVG button produces SVG blob with foreignObject when container exists', async () => {

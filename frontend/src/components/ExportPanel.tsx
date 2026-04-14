@@ -8,6 +8,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type ExportStatus = 'idle' | 'exporting';
+type ExportFailure = 'png_failed' | 'svg_failed' | null;
 
 interface ExportPanelProps {
   /** CSS selector for the ReactFlow container to capture */
@@ -88,13 +89,20 @@ function hideExportChrome(root: Element): () => void {
 export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: ExportPanelProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<ExportStatus>('idle');
+  const [failureKey, setFailureKey] = useState<ExportFailure>(null);
+
+  const setFailure = useCallback((key: Exclude<ExportFailure, null>) => {
+    setFailureKey(key);
+  }, []);
 
   const exportPng = useCallback(async () => {
+    setFailureKey(null);
     setStatus('exporting');
     try {
       const { captureElementBlob } = await import('../hooks/screenCaptureRuntime');
       const container = document.querySelector(containerSelector);
       if (!container) {
+        setFailure('png_failed');
         setStatus('idle');
         return;
       }
@@ -104,18 +112,26 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
       });
       if (blob) {
         downloadBlob(blob, `${filenamePrefix}_${timestamp()}.png`);
+      } else {
+        setFailure('png_failed');
       }
     } catch (err) {
       console.error('[ExportPanel] PNG export failed:', err);
+      setFailure('png_failed');
     }
     setStatus('idle');
-  }, [containerSelector, filenamePrefix]);
+  }, [containerSelector, filenamePrefix, setFailure]);
 
   const exportSvg = useCallback(() => {
+    setFailureKey(null);
     setStatus('exporting');
     try {
       const container = document.querySelector(containerSelector);
-      if (!container) { setStatus('idle'); return; }
+      if (!container) {
+        setFailure('svg_failed');
+        setStatus('idle');
+        return;
+      }
 
       const rect = container.getBoundingClientRect();
       const width = Math.max(1, Math.ceil(rect.width));
@@ -140,48 +156,64 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
       downloadBlob(blob, `${filenamePrefix}_${timestamp()}.svg`);
     } catch (err) {
       console.error('[ExportPanel] SVG export failed:', err);
+      setFailure('svg_failed');
     }
     setStatus('idle');
-  }, [containerSelector, filenamePrefix]);
+  }, [containerSelector, filenamePrefix, setFailure]);
 
   const disabled = status === 'exporting';
 
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }} data-testid="export-panel">
-      <button
-        onClick={exportPng}
-        disabled={disabled}
-        title={t('export.png', 'Export PNG')}
-        style={{
-          padding: '4px 10px',
-          fontSize: '0.8rem',
-          background: '#2a2a3e',
-          color: '#ccc',
-          border: '1px solid #444',
-          borderRadius: 4,
-          cursor: disabled ? 'wait' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
-        }}
-      >
-        {disabled ? t('export.exporting', 'Exporting...') : t('export.png', 'Export PNG')}
-      </button>
-      <button
-        onClick={exportSvg}
-        disabled={disabled}
-        title={t('export.svg', 'Export SVG')}
-        style={{
-          padding: '4px 10px',
-          fontSize: '0.8rem',
-          background: '#2a2a3e',
-          color: '#ccc',
-          border: '1px solid #444',
-          borderRadius: 4,
-          cursor: disabled ? 'wait' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
-        }}
-      >
-        {t('export.svg', 'Export SVG')}
-      </button>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'flex-start' }}
+      data-testid="export-panel"
+    >
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <button
+          onClick={exportPng}
+          disabled={disabled}
+          title={t('export.png', 'Export PNG')}
+          style={{
+            padding: '4px 10px',
+            fontSize: '0.8rem',
+            background: '#2a2a3e',
+            color: '#ccc',
+            border: '1px solid #444',
+            borderRadius: 4,
+            cursor: disabled ? 'wait' : 'pointer',
+            opacity: disabled ? 0.6 : 1,
+          }}
+        >
+          {disabled ? t('export.exporting', 'Exporting...') : t('export.png', 'Export PNG')}
+        </button>
+        <button
+          onClick={exportSvg}
+          disabled={disabled}
+          title={t('export.svg', 'Export SVG')}
+          style={{
+            padding: '4px 10px',
+            fontSize: '0.8rem',
+            background: '#2a2a3e',
+            color: '#ccc',
+            border: '1px solid #444',
+            borderRadius: 4,
+            cursor: disabled ? 'wait' : 'pointer',
+            opacity: disabled ? 0.6 : 1,
+          }}
+        >
+          {t('export.svg', 'Export SVG')}
+        </button>
+      </div>
+      {failureKey && (
+        <div
+          role="alert"
+          style={{ fontSize: '0.75rem', color: '#ff9b9b' }}
+        >
+          {failureKey === 'png_failed'
+            ? t('export.png_failed', 'Failed to export PNG. Try again.')
+            : t('export.svg_failed', 'Failed to export SVG. Try again.')}
+        </div>
+      )}
     </div>
   );
 }

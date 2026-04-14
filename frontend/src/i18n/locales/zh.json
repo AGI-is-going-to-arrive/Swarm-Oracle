@@ -909,13 +909,14 @@
       "a11y_list": "因果事件列表",
       "feature_disabled": "因果图谱功能未启用。",
       "round_label": "回合",
-      "search_agent": "搜索代理...",
+      "search_agent": "搜索 Agent...",
       "no_results": "未找到匹配的节点。",
       "branch_select": "选择分支",
       "all_branches": "所有分支",
       "show_legend": "图例",
       "hide_legend": "隐藏图例",
       "text_fallback": "图谱过大，无法交互展示。显示文本列表。",
+      "relationless_snapshot": "当前场景还没有生成因果连线，先显示事件快照。",
       "open_details": "打开详情",
       "type_event": "事件",
       "type_intervention": "干预",
@@ -992,7 +993,9 @@
     "export": {
       "png": "导出 PNG",
       "svg": "导出 SVG",
-      "exporting": "导出中..."
+      "exporting": "导出中...",
+      "png_failed": "PNG 导出失败，请重试。",
+      "svg_failed": "SVG 导出失败，请重试。"
     },
     "node_detail": {
       "round": "回合",

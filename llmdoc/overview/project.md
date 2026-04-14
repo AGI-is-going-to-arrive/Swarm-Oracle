@@ -23,7 +23,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。
-- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；多节点但 0 edges 时会直接切到 event snapshot fallback，不再把它伪装成可交互 DAG；大图切到文本 fallback 时会隐藏导出控件，并且只保留一条具名的 a11y 列表；图面 minimap 改为非交互 overlay，移动端不会再挡住节点点击。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`。
+- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；多节点但 0 edges 时会直接切到本地化的 event snapshot fallback，不再把它伪装成可交互 DAG；非交互 fallback 只保留一条具名的 a11y 列表；导出失败会显示明确提示；图面 minimap 改为非交互 overlay，移动端不会再挡住节点点击。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`。
 
 ### Debate Arena
 
@@ -121,17 +121,18 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 本轮 graph-viz / replay hardening 定向回归也已通过：
-  - backend graph / replay / migration suite `256 passed`
+  - backend graph / replay / migration suite `262 passed`
   - backend 相邻 API / service smoke `154 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `111 passed`
+  - frontend graph suite `114 passed`
   - frontend `typecheck / lint / build / perf budget` 通过
-  - frontend 全量 vitest `988 passed`
-  - backend 全量 `2033 passed, 2 skipped`
+  - frontend 全量 vitest `989 passed`
+  - backend 全量 `2039 passed, 2 skipped`
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
   - phase3 compare fixture 当前已带真实 `agents / messages`，compare theater 不再空载
   - `phase3-batch-a full` `35/35`，default / `zh-CN` locale 都通过
   - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
+  - graph scoped cross-browser desktop rerun 也已通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
   - `e2e-debate-suite full` 通过
   - `e2e-ending-room-followup-suite full` 通过
   - Oracle scoped cross-browser roundtable 的 Firefox / WebKit rerun 通过

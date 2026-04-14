@@ -79,6 +79,7 @@
   - 如果 seed 阶段仍失败，后端会把刚创建的 replay branch、round 和 message 一起清掉，不再留下脏 branch 占 quota
 - `POST /api/scenario/{id}/resume` 当前会先预占 `simulation lock`，再把锁 lease 传给后台任务：
   - 锁拿不到时直接返回 `409 SIMULATION_ALREADY_RUNNING`
+  - 预占成功后的 lock lease 会在后台续跑期间持续续租，直到任务结束才释放
   - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
@@ -210,7 +211,7 @@
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，更不会留下悬空 verdict edge
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
-- `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
+- `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry，以及 `phase_insights` 里的负数 numeric 字段也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。
 - BYOK `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验。业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400。

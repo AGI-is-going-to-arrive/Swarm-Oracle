@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 
@@ -37,6 +38,7 @@ from app.services.parser import parse_question
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    refresh_runtime_lock,
     release_runtime_lock,
     simulation_lock_key,
 )
@@ -271,6 +273,61 @@ _background_tasks: set[asyncio.Task] = set()
 # C-1 fix: Anti-reentrancy now uses DB-level Scenario status instead of in-memory set.
 # The in-memory set is kept only as a fast-path check; the DB is the source of truth.
 _running_simulations: set[str] = set()
+_SIMULATION_LOCK_REFRESH_FRACTION = 0.33
+
+
+def _runtime_lock_refresh_interval(
+    lease: RuntimeLockLease | None,
+    *,
+    lease_seconds: float,
+) -> float:
+    remaining_seconds = lease_seconds
+    if lease is not None:
+        remaining_seconds = max(0.01, lease.expires_at - time.time())
+    return max(
+        0.01,
+        min(5.0, min(lease_seconds, remaining_seconds) * _SIMULATION_LOCK_REFRESH_FRACTION),
+    )
+
+
+def _start_runtime_lock_heartbeat(
+    lease_holder: list[RuntimeLockLease | None],
+    *,
+    lease_seconds: float,
+    lock_label: str,
+) -> tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+
+    def _heartbeat() -> None:
+        refresh_interval = _runtime_lock_refresh_interval(
+            lease_holder[0],
+            lease_seconds=lease_seconds,
+        )
+        while not stop_event.wait(refresh_interval):
+            current_lease = lease_holder[0]
+            refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            if refreshed is None:
+                lease_holder[0] = None
+                logger.warning("%s runtime lock lease could not be refreshed", lock_label)
+                return
+            lease_holder[0] = refreshed
+            refresh_interval = _runtime_lock_refresh_interval(
+                refreshed,
+                lease_seconds=lease_seconds,
+            )
+
+    thread = threading.Thread(
+        target=_heartbeat,
+        name=f"{lock_label}-runtime-lock-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.Thread) -> None:
+    stop_event.set()
+    thread.join(timeout=1.0)
 
 
 def _finalize_background_task(task: asyncio.Task) -> None:
@@ -323,25 +380,35 @@ async def run_sim_background(
     # C-3 fix: prevent double simulation launch
     if scenario_id in _running_simulations:
         logger.warning("Simulation %s already running — skipping duplicate launch", scenario_id)
+        release_runtime_lock(pre_acquired_lock_lease)
         return
     _running_simulations.add(scenario_id)
-    lock_lease = pre_acquired_lock_lease
+    lock_lease_holder: list[RuntimeLockLease | None] = [pre_acquired_lock_lease]
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
 
     from app.api.ws import ws_manager
     try:
         # H-5 fix: total simulation timeout (MAX_ROUNDS * 180s ceiling)
         total_timeout = settings.MAX_ROUNDS * 180
-        if lock_lease is None:
-            lock_lease = acquire_runtime_lock(
+        lock_lease_seconds = total_timeout + 60
+        if lock_lease_holder[0] is None:
+            lock_lease_holder[0] = acquire_runtime_lock(
                 simulation_lock_key(scenario_id),
-                lease_seconds=total_timeout + 60,
+                lease_seconds=lock_lease_seconds,
             )
-            if lock_lease is None:
+            if lock_lease_holder[0] is None:
                 logger.warning(
                     "Simulation %s already running via another worker — skipping duplicate launch",
                     scenario_id,
                 )
                 return
+        else:
+            heartbeat_stop, heartbeat_thread = _start_runtime_lock_heartbeat(
+                lock_lease_holder,
+                lease_seconds=lock_lease_seconds,
+                lock_label=f"simulation:{scenario_id}",
+            )
 
         sim_kwargs: dict = {
             "scenario_id": scenario_id,
@@ -407,7 +474,9 @@ async def run_sim_background(
                 session.add(s)
                 session.commit()
     finally:
-        release_runtime_lock(lock_lease)
+        if heartbeat_stop is not None and heartbeat_thread is not None:
+            _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
+        release_runtime_lock(lock_lease_holder[0])
         _running_simulations.discard(scenario_id)
 
 

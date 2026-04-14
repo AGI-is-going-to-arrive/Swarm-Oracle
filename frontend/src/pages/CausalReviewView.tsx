@@ -546,8 +546,8 @@ export function CausalReviewView() {
             type="search"
             value={agentSearch}
             onChange={e => setAgentSearch(e.target.value)}
-            placeholder={t('causal.search_agent', 'Search agent...')}
-            aria-label={t('causal.search_agent', 'Search agent...')}
+            placeholder={t('causal.search_agent', 'Search Agent...')}
+            aria-label={t('causal.search_agent', 'Search Agent...')}
             style={{
               padding: '4px 8px', borderRadius: 4, border: '1px solid #555',
               background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
@@ -659,7 +659,7 @@ export function CausalReviewView() {
           </div>
         )}
 
-        {!isTextFallback && (
+        {!isNonInteractiveFallback && (
           <div className="sr-only" role="list" aria-label={causalListAriaLabel}>
             {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
               <div key={n.id} role="listitem">

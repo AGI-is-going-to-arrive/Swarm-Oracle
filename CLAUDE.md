@@ -148,7 +148,7 @@ cd backend && alembic upgrade head
 - P1-3 Graph 导出：`ExportPanel` 组件（PNG via html2canvas + SVG via clone+inline computed styles+foreignObject），集成到 `CausalReviewView` + `ArgumentMap`
 - P1-4 Graph 节点点击：`NodeDetailPanel` 组件（type/round/payload/unit details），`onNodeClick` 绑定到两个 ReactFlow 实例，selectedNode 在 re-fetch 时自动清空
 - P1-12 Identity memory compaction：`FEATURE_IDENTITY_COMPACTION` 控制，阈值超过 50 条未压缩文档时异步 LLM 摘要（fire-and-forget），压缩文档带 `source_ids_hash` 幂等指纹，FIFO eviction raw 优先于 compacted，`get_identity_memories` 过滤压缩文档（只参与语义检索不进 timeline），prompt 经 `format_untrusted_text_block` 防注入
-- P1-9 resume_from_round：`POST /api/scenario/{id}/resume` 从指定轮次续跑（clone+restore+`run_sim_background`），`Blackboard.export_snapshot()`/`from_snapshot()` 完整状态持久化，checkpoint bug fix（`get_global_summary()` → `export_snapshot()`），agent stance/emotion 仅内存恢复不改 DB，`Branch.replay_kind` 新增 `"resume"` 值，与 counterfactual 共享 3 条分支上限，resume 前检查 runtime lock 防 orphan branch
+- P1-9 resume_from_round：`POST /api/scenario/{id}/resume` 从指定轮次续跑（clone+restore+`run_sim_background`），`Blackboard.export_snapshot()`/`from_snapshot()` 完整状态持久化，checkpoint bug fix（`get_global_summary()` → `export_snapshot()`），agent stance/emotion 仅内存恢复不改 DB，`Branch.replay_kind` 新增 `"resume"` 值，与 counterfactual 共享 3 条分支上限，resume 前先预占 runtime lock，后台任务续租 lease 到结束，避免丢锁和 orphan branch
 - 7 个 `FEATURE_*` 环境变量 (`config.py`)：原 6 个 + `FEATURE_IDENTITY_COMPACTION`，compaction 另有 3 个调参变量 (`IDENTITY_COMPACT_THRESHOLD`/`BATCH_SIZE`/`GROUP_SIZE`)
 
 ## 变更记录 (Changelog)

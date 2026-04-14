@@ -539,6 +539,16 @@ def test_import_replay_debate_rejects_invalid_turn_fields(
     assert message in resp.text
 
 
+def test_import_replay_debate_rejects_non_object_turn_entry(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["turns"].append("bad-turn-entry")
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "turns entries must be objects" in resp.text
+
+
 def test_import_replay_debate_rejects_invalid_prediction_kind(client: TestClient):
     payload = _make_import_replay_payload()
     payload["debate"]["predictions"][0]["kind"] = "judge"
@@ -557,6 +567,16 @@ def test_import_replay_debate_rejects_invalid_prediction_confidence(client: Test
 
     assert resp.status_code == 422
     assert "invalid predictions.confidence" in resp.text
+
+
+def test_import_replay_debate_rejects_non_object_prediction_entry(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["predictions"].append("bad-prediction-entry")
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "predictions entries must be objects" in resp.text
 
 
 def test_import_replay_debate_rejects_invalid_prediction_counterplay_phase(client: TestClient):
@@ -974,6 +994,38 @@ def test_import_replay_debate_rejects_invalid_phase_insight_confidence_drift_sha
 
     assert resp.status_code == 422
     assert "confidence_drift must be an object" in resp.text
+
+
+def test_import_replay_debate_rejects_non_object_phase_insight_entry(client: TestClient):
+    payload = _make_import_replay_payload()
+    payload["debate"]["phase_insights"] = ["bad-phase-insight-entry"]
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "phase_insights entries must be objects" in resp.text
+
+
+@pytest.mark.parametrize("field_name", ["phase_margin", "cumulative_margin"])
+def test_import_replay_debate_rejects_negative_phase_insight_confidence_drift_margins(
+    client: TestClient,
+    field_name: str,
+):
+    payload = _make_import_replay_payload()
+    payload["debate"]["phase_insights"] = [
+        {
+            "phase": "opening",
+            "confidence_drift": {
+                "direction": "balanced",
+                field_name: -1,
+            },
+        },
+    ]
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 422
+    assert "numeric fields must be >= 0" in resp.text
 
 
 def test_empty_turn_fallbacks_are_readable():

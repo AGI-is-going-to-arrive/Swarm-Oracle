@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
 
@@ -31,6 +31,52 @@ function writeJson(filePath, data) {
 }
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function parseArgs(argv) {
+  const args = {
+    mode: argv[2] || "desktop",
+    baseUrl: DEFAULT_BASE_URL,
+    browser: "chromium",
+    headless: process.env.HEADLESS === "1",
+  };
+
+  for (let i = 3; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg === "--url" && next) {
+      args.baseUrl = next;
+      i += 1;
+    } else if (arg === "--browser" && next) {
+      args.browser = next;
+      i += 1;
+    } else if (arg === "--headless") {
+      args.headless = true;
+    }
+  }
+
+  if (!["desktop", "mobile", "full"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-phase3-batch-a.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+  }
+  if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
+    throw new Error(`Unsupported browser: ${args.browser}`);
+  }
+
+  return args;
+}
+
+async function launchBrowser(headless, browserName = "chromium") {
+  if (browserName === "firefox") {
+    return firefox.launch({ headless });
+  }
+  if (browserName === "webkit") {
+    return webkit.launch({ headless });
+  }
+  try {
+    return await chromium.launch({ channel: "chrome", headless });
+  } catch {
+    return chromium.launch({ headless });
+  }
 }
 
 async function saveScreenshot(page, filePath) {
@@ -621,17 +667,15 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
 
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport) {
-  const baseUrl = DEFAULT_BASE_URL;
+async function runSurface(mode, viewport, args) {
+  const baseUrl = args.baseUrl;
   const outputDir = path.join(
     DEFAULT_OUTPUT_ROOT,
-    `${timestampLabel()}-phase3a-${mode}`,
+    `${timestampLabel()}-phase3a-${mode}-${args.browser}`,
   );
   ensureDir(outputDir);
 
-  const browser = await chromium.launch({
-    headless: process.env.HEADLESS !== "0",
-  });
+  const browser = await launchBrowser(args.headless, args.browser);
   const context = await browser.newContext({ viewport, acceptDownloads: true, locale: E2E_LOCALE });
   await context.addInitScript(({ storageKey, language }) => {
     window.localStorage.setItem(storageKey, language);
@@ -700,20 +744,22 @@ const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
 async function main() {
-  const mode = process.argv[2] || "desktop";
+  const args = parseArgs(process.argv);
+  const { mode } = args;
   const surfaceResults = [];
 
   if (mode === "desktop" || mode === "full") {
-    const r = await runSurface("desktop", DESKTOP_VIEWPORT);
+    const r = await runSurface("desktop", DESKTOP_VIEWPORT, args);
     surfaceResults.push(r);
   }
   if (mode === "mobile" || mode === "full") {
-    const r = await runSurface("mobile", MOBILE_VIEWPORT);
+    const r = await runSurface("mobile", MOBILE_VIEWPORT, args);
     surfaceResults.push(r);
   }
 
   const overallSummary = {
     mode,
+    browser: args.browser,
     surfaces: surfaceResults.map((result) => ({
       mode: result.mode,
       allPassed: result.summary.allPassed,

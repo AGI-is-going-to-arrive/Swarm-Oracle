@@ -909,13 +909,14 @@
       "a11y_list": "Causal events list",
       "feature_disabled": "Causal graph feature is not enabled.",
       "round_label": "Round",
-      "search_agent": "Search agent...",
+      "search_agent": "Search Agent...",
       "no_results": "No nodes match your search.",
       "branch_select": "Select branch",
       "all_branches": "All branches",
       "show_legend": "Legend",
       "hide_legend": "Hide Legend",
       "text_fallback": "Graph too large for interactive view. Showing text list.",
+      "relationless_snapshot": "No causal edges were generated for this scenario yet. Showing event snapshots instead.",
       "open_details": "Open details",
       "type_event": "Event",
       "type_intervention": "Intervention",
@@ -992,7 +993,9 @@
     "export": {
       "png": "Export PNG",
       "svg": "Export SVG",
-      "exporting": "Exporting..."
+      "exporting": "Exporting...",
+      "png_failed": "Failed to export PNG. Try again.",
+      "svg_failed": "Failed to export SVG. Try again."
     },
     "node_detail": {
       "round": "Round",

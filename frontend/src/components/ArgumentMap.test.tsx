@@ -179,6 +179,26 @@ describe('ArgumentMap', () => {
     expect(flow.getAttribute('data-edges')).toBe('1');
   });
 
+  it('uses the localized verdict label in node accessibility text', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-verdict',
+        nodes: [
+          { id: 'n-verdict', key: 'verdict-1', type: 'verdict', label: 'order', round: null, payload: null },
+        ],
+        edges: [],
+        units: [],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-node-aria-label')).toContain('Verdict');
+    expect(flow.getAttribute('data-node-aria-label')).toContain('order');
+  });
+
   it('handles 501 gracefully', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: false,

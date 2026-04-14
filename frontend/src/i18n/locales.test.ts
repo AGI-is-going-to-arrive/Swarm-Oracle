@@ -81,6 +81,8 @@ describe('i18n locale resources', () => {
   it('provides localized graph node detail labels and counterfactual labels', () => {
     expect(en.translation.node_detail.agent).toBe('Agent');
     expect(zh.translation.node_detail.agent).toBe('Agent');
+    expect(en.translation.causal.search_agent).toBe('Search Agent...');
+    expect(zh.translation.causal.search_agent).toBe('搜索 Agent...');
     expect(en.translation.node_detail.emotion).toBe('Emotion');
     expect(zh.translation.node_detail.emotion).toBe('情绪');
     expect(en.translation.node_detail.stance).toBe('Stance');
@@ -89,6 +91,10 @@ describe('i18n locale resources', () => {
     expect(zh.translation.node_detail.side).toBe('立场方');
     expect(en.translation.node_detail.copy_ref).toBe('Copy Reference');
     expect(zh.translation.node_detail.copy_ref).toBe('复制引用');
+    expect(en.translation.export.png_failed).toBe('Failed to export PNG. Try again.');
+    expect(zh.translation.export.png_failed).toBe('PNG 导出失败，请重试。');
+    expect(en.translation.export.svg_failed).toBe('Failed to export SVG. Try again.');
+    expect(zh.translation.export.svg_failed).toBe('SVG 导出失败，请重试。');
 
     expect(en.translation.counterfactual.title).toBe('What-If Replay');
     expect(zh.translation.counterfactual.title).toBe('假设重演');
@@ -105,5 +111,7 @@ describe('i18n locale resources', () => {
     expect(zh.translation.common.submitting).toBe('提交中...');
     expect(en.translation.causal.type_round).toBe('Round');
     expect(zh.translation.causal.type_round).toBe('回合');
+    expect(en.translation.causal.relationless_snapshot).toBe('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
+    expect(zh.translation.causal.relationless_snapshot).toBe('当前场景还没有生成因果连线，先显示事件快照。');
   });
 });

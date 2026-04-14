@@ -181,20 +181,26 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 # Optional locale smoke
 SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
 SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
+# Optional desktop cross-browser smoke
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs desktop --browser firefox --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --browser firefox --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs desktop --browser webkit --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --browser webkit --headless
 ```
 
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay / migration 定向 `256 passed`
+  - backend graph / replay / migration 定向 `262 passed`
   - backend 相邻 `api / service` smoke `154 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `111 passed`
+  - frontend graph suite `114 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
   - `phase3-batch-a full` `35/35`，default / `zh-CN` locale 都通过
   - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
-  - backend 全量 `python -m pytest -q` 本轮实测 `2033 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `988 passed`
+  - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
+  - backend 全量 `python -m pytest -q` 本轮实测 `2039 passed, 2 skipped`
+  - frontend 全量 `npm test` 本轮实测 `989 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
@@ -203,14 +209,16 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
     - 较旧分支请求的返回不会覆盖较新的分支结果
     - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
-    - text fallback 路径会隐藏 export controls，并只保留一条具名的 a11y list
+    - 非交互 fallback 路径会隐藏 export controls，并只保留一条具名的 a11y list；relationless snapshot fallback 也会走本地化提示
     - 结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
   - `ArgumentMap`
     - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
+    - `verdict` 节点当前也走共享 graph i18n label，不再把可访问名称写死成英文
   - `NodeDetailPanel`
     - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
     - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`
+  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`
   - `GraphNodeCard`
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
@@ -238,13 +246,13 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
   - graph export 按钮可见，且 `Export SVG` 会校验下载下来的 SVG 非空、结构可读
   - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
   - screen-reader fallback list 确实存在，且至少有 1 条 list item
-  - relationless graph（多节点但 0 边）会切到 snapshot fallback；此时不再挂 ReactFlow，也不会显示 export controls
+  - relationless graph（多节点但 0 边）会切到本地化 snapshot fallback；此时不再挂 ReactFlow，也不会显示 export controls，并且只保留一条 a11y list
 - `phase3-batch-b` 主要看：
   - `ArgumentMap` 基础渲染
   - 本地化强度摘要 aria-label（default / `zh-CN` locale 都能定位）
   - legend 可见
   - `Export SVG` 会校验下载下来的 SVG 非空、结构可读
-  - verdict node 可见
+  - 本地化 verdict 节点标签可见
   - graph node 点击后 `NodeDetailPanel` 打开、展示详情文本 / status，并可关闭
   - fail-soft 错误态会显示失败文案和 `Retry`，同时隐藏图与导出
   - status filter 走到空态分支，并可 `Clear` 恢复图谱
@@ -252,6 +260,7 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
   - 与结果页图谱接线是否还活着
   - 脚本 summary 在 step 失败时会把测试名写进 `failedTests`
 - 两条 `phase3` 脚本当前都走 `page.route()` fixtures；fixture 命中的请求会继续按脚本内假数据完成，不需要 live backend
+- 两条 `phase3` 脚本当前都支持 `--browser chromium|firefox|webkit`；这轮 Firefox / WebKit 只做 desktop scoped regression
 - 两条 `phase3` 脚本现在按 fail-closed 收口浏览器侧异常：
   - 任意 `pageerror`
   - 任意非导航中止类 `requestfailed`

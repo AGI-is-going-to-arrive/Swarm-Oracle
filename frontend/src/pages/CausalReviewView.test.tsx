@@ -190,6 +190,7 @@ describe('CausalReviewView', () => {
     expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
     expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Round 1/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('list', { name: 'Causal events list' })).toHaveLength(1);
     vi.restoreAllMocks();
   });
 
@@ -230,7 +231,7 @@ describe('CausalReviewView', () => {
     } as Response);
     renderView();
     await screen.findByTestId('reactflow');
-    const searchInput = screen.getByPlaceholderText('Search agent...');
+    const searchInput = screen.getByPlaceholderText('Search Agent...');
     expect(searchInput).toBeInTheDocument();
     vi.restoreAllMocks();
   });
@@ -536,7 +537,7 @@ describe('CausalReviewView', () => {
     });
     const initialCalls = fitViewMock.mock.calls.length;
 
-    await user.type(screen.getByPlaceholderText('Search agent...'), 'beta');
+    await user.type(screen.getByPlaceholderText('Search Agent...'), 'beta');
 
     await waitFor(() => {
       expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);

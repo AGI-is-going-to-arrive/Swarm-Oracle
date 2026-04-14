@@ -312,7 +312,11 @@ def _normalize_import_replay_turns(turns: list[Any]) -> list[dict[str, Any]]:
     normalized: list[tuple[int, dict[str, Any]]] = []
     for raw_turn in turns:
         if not isinstance(raw_turn, dict):
-            continue
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_TURN_FIELD_INVALID",
+                "Replay debate turns entries must be objects",
+            )
         try:
             sequence = int(raw_turn.get("sequence", 1) or 1)
         except (TypeError, ValueError) as exc:
@@ -407,7 +411,12 @@ def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[d
         except (TypeError, ValueError) as exc:
             raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_INVALID", "Replay debate phase_insights numeric fields must be integers") from exc  # noqa: E501
 
-        if pressure_margin < 0 or turn_count < 0:
+        if (
+            pressure_margin < 0
+            or turn_count < 0
+            or phase_margin < 0
+            or cumulative_margin < 0
+        ):
             raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_RANGE_INVALID", "Replay debate phase_insights numeric fields must be >= 0")  # noqa: E501
 
         normalized.append(
@@ -440,7 +449,11 @@ def _normalize_import_replay_predictions(predictions: list[Any]) -> list[dict[st
     normalized: list[dict[str, Any]] = []
     for raw_prediction in predictions:
         if not isinstance(raw_prediction, dict):
-            continue
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
+                "Replay debate predictions entries must be objects",
+            )
         kind = _normalize_import_replay_enum(
             raw_prediction.get("kind", DebatePredictionKind.WINNER.value),
             enum_cls=DebatePredictionKind,

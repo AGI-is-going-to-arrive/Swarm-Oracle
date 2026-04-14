@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
 
@@ -30,6 +30,52 @@ function writeJson(filePath, data) {
 }
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function parseArgs(argv) {
+  const args = {
+    mode: argv[2] || "desktop",
+    baseUrl: DEFAULT_BASE_URL,
+    browser: "chromium",
+    headless: process.env.HEADLESS === "1",
+  };
+
+  for (let i = 3; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg === "--url" && next) {
+      args.baseUrl = next;
+      i += 1;
+    } else if (arg === "--browser" && next) {
+      args.browser = next;
+      i += 1;
+    } else if (arg === "--headless") {
+      args.headless = true;
+    }
+  }
+
+  if (!["desktop", "mobile", "full"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-phase3-batch-b.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+  }
+  if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
+    throw new Error(`Unsupported browser: ${args.browser}`);
+  }
+
+  return args;
+}
+
+async function launchBrowser(headless, browserName = "chromium") {
+  if (browserName === "firefox") {
+    return firefox.launch({ headless });
+  }
+  if (browserName === "webkit") {
+    return webkit.launch({ headless });
+  }
+  try {
+    return await chromium.launch({ channel: "chrome", headless });
+  } catch {
+    return chromium.launch({ headless });
+  }
 }
 async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
@@ -113,6 +159,15 @@ function summarizeRun(allResults) {
     runError: allResults.error ?? null,
     allPassed: totalSteps > 0 && failedTests.length === 0 && !allResults.error && passedSteps === totalSteps,
   };
+}
+
+async function hasVisibleMatch(locator) {
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const isVisible = await locator.nth(index).isVisible().catch(() => false);
+    if (isVisible) return true;
+  }
+  return false;
 }
 
 const IGNORED_REQUEST_FAILURE_TEXT_PATTERNS = [
@@ -763,7 +818,7 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   results.steps.push({ name: "status-filter-visible", passed: hasRejectedFilter });
   if (hasRejectedFilter) {
     await rejectedFilter.click();
-    const filterEmptyState = page.getByText(/No argument units match the selected filters|所选筛选条件下没有论证单元/i).first();
+    const filterEmptyState = page.getByText(/No argument units match the selected filters|当前筛选条件下没有匹配的论证单元/i).first();
     const hasFilterEmptyState = await filterEmptyState.isVisible({ timeout: 3000 }).catch(() => false);
     await saveScreenshot(page, path.join(stepDir, "04-argument-map-filter-empty.png"));
     results.steps.push({ name: "status-filter-empty-state-visible", passed: hasFilterEmptyState });
@@ -804,9 +859,9 @@ async function testArgumentMapLoadFailed(page, baseUrl, outputDir, aggregateIssu
     const { hasLoadButton, sawResponse: sawFailSoftResponse } = await triggerArgumentMapLoad(failSoftPage);
     results.steps.push({ name: "argument-map-load-failed-button-visible", passed: hasLoadButton });
     results.steps.push({ name: "argument-map-load-failed-request-fired", passed: sawFailSoftResponse });
-    const retryButton = failSoftPage.getByRole("button", { name: /Retry|重试/i }).first();
+    const retryButtons = failSoftPage.getByRole("button", { name: /Retry|重试/i });
     const hasRetryButton = sawFailSoftResponse
-      ? await retryButton.isVisible({ timeout: 5000 }).catch(() => false)
+      ? await hasVisibleMatch(retryButtons)
       : false;
     const hasLoadFailedMessage = sawFailSoftResponse
       ? await failSoftPage.getByText(/Failed to load argument map|Load failed|论证图谱加载失败/i).first().isVisible({ timeout: 5000 }).catch(() => false)
@@ -927,12 +982,12 @@ async function testCompareDigest(page, baseUrl, outputDir) {
 
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport) {
-  const baseUrl = DEFAULT_BASE_URL;
-  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3b-${mode}`);
+async function runSurface(mode, viewport, args) {
+  const baseUrl = args.baseUrl;
+  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3b-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
-  const browser = await chromium.launch({ headless: process.env.HEADLESS !== "0" });
+  const browser = await launchBrowser(args.headless, args.browser);
   const context = await browser.newContext({ viewport, acceptDownloads: true, locale: E2E_LOCALE });
   await context.addInitScript(({ storageKey, language }) => {
     window.localStorage.setItem(storageKey, language);
@@ -1007,20 +1062,22 @@ const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
 
 async function main() {
-  const mode = process.argv[2] || "desktop";
+  const args = parseArgs(process.argv);
+  const { mode } = args;
   const surfaceResults = [];
 
   if (mode === "desktop" || mode === "full") {
-    const r = await runSurface("desktop", DESKTOP_VIEWPORT);
+    const r = await runSurface("desktop", DESKTOP_VIEWPORT, args);
     surfaceResults.push(r);
   }
   if (mode === "mobile" || mode === "full") {
-    const r = await runSurface("mobile", MOBILE_VIEWPORT);
+    const r = await runSurface("mobile", MOBILE_VIEWPORT, args);
     surfaceResults.push(r);
   }
 
   const overallSummary = {
     mode,
+    browser: args.browser,
     surfaces: surfaceResults.map((result) => ({
       mode: result.mode,
       allPassed: result.summary.allPassed,

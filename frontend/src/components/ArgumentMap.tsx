@@ -140,6 +140,7 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
   evidence: GRAPH_TYPE_LABEL_I18N.evidence,
   rebuttal: GRAPH_TYPE_LABEL_I18N.rebuttal,
   counter: GRAPH_TYPE_LABEL_I18N.counter,
+  verdict: GRAPH_TYPE_LABEL_I18N.verdict,
 };
 
 const PERF_TOOLTIP_LIMIT = 150;
