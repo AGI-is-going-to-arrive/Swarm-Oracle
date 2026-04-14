@@ -14,6 +14,11 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const E2E_LOCALE = process.env.SWARM_E2E_LOCALE || "en-US";
+const E2E_APP_LANGUAGE = E2E_LOCALE.toLowerCase().startsWith("zh") ? "zh" : "en";
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 
 // ── Utilities ────────────────────────────────────────────
 
@@ -37,9 +42,12 @@ async function runNamedTest(testName, page, outputDir, runner) {
   try {
     const result = await runner();
     const steps = Array.isArray(result?.steps) ? result.steps : [];
+    const hasExplicitFailure = result?.passed === false || Boolean(result?.error);
+    const stepsPassed = steps.every((step) => step?.passed);
+    const derivedPassed = steps.length > 0 ? stepsPassed : (result?.passed ?? true);
     return {
       steps,
-      passed: result?.passed ?? steps.every((step) => step?.passed),
+      passed: !hasExplicitFailure && derivedPassed,
       error: result?.error ?? null,
     };
   } catch (err) {
@@ -66,7 +74,7 @@ function summarizeRun(allResults) {
         passedSteps++;
       }
     }
-    if (test?.passed === false || test?.error) {
+    if (test?.passed === false || test?.error || steps.some((step) => !step?.passed)) {
       failedTests.push(testName);
     }
   }
@@ -538,6 +546,14 @@ const DEBATE_RESULT_FIXTURE = {
   predictions: [],
 };
 
+const ARGUMENT_MAP_FAILSOFT_FIXTURE = {
+  snapshot_id: null,
+  nodes: [],
+  edges: [],
+  units: [],
+  error: "ARGUMENT_MAP_LOAD_FAILED",
+};
+
 // ── Route Interceptor Setup ──────────────────────────────
 
 async function installFixtures(page) {
@@ -613,7 +629,7 @@ async function testArgumentMap(page, baseUrl, outputDir) {
 
   // Navigate to debate result with argument map
   await page.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
+  await page.locator('.react-flow').first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await saveScreenshot(page, path.join(stepDir, "01-debate-result-loaded.png"));
 
   // Check argument map section exists (ReactFlow container)
@@ -720,6 +736,48 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   return results;
 }
 
+async function testArgumentMapLoadFailed(page, baseUrl, outputDir) {
+  const stepDir = path.join(outputDir, "argument-map-load-failed");
+  ensureDir(stepDir);
+  const results = { steps: [], passed: true };
+
+  await page.unroute(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`);
+  await page.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FAILSOFT_FIXTURE) }),
+  );
+  const failSoftResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/api/debate/${FIXTURE_DEBATE_ID}/argument-map`),
+    { timeout: 5000 },
+  ).then(() => true).catch(() => false);
+  await page.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
+  const sawFailSoftResponse = await failSoftResponse;
+  const retryButton = page.getByRole("button", { name: /Retry|重试/i }).first();
+  const hasRetryButton = sawFailSoftResponse
+    ? await retryButton.isVisible({ timeout: 5000 }).catch(() => false)
+    : false;
+  const hasLoadFailedMessage = sawFailSoftResponse
+    ? await page.getByText(/Failed to load argument map|Load failed|论证图谱加载失败/i).first().isVisible({ timeout: 5000 }).catch(() => false)
+    : false;
+  await saveScreenshot(page, path.join(stepDir, "01-argument-map-load-failed.png"));
+  results.steps.push({ name: "argument-map-load-failed-message-visible", passed: hasLoadFailedMessage });
+  results.steps.push({ name: "argument-map-load-failed-retry-visible", passed: hasRetryButton });
+
+  const reactFlowEl = page.locator('.react-flow').first();
+  const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-load-failed-hides-graph", passed: !hasReactFlow });
+
+  const exportPanel = page.getByTestId("export-panel").first();
+  const hasExportPanel = await exportPanel.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-load-failed-hides-export", passed: !hasExportPanel });
+
+  const emptyState = page.getByText(/No argument map available|暂无论证图谱/i).first();
+  const showsEmptyState = await emptyState.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-load-failed-not-empty-state", passed: !showsEmptyState });
+
+  return results;
+}
+
 async function testFactionTimeline(page, baseUrl, outputDir) {
   const stepDir = path.join(outputDir, "faction-timeline");
   ensureDir(stepDir);
@@ -732,7 +790,7 @@ async function testFactionTimeline(page, baseUrl, outputDir) {
   const title = page.getByText(/Faction Timeline|阵营时间线/).first();
   results.steps.push({ name: "faction-timeline-title-visible", passed: await title.isVisible().catch(() => false) });
 
-  const roundOne = page.getByText("Round 1").first();
+  const roundOne = page.getByText(/Round 1|第 ?1 ?轮/).first();
   results.steps.push({ name: "round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
 
   const hawksChip = page.getByText("Trade Hawks (2)").first();
@@ -755,7 +813,7 @@ async function testCompareDigest(page, baseUrl, outputDir) {
   // Navigate to compare view
   const compareUrl = `${baseUrl}/result/${FIXTURE_SCENARIO_ID}/compare?branch_a=${FIXTURE_BRANCH_A}&branch_b=${FIXTURE_BRANCH_B}`;
   await page.goto(compareUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+  await page.getByText(/Counterfactual|反事实/i).first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await saveScreenshot(page, path.join(stepDir, "01-compare-loaded.png"));
 
   // Check title
@@ -763,7 +821,7 @@ async function testCompareDigest(page, baseUrl, outputDir) {
   const hasTitle = await title.isVisible().catch(() => false);
   results.steps.push({ name: "compare-title-visible", passed: hasTitle });
 
-  const roundOne = page.getByText("Round 1").first();
+  const roundOne = page.getByText(/Round 1|第 ?1 ?轮/).first();
   results.steps.push({ name: "compare-round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
 
   const divergence = page.getByText("40%").first();
@@ -819,7 +877,10 @@ async function runSurface(mode, viewport) {
   ensureDir(outputDir);
 
   const browser = await chromium.launch({ headless: process.env.HEADLESS !== "0" });
-  const context = await browser.newContext({ viewport, acceptDownloads: true });
+  const context = await browser.newContext({ viewport, acceptDownloads: true, locale: E2E_LOCALE });
+  await context.addInitScript(({ storageKey, language }) => {
+    window.localStorage.setItem(storageKey, language);
+  }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
   const page = await context.newPage();
   const browserIssues = attachBrowserIssueMonitor(page);
 
@@ -833,6 +894,12 @@ async function runSurface(mode, viewport) {
       page,
       outputDir,
       () => testArgumentMap(page, baseUrl, outputDir),
+    );
+    allResults.tests.argumentMapLoadFailed = await runNamedTest(
+      "argument-map-load-failed",
+      page,
+      outputDir,
+      () => testArgumentMapLoadFailed(page, baseUrl, outputDir),
     );
     allResults.tests.factionTimeline = await runNamedTest(
       "faction-timeline",
@@ -873,6 +940,11 @@ async function runSurface(mode, viewport) {
   return allResults;
 }
 
+export const __test__ = {
+  runNamedTest,
+  summarizeRun,
+};
+
 // ── Main ─────────────────────────────────────────────────
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
@@ -905,7 +977,9 @@ async function main() {
   if (!overallSummary.allPassed) process.exitCode = 1;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (IS_MAIN_MODULE) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

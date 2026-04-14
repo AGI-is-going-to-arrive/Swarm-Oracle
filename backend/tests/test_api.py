@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 import app.api.agents as agents_api
+import app.api.graphs as graphs_api
 import app.api.scenarios as scenarios_api
 import app.api.social as social_api
 from app.api.schemas import CreateScenarioRequest
@@ -42,6 +43,7 @@ from app.models import (
 )
 from app.models.campaign import DirectorProfile, ProfileMastery
 from app.models.database import get_engine
+from app.services.causal_graph import append_round_nodes
 from app.services.scoring import recompute_leaderboard_entry
 
 
@@ -207,6 +209,125 @@ class TestHealthEndpoint:
         assert data["llm"]["status"] == "ok"
         assert data["probe"]["estimated_parallelism"] == 6
         assert data["probe"]["recommended"]["agents_max"] == 24
+
+
+class TestGraphEndpoints:
+    def test_causal_graph_endpoint_normalizes_blank_branch_query_to_none(self, client, monkeypatch):
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        branch_id = _seed_branch(engine, scenario_id, title="Known")
+        seen_branch_ids: list[str | None] = []
+
+        def _fake_build_snapshot(received_scenario_id, *, branch_id=None):
+            seen_branch_ids.append(branch_id)
+            assert received_scenario_id == scenario_id
+            return {"id": "graph-1", "nodes": [], "edges": []}
+
+        monkeypatch.setattr("app.api.graphs.build_snapshot", _fake_build_snapshot)
+
+        blank_resp = client.get(
+            f"/api/scenario/{scenario_id}/causal-graph",
+            params={"branch_id": "   "},
+        )
+        explicit_resp = client.get(
+            f"/api/scenario/{scenario_id}/causal-graph",
+            params={"branch_id": branch_id},
+        )
+
+        assert blank_resp.status_code == 200
+        assert explicit_resp.status_code == 200
+        assert seen_branch_ids == [None, branch_id]
+
+    def test_causal_graph_endpoint_rejects_unknown_branch_ids(self, client, monkeypatch):
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(engine, scenario_id, title="Known")
+
+        resp = client.get(
+            f"/api/scenario/{scenario_id}/causal-graph",
+            params={"branch_id": "bogus-branch"},
+        )
+
+        assert resp.status_code == 404
+        assert _detail_code(resp) == "BRANCH_NOT_FOUND"
+        assert "bogus-branch" in _detail_message(resp)
+
+    def test_causal_graph_branch_filter_preserves_available_branches(self, client, monkeypatch):
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        parent_branch_id = _seed_branch(engine, scenario_id, title="Parent")
+        child_branch_id = _seed_branch(
+            engine,
+            scenario_id,
+            title="Child",
+            parent_branch_id=parent_branch_id,
+            fork_reason="forked",
+        )
+
+        append_round_nodes(
+            scenario_id,
+            parent_branch_id,
+            1,
+            [
+                {
+                    "id": "m1",
+                    "agent_id": "a-parent",
+                    "emotion": "neutral",
+                    "content": "parent event",
+                }
+            ],
+        )
+        append_round_nodes(
+            scenario_id,
+            parent_branch_id,
+            2,
+            [
+                {
+                    "id": "m2",
+                    "agent_id": "a-parent",
+                    "emotion": "alert",
+                    "content": "fork trigger",
+                }
+            ],
+            fork_event={
+                "branch_id": parent_branch_id,
+                "children": [child_branch_id],
+                "reason": "forked",
+            },
+        )
+        append_round_nodes(
+            scenario_id,
+            child_branch_id,
+            3,
+            [
+                {
+                    "id": "m3",
+                    "agent_id": "a-child",
+                    "emotion": "hopeful",
+                    "content": "child event",
+                }
+            ],
+        )
+
+        resp = client.get(
+            f"/api/scenario/{scenario_id}/causal-graph",
+            params={"branch_id": child_branch_id},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data["available_branches"]) == {parent_branch_id, child_branch_id}
+
+        payload_branch_ids = {
+            node["payload"].get("branch_id")
+            for node in data["nodes"]
+            if isinstance(node.get("payload"), dict)
+        }
+        assert payload_branch_ids == {parent_branch_id, child_branch_id}
+        assert any(edge["label"] == "triggered fork" for edge in data["edges"])
 
 
 class TestIdentityPreflightEndpoint:

@@ -155,7 +155,8 @@ export function CausalReviewView() {
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const branchId = searchParams.get('branch_id') ?? undefined;
+  const rawBranchId = searchParams.get('branch_id');
+  const branchId = rawBranchId && rawBranchId.trim() ? rawBranchId.trim() : undefined;
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
   const [branches, setBranches] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);

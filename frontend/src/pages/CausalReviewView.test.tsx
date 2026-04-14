@@ -301,6 +301,98 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('sends an encoded branch_id query when the selector changes', async () => {
+    const user = userEvent.setup();
+    const encodedBranchId = 'branch/child?2';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-initial',
+          available_branches: ['branch-root', encodedBranchId],
+          nodes: [
+            {
+              id: 'n1',
+              key: 'e1',
+              type: 'event',
+              label: 'Root branch node',
+              round: 1,
+              payload: { branch_id: 'branch-root' },
+            },
+          ],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-filtered',
+          available_branches: ['branch-root', encodedBranchId],
+          nodes: [
+            {
+              id: 'n2',
+              key: 'e2',
+              type: 'event',
+              label: 'Filtered branch node',
+              round: 2,
+              payload: { branch_id: encodedBranchId },
+            },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+    renderView();
+    await screen.findByTestId('reactflow');
+
+    await user.selectOptions(screen.getByLabelText('Select branch'), encodedBranchId);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+    const secondCallUrl = fetchSpy.mock.calls[1]?.[0];
+    const serializedUrl =
+      typeof secondCallUrl === 'string'
+        ? secondCallUrl
+        : secondCallUrl instanceof URL
+          ? secondCallUrl.toString()
+          : secondCallUrl.url;
+    expect(serializedUrl).toContain('branch_id=branch%2Fchild%3F2');
+  });
+
+  it('treats blank branch_id query params as no filter', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-blank-branch',
+        available_branches: ['branch-root'],
+        nodes: [
+          {
+            id: 'n1',
+            key: 'e1',
+            type: 'event',
+            label: 'Root branch node',
+            round: 1,
+            payload: { branch_id: 'branch-root' },
+          },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=%20%20');
+    await screen.findByTestId('reactflow');
+
+    const firstCallUrl = fetchSpy.mock.calls[0]?.[0];
+    const serializedUrl =
+      typeof firstCallUrl === 'string'
+        ? firstCallUrl
+        : firstCallUrl instanceof URL
+          ? firstCallUrl.toString()
+          : firstCallUrl.url;
+    expect(serializedUrl).toBe('/api/scenario/test-id/causal-graph');
+  });
+
   it('refits the viewport after search filtering changes the node set', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({

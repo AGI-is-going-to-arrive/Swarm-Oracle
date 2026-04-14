@@ -14,6 +14,11 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const E2E_LOCALE = process.env.SWARM_E2E_LOCALE || "en-US";
+const E2E_APP_LANGUAGE = E2E_LOCALE.toLowerCase().startsWith("zh") ? "zh" : "en";
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 
 // ── Utilities ────────────────────────────────────────────
 
@@ -38,9 +43,12 @@ async function runNamedTest(testName, page, outputDir, runner) {
   try {
     const result = await runner();
     const steps = Array.isArray(result?.steps) ? result.steps : [];
+    const hasExplicitFailure = result?.passed === false || Boolean(result?.error);
+    const stepsPassed = steps.every((step) => step?.passed);
+    const derivedPassed = steps.length > 0 ? stepsPassed : (result?.passed ?? true);
     return {
       steps,
-      passed: result?.passed ?? steps.every((step) => step?.passed),
+      passed: !hasExplicitFailure && derivedPassed,
       error: result?.error ?? null,
     };
   } catch (err) {
@@ -67,7 +75,7 @@ function summarizeRun(allResults) {
         passedSteps++;
       }
     }
-    if (test?.passed === false || test?.error) {
+    if (test?.passed === false || test?.error || steps.some((step) => !step?.passed)) {
       failedTests.push(testName);
     }
   }
@@ -234,6 +242,7 @@ const GROWTH_EVENTS_FIXTURE = {
 
 const CAUSAL_GRAPH_FIXTURE = {
   id: "cg-e2e-001",
+  available_branches: ["branch-root", "branch-child"],
   nodes: [
     {
       id: "n1",
@@ -241,7 +250,7 @@ const CAUSAL_GRAPH_FIXTURE = {
       type: "event",
       label: "Trade shock announced",
       round: 1,
-      payload: { agent_id: "macro-desk", emotion: "alert", stance_score: -0.2 },
+      payload: { agent_id: "macro-desk", emotion: "alert", stance_score: -0.2, branch_id: "branch-root" },
     },
     {
       id: "n2",
@@ -249,7 +258,7 @@ const CAUSAL_GRAPH_FIXTURE = {
       type: "stance_shift",
       label: "Analysts shift dovish",
       round: 2,
-      payload: { agent_id: "macro-desk", emotion: "cautious", stance_score: -0.45 },
+      payload: { agent_id: "macro-desk", emotion: "cautious", stance_score: -0.45, branch_id: "branch-root" },
     },
     {
       id: "n3",
@@ -257,13 +266,41 @@ const CAUSAL_GRAPH_FIXTURE = {
       type: "event",
       label: "Central bank responds",
       round: 3,
-      payload: { agent_id: "policy-board", emotion: "decisive", stance_score: 0.6 },
+      payload: { agent_id: "policy-board", emotion: "decisive", stance_score: 0.6, branch_id: "branch-child" },
     },
   ],
   edges: [
     { id: "e1", source: "n1", target: "n2", type: "caused", weight: 0.9, label: "triggered" },
     { id: "e2", source: "n2", target: "n3", type: "influenced", weight: 0.6, label: "influenced" },
   ],
+};
+
+const CAUSAL_GRAPH_FILTERED_FIXTURES = {
+  "branch-child": {
+    id: "cg-e2e-001",
+    available_branches: ["branch-root", "branch-child"],
+    nodes: [
+      {
+        id: "n2",
+        key: "stance_shift",
+        type: "stance_shift",
+        label: "Analysts shift dovish",
+        round: 2,
+        payload: { agent_id: "macro-desk", emotion: "cautious", stance_score: -0.45, branch_id: "branch-root" },
+      },
+      {
+        id: "n3",
+        key: "policy_change",
+        type: "event",
+        label: "Central bank responds",
+        round: 3,
+        payload: { agent_id: "policy-board", emotion: "decisive", stance_score: 0.6, branch_id: "branch-child" },
+      },
+    ],
+    edges: [
+      { id: "e2", source: "n2", target: "n3", type: "influenced", weight: 0.6, label: "influenced" },
+    ],
+  },
 };
 
 // ── Route Interceptor Setup ──────────────────────────────
@@ -293,9 +330,12 @@ async function installFixtures(page) {
     }
     return route.continue();
   });
-  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAUSAL_GRAPH_FIXTURE) }),
-  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph*`, (route) => {
+    const url = new URL(route.request().url());
+    const branchId = url.searchParams.get("branch_id");
+    const fixture = branchId ? (CAUSAL_GRAPH_FILTERED_FIXTURES[branchId] ?? CAUSAL_GRAPH_FIXTURE) : CAUSAL_GRAPH_FIXTURE;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture) });
+  });
 }
 
 // ── Test Flows ───────────────────────────────────────────
@@ -307,12 +347,12 @@ async function testAgentWorkshop(page, baseUrl, outputDir) {
 
   // Navigate to workshop
   await page.goto(`${baseUrl}/agents/new`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1000);
+  const nameInput = page.locator('#agent-name').first();
+  const roleInput = page.locator('#agent-role').first();
+  await nameInput.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await saveScreenshot(page, path.join(stepDir, "01-workshop-loaded.png"));
 
   // Check form elements exist
-  const nameInput = page.locator('#agent-name').first();
-  const roleInput = page.locator('#agent-role').first();
   const hasForm = await nameInput.isVisible().catch(() => false);
   results.steps.push({ name: "workshop-form-visible", passed: hasForm });
   if (!hasForm) { results.passed = false; return results; }
@@ -384,7 +424,7 @@ async function testAgentLibraryAndProfile(page, baseUrl, outputDir) {
     results.steps.push({ name: "growth-event-visible", passed: hasEvent });
 
     // Close modal
-    const closeBtn = page.locator('dialog button[aria-label="Close"]').first();
+    const closeBtn = page.locator('dialog button[aria-label="Close"], dialog button[aria-label="关闭"]').first();
     if (await closeBtn.isVisible()) {
       await closeBtn.click();
       await page.waitForTimeout(300);
@@ -414,7 +454,7 @@ async function testCausalMap(page, baseUrl, outputDir) {
 
   // Navigate to causal map
   await page.goto(`${baseUrl}/sim/${FIXTURE_SCENARIO_ID}/causal-map`, { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+  await page.getByText(/Causal Graph|因果图谱/i).waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await saveScreenshot(page, path.join(stepDir, "01-causal-map-loaded.png"));
 
   // Check ReactFlow container rendered
@@ -428,12 +468,12 @@ async function testCausalMap(page, baseUrl, outputDir) {
   results.steps.push({ name: "controls-visible", passed: hasControls });
 
   // Check node count label
-  const nodeCount = page.getByText("3 nodes");
+  const nodeCount = page.getByText(/3 (nodes|节点)/);
   const hasNodeCount = await nodeCount.isVisible().catch(() => false);
   results.steps.push({ name: "node-count-correct", passed: hasNodeCount });
 
   // Check edge count label
-  const edgeCount = page.getByText("2 edges");
+  const edgeCount = page.getByText(/2 (edges|连线)/);
   const hasEdgeCount = await edgeCount.isVisible().catch(() => false);
   results.steps.push({ name: "edge-count-correct", passed: hasEdgeCount });
 
@@ -500,6 +540,32 @@ async function testCausalMap(page, baseUrl, outputDir) {
     results.steps.push({ name: "sr-fallback-list-has-items", passed: srItemCount > 0 });
   }
 
+  const branchSelect = page.getByLabel(/Select branch|选择分支/i).first();
+  const hasBranchSelect = await branchSelect.isVisible().catch(() => false);
+  results.steps.push({ name: "branch-selector-visible", passed: hasBranchSelect });
+  if (hasBranchSelect) {
+    const branchResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph?branch_id=branch-child`),
+      { timeout: 5000 },
+    ).then(() => true).catch(() => false);
+    await branchSelect.selectOption("branch-child");
+    const branchQueryApplied = await page.waitForURL(
+      (url) => url.searchParams.get("branch_id") === "branch-child",
+      { timeout: 5000 },
+    ).then(() => true).catch(() => false);
+    results.steps.push({ name: "branch-selector-updates-url", passed: branchQueryApplied });
+    const branchResponseSeen = await branchResponsePromise;
+    const filteredCountVisible = branchResponseSeen
+      ? await page.getByText(/2 (nodes|节点)/).isVisible({ timeout: 5000 }).catch(() => false)
+      : false;
+    results.steps.push({ name: "branch-filtered-count-visible", passed: filteredCountVisible });
+    results.steps.push({
+      name: "branch-filter-request-sent",
+      passed: branchResponseSeen,
+    });
+  }
+
   return results;
 }
 
@@ -516,7 +582,10 @@ async function runSurface(mode, viewport) {
   const browser = await chromium.launch({
     headless: process.env.HEADLESS !== "0",
   });
-  const context = await browser.newContext({ viewport, acceptDownloads: true });
+  const context = await browser.newContext({ viewport, acceptDownloads: true, locale: E2E_LOCALE });
+  await context.addInitScript(({ storageKey, language }) => {
+    window.localStorage.setItem(storageKey, language);
+  }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
   const page = await context.newPage();
   const browserIssues = attachBrowserIssueMonitor(page);
 
@@ -570,6 +639,11 @@ async function runSurface(mode, viewport) {
   return allResults;
 }
 
+export const __test__ = {
+  runNamedTest,
+  summarizeRun,
+};
+
 // ── Main ─────────────────────────────────────────────────
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
@@ -602,7 +676,9 @@ async function main() {
   if (!overallSummary.allPassed) process.exitCode = 1;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (IS_MAIN_MODULE) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

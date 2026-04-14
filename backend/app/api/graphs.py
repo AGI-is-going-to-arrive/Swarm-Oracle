@@ -54,10 +54,23 @@ async def get_causal_graph(
     """Return the causal graph for a scenario."""
     if not settings.FEATURE_CAUSAL_GRAPH:
         raise _feature_disabled("causal_graph")
+    normalized_branch_id = branch_id.strip() or None if branch_id is not None else None
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
-
-    graph = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=branch_id)
+        if normalized_branch_id is not None:
+            branch_exists = session.exec(
+                select(Branch.id).where(
+                    Branch.id == normalized_branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch_exists is None:
+                raise api_error(
+                    404,
+                    "BRANCH_NOT_FOUND",
+                    f"Branch {normalized_branch_id} not found in scenario",
+                )
+    graph = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=normalized_branch_id)
     return graph
 
 

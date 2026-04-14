@@ -9,6 +9,12 @@ const DIST_ASSETS_DIR = path.join(FRONTEND_ROOT, "dist", "assets");
 
 const FILE_BUDGETS = [
   {
+    label: "vendor chunk",
+    pattern: /^vendor-.*\.js$/,
+    maxBytes: 700 * 1024,
+    maxGzipBytes: 230 * 1024,
+  },
+  {
     label: "phaser chunk",
     pattern: /^phaser-.*\.js$/,
     maxBytes: 760 * 1024,
@@ -72,28 +78,33 @@ async function getDirectorySize(dirPath) {
   return total;
 }
 
-async function resolveFileBudgetMatch(pattern) {
+async function resolveFileBudgetMatches(pattern) {
   const entries = await listFiles(DIST_ASSETS_DIR);
-  const match = entries.find((entry) => entry.isFile() && pattern.test(entry.name));
-  if (!match) {
+  const matches = entries
+    .filter((entry) => entry.isFile() && pattern.test(entry.name))
+    .map((entry) => path.join(DIST_ASSETS_DIR, entry.name))
+    .sort();
+  if (matches.length === 0) {
     throw new Error(`Missing dist asset matching ${pattern}`);
   }
-  return path.join(DIST_ASSETS_DIR, match.name);
+  return matches;
 }
 
 async function evaluateFileBudget(budget) {
-  const filePath = await resolveFileBudgetMatch(budget.pattern);
-  const bytes = await fs.readFile(filePath);
-  const gzipBytes = gzipSync(bytes).length;
-  return {
-    label: budget.label,
-    file: path.relative(FRONTEND_ROOT, filePath),
-    bytes: bytes.length,
-    gzipBytes,
-    maxBytes: budget.maxBytes,
-    maxGzipBytes: budget.maxGzipBytes,
-    withinBudget: bytes.length <= budget.maxBytes && gzipBytes <= budget.maxGzipBytes,
-  };
+  const filePaths = await resolveFileBudgetMatches(budget.pattern);
+  return await Promise.all(filePaths.map(async (filePath) => {
+    const bytes = await fs.readFile(filePath);
+    const gzipBytes = gzipSync(bytes).length;
+    return {
+      label: budget.label,
+      file: path.relative(FRONTEND_ROOT, filePath),
+      bytes: bytes.length,
+      gzipBytes,
+      maxBytes: budget.maxBytes,
+      maxGzipBytes: budget.maxGzipBytes,
+      withinBudget: bytes.length <= budget.maxBytes && gzipBytes <= budget.maxGzipBytes,
+    };
+  }));
 }
 
 async function evaluateDirectoryBudget(budget) {
@@ -108,7 +119,7 @@ async function evaluateDirectoryBudget(budget) {
 }
 
 async function main() {
-  const fileResults = await Promise.all(FILE_BUDGETS.map(evaluateFileBudget));
+  const fileResults = (await Promise.all(FILE_BUDGETS.map(evaluateFileBudget))).flat();
   const directoryResults = await Promise.all(DIRECTORY_BUDGETS.map(evaluateDirectoryBudget));
 
   const violations = [

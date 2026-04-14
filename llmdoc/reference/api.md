@@ -200,6 +200,10 @@
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
+- `GET /api/scenario/{id}/causal-graph` 当前会先 `trim` `branch_id`：
+  - 空白值按未过滤处理
+  - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
+  - 成功返回体仍会带 `available_branches`
 - 当 `SESSION_SECRET` 非空时：
   - agent identity / workshop 当前要求 signed principal token
   - 读取 scenario owner 资源的 graph / counterfactual / checkpoints / faction-timeline 也会按 principal 收口

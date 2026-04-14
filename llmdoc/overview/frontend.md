@@ -246,6 +246,7 @@
   分支 selector 当前直接显示完整 branch id，不再截成相同前缀的短标签。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
+- URL 里如果带了不存在的 `branch_id`，`CausalReviewView` 当前会直接显示后端错误，不再把未知分支伪装成空图。
 - `CausalReviewView` 当前在大图走 text fallback 时会隐藏导出按钮。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），不会挡住节点点击；移动端同口径。
@@ -261,8 +262,12 @@
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `phase3-batch-a` 当前除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
+- `phase3-batch-a` 当前也会检查 branch selector 真的发出带 `branch_id` 的请求，default / `zh-CN` locale 走同一条 fixture 口径。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的 `Export SVG`、verdict 节点、节点点击打开详情、详情文本、accepted 状态与关闭动作。
+- `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：错误态需要显示失败文案和 `Retry`，同时隐藏图和导出。
+- `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
+- graph-viz 相关构建回归当前也会检查共享 `vendor` chunk 的 perf budget，不再只看 `phaser / capture-html / flow-vendor`。
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`

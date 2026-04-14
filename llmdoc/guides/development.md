@@ -164,37 +164,43 @@ source .venv/bin/activate
 python -m pytest tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
 # 更宽一点的 backend smoke，用来兜住相邻 API / service 回归；不是 graph 专项断言
 python -m pytest tests/test_api.py tests/test_debate_service.py -q
-python -m ruff check app/services/causal_graph.py app/services/debate_argument_map.py tests/test_causal_graph.py tests/test_debate_argument_map.py
+python -m ruff check app/api/graphs.py app/services/causal_graph.py app/services/debate_argument_map.py tests/test_api.py tests/test_causal_graph.py tests/test_debate_argument_map.py
 
 cd ../frontend
 npm test -- --run src/lib/manualChunks.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 npm run build
+npm run perf:budgets:check
 
 # These two scripts use page.route() fixtures.
 # They do not need a live backend, but they do need a reachable frontend host.
 npm run preview -- --host 127.0.0.1 --port 18930
 SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
 SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
+# Optional locale smoke
+SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
+SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 ```
 
 说明：
 
 - 本轮实测结果：
   - backend graph / debate 定向 `193 passed`
-  - backend 相邻 `api / service` smoke `151 passed`
+  - backend 相邻 `api / service` smoke `153 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `92 passed`
-  - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` 通过
-  - `phase3-batch-a full` `29/29`，desktop / mobile 全通过
-  - `phase3-batch-b full` `34/34`，desktop / mobile 全通过
+  - frontend graph suite `96 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
+  - `phase3-batch-a full` `33/33`，default / `zh-CN` locale 都通过
+  - `phase3-batch-b full` `39/39`，default / `zh-CN` locale 都通过
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
+  - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，不再只看 `phaser / capture-html / flow-vendor`
   - `CausalReviewView` 分支 selector：
     - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
     - 较旧分支请求的返回不会覆盖较新的分支结果
+    - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
     - text fallback 路径会隐藏 export controls
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
   - `ArgumentMap`
@@ -220,6 +226,7 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView` 基础渲染
+  - branch selector 会把 `branch_id` 真正写回 URL，并发出过滤请求
   - graph export 按钮可见，且 `Export SVG` 实际触发下载
   - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
   - screen-reader fallback list 确实存在，且至少有 1 条 list item
@@ -230,9 +237,11 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
   - `Export SVG` 实际触发下载
   - verdict node 可见
   - graph node 点击后 `NodeDetailPanel` 打开、展示详情文本 / status，并可关闭
+  - fail-soft 错误态会显示失败文案和 `Retry`，同时隐藏图与导出
   - status filter 走到空态分支，并可 `Clear` 恢复图谱
   - compare theater 的 actor / message / bubble 状态都非空
   - 与结果页图谱接线是否还活着
+  - 脚本 summary 在 step 失败时会把测试名写进 `failedTests`
 - 两条 `phase3` 脚本当前都走 `page.route()` fixtures；fixture 命中的请求会继续按脚本内假数据完成，不需要 live backend
 - 两条 `phase3` 脚本现在按 fail-closed 收口浏览器侧异常：
   - 任意 `pageerror`

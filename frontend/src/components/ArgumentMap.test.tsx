@@ -67,6 +67,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const createDeferredResponse = () => {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
+
 // ── ArgumentMap main component ──────────────────────────────
 
 describe('ArgumentMap', () => {
@@ -207,6 +215,27 @@ describe('ArgumentMap', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     const msg = await screen.findByText(/Network error/i);
     expect(msg).toBeInTheDocument();
+  });
+
+  it('treats a 200 payload with json.error as load_failed and keeps graph/export hidden', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-error',
+        nodes: [],
+        edges: [],
+        units: [],
+        error: 'ARGUMENT_MAP_LOAD_FAILED',
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    expect(await screen.findByText('Load failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No argument map/)).not.toBeInTheDocument();
   });
 
   it('shows export panel when data has units', async () => {
@@ -354,6 +383,67 @@ describe('ArgumentMap', () => {
     // After re-fetch, detail panel should be gone
     await screen.findByTestId('reactflow');
     expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
+  });
+
+  it('ignores stale responses when debateId changes and a newer request resolves first', async () => {
+    const firstResponse = createDeferredResponse();
+    const secondResponse = createDeferredResponse();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/api/debate/d1/argument-map')) return firstResponse.promise;
+      if (url.includes('/api/debate/d2/argument-map')) return secondResponse.promise;
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    const { rerender } = render(<ArgumentMap debateId="d1" visible={true} />);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(<ArgumentMap debateId="d2" visible={true} />);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    secondResponse.resolve({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-new',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'New claim', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'New evidence', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'New claim', turn_id: 't2', node_id: 'n1' },
+          { id: 'u2', type: 'evidence', status: 'accepted', text: 'New evidence', turn_id: 't2', node_id: 'n2' },
+        ],
+      }),
+    } as Response);
+
+    const flow = await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(flow.getAttribute('data-nodes')).toBe('2');
+    });
+
+    firstResponse.resolve({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-old',
+        nodes: [
+          { id: 'old-1', key: 'old-k1', type: 'claim', label: 'Old claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'old-u1', type: 'claim', status: 'standing', text: 'Old claim', turn_id: 't1', node_id: 'old-1' },
+        ],
+      }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow').getAttribute('data-nodes')).toBe('2');
+    });
+    expect(screen.getByText(/2 units/)).toBeInTheDocument();
   });
 
   it('refits the viewport after status filters change the graph', async () => {

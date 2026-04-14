@@ -326,8 +326,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
+  const latestRequestIdRef = useRef(0);
 
   const fetchData = useCallback(async () => {
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
     setLoading(true);
     setSelectedNode(null);
     setErrorTier(null);
@@ -335,16 +338,20 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
       const res = await fetch(`/api/debate/${debateId}/argument-map`, {
         headers: buildSessionHeaders(),
       });
-      if (res.status === 401 || res.status === 403) { setErrorTier('unauthorized'); return; }
+      if (requestId !== latestRequestIdRef.current) return;
+      if (res.status === 401 || res.status === 403) { setErrorTier('unauthorized'); setData(null); return; }
       if (res.status === 404) {
         const body = await res.json().catch(() => ({}));
+        if (requestId !== latestRequestIdRef.current) return;
         setErrorTier(body?.detail?.code === 'FEATURE_DISABLED' ? 'disabled' : 'not_found');
+        setData(null);
         return;
       }
-      if (res.status === 501) { setErrorTier('disabled'); return; }
-      if (res.status >= 500) { setErrorTier('server_error'); return; }
-      if (!res.ok) { setErrorTier('server_error'); return; }
+      if (res.status === 501) { setErrorTier('disabled'); setData(null); return; }
+      if (res.status >= 500) { setErrorTier('server_error'); setData(null); return; }
+      if (!res.ok) { setErrorTier('server_error'); setData(null); return; }
       const json = await res.json();
+      if (requestId !== latestRequestIdRef.current) return;
       if (json.error) { setErrorTier('load_failed'); setData(null); return; }
       const mapped: ArgumentMapData = {
         snapshot_id: json.snapshot_id,
@@ -353,9 +360,15 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         units: Array.isArray(json.units) ? json.units.map((u: Record<string, unknown>) => mapBackendUnit(u)) : [],
       };
       const visualNodeCount = mapped.nodes.length > 0 ? mapped.nodes.length : mapped.units.length;
-      if (visualNodeCount > 2000) { setErrorTier('too_large'); return; }
+      if (visualNodeCount > 2000) { setErrorTier('too_large'); setData(null); return; }
       setData(mapped);
-    } catch { setErrorTier('network'); } finally { setLoading(false); }
+    } catch {
+      if (requestId !== latestRequestIdRef.current) return;
+      setErrorTier('network');
+      setData(null);
+    } finally {
+      if (requestId === latestRequestIdRef.current) setLoading(false);
+    }
   }, [debateId]);
 
   useEffect(() => {

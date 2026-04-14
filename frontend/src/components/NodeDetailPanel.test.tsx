@@ -16,7 +16,25 @@ vi.mock('react-i18next', () => ({
 
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 
-afterEach(() => { cleanup(); mockT.mockClear(); });
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+const originalExecCommand = document.execCommand;
+
+afterEach(() => {
+  cleanup();
+  mockT.mockClear();
+  if (originalClipboardDescriptor) {
+    Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+  } else {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+  }
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: originalExecCommand,
+  });
+});
 
 describe('NodeDetailPanel', () => {
   it('returns null when node is null', () => {
@@ -175,8 +193,6 @@ describe('NodeDetailPanel', () => {
   it('falls back when clipboard write is rejected', async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied'));
-    const originalClipboard = navigator.clipboard;
-    const originalExecCommand = document.execCommand;
     const execCommand = vi.fn().mockReturnValue(true);
 
     Object.defineProperty(navigator, 'clipboard', {
@@ -193,17 +209,11 @@ describe('NodeDetailPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Copy Reference' }));
 
     await waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
       expect(writeText).toHaveBeenCalledWith('copy-me');
+      expect(execCommand).toHaveBeenCalledTimes(1);
       expect(execCommand).toHaveBeenCalledWith('copy');
-    });
-
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: originalClipboard,
-    });
-    Object.defineProperty(document, 'execCommand', {
-      configurable: true,
-      value: originalExecCommand,
+      expect(document.querySelectorAll('textarea')).toHaveLength(0);
     });
   });
 
