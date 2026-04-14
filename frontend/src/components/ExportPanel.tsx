@@ -16,6 +16,12 @@ interface ExportPanelProps {
   filenamePrefix?: string;
 }
 
+const EXPORT_CHROME_SELECTORS = [
+  '.graph-export-chrome',
+  '.react-flow__controls',
+  '.react-flow__minimap',
+];
+
 function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 }
@@ -47,7 +53,36 @@ function cloneWithInlinedStyles(source: Element): HTMLElement {
       if (val) tgtEl.style.setProperty(prop, val);
     }
   });
+  EXPORT_CHROME_SELECTORS.forEach((selector) => {
+    clone.querySelectorAll(selector).forEach((element) => element.remove());
+  });
   return clone;
+}
+
+function hideExportChrome(root: Element): () => void {
+  const hiddenElements = Array.from(
+    new Set(
+      EXPORT_CHROME_SELECTORS.flatMap((selector) => Array.from(root.querySelectorAll<HTMLElement>(selector))),
+    ),
+  );
+  const previousDisplay = hiddenElements.map((element) => element.style.getPropertyValue('display'));
+  const previousPriority = hiddenElements.map((element) => element.style.getPropertyPriority('display'));
+
+  hiddenElements.forEach((element) => {
+    element.style.setProperty('display', 'none', 'important');
+  });
+
+  return () => {
+    hiddenElements.forEach((element, index) => {
+      const display = previousDisplay[index] ?? '';
+      const priority = previousPriority[index] ?? '';
+      if (display) {
+        element.style.setProperty('display', display, priority || undefined);
+      } else {
+        element.style.removeProperty('display');
+      }
+    });
+  };
 }
 
 export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: ExportPanelProps) {
@@ -58,7 +93,15 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
     setStatus('exporting');
     try {
       const { captureElementBlob } = await import('../hooks/screenCaptureRuntime');
-      const blob = await captureElementBlob(containerSelector, 'element');
+      const container = document.querySelector(containerSelector);
+      if (!container) {
+        setStatus('idle');
+        return;
+      }
+      const restoreChrome = hideExportChrome(container);
+      const blob = await captureElementBlob(containerSelector, 'element').finally(() => {
+        restoreChrome();
+      });
       if (blob) {
         downloadBlob(blob, `${filenamePrefix}_${timestamp()}.png`);
       }

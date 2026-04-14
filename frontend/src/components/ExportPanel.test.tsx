@@ -48,6 +48,9 @@ describe('ExportPanel', () => {
   it('PNG button calls captureElementBlob and triggers download', async () => {
     const mockBlob = new Blob(['png'], { type: 'image/png' });
     mockCaptureElementBlob.mockResolvedValue(mockBlob);
+    const container = document.createElement('div');
+    container.className = 'my-graph';
+    document.body.appendChild(container);
 
     const appendSpy = vi.spyOn(document.body, 'appendChild');
 
@@ -66,10 +69,14 @@ describe('ExportPanel', () => {
     expect(anchors[0].download).toMatch(/^test_.*\.png$/);
 
     appendSpy.mockRestore();
+    document.body.removeChild(container);
   });
 
   it('PNG button recovers to idle when captureElementBlob returns null', async () => {
     mockCaptureElementBlob.mockResolvedValue(null);
+    const container = document.createElement('div');
+    container.className = 'missing';
+    document.body.appendChild(container);
 
     const user = userEvent.setup();
     render(<ExportPanel containerSelector=".missing" />);
@@ -78,6 +85,7 @@ describe('ExportPanel', () => {
     // No crash, button is re-enabled
     expect(screen.getByText('Export PNG')).not.toBeDisabled();
     expect(mockCaptureElementBlob).toHaveBeenCalledOnce();
+    document.body.removeChild(container);
   });
 
   it('SVG button does not crash when container is missing', async () => {

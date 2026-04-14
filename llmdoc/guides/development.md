@@ -161,10 +161,10 @@ npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.tes
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
+python -m pytest tests/test_counterfactual.py tests/test_resume.py tests/test_runtime_lock.py tests/test_fallback_migrations.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
 # 更宽一点的 backend smoke，用来兜住相邻 API / service 回归；不是 graph 专项断言
 python -m pytest tests/test_api.py tests/test_debate_service.py -q
-python -m ruff check app/api/graphs.py app/services/causal_graph.py app/services/debate_argument_map.py tests/test_api.py tests/test_causal_graph.py tests/test_debate_argument_map.py
+python -m ruff check app/api/graphs.py app/api/helpers.py app/services/runtime_lock.py app/services/causal_graph.py app/services/debate_argument_map.py app/models/checkpoint.py alembic/versions/021_scope_debate_argument_unit_dedup_per_turn.py tests/test_counterfactual.py tests/test_resume.py tests/test_runtime_lock.py tests/test_fallback_migrations.py tests/test_causal_graph.py tests/test_debate_argument_map.py
 
 cd ../frontend
 npm test -- --run src/lib/manualChunks.test.ts src/lib/performanceBudgets.test.ts src/lib/exportValidation.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
@@ -186,14 +186,15 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
 说明：
 
 - 本轮实测结果：
-  - backend graph / debate 定向 `193 passed`
-  - backend 相邻 `api / service` smoke `153 passed`
+  - backend graph / replay / migration 定向 `256 passed`
+  - backend 相邻 `api / service` smoke `154 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `102 passed`
+  - frontend graph suite `111 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
-  - `phase3-batch-a full` `33/33`，default / `zh-CN` locale 都通过
-  - `phase3-batch-b full` `39/39`，default / `zh-CN` locale 都通过
-  - backend 全量 `python -m pytest -x -q` 本轮实测 `2015 passed, 2 skipped`
+  - `phase3-batch-a full` `34/34`，default / `zh-CN` locale 都通过
+  - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
+  - backend 全量 `python -m pytest -q` 本轮实测 `2033 passed, 2 skipped`
+  - frontend 全量 `npm test` 本轮实测 `979 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
@@ -202,7 +203,7 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
     - 较旧分支请求的返回不会覆盖较新的分支结果
     - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
-    - text fallback 路径会隐藏 export controls
+    - text fallback 路径会隐藏 export controls，并只保留一条具名的 a11y list
     - 结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
   - `ArgumentMap`
@@ -216,6 +217,10 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
     - `020` migration 对 runtime schema repair 先跑的路径保持兼容
     - causal graph 读取 legacy duplicate snapshot 时优先取最新一份
     - causal append 幂等
+    - replay branch runtime lock 当前会续租；慢 clone / seed 不会再因为 lease 过期突破共享上限
+    - `resume` 当前会先预占 simulation lock，不再出现 `201` 已返回但后台实际没启动的假成功
+    - `counterfactual` 当前会在 clone 前先校验目标 agent message；同 agent 同轮多消息时要求显式选定 source message，seed 失败也会清理掉新建 branch
+    - `021` migration 当前会移除 legacy `debate_id + semantic_hash` 约束，并在升级前清理同 turn 的脏重复行
     - same-round sibling branch 节点隔离（含 `id=None`）
     - same-round 重复 `msg.id` 当前会继续按 branch 与 agent 隔离
     - 同 agent 同轮多消息

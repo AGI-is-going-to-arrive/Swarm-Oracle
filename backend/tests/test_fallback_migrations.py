@@ -7,6 +7,87 @@ from sqlalchemy import create_engine, inspect, text
 from sqlmodel import SQLModel
 
 
+def _build_alembic_config(database_module, Config, db_url: str):
+    backend_root = Path(database_module.__file__).resolve().parents[2]
+    alembic_config = Config(str(backend_root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(backend_root / "alembic"))
+    alembic_config.set_main_option("sqlalchemy.url", db_url)
+    alembic_config.attributes["configure_logging"] = False
+    return backend_root, alembic_config
+
+
+def _recreate_debate_argument_unit_with_unique_constraint(
+    conn,
+    *,
+    constraint_name: str,
+    unique_columns: tuple[str, ...],
+) -> None:
+    conn.execute(text("DROP INDEX IF EXISTS ix_debate_argument_unit_debate_id"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_debate_argument_unit_semantic_hash"))
+    conn.execute(text("ALTER TABLE debate_argument_unit RENAME TO debate_argument_unit_old"))
+    unique_sql = ", ".join(unique_columns)
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE debate_argument_unit (
+                id VARCHAR NOT NULL,
+                debate_id VARCHAR NOT NULL,
+                turn_id VARCHAR NOT NULL,
+                node_id VARCHAR NOT NULL,
+                unit_type VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'standing',
+                canonical_text TEXT NOT NULL DEFAULT '',
+                semantic_hash VARCHAR NOT NULL DEFAULT '',
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY (id),
+                CONSTRAINT {constraint_name} UNIQUE ({unique_sql})
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            INSERT INTO debate_argument_unit (
+                id,
+                debate_id,
+                turn_id,
+                node_id,
+                unit_type,
+                status,
+                canonical_text,
+                semantic_hash,
+                created_at
+            )
+            SELECT
+                id,
+                debate_id,
+                turn_id,
+                node_id,
+                unit_type,
+                status,
+                canonical_text,
+                semantic_hash,
+                created_at
+            FROM debate_argument_unit_old
+            """
+        )
+    )
+    conn.execute(text("DROP TABLE debate_argument_unit_old"))
+    conn.execute(
+        text(
+            "CREATE INDEX ix_debate_argument_unit_debate_id "
+            "ON debate_argument_unit (debate_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX ix_debate_argument_unit_semantic_hash "
+            "ON debate_argument_unit (semantic_hash)"
+        )
+    )
+
+
 def test_init_db_upgrades_empty_sqlite_to_current_head(tmp_path, monkeypatch):
     """Empty SQLite files should be upgraded to the current Alembic head."""
     from app.config import settings
@@ -47,9 +128,7 @@ def test_init_db_upgrades_empty_sqlite_to_current_head(tmp_path, monkeypatch):
     with database_module.get_engine().connect() as conn:
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    backend_root = Path(database_module.__file__).resolve().parents[2]
-    alembic_config = Config(str(backend_root / "alembic.ini"))
-    alembic_config.set_main_option("script_location", str(backend_root / "alembic"))
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
 
     assert revision == expected_head
@@ -118,6 +197,7 @@ def test_sqlmodel_metadata_matches_alembic_constraint_semantics(tmp_path, monkey
         "agent_relation_edge",
         "agent_state_frame",
         "debate",
+        "debate_argument_unit",
         "director_profile",
         "ending_room",
         "prediction",
@@ -153,11 +233,7 @@ def test_init_db_stamps_legacy_ending_room_schema_before_upgrade(tmp_path, monke
     settings.DATABASE_URL = db_url
     database_module.dispose_engine()
 
-    backend_root = Path(database_module.__file__).resolve().parents[2]
-    alembic_config = Config(str(backend_root / "alembic.ini"))
-    alembic_config.set_main_option("script_location", str(backend_root / "alembic"))
-    alembic_config.set_main_option("sqlalchemy.url", db_url)
-    alembic_config.attributes["configure_logging"] = False
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
 
     command.upgrade(alembic_config, "016_checkpoint_faction_argument_tables")
 
@@ -186,4 +262,628 @@ def test_init_db_stamps_legacy_ending_room_schema_before_upgrade(tmp_path, monke
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
     assert revision == expected_head
 
+    database_module.dispose_engine()
+
+
+def test_init_db_replaces_legacy_debate_argument_unit_unique_constraint(tmp_path, monkeypatch):
+    """Legacy debate_id+semantic_hash uniqueness should not survive upgrade to head."""
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "legacy-debate-constraint.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "020_harden_graph_snapshot_and_state_frame_constraints")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        _recreate_debate_argument_unit_with_unique_constraint(
+            conn,
+            constraint_name="uq_debate_argument_unit_debate_hash",
+            unique_columns=("debate_id", "semantic_hash"),
+        )
+
+    database_module.init_db()
+
+    upgraded_engine = database_module.get_engine()
+    inspector = inspect(upgraded_engine)
+    unique_sets = {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("debate_argument_unit")
+    }
+    assert unique_sets == {("debate_id", "turn_id", "semantic_hash")}
+
+    with upgraded_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES (
+                    'unit-turn-1',
+                    'debate-1',
+                    'turn-1',
+                    'node-1',
+                    'claim',
+                    'standing',
+                    'Claim text',
+                    'same-hash',
+                    '2026-04-14T20:00:00'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES (
+                    'unit-turn-2',
+                    'debate-1',
+                    'turn-2',
+                    'node-2',
+                    'claim',
+                    'standing',
+                    'Claim text',
+                    'same-hash',
+                    '2026-04-14T20:00:01'
+                )
+                """
+            )
+        )
+        row_count = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM debate_argument_unit
+                WHERE debate_id = 'debate-1'
+                  AND semantic_hash = 'same-hash'
+                """
+            )
+        ).scalar_one()
+
+    assert row_count == 2
+
+    with upgraded_engine.connect() as conn:
+        revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert revision == expected_head
+
+    legacy_engine.dispose()
+    database_module.dispose_engine()
+
+
+def test_init_db_lightweight_fallback_replaces_legacy_debate_argument_unit_unique_constraint(
+    tmp_path,
+    monkeypatch,
+):
+    """Lightweight fallback should still repair legacy debate hash uniqueness."""
+    import app.models  # noqa: F401  # Ensure all model modules are registered
+    from app.config import settings
+    from app.models import database as database_module
+
+    db_path = tmp_path / "legacy-debate-constraint-lightweight.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    legacy_engine = create_engine(db_url)
+    SQLModel.metadata.create_all(legacy_engine)
+    with legacy_engine.begin() as conn:
+        _recreate_debate_argument_unit_with_unique_constraint(
+            conn,
+            constraint_name="uq_debate_argument_unit_debate_hash",
+            unique_columns=("debate_id", "semantic_hash"),
+        )
+
+    monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)
+
+    database_module.init_db()
+
+    upgraded_engine = database_module.get_engine()
+    inspector = inspect(upgraded_engine)
+    unique_sets = {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("debate_argument_unit")
+    }
+    assert unique_sets == {("debate_id", "turn_id", "semantic_hash")}
+
+    with upgraded_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES (
+                    'unit-lightweight-1',
+                    'debate-lightweight',
+                    'turn-1',
+                    'node-lightweight-1',
+                    'claim',
+                    'standing',
+                    'Claim text',
+                    'same-hash',
+                    '2026-04-14T20:10:00'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES (
+                    'unit-lightweight-2',
+                    'debate-lightweight',
+                    'turn-2',
+                    'node-lightweight-2',
+                    'claim',
+                    'standing',
+                    'Claim text',
+                    'same-hash',
+                    '2026-04-14T20:10:01'
+                )
+                """
+            )
+        )
+        row_count = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM debate_argument_unit
+                WHERE debate_id = 'debate-lightweight'
+                  AND semantic_hash = 'same-hash'
+                """
+            )
+        ).scalar_one()
+
+    assert row_count == 2
+
+    legacy_engine.dispose()
+    database_module.dispose_engine()
+
+
+def test_init_db_deduplicates_dirty_debate_argument_units_before_021_upgrade(
+    tmp_path,
+    monkeypatch,
+):
+    """Upgrade should drop duplicate rows per debate/turn/hash and keep the newest row."""
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "dirty-debate-argument-unit.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "020_harden_graph_snapshot_and_state_frame_constraints")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES
+                    (
+                        'unit-old',
+                        'debate-dirty',
+                        'turn-1',
+                        'node-old',
+                        'claim',
+                        'standing',
+                        'Old duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:00:00'
+                    ),
+                    (
+                        'unit-mid',
+                        'debate-dirty',
+                        'turn-1',
+                        'node-mid',
+                        'claim',
+                        'standing',
+                        'Mid duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:00:01'
+                    ),
+                    (
+                        'unit-new',
+                        'debate-dirty',
+                        'turn-1',
+                        'node-new',
+                        'rebuttal',
+                        'accepted',
+                        'Newest duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:00:02'
+                    ),
+                    (
+                        'unit-other-turn',
+                        'debate-dirty',
+                        'turn-2',
+                        'node-other',
+                        'claim',
+                        'standing',
+                        'Later turn survives',
+                        'dup-hash',
+                        '2026-04-14T20:00:03'
+                    )
+                """
+            )
+        )
+
+    database_module.init_db()
+
+    upgraded_engine = database_module.get_engine()
+    inspector = inspect(upgraded_engine)
+    unique_sets = {
+        tuple(constraint["column_names"])
+        for constraint in inspector.get_unique_constraints("debate_argument_unit")
+    }
+    assert unique_sets == {("debate_id", "turn_id", "semantic_hash")}
+
+    with upgraded_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT id, node_id, unit_type, status, canonical_text, created_at
+                FROM debate_argument_unit
+                WHERE debate_id = :debate_id
+                  AND semantic_hash = :semantic_hash
+                ORDER BY turn_id, created_at
+                """
+            ),
+            {"debate_id": "debate-dirty", "semantic_hash": "dup-hash"},
+        ).fetchall()
+        revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    assert rows == [
+        (
+            "unit-new",
+            "node-new",
+            "rebuttal",
+            "accepted",
+            "Newest duplicate",
+            "2026-04-14T20:00:02",
+        ),
+        (
+            "unit-other-turn",
+            "node-other",
+            "claim",
+            "standing",
+            "Later turn survives",
+            "2026-04-14T20:00:03",
+        ),
+    ]
+
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert revision == expected_head
+
+    legacy_engine.dispose()
+    database_module.dispose_engine()
+
+
+def test_021_upgrade_removes_orphan_argument_graph_rows_for_deleted_duplicates(
+    tmp_path,
+    monkeypatch,
+):
+    """Dedup migration should delete stale graph nodes and edges for removed units."""
+    from app.config import settings
+    from app.models import database as database_module
+    from app.services.debate_argument_map import get_argument_map
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "dirty-debate-argument-graph.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "020_harden_graph_snapshot_and_state_frame_constraints")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_snapshot (
+                    id,
+                    owner_type,
+                    owner_id,
+                    graph_kind,
+                    created_at
+                ) VALUES (
+                    'snapshot-argument-map',
+                    'debate',
+                    'debate-orphan-graph',
+                    'argument_map',
+                    '2026-04-14T20:20:00'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_node (
+                    id,
+                    snapshot_id,
+                    node_key,
+                    node_type,
+                    label,
+                    round_number,
+                    ref_model,
+                    ref_id,
+                    payload_json
+                ) VALUES
+                    (
+                        'node-verdict',
+                        'snapshot-argument-map',
+                        'verdict',
+                        'verdict',
+                        'Verdict',
+                        1,
+                        'debate',
+                        'debate-orphan-graph',
+                        '{}'
+                    ),
+                    (
+                        'node-old',
+                        'snapshot-argument-map',
+                        'claim-old',
+                        'claim',
+                        'Old duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    ),
+                    (
+                        'node-mid',
+                        'snapshot-argument-map',
+                        'claim-mid',
+                        'claim',
+                        'Mid duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    ),
+                    (
+                        'node-new',
+                        'snapshot-argument-map',
+                        'claim-new',
+                        'claim',
+                        'Newest duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_edge (
+                    id,
+                    snapshot_id,
+                    source_node_id,
+                    target_node_id,
+                    edge_type,
+                    weight,
+                    label,
+                    payload_json
+                ) VALUES
+                    (
+                        'edge-old',
+                        'snapshot-argument-map',
+                        'node-verdict',
+                        'node-old',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    ),
+                    (
+                        'edge-mid',
+                        'snapshot-argument-map',
+                        'node-verdict',
+                        'node-mid',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    ),
+                    (
+                        'edge-new',
+                        'snapshot-argument-map',
+                        'node-verdict',
+                        'node-new',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES
+                    (
+                        'unit-old',
+                        'debate-orphan-graph',
+                        'turn-1',
+                        'node-old',
+                        'claim',
+                        'standing',
+                        'Old duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:20:00'
+                    ),
+                    (
+                        'unit-mid',
+                        'debate-orphan-graph',
+                        'turn-1',
+                        'node-mid',
+                        'claim',
+                        'standing',
+                        'Mid duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:20:01'
+                    ),
+                    (
+                        'unit-new',
+                        'debate-orphan-graph',
+                        'turn-1',
+                        'node-new',
+                        'claim',
+                        'accepted',
+                        'Newest duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:20:02'
+                    )
+                """
+            )
+        )
+
+    database_module.init_db()
+
+    upgraded_engine = database_module.get_engine()
+    with upgraded_engine.connect() as conn:
+        node_ids = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM graph_node
+                    WHERE snapshot_id = 'snapshot-argument-map'
+                    ORDER BY id
+                    """
+                )
+            ).fetchall()
+        ]
+        edge_ids = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM graph_edge
+                    WHERE snapshot_id = 'snapshot-argument-map'
+                    ORDER BY id
+                    """
+                )
+            ).fetchall()
+        ]
+
+    result = get_argument_map("debate-orphan-graph")
+
+    assert node_ids == ["node-new", "node-verdict"]
+    assert edge_ids == ["edge-new"]
+    assert {node["id"] for node in result["nodes"]} == {"node-new", "node-verdict"}
+    assert {node["label"] for node in result["nodes"]} == {"Newest duplicate", "Verdict"}
+    assert result["edges"] == [
+        {
+            "id": "edge-new",
+            "source": "node-verdict",
+            "target": "node-new",
+            "type": "accepted",
+            "weight": 1.0,
+            "label": None,
+        }
+    ]
+    assert result["units"] == [
+        {
+            "id": "unit-new",
+            "type": "claim",
+            "status": "accepted",
+            "text": "Newest duplicate",
+            "turn_id": "turn-1",
+            "node_id": "node-new",
+        }
+    ]
+
+    legacy_engine.dispose()
     database_module.dispose_engine()

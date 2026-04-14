@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 _ENDING_ROOM_PREVIOUS_REVISION = "016_checkpoint_faction_argument_tables"
 _ENDING_ROOM_REVISION = "017_add_ending_room_tables"
+_DEBATE_ARGUMENT_UNIT_TARGET_UNIQUE_COLUMNS = ("debate_id", "turn_id", "semantic_hash")
+_DEBATE_ARGUMENT_UNIT_LEGACY_UNIQUE_COLUMNS = ("debate_id", "semantic_hash")
 _ENDING_ROOM_SCHEMA_COLUMNS = {
     "ending_room": {
         "scenario_id",
@@ -306,9 +308,10 @@ def _load_alembic_runtime():
             for entry in original_path
             if str(Path(entry or ".").resolve()) not in blocked_paths
         ]
-        from alembic import command as alembic_command
         from alembic.config import Config
         from alembic.script import ScriptDirectory
+
+        from alembic import command as alembic_command
 
         return Config, alembic_command, ScriptDirectory
     except ModuleNotFoundError:
@@ -318,7 +321,11 @@ def _load_alembic_runtime():
 
 
 def _current_alembic_revision(connection) -> str | None:
-    table_names = set(connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars())
+    table_names = set(
+        connection.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).scalars()
+    )
     if "alembic_version" not in table_names:
         return None
     row = connection.exec_driver_sql("SELECT version_num FROM alembic_version").first()
@@ -388,7 +395,12 @@ def _init_db_lightweight() -> None:
             _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
             _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
             _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
-            _migrate_add_column(conn, "ending_room", "memory_partition_version", "INTEGER DEFAULT 2")
+            _migrate_add_column(
+                conn,
+                "ending_room",
+                "memory_partition_version",
+                "INTEGER DEFAULT 2",
+            )
             _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
             _migrate_add_column(
                 conn,
@@ -409,8 +421,18 @@ def _init_db_lightweight() -> None:
             _migrate_add_column(conn, "ending_room_turn", "memory_partition_id", "TEXT")
             _migrate_add_column(conn, "ending_room_turn", "addressed_agent_ids_json", "TEXT")
             _migrate_add_column(conn, "ending_room_turn", "question_anchor_ids_json", "TEXT")
-            _migrate_add_column(conn, "scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0")
-            _migrate_add_column(conn, "scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0")
+            _migrate_add_column(
+                conn,
+                "scenario_campaign_log",
+                "objective_completed_count",
+                "INTEGER DEFAULT 0",
+            )
+            _migrate_add_column(
+                conn,
+                "scenario_campaign_log",
+                "objective_total_count",
+                "INTEGER DEFAULT 0",
+            )
             _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
             _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
             _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
@@ -418,13 +440,25 @@ def _init_db_lightweight() -> None:
             _migrate_add_column(conn, "replay_artifact", "owner_user_id", "TEXT")
             _migrate_add_column(conn, "replay_artifact", "source_scenario_id", "TEXT")
             _migrate_add_column(conn, "debate", "user_id", "TEXT DEFAULT 'anonymous'")
+            try:
+                _migrate_repair_debate_argument_unit_unique_constraint(conn)
+            except Exception as exc:
+                logger.warning(
+                    "Debate argument unit constraint repair failed (best-effort): %s",
+                    exc,
+                )
 
             _migrate_create_index(conn, "agent_message", "ix_agent_message_round_id", ["round_id"])
             _migrate_create_index(conn, "agent_message", "ix_agent_message_agent_id", ["agent_id"])
             _migrate_create_index(conn, "agent", "ix_agent_identity_id", ["agent_identity_id"])
             _migrate_create_index(conn, "round", "ix_round_branch_id", ["branch_id"])
             _migrate_create_index(conn, "agent", "ix_agent_scenario_id", ["scenario_id"])
-            _migrate_create_index(conn, "agent_group", "ix_agent_group_scenario_id", ["scenario_id"])
+            _migrate_create_index(
+                conn,
+                "agent_group",
+                "ix_agent_group_scenario_id",
+                ["scenario_id"],
+            )
             _migrate_create_index(conn, "branch", "ix_branch_scenario_id", ["scenario_id"])
             _migrate_create_index(
                 conn,
@@ -474,9 +508,24 @@ def _init_db_lightweight() -> None:
                 "ix_ending_room_turn_room_sequence",
                 ["room_id", "sequence"],
             )
-            _migrate_create_index(conn, "ending_room_turn", "ix_ending_room_turn_thread_id", ["thread_id"])
-            _migrate_create_index(conn, "intervention_log", "ix_intervention_log_scenario_id", ["scenario_id"])
-            _migrate_create_index(conn, "intervention_log", "ix_intervention_log_branch_id", ["branch_id"])
+            _migrate_create_index(
+                conn,
+                "ending_room_turn",
+                "ix_ending_room_turn_thread_id",
+                ["thread_id"],
+            )
+            _migrate_create_index(
+                conn,
+                "intervention_log",
+                "ix_intervention_log_scenario_id",
+                ["scenario_id"],
+            )
+            _migrate_create_index(
+                conn,
+                "intervention_log",
+                "ix_intervention_log_branch_id",
+                ["branch_id"],
+            )
             _migrate_create_unique_index(
                 conn,
                 "prediction",
@@ -506,7 +555,12 @@ def _init_db_lightweight() -> None:
                     "created_at",
                 ],
             )
-            _migrate_create_index(conn, "replay_artifact", "ix_replay_artifact_owner_user_id", ["owner_user_id"])
+            _migrate_create_index(
+                conn,
+                "replay_artifact",
+                "ix_replay_artifact_owner_user_id",
+                ["owner_user_id"],
+            )
             _migrate_create_index(
                 conn,
                 "replay_artifact",
@@ -519,7 +573,12 @@ def _init_db_lightweight() -> None:
             _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
             _migrate_normalize_enum_values(conn, "ending_room", "phase", EndingRoomPhase)
             _migrate_normalize_enum_values(conn, "ending_room", "current_phase", EndingRoomPhase)
-            _migrate_normalize_enum_values(conn, "ending_room_participant", "role_slot", EndingRoomRoleSlot)
+            _migrate_normalize_enum_values(
+                conn,
+                "ending_room_participant",
+                "role_slot",
+                EndingRoomRoleSlot,
+            )
             _migrate_normalize_enum_values(conn, "ending_room_thread", "mode", EndingRoomThreadMode)
             _migrate_normalize_enum_values(
                 conn,
@@ -573,6 +632,13 @@ def _sqlite_exec(handle: Any, statement: str):
     return handle.execute(statement)
 
 
+def _sqlite_exec_params(handle: Any, statement: str, params: tuple[Any, ...] | dict[str, Any]):
+    """Execute SQLite SQL with bound parameters."""
+    if hasattr(handle, "exec_driver_sql"):
+        return handle.exec_driver_sql(statement, params)
+    return handle.execute(statement, params)
+
+
 def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     """Add a column to a table if it doesn't exist (SQLite only)."""
     # C-2 fix: validate identifiers against whitelist to prevent SQL injection
@@ -596,6 +662,146 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
     existing = {row[1] for row in result.fetchall()}
     if column not in existing:
         _sqlite_exec(cursor, f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
+def _migrate_table_exists(cursor, table: str) -> bool:
+    if not _SAFE_IDENTIFIER.match(table):
+        raise ValueError(f"Unsafe SQL identifier rejected: {table!r}")
+    result = _sqlite_exec(cursor, f"PRAGMA table_info({table})")
+    return bool(result.fetchall())
+
+
+def _migrate_list_unique_index_columns(cursor, table: str) -> set[tuple[str, ...]]:
+    if not _SAFE_IDENTIFIER.match(table):
+        raise ValueError(f"Unsafe SQL identifier rejected: {table!r}")
+
+    unique_sets: set[tuple[str, ...]] = set()
+    index_rows = _sqlite_exec(cursor, f"PRAGMA index_list('{table}')").fetchall()
+    for row in index_rows:
+        index_name = row[1]
+        is_unique = row[2]
+        if not is_unique:
+            continue
+        if not _SAFE_IDENTIFIER.match(index_name):
+            raise ValueError(f"Unsafe SQL identifier rejected: {index_name!r}")
+        columns = _sqlite_exec(cursor, f"PRAGMA index_info('{index_name}')").fetchall()
+        unique_sets.add(tuple(column_row[2] for column_row in columns))
+    return unique_sets
+
+
+def _migrate_dedupe_debate_argument_units_per_turn(cursor) -> None:
+    duplicate_groups = _sqlite_exec(
+        cursor,
+        """
+        SELECT debate_id, turn_id, semantic_hash
+        FROM debate_argument_unit
+        GROUP BY debate_id, turn_id, semantic_hash
+        HAVING COUNT(*) > 1
+        """,
+    ).fetchall()
+
+    for debate_id, turn_id, semantic_hash in duplicate_groups:
+        unit_ids = [
+            row[0]
+            for row in _sqlite_exec_params(
+                cursor,
+                """
+                SELECT id
+                FROM debate_argument_unit
+                WHERE debate_id = ?
+                  AND turn_id = ?
+                  AND semantic_hash = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (debate_id, turn_id, semantic_hash),
+            ).fetchall()
+        ]
+        for duplicate_id in unit_ids[1:]:
+            _sqlite_exec_params(
+                cursor,
+                "DELETE FROM debate_argument_unit WHERE id = ?",
+                (duplicate_id,),
+            )
+
+
+def _migrate_repair_debate_argument_unit_unique_constraint(cursor) -> None:
+    if not _migrate_table_exists(cursor, "debate_argument_unit"):
+        return
+
+    unique_sets = _migrate_list_unique_index_columns(cursor, "debate_argument_unit")
+    has_target_constraint = (
+        _DEBATE_ARGUMENT_UNIT_TARGET_UNIQUE_COLUMNS in unique_sets
+    )
+    has_legacy_constraint = (
+        _DEBATE_ARGUMENT_UNIT_LEGACY_UNIQUE_COLUMNS in unique_sets
+    )
+    if has_target_constraint and not has_legacy_constraint:
+        return
+
+    _migrate_dedupe_debate_argument_units_per_turn(cursor)
+    _sqlite_exec(cursor, "DROP INDEX IF EXISTS ix_debate_argument_unit_debate_id")
+    _sqlite_exec(cursor, "DROP INDEX IF EXISTS ix_debate_argument_unit_semantic_hash")
+    _sqlite_exec(
+        cursor,
+        "ALTER TABLE debate_argument_unit RENAME TO debate_argument_unit__legacy",
+    )
+    _sqlite_exec(
+        cursor,
+        """
+        CREATE TABLE debate_argument_unit (
+            id TEXT NOT NULL,
+            debate_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            unit_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'standing',
+            canonical_text TEXT NOT NULL DEFAULT '',
+            semantic_hash TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            CONSTRAINT uq_debate_argument_unit_debate_turn_hash
+            UNIQUE (debate_id, turn_id, semantic_hash)
+        )
+        """,
+    )
+    _sqlite_exec(
+        cursor,
+        """
+        INSERT INTO debate_argument_unit (
+            id,
+            debate_id,
+            turn_id,
+            node_id,
+            unit_type,
+            status,
+            canonical_text,
+            semantic_hash,
+            created_at
+        )
+        SELECT
+            id,
+            debate_id,
+            turn_id,
+            node_id,
+            unit_type,
+            status,
+            canonical_text,
+            semantic_hash,
+            created_at
+        FROM debate_argument_unit__legacy
+        """,
+    )
+    _sqlite_exec(cursor, "DROP TABLE debate_argument_unit__legacy")
+    _sqlite_exec(
+        cursor,
+        "CREATE INDEX IF NOT EXISTS ix_debate_argument_unit_debate_id "
+        "ON debate_argument_unit (debate_id)",
+    )
+    _sqlite_exec(
+        cursor,
+        "CREATE INDEX IF NOT EXISTS ix_debate_argument_unit_semantic_hash "
+        "ON debate_argument_unit (semantic_hash)",
+    )
 
 
 def _migrate_normalize_enum_values(cursor, table: str, column: str, enum_cls: type[enum.Enum]):

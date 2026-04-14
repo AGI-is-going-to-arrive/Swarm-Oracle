@@ -80,4 +80,34 @@ describe('validateSvgDownloadArtifact', () => {
       }),
     ).rejects.toThrow(/foreignObject|svg|malformed/i);
   });
+
+  it('rejects SVG files that leak transient node detail UI into the export', async () => {
+    const filePath = await writeTempFile(
+      'graph-export-leaked-detail-panel.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div data-testid="node-detail-panel">detail</div></foreignObject></svg>',
+    );
+
+    await expect(
+      validateSvgDownloadArtifact({
+        filePath,
+        filename: 'causal-graph_2026-04-14.svg',
+        expectedPrefix: 'causal-graph_',
+      }),
+    ).rejects.toThrow(/transient|detail|export/i);
+  });
+
+  it('accepts argument-map SVG filenames that match the expected prefix', async () => {
+    const filePath = await writeTempFile(
+      'argument-map-export-valid.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>graph</div></foreignObject></svg>',
+    );
+
+    await expect(
+      validateSvgDownloadArtifact({
+        filePath,
+        filename: 'argument-map_2026-04-14.svg',
+        expectedPrefix: 'argument-map_',
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

@@ -107,8 +107,8 @@ class DebateArgumentUnit(SQLModel, table=True):
     __tablename__ = "debate_argument_unit"
     __table_args__ = (
         UniqueConstraint(
-            "debate_id", "semantic_hash",
-            name="uq_debate_argument_unit_debate_hash",
+            "debate_id", "turn_id", "semantic_hash",
+            name="uq_debate_argument_unit_debate_turn_hash",
         ),
     )
 
@@ -119,5 +119,5 @@ class DebateArgumentUnit(SQLModel, table=True):
     unit_type: str  # "claim" | "evidence" | "rebuttal" | "counter"
     status: str = "standing"  # standing | rebutted | unaddressed | accepted | rejected
     canonical_text: str = ""
-    semantic_hash: str = Field(default="", index=True)  # dedup key
+    semantic_hash: str = Field(default="", index=True)  # dedup key scoped per turn
     created_at: datetime = Field(default_factory=_now)

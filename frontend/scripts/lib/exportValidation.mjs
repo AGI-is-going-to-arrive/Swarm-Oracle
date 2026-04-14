@@ -34,4 +34,7 @@ export async function validateSvgDownloadArtifact({ filePath, filename, expected
   if (!foreignObjectContent) {
     throw new Error(`Malformed SVG download for ${filename}: empty foreignObject content`);
   }
+  if (trimmed.includes('data-testid="node-detail-panel"')) {
+    throw new Error(`Malformed SVG download for ${filename}: transient graph UI leaked into export`);
+  }
 }

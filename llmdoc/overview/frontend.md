@@ -234,6 +234,9 @@
   - 禁用 `Export Markdown`
   - 隐藏 `score_predictions`
   - 只保留本地导入、只读分享与 permalink 相关动作
+- `DebateResultView` 当前把 argument map 改成按需加载：
+  - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
+  - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
 - `ResultView` 当前在 `counterfactual_replay` capability 开启且结果里存在 branches 时，会显示：
   - `CounterfactualPanel`
   - `ResumePanel`
@@ -247,12 +250,13 @@
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；有结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
 - URL 里如果带了不存在的 `branch_id`，`CausalReviewView` 当前会直接显示后端错误，不再把未知分支伪装成空图。
-- `CausalReviewView` 当前在大图走 text fallback 时会隐藏导出按钮。
+- `CausalReviewView` 当前在大图走 text fallback 时会隐藏导出按钮，并且只保留一条具名的 a11y 列表；当前列表名固定为 `Causal events list`。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），不会挡住节点点击；移动端同口径。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`。
+- `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦
   - 保留 pointer click 打开详情
@@ -267,7 +271,7 @@
 - `phase3-batch-a / batch-b` 的 graph SVG smoke 当前会校验下载文件内容，不只看文件名。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的强度摘要在 default / `zh-CN` locale 都能定位，以及 `Export SVG`、verdict 节点、节点点击打开详情、详情文本、accepted 状态与关闭动作。
-- `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：错误态需要显示失败文案和 `Retry`，同时隐藏图和导出。
+- `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会先走结果页的 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏。
 - `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
 - graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor` 的 perf budget，不再只看 `phaser / capture-html / flow-vendor`。
 - `ResumePanel` 当前会：

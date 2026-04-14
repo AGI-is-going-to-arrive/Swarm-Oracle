@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -23,16 +26,202 @@ from app.api.helpers import (
 from app.api.schemas import ResumeRequest
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
-from app.models.database import Branch, Scenario, get_engine
+from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_timeline
 from app.services.replay import clone_until_round, compare_branches, seed_counterfactual
-from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
+from app.services.runtime_lock import (
+    RuntimeLockLease,
+    acquire_runtime_lock,
+    refresh_runtime_lock,
+    release_runtime_lock,
+    simulation_lock_key,
+)
 
 logger = logging.getLogger(__name__)
+MAX_REPLAY_BRANCHES = 3
+_REPLAY_BRANCH_LOCK_LEASE_SECONDS = 15.0
+_REPLAY_BRANCH_LOCK_WAIT_SECONDS = 2.0
+_REPLAY_BRANCH_LOCK_POLL_SECONDS = 0.05
+_REPLAY_BRANCH_LOCK_REFRESH_FRACTION = 0.33
 
 def _feature_disabled(name: str):
     return api_error(404, "FEATURE_DISABLED", f"Feature '{name}' is not enabled")
+
+
+def _replay_branch_lock_key(scenario_id: str) -> str:
+    return f"replay-branch:{scenario_id}"
+
+
+def _count_replay_branches(session: Session, scenario_id: str) -> int:
+    return len(
+        session.exec(
+            select(Branch).where(
+                Branch.scenario_id == scenario_id,
+                Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
+            )
+        ).all()
+    )
+
+
+def _acquire_replay_branch_lock(scenario_id: str):
+    deadline = time.monotonic() + _REPLAY_BRANCH_LOCK_WAIT_SECONDS
+    while True:
+        lease = acquire_runtime_lock(
+            _replay_branch_lock_key(scenario_id),
+            lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
+        )
+        if lease is not None:
+            return lease
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(_REPLAY_BRANCH_LOCK_POLL_SECONDS)
+
+
+def _start_runtime_lock_heartbeat(
+    lease_holder: list[RuntimeLockLease | None],
+    *,
+    lease_seconds: float,
+    lock_label: str,
+) -> tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+    refresh_interval = max(0.01, min(5.0, lease_seconds * _REPLAY_BRANCH_LOCK_REFRESH_FRACTION))
+
+    def _heartbeat() -> None:
+        while not stop_event.wait(refresh_interval):
+            current_lease = lease_holder[0]
+            refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            if refreshed is None:
+                lease_holder[0] = None
+                logger.warning("%s runtime lock lease could not be refreshed", lock_label)
+                return
+            lease_holder[0] = refreshed
+
+    thread = threading.Thread(
+        target=_heartbeat,
+        name=f"{lock_label}-runtime-lock-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.Thread) -> None:
+    stop_event.set()
+    thread.join(timeout=1.0)
+
+
+def _require_replay_branch_lock_alive(lease_holder: list[RuntimeLockLease | None]) -> None:
+    if lease_holder[0] is None:
+        raise api_error(
+            409,
+            "REPLAY_BRANCH_LOCK_LOST",
+            "Replay branch lock was lost before cloning or seeding",
+        )
+
+
+def _acquire_simulation_lock_for_resume(scenario_id: str) -> RuntimeLockLease | None:
+    total_timeout = settings.MAX_ROUNDS * 180
+    return acquire_runtime_lock(
+        simulation_lock_key(scenario_id),
+        lease_seconds=total_timeout + 60,
+    )
+
+
+def _cleanup_replay_branch(branch_id: str) -> None:
+    with Session(get_engine()) as session:
+        round_ids = list(
+            session.exec(select(Round.id).where(Round.branch_id == branch_id)).all()
+        )
+        if round_ids:
+            session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
+        session.exec(sa_delete(Round).where(Round.branch_id == branch_id))
+        session.exec(sa_delete(Branch).where(Branch.id == branch_id))
+        session.commit()
+
+
+def _rollback_resume_start(scenario_id: str, branch_id: str) -> None:
+    _cleanup_replay_branch(branch_id)
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is not None:
+            scenario.status = ScenarioStatus.DONE
+            session.add(scenario)
+            session.commit()
+
+
+def _validate_counterfactual_target_message(
+    session: Session,
+    *,
+    source_branch_id: str,
+    round_number: int,
+    agent_id: str,
+    source_message_content: str | None = None,
+) -> None:
+    candidate_messages = session.exec(
+        select(AgentMessage.content)
+        .join(Round, AgentMessage.round_id == Round.id)
+        .where(
+            Round.branch_id == source_branch_id,
+            Round.round_number == round_number,
+            AgentMessage.agent_id == agent_id,
+        )
+    ).all()
+    if not candidate_messages:
+        raise api_error(
+            400,
+            "COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND",
+            (
+                f"Agent {agent_id} has no message in round {round_number} "
+                f"of branch {source_branch_id}"
+            ),
+        )
+    normalized_source = source_message_content.strip() if source_message_content else None
+    if normalized_source is None:
+        if len(candidate_messages) > 1:
+            raise api_error(
+                400,
+                "COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS",
+                (
+                    f"Agent {agent_id} has multiple messages in round {round_number} "
+                    f"of branch {source_branch_id}; select a specific source message"
+                ),
+            )
+        return
+
+    matching_messages = [
+        content
+        for content in candidate_messages
+        if isinstance(content, str) and content.strip() == normalized_source
+    ]
+    if not matching_messages:
+        raise api_error(
+            400,
+            "COUNTERFACTUAL_AGENT_MESSAGE_MISMATCH",
+            (
+                f"Agent {agent_id} has no message matching the selected source content "
+                f"in round {round_number} of branch {source_branch_id}"
+            ),
+        )
+    if len(matching_messages) > 1:
+        raise api_error(
+            400,
+            "COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS",
+            (
+                f"Agent {agent_id} has multiple matching messages in round {round_number} "
+                f"of branch {source_branch_id}; select a more specific source message"
+            ),
+        )
+
+
+def _raise_if_replay_limit_reached(session: Session, scenario_id: str) -> None:
+    replay_count = _count_replay_branches(session, scenario_id)
+    if replay_count >= MAX_REPLAY_BRANCHES:
+        raise api_error(
+            429,
+            "REPLAY_BRANCH_LIMIT_REACHED",
+            f"Maximum {MAX_REPLAY_BRANCHES} replay branches per scenario",
+        )
 
 
 router = APIRouter(prefix="/api", tags=["graphs"], dependencies=[Depends(verify_session)])
@@ -40,9 +229,10 @@ router = APIRouter(prefix="/api", tags=["graphs"], dependencies=[Depends(verify_
 
 class CounterfactualRequest(BaseModel):
     source_branch_id: str
-    round_number: int
+    round_number: int = Field(ge=1)
     agent_id: str
     replacement_content: str
+    source_message_content: str | None = None
 
 
 @router.get("/scenario/{scenario_id}/causal-graph")
@@ -83,53 +273,85 @@ async def create_counterfactual(
     """Create a counterfactual branch by cloning + seeding a replacement."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
         raise _feature_disabled("counterfactual_replay")
-    with Session(get_engine()) as session:
-        require_owned_scenario(session, scenario_id, principal)
-
-        # Validate source branch exists and belongs to this scenario
-        branch = session.exec(
-            select(Branch).where(
-                Branch.id == body.source_branch_id,
-                Branch.scenario_id == scenario_id,
-            )
-        ).first()
-        if branch is None:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": f"Branch {body.source_branch_id} not found in scenario"},
-            )
-
-        # Validate round_number is within range
-        from app.models.database import Round
-        max_round = session.exec(
-            select(Round.round_number)
-            .where(Round.branch_id == body.source_branch_id)
-            .order_by(Round.round_number.desc())
-        ).first()
-        if max_round is None or body.round_number > max_round:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": f"round_number {body.round_number} exceeds available rounds"},
-            )
-
-        # Limit to 3 replay branches (counterfactual + resume) per scenario
-        cf_count = len(
-            session.exec(
-                select(Branch).where(
-                    Branch.scenario_id == scenario_id,
-                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
-                )
-            ).all()
+    lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
+    if lease is None:
+        raise api_error(
+            409,
+            "REPLAY_BRANCH_BUSY",
+            "Another replay branch operation is in progress for this scenario",
         )
-        if cf_count >= 3:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Maximum 3 replay branches per scenario"},
-            )
+    lease_holder: list[RuntimeLockLease | None] = [lease]
+    heartbeat_stop, heartbeat_thread = _start_runtime_lock_heartbeat(
+        lease_holder,
+        lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
+        lock_label=f"replay-branch:{scenario_id}",
+    )
+    new_branch_id: str | None = None
+    try:
+        with Session(get_engine()) as session:
+            require_owned_scenario(session, scenario_id, principal)
 
-    # Clone + seed
-    new_branch_id = clone_until_round(scenario_id, body.source_branch_id, body.round_number)
-    seed_counterfactual(new_branch_id, body.agent_id, body.replacement_content)
+            # Validate source branch exists and belongs to this scenario
+            branch = session.exec(
+                select(Branch).where(
+                    Branch.id == body.source_branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch is None:
+                raise api_error(
+                    404,
+                    "COUNTERFACTUAL_BRANCH_NOT_FOUND",
+                    f"Branch {body.source_branch_id} not found in scenario",
+                )
+
+            max_round = session.exec(
+                select(Round.round_number)
+                .where(Round.branch_id == body.source_branch_id)
+                .order_by(Round.round_number.desc())
+            ).first()
+            if max_round is None or body.round_number > max_round:
+                raise api_error(
+                    400,
+                    "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
+                    f"round_number {body.round_number} exceeds available rounds",
+                )
+
+            _validate_counterfactual_target_message(
+                session,
+                source_branch_id=body.source_branch_id,
+                round_number=body.round_number,
+                agent_id=body.agent_id,
+                source_message_content=body.source_message_content,
+            )
+            _raise_if_replay_limit_reached(session, scenario_id)
+            _require_replay_branch_lock_alive(lease_holder)
+
+        # Clone + seed
+        new_branch_id = clone_until_round(
+            scenario_id,
+            body.source_branch_id,
+            body.round_number,
+            ensure_lock=lambda: _require_replay_branch_lock_alive(lease_holder),
+        )
+        try:
+            _require_replay_branch_lock_alive(lease_holder)
+            seed_counterfactual(
+                new_branch_id,
+                body.agent_id,
+                body.replacement_content,
+                ensure_lock=lambda: _require_replay_branch_lock_alive(lease_holder),
+                source_message_content=body.source_message_content,
+            )
+        except ValueError as exc:
+            _cleanup_replay_branch(new_branch_id)
+            raise api_error(400, "COUNTERFACTUAL_SEED_FAILED", str(exc)) from exc
+        except Exception:
+            _cleanup_replay_branch(new_branch_id)
+            raise
+    finally:
+        _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
+        release_runtime_lock(lease_holder[0])
 
     return JSONResponse(
         status_code=201,
@@ -215,86 +437,91 @@ async def resume_from_round(
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
         raise _feature_disabled("counterfactual_replay")
 
-    from app.models.database import Round, ScenarioStatus
-
-    with Session(get_engine()) as session:
-        scenario = require_owned_scenario(session, scenario_id, principal)
-        if scenario.status != ScenarioStatus.DONE:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "Scenario must be in 'done' status to resume"},
-            )
-        if runtime_lock_is_active(simulation_lock_key(scenario_id)):
-            return JSONResponse(
-                status_code=409,
-                content={"detail": "Scenario already has a running simulation"},
-            )
-
-        branch = session.exec(
-            select(Branch).where(
-                Branch.id == body.source_branch_id,
-                Branch.scenario_id == scenario_id,
-            )
-        ).first()
-        if branch is None:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "detail": f"Branch {body.source_branch_id} not found",
-                },
-            )
-
-        max_round = session.exec(
-            select(Round.round_number)
-            .where(Round.branch_id == body.source_branch_id)
-            .order_by(Round.round_number.desc())
-        ).first()
-        if max_round is None or body.round_number > max_round:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": (
-                        f"round_number {body.round_number} exceeds "
-                        f"available rounds"
-                    ),
-                },
-            )
-
-        # Shared limit: counterfactual + resume <= 3
-        replay_count = len(
-            session.exec(
-                select(Branch).where(
-                    Branch.scenario_id == scenario_id,
-                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
-                )
-            ).all()
+    lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
+    if lease is None:
+        raise api_error(
+            409,
+            "REPLAY_BRANCH_BUSY",
+            "Another replay branch operation is in progress for this scenario",
         )
-        if replay_count >= 3:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Maximum 3 replay branches per scenario",
-                },
-            )
-
-    # Clone branch up to round_number, then schedule background simulation
-    new_branch_id = clone_until_round(
-        scenario_id,
-        body.source_branch_id,
-        body.round_number,
-        replay_kind="resume",
-        title=f"Resume from round {body.round_number}",
+    lease_holder: list[RuntimeLockLease | None] = [lease]
+    heartbeat_stop, heartbeat_thread = _start_runtime_lock_heartbeat(
+        lease_holder,
+        lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
+        lock_label=f"replay-branch:{scenario_id}",
     )
-    with Session(get_engine()) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario is not None:
-            scenario.status = ScenarioStatus.SIMULATING
-            session.add(scenario)
-            session.commit()
+    simulation_lease: RuntimeLockLease | None = None
+    try:
+        with Session(get_engine()) as session:
+            scenario = require_owned_scenario(session, scenario_id, principal)
+            if scenario.status != ScenarioStatus.DONE:
+                raise api_error(
+                    400,
+                    "RESUME_SCENARIO_STATUS_INVALID",
+                    "Scenario must be in 'done' status to resume",
+                )
 
-    schedule_background_task(
-        run_sim_background(scenario_id, branch_id=new_branch_id)
-    )
+            branch = session.exec(
+                select(Branch).where(
+                    Branch.id == body.source_branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch is None:
+                raise api_error(
+                    404,
+                    "RESUME_BRANCH_NOT_FOUND",
+                    f"Branch {body.source_branch_id} not found",
+                )
+
+            max_round = session.exec(
+                select(Round.round_number)
+                .where(Round.branch_id == body.source_branch_id)
+                .order_by(Round.round_number.desc())
+            ).first()
+            if max_round is None or body.round_number > max_round:
+                raise api_error(
+                    400,
+                    "RESUME_ROUND_OUT_OF_RANGE",
+                    f"round_number {body.round_number} exceeds available rounds",
+                )
+
+            _raise_if_replay_limit_reached(session, scenario_id)
+            simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)
+            if simulation_lease is None:
+                raise api_error(
+                    409,
+                    "SIMULATION_ALREADY_RUNNING",
+                    "Scenario already has a running simulation",
+                )
+            _require_replay_branch_lock_alive(lease_holder)
+
+        # Clone branch up to round_number, then schedule background simulation
+        new_branch_id = clone_until_round(
+            scenario_id,
+            body.source_branch_id,
+            body.round_number,
+            ensure_lock=lambda: _require_replay_branch_lock_alive(lease_holder),
+            replay_kind="resume",
+            title=f"Resume from round {body.round_number}",
+        )
+        background_coro = run_sim_background(
+            scenario_id,
+            branch_id=new_branch_id,
+            pre_acquired_lock_lease=simulation_lease,
+        )
+        try:
+            _require_replay_branch_lock_alive(lease_holder)
+            schedule_background_task(background_coro)
+        except Exception:
+            background_coro.close()
+            _rollback_resume_start(scenario_id, new_branch_id)
+            raise
+        simulation_lease = None
+    finally:
+        _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
+        release_runtime_lock(lease_holder[0])
+        release_runtime_lock(simulation_lease)
 
     return JSONResponse(
         status_code=201,

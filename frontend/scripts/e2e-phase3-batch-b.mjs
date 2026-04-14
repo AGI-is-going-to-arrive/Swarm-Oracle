@@ -35,6 +35,30 @@ async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
 }
 
+async function triggerArgumentMapLoad(page) {
+  const sectionHeading = page.getByRole("heading", { name: /Argument Map|论证图谱/i }).first();
+  const sectionReady = await sectionHeading.isVisible({ timeout: 10000 }).catch(() => false);
+  if (!sectionReady) {
+    return { hasLoadButton: false, sawResponse: false };
+  }
+
+  const loadButton = page.getByRole("button", { name: /Load map|加载图谱/i }).first();
+  const hasLoadButton = await loadButton.isVisible({ timeout: 10000 }).catch(() => false);
+  if (!hasLoadButton) {
+    return { hasLoadButton: false, sawResponse: false };
+  }
+
+  const sawResponse = await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().includes(`/api/debate/${FIXTURE_DEBATE_ID}/argument-map`),
+      { timeout: 10000 },
+    ).then(() => true).catch(() => false),
+    loadButton.click(),
+  ]).then(([didRespond]) => didRespond);
+
+  return { hasLoadButton: true, sawResponse };
+}
+
 function toErrorMessage(err) {
   if (err instanceof Error) return err.message;
   return String(err);
@@ -155,6 +179,12 @@ function attachBrowserIssueMonitor(page) {
   });
 
   return issues;
+}
+
+function mergeBrowserIssues(target, source) {
+  target.consoleErrors.push(...source.consoleErrors);
+  target.pageErrors.push(...source.pageErrors);
+  target.requestFailures.push(...source.requestFailures);
 }
 
 function buildBrowserRuntimeResult(issues) {
@@ -629,10 +659,15 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
 
-  // Navigate to debate result with argument map
+  // Navigate to debate result and explicitly load the deferred argument map.
   await page.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
-  await page.locator('.react-flow').first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await saveScreenshot(page, path.join(stepDir, "01-debate-result-loaded.png"));
+  const { hasLoadButton, sawResponse } = await triggerArgumentMapLoad(page);
+  results.steps.push({ name: "argument-map-load-button-visible", passed: hasLoadButton });
+  results.steps.push({ name: "argument-map-load-request-fired", passed: sawResponse });
+  if (sawResponse) {
+    await page.locator(".react-flow").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+  }
 
   // Check argument map section exists (ReactFlow container)
   const reactFlowEl = page.locator('.react-flow').first();
@@ -747,44 +782,54 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   return results;
 }
 
-async function testArgumentMapLoadFailed(page, baseUrl, outputDir) {
+async function testArgumentMapLoadFailed(page, baseUrl, outputDir, aggregateIssues) {
   const stepDir = path.join(outputDir, "argument-map-load-failed");
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
+  const failSoftPage = await page.context().newPage();
+  const localIssues = attachBrowserIssueMonitor(failSoftPage);
 
-  await page.unroute(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`);
-  await page.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FAILSOFT_FIXTURE) }),
-  );
-  const failSoftResponse = page.waitForResponse(
-    (response) =>
-      response.url().includes(`/api/debate/${FIXTURE_DEBATE_ID}/argument-map`),
-    { timeout: 5000 },
-  ).then(() => true).catch(() => false);
-  await page.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
-  const sawFailSoftResponse = await failSoftResponse;
-  const retryButton = page.getByRole("button", { name: /Retry|重试/i }).first();
-  const hasRetryButton = sawFailSoftResponse
-    ? await retryButton.isVisible({ timeout: 5000 }).catch(() => false)
-    : false;
-  const hasLoadFailedMessage = sawFailSoftResponse
-    ? await page.getByText(/Failed to load argument map|Load failed|论证图谱加载失败/i).first().isVisible({ timeout: 5000 }).catch(() => false)
-    : false;
-  await saveScreenshot(page, path.join(stepDir, "01-argument-map-load-failed.png"));
-  results.steps.push({ name: "argument-map-load-failed-message-visible", passed: hasLoadFailedMessage });
-  results.steps.push({ name: "argument-map-load-failed-retry-visible", passed: hasRetryButton });
+  try {
+    await installFixtures(failSoftPage);
+    await failSoftPage.unroute(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`);
+    await failSoftPage.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FAILSOFT_FIXTURE) }),
+    );
+    const resultResponse = failSoftPage.waitForResponse(
+      (response) => response.url().includes(`/api/debate/${FIXTURE_DEBATE_ID}/result`),
+      { timeout: 10000 },
+    ).then(() => true).catch(() => false);
+    await failSoftPage.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
+    await resultResponse;
+    const { hasLoadButton, sawResponse: sawFailSoftResponse } = await triggerArgumentMapLoad(failSoftPage);
+    results.steps.push({ name: "argument-map-load-failed-button-visible", passed: hasLoadButton });
+    results.steps.push({ name: "argument-map-load-failed-request-fired", passed: sawFailSoftResponse });
+    const retryButton = failSoftPage.getByRole("button", { name: /Retry|重试/i }).first();
+    const hasRetryButton = sawFailSoftResponse
+      ? await retryButton.isVisible({ timeout: 5000 }).catch(() => false)
+      : false;
+    const hasLoadFailedMessage = sawFailSoftResponse
+      ? await failSoftPage.getByText(/Failed to load argument map|Load failed|论证图谱加载失败/i).first().isVisible({ timeout: 5000 }).catch(() => false)
+      : false;
+    await saveScreenshot(failSoftPage, path.join(stepDir, "01-argument-map-load-failed.png"));
+    results.steps.push({ name: "argument-map-load-failed-message-visible", passed: hasLoadFailedMessage });
+    results.steps.push({ name: "argument-map-load-failed-retry-visible", passed: hasRetryButton });
 
-  const reactFlowEl = page.locator('.react-flow').first();
-  const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
-  results.steps.push({ name: "argument-map-load-failed-hides-graph", passed: !hasReactFlow });
+    const reactFlowEl = failSoftPage.locator('.react-flow').first();
+    const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
+    results.steps.push({ name: "argument-map-load-failed-hides-graph", passed: !hasReactFlow });
 
-  const exportPanel = page.getByTestId("export-panel").first();
-  const hasExportPanel = await exportPanel.isVisible().catch(() => false);
-  results.steps.push({ name: "argument-map-load-failed-hides-export", passed: !hasExportPanel });
+    const exportPanel = failSoftPage.getByTestId("export-panel").first();
+    const hasExportPanel = await exportPanel.isVisible().catch(() => false);
+    results.steps.push({ name: "argument-map-load-failed-hides-export", passed: !hasExportPanel });
 
-  const emptyState = page.getByText(/No argument map available|暂无论证图谱/i).first();
-  const showsEmptyState = await emptyState.isVisible().catch(() => false);
-  results.steps.push({ name: "argument-map-load-failed-not-empty-state", passed: !showsEmptyState });
+    const emptyState = failSoftPage.getByText(/No argument map available|暂无论证图谱/i).first();
+    const showsEmptyState = await emptyState.isVisible().catch(() => false);
+    results.steps.push({ name: "argument-map-load-failed-not-empty-state", passed: !showsEmptyState });
+  } finally {
+    mergeBrowserIssues(aggregateIssues, localIssues);
+    await failSoftPage.close();
+  }
 
   return results;
 }
@@ -910,7 +955,7 @@ async function runSurface(mode, viewport) {
       "argument-map-load-failed",
       page,
       outputDir,
-      () => testArgumentMapLoadFailed(page, baseUrl, outputDir),
+      () => testArgumentMapLoadFailed(page, baseUrl, outputDir, browserIssues),
     );
     allResults.tests.factionTimeline = await runNamedTest(
       "faction-timeline",

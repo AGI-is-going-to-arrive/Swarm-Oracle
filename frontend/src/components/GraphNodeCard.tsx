@@ -26,6 +26,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
 export interface GraphNodeCardData {
   label: string;
   fullLabel: string;
+  ariaLabel?: string;
   iconName: string;
   bgColor: string;
   borderColor: string;
@@ -65,26 +66,30 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
 
   const card = (
     <button
+      className="nodrag nopan"
       type="button"
-      aria-label={d.fullLabel || d.label}
+      aria-label={d.ariaLabel || d.fullLabel || d.label}
+      aria-haspopup="dialog"
       style={{
         background: d.bgColor || '#555',
         appearance: 'none',
         color: isBright ? '#111' : '#fff',
         textShadow: isBright ? 'none' : '0 1px 3px rgba(0,0,0,0.8)',
         borderRadius: 8,
-        padding: '8px 12px',
-        fontSize: '0.75rem',
+        padding: '10px 12px',
+        minHeight: 44,
+        fontSize: '0.78rem',
         border: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
-        maxWidth: 220,
+        maxWidth: 'min(220px, calc(100vw - 96px))',
         opacity: d.dimmed ? 0.2 : 1,
         filter: d.dimmed ? 'grayscale(100%)' : 'none',
         transition: 'opacity 0.2s ease, filter 0.2s ease',
         cursor: 'pointer',
         textAlign: 'left',
+        boxSizing: 'border-box',
       }}
     >
       {Icon && <Icon size={14} style={{ flexShrink: 0 }} />}

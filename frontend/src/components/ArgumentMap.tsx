@@ -6,7 +6,7 @@
             tooltips, status filter.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
 import dagre from 'dagre';
@@ -76,14 +76,14 @@ interface ArgumentMapData {
 
 // ── B1: Safe adapters ───────────────────────────────────────
 
-function safeParsePayload(v: unknown): Record<string, unknown> {
-  if (v === null || v === undefined) return {};
+function safeParsePayload(v: unknown): Record<string, unknown> | null {
+  if (v === null || v === undefined) return null;
   if (typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
   if (typeof v === 'string') {
     try { const parsed = JSON.parse(v); return typeof parsed === 'object' && parsed && !Array.isArray(parsed) ? parsed : {}; }
-    catch { return {}; }
+    catch { return null; }
   }
-  return {};
+  return null;
 }
 
 function mapBackendNode(raw: Record<string, unknown>): GraphNodeRaw {
@@ -144,6 +144,7 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
 
 const PERF_TOOLTIP_LIMIT = 150;
 const NO_ARROW_TYPES = new Set(['temporal']);
+const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
 
 // ── Strength Meter (P1-7) ───────────────────────────────────
 
@@ -160,6 +161,42 @@ const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   accepted: GRAPH_STATUS_LABEL_I18N.accepted,
   rejected: GRAPH_STATUS_LABEL_I18N.rejected,
 };
+
+function useCompactGraphViewport() {
+  const [isCompact, setIsCompact] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches
+      : false
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mediaQueryList = window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY);
+    const handleChange = (event: MediaQueryListEvent) => setIsCompact(event.matches);
+    mediaQueryList.addEventListener?.('change', handleChange);
+    return () => mediaQueryList.removeEventListener?.('change', handleChange);
+  }, []);
+
+  return isCompact;
+}
+
+function getArgumentTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
+  const pair = TYPE_LABEL_I18N[type];
+  return pair ? t(pair[0], pair[1]) : type;
+}
+
+function getArgumentStatusLabel(status: string, t: (key: string, fallback: string) => string): string {
+  const pair = STATUS_LABEL_I18N[status];
+  return pair ? t(pair[0], pair[1]) : status;
+}
+
+function getArgumentNodeActionLabel(
+  typeLabel: string,
+  label: string,
+  t: (key: string, fallback: string) => string,
+): string {
+  return `${t('argument.open_details', 'Open details')}: ${typeLabel} - ${label}`;
+}
 
 export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
   const { t } = useTranslation();
@@ -243,13 +280,19 @@ function layoutArgumentDag(
       const pos = g.node(u.id);
       const fullLabel = u.text;
       const label = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
+      const typeLabel = getArgumentTypeLabel(u.type, t);
+      const ariaLabel = getArgumentNodeActionLabel(typeLabel, fullLabel, t);
       flowNodes.push({
         id: u.id,
         type: 'graphCard',
         position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
+        focusable: false,
+        ariaRole: 'button',
+        ariaLabel,
         data: {
           label,
           fullLabel,
+          ariaLabel,
           iconName: NODE_ICONS[u.type] ?? '',
           bgColor: NODE_TYPE_COLORS_HEX[u.type] ?? '#555',
           borderColor: STATUS_COLORS_HEX[u.status] ?? '',
@@ -268,18 +311,22 @@ function layoutArgumentDag(
     const unit = unitByNodeId.get(n.id);
     const typeKey = unit?.type ?? n.type;
     const statusKey = unit?.status ?? '';
-    const typePair = TYPE_LABEL_I18N[typeKey];
-    const typeLabel = typePair ? t(typePair[0], typePair[1]) : typeKey;
+    const typeLabel = getArgumentTypeLabel(typeKey, t);
     const fullLabel = `[${typeLabel}] ${n.label}`;
     const displayLabel = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
+    const ariaLabel = getArgumentNodeActionLabel(typeLabel, n.label, t);
 
     flowNodes.push({
       id: n.id,
       type: 'graphCard',
       position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
+      focusable: false,
+      ariaRole: 'button',
+      ariaLabel,
       data: {
         label: displayLabel,
         fullLabel,
+        ariaLabel,
         iconName: NODE_ICONS[typeKey] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[typeKey] ?? '#555',
         borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',
@@ -319,14 +366,25 @@ interface Props {
 
 export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
+  const isCompactViewport = useCompactGraphViewport();
+  const translateRef = useRef(t);
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
+  const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const latestRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
+
+  const translate = useCallback((key: string, fallback: string) => (
+    translateRef.current(key, fallback)
+  ), []);
 
   const fetchData = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -392,8 +450,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
 
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
     if (!filteredData) return { nodes: [], edges: [] };
-    return layoutArgumentDag(filteredData.nodes, filteredData.edges, filteredData.units, t);
-  }, [filteredData, t]);
+    return layoutArgumentDag(filteredData.nodes, filteredData.edges, filteredData.units, translate);
+  }, [filteredData, translate]);
   const layoutSignature = useMemo(() => (
     `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
   ), [layoutNodes, layoutEdges]);
@@ -515,7 +573,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     <Tooltip.Provider delayDuration={300}>
       <div
         aria-label={t('argument.a11y_label', 'Debate argument map')}
-        style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
+        style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 0 }}
       >
         {/* P1-7: Strength meter summary */}
         <ArgumentStrengthMeter units={data.units} />
@@ -566,32 +624,55 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         ) : (
           <>
             {/* Export controls (P1-3) */}
-            <ExportPanel containerSelector=".argument-map-container" filenamePrefix="argument-map" />
+            <ExportPanel
+              containerSelector={`.argument-map-export-target[data-export-root="${exportRootId}"]`}
+              filenamePrefix="argument-map"
+            />
 
             {/* DAG container */}
-            <div style={{ height: 'min(50vh, 480px)', border: '1px solid #333', borderRadius: 6, overflow: 'hidden', position: 'relative' }} className="argument-map-container">
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                nodeTypes={nodeTypes}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onNodeClick={onNodeClick}
-                onPaneClick={onPaneClick}
-                onInit={(instance) => {
-                  reactFlowRef.current = instance;
-                }}
-                fitView
-                proOptions={{ hideAttribution: true }}
+            <div
+              style={{
+                height: isCompactViewport ? 'min(62vh, 540px)' : 'min(50vh, 480px)',
+                minHeight: isCompactViewport ? 320 : 280,
+                border: '1px solid #333',
+                borderRadius: 6,
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+              className="argument-map-container"
+            >
+              <div
+                className="argument-map-export-target"
+                data-testid="argument-map-export-target"
+                data-export-root={exportRootId}
+                style={{ position: 'absolute', inset: 0 }}
               >
-                <Background />
-                <Controls />
-                <MiniMap
-                  nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
-                  nodeStrokeWidth={3}
-                  style={{ background: '#1a1a2e', pointerEvents: 'none' }}
-                />
-              </ReactFlow>
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  nodeTypes={nodeTypes}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onNodeClick={onNodeClick}
+                  onPaneClick={onPaneClick}
+                  onInit={(instance) => {
+                    reactFlowRef.current = instance;
+                  }}
+                  fitView
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background />
+                  {!isCompactViewport && <Controls className="graph-export-chrome" />}
+                  {!isCompactViewport && (
+                    <MiniMap
+                      className="graph-export-chrome"
+                      nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+                      nodeStrokeWidth={3}
+                      style={{ background: '#1a1a2e', pointerEvents: 'none' }}
+                    />
+                  )}
+                </ReactFlow>
+              </div>
               <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
             </div>
           </>
@@ -617,7 +698,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         <div className="sr-only" role="list" aria-label={t('argument.a11y_list', 'Argument units list')}>
           {(filteredData?.units ?? data.units).map(u => (
             <div key={u.id} role="listitem">
-              {u.type}: {u.text} [{u.status}]
+              {`${getArgumentTypeLabel(u.type, t)}: ${u.text} [${getArgumentStatusLabel(u.status, t)}]`}
             </div>
           ))}
         </div>

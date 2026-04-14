@@ -562,7 +562,7 @@ def extract_argument_units(
     Rule-based v1 (no LLM):
     - Split into sentences
     - Classify each as claim / evidence / rebuttal
-    - Deduplicate by semantic_hash within the same debate
+    - Deduplicate by semantic_hash within the same turn
     - Create GraphNode + DebateArgumentUnit per sentence
     """
     sentences = _split_sentences(content)
@@ -575,9 +575,10 @@ def extract_argument_units(
     with Session(engine) as session:
         snapshot = _get_or_create_snapshot(session, debate_id)
 
-        # Load existing hashes for dedup within this debate
+        # Load existing hashes for dedup within this turn.
         existing_stmt = select(DebateArgumentUnit.semantic_hash).where(
             DebateArgumentUnit.debate_id == debate_id,
+            DebateArgumentUnit.turn_id == turn_id,
         )
         existing_hashes: set[str] = set(session.exec(existing_stmt).all())
 
@@ -621,7 +622,11 @@ def extract_argument_units(
                     session.flush()
             except IntegrityError as exc:
                 exc_msg = str(getattr(exc, "orig", exc)).lower()
-                if "uq_debate_argument_unit_debate_hash" in exc_msg or "semantic_hash" in exc_msg:
+                if (
+                    "uq_debate_argument_unit_debate_turn_hash" in exc_msg
+                    or "uq_debate_argument_unit_debate_hash" in exc_msg
+                    or "semantic_hash" in exc_msg
+                ):
                     logger.info(
                         "extract_argument_units dedup race debate=%s turn=%s hash=%s",
                         debate_id, turn_id, h,

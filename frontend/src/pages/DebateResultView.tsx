@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -55,6 +55,7 @@ export function DebateResultView() {
   const [showShare, setShowShare] = useState(false);
   const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
+  const [showArgumentMap, setShowArgumentMap] = useState(false);
   const replayPayload = useMemo(
     () => readDebateReplayPayload(searchParams),
     [searchParams],
@@ -365,6 +366,7 @@ export function DebateResultView() {
   const winnerLabel = getDebateSideLabel(t, payload.result.winner);
   const themeLabel = getTheaterThemeLabel(payload.scene_theme, isZh);
   const themeAsset = getThemeAssetPath(payload.scene_theme as never);
+  const canShowArgumentMap = Boolean(id && capabilities?.argument_map?.enabled);
 
   return (
     <div className="debate-shell">
@@ -717,10 +719,37 @@ export function DebateResultView() {
       </div>
 
       {/* Phase 3 F6: Argument Map */}
-      {id && capabilities?.argument_map?.enabled && (
+      {canShowArgumentMap && (
         <section style={{ marginTop: '1.5rem', padding: '0 1rem' }}>
-          <h2 style={{ fontSize: '1.1rem', marginBottom: '0.75rem' }}>{t('argument.section_title', 'Argument Map')}</h2>
-          <ArgumentMap debateId={id} visible={true} />
+          <div className="debate-panel">
+            <div className="debate-panel__header" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>{t('argument.section_title', 'Argument Map')}</h2>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  startTransition(() => {
+                    setShowArgumentMap((current) => !current);
+                  });
+                }}
+              >
+                {showArgumentMap
+                  ? t('argument.hide_map', 'Hide map')
+                  : t('argument.load_map', 'Load map')}
+              </button>
+            </div>
+            {showArgumentMap ? (
+              <div className="debate-panel__body">
+                <ArgumentMap debateId={id!} visible={true} />
+              </div>
+            ) : (
+              <div className="debate-panel__body">
+                <p className="debate-empty-state">
+                  {t('argument.load_map_hint', 'Load the interactive map only when you need it.')}
+                </p>
+              </div>
+            )}
+          </div>
         </section>
       )}
 

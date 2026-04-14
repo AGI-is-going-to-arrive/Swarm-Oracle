@@ -18,6 +18,7 @@ const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const E2E_LOCALE = process.env.SWARM_E2E_LOCALE || "en-US";
 const E2E_APP_LANGUAGE = E2E_LOCALE.toLowerCase().startsWith("zh") ? "zh" : "en";
+const COMPACT_GRAPH_MAX_WIDTH = 768;
 const IS_MAIN_MODULE = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
@@ -449,10 +450,11 @@ async function testAgentLibraryAndProfile(page, baseUrl, outputDir) {
   return results;
 }
 
-async function testCausalMap(page, baseUrl, outputDir) {
+async function testCausalMap(page, baseUrl, outputDir, viewport) {
   const stepDir = path.join(outputDir, "causal-map");
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
+  const isCompactViewport = viewport.width <= COMPACT_GRAPH_MAX_WIDTH;
 
   // Navigate to causal map
   await page.goto(`${baseUrl}/sim/${FIXTURE_SCENARIO_ID}/causal-map`, { waitUntil: "domcontentloaded" });
@@ -464,10 +466,26 @@ async function testCausalMap(page, baseUrl, outputDir) {
   const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
   results.steps.push({ name: "reactflow-container-visible", passed: hasReactFlow });
 
-  // Check controls rendered
+  // Check graph chrome follows the same viewport policy as the product.
   const controls = page.locator('.react-flow__controls').first();
-  const hasControls = await controls.isVisible().catch(() => false);
-  results.steps.push({ name: "controls-visible", passed: hasControls });
+  const controlsCount = await page.locator('.react-flow__controls').count().catch(() => 0);
+  const hasControls = controlsCount > 0
+    ? await controls.isVisible().catch(() => false)
+    : false;
+  results.steps.push({
+    name: isCompactViewport ? "controls-hidden-on-compact-viewport" : "controls-visible-on-desktop",
+    passed: isCompactViewport ? controlsCount === 0 || !hasControls : hasControls,
+  });
+
+  const minimap = page.locator('.react-flow__minimap').first();
+  const minimapCount = await page.locator('.react-flow__minimap').count().catch(() => 0);
+  const hasMinimap = minimapCount > 0
+    ? await minimap.isVisible().catch(() => false)
+    : false;
+  results.steps.push({
+    name: isCompactViewport ? "minimap-hidden-on-compact-viewport" : "minimap-visible-on-desktop",
+    passed: isCompactViewport ? minimapCount === 0 || !hasMinimap : hasMinimap,
+  });
 
   // Check node count label
   const nodeCount = page.getByText(/3 (nodes|节点)/);
@@ -621,7 +639,7 @@ async function runSurface(mode, viewport) {
       "causal-map",
       page,
       outputDir,
-      () => testCausalMap(page, baseUrl, outputDir),
+      () => testCausalMap(page, baseUrl, outputDir, viewport),
     );
   } catch (err) {
     allResults.error = toErrorMessage(err);

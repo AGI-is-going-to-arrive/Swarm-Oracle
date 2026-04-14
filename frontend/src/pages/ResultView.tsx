@@ -2180,6 +2180,7 @@ export default function ResultView() {
                 scenarioId={id}
                 branchId={branches[0]?.id ?? ''}
                 agents={agents}
+                messages={scenario?.messages ?? []}
                 totalRounds={scenario?.total_rounds ?? 10}
                 onCreated={(branchId) => setCfBranchId(branchId)}
               />

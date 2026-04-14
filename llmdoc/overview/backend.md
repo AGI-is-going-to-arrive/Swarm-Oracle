@@ -41,7 +41,7 @@
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
-| Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease，防重入 |
+| Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
 
 ### 数据模型
@@ -67,9 +67,19 @@
 ### Replay
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
+- `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
+- `POST /api/scenario/{id}/counterfactual` 当前会在 clone 前先校验目标 `round_number` 里确实存在该 `agent_id` 的消息：
+  - `round_number < 1` 会先被 schema 拦成 `422`
+  - 找不到目标消息时返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND`
+  - 同 agent 同轮有多条消息时，如果前端没带 `source_message_content`，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+  - 前端带了 `source_message_content` 但找不到唯一匹配时，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_MISMATCH` 或 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+  - 如果 seed 阶段仍失败，后端会把刚创建的 replay branch、round 和 message 一起清掉，不再留下脏 branch 占 quota
+- `POST /api/scenario/{id}/resume` 当前会先预占 `simulation lock`，再把锁 lease 传给后台任务：
+  - 锁拿不到时直接返回 `409 SIMULATION_ALREADY_RUNNING`
+  - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
@@ -125,6 +135,9 @@
 ## 运行时约束
 
 - 主模式与 Debate 的后台任务都通过 `runtime_lock` 做跨 worker 防重入。
+- replay branch 路径当前也走 runtime lock：
+  - `counterfactual / resume` 在 clone / seed / schedule 期间持有同一把 scenario 级 replay 锁
+  - 这把锁会按固定间隔续租，避免长请求把 lease 跑过期后被第二个请求插队
 - `VectorStore` 读取默认按 branch 或 allowed-branch scope 收口，不再放宽到整个 scenario。
 - `llm_client` 负责：
   - 进程内 semaphore
@@ -186,6 +199,9 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
+  - SQLite lightweight fallback 当前也会尽力把唯一语义修到 `debate_id + turn_id + semantic_hash`；如果 repair 本身失败，会记 warning，但不会把旧的 best-effort index 补齐链路一起打断
+  - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复
+  - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
   - legacy SQLite 上如果已经留下重复 snapshot，读取会稳定选最新 snapshot，不再随机命中旧图
   - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来

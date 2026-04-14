@@ -110,21 +110,23 @@ def test_extract_splits_question_and_exclamation_sentences_in_chinese():
     assert "当然会" in texts
 
 
-def test_extract_deduplicates_by_semantic_hash():
-    """Identical sentences (case-insensitive) should be deduplicated."""
+def test_extract_deduplicates_by_semantic_hash_within_same_turn():
+    """Identical sentences are deduplicated within one turn, not across turns."""
     ids1 = extract_argument_units(
         debate_id="d-dedup", turn_id="t1",
         content="AI is great. AI is great.",
         speaker_side="proposition",
     )
-    # Second call with same text from a different turn
     ids2 = extract_argument_units(
         debate_id="d-dedup", turn_id="t2",
         content="AI IS GREAT.",
         speaker_side="opposition",
     )
     assert len(ids1) == 1  # dedup within same turn content
-    assert len(ids2) == 0  # dedup across turns
+    assert len(ids2) == 1  # preserved for a later turn
+
+    result = get_argument_map("d-dedup")
+    assert [unit["turn_id"] for unit in result["units"]] == ["t1", "t2"]
 
 
 def test_extract_empty_content_returns_empty():
@@ -159,6 +161,27 @@ def test_link_verdict_marks_accepted_and_unaddressed():
     statuses = {u["turn_id"]: u["status"] for u in result["units"]}
     assert statuses["t1"] == "accepted"
     assert statuses["t2"] == "unaddressed"
+
+
+def test_link_verdict_preserves_same_text_units_from_later_turns():
+    """Verdict attribution should still work when turns reuse the same sentence."""
+    extract_argument_units(
+        debate_id="d-verdict-same-text", turn_id="t1",
+        content="Same claim.",
+        speaker_side="proposition",
+    )
+    extract_argument_units(
+        debate_id="d-verdict-same-text", turn_id="t2",
+        content="Same claim.",
+        speaker_side="opposition",
+    )
+
+    link_verdict("d-verdict-same-text", {"supporting_turns": ["t2"]})
+
+    result = get_argument_map("d-verdict-same-text")
+    statuses = {u["turn_id"]: u["status"] for u in result["units"]}
+    assert statuses["t1"] == "unaddressed"
+    assert statuses["t2"] == "accepted"
 
 
 def test_link_verdict_no_supporting_turns_marks_all_unaddressed():

@@ -1,7 +1,7 @@
 /**
  * Phase C1 — CausalReviewView tests
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -225,6 +225,32 @@ describe('CausalReviewView', () => {
     renderView();
     await screen.findByTestId('reactflow');
     expect(screen.getByTestId('rf-minimap')).toHaveAttribute('data-pointer-events', 'none');
+    vi.restoreAllMocks();
+  });
+
+  it('hides the minimap on narrow viewports to avoid covering the graph', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-mobile-minimap',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [],
+      }),
+    } as Response);
+    renderView();
+    await screen.findByTestId('reactflow');
+    expect(screen.queryByTestId('rf-minimap')).not.toBeInTheDocument();
+    matchMediaSpy.mockRestore();
     vi.restoreAllMocks();
   });
 
@@ -461,7 +487,7 @@ describe('CausalReviewView', () => {
     });
     const initialCalls = fitViewMock.mock.calls.length;
 
-    await user.click(screen.getByTestId('rf-node-n1'));
+    await user.click(await screen.findByTestId('rf-node-n1'));
     await waitFor(() => {
       expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
     });
@@ -473,6 +499,30 @@ describe('CausalReviewView', () => {
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
     vi.restoreAllMocks();
+  });
+
+  it('keeps the node detail panel outside the export target so transient UI is not exported', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-export-scope',
+        available_branches: ['br1'],
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    const { container } = renderView();
+    const nodeButton = await screen.findByTestId('rf-node-n1');
+    await user.click(nodeButton);
+
+    const detailPanel = await screen.findByTestId('node-detail-panel');
+    const exportRoot = await screen.findByTestId('causal-graph-export-target');
+    expect(container.contains(exportRoot)).toBe(true);
+    expect(exportRoot?.contains(detailPanel)).toBe(false);
   });
 
   it('recovers after retrying a failed fetch', async () => {
@@ -617,6 +667,32 @@ describe('CausalReviewView', () => {
     renderView();
     const list = await screen.findByRole('list', { name: /Causal events/i });
     expect(list).toBeInTheDocument();
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Event');
     vi.restoreAllMocks();
+  });
+
+  it('uses a single named a11y list when large graphs use the text fallback', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-fallback-a11y',
+        nodes: Array.from({ length: 501 }, (_, index) => ({
+          id: `n${index}`,
+          key: `e${index}`,
+          type: 'event',
+          label: `Large node ${index}`,
+          round: 1,
+          payload: null,
+        })),
+        edges: [],
+      }),
+    } as Response);
+
+    renderView();
+
+    const visibleList = await screen.findByRole('list', { name: 'Causal events list' });
+    expect(visibleList).toBeInTheDocument();
+    expect(screen.getAllByRole('list')).toHaveLength(1);
+    expect(within(visibleList).getAllByRole('listitem')[0]).toHaveTextContent('Event');
   });
 });

@@ -574,7 +574,12 @@ class TestBuildSnapshot:
 
     def test_empty_graph_when_no_data(self):
         result = build_snapshot("nonexistent_scenario")
-        assert result == {"id": None, "nodes": [], "edges": []}
+        assert result == {
+            "id": None,
+            "available_branches": [],
+            "nodes": [],
+            "edges": [],
+        }
 
     def test_returns_populated_graph(self):
         messages = [
@@ -993,6 +998,80 @@ class TestForkEdgeFallback:
         ]
 
         assert len(caused) == 1
+
+    def test_explicit_trigger_ids_ignore_unrelated_branch_nodes_for_child_branch(self):
+        """Child branch provenance should ignore explicit triggers from unrelated branches."""
+        append_round_nodes(
+            "sc_fef5",
+            "br_parent",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_parent", content="parent event")],
+        )
+        append_round_nodes(
+            "sc_fef5",
+            "br_sibling",
+            1,
+            [MockMessage(emotion="angry", agent_id="a2", id="m_sibling", content="sibling event")],
+        )
+
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_fef5")
+            ).first()
+            assert snapshot is not None
+            parent_node = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.ref_id == "m_parent",
+                )
+            ).first()
+            sibling_node = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.ref_id == "m_sibling",
+                )
+            ).first()
+            assert parent_node is not None
+            assert sibling_node is not None
+
+        append_round_nodes(
+            "sc_fef5",
+            "br_parent",
+            2,
+            [MockMessage(emotion="neutral", agent_id="a1", id="m_fork", content="fork round")],
+            fork_event={
+                "branch_id": "br_parent",
+                "children": ["br_child"],
+                "reason": "forked",
+                "trigger_node_ids": [parent_node.id, sibling_node.id],
+            },
+        )
+        append_round_nodes(
+            "sc_fef5",
+            "br_child",
+            3,
+            [MockMessage(emotion="hopeful", agent_id="a3", id="m_child", content="child event")],
+        )
+
+        result = build_snapshot("sc_fef5", branch_id="br_child")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if (
+                edge["type"] == "caused"
+                and edge["target"] == fork_node["id"]
+                and edge["label"] == "triggered fork"
+            )
+        ]
+
+        assert {node["label"] for node in result["nodes"]} == {
+            "parent event",
+            "forked",
+            "child event",
+        }
+        assert len(caused) == 1
+        assert caused[0]["source"] == parent_node.id
 
 
 # ── Stance shift (A3) ─────────────────────────────────────

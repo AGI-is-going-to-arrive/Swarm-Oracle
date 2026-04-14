@@ -6,17 +6,25 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
-import type { AgentInfo } from '../types';
+import type { AgentInfo, AgentMessage } from '../types';
 
 interface Props {
   scenarioId: string;
   branchId: string;
   agents: AgentInfo[];
+  messages?: AgentMessage[];
   totalRounds: number;
   onCreated?: (branchId: string) => void;
 }
 
-export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds, onCreated }: Props) {
+export function CounterfactualPanel({
+  scenarioId,
+  branchId,
+  agents,
+  messages = [],
+  totalRounds,
+  onCreated,
+}: Props) {
   const { t } = useTranslation();
   const [selectedAgent, setSelectedAgent] = useState('');
   const [selectedRound, setSelectedRound] = useState(1);
@@ -24,6 +32,14 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+
+  const selectedSourceMessage = [...messages]
+    .reverse()
+    .find((message) => (
+      message.branch === branchId
+      && message.round === selectedRound
+      && message.agent_id === selectedAgent
+    ));
 
   const canSubmit = selectedAgent && replacement.trim() && !submitting;
 
@@ -39,6 +55,7 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
           source_branch_id: branchId,
           round_number: selectedRound,
           agent_id: selectedAgent,
+          source_message_content: selectedSourceMessage?.message,
           replacement_content: replacement.trim(),
         }),
       });
@@ -58,7 +75,17 @@ export function CounterfactualPanel({ scenarioId, branchId, agents, totalRounds,
     } finally {
       setSubmitting(false);
     }
-  }, [branchId, canSubmit, scenarioId, selectedAgent, selectedRound, replacement, t, onCreated]);
+  }, [
+    branchId,
+    canSubmit,
+    onCreated,
+    replacement,
+    scenarioId,
+    selectedAgent,
+    selectedRound,
+    selectedSourceMessage?.message,
+    t,
+  ]);
 
   return (
     <div style={{ border: '1px solid var(--color-border, #555)', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>

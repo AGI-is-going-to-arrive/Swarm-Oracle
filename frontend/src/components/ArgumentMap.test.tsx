@@ -18,13 +18,14 @@ vi.mock('@xyflow/react', async () => {
   const React = await import('react');
   return {
     ReactFlow: (props: Record<string, unknown>) => {
-      const nodes = props.nodes as Array<{ id: string }> | undefined;
+      const nodes = props.nodes as Array<{ id: string; focusable?: boolean; ariaLabel?: string | null }> | undefined;
       const edges = props.edges as Array<Record<string, unknown>> | undefined;
       const children = props.children as React.ReactNode;
       const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
       const onPaneClick = props.onPaneClick as (() => void) | undefined;
       const onInit = props.onInit as ((instance: { fitView: typeof fitViewMock }) => void) | undefined;
       const firstEdge = edges?.[0];
+      const firstNode = nodes?.[0];
 
       React.useEffect(() => {
         onInit?.({ fitView: fitViewMock });
@@ -39,6 +40,8 @@ vi.mock('@xyflow/react', async () => {
           data-edge-dash={String((firstEdge?.style as Record<string, unknown> | undefined)?.strokeDasharray ?? '')}
           data-edge-animated={String(firstEdge?.animated ?? false)}
           data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
+          data-node-focusable={String(firstNode?.focusable ?? '')}
+          data-node-aria-label={firstNode?.ariaLabel ?? ''}
         >
           {/* Expose clickable elements per node for testing onNodeClick */}
           {nodes?.map(n => (
@@ -298,6 +301,60 @@ describe('ArgumentMap', () => {
     expect(minimap).toHaveAttribute('data-pointer-events', 'none');
   });
 
+  it('keeps ReactFlow node wrappers out of the tab order and exposes a dialog action label on the card button', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-a11y-node',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow).toHaveAttribute('data-node-focusable', 'false');
+    expect(flow.getAttribute('data-node-aria-label')).toContain('Open details');
+  });
+
+  it('hides the minimap on narrow viewports to reduce graph chrome overlap', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-mobile',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    await screen.findByTestId('reactflow');
+    expect(screen.queryByTestId('rf-minimap')).not.toBeInTheDocument();
+    matchMediaSpy.mockRestore();
+  });
+
   it('renders the rejected status filter when backend data uses that status', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -315,6 +372,32 @@ describe('ArgumentMap', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     await screen.findByTestId('reactflow');
     expect(screen.getByRole('button', { name: 'Rejected' })).toBeInTheDocument();
+  });
+
+  it('keeps the node detail panel outside the export target so transient UI is not exported', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-export-scope',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    const { container } = render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    await user.click(screen.getByTestId('rf-node-n1'));
+
+    const detailPanel = await screen.findByTestId('node-detail-panel');
+    const exportRoot = await screen.findByTestId('argument-map-export-target');
+    expect(container.contains(exportRoot)).toBe(true);
+    expect(exportRoot?.contains(detailPanel)).toBe(false);
   });
 
   it('renders screen reader fallback list with all units', async () => {
@@ -336,9 +419,9 @@ describe('ArgumentMap', () => {
     const srList = screen.getByRole('list', { name: 'Argument units list' });
     const items = within(srList).getAllByRole('listitem');
     expect(items).toHaveLength(2);
-    expect(items[0].textContent).toContain('claim');
+    expect(items[0].textContent).toContain('Claim');
     expect(items[0].textContent).toContain('A claim');
-    expect(items[0].textContent).toContain('standing');
+    expect(items[0].textContent).toContain('Standing');
   });
 
   it('renders aria-label on map container', async () => {
@@ -504,6 +587,30 @@ describe('ArgumentMap', () => {
       expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('does not render a payload block for nodes whose backend payload is null', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-null-payload',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Claim A', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Claim A', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+    await user.click(screen.getByTestId('rf-node-n1'));
+
+    const detailPanel = await screen.findByTestId('node-detail-panel');
+    expect(within(detailPanel).queryByText('Payload')).not.toBeInTheDocument();
   });
 });
 

@@ -11,6 +11,9 @@ import type { DebateResultPayload } from '../types';
 const getDebateResultMock = vi.fn();
 const importReplayDebateMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
+const argumentMapMock = vi.fn(({ debateId }: { debateId: string }) => (
+  <div data-testid="argument-map">{debateId}</div>
+));
 
 function buildPayload(): DebateResultPayload {
   return {
@@ -188,6 +191,18 @@ vi.mock('../hooks/useScreenCapture', () => ({
   captureElementDataUrl: (...args: unknown[]) => captureElementDataUrlMock(...args),
 }));
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    capabilities: {
+      argument_map: { enabled: true },
+    },
+  }),
+}));
+
+vi.mock('../components/ArgumentMap', () => ({
+  ArgumentMap: (props: { debateId: string; visible: boolean }) => argumentMapMock(props),
+}));
+
 vi.mock('../lib/debateCounterplay', () => ({
   loadDebateCounterplay: vi.fn(() => ({
     debateId: 'debate-1',
@@ -216,6 +231,7 @@ describe('DebateResultView', () => {
     getDebateResultMock.mockReset();
     importReplayDebateMock.mockReset();
     captureElementDataUrlMock.mockReset();
+    argumentMapMock.mockClear();
   });
 
   it('renders verdict and exposes automation payload plus capture hooks', async () => {
@@ -386,6 +402,28 @@ describe('DebateResultView', () => {
 
     vi.useRealTimers();
     expect(await screen.findByText('debate.result_pending')).toBeInTheDocument();
+  });
+
+  it('loads the argument map on demand instead of rendering it on first paint', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(argumentMapMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('argument-map')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'argument.load_map' }));
+
+    expect(argumentMapMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('argument-map')).toHaveTextContent('debate-1');
   });
 
 });

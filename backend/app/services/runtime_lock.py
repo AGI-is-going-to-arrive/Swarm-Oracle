@@ -197,6 +197,63 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
         raise
 
 
+def refresh_runtime_lock(
+    lease: RuntimeLockLease | None,
+    *,
+    lease_seconds: float,
+) -> RuntimeLockLease | None:
+    """Extend an existing runtime lock lease if it is still owned by the caller."""
+    if lease is None:
+        return None
+
+    now = time.time()
+    normalized_lease = max(float(lease_seconds), 0.01)
+    refreshed_expires_at = now + normalized_lease
+
+    if lease.db_path is None:
+        with _INPROCESS_LOCKS_GUARD:
+            _sweep_expired_inprocess_locks(now)
+            current = _INPROCESS_LOCKS.get(lease.lock_key)
+            if current is None or current[0] != lease.owner_id:
+                return None
+            _INPROCESS_LOCKS[lease.lock_key] = (lease.owner_id, refreshed_expires_at)
+        return RuntimeLockLease(
+            lock_key=lease.lock_key,
+            owner_id=lease.owner_id,
+            db_path=None,
+            expires_at=refreshed_expires_at,
+        )
+
+    conn = _get_sqlite_connection(lease.db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_runtime_lock_table(conn, lease.db_path)
+        cursor = conn.execute(
+            f"""
+            UPDATE {_RUNTIME_LOCK_TABLE}
+            SET expires_at = ?
+            WHERE lock_key = ? AND owner_id = ? AND expires_at > ?
+            """,
+            (refreshed_expires_at, lease.lock_key, lease.owner_id, now),
+        )
+        if (cursor.rowcount or 0) <= 0:
+            conn.execute("ROLLBACK")
+            return None
+        conn.execute("COMMIT")
+        return RuntimeLockLease(
+            lock_key=lease.lock_key,
+            owner_id=lease.owner_id,
+            db_path=lease.db_path,
+            expires_at=refreshed_expires_at,
+        )
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise
+
+
 def runtime_lock_is_active(lock_key: str) -> bool:
     """Return whether a runtime lock is currently active for the given key."""
     now = time.time()

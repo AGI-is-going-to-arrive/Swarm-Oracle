@@ -665,13 +665,17 @@ def append_round_nodes(
 
                 trigger_ids = list(fork_event.get("trigger_node_ids") or [])
                 if trigger_ids:
-                    valid_trigger_ids = session.exec(
-                        select(GraphNode.id).where(
+                    valid_trigger_nodes = session.exec(
+                        select(GraphNode).where(
                             GraphNode.snapshot_id == snapshot.id,
                             GraphNode.id.in_(trigger_ids),
                         )
                     ).all()
-                    valid_trigger_id_set = set(valid_trigger_ids)
+                    valid_trigger_id_set = {
+                        node.id
+                        for node in valid_trigger_nodes
+                        if _node_branch_id(node) == branch_id
+                    }
                     trigger_ids = [
                         node_id
                         for node_id in trigger_ids
@@ -716,7 +720,7 @@ def append_round_nodes(
 
 def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
     """Build and return a serialized causal graph snapshot."""
-    empty = {"id": None, "nodes": [], "edges": []}
+    empty = {"id": None, "available_branches": [], "nodes": [], "edges": []}
 
     with Session(get_engine()) as session:
         stmt = select(GraphSnapshot).where(

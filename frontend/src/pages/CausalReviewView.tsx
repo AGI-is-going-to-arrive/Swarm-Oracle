@@ -6,7 +6,7 @@
             tooltips, agent search.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
@@ -29,7 +29,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useSearchParams } from 'react-router-dom';
-import { NODE_TYPE_COLORS_HEX, EDGE_STYLES, NODE_ICONS } from '../lib/graphTokens';
+import {
+  NODE_TYPE_COLORS_HEX,
+  EDGE_STYLES,
+  NODE_ICONS,
+  TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
+} from '../lib/graphTokens';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -96,6 +101,38 @@ const PERF_ANIMATION_LIMIT = 150;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
+const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
+
+function useCompactGraphViewport() {
+  const [isCompact, setIsCompact] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches
+      : false
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mediaQueryList = window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY);
+    const handleChange = (event: MediaQueryListEvent) => setIsCompact(event.matches);
+    mediaQueryList.addEventListener?.('change', handleChange);
+    return () => mediaQueryList.removeEventListener?.('change', handleChange);
+  }, []);
+
+  return isCompact;
+}
+
+function getCausalTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
+  const pair = GRAPH_TYPE_LABEL_I18N[type];
+  return pair ? t(pair[0], pair[1]) : type;
+}
+
+function getCausalNodeActionLabel(
+  typeLabel: string,
+  label: string,
+  t: (key: string, fallback: string) => string,
+): string {
+  return `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${label}`;
+}
 
 function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'available_branches'>): string[] {
   const explicit = Array.isArray(data.available_branches)
@@ -122,7 +159,11 @@ function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'availab
 
 // ── Layout ──────────────────────────────────────────────────
 
-function layoutDagre(nodes: GraphNodeData[], edges: GraphEdgeData[]): { nodes: Node[]; edges: Edge[] } {
+function layoutDagre(
+  nodes: GraphNodeData[],
+  edges: GraphEdgeData[],
+  t: (key: string, fallback: string) => string,
+): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: 'LR', ranksep: 80, nodesep: 40 });
@@ -138,13 +179,19 @@ function layoutDagre(nodes: GraphNodeData[], edges: GraphEdgeData[]): { nodes: N
     const pos = g.node(n.id);
     const fullLabel = n.label || n.key;
     const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '\u2026' : fullLabel;
+    const typeLabel = getCausalTypeLabel(n.type, t);
+    const ariaLabel = getCausalNodeActionLabel(typeLabel, fullLabel, t);
     return {
       id: n.id,
       type: 'graphCard',
       position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
+      focusable: false,
+      ariaRole: 'button',
+      ariaLabel,
       data: {
         label,
         fullLabel,
+        ariaLabel,
         iconName: NODE_ICONS[n.type] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? '#555',
         borderColor: '',
@@ -178,6 +225,8 @@ function layoutDagre(nodes: GraphNodeData[], edges: GraphEdgeData[]): { nodes: N
 
 export function CausalReviewView() {
   const { t } = useTranslation();
+  const isCompactViewport = useCompactGraphViewport();
+  const translateRef = useRef(t);
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -191,9 +240,18 @@ export function CausalReviewView() {
   const [legendOpen, setLegendOpen] = useState(false);
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
+  const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
+
+  const translate = useCallback((key: string, fallback: string) => (
+    translateRef.current(key, fallback)
+  ), []);
 
   const fetchGraph = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -252,11 +310,12 @@ export function CausalReviewView() {
   const nodeCount = filteredData?.nodes.length ?? 0;
   const edgeCount = filteredData?.edges.length ?? 0;
   const isTextFallback = nodeCount > PERF_TEXT_FALLBACK_LIMIT;
+  const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isTextFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges);
-  }, [filteredData, isTextFallback]);
+    return layoutDagre(filteredData.nodes, filteredData.edges, translate);
+  }, [filteredData, isTextFallback, translate]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -393,8 +452,8 @@ export function CausalReviewView() {
 
   return (
     <Tooltip.Provider delayDuration={300}>
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
+      <div style={{ height: '100dvh', minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: isCompactViewport ? '0.75rem' : '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
           <Link to={`/result/${id}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
             &larr; {t('common.back_to_result', 'Back to Result')}
           </Link>
@@ -431,7 +490,10 @@ export function CausalReviewView() {
             }}
           />
           {nodeCount > 0 && !isTextFallback && (
-            <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
+            <ExportPanel
+              containerSelector={`.causal-graph-export-target[data-export-root="${exportRootId}"]`}
+              filenamePrefix="causal-graph"
+            />
           )}
           {/* B6: Legend toggle */}
           <button
@@ -464,50 +526,61 @@ export function CausalReviewView() {
         ) : isTextFallback ? (
           <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }} className="causal-graph-container">
             <p style={{ color: '#888', marginBottom: '0.5rem' }}>{t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')}</p>
-            <div role="list">
+            <div role="list" aria-label={causalListAriaLabel}>
               {filteredData?.nodes.map(n => (
                 <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
-                  [{n.type}] {n.label} (R{n.round ?? '?'})
+                  {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
                 </div>
               ))}
             </div>
           </div>
         ) : (
           <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={onNodeClick}
-              onPaneClick={onPaneClick}
-              onInit={(instance) => {
-                reactFlowRef.current = instance;
-              }}
-              fitView
-              proOptions={{ hideAttribution: true }}
+            <div
+              className="causal-graph-export-target"
+              data-testid="causal-graph-export-target"
+              data-export-root={exportRootId}
+              style={{ position: 'absolute', inset: 0 }}
             >
-              <Background />
-              <Controls />
-              <MiniMap
-                nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
-                nodeStrokeWidth={3}
-                style={{ background: '#1a1a2e', pointerEvents: 'none' }}
-              />
-            </ReactFlow>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                onPaneClick={onPaneClick}
+                onInit={(instance) => {
+                  reactFlowRef.current = instance;
+                }}
+                fitView
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background />
+                {!isCompactViewport && <Controls className="graph-export-chrome" />}
+                {!isCompactViewport && (
+                  <MiniMap
+                    className="graph-export-chrome"
+                    nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+                    nodeStrokeWidth={3}
+                    style={{ background: '#1a1a2e', pointerEvents: 'none' }}
+                  />
+                )}
+              </ReactFlow>
+            </div>
             <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
           </div>
         )}
 
-        {/* a11y: screen reader fallback list */}
-        <div className="sr-only" role="list" aria-label={t('causal.a11y_list', 'Causal events list')}>
-          {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
-            <div key={n.id} role="listitem">
-              {n.type}: {n.label} ({t('causal.round_label', 'Round')} {n.round ?? '?'})
-            </div>
-          ))}
-        </div>
+        {!isTextFallback && (
+          <div className="sr-only" role="list" aria-label={causalListAriaLabel}>
+            {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
+              <div key={n.id} role="listitem">
+                {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Tooltip.Provider>
   );

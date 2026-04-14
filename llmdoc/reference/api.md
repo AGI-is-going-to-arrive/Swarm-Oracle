@@ -191,6 +191,7 @@
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
 | `POST` | `/api/scenario/{id}/counterfactual` | 创建反事实分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `POST` | `/api/scenario/{id}/resume` | 从指定 round 续跑新分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/checkpoints` | 检查点列表 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/faction-timeline` | 阵营时间线 | `FEATURE_FACTIONS` |
@@ -204,6 +205,23 @@
   - 空白值按未过滤处理
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
   - 成功返回体仍会带 `available_branches`
+- `POST /api/scenario/{id}/counterfactual` 当前约束：
+  - `round_number` 通过 schema 校验，必须 `>= 1`
+  - clone 前会先校验目标 round 里是否存在该 `agent_id` 的消息；找不到时返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND`
+  - 请求体当前也支持可选 `source_message_content`
+    - 同 agent 同轮只有 1 条消息时，不传也可以
+    - 同 agent 同轮有多条消息时，不传会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+    - 传了但找不到唯一匹配时，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_MISMATCH` 或 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+  - 如果 seed 阶段失败，会返回 `400 COUNTERFACTUAL_SEED_FAILED`，并清理刚创建的 replay branch
+- `POST /api/scenario/{id}/counterfactual` 与 `POST /api/scenario/{id}/resume` 当前共用 replay branch 锁：
+  - 正在跑另一条 replay branch 操作时返回 `409 REPLAY_BRANCH_BUSY`
+  - 达到共享上限时返回 `429 REPLAY_BRANCH_LIMIT_REACHED`
+- `POST /api/scenario/{id}/resume` 当前还会先预占 simulation lock：
+  - scenario 状态不是 `done` 时返回 `400 RESUME_SCENARIO_STATUS_INVALID`
+  - source branch 不存在时返回 `404 RESUME_BRANCH_NOT_FOUND`
+  - round 超范围时返回 `400 RESUME_ROUND_OUT_OF_RANGE`
+  - simulation lock 已被占用时返回 `409 SIMULATION_ALREADY_RUNNING`
+  - 只有后台任务真正成功挂起后才会返回 `201`
 - 当 `SESSION_SECRET` 非空时：
   - agent identity / workshop 当前要求 signed principal token
   - 读取 scenario owner 资源的 graph / counterfactual / checkpoints / faction-timeline 也会按 principal 收口

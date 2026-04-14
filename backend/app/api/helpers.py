@@ -35,6 +35,7 @@ from app.services.campaign import (
 from app.services.llm_client import is_local_provider_url, llm_request_scope
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
+    RuntimeLockLease,
     acquire_runtime_lock,
     release_runtime_lock,
     simulation_lock_key,
@@ -309,6 +310,7 @@ async def run_sim_background(
     *,
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
+    pre_acquired_lock_lease: RuntimeLockLease | None = None,
 ):
     """Run simulation as a background task with anti-reentrancy guard.
 
@@ -323,22 +325,23 @@ async def run_sim_background(
         logger.warning("Simulation %s already running — skipping duplicate launch", scenario_id)
         return
     _running_simulations.add(scenario_id)
-    lock_lease = None
+    lock_lease = pre_acquired_lock_lease
 
     from app.api.ws import ws_manager
     try:
         # H-5 fix: total simulation timeout (MAX_ROUNDS * 180s ceiling)
         total_timeout = settings.MAX_ROUNDS * 180
-        lock_lease = acquire_runtime_lock(
-            simulation_lock_key(scenario_id),
-            lease_seconds=total_timeout + 60,
-        )
         if lock_lease is None:
-            logger.warning(
-                "Simulation %s already running via another worker — skipping duplicate launch",
-                scenario_id,
+            lock_lease = acquire_runtime_lock(
+                simulation_lock_key(scenario_id),
+                lease_seconds=total_timeout + 60,
             )
-            return
+            if lock_lease is None:
+                logger.warning(
+                    "Simulation %s already running via another worker — skipping duplicate launch",
+                    scenario_id,
+                )
+                return
 
         sim_kwargs: dict = {
             "scenario_id": scenario_id,

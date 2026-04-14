@@ -1,8 +1,12 @@
 """API-level tests for counterfactual replay endpoints."""
 
+from concurrent.futures import ThreadPoolExecutor
+from time import sleep
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.main import app
 from app.models.database import (
@@ -141,6 +145,10 @@ class TestCreateCounterfactual:
             "replacement_content": "test",
         })
         assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_BRANCH_NOT_FOUND",
+            "message": "Branch nonexistent-branch not found in scenario",
+        }
 
     def test_rejects_round_exceeds_max(self, client):
         """POST counterfactual should reject round_number beyond available rounds."""
@@ -154,6 +162,50 @@ class TestCreateCounterfactual:
             "replacement_content": "test",
         })
         assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
+            "message": "round_number 99 exceeds available rounds",
+        }
+
+    def test_rejects_agent_without_message_for_round_and_does_not_create_branch(self, client):
+        """Validation should fail before cloning when the target agent cannot be edited."""
+        engine = get_engine()
+        sid, bid, _aid = _setup_full_scenario(engine)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 2,
+            "agent_id": "missing-agent",
+            "replacement_content": "test",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND",
+            "message": f"Agent missing-agent has no message in round 2 of branch {bid}",
+        }
+
+        with Session(engine) as session:
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+        assert replay_branches == []
+
+    def test_rejects_round_below_one_via_schema_validation(self, client):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 0,
+            "agent_id": aid,
+            "replacement_content": "test",
+        })
+
+        assert resp.status_code == 422
 
     def test_limits_to_three_per_scenario(self, client):
         """POST counterfactual should return 429 after 3 counterfactual branches."""
@@ -171,7 +223,226 @@ class TestCreateCounterfactual:
             "replacement_content": "too many",
         })
         assert resp.status_code == 429
-        assert resp.json()["detail"] == "Maximum 3 replay branches per scenario"
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LIMIT_REACHED",
+            "message": "Maximum 3 replay branches per scenario",
+        }
+
+    def test_concurrent_requests_do_not_bypass_replay_branch_limit(self, client, monkeypatch):
+        """Concurrent counterfactual requests must not exceed the shared replay limit."""
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        for i in range(2):
+            _seed_branch(engine, sid, title=f"CF-{i}", replay_kind="counterfactual")
+
+        monkeypatch.setattr("app.api.graphs._REPLAY_BRANCH_LOCK_LEASE_SECONDS", 0.05)
+        monkeypatch.setattr("app.api.graphs._REPLAY_BRANCH_LOCK_WAIT_SECONDS", 0.3)
+        monkeypatch.setattr("app.api.graphs._REPLAY_BRANCH_LOCK_POLL_SECONDS", 0.01)
+
+        def fake_clone_until_round(*_args, **_kwargs):
+            sleep(0.12)
+            new_branch = Branch(
+                scenario_id=sid,
+                parent_branch_id=bid,
+                replay_kind="counterfactual",
+                replay_source_branch_id=bid,
+                replay_source_round=1,
+                title="Concurrent CF",
+                status=BranchStatus.ACTIVE,
+                probability=0.5,
+            )
+            with Session(engine) as session:
+                session.add(new_branch)
+                session.commit()
+                session.refresh(new_branch)
+                return new_branch.id
+
+        monkeypatch.setattr("app.api.graphs.clone_until_round", fake_clone_until_round)
+        monkeypatch.setattr("app.api.graphs.seed_counterfactual", lambda *_args, **_kwargs: None)
+
+        def post_request():
+            return client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 1,
+                    "agent_id": aid,
+                    "replacement_content": "race test",
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _index: post_request(), range(2)))
+
+        status_codes = sorted(resp.status_code for resp in responses)
+        assert status_codes == [201, 429]
+        assert any(
+            resp.json().get("detail", {}).get("code") == "REPLAY_BRANCH_LIMIT_REACHED"
+            for resp in responses
+        )
+
+        with Session(engine) as session:
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
+                )
+            ).all()
+        assert len(replay_branches) == 3
+
+    def test_seed_failure_cleans_up_created_branch(self, client, monkeypatch):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        monkeypatch.setattr(
+            "app.api.graphs.seed_counterfactual",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("seed failed")),
+        )
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "replacement_content": "test",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_SEED_FAILED",
+            "message": "seed failed",
+        }
+
+        with Session(engine) as session:
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+        assert replay_branches == []
+
+    def test_unexpected_seed_failure_also_cleans_up_created_branch(self, monkeypatch):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        monkeypatch.setattr(
+            "app.api.graphs.seed_counterfactual",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            resp = failing_client.post(f"/api/scenario/{sid}/counterfactual", json={
+                "source_branch_id": bid,
+                "round_number": 1,
+                "agent_id": aid,
+                "replacement_content": "test",
+            })
+
+        assert resp.status_code == 500
+
+        with Session(engine) as session:
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+        assert replay_branches == []
+
+    def test_lock_loss_before_clone_fails_closed(self, client, monkeypatch):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        clone_mock = MagicMock(return_value="new-branch-id")
+        seed_mock = MagicMock()
+        monkeypatch.setattr("app.api.graphs.clone_until_round", clone_mock)
+        monkeypatch.setattr("app.api.graphs.seed_counterfactual", seed_mock)
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args, **_kwargs: True)
+
+        def fail_heartbeat(lease_holder, *, lease_seconds, lock_label):
+            lease_holder[0] = None
+            return MagicMock(), MagicMock()
+
+        monkeypatch.setattr("app.api.graphs._start_runtime_lock_heartbeat", fail_heartbeat)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "replacement_content": "test",
+        })
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "REPLAY_BRANCH_LOCK_LOST",
+            "message": "Replay branch lock was lost before cloning or seeding",
+        }
+        clone_mock.assert_not_called()
+        seed_mock.assert_not_called()
+
+    def test_rewrites_latest_agent_message_when_round_has_multiple_messages(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        aid = _seed_agent(engine, sid)
+        rid = _seed_round(engine, bid, 1)
+        _seed_message(engine, rid, aid, content="first message")
+        _seed_message(engine, rid, aid, content="second message")
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "source_message_content": "second message",
+            "replacement_content": "replacement",
+        })
+
+        assert resp.status_code == 201
+        new_branch_id = resp.json()["branch_id"]
+
+        with Session(engine) as session:
+            cloned_contents = session.exec(
+                select(AgentMessage.content)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .where(
+                    Round.branch_id == new_branch_id,
+                    Round.round_number == 1,
+                    AgentMessage.agent_id == aid,
+                )
+            ).all()
+
+        assert cloned_contents.count("replacement") == 1
+        assert "first message" in cloned_contents
+        assert "second message" not in cloned_contents
+
+    def test_rejects_ambiguous_agent_message_without_source_content(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        aid = _seed_agent(engine, sid)
+        rid = _seed_round(engine, bid, 1)
+        _seed_message(engine, rid, aid, content="first message")
+        _seed_message(engine, rid, aid, content="second message")
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "replacement_content": "replacement",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS",
+            "message": (
+                f"Agent {aid} has multiple messages in round 1 "
+                f"of branch {bid}; select a specific source message"
+            ),
+        }
 
 
 # ── GET /compare ─────────────────────────────────────────

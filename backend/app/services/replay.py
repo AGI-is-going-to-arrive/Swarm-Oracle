@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 
+from sqlalchemy import literal_column
 from sqlmodel import Session, select
 
 from app.models.checkpoint import ScenarioCheckpoint
@@ -21,6 +23,51 @@ from app.models.database import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _agent_message_rowid():
+    return literal_column(f"{AgentMessage.__tablename__}.rowid")
+
+
+def _normalize_source_message_content(message_content: str | None) -> str | None:
+    if message_content is None:
+        return None
+    normalized = message_content.strip()
+    return normalized or None
+
+
+def _select_counterfactual_message(
+    messages: list[AgentMessage],
+    *,
+    agent_id: str,
+    source_message_content: str | None = None,
+) -> AgentMessage:
+    # Callers provide messages ordered newest-first so same-round duplicates
+    # deterministically resolve to the intended latest message.
+    candidates = [message for message in messages if message.agent_id == agent_id]
+    if not candidates:
+        raise ValueError(f"No message from agent {agent_id} in the selected round")
+
+    normalized_source = _normalize_source_message_content(source_message_content)
+    if normalized_source is not None:
+        matches = [
+            message for message in candidates
+            if message.content.strip() == normalized_source
+        ]
+        if not matches:
+            raise ValueError(
+                "Agent "
+                f"{agent_id} has no message matching the selected source "
+                "content in the selected round"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Agent {agent_id} has multiple matching messages in the selected round; "
+                "target is ambiguous"
+            )
+        return matches[0]
+
+    return candidates[0]
 
 
 def _require_branch_in_scenario(
@@ -57,9 +104,21 @@ def write_checkpoint(
     compressed_summary = json.dumps(
         [
             {
-                "agent_id": getattr(a, "id", a.get("id", "")) if isinstance(a, dict) else a.id,
-                "stance": getattr(a, "stance", a.get("stance", "")) if isinstance(a, dict) else a.stance,
-                "emotion": getattr(a, "emotion", a.get("emotion", "neutral")) if isinstance(a, dict) else a.emotion,
+                "agent_id": (
+                    getattr(a, "id", a.get("id", ""))
+                    if isinstance(a, dict)
+                    else a.id
+                ),
+                "stance": (
+                    getattr(a, "stance", a.get("stance", ""))
+                    if isinstance(a, dict)
+                    else a.stance
+                ),
+                "emotion": (
+                    getattr(a, "emotion", a.get("emotion", "neutral"))
+                    if isinstance(a, dict)
+                    else a.emotion
+                ),
             }
             for a in agents
         ],
@@ -81,7 +140,12 @@ def write_checkpoint(
             existing.compressed_summary = compressed_summary
             existing.blackboard_json = blackboard_json
             session.add(existing)
-            logger.info("Updated checkpoint: scenario=%s branch=%s round=%d", scenario_id, branch_id, round_number)
+            logger.info(
+                "Updated checkpoint: scenario=%s branch=%s round=%d",
+                scenario_id,
+                branch_id,
+                round_number,
+            )
         else:
             checkpoint = ScenarioCheckpoint(
                 scenario_id=scenario_id,
@@ -91,7 +155,12 @@ def write_checkpoint(
                 blackboard_json=blackboard_json,
             )
             session.add(checkpoint)
-            logger.info("Created checkpoint: scenario=%s branch=%s round=%d", scenario_id, branch_id, round_number)
+            logger.info(
+                "Created checkpoint: scenario=%s branch=%s round=%d",
+                scenario_id,
+                branch_id,
+                round_number,
+            )
 
         session.commit()
 
@@ -101,6 +170,7 @@ def clone_until_round(
     source_branch_id: str,
     round_number: int,
     *,
+    ensure_lock: Callable[[], None] | None = None,
     replay_kind: str = "counterfactual",
     title: str | None = None,
 ) -> str:
@@ -115,6 +185,8 @@ def clone_until_round(
     """
     display_title = title or f"{replay_kind.title()} from round {round_number}"
     with Session(get_engine()) as session:
+        if ensure_lock is not None:
+            ensure_lock()
         # Create new branch with replay provenance
         new_branch = Branch(
             scenario_id=scenario_id,
@@ -140,6 +212,8 @@ def clone_until_round(
         ).all()
 
         for src_round in source_rounds:
+            if ensure_lock is not None:
+                ensure_lock()
             new_round = Round(
                 branch_id=new_branch_id,
                 round_number=src_round.round_number,
@@ -150,9 +224,13 @@ def clone_until_round(
 
             # Copy all messages for this round
             messages = session.exec(
-                select(AgentMessage).where(AgentMessage.round_id == src_round.id)
+                select(AgentMessage)
+                .where(AgentMessage.round_id == src_round.id)
+                .order_by(_agent_message_rowid())
             ).all()
             for msg in messages:
+                if ensure_lock is not None:
+                    ensure_lock()
                 new_msg = AgentMessage(
                     round_id=new_round.id,
                     agent_id=msg.agent_id,
@@ -163,6 +241,8 @@ def clone_until_round(
                 )
                 session.add(new_msg)
 
+        if ensure_lock is not None:
+            ensure_lock()
         session.commit()
         logger.info(
             "Cloned branch %s -> %s up to round %d (%d rounds copied)",
@@ -173,6 +253,9 @@ def clone_until_round(
 
 def seed_counterfactual(
     branch_id: str, agent_id: str, replacement_content: str,
+    *,
+    ensure_lock: Callable[[], None] | None = None,
+    source_message_content: str | None = None,
 ) -> None:
     """Seed a counterfactual replacement into a cloned branch.
 
@@ -181,6 +264,8 @@ def seed_counterfactual(
     Also sets replay_source_agent_id on the branch.
     """
     with Session(get_engine()) as session:
+        if ensure_lock is not None:
+            ensure_lock()
         # Find the last round in the cloned branch
         last_round = session.exec(
             select(Round)
@@ -191,19 +276,21 @@ def seed_counterfactual(
         if last_round is None:
             raise ValueError(f"No rounds found in branch {branch_id}")
 
-        # Find the agent's message in that round
-        message = session.exec(
-            select(AgentMessage).where(
-                AgentMessage.round_id == last_round.id,
-                AgentMessage.agent_id == agent_id,
+        candidate_messages = session.exec(
+            select(AgentMessage)
+            .where(AgentMessage.round_id == last_round.id)
+            .order_by(_agent_message_rowid().desc())
+        ).all()
+        try:
+            message = _select_counterfactual_message(
+                candidate_messages,
+                agent_id=agent_id,
+                source_message_content=source_message_content,
             )
-        ).first()
-
-        if message is None:
+        except ValueError as exc:
             raise ValueError(
-                f"No message from agent {agent_id} in round {last_round.round_number} "
-                f"of branch {branch_id}"
-            )
+                f"{exc} of branch {branch_id}"
+            ) from exc
 
         message.content = replacement_content
         session.add(message)
@@ -214,6 +301,8 @@ def seed_counterfactual(
             branch.replay_source_agent_id = agent_id
             session.add(branch)
 
+        if ensure_lock is not None:
+            ensure_lock()
         session.commit()
         logger.info(
             "Seeded counterfactual: branch=%s agent=%s round=%d",
