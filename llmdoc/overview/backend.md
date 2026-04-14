@@ -160,7 +160,8 @@
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
 - `causal_graph.append_round_nodes()` 当前对同一 `branch / round` 的重复追加是幂等的：
   - 同一 agent 同 round 多条消息会用最后一条覆盖 `AgentStateFrame`
-  - 已存在的 event / fork / stance_shift 节点与边会复用，不再因为 `AgentStateFrame` 唯一约束把整轮 causal graph 写入打断
+  - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 的 sibling branch 不会再互相覆盖节点
+  - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换，不会继续累积双来源
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
@@ -176,7 +177,8 @@
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
   - 如果 enrichment 改写了 unit type，会按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn，避免跨 turn 遗留陈旧 `rebuts`
-  - 重建时会尽量保留仍然有效的旧边；`rebuttal` 的 target 不会在重建时漂移到另一条 claim
+  - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜
+  - 重建时会尽量保留仍然有效的旧边；如果 `DebateTurn.content` 可用，会优先用 turn 内句子顺序恢复 `supports / rebuts` 边
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。

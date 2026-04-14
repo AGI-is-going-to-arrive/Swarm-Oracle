@@ -20,15 +20,19 @@
 ### Post-v6 Patch Update (2026-04-14)
 
 - `P1` causal graph round append 现已按 `(branch_id, round_number, agent_id)` 幂等收口；同一 agent 同轮重复 hook 或多消息不会再因为 `AgentStateFrame` 唯一约束让整轮图谱回滚，state frame 取该 agent 本轮最后一条消息。
+- `P1` causal graph 的 same-round event / stance-shift 节点当前已按 `branch_id` 隔离；sibling branch 即使 round、agent、`msg.id` 一样，也不会再互相覆盖节点。
 - `P1` child-branch causal review 当前会保留 fork 的直接 provenance；切到 child branch 时不再只剩孤儿 fork。
-- `P1` argument map 当前统一了初次抽取与重建时的 opponent-claim 选择规则；enrichment rerun 不再把既有 rebuttal target 改挂到别的 claim。
+- `P1` fork replay 当前如果从 same-round fallback 切到显式 `trigger_node_ids`，旧的 `triggered fork` provenance edge 会先被替换，不会再保留双来源。
+- `P1` argument map 当前统一了初次抽取与重建时的 opponent-claim 选择规则；最新对手 claim 先按 round/turn 选，再按句子顺序取同 turn 最后一条，enrichment rerun 不再把既有 rebuttal target 改挂到别的 claim。
 - `P2` argument map sentence split 当前已覆盖 `? / ! / ？ / ！`，多句 turn 不再被错误并成一个 unit。
+- `P2` argument map rebuild 当前在 `DebateTurn.content` 可用时，会优先按 turn 内句子顺序恢复 `supports / rebuts`；不再只靠 hash 或时间戳回退。
 - `P2` `ArgumentMap / CausalReviewView` 当前只会在图结构变化时 `fitView()`；节点选中 / 取消选中不会再把视口强制拉回去。`ArgumentMap` 在筛选结果为空时也会保留 chips 和 `Clear`。
 - `P2` branch selector 当前除了优先使用后端 `available_branches`，也补了 `payload.branch_id + children` 的前端 fallback。
 - 最新复验：
-  - backend graph/debate 定向回归 `176 passed`
-  - frontend graph suite `80 passed`
+  - backend graph/debate 定向回归 `180 passed`
+  - backend API / debate service 补回归 `151 passed`
   - targeted `ruff check` 通过
+  - frontend graph suite `80 passed`
   - frontend `typecheck / lint / build` 通过
   - `phase3a` desktop/mobile `17/17`
   - `phase3b` desktop/mobile `14/14`
@@ -40,7 +44,7 @@
 | Finding | Fix |
 |---------|-----|
 | P1 A8 status=unaddressed but edge=rejected → dual semantics breaks frontend | **Eliminated `rejected` edge type from verdict edges.** All non-supporting verdict edges stay `unaddressed`. Frontend visual layer meanwhile keeps `rejected` status compatibility because backend model still exposes it as a legal `unit.status`. |
-| P1 A7 node_key hash ≠ sentence order → rebuttal targets arbitrary claim | **Clarified as v1 heuristic.** Sort by round_number DESC + node_key ASC (lowest hash = stable tiebreak). Documented as approximation; cross-turn semantic matching deferred to LLM enrichment. |
+| P1 A7 node_key hash ≠ sentence order → rebuttal targets arbitrary claim | **在 v6 当时先按启发式兜底；2026-04-14 patch 已收口为最新对手 claim + 同 turn 句子顺序。** 当前初次抽取与重建都不再按 hash 字典序猜目标。 |
 | P2 B4 implicitly dropped, test counts inconsistent | **B4 explicitly marked SKIPPED (already TB).** Task count corrected to 8. Test descriptions aligned with tier count. |
 
 ### Open Questions — Resolved
@@ -49,7 +53,7 @@
 A: verdict edge semantics stay `unaddressed`. Current judge_rationale only provides `supporting_turns`, not `rejected_turns`, so verdict rebuild still has no data source for an explicit `rejected` edge. Frontend visual compatibility for `unit.status="rejected"` is retained because the backend model still allows that value.
 
 **Q: Rebuttal target = "latest claim" or "same turn most relevant"?**
-A: V1 rule = **opponent's claim with highest round_number; same-round tiebreak = lowest node_key (ASC, stable arbitrary).** This is documented as a heuristic. More accurate cross-turn targeting requires LLM enrichment (ARGUMENT_MAP_LLM_ENRICHMENT flag, already scaffolded).
+A: 当前规则 = **先选最新的对手 claim；同一 turn 内按句子顺序取最后一条。** `DebateTurn.content` 可用时，重建路径也走同一套句子顺序；不再按 `node_key` hash 字典序猜目标。
 
 ---
 

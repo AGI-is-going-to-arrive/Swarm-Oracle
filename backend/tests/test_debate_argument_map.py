@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
+from app.models.debate import DebateTurn
 from app.services.debate_argument_map import (
     enrich_argument_units_for_turn,
     extract_argument_units,
@@ -468,6 +469,17 @@ async def test_enrich_rebuild_preserves_support_edge_with_tied_timestamps():
     )
 
     with Session(get_engine()) as session:
+        session.add(
+            DebateTurn(
+                id="t1",
+                debate_id="d-enrich-stable-order",
+                sequence=1,
+                phase="opening",
+                speaker_side="proposition",
+                speaker_name="Speaker",
+                content="Claim first. Data confirms it.",
+            )
+        )
         units = {
             unit.canonical_text: unit
             for unit in session.exec(
@@ -646,6 +658,29 @@ def test_rebuttal_rebuts_opponent():
     result = get_argument_map("d-edge2")
     rebuts = [e for e in result["edges"] if e["type"] == "rebuts"]
     assert len(rebuts) >= 1
+
+
+def test_rebuttal_targets_latest_claim_from_opponent_turn():
+    """A rebuttal should target the latest opposing claim from the same turn."""
+    extract_argument_units(
+        debate_id="d-edge3",
+        turn_id="t1",
+        content="Alpha claim. Beta claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-edge3",
+        turn_id="t2",
+        content="However nope.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    result = get_argument_map("d-edge3")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    rebuttal = next(edge for edge in result["edges"] if edge["type"] == "rebuts")
+    assert labels_by_node[rebuttal["target"]] == "Beta claim."
 
 
 # ── A10: round_number from turn_sequence ───────────────────

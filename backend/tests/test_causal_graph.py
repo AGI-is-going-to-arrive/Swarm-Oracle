@@ -249,6 +249,63 @@ class TestAppendRoundNodes:
             assert len(edges) == 1
             assert edges[0].edge_type == "caused"
 
+    def test_same_round_nodes_are_isolated_per_branch(self):
+        """Same-round nodes from different branches must not reuse the same event node."""
+        append_round_nodes(
+            "sc3d",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id=None, content="branch one")],
+        )
+        append_round_nodes(
+            "sc3d",
+            "br2",
+            1,
+            [MockMessage(emotion="angry", agent_id="a1", id=None, content="branch two")],
+        )
+
+        branch_one = build_snapshot("sc3d", branch_id="br1")
+        branch_two = build_snapshot("sc3d", branch_id="br2")
+
+        assert [node["label"] for node in branch_one["nodes"]] == ["branch one"]
+        assert [node["label"] for node in branch_two["nodes"]] == ["branch two"]
+        assert set(branch_one["available_branches"]) == {"br1", "br2"}
+
+    def test_same_round_duplicate_message_ids_are_isolated_per_branch(self):
+        """Identical msg ids in different branches must still produce separate event nodes."""
+        append_round_nodes(
+            "sc3e",
+            "br1",
+            1,
+            [
+                MockMessage(
+                    emotion="calm",
+                    agent_id="a1",
+                    id="same-id",
+                    content="branch one same id",
+                )
+            ],
+        )
+        append_round_nodes(
+            "sc3e",
+            "br2",
+            1,
+            [
+                MockMessage(
+                    emotion="angry",
+                    agent_id="a1",
+                    id="same-id",
+                    content="branch two same id",
+                )
+            ],
+        )
+
+        branch_one = build_snapshot("sc3e", branch_id="br1")
+        branch_two = build_snapshot("sc3e", branch_id="br2")
+
+        assert [node["label"] for node in branch_one["nodes"]] == ["branch one same id"]
+        assert [node["label"] for node in branch_two["nodes"]] == ["branch two same id"]
+
 
 # ── build_snapshot ──────────────────────────────────────
 
@@ -593,6 +650,52 @@ class TestForkEdgeFallback:
         result = build_snapshot("sc_fef2")
         caused = [e for e in result["edges"] if e["type"] == "caused"]
         assert len(caused) == 0
+
+    def test_explicit_trigger_ids_replace_same_round_fallback_edges(self):
+        """Replaying a fork with explicit trigger ids should not keep stale fallback provenance."""
+        append_round_nodes(
+            "sc_fef3",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_root", content="root event")],
+        )
+        append_round_nodes(
+            "sc_fef3",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event={"branch_id": "br_child", "reason": "fallback first"},
+        )
+
+        initial = build_snapshot("sc_fef3")
+        root_node = next(node for node in initial["nodes"] if node["label"] == "root event")
+
+        append_round_nodes(
+            "sc_fef3",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event={
+                "branch_id": "br_child",
+                "reason": "fallback first",
+                "trigger_node_ids": [root_node["id"]],
+            },
+        )
+
+        result = build_snapshot("sc_fef3")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if (
+                edge["type"] == "caused"
+                and edge["target"] == fork_node["id"]
+                and edge["label"] == "triggered fork"
+            )
+        ]
+
+        assert len(caused) == 1
+        assert caused[0]["source"] == root_node["id"]
 
 
 # ── Stance shift (A3) ─────────────────────────────────────

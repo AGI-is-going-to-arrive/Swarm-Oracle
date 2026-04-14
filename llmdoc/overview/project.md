@@ -31,7 +31,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
-- debate argument map 在 enrichment 改写 unit type 后会同步重建同 turn 图边；`rebuts / supports` target 也会保持稳定，不再在重建后漂到别的 claim；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
+- debate argument map 在 enrichment 改写 unit type 后会同步重建同 turn 图边；`rebuts / supports` target 也会保持稳定。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
 
 ### Oracle Chambers / 世界线圆桌
 
@@ -116,8 +116,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 本轮 graph-viz 定向回归也已通过：
-  - backend graph / debate 定向回归 `176 passed`
+  - backend graph / debate 定向回归 `180 passed`
+  - backend API / debate service 补回归 `151 passed`
+  - targeted `ruff check` 通过
   - frontend graph suite `80 passed`
+  - frontend `typecheck / lint / build` 通过
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
   - `phase3a-desktop` `17/17`
   - `phase3a-mobile` `17/17`

@@ -130,10 +130,13 @@ npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.tes
 cd backend
 source .venv/bin/activate
 python -m pytest tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
+python -m pytest tests/test_api.py tests/test_debate_service.py -q
+python -m ruff check app/services/causal_graph.py app/services/debate_argument_map.py tests/test_causal_graph.py tests/test_debate_argument_map.py
 
 cd ../frontend
 npm test -- --run src/lib/manualChunks.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
+npm run lint
 npm run build
 
 # These two scripts use page.route() fixtures.
@@ -154,10 +157,13 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
     - causal append 幂等
+    - same-round sibling branch 节点隔离（含重复 `msg.id` / `id=None`）
     - 同 agent 同轮多消息
     - child-branch fork provenance
+    - fork replay 时显式 `trigger_node_ids` 会替换旧的 fallback provenance edge
     - argument map `? ! ？ ！` punctuation split
-    - enrichment 后 stable rebuttal / support edge rebuild
+    - `rebuttal` 当前按最新对手 claim 选边；同一 turn 里按句子顺序取最后一条
+    - enrichment 后 stable rebuttal / support edge rebuild（含 `DebateTurn.content` 句子顺序路径）
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView`

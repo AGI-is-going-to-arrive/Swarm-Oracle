@@ -55,6 +55,11 @@ def _collect_available_branches(nodes: list[GraphNode]) -> list[str]:
     return sorted(branch_ids)
 
 
+def _node_branch_id(node: GraphNode) -> str | None:
+    branch_id = _safe_parse_payload(node.payload_json).get("branch_id")
+    return branch_id if isinstance(branch_id, str) and branch_id else None
+
+
 def _message_node_key(round_number: int, msg_id: str | None, agent_id: str) -> str:
     return f"r{round_number}_{msg_id or agent_id}"
 
@@ -162,12 +167,12 @@ def append_round_nodes(
         )
         round_nodes = session.exec(round_nodes_stmt).all()
         event_nodes_by_key = {
-            node.node_key: node
+            (_node_branch_id(node), node.node_key): node
             for node in round_nodes
             if node.node_type == "event"
         }
         stance_shift_nodes_by_key = {
-            node.node_key: node
+            (_node_branch_id(node), node.node_key): node
             for node in round_nodes
             if node.node_type == "stance_shift"
         }
@@ -210,7 +215,8 @@ def append_round_nodes(
                 "branch_id": branch_id,
             })
             node_key = _message_node_key(round_number, msg_id, agent_id)
-            node = event_nodes_by_key.get(node_key)
+            node_scope = (branch_id, node_key)
+            node = event_nodes_by_key.get(node_scope)
             if node is None:
                 node = GraphNode(
                     snapshot_id=snapshot.id,
@@ -224,7 +230,7 @@ def append_round_nodes(
                 )
                 session.add(node)
                 session.flush()
-                event_nodes_by_key[node_key] = node
+                event_nodes_by_key[node_scope] = node
             else:
                 node.label = content[:80]
                 node.round_number = round_number
@@ -314,7 +320,8 @@ def append_round_nodes(
                             "delta": delta,
                         })
                         shift_key = f"stance_r{round_number}_{aid}"
-                        shift_node = stance_shift_nodes_by_key.get(shift_key)
+                        shift_scope = (branch_id, shift_key)
+                        shift_node = stance_shift_nodes_by_key.get(shift_scope)
                         if shift_node is None:
                             shift_node = GraphNode(
                                 snapshot_id=snapshot.id,
@@ -326,7 +333,7 @@ def append_round_nodes(
                             )
                             session.add(shift_node)
                             session.flush()
-                            stance_shift_nodes_by_key[shift_key] = shift_node
+                            stance_shift_nodes_by_key[shift_scope] = shift_node
                         else:
                             shift_node.label = f"{aid} stance shifted"
                             shift_node.round_number = round_number
@@ -367,6 +374,24 @@ def append_round_nodes(
                 fork_node.ref_model = "branch"
                 fork_node.ref_id = fork_event.get("branch_id")
                 fork_node.payload_json = fork_payload_json
+
+            existing_trigger_edges = session.exec(
+                select(GraphEdge).where(
+                    GraphEdge.snapshot_id == snapshot.id,
+                    GraphEdge.target_node_id == fork_node.id,
+                    GraphEdge.edge_type == "caused",
+                    GraphEdge.label == "triggered fork",
+                )
+            ).all()
+            for edge in existing_trigger_edges:
+                signature = _edge_signature(
+                    edge.source_node_id,
+                    edge.target_node_id,
+                    edge.edge_type,
+                    edge.label,
+                )
+                existing_edge_signatures.discard(signature)
+                session.delete(edge)
 
             # Edges from triggering message nodes to the fork
             trigger_ids = list(fork_event.get("trigger_node_ids") or [])

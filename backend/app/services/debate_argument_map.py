@@ -94,9 +94,14 @@ def _normalize_confidence(value: Any) -> float:
 def _claim_priority_key(
     *,
     round_number: int | None,
+    sentence_index: int | None,
     node_key: str,
-) -> tuple[bool, int, str]:
-    return (round_number is None, -(round_number or 0), node_key)
+) -> tuple[int, int, str]:
+    return (
+        round_number or -1,
+        sentence_index if sentence_index is not None else -1,
+        node_key,
+    )
 
 
 def _select_opponent_claim_id(
@@ -110,10 +115,11 @@ def _select_opponent_claim_id(
     ]
     if not candidates:
         return None
-    selected = min(
+    selected = max(
         candidates,
         key=lambda claim: _claim_priority_key(
             round_number=claim.get("round_number"),
+            sentence_index=claim.get("sentence_index"),
             node_key=str(claim.get("node_key") or ""),
         ),
     )
@@ -168,11 +174,16 @@ def _unit_rebuild_sort_key(
     node: GraphNode,
     turn_metadata: dict[str, dict[str, Any]],
 ) -> tuple[bool, int, bool, int, Any, str, str]:
+    payload = _load_payload(node.payload_json)
     metadata = turn_metadata.get(unit.turn_id, {})
     turn_order = metadata.get("sequence")
     if turn_order is None:
         turn_order = node.round_number
     sentence_index = metadata.get("sentence_positions", {}).get(unit.semantic_hash)
+    if sentence_index is None:
+        payload_sentence_index = payload.get("sentence_index")
+        if isinstance(payload_sentence_index, int):
+            sentence_index = payload_sentence_index
     return (
         turn_order is None,
         turn_order or 0,
@@ -302,6 +313,11 @@ def _rebuild_snapshot_edges_sync(
                 "node_id": node.id,
                 "speaker_side": speaker_side,
                 "round_number": node.round_number,
+                "sentence_index": (
+                    payload.get("sentence_index")
+                    if isinstance(payload.get("sentence_index"), int)
+                    else None
+                ),
                 "node_key": node.node_key,
             })
         elif unit.unit_type == "evidence":
@@ -434,13 +450,7 @@ def _build_enrichment_prompt(
 def _find_opponent_last_claim(
     session: Session, snapshot_id: str, current_side: str,
 ) -> str | None:
-    """Find most recent opposing claim. V1 heuristic.
-
-    Strategy: highest round_number wins (= most recent turn).
-    Same-round tiebreak: lowest node_key ASC (stable arbitrary;
-    node_key is SHA-256 hash of sentence text, deterministic but
-    NOT positional).
-    """
+    """Find the most recent opposing claim using turn/round plus sentence order."""
     stmt = (
         select(GraphNode)
         .where(
@@ -459,6 +469,7 @@ def _find_opponent_last_claim(
             "node_id": node.id,
             "speaker_side": str(payload.get("side") or "") if payload else "",
             "round_number": node.round_number,
+            "sentence_index": payload.get("sentence_index") if payload else None,
             "node_key": node.node_key,
         })
     return _select_opponent_claim_id(candidates, current_side)
@@ -513,7 +524,7 @@ def extract_argument_units(
 
         turn_nodes: list[tuple[str, str]] = []  # (node_id, unit_type)
 
-        for sentence in sentences:
+        for sentence_index, sentence in enumerate(sentences):
             h = _semantic_hash(sentence)
             if h in existing_hashes:
                 continue
@@ -530,7 +541,10 @@ def extract_argument_units(
                         round_number=turn_sequence,
                         ref_model="debate_turn",
                         ref_id=turn_id,
-                        payload_json=f'{{"side":"{speaker_side}"}}',
+                        payload_json=json.dumps({
+                            "side": speaker_side,
+                            "sentence_index": sentence_index,
+                        }),
                     )
                     session.add(node)
                     session.flush()
