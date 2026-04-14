@@ -218,6 +218,8 @@ describe('CompareDigestView', () => {
     expect(payload.page.controls.active_compare_pane).toBe('b');
     expect(payload.page.compare.active_branch_id).toBe('b');
     expect(payload.page.compare.selected_round).toBe(2);
+    expect(payload.simulation.agentCount).toBe(2);
+    expect(payload.simulation.messageCount).toBe(4);
   });
 
   it('routes panel screenshot capture to a compare composite first', async () => {

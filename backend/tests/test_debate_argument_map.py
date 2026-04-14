@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -628,6 +629,206 @@ async def test_enrich_argument_units_for_turn_keeps_rebuttal_target_stable_after
     labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
     rebuttal = next(edge for edge in result["edges"] if edge["type"] == "rebuts")
     assert labels_by_node[rebuttal["target"]] == initial_target_label
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_retargets_rebuttal_to_new_latest_claim():
+    extract_argument_units(
+        debate_id="d-enrich-retarget-rebuttal",
+        turn_id="t1",
+        content="Alpha claim. Research evidence.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-enrich-retarget-rebuttal",
+        turn_id="t2",
+        content="Beta claim. However nope.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "Alpha claim.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.72,
+                        },
+                        {
+                            "text": "Research evidence.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.84,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-retarget-rebuttal",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 2
+    result = get_argument_map("d-enrich-retarget-rebuttal")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    rebuttal = next(edge for edge in result["edges"] if edge["type"] == "rebuts")
+    assert labels_by_node[rebuttal["target"]] == "Research evidence."
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_retargets_support_edge_to_new_claim():
+    extract_argument_units(
+        debate_id="d-enrich-retarget-support",
+        turn_id="t1",
+        content="Alpha claim. Beta study. Gamma study.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "Alpha claim.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.72,
+                        },
+                        {
+                            "text": "Beta study.",
+                            "type": "claim",
+                            "stance": "supports_proposition",
+                            "confidence": 0.84,
+                        },
+                        {
+                            "text": "Gamma study.",
+                            "type": "evidence",
+                            "stance": "supports_proposition",
+                            "confidence": 0.81,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-retarget-support",
+                turn_id="t1",
+                speaker_side="proposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 3
+    result = get_argument_map("d-enrich-retarget-support")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    supports = next(edge for edge in result["edges"] if edge["type"] == "supports")
+    assert labels_by_node[supports["source"]] == "Gamma study."
+    assert labels_by_node[supports["target"]] == "Beta study."
+
+
+@pytest.mark.asyncio
+async def test_concurrent_enrichment_updates_do_not_drop_latest_edge_targets():
+    extract_argument_units(
+        debate_id="d-enrich-concurrent",
+        turn_id="t1",
+        content="Alpha claim. Research evidence.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-enrich-concurrent",
+        turn_id="t2",
+        content="Beta claim. However nope.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    async def fake_llm_call(prompt: str, *args, **kwargs):
+        if "Turn ID: t1" in prompt:
+            await asyncio.sleep(0.2)
+            return {
+                "units": [
+                    {
+                        "text": "Alpha claim.",
+                        "type": "claim",
+                        "stance": "supports_proposition",
+                        "confidence": 0.72,
+                    },
+                    {
+                        "text": "Research evidence.",
+                        "type": "claim",
+                        "stance": "supports_proposition",
+                        "confidence": 0.84,
+                    },
+                ]
+            }
+        await asyncio.sleep(0.05)
+        return {
+            "units": [
+                {
+                    "text": "Beta claim.",
+                    "type": "claim",
+                    "stance": "supports_opposition",
+                    "confidence": 0.71,
+                },
+                {
+                    "text": "However nope.",
+                    "type": "rebuttal",
+                    "stance": "supports_opposition",
+                    "confidence": 0.8,
+                },
+            ]
+        }
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=fake_llm_call,
+        ):
+            updated_t1, updated_t2 = await asyncio.gather(
+                enrich_argument_units_for_turn(
+                    debate_id="d-enrich-concurrent",
+                    turn_id="t1",
+                    speaker_side="proposition",
+                    language="en",
+                ),
+                enrich_argument_units_for_turn(
+                    debate_id="d-enrich-concurrent",
+                    turn_id="t2",
+                    speaker_side="opposition",
+                    language="en",
+                ),
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated_t1 == 2
+    assert updated_t2 == 2
+    result = get_argument_map("d-enrich-concurrent")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    rebuttal = next(edge for edge in result["edges"] if edge["type"] == "rebuts")
+    assert labels_by_node[rebuttal["target"]] == "Research evidence."
 
 
 @pytest.mark.asyncio

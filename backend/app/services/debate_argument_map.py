@@ -31,6 +31,7 @@ from app.services.llm_client import (
 logger = logging.getLogger(__name__)
 _snapshot_index_lock = threading.Lock()
 _snapshot_index_urls: set[str] = set()
+_enrichment_apply_lock = threading.Lock()
 
 # ── Keyword sets for rule-based classification ──────────────
 
@@ -198,42 +199,6 @@ def _unit_rebuild_sort_key(
     )
 
 
-def _reusable_support_target(
-    *,
-    source_node_id: str,
-    existing_edge_targets: dict[tuple[str, str], str],
-    units_by_node_id: dict[str, DebateArgumentUnit],
-) -> str | None:
-    target_id = existing_edge_targets.get(("supports", source_node_id))
-    if not target_id:
-        return None
-    target_unit = units_by_node_id.get(target_id)
-    if target_unit is None or target_unit.unit_type != "claim":
-        return None
-    return target_id
-
-
-def _reusable_rebuttal_target(
-    *,
-    source_node_id: str,
-    speaker_side: str,
-    existing_edge_targets: dict[tuple[str, str], str],
-    units_by_node_id: dict[str, DebateArgumentUnit],
-    nodes_by_id: dict[str, GraphNode],
-) -> str | None:
-    target_id = existing_edge_targets.get(("rebuts", source_node_id))
-    if not target_id:
-        return None
-    target_unit = units_by_node_id.get(target_id)
-    target_node = nodes_by_id.get(target_id)
-    if target_unit is None or target_unit.unit_type != "claim" or target_node is None:
-        return None
-    target_side = str(_load_payload(target_node.payload_json).get("side") or "")
-    if not target_side or target_side == speaker_side:
-        return None
-    return target_id
-
-
 def _load_units_for_enrichment_sync(
     debate_id: str,
     turn_id: str,
@@ -269,10 +234,6 @@ def _rebuild_snapshot_edges_sync(
             GraphEdge.edge_type.in_(["supports", "rebuts"]),
         )
     ).all()
-    existing_edge_targets = {
-        (edge.edge_type, edge.source_node_id): edge.target_node_id
-        for edge in existing_edges
-    }
     for edge in existing_edges:
         session.delete(edge)
 
@@ -285,8 +246,6 @@ def _rebuild_snapshot_edges_sync(
     if not unit_rows:
         return
 
-    nodes_by_id = {node.id: node for _, node in unit_rows}
-    units_by_node_id = {unit.node_id: unit for unit, _ in unit_rows}
     turn_metadata = _build_turn_metadata(
         session,
         {unit.turn_id for unit, _ in unit_rows if unit.turn_id},
@@ -324,13 +283,7 @@ def _rebuild_snapshot_edges_sync(
                 "node_key": node.node_key,
             })
         elif unit.unit_type == "evidence":
-            target_id = _reusable_support_target(
-                source_node_id=node.id,
-                existing_edge_targets=existing_edge_targets,
-                units_by_node_id=units_by_node_id,
-            )
-            if target_id is None:
-                target_id = last_claim_id
+            target_id = last_claim_id
             if target_id is None:
                 continue
             session.add(GraphEdge(
@@ -341,15 +294,7 @@ def _rebuild_snapshot_edges_sync(
                 weight=0.7,
             ))
         elif unit.unit_type == "rebuttal":
-            opp_claim = _reusable_rebuttal_target(
-                source_node_id=node.id,
-                speaker_side=speaker_side,
-                existing_edge_targets=existing_edge_targets,
-                units_by_node_id=units_by_node_id,
-                nodes_by_id=nodes_by_id,
-            )
-            if opp_claim is None:
-                opp_claim = _select_opponent_claim_id(processed_claims, speaker_side)
+            opp_claim = _select_opponent_claim_id(processed_claims, speaker_side)
             if opp_claim:
                 session.add(GraphEdge(
                     snapshot_id=snapshot_id,
@@ -364,58 +309,58 @@ def _apply_enriched_units_sync(
     *,
     speaker_side: str,
     unit_refs_by_text: dict[str, dict[str, str]],
-    unit_refs: list[dict[str, str]],
     enriched_units: list[dict[str, Any]],
 ) -> int:
     updated = 0
     snapshot_id: str | None = None
-    with Session(get_engine()) as session:
-        for item in enriched_units:
-            if not isinstance(item, dict):
-                continue
-            normalized_text = _normalize_unit_text(str(item.get("text", "")))
-            if not normalized_text:
-                continue
+    with _enrichment_apply_lock:
+        with Session(get_engine()) as session:
+            for item in enriched_units:
+                if not isinstance(item, dict):
+                    continue
+                normalized_text = _normalize_unit_text(str(item.get("text", "")))
+                if not normalized_text:
+                    continue
 
-            original_unit = unit_refs_by_text.get(normalized_text)
-            if original_unit is None:
-                continue
+                original_unit = unit_refs_by_text.get(normalized_text)
+                if original_unit is None:
+                    continue
 
-            unit = session.get(DebateArgumentUnit, original_unit["id"])
-            if unit is None:
-                continue
+                unit = session.get(DebateArgumentUnit, original_unit["id"])
+                if unit is None:
+                    continue
 
-            next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
-            stance = _normalize_stance(item.get("stance"))
-            confidence = _normalize_confidence(item.get("confidence"))
+                next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
+                stance = _normalize_stance(item.get("stance"))
+                confidence = _normalize_confidence(item.get("confidence"))
 
-            node = session.get(GraphNode, original_unit["node_id"])
-            if node is None:
-                continue
-            if snapshot_id is None:
-                snapshot_id = node.snapshot_id
+                node = session.get(GraphNode, original_unit["node_id"])
+                if node is None:
+                    continue
+                if snapshot_id is None:
+                    snapshot_id = node.snapshot_id
 
-            unit.unit_type = next_type
-            node.node_type = next_type
+                unit.unit_type = next_type
+                node.node_type = next_type
 
-            payload = _load_payload(node.payload_json)
-            payload["side"] = payload.get("side") or speaker_side
-            payload["stance"] = stance
-            payload["confidence"] = confidence
-            payload["enriched_by"] = "llm"
-            node.payload_json = json.dumps(payload, ensure_ascii=False)
+                payload = _load_payload(node.payload_json)
+                payload["side"] = payload.get("side") or speaker_side
+                payload["stance"] = stance
+                payload["confidence"] = confidence
+                payload["enriched_by"] = "llm"
+                node.payload_json = json.dumps(payload, ensure_ascii=False)
 
-            session.add(unit)
-            session.add(node)
-            updated += 1
+                session.add(unit)
+                session.add(node)
+                updated += 1
 
-        if updated:
-            if snapshot_id is not None:
-                _rebuild_snapshot_edges_sync(
-                    session,
-                    snapshot_id=snapshot_id,
-                )
-            session.commit()
+            if updated:
+                if snapshot_id is not None:
+                    _rebuild_snapshot_edges_sync(
+                        session,
+                        snapshot_id=snapshot_id,
+                    )
+                session.commit()
     return updated
 
 
@@ -780,7 +725,6 @@ async def enrich_argument_units_for_turn(
         _apply_enriched_units_sync,
         speaker_side=speaker_side,
         unit_refs_by_text=by_text,
-        unit_refs=units,
         enriched_units=enriched_units,
     )
 

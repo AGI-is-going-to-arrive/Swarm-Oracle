@@ -1,5 +1,6 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -379,6 +380,62 @@ class TestAppendRoundNodes:
         assert [node["label"] for node in branch_one["nodes"]] == ["branch one same id"]
         assert [node["label"] for node in branch_two["nodes"]] == ["branch two same id"]
 
+    def test_same_round_duplicate_message_ids_are_isolated_per_agent(self):
+        """Identical msg ids in the same branch/round must not overwrite another agent."""
+        append_round_nodes(
+            "sc3f",
+            "br1",
+            1,
+            [
+                MockMessage(
+                    emotion="calm",
+                    agent_id="a1",
+                    id="same-id",
+                    content="agent one same id",
+                ),
+                MockMessage(
+                    emotion="angry",
+                    agent_id="a2",
+                    id="same-id",
+                    content="agent two same id",
+                ),
+            ],
+        )
+
+        result = build_snapshot("sc3f", branch_id="br1")
+
+        assert [node["label"] for node in result["nodes"]] == [
+            "agent one same id",
+            "agent two same id",
+        ]
+
+    def test_concurrent_append_same_message_id_reuses_single_event_node(self):
+        """Concurrent appends for the same agent/message should not create duplicate nodes."""
+
+        def append_once():
+            append_round_nodes(
+                "sc3g",
+                "br1",
+                1,
+                [
+                    MockMessage(
+                        emotion="calm",
+                        agent_id="a1",
+                        id="same-id",
+                        content="concurrent same id",
+                    )
+                ],
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(append_once), executor.submit(append_once)]
+            for future in futures:
+                future.result(timeout=5)
+
+        result = build_snapshot("sc3g", branch_id="br1")
+
+        assert [node["label"] for node in result["nodes"]] == ["concurrent same id"]
+
 
 # ── build_snapshot ──────────────────────────────────────
 
@@ -419,6 +476,65 @@ class TestBuildSnapshot:
         )
         result = build_snapshot("sc-migration-runtime-repair")
         assert len(result["nodes"]) == 3  # 2 events + 1 temporal edge source preserved
+
+    def test_build_snapshot_prefers_latest_legacy_duplicate_snapshot(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        db_path = tmp_path / "legacy-duplicate-snapshot.db"
+        db_url = f"sqlite:///{db_path}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        settings.DATABASE_URL = db_url
+        dispose_engine()
+
+        backend_root = Path(__file__).resolve().parents[1]
+        config = Config(str(backend_root / "alembic.ini"))
+        config.set_main_option("script_location", str(backend_root / "alembic"))
+        config.set_main_option("sqlalchemy.url", db_url)
+        config.attributes["configure_logging"] = False
+
+        alembic_command.upgrade(config, "019_add_debate_user_owner")
+
+        with Session(get_engine()) as session:
+            old_snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id="sc-legacy-duplicate",
+                graph_kind="causal_review",
+            )
+            new_snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id="sc-legacy-duplicate",
+                graph_kind="causal_review",
+            )
+            session.add(old_snapshot)
+            session.add(new_snapshot)
+            session.flush()
+            session.add(
+                GraphNode(
+                    snapshot_id=old_snapshot.id,
+                    node_key="old-node",
+                    node_type="event",
+                    label="old snapshot node",
+                    round_number=1,
+                    payload_json='{"branch_id":"br1","agent_id":"a1"}',
+                )
+            )
+            session.add(
+                GraphNode(
+                    snapshot_id=new_snapshot.id,
+                    node_key="new-node",
+                    node_type="event",
+                    label="new snapshot node",
+                    round_number=2,
+                    payload_json='{"branch_id":"br1","agent_id":"a1"}',
+                )
+            )
+            session.commit()
+
+        result = build_snapshot("sc-legacy-duplicate")
+
+        assert [node["label"] for node in result["nodes"]] == ["new snapshot node"]
 
     def test_empty_graph_when_no_data(self):
         result = build_snapshot("nonexistent_scenario")
@@ -805,6 +921,42 @@ class TestForkEdgeFallback:
 
         assert len(caused) == 1
         assert caused[0]["source"] == root_node["id"]
+
+    def test_invalid_trigger_ids_fall_back_to_same_round_provenance(self):
+        """Invalid explicit trigger ids should not orphan the fork node."""
+        append_round_nodes(
+            "sc_fef4",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event={"branch_id": "br_child", "reason": "fallback first"},
+        )
+
+        append_round_nodes(
+            "sc_fef4",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event={
+                "branch_id": "br_child",
+                "reason": "fallback first",
+                "trigger_node_ids": ["missing-node-id"],
+            },
+        )
+
+        result = build_snapshot("sc_fef4")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if (
+                edge["type"] == "caused"
+                and edge["target"] == fork_node["id"]
+                and edge["label"] == "triggered fork"
+            )
+        ]
+
+        assert len(caused) == 1
 
 
 # ── Stance shift (A3) ─────────────────────────────────────

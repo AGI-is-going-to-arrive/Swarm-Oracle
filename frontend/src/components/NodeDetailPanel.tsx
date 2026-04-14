@@ -4,8 +4,9 @@
    Shared between CausalReviewView and ArgumentMap.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { copyText } from '../lib/copyText';
 import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
 
 export interface NodeDetail {
@@ -33,18 +34,37 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   const titleId = useId();
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  const nodeId = node?.id ?? null;
+
+  const restorePreviousFocus = useCallback(() => {
+    const previousFocus = previousFocusRef.current;
+    if (previousFocus?.isConnected) {
+      previousFocus.focus();
+    }
+    previousFocusRef.current = null;
+  }, []);
 
   useEffect(() => {
-    if (!node) return;
+    if (nodeId === null) {
+      if (wasOpenRef.current) {
+        restorePreviousFocus();
+        wasOpenRef.current = false;
+      }
+      return;
+    }
 
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    wasOpenRef.current = true;
     closeButtonRef.current?.focus();
+  }, [nodeId, restorePreviousFocus]);
 
-    return () => {
-      previousFocusRef.current?.focus();
-    };
-  }, [node]);
+  useEffect(() => () => {
+    if (wasOpenRef.current) {
+      restorePreviousFocus();
+    }
+  }, [restorePreviousFocus]);
 
   if (!node) return null;
 
@@ -199,7 +219,9 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
 
       {/* B8: Copy Reference */}
       <button
-        onClick={() => navigator.clipboard?.writeText(node.id)}
+        onClick={() => {
+          void copyText(node.id).catch(() => undefined);
+        }}
         style={{
           padding: '4px 10px', borderRadius: 4, border: '1px solid #555',
           background: 'transparent', color: '#8ab4f8', cursor: 'pointer',

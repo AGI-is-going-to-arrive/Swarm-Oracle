@@ -82,6 +82,110 @@ function summarizeRun(allResults) {
   };
 }
 
+const IGNORED_REQUEST_FAILURE_TEXT_PATTERNS = [
+  /net::ERR_ABORTED/i,
+  /NS_BINDING_ABORTED/i,
+];
+const ALLOWED_EXTERNAL_RESOURCE_URL_PATTERNS = [
+  /^https:\/\/fonts\.googleapis\.com\//i,
+  /^https:\/\/fonts\.gstatic\.com\//i,
+];
+
+function matchesAllowedExternalResource(url) {
+  return ALLOWED_EXTERNAL_RESOURCE_URL_PATTERNS.some((pattern) => pattern.test(url));
+}
+
+function shouldCaptureConsoleMessage(message) {
+  const type = message.type();
+  if (type !== "error" && type !== "assert") return false;
+  const locationUrl = message.location()?.url ?? "";
+  if (locationUrl && matchesAllowedExternalResource(locationUrl)) return false;
+  return message.text().trim().length > 0;
+}
+
+function shouldIgnoreRequestFailure(request) {
+  const url = request.url();
+  if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) return true;
+  if (matchesAllowedExternalResource(url)) {
+    return request.resourceType() === "stylesheet" || request.resourceType() === "font";
+  }
+  const errorText = request.failure()?.errorText ?? "";
+  return IGNORED_REQUEST_FAILURE_TEXT_PATTERNS.some((pattern) => pattern.test(errorText));
+}
+
+function attachBrowserIssueMonitor(page) {
+  const issues = {
+    consoleErrors: [],
+    pageErrors: [],
+    requestFailures: [],
+  };
+
+  page.on("console", (message) => {
+    if (!shouldCaptureConsoleMessage(message)) return;
+    issues.consoleErrors.push({
+      type: message.type(),
+      text: message.text(),
+      location: message.location(),
+    });
+  });
+  page.on("pageerror", (error) => {
+    issues.pageErrors.push({
+      name: error.name,
+      text: error.message,
+      stack: error.stack ?? null,
+    });
+  });
+  page.on("requestfailed", (request) => {
+    if (shouldIgnoreRequestFailure(request)) return;
+    issues.requestFailures.push({
+      url: request.url(),
+      method: request.method(),
+      resourceType: request.resourceType(),
+      errorText: request.failure()?.errorText ?? "requestfailed",
+    });
+  });
+
+  return issues;
+}
+
+function buildBrowserRuntimeResult(issues) {
+  const snapshot = {
+    consoleErrors: [...issues.consoleErrors],
+    pageErrors: [...issues.pageErrors],
+    requestFailures: [...issues.requestFailures],
+  };
+  const steps = [
+    {
+      name: "browser-page-errors-absent",
+      passed: snapshot.pageErrors.length === 0,
+      error: snapshot.pageErrors.length > 0 ? JSON.stringify(snapshot.pageErrors, null, 2) : null,
+    },
+    {
+      name: "browser-request-failures-absent",
+      passed: snapshot.requestFailures.length === 0,
+      error: snapshot.requestFailures.length > 0 ? JSON.stringify(snapshot.requestFailures, null, 2) : null,
+    },
+    {
+      name: "browser-console-errors-absent",
+      passed: snapshot.consoleErrors.length === 0,
+      error: snapshot.consoleErrors.length > 0 ? JSON.stringify(snapshot.consoleErrors, null, 2) : null,
+    },
+  ];
+  const failedBuckets = [];
+  if (snapshot.pageErrors.length > 0) failedBuckets.push("pageerror");
+  if (snapshot.requestFailures.length > 0) failedBuckets.push("requestfailed");
+  if (snapshot.consoleErrors.length > 0) failedBuckets.push("console-error");
+
+  return {
+    steps,
+    passed: steps.every((step) => step.passed),
+    error: failedBuckets.length > 0
+      ? `Unexpected browser-side failures detected: ${failedBuckets.join(", ")}`
+      : null,
+    issues: snapshot,
+  };
+}
+
 // ── Fixtures ─────────────────────────────────────────────
 
 const FIXTURE_USER_ID = "e2e-test-user";
@@ -177,7 +281,7 @@ async function installFixtures(page) {
   await page.route(`**/api/agents/identities/${FIXTURE_IDENTITY_ID}/growth-events?*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(GROWTH_EVENTS_FIXTURE) }),
   );
-  await page.route("**/api/agents/workshop*", (route) => {
+  await page.route("**/api/agents/workshop**", (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill({
         status: 200, contentType: "application/json",
@@ -414,6 +518,7 @@ async function runSurface(mode, viewport) {
   });
   const context = await browser.newContext({ viewport, acceptDownloads: true });
   const page = await context.newPage();
+  const browserIssues = attachBrowserIssueMonitor(page);
 
   await installFixtures(page);
 
@@ -442,6 +547,17 @@ async function runSurface(mode, viewport) {
     allResults.error = toErrorMessage(err);
     await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
+    const browserRuntime = buildBrowserRuntimeResult(browserIssues);
+    allResults.tests.browserRuntime = {
+      steps: browserRuntime.steps,
+      passed: browserRuntime.passed,
+      error: browserRuntime.error,
+    };
+    allResults.browserIssues = browserRuntime.issues;
+    writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
+    if (!browserRuntime.passed) {
+      await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+    }
     await page.close().catch(() => {});
     await context.close().catch(() => {});
     await browser.close().catch(() => {});

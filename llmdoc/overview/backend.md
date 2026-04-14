@@ -161,13 +161,14 @@
 - `causal_graph.append_round_nodes()` 当前对同一 `branch / round` 的重复追加是幂等的：
   - 同一 agent 同 round 多条消息会用最后一条覆盖 `AgentStateFrame`
   - 同一 agent 同 round 就算消息没有 `id`，event 节点也会继续保留为多条；不会再被后一条静默覆盖
-  - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 的 sibling branch 不会再互相覆盖节点
-  - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换，不会继续累积双来源
+  - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 就算 `msg_id` 重复，event 节点也会按 agent 隔离
+  - append 路径当前会按 `scenario_id` 串行化；同一 scenario 并发写入不会再撞出重复 event 节点
+  - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换；显式 ids 非法时也会回退 same-round provenance
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
   `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
-  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份。
+  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；如果 legacy duplicate snapshot 还残留，读取会稳定选最新一份。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
@@ -182,11 +183,11 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
-  - legacy SQLite 上如果已经留下重复 snapshot，读取前会先做一次去重收口
-  - 如果 enrichment 改写了 unit type，会按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn，避免跨 turn 遗留陈旧 `rebuts`
+  - legacy SQLite 上如果已经留下重复 snapshot，读取会稳定选最新 snapshot，不再随机命中旧图
+  - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
   - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜
-  - 重建时会尽量保留仍然有效的旧边；如果 `DebateTurn.content` 可用，会优先用 turn 内句子顺序恢复 `supports / rebuts` 边
+  - 重建时不会复用旧 target；`supports / rebuts` 会按当前 claim 状态重新选边，`DebateTurn.content` 可用时再按 turn 内句子顺序定序
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，更不会留下悬空 verdict edge
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉

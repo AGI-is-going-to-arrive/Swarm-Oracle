@@ -576,7 +576,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                 <MiniMap
                   nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
                   nodeStrokeWidth={3}
-                  style={{ background: '#1a1a2e' }}
+                  style={{ background: '#1a1a2e', pointerEvents: 'none' }}
                 />
               </ReactFlow>
               <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />

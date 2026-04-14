@@ -22,6 +22,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。
+- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；大图切到文本 fallback 时会隐藏导出控件；图面 minimap 改为非交互 overlay，移动端不会再挡住节点点击。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`。
 
 ### Debate Arena
 
@@ -31,7 +32,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
-- debate argument map 在 enrichment 改写 unit type 后会同步重建同 turn 图边；`rebuts / supports` target 也会保持稳定。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
+- debate argument map 的 enrichment apply / rebuild 当前按串行收口；改写 unit type 后会按最新 claim 状态重建 `rebuts / supports` target。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态
 
 ### Oracle Chambers / 世界线圆桌
 
@@ -116,15 +117,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 本轮 graph-viz 定向回归也已通过：
-  - backend graph / debate + 相邻 API / service 定向回归 `337 passed`
+  - backend targeted graph / debate suite `193 passed`
+  - backend 相邻 API / service smoke `151 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `87 passed`
+  - frontend graph suite `92 passed`
   - frontend `typecheck / lint / build` 通过
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
-  - `phase3a-desktop` `26/26`
-  - `phase3a-mobile` `26/26`
-  - `phase3b-desktop` `26/26`
-  - `phase3b-mobile` `26/26`
+  - phase3 compare fixture 当前已带真实 `agents / messages`，compare theater 不再空载
+  - `phase3-batch-a` `29/29`，desktop + mobile 全通过
+  - `phase3-batch-b` `34/34`，desktop + mobile 全通过
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

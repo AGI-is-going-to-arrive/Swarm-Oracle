@@ -20,6 +20,7 @@ vi.mock('@xyflow/react', async () => {
     ReactFlow: (props: Record<string, unknown>) => {
       const nodes = props.nodes as Array<{ id: string }> | undefined;
       const edges = props.edges as Array<Record<string, unknown>> | undefined;
+      const children = props.children as React.ReactNode;
       const onNodeClick = props.onNodeClick as ((e: unknown, n: unknown) => void) | undefined;
       const onPaneClick = props.onPaneClick as (() => void) | undefined;
       const onInit = props.onInit as ((instance: { fitView: typeof fitViewMock }) => void) | undefined;
@@ -44,12 +45,15 @@ vi.mock('@xyflow/react', async () => {
             <button key={n.id} data-testid={`rf-node-${n.id}`} onClick={(e) => onNodeClick?.(e, n)} />
           ))}
           <button data-testid="rf-pane" onClick={() => onPaneClick?.()} />
+          {children}
         </div>
       );
     },
     Background: () => null,
     Controls: () => null,
-    MiniMap: () => null,
+    MiniMap: ({ style }: { style?: React.CSSProperties }) => (
+      <div data-testid="rf-minimap" data-pointer-events={String(style?.pointerEvents ?? '')} />
+    ),
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
     MarkerType: { ArrowClosed: 'arrowclosed' },
   };
@@ -242,6 +246,27 @@ describe('ArgumentMap', () => {
     expect(screen.getByText('Rebuttal')).toBeInTheDocument();
     expect(screen.getByText('Counter')).toBeInTheDocument();
     expect(screen.getByText(/1 units/)).toBeInTheDocument();
+  });
+
+  it('renders the minimap as a non-interactive overlay so it does not block node clicks', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-minimap',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const minimap = await screen.findByTestId('rf-minimap');
+    expect(minimap).toHaveAttribute('data-pointer-events', 'none');
   });
 
   it('renders the rejected status filter when backend data uses that status', async () => {

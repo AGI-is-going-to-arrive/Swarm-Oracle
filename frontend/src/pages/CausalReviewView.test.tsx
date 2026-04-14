@@ -4,7 +4,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import dagre from 'dagre';
 
 const fitViewMock = vi.fn();
@@ -61,7 +61,9 @@ vi.mock('@xyflow/react', async () => {
     },
     Background: () => null,
     Controls: () => null,
-    MiniMap: () => null,
+    MiniMap: ({ style }: { style?: React.CSSProperties }) => (
+      <div data-testid="rf-minimap" data-pointer-events={String(style?.pointerEvents ?? '')} />
+    ),
     useNodesState: useStatefulFlow,
     useEdgesState: useStatefulFlow,
     Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
@@ -85,6 +87,27 @@ const renderView = (path = '/sim/test-id/causal-map') =>
       </Routes>
     </MemoryRouter>,
   );
+
+const createDeferredResponse = () => {
+  let resolve!: (value: Response) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Response>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+
+function BranchNavigationHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate('/sim/test-id/causal-map?branch_id=br1')}>Go br1</button>
+      <button onClick={() => navigate('/sim/test-id/causal-map?branch_id=br2')}>Go br2</button>
+      <CausalReviewView />
+    </>
+  );
+}
 
 describe('CausalReviewView', () => {
   it('shows loading state initially', () => {
@@ -169,6 +192,21 @@ describe('CausalReviewView', () => {
     await screen.findByTestId('reactflow');
     const searchInput = screen.getByPlaceholderText('Search agent...');
     expect(searchInput).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the minimap as a non-interactive overlay', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-minimap',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [],
+      }),
+    } as Response);
+    renderView();
+    await screen.findByTestId('reactflow');
+    expect(screen.getByTestId('rf-minimap')).toHaveAttribute('data-pointer-events', 'none');
     vi.restoreAllMocks();
   });
 
@@ -351,7 +389,66 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps an export target container when large graphs fall back to the text list', async () => {
+  it('ignores stale branch responses when a newer branch selection resolves first', async () => {
+    const user = userEvent.setup();
+    const branchOneResponse = createDeferredResponse();
+    const branchTwoResponse = createDeferredResponse();
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('branch_id=br1')) return branchOneResponse.promise;
+      if (url.includes('branch_id=br2')) return branchTwoResponse.promise;
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/sim/test-id/causal-map?branch_id=br1']}>
+        <Routes>
+          <Route path="/sim/:id/causal-map" element={<BranchNavigationHarness />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Go br2' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    branchTwoResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-branch-two',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n2', key: 'e2', type: 'event', label: 'Branch 2 fresh event', round: 1, payload: { branch_id: 'br2' } }],
+        edges: [],
+      }),
+    } as Response);
+
+    await screen.findByText(/Branch 2 fresh event/);
+
+    branchOneResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-branch-one',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Branch 1 stale event', round: 1, payload: { branch_id: 'br1' } }],
+        edges: [],
+      }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Branch 2 fresh event/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Branch 1 stale event/)).not.toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('hides export controls when large graphs fall back to the text list', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -371,8 +468,7 @@ describe('CausalReviewView', () => {
     renderView();
 
     await screen.findByText('Graph too large for interactive view. Showing text list.');
-    expect(screen.getByTestId('export-panel')).toBeInTheDocument();
-    expect(document.querySelector('.causal-graph-container')).not.toBeNull();
+    expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
   });
 
   it('skips dagre layout work when large graphs render through the text fallback path', async () => {

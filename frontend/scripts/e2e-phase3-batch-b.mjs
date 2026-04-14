@@ -81,6 +81,110 @@ function summarizeRun(allResults) {
   };
 }
 
+const IGNORED_REQUEST_FAILURE_TEXT_PATTERNS = [
+  /net::ERR_ABORTED/i,
+  /NS_BINDING_ABORTED/i,
+];
+const ALLOWED_EXTERNAL_RESOURCE_URL_PATTERNS = [
+  /^https:\/\/fonts\.googleapis\.com\//i,
+  /^https:\/\/fonts\.gstatic\.com\//i,
+];
+
+function matchesAllowedExternalResource(url) {
+  return ALLOWED_EXTERNAL_RESOURCE_URL_PATTERNS.some((pattern) => pattern.test(url));
+}
+
+function shouldCaptureConsoleMessage(message) {
+  const type = message.type();
+  if (type !== "error" && type !== "assert") return false;
+  const locationUrl = message.location()?.url ?? "";
+  if (locationUrl && matchesAllowedExternalResource(locationUrl)) return false;
+  return message.text().trim().length > 0;
+}
+
+function shouldIgnoreRequestFailure(request) {
+  const url = request.url();
+  if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) return true;
+  if (matchesAllowedExternalResource(url)) {
+    return request.resourceType() === "stylesheet" || request.resourceType() === "font";
+  }
+  const errorText = request.failure()?.errorText ?? "";
+  return IGNORED_REQUEST_FAILURE_TEXT_PATTERNS.some((pattern) => pattern.test(errorText));
+}
+
+function attachBrowserIssueMonitor(page) {
+  const issues = {
+    consoleErrors: [],
+    pageErrors: [],
+    requestFailures: [],
+  };
+
+  page.on("console", (message) => {
+    if (!shouldCaptureConsoleMessage(message)) return;
+    issues.consoleErrors.push({
+      type: message.type(),
+      text: message.text(),
+      location: message.location(),
+    });
+  });
+  page.on("pageerror", (error) => {
+    issues.pageErrors.push({
+      name: error.name,
+      text: error.message,
+      stack: error.stack ?? null,
+    });
+  });
+  page.on("requestfailed", (request) => {
+    if (shouldIgnoreRequestFailure(request)) return;
+    issues.requestFailures.push({
+      url: request.url(),
+      method: request.method(),
+      resourceType: request.resourceType(),
+      errorText: request.failure()?.errorText ?? "requestfailed",
+    });
+  });
+
+  return issues;
+}
+
+function buildBrowserRuntimeResult(issues) {
+  const snapshot = {
+    consoleErrors: [...issues.consoleErrors],
+    pageErrors: [...issues.pageErrors],
+    requestFailures: [...issues.requestFailures],
+  };
+  const steps = [
+    {
+      name: "browser-page-errors-absent",
+      passed: snapshot.pageErrors.length === 0,
+      error: snapshot.pageErrors.length > 0 ? JSON.stringify(snapshot.pageErrors, null, 2) : null,
+    },
+    {
+      name: "browser-request-failures-absent",
+      passed: snapshot.requestFailures.length === 0,
+      error: snapshot.requestFailures.length > 0 ? JSON.stringify(snapshot.requestFailures, null, 2) : null,
+    },
+    {
+      name: "browser-console-errors-absent",
+      passed: snapshot.consoleErrors.length === 0,
+      error: snapshot.consoleErrors.length > 0 ? JSON.stringify(snapshot.consoleErrors, null, 2) : null,
+    },
+  ];
+  const failedBuckets = [];
+  if (snapshot.pageErrors.length > 0) failedBuckets.push("pageerror");
+  if (snapshot.requestFailures.length > 0) failedBuckets.push("requestfailed");
+  if (snapshot.consoleErrors.length > 0) failedBuckets.push("console-error");
+
+  return {
+    steps,
+    passed: steps.every((step) => step.passed),
+    error: failedBuckets.length > 0
+      ? `Unexpected browser-side failures detected: ${failedBuckets.join(", ")}`
+      : null,
+    issues: snapshot,
+  };
+}
+
 // ── Fixtures ─────────────────────────────────────────────
 
 const FIXTURE_SCENARIO_ID = "sc-e2e-batch-b";
@@ -105,15 +209,26 @@ const ARGUMENT_MAP_FIXTURE = {
     { id: "n1", key: "claim-1", type: "claim", label: "Trade deficits are self-correcting", round: 1, payload: null },
     { id: "n2", key: "evidence-1", type: "evidence", label: "Historical data from 2008-2020 shows mean reversion", round: 1, payload: null },
     { id: "n3", key: "rebuttal-1", type: "rebuttal", label: "Selection bias — only stable economies sampled", round: 2, payload: null },
+    {
+      id: "n4",
+      key: `verdict_${FIXTURE_DEBATE_ID}`,
+      type: "verdict",
+      label: "order",
+      round: null,
+      payload: { winner: "proposition", verdict_tone: "order" },
+    },
   ],
   edges: [
-    { id: "e1", source: "n2", target: "n1", type: "supports", weight: 0.8, label: "supports" },
-    { id: "e2", source: "n3", target: "n1", type: "attacks", weight: 0.7, label: "attacks" },
+    { id: "e1", source: "n2", target: "n1", type: "supports", weight: 0.8, label: null },
+    { id: "e2", source: "n3", target: "n1", type: "rebuts", weight: 0.7, label: null },
+    { id: "e3", source: "n4", target: "n1", type: "accepted", weight: 1, label: null },
+    { id: "e4", source: "n4", target: "n2", type: "accepted", weight: 1, label: null },
+    { id: "e5", source: "n4", target: "n3", type: "unaddressed", weight: 1, label: null },
   ],
   units: [
-    { id: "u1", type: "claim", status: "standing", text: "Trade deficits are self-correcting", turn_id: "t1", node_id: "n1" },
-    { id: "u2", type: "evidence", status: "accepted", text: "Historical data from 2008-2020 shows mean reversion", turn_id: "t1", node_id: "n2" },
-    { id: "u3", type: "rebuttal", status: "rebutted", text: "Selection bias — only stable economies sampled", turn_id: "t2", node_id: "n3" },
+    { id: "u1", type: "claim", status: "accepted", text: "Trade deficits are self-correcting", turn_id: "turn-1", node_id: "n1" },
+    { id: "u2", type: "evidence", status: "accepted", text: "Historical data from 2008-2020 shows mean reversion", turn_id: "turn-1", node_id: "n2" },
+    { id: "u3", type: "rebuttal", status: "unaddressed", text: "Selection bias — only stable economies sampled", turn_id: "turn-2", node_id: "n3" },
   ],
 };
 
@@ -186,6 +301,54 @@ const STORY_FIXTURE = {
   ],
 };
 
+const COMPARE_SCENARIO_AGENTS = [
+  { id: "agent-1", name: "Trade Hawk", role: "Negotiator", tier: "CORE", emotion: "focused" },
+  { id: "agent-2", name: "Free Trader", role: "Analyst", tier: "IMPORTANT", emotion: "calm" },
+];
+
+const COMPARE_SCENARIO_MESSAGES = [
+  {
+    agent: "Trade Hawk",
+    agent_id: "agent-1",
+    message: "Ledger publication steadies the port docket.",
+    emotion: "focused",
+    diverge: null,
+    branch: FIXTURE_BRANCH_A,
+    branch_title: "Ledger Branch",
+    round: 1,
+  },
+  {
+    agent: "Free Trader",
+    agent_id: "agent-2",
+    message: "Opaque ledgers trigger a rumor spiral.",
+    emotion: "anxious",
+    diverge: null,
+    branch: FIXTURE_BRANCH_B,
+    branch_title: "Opaque Branch",
+    round: 1,
+  },
+  {
+    agent: "Trade Hawk",
+    agent_id: "agent-1",
+    message: "Negotiators converge on an auditable settlement.",
+    emotion: "confident",
+    diverge: null,
+    branch: FIXTURE_BRANCH_A,
+    branch_title: "Ledger Branch",
+    round: 2,
+  },
+  {
+    agent: "Free Trader",
+    agent_id: "agent-2",
+    message: "Hawks seize the chamber as trust evaporates.",
+    emotion: "aggressive",
+    diverge: null,
+    branch: FIXTURE_BRANCH_B,
+    branch_title: "Opaque Branch",
+    round: 2,
+  },
+];
+
 const SCENARIO_FIXTURE = {
   id: FIXTURE_SCENARIO_ID,
   question: "What if trade ports published tariff ledgers?",
@@ -194,10 +357,10 @@ const SCENARIO_FIXTURE = {
   scene_theme: "law_court",
   total_rounds: 5,
   mode: "blackboard",
-  visualization_enabled: false,
-  agents: [],
-  branches: [],
-  messages: [],
+  visualization_enabled: true,
+  agents: COMPARE_SCENARIO_AGENTS,
+  branches: STORY_FIXTURE.branches,
+  messages: COMPARE_SCENARIO_MESSAGES,
   groups: [],
   hierarchical: false,
   director_state: {
@@ -219,10 +382,7 @@ const SCENARIO_FIXTURE = {
   gameplay_state: null,
 };
 
-const RESULT_AGENTS_FIXTURE = [
-  { id: "agent-1", name: "Trade Hawk", role: "Negotiator", tier: "CORE", emotion: "focused" },
-  { id: "agent-2", name: "Free Trader", role: "Analyst", tier: "IMPORTANT", emotion: "calm" },
-];
+const RESULT_AGENTS_FIXTURE = COMPARE_SCENARIO_AGENTS;
 
 const CAMPAIGN_SUMMARY_FIXTURE = {
   scenario_id: FIXTURE_SCENARIO_ID,
@@ -402,15 +562,16 @@ async function installFixtures(page) {
   await page.route(`**/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/summary`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_SUMMARY_FIXTURE) }),
   );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) }),
-  );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/mastery`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_MASTERY_FIXTURE) }),
-  );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/badges`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
-  );
+  await page.route(/\/api\/campaign\/profile\/[^/?]+(?:\/mastery|\/badges)?(?:\?.*)?$/, (route) => {
+    const url = route.request().url();
+    if (url.includes("/mastery")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_MASTERY_FIXTURE) });
+    }
+    if (url.includes("/badges")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) });
+  });
   await page.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FIXTURE) }),
   );
@@ -429,6 +590,17 @@ async function installFixtures(page) {
   );
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/checkpoints*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  );
+  await page.route("**/api/replay-artifact", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "artifact-e2e-phase3b",
+        kind: "scenario_result_v1",
+        created_at: "2026-04-10T00:00:00Z",
+      }),
+    }),
   );
 }
 
@@ -458,6 +630,10 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const legend = page.getByText(/units|单元/).first();
   const hasLegend = await legend.isVisible().catch(() => false);
   results.steps.push({ name: "legend-visible", passed: hasLegend });
+
+  const verdictNode = page.getByRole("button", { name: /Verdict.*order|裁决.*order/i }).first();
+  const hasVerdictNode = await verdictNode.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-verdict-node-visible", passed: hasVerdictNode });
 
   // Check empty state doesn't appear
   const emptyMsg = page.getByText(/No argument map available|暂无论证图谱/);
@@ -501,6 +677,11 @@ async function testArgumentMap(page, baseUrl, outputDir) {
       ? await detailPanel.textContent().then((text) => text?.includes("Trade deficits are self-correcting") ?? false).catch(() => false)
       : false;
     results.steps.push({ name: "argument-map-node-detail-text-visible", passed: hasUnitText });
+
+    const hasAcceptedStatus = hasDetailPanel
+      ? await detailPanel.textContent().then((text) => /Accepted|已采纳/i.test(text ?? "")).catch(() => false)
+      : false;
+    results.steps.push({ name: "argument-map-node-detail-status-visible", passed: hasAcceptedStatus });
 
     const closeBtn = hasDetailPanel
       ? detailPanel.getByRole("button", { name: /Close|关闭/i }).first()
@@ -596,6 +777,37 @@ async function testCompareDigest(page, baseUrl, outputDir) {
   const showsDisabled = await disabled.isVisible().catch(() => false);
   results.steps.push({ name: "no-feature-disabled-message", passed: !showsDisabled });
 
+  const compareAutomationReady = await page.waitForFunction(() => {
+    try {
+      const raw = window.render_game_to_text?.();
+      if (!raw) return false;
+      const payload = JSON.parse(raw);
+      return Number(payload?.scene?.agent_count ?? 0) > 0;
+    } catch {
+      return false;
+    }
+  }, { timeout: 5000 }).then(() => true).catch(() => false);
+  results.steps.push({ name: "compare-theater-agent-count-positive", passed: compareAutomationReady });
+
+  const compareAutomation = compareAutomationReady
+    ? await page.evaluate(() => {
+        try {
+          const raw = window.render_game_to_text?.();
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
+        }
+      })
+    : null;
+  results.steps.push({
+    name: "compare-theater-message-count-positive",
+    passed: Number(compareAutomation?.simulation?.messageCount ?? 0) > 0,
+  });
+  results.steps.push({
+    name: "compare-theater-bubble-count-positive",
+    passed: Number(compareAutomation?.scene?.displayed_bubble_count ?? 0) > 0,
+  });
+
   return results;
 }
 
@@ -609,6 +821,7 @@ async function runSurface(mode, viewport) {
   const browser = await chromium.launch({ headless: process.env.HEADLESS !== "0" });
   const context = await browser.newContext({ viewport, acceptDownloads: true });
   const page = await context.newPage();
+  const browserIssues = attachBrowserIssueMonitor(page);
 
   await installFixtures(page);
 
@@ -637,6 +850,17 @@ async function runSurface(mode, viewport) {
     allResults.error = toErrorMessage(err);
     await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
+    const browserRuntime = buildBrowserRuntimeResult(browserIssues);
+    allResults.tests.browserRuntime = {
+      steps: browserRuntime.steps,
+      passed: browserRuntime.passed,
+      error: browserRuntime.error,
+    };
+    allResults.browserIssues = browserRuntime.issues;
+    writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
+    if (!browserRuntime.passed) {
+      await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+    }
     await page.close().catch(() => {});
     await context.close().catch(() => {});
     await browser.close().catch(() => {});

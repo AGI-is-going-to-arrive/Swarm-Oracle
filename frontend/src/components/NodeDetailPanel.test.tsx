@@ -1,7 +1,8 @@
 /**
  * P1-4 — NodeDetailPanel unit tests
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import * as React from 'react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -129,6 +130,81 @@ describe('NodeDetailPanel', () => {
     await user.keyboard('{Escape}');
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('restores focus to the latest trigger when switching from node A to node B before close', async () => {
+    const user = userEvent.setup();
+    const nodeA: NodeDetail = { id: 'a', label: 'Node A', type: 'event' };
+    const nodeB: NodeDetail = { id: 'b', label: 'Node B', type: 'claim' };
+
+    function Harness() {
+      const [selectedNode, setSelectedNode] = React.useState<NodeDetail | null>(null);
+
+      return (
+        <div>
+          <button type="button" onClick={() => setSelectedNode(nodeA)}>
+            Open A
+          </button>
+          <button type="button" onClick={() => setSelectedNode(nodeB)}>
+            Open B
+          </button>
+          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+        </div>
+      );
+    }
+
+    render(<Harness />);
+
+    const openAButton = screen.getByRole('button', { name: 'Open A' });
+    const openBButton = screen.getByRole('button', { name: 'Open B' });
+
+    await user.click(openAButton);
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+
+    await user.click(openBButton);
+
+    const closeButton = screen.getByRole('button', { name: 'Close' });
+    expect(closeButton).toHaveFocus();
+
+    await user.click(closeButton);
+
+    expect(openBButton).toHaveFocus();
+    expect(openAButton).not.toHaveFocus();
+  });
+
+  it('falls back when clipboard write is rejected', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied'));
+    const originalClipboard = navigator.clipboard;
+    const originalExecCommand = document.execCommand;
+    const execCommand = vi.fn().mockReturnValue(true);
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(<NodeDetailPanel node={{ id: 'copy-me', label: 'Copy node', type: 'event' }} onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Copy Reference' }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('copy-me');
+      expect(execCommand).toHaveBeenCalledWith('copy');
+    });
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: originalClipboard,
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: originalExecCommand,
+    });
   });
 
   it('turn label uses i18n key node_detail.turn (not hardcoded)', () => {

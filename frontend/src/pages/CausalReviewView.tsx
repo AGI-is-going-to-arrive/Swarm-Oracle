@@ -166,8 +166,11 @@ export function CausalReviewView() {
   const [agentSearch, setAgentSearch] = useState('');
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
+  const latestRequestIdRef = useRef(0);
 
   const fetchGraph = useCallback(async () => {
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
     setLoading(true);
     setSelectedNode(null);
     setError(null);
@@ -178,11 +181,16 @@ export function CausalReviewView() {
       const res = await fetch(url, { headers: buildSessionHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (requestId !== latestRequestIdRef.current) return;
       setGraphData(data);
       setError(null);
       setBranches(extractAvailableBranches(data));
-    } catch (err) { setError((err as Error).message); }
-    setLoading(false);
+    } catch (err) {
+      if (requestId !== latestRequestIdRef.current) return;
+      setError((err as Error).message);
+    } finally {
+      if (requestId === latestRequestIdRef.current) setLoading(false);
+    }
   }, [id, branchId]);
 
   useEffect(() => {
@@ -387,7 +395,7 @@ export function CausalReviewView() {
               background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
             }}
           />
-          {nodeCount > 0 && (
+          {nodeCount > 0 && !isTextFallback && (
             <ExportPanel containerSelector=".causal-graph-container" filenamePrefix="causal-graph" />
           )}
           {/* B6: Legend toggle */}
@@ -447,7 +455,11 @@ export function CausalReviewView() {
             >
               <Background />
               <Controls />
-              <MiniMap nodeColor={(n) => (n.data?.bgColor as string) || '#555'} nodeStrokeWidth={3} style={{ background: '#1a1a2e' }} />
+              <MiniMap
+                nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+                nodeStrokeWidth={3}
+                style={{ background: '#1a1a2e', pointerEvents: 'none' }}
+              />
             </ReactFlow>
             <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
           </div>
