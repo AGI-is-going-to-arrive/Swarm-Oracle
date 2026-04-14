@@ -242,10 +242,10 @@
   - `GraphNodeCard`
   - `NodeDetailPanel`
   - `graphTokens`
-- `CausalReviewView` 当前通过后端 `available_branches` 保持分支 selector；即使当前带 `branch_id` 过滤，兄弟分支和 fork child branch 也不会从下拉里消失
+- `CausalReviewView` 当前优先使用后端 `available_branches` 保持分支 selector；如果后端没带这个字段，会回退到 `payload.branch_id + fork children` 重建选项，因此即使当前带 `branch_id` 过滤，兄弟分支和 fork child branch 也不会从下拉里消失
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态
-- `CausalReviewView` 与 `ArgumentMap` 当前在 search / status filter / branch 切换后都会重新 `fitView()`，不会把视口停在旧图位置
-- `ArgumentMap` 当前在筛选结果为空时会显式显示空态文案，不再只留下空白 canvas
+- `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
+- `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦

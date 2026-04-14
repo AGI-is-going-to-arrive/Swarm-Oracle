@@ -146,13 +146,18 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 说明：
 
 - 这组回归当前覆盖：
-  - `manualChunks` production 分块回归（React 保持在共享 `vendor`）
-  - `CausalReviewView`
+  - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
+  - `CausalReviewView` 分支 selector 回退（`available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支）
   - `ArgumentMap`
   - `NodeDetailPanel`
   - `GraphNodeCard`
   - graph locale 资源
-  - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路
+  - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
+    - causal append 幂等
+    - 同 agent 同轮多消息
+    - child-branch fork provenance
+    - argument map `? ! ？ ！` punctuation split
+    - enrichment 后 stable rebuttal / support edge rebuild
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView`

@@ -71,6 +71,7 @@
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
+- causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
 
 ### Ending Room
 
@@ -157,6 +158,9 @@
 - 只要 follow-up 已经发出 `ending_room_turn_start`，后续无论是 partial stream 中断，还是后面的 rewrite / commit 失败，都会补 `ending_room_turn_error`；payload 当前带 `message / error / code / recoverable`，前端可据此清理 draft 而不把整 room 升成 fatal error。
 - Oracle auto-recap 的静态改写当前已接到 `stream-first + non-stream fallback` helper；follow-up / thread 仍走独立流式状态机，不和 auto-recap 共用同一条改写调度逻辑。
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
+- `causal_graph.append_round_nodes()` 当前对同一 `branch / round` 的重复追加是幂等的：
+  - 同一 agent 同 round 多条消息会用最后一条覆盖 `AgentStateFrame`
+  - 已存在的 event / fork / stance_shift 节点与边会复用，不再因为 `AgentStateFrame` 唯一约束把整轮 causal graph 写入打断
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
@@ -168,10 +172,11 @@
   - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
 - Debate argument map 当前走两层抽取：
-  - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类
+  - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
   - 如果 enrichment 改写了 unit type，会按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn，避免跨 turn 遗留陈旧 `rebuts`
+  - 重建时会尽量保留仍然有效的旧边；`rebuttal` 的 target 不会在重建时漂移到另一条 claim
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。

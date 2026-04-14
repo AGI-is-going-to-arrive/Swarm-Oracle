@@ -17,6 +17,22 @@
   - `phase3a` desktop/mobile `17/17`
   - `phase3b` desktop/mobile `14/14`
 
+### Post-v6 Patch Update (2026-04-14)
+
+- `P1` causal graph round append 现已按 `(branch_id, round_number, agent_id)` 幂等收口；同一 agent 同轮重复 hook 或多消息不会再因为 `AgentStateFrame` 唯一约束让整轮图谱回滚，state frame 取该 agent 本轮最后一条消息。
+- `P1` child-branch causal review 当前会保留 fork 的直接 provenance；切到 child branch 时不再只剩孤儿 fork。
+- `P1` argument map 当前统一了初次抽取与重建时的 opponent-claim 选择规则；enrichment rerun 不再把既有 rebuttal target 改挂到别的 claim。
+- `P2` argument map sentence split 当前已覆盖 `? / ! / ？ / ！`，多句 turn 不再被错误并成一个 unit。
+- `P2` `ArgumentMap / CausalReviewView` 当前只会在图结构变化时 `fitView()`；节点选中 / 取消选中不会再把视口强制拉回去。`ArgumentMap` 在筛选结果为空时也会保留 chips 和 `Clear`。
+- `P2` branch selector 当前除了优先使用后端 `available_branches`，也补了 `payload.branch_id + children` 的前端 fallback。
+- 最新复验：
+  - backend graph/debate 定向回归 `176 passed`
+  - frontend graph suite `80 passed`
+  - targeted `ruff check` 通过
+  - frontend `typecheck / lint / build` 通过
+  - `phase3a` desktop/mobile `17/17`
+  - `phase3b` desktop/mobile `14/14`
+
 ---
 
 ## v5 → v6 Corrections (3 findings + 2 open questions resolved)
