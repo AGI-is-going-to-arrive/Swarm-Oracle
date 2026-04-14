@@ -150,14 +150,6 @@ export function DebateArenaView() {
     }));
   }, [debate?.counterplay, debate?.id, id]);
 
-  useEffect(() => {
-    if (!debate?.language) return;
-    const targetLanguage = debate.language === 'zh' ? 'zh' : 'en';
-    if (!i18n.language.startsWith(targetLanguage)) {
-      void i18n.changeLanguage(targetLanguage);
-    }
-  }, [debate?.language, i18n]);
-
   useDebateWS(id, Boolean(id));
 
   useEffect(() => {

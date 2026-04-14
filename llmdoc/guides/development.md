@@ -191,10 +191,10 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
   - targeted `ruff check` 通过
   - frontend graph suite `111 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
-  - `phase3-batch-a full` `34/34`，default / `zh-CN` locale 都通过
+  - `phase3-batch-a full` `35/35`，default / `zh-CN` locale 都通过
   - `phase3-batch-b full` `43/43`，default / `zh-CN` locale 都通过
   - backend 全量 `python -m pytest -q` 本轮实测 `2033 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `979 passed`
+  - frontend 全量 `npm test` 本轮实测 `988 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
@@ -234,10 +234,11 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView` 基础渲染
-  - branch selector 会把 `branch_id` 真正写回 URL，并发出过滤请求
+  - branch selector 会校验 `scenario title + probability` 的可读 option，同时把 `branch_id` 真正写回 URL，并发出过滤请求
   - graph export 按钮可见，且 `Export SVG` 会校验下载下来的 SVG 非空、结构可读
   - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
   - screen-reader fallback list 确实存在，且至少有 1 条 list item
+  - relationless graph（多节点但 0 边）会切到 snapshot fallback；此时不再挂 ReactFlow，也不会显示 export controls
 - `phase3-batch-b` 主要看：
   - `ArgumentMap` 基础渲染
   - 本地化强度摘要 aria-label（default / `zh-CN` locale 都能定位）
@@ -277,7 +278,7 @@ source .venv/bin/activate
 python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
+npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
 node --test scripts/e2e-debate-suite.test.mjs
 node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless
 npx tsc --noEmit -p tsconfig.app.json
@@ -288,6 +289,10 @@ npm run build
   - 只认 `.debate-mobile-rail .btn`
   - rail 按钮不可用，或点击后没打开 modal / 没跳到结果页，脚本会直接失败
   - 不再 fallback 去点隐藏 hero CTA
+- 这组定向回归当前还会看：
+  - 页面壳不再跟着 debate payload 里的 `language` 静默改全局 UI 语言
+  - mixed-language fallback 当前覆盖 `phase commentary / replay quote / prediction score reason`
+  - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless` 本轮通过
 
 ### Oracle Chambers / Roundtable 定向回归
 
@@ -360,6 +365,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - anchored fallback 也会补校验 `threadId + questionAnchorIds + assistant reply`，不再把 `state: null` 或只有 user turn 的快照当成成功
 - `e2e-ending-room-followup-suite.mjs full / mobile`
   - 当前更适合专项 follow-up 回归
+  - `full` 本轮通过
   - 当前最新 mobile rerun 已通过：`frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
   - 慢流式场景仍可能只落到 fallback 观测，不一定每次都有完整 lifecycle 工件
   - 如果目标只是基础 smoke，优先跑 `e2e-ending-room-suite.mjs full`
@@ -512,6 +518,9 @@ npm run release:signoff -- --headless
 - 默认口径固定读取：
   - frontend `http://127.0.0.1:18928`
   - backend `http://127.0.0.1:18927`
+- 默认 `release-signoff` 当前已纳入：
+  - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
+  - roundtable Firefox / WebKit scoped regression
 - 如果本地预览端口不同，显式传 `--url http://127.0.0.1:<port>`。
 
 如果需要强制 Debate 使用 `llm_hybrid` 裁决模式：
@@ -551,8 +560,13 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 最近一轮 Oracle roundtable Firefox / WebKit scoped regression 工件：
 
-- `frontend/output/e2e/2026-04-12-roundtable-firefox-final/summary.json`
-- `frontend/output/e2e/2026-04-12-roundtable-webkit-final/summary.json`
+- `frontend/output/e2e/2026-04-14-roundtable-firefox-postfix-r2/summary.json`
+- `frontend/output/e2e/2026-04-14-roundtable-webkit-postfix/summary.json`
+
+最近一轮 Debate / ending-room follow-up 工件：
+
+- `frontend/output/e2e/2026-04-14-debate-full-rerun/result.json`
+- `frontend/output/e2e/2026-04-14-ending-room-followup-full-r3/summary.json`
 
 最近一轮经典模式流式 hardening 工件：
 

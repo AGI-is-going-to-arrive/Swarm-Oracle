@@ -171,6 +171,28 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows a snapshot fallback instead of ReactFlow when the graph has multiple nodes but no edges', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-relationless',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 2, payload: null },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    renderView();
+
+    expect(await screen.findByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.')).toBeInTheDocument();
+    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Round 1/i })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
   it('shows export panel when graph has nodes', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -281,6 +303,36 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('prefers scenario branch titles and probabilities in the branch selector', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-branch-meta',
+          nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+          edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+          available_branches: ['branch-1', 'branch-2'],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'scenario-1',
+          branches: [
+            { id: 'branch-1', title: 'Worldline Alpha', probability: 0.73 },
+            { id: 'branch-2', title: 'Worldline Beta', probability: 0.27 },
+          ],
+        }),
+      } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    const selector = await screen.findByRole('combobox', { name: 'Select branch' });
+    expect(within(selector).getByRole('option', { name: 'Worldline Alpha · 73.0%' })).toBeInTheDocument();
+    expect(within(selector).getByRole('option', { name: 'Worldline Beta · 27.0%' })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
   it('renders full branch labels so similar prefixes stay distinguishable', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -336,7 +388,7 @@ describe('CausalReviewView', () => {
       }),
     } as Response);
     renderView('/sim/test-id/causal-map?branch_id=br-child');
-    await screen.findByTestId('reactflow');
+    await screen.findByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
 
     expect(screen.getByLabelText('Select branch')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'All branches' })).toBeInTheDocument();
@@ -370,6 +422,16 @@ describe('CausalReviewView', () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
+          id: 'scenario-initial',
+          branches: [
+            { id: 'branch-root', title: 'Root branch', probability: 1 },
+            { id: encodedBranchId, title: 'Filtered branch', probability: 0.5 },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
           id: 'g-filtered',
           available_branches: ['branch-root', encodedBranchId],
           nodes: [
@@ -384,6 +446,16 @@ describe('CausalReviewView', () => {
           ],
           edges: [],
         }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'scenario-filtered',
+          branches: [
+            { id: 'branch-root', title: 'Root branch', probability: 1 },
+            { id: encodedBranchId, title: 'Filtered branch', probability: 0.5 },
+          ],
+        }),
       } as Response);
 
     renderView();
@@ -392,15 +464,21 @@ describe('CausalReviewView', () => {
     await user.selectOptions(screen.getByLabelText('Select branch'), encodedBranchId);
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
     });
-    const secondCallUrl = fetchSpy.mock.calls[1]?.[0];
+    const filteredGraphUrl = fetchSpy.mock.calls
+      .map((call) => call[0])
+      .find((value) => {
+        if (typeof value === 'string') return value.includes('branch_id=');
+        if (value instanceof URL) return value.toString().includes('branch_id=');
+        return value.url.includes('branch_id=');
+      });
     const serializedUrl =
-      typeof secondCallUrl === 'string'
-        ? secondCallUrl
-        : secondCallUrl instanceof URL
-          ? secondCallUrl.toString()
-          : secondCallUrl.url;
+      typeof filteredGraphUrl === 'string'
+        ? filteredGraphUrl
+        : filteredGraphUrl instanceof URL
+          ? filteredGraphUrl.toString()
+          : filteredGraphUrl?.url ?? '';
     expect(serializedUrl).toContain('branch_id=branch%2Fchild%3F2');
   });
 
@@ -448,7 +526,7 @@ describe('CausalReviewView', () => {
           { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
           { id: 'n2', key: 'e2', type: 'event', label: 'Agent Beta speaks', round: 1, payload: { agent_id: 'beta', branch_id: 'br1' } },
         ],
-        edges: [],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
       }),
     } as Response);
     renderView();

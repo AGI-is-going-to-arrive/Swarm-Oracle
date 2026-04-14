@@ -263,40 +263,15 @@
 
 /* ── Collapsible Detail Section ──────────────────────── */
 .ending-detail {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  overflow: hidden;
-}
-
-/* Fallback for browsers without 0fr support (Safari < 16) */
-@supports not (grid-template-rows: 0fr) {
-  .ending-detail {
-    display: block;
-    max-height: 0;
-    transition: max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  .ending-detail--open {
-    max-height: none;
-  }
-}
-
-.ending-detail > * {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.ending-detail--open {
-  grid-template-rows: 1fr;
+  margin-top: 16px;
 }
 
 .ending-detail__inner {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-top: 16px;
+  padding-top: 20px;
   border-top: 1px solid var(--border-subtle);
-  margin-top: 16px;
 }
 
 /* ── Insight (always visible) ──────────────────────── */

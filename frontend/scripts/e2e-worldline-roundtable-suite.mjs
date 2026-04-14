@@ -1446,12 +1446,15 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   };
 }
 
-async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId) {
-  const context = await browser.newContext({
+async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, browserName) {
+  const contextOptions = {
     viewport: { width: 390, height: 844 },
-    isMobile: true,
     hasTouch: true,
-  });
+  };
+  if (browserName !== "firefox") {
+    contextOptions.isMobile = true;
+  }
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir);
   const fit = await captureMobileFit(page);
@@ -1698,7 +1701,14 @@ async function main() {
   if (args.mode === "mobile" || args.mode === "full") {
     const mobileBrowser = await launchBrowser(args.headless, args.browser);
     try {
-      summary.mobile = await runMobile(mobileBrowser, args.baseUrl, args.backendUrl, outputDir, mobileScenarioId);
+      summary.mobile = await runMobile(
+        mobileBrowser,
+        args.baseUrl,
+        args.backendUrl,
+        outputDir,
+        mobileScenarioId,
+        args.browser,
+      );
     } finally {
       await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser", 20000);
     }

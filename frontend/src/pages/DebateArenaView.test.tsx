@@ -9,6 +9,23 @@ import { ApiError } from '../api/client';
 import type { DebateSnapshot } from '../types';
 import { DebateArenaView } from './DebateArenaView';
 
+const {
+  changeLanguageMock,
+  getMockLanguage,
+  setMockLanguage,
+} = vi.hoisted(() => {
+  let currentLanguage = 'en';
+  return {
+    changeLanguageMock: vi.fn(async (language: string) => {
+      currentLanguage = language;
+    }),
+    getMockLanguage: () => currentLanguage,
+    setMockLanguage: (language: string) => {
+      currentLanguage = language;
+    },
+  };
+});
+
 const predictDebateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
@@ -181,7 +198,12 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       key === 'debate.audience_meter' ? `Audience meter ${options?.value}` : key,
-    i18n: { language: 'en', changeLanguage: vi.fn() },
+    i18n: {
+      get language() {
+        return getMockLanguage();
+      },
+      changeLanguage: changeLanguageMock,
+    },
   }),
 }));
 
@@ -226,6 +248,8 @@ describe('DebateArenaView', () => {
       }),
     });
     resetMockDebateStore();
+    setMockLanguage('en');
+    changeLanguageMock.mockReset();
     predictDebateMock.mockReset();
     captureScreenshotMock.mockReset();
     captureElementDataUrlMock.mockReset();
@@ -264,6 +288,25 @@ describe('DebateArenaView', () => {
       expect(payload?.page?.debate?.room_map?.length).toBe(3);
       expect(payload?.page?.debate?.overview_cards?.length).toBe(3);
     });
+  });
+
+  it('keeps the current UI language even when the debate payload language is zh', async () => {
+    mockDebateStore.debate = {
+      ...mockDebateStore.debate,
+      language: 'zh',
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByRole('button', { name: 'debate.view_result' })).length).toBeGreaterThan(0);
+    expect(changeLanguageMock).not.toHaveBeenCalled();
+    expect(getMockLanguage()).toBe('en');
   });
 
   it('does not advance debate turns on sub-interval automation ticks', async () => {

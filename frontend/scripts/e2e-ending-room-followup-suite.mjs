@@ -230,10 +230,18 @@ async function findScenarioIds(frontendUrl) {
   for (const scenario of list.scenarios ?? []) {
     const detail = await fetchJson(`${backendUrl}/api/scenario/${scenario.id}`);
     const branches = Array.isArray(detail.branches) ? detail.branches : [];
+    const agents = Array.isArray(detail.agents) ? detail.agents : [];
+    const messages = Array.isArray(detail.messages) ? detail.messages : [];
     const branchCount = branches.length;
     const allBranchesCompleted = branchCount > 0
       && branches.every((branch) => branch?.status === "COMPLETED");
+    const hasStructuredEndingRoomInputs = agents.length > 0
+      && messages.length > 0
+      && branches.some((branch) => typeof branch?.story === "string" && branch.story.trim().length > 0);
     if (!allBranchesCompleted) {
+      continue;
+    }
+    if (!hasStructuredEndingRoomInputs) {
       continue;
     }
     const candidate = {
@@ -413,6 +421,22 @@ async function openPicker(page, buttonRegex, index) {
   await button.scrollIntoViewIfNeeded().catch(() => {});
   await button.click({ force: true });
   await page.waitForSelector(".ending-room-picker", { timeout: 15000 });
+}
+
+async function closeEndingRoom(page) {
+  const closeButton = page.locator(".ending-chat-close");
+  await closeButton.waitFor({ state: "visible", timeout: 30000 });
+  await closeButton.scrollIntoViewIfNeeded().catch(() => {});
+  try {
+    await closeButton.click({ force: true });
+  } catch {
+    await page.evaluate(() => {
+      const button = document.querySelector(".ending-chat-close");
+      if (button instanceof HTMLButtonElement) {
+        button.click();
+      }
+    });
+  }
 }
 
 async function enterRoomFromPicker(page, options = {}) {
@@ -1507,7 +1531,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     "pre-one-move flow",
     DESKTOP_CONTEXT_OPTIONS,
   );
-  await page.locator(".ending-chat-close").click();
+  await closeEndingRoom(page);
   await page.waitForTimeout(400);
 
   await openPicker(page, /One Move Only|只改一步/i, 1);
@@ -1553,7 +1577,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     "pre-gallery flow",
     DESKTOP_CONTEXT_OPTIONS,
   );
-  await page.locator(".ending-chat-close").click();
+  await closeEndingRoom(page);
   await page.waitForTimeout(400);
 
   const galleryState = await openGallery(page);
@@ -1566,7 +1590,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   // ── Evidence Card (证据投牌) ────────────────────────────────
   // Evidence buttons only render in non-gallery rooms (composerEnabled requires !isCrosslineGallery).
   // Close the gallery, prewarm a fresh ending_chamber, and navigate to it.
-  await page.locator(".ending-chat-close").click();
+  await closeEndingRoom(page);
   await page.waitForTimeout(400);
 
   const evidenceChamber = await prewarmEndingRoom(frontendUrl, multiId, {
@@ -2466,7 +2490,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     throw new Error("Mobile epilogue control is missing");
   }
 
-  await page.locator(".ending-chat-close").click();
+  await closeEndingRoom(page);
   await page.waitForTimeout(400);
   let galleryState = null;
   let evidenceCardState = null;
@@ -2488,7 +2512,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
     // ── Mobile Evidence Card (证据投牌) ───────────────────────
     // Evidence buttons only render in non-gallery rooms. Close gallery, prewarm fresh chamber.
-    await page.locator(".ending-chat-close").click();
+    await closeEndingRoom(page);
     await page.waitForTimeout(400);
 
     const mobileEvidenceChamber = await prewarmEndingRoom(frontendUrl, multiId, {

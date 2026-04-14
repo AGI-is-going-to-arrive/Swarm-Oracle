@@ -328,6 +328,8 @@ function main() {
   const cornersOutput = path.join(args.outputRoot, "corners");
   const mobileOutput = path.join(args.outputRoot, "mobile");
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
+  const roundtableFirefoxOutput = path.join(args.outputRoot, "roundtable-firefox");
+  const roundtableWebkitOutput = path.join(args.outputRoot, "roundtable-webkit");
   const debateOutput = path.join(args.outputRoot, "debate-full");
   const endingRoomOutput = path.join(args.outputRoot, "ending-room-followup");
   const roundtableOutput = path.join(args.outputRoot, "roundtable-full");
@@ -406,6 +408,68 @@ function main() {
     runStep(
       summary,
       args,
+      "phase3a_graph_default",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "full",
+      ],
+      {
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3b_graph_default",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "full",
+      ],
+      {
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3a_graph_zh",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "full",
+      ],
+      {
+        env: {
+          SWARM_URL: args.baseUrl,
+          SWARM_E2E_LOCALE: "zh-CN",
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3b_graph_zh",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "full",
+      ],
+      {
+        env: {
+          SWARM_URL: args.baseUrl,
+          SWARM_E2E_LOCALE: "zh-CN",
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
       "corners",
       nodeCommand,
       buildSuiteArgs("scripts/e2e-suite.mjs", "corners", args.baseUrl, cornersOutput, args.headless, args.scenarioId),
@@ -479,6 +543,52 @@ function main() {
       {
         artifactDir: roundtableOutput,
         resultFile: path.join(roundtableOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "roundtable_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--browser",
+        "firefox",
+        "--output-dir",
+        roundtableFirefoxOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableFirefoxOutput,
+        resultFile: path.join(roundtableFirefoxOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "roundtable_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--browser",
+        "webkit",
+        "--output-dir",
+        roundtableWebkitOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableWebkitOutput,
+        resultFile: path.join(roundtableWebkitOutput, "summary.json"),
       },
     );
     runStep(

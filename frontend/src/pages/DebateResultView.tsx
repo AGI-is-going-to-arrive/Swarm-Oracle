@@ -39,6 +39,16 @@ function isPredictionHit(prediction: DebatePrediction, result: DebateResultPaylo
   return prediction.target_value === result.verdict_tone;
 }
 
+function hasMixedLanguageLongText(text: string | null | undefined): boolean {
+  const normalized = text?.replace(/\s+/g, ' ').trim() ?? '';
+  if (normalized.length < 60) return false;
+
+  const hanCount = (normalized.match(/[\u3400-\u9fff]/g) ?? []).length;
+  const latinWordCount = (normalized.match(/\b[A-Za-z]{2,}\b/g) ?? []).length;
+
+  return hanCount >= 6 && latinWordCount >= 3;
+}
+
 export function DebateResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -243,6 +253,31 @@ export function DebateResultView() {
       permalinkUrl: buildDebateReplayUrl(window.location.origin, payload),
     };
   }, [counterplayExplanation, counterplayOutcome, counterplaySummary, payload, t]);
+  const hasMixedLanguageLongResultCopy = useMemo(() => {
+    if (!payload) return false;
+
+    const longformTexts = [
+      payload.result.best_argument,
+      payload.result.best_rebuttal,
+      payload.result.judge_summary,
+      payload.counterplay?.explanation ?? '',
+      judgeRationale?.winner_reason ?? '',
+      judgeRationale?.loser_gap ?? '',
+      judgeRationale?.swing_factor ?? '',
+      judgeRationale?.closing_note ?? '',
+      ...Object.values(judgeRationale?.dimension_rationales ?? {}),
+      ...supportingTurns.flatMap((turn) => [turn.quote, turn.why_it_matters]),
+      ...(payload.phase_insights ?? []).map((insight) => insight.commentary ?? ''),
+      ...payload.result.replay.map((item) => item.quote ?? ''),
+      ...payload.predictions.map((prediction) => prediction.score_reason ?? ''),
+    ];
+
+    return longformTexts.some((text) => hasMixedLanguageLongText(text));
+  }, [judgeRationale, payload, supportingTurns]);
+  const mixedLanguageFallbackTitle = isZh ? '语言兜底' : 'Language fallback';
+  const mixedLanguageFallbackNotice = isZh
+    ? '检测到结果页长文案混用中英文。当前保留原文展示，不再静默切换全局界面语言。'
+    : 'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.';
 
   const handleImportReplay = async () => {
     if (!replayPayload || importingReplay) return;
@@ -254,14 +289,6 @@ export function DebateResultView() {
       setImportingReplay(false);
     }
   };
-
-  useEffect(() => {
-    if (!payload?.language) return;
-    const targetLanguage = payload.language === 'zh' ? 'zh' : 'en';
-    if (!i18n.language.startsWith(targetLanguage)) {
-      void i18n.changeLanguage(targetLanguage);
-    }
-  }, [i18n, payload?.language]);
 
   useEffect(() => {
     const win = window as AutomationWindow;
@@ -439,6 +466,17 @@ export function DebateResultView() {
 
         <div className="debate-result-grid">
           <div className="debate-result-stack">
+            {hasMixedLanguageLongResultCopy && (
+              <section className="debate-panel">
+                <div className="debate-panel__header">
+                  <h2>{mixedLanguageFallbackTitle}</h2>
+                </div>
+                <div className="debate-panel__body">
+                  <p className="debate-rule-copy" role="note">{mixedLanguageFallbackNotice}</p>
+                </div>
+              </section>
+            )}
+
             <section className="debate-panel">
               <div className="debate-panel__header">
                 <h2>{t('debate.result_breakdown')}</h2>

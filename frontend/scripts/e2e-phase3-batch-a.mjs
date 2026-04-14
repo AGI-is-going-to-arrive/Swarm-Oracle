@@ -243,6 +243,14 @@ const GROWTH_EVENTS_FIXTURE = {
   ],
 };
 
+const SCENARIO_FIXTURE = {
+  id: FIXTURE_SCENARIO_ID,
+  branches: [
+    { id: "branch-root", title: "Baseline track", probability: 0.63 },
+    { id: "branch-child", title: "Intervention branch", probability: 0.37 },
+  ],
+};
+
 const CAUSAL_GRAPH_FIXTURE = {
   id: "cg-e2e-001",
   available_branches: ["branch-root", "branch-child"],
@@ -339,6 +347,9 @@ async function installFixtures(page) {
     const fixture = branchId ? (CAUSAL_GRAPH_FILTERED_FIXTURES[branchId] ?? CAUSAL_GRAPH_FIXTURE) : CAUSAL_GRAPH_FIXTURE;
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture) });
   });
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SCENARIO_FIXTURE) }),
+  );
 }
 
 // ── Test Flows ───────────────────────────────────────────
@@ -573,6 +584,12 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
   const hasBranchSelect = await branchSelect.isVisible().catch(() => false);
   results.steps.push({ name: "branch-selector-visible", passed: hasBranchSelect });
   if (hasBranchSelect) {
+    const hasReadableBranchOptions = await branchSelect.evaluate((element) => {
+      const options = Array.from((element).querySelectorAll("option"));
+      const labels = options.map((option) => option.textContent?.trim() ?? "");
+      return labels.includes("Baseline track · 63.0%") && labels.includes("Intervention branch · 37.0%");
+    }).catch(() => false);
+    results.steps.push({ name: "branch-selector-shows-readable-options", passed: hasReadableBranchOptions });
     const branchResponsePromise = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph?branch_id=branch-child`),
@@ -586,7 +603,11 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
     results.steps.push({ name: "branch-selector-updates-url", passed: branchQueryApplied });
     const branchResponseSeen = await branchResponsePromise;
     const filteredCountVisible = branchResponseSeen
-      ? await page.getByText(/2 (nodes|节点)/).isVisible({ timeout: 5000 }).catch(() => false)
+      ? await page.waitForFunction(
+        () => document.querySelectorAll(".react-flow__node").length === 2,
+        undefined,
+        { timeout: 5000 },
+      ).then(() => true).catch(() => false)
       : false;
     results.steps.push({ name: "branch-filtered-count-visible", passed: filteredCountVisible });
     results.steps.push({

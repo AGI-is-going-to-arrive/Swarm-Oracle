@@ -653,10 +653,6 @@ export function InputView() {
         reasoningEffort: reasoningEffort || undefined,
         userId: directorIdentity.userId,
       });
-      const targetLanguage = debate.language === 'zh' ? 'zh' : 'en';
-      if (!i18n.language.startsWith(targetLanguage)) {
-        await i18n.changeLanguage(targetLanguage);
-      }
       navigate(`/debate/${debate.id}`);
     } catch {
       setIsSubmitting(false);

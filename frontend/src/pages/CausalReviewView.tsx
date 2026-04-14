@@ -67,6 +67,12 @@ interface CausalGraphData {
   available_branches?: string[];
 }
 
+interface ScenarioBranchOption {
+  id: string;
+  title: string;
+  probability: number | null;
+}
+
 function extractApiErrorMessage(payload: unknown, status: number): string {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
@@ -234,6 +240,7 @@ export function CausalReviewView() {
   const branchId = rawBranchId && rawBranchId.trim() ? rawBranchId.trim() : undefined;
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
   const [branches, setBranches] = useState<string[]>([]);
+  const [branchOptions, setBranchOptions] = useState<ScenarioBranchOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
@@ -259,6 +266,7 @@ export function CausalReviewView() {
     setLoading(true);
     setSelectedNode(null);
     setError(null);
+    setBranchOptions([]);
     try {
       const url = branchId
         ? `/api/scenario/${id}/causal-graph?branch_id=${encodeURIComponent(branchId)}`
@@ -274,10 +282,36 @@ export function CausalReviewView() {
         throw new Error(extractApiErrorMessage(payload, res.status));
       }
       const data = await res.json();
+      let scenarioBranchOptions: ScenarioBranchOption[] = [];
+      try {
+        const scenarioRes = await fetch(`/api/scenario/${id}`, { headers: buildSessionHeaders() });
+        if (scenarioRes.ok) {
+          const scenarioPayload = await scenarioRes.json();
+          const scenarioBranches: unknown[] = Array.isArray(scenarioPayload?.branches)
+            ? scenarioPayload.branches
+            : [];
+          scenarioBranchOptions = scenarioBranches
+            .filter((branch): branch is Record<string, unknown> => (
+              typeof branch === 'object'
+              && branch !== null
+              && typeof (branch as Record<string, unknown>).id === 'string'
+            ))
+            .map((branch) => ({
+              id: branch.id as string,
+              title: typeof branch.title === 'string' && branch.title.trim().length > 0
+                ? branch.title
+                : branch.id as string,
+              probability: typeof branch.probability === 'number' ? branch.probability : null,
+            }));
+        }
+      } catch {
+        scenarioBranchOptions = [];
+      }
       if (requestId !== latestRequestIdRef.current) return;
       setGraphData(data);
       setError(null);
       setBranches(extractAvailableBranches(data));
+      setBranchOptions(scenarioBranchOptions);
     } catch (err) {
       if (requestId !== latestRequestIdRef.current) return;
       setError((err as Error).message);
@@ -310,12 +344,14 @@ export function CausalReviewView() {
   const nodeCount = filteredData?.nodes.length ?? 0;
   const edgeCount = filteredData?.edges.length ?? 0;
   const isTextFallback = nodeCount > PERF_TEXT_FALLBACK_LIMIT;
+  const isRelationlessFallback = nodeCount > 1 && edgeCount === 0;
+  const isNonInteractiveFallback = isTextFallback || isRelationlessFallback;
   const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
 
   const layoutResult = useMemo(() => {
-    if (!filteredData || filteredData.nodes.length === 0 || isTextFallback) return { nodes: [], edges: [] };
+    if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
     return layoutDagre(filteredData.nodes, filteredData.edges, translate);
-  }, [filteredData, isTextFallback, translate]);
+  }, [filteredData, isNonInteractiveFallback, translate]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -401,8 +437,28 @@ export function CausalReviewView() {
     return branches.includes(branchId) ? branches : [branchId, ...branches];
   }, [branchId, branches]);
 
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    const raw = rawNodeMap.get(node.id);
+  const branchOptionMap = useMemo(() => (
+    new Map(branchOptions.map((option) => [option.id, option]))
+  ), [branchOptions]);
+
+  const availableBranchOptions = useMemo(() => (
+    availableBranches.map((candidateId) => {
+      const option = branchOptionMap.get(candidateId);
+      return option ?? {
+        id: candidateId,
+        title: candidateId,
+        probability: null,
+      };
+    })
+  ), [availableBranches, branchOptionMap]);
+
+  const buildBranchOptionLabel = useCallback((option: ScenarioBranchOption) => {
+    if (option.probability == null) return option.title;
+    return `${option.title} · ${(option.probability * 100).toFixed(1)}%`;
+  }, []);
+
+  const openNodeDetail = useCallback((nodeId: string) => {
+    const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
     setSelectedNode({
       id: raw.id,
@@ -412,6 +468,10 @@ export function CausalReviewView() {
       payload: raw.payload,
     });
   }, [rawNodeMap]);
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    openNodeDetail(node.id);
+  }, [openNodeDetail]);
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
@@ -474,7 +534,11 @@ export function CausalReviewView() {
               aria-label={t('causal.branch_select', 'Select branch')}
             >
               <option value="">{t('causal.all_branches', 'All branches')}</option>
-              {availableBranches.map(b => <option key={b} value={b}>{b}</option>)}
+              {availableBranchOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {buildBranchOptionLabel(option)}
+                </option>
+              ))}
             </select>
           )}
           {/* C5: Agent search */}
@@ -489,7 +553,7 @@ export function CausalReviewView() {
               background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
             }}
           />
-          {nodeCount > 0 && !isTextFallback && (
+          {nodeCount > 0 && !isNonInteractiveFallback && (
             <ExportPanel
               containerSelector={`.causal-graph-export-target[data-export-root="${exportRootId}"]`}
               filenamePrefix="causal-graph"
@@ -523,16 +587,39 @@ export function CausalReviewView() {
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <p style={{ color: '#888' }}>{t('causal.no_results', 'No nodes match your search.')}</p>
           </div>
-        ) : isTextFallback ? (
+        ) : isNonInteractiveFallback ? (
           <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }} className="causal-graph-container">
-            <p style={{ color: '#888', marginBottom: '0.5rem' }}>{t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')}</p>
+            <p style={{ color: '#888', marginBottom: '0.5rem' }}>
+              {isTextFallback
+                ? t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')
+                : (t(
+                    'causal.relationless_snapshot',
+                    'No causal edges were generated for this scenario yet. Showing event snapshots instead.',
+                  ))}
+            </p>
             <div role="list" aria-label={causalListAriaLabel}>
               {filteredData?.nodes.map(n => (
                 <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
-                  {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
+                  <button
+                    type="button"
+                    onClick={() => openNodeDetail(n.id)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      border: '1px solid #333',
+                      borderRadius: 6,
+                      background: '#17172a',
+                      color: '#ddd',
+                      padding: '0.55rem 0.7rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {`${t('causal.round_label', 'Round')} ${n.round ?? '?'} · ${getCausalTypeLabel(n.type, t)}: ${n.label}`}
+                  </button>
                 </div>
               ))}
             </div>
+            <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
           </div>
         ) : (
           <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">

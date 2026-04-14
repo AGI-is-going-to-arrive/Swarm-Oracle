@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
@@ -532,6 +532,46 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByTestId('ending-chat-modal')).toHaveTextContent('Archive Branch:one_move_only');
     expect(screen.getByTestId('ending-chat-selected-agent-count')).toHaveTextContent('1');
+  });
+
+  it('keeps branch detail content out of the tree until the card is expanded', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const toggle = await screen.findByRole('button', { name: 'result.read_full' });
+    const branchCard = screen.getByRole('heading', { name: 'Archive Branch' }).closest('article');
+    expect(branchCard).not.toBeNull();
+    const branchQueries = within(branchCard as HTMLElement);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(branchQueries.queryByText('A complete branch story.')).not.toBeInTheDocument();
+    expect(branchQueries.queryByText('Moment 1')).not.toBeInTheDocument();
+    expect(branchQueries.queryByRole('heading', { name: 'result.story' })).not.toBeInTheDocument();
+    expect(branchQueries.queryByRole('heading', { name: 'result.key_moments' })).not.toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls');
+    expect(branchQueries.getByText('A complete branch story.')).toBeInTheDocument();
+    expect(branchQueries.getByText('Moment 1')).toBeInTheDocument();
+    expect(branchQueries.getByRole('heading', { name: 'result.story' })).toBeInTheDocument();
+    expect(branchQueries.getByRole('heading', { name: 'result.key_moments' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'result.collapse' }));
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(branchQueries.queryByText('A complete branch story.')).not.toBeInTheDocument();
+    expect(branchQueries.queryByText('Moment 1')).not.toBeInTheDocument();
   });
 
   it('opens crossline gallery directly when multiple endings are available', async () => {

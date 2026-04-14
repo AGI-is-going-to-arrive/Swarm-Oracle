@@ -8,6 +8,23 @@ import { DebateResultView } from './DebateResultView';
 import { encodeDebateReplayToken } from '../lib/debateReplay';
 import type { DebateResultPayload } from '../types';
 
+const {
+  changeLanguageMock,
+  getMockLanguage,
+  setMockLanguage,
+} = vi.hoisted(() => {
+  let currentLanguage = 'en';
+  return {
+    changeLanguageMock: vi.fn(async (language: string) => {
+      currentLanguage = language;
+    }),
+    getMockLanguage: () => currentLanguage,
+    setMockLanguage: (language: string) => {
+      currentLanguage = language;
+    },
+  };
+});
+
 const getDebateResultMock = vi.fn();
 const importReplayDebateMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
@@ -174,7 +191,12 @@ function buildPayload(): DebateResultPayload {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
-    i18n: { language: 'en', changeLanguage: vi.fn() },
+    i18n: {
+      get language() {
+        return getMockLanguage();
+      },
+      changeLanguage: changeLanguageMock,
+    },
   }),
 }));
 
@@ -228,6 +250,8 @@ vi.mock('../lib/debateCounterplay', () => ({
 
 describe('DebateResultView', () => {
   beforeEach(() => {
+    setMockLanguage('en');
+    changeLanguageMock.mockClear();
     getDebateResultMock.mockReset();
     importReplayDebateMock.mockReset();
     captureElementDataUrlMock.mockReset();
@@ -302,6 +326,115 @@ describe('DebateResultView', () => {
     expect(screen.getByText('debate.result_phase_map')).toBeInTheDocument();
     expect(screen.getByText('debate.result_prediction_confidence')).toBeInTheDocument();
     expect(screen.getByText('The bet tracked the late momentum correctly.')).toBeInTheDocument();
+  });
+
+  it('keeps the current UI language instead of forcing the debate language on the result page', async () => {
+    setMockLanguage('en');
+    getDebateResultMock.mockResolvedValue({
+      ...buildPayload(),
+      language: 'zh',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(changeLanguageMock).not.toHaveBeenCalled();
+    expect(getMockLanguage()).toBe('en');
+  });
+
+  it('shows an explicit fallback note when long-form result copy mixes Chinese and English', async () => {
+    getDebateResultMock.mockResolvedValue({
+      ...buildPayload(),
+      result: {
+        ...buildPayload().result,
+        best_argument:
+          'This verdict keeps the English frame, 但关键转折突然改成中文解释，so the long-form copy becomes visibly mixed instead of staying in one language.',
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This verdict keeps the English frame, 但关键转折突然改成中文解释，so the long-form copy becomes visibly mixed instead of staying in one language.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the fallback note when mixed-language copy only appears in phase commentary', async () => {
+    const payload = buildPayload();
+    getDebateResultMock.mockResolvedValue({
+      ...payload,
+      phase_insights: (payload.phase_insights ?? []).map((insight, index) => (
+        index === 0
+          ? {
+            ...insight,
+            commentary:
+              'Opening commentary stays in English, 但后半段突然切到中文分析，so the long-form phase note becomes visibly mixed for the same insight card.',
+          }
+          : insight
+      )),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the fallback note when mixed-language copy only appears in prediction score reasons', async () => {
+    const payload = buildPayload();
+    getDebateResultMock.mockResolvedValue({
+      ...payload,
+      predictions: payload.predictions.map((prediction) => ({
+        ...prediction,
+        score_reason:
+          'The score explanation starts in English, 但最后一段突然换成中文总结，so the prediction note becomes mixed even though the headline stays stable.',
+      })),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('hydrates from a replay token without calling the API', async () => {

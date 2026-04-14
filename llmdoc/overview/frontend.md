@@ -234,9 +234,23 @@
   - 禁用 `Export Markdown`
   - 隐藏 `score_predictions`
   - 只保留本地导入、只读分享与 permalink 相关动作
+- `ResultView` 的结局详情当前只在展开时挂载：
+  - 收起时不会再把完整 story / key moments 留在 DOM 或可访问性树里
+  - 展开按钮也不会再保留指向已卸载详情节点的悬空 `aria-controls`
 - `DebateResultView` 当前把 argument map 改成按需加载：
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
+- `InputView / DebateArenaView / DebateResultView` 当前都不会再因为 debate payload 里的 `language` 改全局 UI 语言：
+  - 页面壳继续只跟用户当前语言开关走
+  - `DebateResultView` 遇到中英混排的长文案时，会显示明确 fallback note，并保留原文展示
+  - mixed-language 检测当前覆盖：
+    - `best_argument / best_rebuttal / judge_summary`
+    - `counterplay.explanation`
+    - `judge_rationale.*`
+    - `supporting_turns`
+    - `phase_insights.commentary`
+    - `result.replay.quote`
+    - `prediction.score_reason`
 - `ResultView` 当前在 `counterfactual_replay` capability 开启且结果里存在 branches 时，会显示：
   - `CounterfactualPanel`
   - `ResumePanel`
@@ -246,10 +260,14 @@
   - `NodeDetailPanel`
   - `graphTokens`
 - `CausalReviewView` 当前优先使用后端 `available_branches` 保持分支 selector；如果后端没带这个字段，会回退到 `payload.branch_id + fork children` 重建选项，因此即使当前带 `branch_id` 过滤，兄弟分支和 fork child branch 也不会从下拉里消失
-  分支 selector 当前直接显示完整 branch id，不再截成相同前缀的短标签。
+  分支 selector 当前会优先显示 scenario branch 的标题和概率；拿不到 branch 元数据时才回退完整 branch id。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；有结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
 - URL 里如果带了不存在的 `branch_id`，`CausalReviewView` 当前会直接显示后端错误，不再把未知分支伪装成空图。
+- `CausalReviewView` 当前在 `多节点但 0 edges` 时会直接走 relationless snapshot fallback：
+  - 显示 event snapshot 列表
+  - 仍可打开节点详情
+  - 不再把这类图伪装成可交互 DAG
 - `CausalReviewView` 当前在大图走 text fallback 时会隐藏导出按钮，并且只保留一条具名的 a11y 列表；当前列表名固定为 `Causal events list`。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），不会挡住节点点击；移动端同口径。
@@ -266,8 +284,11 @@
   - 关闭后会把焦点还回最新一次打开详情的 trigger
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 详情关闭后仍走 pane click / close button 这条现有口径
-- `phase3-batch-a` 当前除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
-- `phase3-batch-a` 当前也会检查 branch selector 真的发出带 `branch_id` 的请求，default / `zh-CN` locale 走同一条 fixture 口径。
+- `phase3-batch-a full` 当前口径是 `35/35`；除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
+- `phase3-batch-a` 当前也会检查：
+  - branch selector 真的发出带 `branch_id` 的请求
+  - `/api/scenario/:id` 返回的可读 branch title + probability 确实进了 selector
+  - default / `zh-CN` locale 走同一条 fixture 口径
 - `phase3-batch-a / batch-b` 的 graph SVG smoke 当前会校验下载文件内容，不只看文件名。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的强度摘要在 default / `zh-CN` locale 都能定位，以及 `Export SVG`、verdict 节点、节点点击打开详情、详情文本、accepted 状态与关闭动作。
@@ -310,6 +331,10 @@
   - `turn-commit`
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
 - 默认 `release-signoff` 当前会把 `corners` 步骤固定到 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
+- 默认 `release-signoff` 当前还会纳入：
+  - `phase3a / phase3b` 的 default graph smoke
+  - `phase3a / phase3b` 的 `zh-CN` graph smoke
+  - roundtable 的 Firefox / WebKit scoped regression
 - `single-ending` 的 mobile verdict-anchor thread 当前也走 deterministic 兜底：
   - thread title 每次唯一，避免复用同一 room 时点到旧 thread
   - 如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
@@ -344,7 +369,7 @@
   - readonly replay 下 `interaction_mode` 会跟随 active replay thread
   - mobile artifact replay readonly 不再因为错误暴露 `archivist_route` 而超时
 - 最近一次默认本地全链签收工件位于：
-  - `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`
+  - `frontend/output/e2e/2026-04-14T13-23-55-764Z-release-signoff/summary.json`
 - 当前 single-ending Oracle 已额外做过真实浏览器复核：
   - 结果页无 `Start Roundtable / Crossline Gallery`
   - `ending_chamber / one_move_only` 可正常打开
@@ -361,7 +386,7 @@
   - Canvas bubble 尺寸预测模块已独立封装（`canvasTextPredict.ts`），当前已正式接入 WorldScene 的 `showBubble()` 方法——预测可用时跳过 Phaser `getBounds()` DOM 调用，不可用时自动回退原路径
 - `ResultView` 当前已做 Summary-First 优化：
   - 结局卡默认只显示标题 + 概率条 + insight 引言 + 操作按钮
-  - 故事、分歧原因、关键时刻需点击"阅读完整故事"展开（`grid-template-rows: 0fr` 折叠动画，Safari < 16 有 `@supports` 降级）
+  - 故事、分歧原因、关键时刻需点击"阅读完整故事"展开；收起时详情区不会保留正文和 key moments DOM，可访问性树也只在展开时看到详情
   - 桌面端 2 列网格布局，主结局（概率最高）跨两列
   - 概率条按区间着色：>60% rose、30-60% amber、<30% gray
   - 关键时刻改为 mini-timeline 视觉化

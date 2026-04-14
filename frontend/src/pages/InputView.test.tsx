@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InputView } from './InputView';
 
 const {
+  createDebateMock,
   getCapabilitiesMock,
   identityPreflightMock,
   testLlmConnectionMock,
@@ -17,6 +18,7 @@ const {
   getCampaignDailyChallengeStatusMock,
   getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
+  changeLanguageMock,
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
@@ -114,6 +116,7 @@ const {
     return translations[currentLanguage]?.[key] ?? key;
   };
   return {
+    createDebateMock: vi.fn(),
     getCapabilitiesMock: vi.fn(),
     identityPreflightMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
@@ -125,6 +128,9 @@ const {
     getCampaignDailyChallengeStatusMock: vi.fn(),
     getCampaignWeeklySummaryMock: vi.fn(),
     getChallengeProgressMock: vi.fn(),
+    changeLanguageMock: vi.fn((language: string) => {
+      setMockLanguage(language);
+    }),
     setMockLanguage,
     getMockLanguage,
     stableTranslator,
@@ -144,9 +150,7 @@ vi.mock('react-i18next', () => ({
       get language() {
         return getMockLanguage();
       },
-      changeLanguage: vi.fn((language: string) => {
-        setMockLanguage(language);
-      }),
+      changeLanguage: changeLanguageMock,
     },
   }),
 }));
@@ -166,6 +170,7 @@ vi.mock('../stores/simulationStore', () => ({
 }));
 
 vi.mock('../api/client', () => ({
+  createDebate: createDebateMock,
   getCapabilities: getCapabilitiesMock,
   identityContinuityPreflight: identityPreflightMock,
   testLlmConnection: testLlmConnectionMock,
@@ -296,6 +301,8 @@ describe('InputView campaign progress', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
     setMockLanguage('en');
+    changeLanguageMock.mockClear();
+    createDebateMock.mockReset();
     startSimulationMock.mockClear();
     identityPreflightMock.mockReset();
     testLlmConnectionMock.mockReset();
@@ -408,6 +415,36 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('4 total runs logged')).toBeInTheDocument();
     expect(screen.getByText('2 badges unlocked so far.')).toBeInTheDocument();
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
+  });
+
+  it('keeps the current UI language when entering Debate Arena from the homepage', async () => {
+    const user = userEvent.setup();
+    createDebateMock.mockResolvedValue({
+      id: 'debate-zh',
+      language: 'zh',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/debate/:id" element={<div>debate-route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const questionField = document.querySelector('textarea');
+    expect(questionField).not.toBeNull();
+
+    await user.type(questionField as HTMLTextAreaElement, 'What if AI ruled every city?');
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+
+    await waitFor(() => {
+      expect(createDebateMock).toHaveBeenCalledTimes(1);
+    });
+    expect(changeLanguageMock).not.toHaveBeenCalled();
+    expect(getMockLanguage()).toBe('en');
+    expect(await screen.findByText('debate-route')).toBeInTheDocument();
   });
 
   it('shows mode-specific action hints and updates the main simulation ETA when rounds change', async () => {
