@@ -62,6 +62,32 @@ interface CausalGraphData {
   available_branches?: string[];
 }
 
+function extractApiErrorMessage(payload: unknown, status: number): string {
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    const detail = record.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail.trim();
+    }
+    if (detail && typeof detail === 'object') {
+      const detailRecord = detail as Record<string, unknown>;
+      const message = detailRecord.message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim();
+      }
+      const code = detailRecord.code;
+      if (typeof code === 'string' && code.trim()) {
+        return code.trim();
+      }
+    }
+    const message = record.message;
+    if (typeof message === 'string' && message.trim()) {
+      return message.trim();
+    }
+  }
+  return `HTTP ${status}`;
+}
+
 // ── Constants ───────────────────────────────────────────────
 
 const NODE_W = 200;
@@ -180,7 +206,15 @@ export function CausalReviewView() {
         ? `/api/scenario/${id}/causal-graph?branch_id=${encodeURIComponent(branchId)}`
         : `/api/scenario/${id}/causal-graph`;
       const res = await fetch(url, { headers: buildSessionHeaders() });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let payload: unknown = null;
+        try {
+          payload = await res.json();
+        } catch {
+          payload = null;
+        }
+        throw new Error(extractApiErrorMessage(payload, res.status));
+      }
       const data = await res.json();
       if (requestId !== latestRequestIdRef.current) return;
       setGraphData(data);

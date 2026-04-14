@@ -10,6 +10,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
+import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
@@ -492,8 +494,17 @@ async function testCausalMap(page, baseUrl, outputDir) {
         exportSvgButton.click(),
       ]);
       const filename = download.suggestedFilename();
-      await download.path().catch(() => null);
-      svgDownloadPassed = filename.startsWith("causal-graph_") && filename.endsWith(".svg");
+      let filePath = await download.path().catch(() => null);
+      if (!filePath) {
+        filePath = path.join(stepDir, filename);
+        await download.saveAs(filePath);
+      }
+      await validateSvgDownloadArtifact({
+        filePath,
+        filename,
+        expectedPrefix: "causal-graph_",
+      });
+      svgDownloadPassed = true;
       await saveScreenshot(page, path.join(stepDir, "02-causal-map-exported.png"));
     } catch {
       svgDownloadPassed = false;

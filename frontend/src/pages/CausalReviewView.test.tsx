@@ -127,6 +127,24 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('surfaces structured backend error details for invalid branch filters', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({
+        detail: {
+          code: 'BRANCH_NOT_FOUND',
+          message: 'Branch missing-branch not found in scenario',
+        },
+      }),
+    } as Response);
+    renderView('/sim/test-id/causal-map?branch_id=missing-branch');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Branch missing-branch not found in scenario');
+    vi.restoreAllMocks();
+  });
+
   it('shows empty state when graph has no nodes', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,

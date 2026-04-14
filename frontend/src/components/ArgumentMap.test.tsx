@@ -624,25 +624,28 @@ describe('ArgumentStrengthMeter', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders correct color segments based on unit statuses', () => {
+  it('renders the strength distribution as an accessible list summary', () => {
     const units: ArgumentUnit[] = [
       { id: 'u1', type: 'claim', status: 'standing', text: '', turn_id: 't1' },
       { id: 'u2', type: 'claim', status: 'standing', text: '', turn_id: 't2' },
       { id: 'u3', type: 'rebuttal', status: 'rebutted', text: '', turn_id: 't3' },
     ];
     render(<ArgumentStrengthMeter units={units} />);
-    const meter = screen.getByRole('meter');
-    expect(meter).toBeInTheDocument();
-    expect(meter.getAttribute('aria-valuemax')).toBe('3');
+    const summary = screen.getByRole('list', { name: 'Argument strength distribution' });
+    expect(summary).toBeInTheDocument();
 
     // Check segments are rendered via title attributes
     const standingSegment = screen.getByTitle(/Standing: 2\/3/);
     expect(standingSegment).toBeInTheDocument();
     expect(standingSegment).toHaveStyle({ background: '#2ecc71' });
+    expect(standingSegment).toHaveAttribute('role', 'listitem');
+    expect(standingSegment).toHaveAttribute('aria-label', 'Standing: 2/3');
 
     const rebuttedSegment = screen.getByTitle(/Rebutted: 1\/3/);
     expect(rebuttedSegment).toBeInTheDocument();
     expect(rebuttedSegment).toHaveStyle({ background: '#e74c3c' });
+    expect(rebuttedSegment).toHaveAttribute('role', 'listitem');
+    expect(rebuttedSegment).toHaveAttribute('aria-label', 'Rebutted: 1/3');
   });
 
   it('skips zero-count statuses', () => {
@@ -650,7 +653,7 @@ describe('ArgumentStrengthMeter', () => {
       { id: 'u1', type: 'claim', status: 'accepted', text: '', turn_id: 't1' },
     ];
     render(<ArgumentStrengthMeter units={units} />);
-    const meter = screen.getByRole('meter');
+    const meter = screen.getByRole('list', { name: 'Argument strength distribution' });
     // Only 1 child segment (accepted)
     const segments = meter.children;
     expect(segments.length).toBe(1);
@@ -662,7 +665,7 @@ describe('ArgumentStrengthMeter', () => {
       { id: 'u1', type: 'claim', status: 'standing', text: '', turn_id: 't1' },
     ];
     render(<ArgumentStrengthMeter units={units} compact />);
-    const meter = screen.getByRole('meter');
+    const meter = screen.getByRole('list', { name: 'Argument strength distribution' });
     expect(meter).toHaveStyle({ height: '4px' });
   });
 });

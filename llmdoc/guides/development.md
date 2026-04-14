@@ -167,7 +167,7 @@ python -m pytest tests/test_api.py tests/test_debate_service.py -q
 python -m ruff check app/api/graphs.py app/services/causal_graph.py app/services/debate_argument_map.py tests/test_api.py tests/test_causal_graph.py tests/test_debate_argument_map.py
 
 cd ../frontend
-npm test -- --run src/lib/manualChunks.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/lib/manualChunks.test.ts src/lib/performanceBudgets.test.ts src/lib/exportValidation.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 npm run build
@@ -189,21 +189,24 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
   - backend graph / debate 定向 `193 passed`
   - backend 相邻 `api / service` smoke `153 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `96 passed`
+  - frontend graph suite `102 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
   - `phase3-batch-a full` `33/33`，default / `zh-CN` locale 都通过
   - `phase3-batch-b full` `39/39`，default / `zh-CN` locale 都通过
+  - backend 全量 `python -m pytest -x -q` 本轮实测 `2015 passed, 2 skipped`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
-  - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，不再只看 `phaser / capture-html / flow-vendor`
+  - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
   - `CausalReviewView` 分支 selector：
     - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
     - 较旧分支请求的返回不会覆盖较新的分支结果
     - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
     - text fallback 路径会隐藏 export controls
+    - 结构化后端错误时会优先显示 `detail.message / detail.code`，不再只剩 `HTTP 404`
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
   - `ArgumentMap`
+    - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
   - `NodeDetailPanel`
     - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
     - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`
@@ -227,14 +230,14 @@ SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-
 - `phase3-batch-a` 主要看：
   - `CausalReviewView` 基础渲染
   - branch selector 会把 `branch_id` 真正写回 URL，并发出过滤请求
-  - graph export 按钮可见，且 `Export SVG` 实际触发下载
+  - graph export 按钮可见，且 `Export SVG` 会校验下载下来的 SVG 非空、结构可读
   - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
   - screen-reader fallback list 确实存在，且至少有 1 条 list item
 - `phase3-batch-b` 主要看：
   - `ArgumentMap` 基础渲染
-  - strength meter
+  - 本地化强度摘要 aria-label（default / `zh-CN` locale 都能定位）
   - legend 可见
-  - `Export SVG` 实际触发下载
+  - `Export SVG` 会校验下载下来的 SVG 非空、结构可读
   - verdict node 可见
   - graph node 点击后 `NodeDetailPanel` 打开、展示详情文本 / status，并可关闭
   - fail-soft 错误态会显示失败文案和 `Retry`，同时隐藏图与导出
@@ -400,7 +403,7 @@ npm run assets:provenance:check
 
 ### LLM 集成测试
 
-`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。运行方式：
+`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。`test_blackboard_e2e.py` 当前会对瞬时 `5xx` 做有限重试；持续 `4xx / 5xx` 仍然直接失败。运行方式：
 
 ```bash
 cd backend

@@ -121,7 +121,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - backend targeted graph / debate suite `193 passed`
   - backend 相邻 API / service smoke `153 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `96 passed`
+  - frontend graph suite `102 passed`
   - frontend `typecheck / lint / build / perf budget` 通过
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
   - phase3 compare fixture 当前已带真实 `agents / messages`，compare theater 不再空载

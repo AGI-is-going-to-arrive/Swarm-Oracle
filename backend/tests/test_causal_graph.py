@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlmodel import Session, select
+from sqlmodel import Session, create_engine, select
 
 from alembic import command as alembic_command
 from app.config import settings
@@ -483,20 +483,56 @@ class TestBuildSnapshot:
         monkeypatch: pytest.MonkeyPatch,
     ):
         db_path = tmp_path / "legacy-duplicate-snapshot.db"
-        db_url = f"sqlite:///{db_path}"
-        monkeypatch.setenv("DATABASE_URL", db_url)
-        settings.DATABASE_URL = db_url
-        dispose_engine()
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_snapshot (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    owner_type TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    graph_kind TEXT NOT NULL,
+                    branch_id TEXT,
+                    round_number INTEGER,
+                    share_artifact_id TEXT,
+                    metadata_json TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_node (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    node_type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    round_number INTEGER,
+                    ref_model TEXT,
+                    ref_id TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_edge (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    target_node_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    weight FLOAT,
+                    label TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
 
-        backend_root = Path(__file__).resolve().parents[1]
-        config = Config(str(backend_root / "alembic.ini"))
-        config.set_main_option("script_location", str(backend_root / "alembic"))
-        config.set_main_option("sqlalchemy.url", db_url)
-        config.attributes["configure_logging"] = False
+        monkeypatch.setattr("app.services.causal_graph.get_engine", lambda: engine)
 
-        alembic_command.upgrade(config, "019_add_debate_user_owner")
-
-        with Session(get_engine()) as session:
+        with Session(engine) as session:
             old_snapshot = GraphSnapshot(
                 owner_type="scenario",
                 owner_id="sc-legacy-duplicate",

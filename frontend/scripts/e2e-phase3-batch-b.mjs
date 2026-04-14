@@ -10,6 +10,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
+import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
@@ -637,8 +639,8 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const hasReactFlow = await reactFlowEl.isVisible({ timeout: 5000 }).catch(() => false);
   results.steps.push({ name: "argument-map-reactflow-visible", passed: hasReactFlow });
 
-  // Check strength meter
-  const meter = page.locator('[role="meter"]').first();
+  // Check strength distribution summary
+  const meter = page.locator('[role="list"][aria-label="Argument strength distribution"], [role="list"][aria-label="论证强度分布"]').first();
   const hasMeter = await meter.isVisible().catch(() => false);
   results.steps.push({ name: "strength-meter-visible", passed: hasMeter });
 
@@ -671,8 +673,17 @@ async function testArgumentMap(page, baseUrl, outputDir) {
         exportSvgButton.click(),
       ]);
       const filename = download.suggestedFilename();
-      await download.path().catch(() => null);
-      svgDownloadPassed = filename.startsWith("argument-map_") && filename.endsWith(".svg");
+      let filePath = await download.path().catch(() => null);
+      if (!filePath) {
+        filePath = path.join(stepDir, filename);
+        await download.saveAs(filePath);
+      }
+      await validateSvgDownloadArtifact({
+        filePath,
+        filename,
+        expectedPrefix: "argument-map_",
+      });
+      svgDownloadPassed = true;
       await saveScreenshot(page, path.join(stepDir, "02-argument-map-exported.png"));
     } catch {
       svgDownloadPassed = false;

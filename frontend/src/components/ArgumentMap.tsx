@@ -173,10 +173,8 @@ export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
 
   return (
     <div
-      role="meter"
+      role="list"
       aria-label={t('argument.strength_label', 'Argument strength distribution')}
-      aria-valuemin={0}
-      aria-valuemax={total}
       style={{
         display: 'flex',
         height: compact ? 4 : 8,
@@ -190,12 +188,14 @@ export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
         const count = counts[status] ?? 0;
         if (count === 0) return null;
         const pct = (count / total) * 100;
-        return (
-          <div
-            key={status}
-            title={`${t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}: ${count}/${total}`}
-            style={{
-              width: `${pct}%`,
+          return (
+            <div
+              key={status}
+              role="listitem"
+              aria-label={`${t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}: ${count}/${total}`}
+              title={`${t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}: ${count}/${total}`}
+              style={{
+                width: `${pct}%`,
               background: STATUS_COLORS_HEX[status] ?? '#555',
               transition: 'width 0.3s ease',
             }}

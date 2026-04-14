@@ -112,17 +112,27 @@ async def _call_llm(prompt: str, agent: str, round_num: int, mode: str) -> CallM
 
     start = time.perf_counter()
     async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            LLM_API_URL,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                "Content-Type": "application/json",
-            },
-        )
-        resp.raise_for_status()
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = await client.post(
+                    LLM_API_URL,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code >= 500 and attempt < 2:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                raise
     m.latency_ms = (time.perf_counter() - start) * 1000
 
+    assert resp is not None
     data = resp.json()
     usage = data.get("usage", {})
     m.prompt_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)

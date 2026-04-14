@@ -3,36 +3,11 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
+import { FILE_BUDGETS } from "./lib/performanceBudgetConfig.mjs";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DIST_ASSETS_DIR = path.join(FRONTEND_ROOT, "dist", "assets");
-
-const FILE_BUDGETS = [
-  {
-    label: "vendor chunk",
-    pattern: /^vendor-.*\.js$/,
-    maxBytes: 700 * 1024,
-    maxGzipBytes: 230 * 1024,
-  },
-  {
-    label: "phaser chunk",
-    pattern: /^phaser-.*\.js$/,
-    maxBytes: 760 * 1024,
-    maxGzipBytes: 215 * 1024,
-  },
-  {
-    label: "capture-html chunk",
-    pattern: /^capture-html-.*\.js$/,
-    maxBytes: 220 * 1024,
-    maxGzipBytes: 55 * 1024,
-  },
-  {
-    label: "flow-vendor chunk",
-    pattern: /^flow-vendor-.*\.js$/,
-    maxBytes: 220 * 1024,
-    maxGzipBytes: 75 * 1024,
-  },
-];
 
 const DIRECTORY_BUDGETS = [
   {
