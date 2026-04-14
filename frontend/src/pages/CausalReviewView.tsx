@@ -372,7 +372,7 @@ export function CausalReviewView() {
               aria-label={t('causal.branch_select', 'Select branch')}
             >
               <option value="">{t('causal.all_branches', 'All branches')}</option>
-              {availableBranches.map(b => <option key={b} value={b}>{b.slice(0, 8)}&hellip;</option>)}
+              {availableBranches.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           )}
           {/* C5: Agent search */}

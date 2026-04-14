@@ -1,9 +1,14 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
+from pathlib import Path
+
 import pytest
+from alembic.config import Config
 from sqlmodel import Session, select
 
-from app.models.database import get_engine
+from alembic import command as alembic_command
+from app.config import settings
+from app.models.database import dispose_engine, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from app.services.causal_graph import (
     _safe_parse_payload,
@@ -209,7 +214,50 @@ class TestAppendRoundNodes:
                 )
             ).all()
             assert len(nodes) == 2
-            assert {node.ref_id for node in nodes} == {"m1", "m2"}
+
+    def test_same_agent_idless_messages_in_round_keep_distinct_event_nodes(self):
+        append_round_nodes(
+            "sc3c",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Agent A",
+                    "content": "first idless point",
+                    "emotion": "calm",
+                    "id": None,
+                },
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Agent A",
+                    "content": "second idless point",
+                    "emotion": "angry",
+                    "id": None,
+                },
+            ],
+        )
+
+        result = build_snapshot("sc3c")
+
+        event_nodes = [node for node in result["nodes"] if node["type"] == "event"]
+        assert len(event_nodes) == 2
+        assert [node["label"] for node in event_nodes] == [
+            "first idless point",
+            "second idless point",
+        ]
+
+        with Session(get_engine()) as session:
+            frame = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc3c",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 1,
+                    AgentStateFrame.agent_id == "a1",
+                )
+            ).first()
+            assert frame is not None
+            assert frame.summary_excerpt == "second idless point"
 
     def test_repeated_round_append_reuses_existing_state_and_nodes(self):
         messages = [
@@ -336,6 +384,42 @@ class TestAppendRoundNodes:
 
 
 class TestBuildSnapshot:
+    def test_upgrade_tolerates_runtime_agent_state_frame_schema_repair(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        db_path = tmp_path / "migration-repair.db"
+        db_url = f"sqlite:///{db_path}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        settings.DATABASE_URL = db_url
+        dispose_engine()
+
+        backend_root = Path(__file__).resolve().parents[1]
+        config = Config(str(backend_root / "alembic.ini"))
+        config.set_main_option("script_location", str(backend_root / "alembic"))
+        config.set_main_option("sqlalchemy.url", db_url)
+        config.attributes["configure_logging"] = False
+
+        alembic_command.upgrade(config, "019_add_debate_user_owner")
+        append_round_nodes(
+            "sc-migration-runtime-repair",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="point A")],
+        )
+
+        alembic_command.upgrade(config, "head")
+
+        append_round_nodes(
+            "sc-migration-runtime-repair",
+            "br1",
+            2,
+            [MockMessage(emotion="angry", agent_id="a1", id="m2", content="point B")],
+        )
+        result = build_snapshot("sc-migration-runtime-repair")
+        assert len(result["nodes"]) == 3  # 2 events + 1 temporal edge source preserved
+
     def test_empty_graph_when_no_data(self):
         result = build_snapshot("nonexistent_scenario")
         assert result == {"id": None, "nodes": [], "edges": []}

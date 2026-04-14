@@ -4,6 +4,7 @@
    Shared between CausalReviewView and ArgumentMap.
    ═══════════════════════════════════════════════════════════ */
 
+import { useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
 
@@ -29,6 +30,21 @@ const STATUS_COLORS = STATUS_COLORS_HEX;
 
 export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   const { t } = useTranslation();
+  const titleId = useId();
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!node) return;
+
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+
+    return () => {
+      previousFocusRef.current?.focus();
+    };
+  }, [node]);
 
   if (!node) return null;
 
@@ -39,6 +55,16 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   return (
     <div
       data-testid="node-detail-panel"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={titleId}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }
+      }}
       style={{
         position: 'absolute',
         top: 8,
@@ -56,10 +82,11 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
     >
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-        <h3 style={{ margin: 0, fontSize: '0.95rem', color: '#eee', lineHeight: 1.3 }}>
+        <h3 id={titleId} style={{ margin: 0, fontSize: '0.95rem', color: '#eee', lineHeight: 1.3 }}>
           {node.label}
         </h3>
         <button
+          ref={closeButtonRef}
           onClick={onClose}
           aria-label={t('common.close', 'Close')}
           style={{

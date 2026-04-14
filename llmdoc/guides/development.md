@@ -183,12 +183,15 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
 
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
-  - `CausalReviewView` 分支 selector 回退（`available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支）
+  - `CausalReviewView` 分支 selector：
+    - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
+    - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
   - `ArgumentMap`
   - `NodeDetailPanel`
   - `GraphNodeCard`
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
+    - `020` migration 对 runtime schema repair 先跑的路径保持兼容
     - causal append 幂等
     - same-round sibling branch 节点隔离（含重复 `msg.id` / `id=None`）
     - 同 agent 同轮多消息
@@ -197,15 +200,19 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
     - argument map `? ! ？ ！` punctuation split
     - `rebuttal` 当前按最新对手 claim 选边；同一 turn 里按句子顺序取最后一条
     - enrichment 后 stable rebuttal / support edge rebuild（含 `DebateTurn.content` 句子顺序路径）
+    - `link_verdict()` 不会再把其他 snapshot 的 stale unit 重连回当前图里
 - `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
 - `phase3-batch-a` 主要看：
   - `CausalReviewView` 基础渲染
   - graph export 按钮可见，且 `Export SVG` 实际触发下载
   - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
+  - screen-reader fallback list 确实存在，且至少有 1 条 list item
 - `phase3-batch-b` 主要看：
   - `ArgumentMap` 基础渲染
   - strength meter
   - legend 可见
+  - `Export SVG` 实际触发下载
+  - graph node 点击后 `NodeDetailPanel` 打开、展示详情文本，并可关闭
   - status filter 走到空态分支，并可 `Clear` 恢复图谱
   - 与结果页图谱接线是否还活着
 - 两条 `phase3` 脚本当前都走 `page.route()` fixtures；即使 preview 代理到 `backend` 返回 `ECONNREFUSED` 噪音，也只有在断言全部通过、没有 test 级未处理异常、且 overall summary 为 `allPassed: true` 时才按通过处理；任一 surface/test 失败都会反映到 summary 和退出码

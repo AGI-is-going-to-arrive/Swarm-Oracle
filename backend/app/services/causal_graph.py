@@ -177,8 +177,16 @@ def _node_branch_id(node: GraphNode) -> str | None:
     return branch_id if isinstance(branch_id, str) and branch_id else None
 
 
-def _message_node_key(round_number: int, msg_id: str | None, agent_id: str) -> str:
-    return f"r{round_number}_{msg_id or agent_id}"
+def _message_node_key(
+    round_number: int,
+    msg_id: str | None,
+    agent_id: str,
+    ordinal: int | None = None,
+) -> str:
+    if msg_id:
+        return f"r{round_number}_{msg_id}"
+    suffix = f"{agent_id}_{ordinal}" if ordinal is not None else agent_id
+    return f"r{round_number}_{suffix}"
 
 
 def _edge_signature(
@@ -345,7 +353,7 @@ def append_round_nodes(
 
         message_records: list[dict[str, Any]] = []
 
-        for msg in messages:
+        for idx, msg in enumerate(messages):
             stance = derive_stance_score(msg)
             agent_id = _getfield(msg, "agent_id", "unknown")
             emotion = _getfield(msg, "emotion", None)
@@ -357,7 +365,12 @@ def append_round_nodes(
                 "stance_score": stance,
                 "branch_id": branch_id,
             })
-            node_key = _message_node_key(round_number, msg_id, agent_id)
+            node_key = _message_node_key(
+                round_number,
+                msg_id,
+                agent_id,
+                ordinal=idx,
+            )
             node_scope = (branch_id, node_key)
             node = event_nodes_by_key.get(node_scope)
             if node is None:

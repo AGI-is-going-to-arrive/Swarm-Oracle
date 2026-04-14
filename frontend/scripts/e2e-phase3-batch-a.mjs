@@ -389,9 +389,12 @@ async function testCausalMap(page, baseUrl, outputDir) {
 
   // Check a11y screen-reader list
   const srList = page.locator('[role="list"][aria-label]').first();
-  const hasSrList = await srList.isVisible().catch(() => false);
-  // sr-only may be visually hidden
-  results.steps.push({ name: "sr-fallback-list-exists", passed: true });
+  const hasSrList = await srList.count().then((count) => count > 0).catch(() => false);
+  results.steps.push({ name: "sr-fallback-list-exists", passed: hasSrList });
+  if (hasSrList) {
+    const srItemCount = await srList.locator('[role="listitem"]').count().catch(() => 0);
+    results.steps.push({ name: "sr-fallback-list-has-items", passed: srItemCount > 0 });
+  }
 
   return results;
 }

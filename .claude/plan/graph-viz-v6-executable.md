@@ -37,6 +37,24 @@
   - `phase3a` desktop/mobile `17/17`
   - `phase3b` desktop/mobile `14/14`
 
+### Post-v6 Review Fix Update (2026-04-14)
+
+- `P1` `020` migration 当前兼容“runtime schema repair 先跑、Alembic 后补”的顺序；不会再因为旧的 `uq_state_frame_branch_round_agent` 已不存在而中断升级。
+- `P1` causal graph 当前在“同 agent、同轮、消息没有 `id`”的情况下，也会继续保留独立 event 节点；`AgentStateFrame` 仍取该 agent 本轮最后一条消息。
+- `P1` `link_verdict()` 当前只会重连当前 argument-map snapshot 内的 units；其他 snapshot 的 stale unit 不会再产出悬空 verdict edge。
+- `P2` `NodeDetailPanel` 当前补齐轻量 dialog 语义：打开后焦点进 close button，`Escape` 可关，关闭后焦点回到原节点。
+- `P2` causal graph 的 branch selector 当前直接显示完整 branch label，不再把相同前缀截成一模一样的 option。
+- `P2` phase3 browser smoke 当前补强：
+  - `phase3a` 会检查 a11y fallback list 确实存在且有条目
+  - `phase3b` 会检查 argument-map `Export SVG`、节点详情打开/展示/关闭
+- 最新复验：
+  - backend graph / debate + 相邻 API / service 定向回归 `337 passed`
+  - targeted `ruff check` 通过
+  - frontend graph suite `87 passed`
+  - frontend `typecheck / lint / build` 通过
+  - `phase3a` desktop/mobile `26/26`
+  - `phase3b` desktop/mobile `26/26`
+
 ---
 
 ## v5 → v6 Corrections (3 findings + 2 open questions resolved)

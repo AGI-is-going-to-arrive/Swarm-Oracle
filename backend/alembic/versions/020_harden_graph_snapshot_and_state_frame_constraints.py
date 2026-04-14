@@ -8,12 +8,28 @@ Create Date: 2026-04-14
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "020_harden_graph_snapshot_and_state_frame_constraints"
 down_revision: Union[str, None] = "019_add_debate_user_owner"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]) -> bool:
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        return False
+
+    indexes = bind.execute(sa.text(f"PRAGMA index_list('{table_name}')")).fetchall()
+    for index in indexes:
+        if not index[2]:
+            continue
+        columns = bind.execute(sa.text(f"PRAGMA index_info('{index[1]}')")).fetchall()
+        if tuple(row[2] for row in columns) == expected_columns:
+            return True
+    return False
 
 
 def _dedupe_graph_snapshots() -> None:
@@ -137,12 +153,16 @@ def upgrade() -> None:
             ["owner_type", "owner_id", "graph_kind"],
         )
 
-    with op.batch_alter_table("agent_state_frame", recreate="always") as batch_op:
-        batch_op.drop_constraint("uq_state_frame_branch_round_agent", type_="unique")
-        batch_op.create_unique_constraint(
-            "uq_state_frame_scenario_branch_round_agent",
-            ["scenario_id", "branch_id", "round_number", "agent_id"],
-        )
+    target_columns = ("scenario_id", "branch_id", "round_number", "agent_id")
+    legacy_columns = ("branch_id", "round_number", "agent_id")
+    if not _has_unique_index_columns("agent_state_frame", target_columns):
+        with op.batch_alter_table("agent_state_frame", recreate="always") as batch_op:
+            if _has_unique_index_columns("agent_state_frame", legacy_columns):
+                batch_op.drop_constraint("uq_state_frame_branch_round_agent", type_="unique")
+            batch_op.create_unique_constraint(
+                "uq_state_frame_scenario_branch_round_agent",
+                ["scenario_id", "branch_id", "round_number", "agent_id"],
+            )
 
 
 def downgrade() -> None:

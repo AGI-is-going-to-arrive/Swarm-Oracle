@@ -109,6 +109,28 @@ describe('NodeDetailPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('renders an accessible dialog and moves focus to the close button', async () => {
+    const node: NodeDetail = { id: 'n1', label: 'Focused node', type: 'event' };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Focused node' });
+    const closeButton = screen.getByRole('button', { name: 'Close' });
+
+    expect(dialog).toBeInTheDocument();
+    expect(closeButton).toHaveFocus();
+  });
+
+  it('calls onClose when Escape is pressed inside the dialog', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    const node: NodeDetail = { id: 'n1', label: 'Escapable node', type: 'event' };
+    render(<NodeDetailPanel node={node} onClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('turn label uses i18n key node_detail.turn (not hardcoded)', () => {
     const node: NodeDetail = {
       id: 'u1',

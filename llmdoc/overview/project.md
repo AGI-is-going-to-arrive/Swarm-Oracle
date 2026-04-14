@@ -116,16 +116,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 本轮新增定向复验已通过：
   - `frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
 - 本轮 graph-viz 定向回归也已通过：
-  - backend graph / debate 定向回归 `180 passed`
-  - backend API / debate service 补回归 `151 passed`
+  - backend graph / debate + 相邻 API / service 定向回归 `337 passed`
   - targeted `ruff check` 通过
-  - frontend graph suite `80 passed`
+  - frontend graph suite `87 passed`
   - frontend `typecheck / lint / build` 通过
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
-  - `phase3a-desktop` `17/17`
-  - `phase3a-mobile` `17/17`
-  - `phase3b-desktop` `14/14`
-  - `phase3b-mobile` `14/14`
+  - `phase3a-desktop` `26/26`
+  - `phase3a-mobile` `26/26`
+  - `phase3b-desktop` `26/26`
+  - `phase3b-mobile` `26/26`
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

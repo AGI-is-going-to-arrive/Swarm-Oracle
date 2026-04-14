@@ -199,6 +199,34 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('renders full branch labels so similar prefixes stay distinguishable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-branch-labels',
+        available_branches: ['branch-1234-A', 'branch-1234-B'],
+        nodes: [
+          {
+            id: 'n1',
+            key: 'e1',
+            type: 'event',
+            label: 'Filtered branch node',
+            round: 1,
+            payload: { branch_id: 'branch-1234-A' },
+          },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1234-A');
+    await screen.findByTestId('reactflow');
+
+    expect(screen.getByRole('option', { name: 'branch-1234-A' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'branch-1234-B' })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
   it('reconstructs branch options from payload branch ids and fork children when available_branches is missing', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,

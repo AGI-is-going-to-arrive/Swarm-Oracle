@@ -851,9 +851,16 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
     engine = get_engine()
     _ensure_argument_map_snapshot_index(engine)
     with Session(engine) as session:
+        snapshot = _get_or_create_snapshot(session, debate_id)
+
         # Step 1: Re-query ALL units for full re-evaluation
-        all_units_stmt = select(DebateArgumentUnit).where(
-            DebateArgumentUnit.debate_id == debate_id,
+        all_units_stmt = (
+            select(DebateArgumentUnit)
+            .join(GraphNode, GraphNode.id == DebateArgumentUnit.node_id)
+            .where(
+                DebateArgumentUnit.debate_id == debate_id,
+                GraphNode.snapshot_id == snapshot.id,
+            )
         )
         all_units = session.exec(all_units_stmt).all()
 
@@ -866,7 +873,6 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
             session.add(unit)
 
         # Step 3: Idempotent verdict node (reuse by fixed node_key)
-        snapshot = _get_or_create_snapshot(session, debate_id)
         verdict_key = f"verdict_{debate_id}"
         existing_verdict = session.exec(
             select(GraphNode).where(
@@ -956,7 +962,11 @@ def get_argument_map(debate_id: str) -> dict:
         edges_stmt = select(GraphEdge).where(
             GraphEdge.snapshot_id == snapshot.id,
         )
-        edges = session.exec(edges_stmt).all()
+        node_ids = {node.id for node in nodes}
+        edges = [
+            edge for edge in session.exec(edges_stmt).all()
+            if edge.source_node_id in node_ids and edge.target_node_id in node_ids
+        ]
 
         units_stmt = (
             select(DebateArgumentUnit)

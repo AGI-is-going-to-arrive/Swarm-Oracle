@@ -464,6 +464,57 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const hasEmpty = await emptyMsg.isVisible().catch(() => false);
   results.steps.push({ name: "no-empty-state", passed: !hasEmpty });
 
+  const exportPanel = page.getByTestId("export-panel").first();
+  const hasExportPanel = await exportPanel.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-export-panel-visible", passed: hasExportPanel });
+
+  const exportSvgButton = page.getByRole("button", { name: /Export SVG|导出 SVG/i }).first();
+  const hasExportSvgButton = await exportSvgButton.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-export-svg-visible", passed: hasExportSvgButton });
+  if (hasExportSvgButton) {
+    let svgDownloadPassed = false;
+    try {
+      const [download] = await Promise.all([
+        page.waitForEvent("download", { timeout: 5000 }),
+        exportSvgButton.click(),
+      ]);
+      const filename = download.suggestedFilename();
+      await download.path().catch(() => null);
+      svgDownloadPassed = filename.startsWith("argument-map_") && filename.endsWith(".svg");
+      await saveScreenshot(page, path.join(stepDir, "02-argument-map-exported.png"));
+    } catch {
+      svgDownloadPassed = false;
+    }
+    results.steps.push({ name: "argument-map-export-svg-download-succeeds", passed: svgDownloadPassed });
+  }
+
+  const firstNode = page.getByRole("button", { name: /Trade deficits are self-correcting/i }).first();
+  const hasFirstNode = await firstNode.isVisible().catch(() => false);
+  results.steps.push({ name: "argument-map-node-visible", passed: hasFirstNode });
+  if (hasFirstNode) {
+    await firstNode.click();
+    const detailPanel = page.getByTestId("node-detail-panel");
+    const hasDetailPanel = await detailPanel.isVisible({ timeout: 3000 }).catch(() => false);
+    results.steps.push({ name: "argument-map-node-detail-opens", passed: hasDetailPanel });
+
+    const hasUnitText = hasDetailPanel
+      ? await detailPanel.textContent().then((text) => text?.includes("Trade deficits are self-correcting") ?? false).catch(() => false)
+      : false;
+    results.steps.push({ name: "argument-map-node-detail-text-visible", passed: hasUnitText });
+
+    const closeBtn = hasDetailPanel
+      ? detailPanel.getByRole("button", { name: /Close|关闭/i }).first()
+      : null;
+    const hasCloseBtn = closeBtn ? await closeBtn.isVisible().catch(() => false) : false;
+    results.steps.push({ name: "argument-map-node-detail-close-visible", passed: hasCloseBtn });
+    if (closeBtn && hasCloseBtn) {
+      await closeBtn.click();
+      const panelClosed = await detailPanel.isHidden().catch(() => false);
+      await saveScreenshot(page, path.join(stepDir, "03-argument-map-detail-closed.png"));
+      results.steps.push({ name: "argument-map-node-detail-closes", passed: panelClosed });
+    }
+  }
+
   const rejectedFilter = page.getByRole("button", { name: /Rejected|驳回|拒绝/i }).first();
   const hasRejectedFilter = await rejectedFilter.isVisible().catch(() => false);
   results.steps.push({ name: "status-filter-visible", passed: hasRejectedFilter });
@@ -471,7 +522,7 @@ async function testArgumentMap(page, baseUrl, outputDir) {
     await rejectedFilter.click();
     const filterEmptyState = page.getByText(/No argument units match the selected filters|所选筛选条件下没有论证单元/i).first();
     const hasFilterEmptyState = await filterEmptyState.isVisible({ timeout: 3000 }).catch(() => false);
-    await saveScreenshot(page, path.join(stepDir, "02-argument-map-filter-empty.png"));
+    await saveScreenshot(page, path.join(stepDir, "04-argument-map-filter-empty.png"));
     results.steps.push({ name: "status-filter-empty-state-visible", passed: hasFilterEmptyState });
 
     const clearBtn = page.getByRole("button", { name: /Clear|清除/i }).first();
@@ -480,7 +531,7 @@ async function testArgumentMap(page, baseUrl, outputDir) {
     if (hasClearBtn) {
       await clearBtn.click();
       const mapRestored = await reactFlowEl.isVisible({ timeout: 3000 }).catch(() => false);
-      await saveScreenshot(page, path.join(stepDir, "03-argument-map-filter-cleared.png"));
+      await saveScreenshot(page, path.join(stepDir, "05-argument-map-filter-cleared.png"));
       results.steps.push({ name: "status-filter-clear-restores-map", passed: mapRestored });
     }
   }

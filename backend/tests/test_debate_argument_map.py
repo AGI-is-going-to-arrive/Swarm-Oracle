@@ -174,6 +174,56 @@ def test_link_verdict_no_supporting_turns_marks_all_unaddressed():
     assert all(u["status"] == "unaddressed" for u in result["units"])
 
 
+def test_link_verdict_ignores_units_outside_current_snapshot():
+    extract_argument_units(
+        debate_id="d-v-stale",
+        turn_id="t1",
+        content="Current snapshot claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+
+    with Session(get_engine()) as session:
+        stale_snapshot = GraphSnapshot(
+            owner_type="debate",
+            owner_id="d-other-owner",
+            graph_kind="argument_map",
+        )
+        session.add(stale_snapshot)
+        session.flush()
+
+        stale_node = GraphNode(
+            snapshot_id=stale_snapshot.id,
+            node_key="stale-claim",
+            node_type="claim",
+            label="Stale claim.",
+            payload_json='{"side":"opposition"}',
+        )
+        session.add(stale_node)
+        session.flush()
+
+        session.add(
+            DebateArgumentUnit(
+                debate_id="d-v-stale",
+                turn_id="t-stale",
+                node_id=stale_node.id,
+                unit_type="claim",
+                status="standing",
+                canonical_text="Stale claim.",
+                semantic_hash="stale-claim-unit",
+            )
+        )
+        session.commit()
+
+    link_verdict("d-v-stale", {"supporting_turns": []})
+
+    result = get_argument_map("d-v-stale")
+    node_ids = {node["id"] for node in result["nodes"]}
+
+    assert all(edge["source"] in node_ids for edge in result["edges"])
+    assert all(edge["target"] in node_ids for edge in result["edges"])
+
+
 def test_link_verdict_with_finalized_summary_dict_shape():
     """Verdict linking works with finalized_summary dict items in supporting_turns."""
     extract_argument_units(
