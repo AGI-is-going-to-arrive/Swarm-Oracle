@@ -240,6 +240,11 @@
 - `DebateResultView` 当前把 argument map 改成按需加载：
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
+- `DebateResultView` 当前的 replay 分享有两条只读路径：
+  - URL 足够短时走内联 `?replay=`
+  - URL 过长时，把 payload 落到本地存储后改走 `?local=`
+  - replay 结果页会同时识别这两条只读路径；只有 `?local=` 的分享按钮文案会明确显示 `Save local read-only copy`，普通 `?replay=` 仍保留通用 permalink 文案；导入入口继续保留 `Import as Local Run`
+  - automation payload 当前会显式区分 `replay_source=api|token|local`，并额外暴露 `replay.is_readonly / controls.can_import_local_run / controls.importing_local_run`
 - `InputView / DebateArenaView / DebateResultView` 当前都不会再因为 debate payload 里的 `language` 改全局 UI 语言：
   - 页面壳继续只跟用户当前语言开关走
   - `DebateResultView` 遇到中英混排的长文案时，会显示明确 fallback note，并保留原文展示
@@ -268,6 +273,8 @@
   - 显示本地化提示和 event snapshot 列表
   - 仍可打开节点详情
   - 不再把这类图伪装成可交互 DAG
+- `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。
+- `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并补一个显式 `Fit view` 按钮；legend toggle 也补上了 `aria-expanded / aria-controls`。
 - 如果只是 search / filter 把边筛空，`CausalReviewView` 当前仍会保留交互图和导出入口，不会误切 relationless fallback。
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
 - `CausalReviewView` 的 agent search 输入当前统一使用 `Search Agent... / 搜索 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
@@ -278,11 +285,13 @@
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
 - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`。
+- `ArgumentMap` 当前在 compact viewport 下也会补显式 `Fit view`；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
 - `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - `ArgumentMap` 当前在 node-only 图（有节点、没 units）时，仍会保留 screen-reader fallback list；图节点 button 口径也继续支持键盘打开详情。
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦
   - 保留 pointer click 打开详情
+  - React Flow 外层 node wrapper 不再重复暴露 button 语义，避免出现 button 套 button 的可访问性冲突
 - `NodeDetailPanel` 当前按轻量 dialog 语义工作：
   - 打开后焦点会先落到关闭按钮
   - `Escape` 可直接关闭
@@ -341,9 +350,16 @@
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
 - 默认 `release-signoff` 当前会把 `corners` 步骤固定到 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
 - 默认 `release-signoff` 当前还会纳入：
+  - `script_contracts`
   - `phase3a / phase3b` 的 default graph smoke
   - `phase3a / phase3b` 的 `zh-CN` graph smoke
-  - roundtable 的 Firefox / WebKit scoped regression
+  - `ending_room_followup / ending_room_followup_en`
+  - `ending_room_followup_firefox / ending_room_followup_en_firefox`
+  - `ending_room_followup_webkit / ending_room_followup_en_webkit`
+  - `roundtable_full / roundtable_en`
+  - `roundtable_firefox / roundtable_en_firefox`
+  - `roundtable_webkit / roundtable_en_webkit`
+  - `debate_full / debate_firefox / debate_webkit`
 - `single-ending` 的 mobile verdict-anchor thread 当前也走 deterministic 兜底：
   - thread title 每次唯一，避免复用同一 room 时点到旧 thread
   - 如果 UI automation 状态刷新偏慢，脚本会回退到 backend room snapshot 合成可验证状态
@@ -385,6 +401,10 @@
   - single-ending chamber readonly replay 仍可 `import`
   - `Save local read-only copy` 文案与 replay automation 契约一致
   - mobile `390x844` 下 chamber modal 仍能完整落在视口内
+- Debate replay/import 当前也已做过真实浏览器复核：
+  - `share -> readonly replay -> reload restore -> import` 主链通过
+  - desktop Firefox / WebKit scoped regression 通过
+  - `?local=` fallback 当前会把分享入口明确显示成 `Save local read-only copy`
 - `pretext` 当前已接到 Oracle transcript 运行时布局内核：
   - `EndingChatModal / WorldlineRoundtableView` 的 bubble `min-height` 预测
   - transcript scroll bottom anchor 稳定化

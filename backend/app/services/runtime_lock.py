@@ -10,6 +10,7 @@ import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
+from urllib.parse import unquote, urlsplit
 
 from app.config import settings
 
@@ -46,16 +47,31 @@ def ending_room_lock_key(room_id: str) -> str:
     return f"ending-room:{room_id}"
 
 
-def _runtime_lock_db_path() -> str | None:
-    db_url = settings.DATABASE_URL.strip()
+def _sqlite_db_path_from_url(database_url: str) -> str | None:
     prefix = "sqlite:///"
-    if not db_url.startswith(prefix):
+    if not database_url.startswith(prefix):
         return None
 
-    db_path = db_url[len(prefix):].split("?", 1)[0]
-    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+    location = database_url[len(prefix):]
+    if not location or location == ":memory:":
+        return None
+
+    if location.startswith("file:"):
+        parsed = urlsplit(location)
+        if parsed.scheme != "file":
+            return None
+        if not parsed.path or parsed.path == ":memory:" or "mode=memory" in parsed.query:
+            return None
+        return unquote(parsed.path)
+
+    db_path = location.split("?", 1)[0]
+    if not db_path or db_path == ":memory:":
         return None
     return db_path
+
+
+def _runtime_lock_db_path() -> str | None:
+    return _sqlite_db_path_from_url(settings.DATABASE_URL.strip())
 
 
 def _ensure_runtime_lock_table(conn: sqlite3.Connection, db_path: str | None = None) -> None:

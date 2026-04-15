@@ -139,7 +139,7 @@ vi.mock('@xyflow/react', async () => {
       onPaneClick,
     }: {
       children?: React.ReactNode;
-      nodes?: Array<{ id: string; ariaLabel?: string | null }>;
+      nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null }>;
       ariaLabelConfig?: Record<string, string>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
       onNodeClick?: (event: unknown, node: { id: string }) => void;
@@ -154,6 +154,7 @@ vi.mock('@xyflow/react', async () => {
         <div
           data-testid="reactflow"
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
+          data-node-aria-role={firstNode?.ariaRole ?? ''}
           data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
         >
           {nodes?.map((node) => (
@@ -426,6 +427,23 @@ describe('CausalReviewView', () => {
     expect(countCausalGraphRequests(fetchSpy)).toBe(1);
   });
 
+  it('keeps node wrappers non-interactive so the card button owns the action semantics', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-node-semantics',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Timeline split', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow.getAttribute('data-node-aria-role')).toBe('');
+    expect(flow.getAttribute('data-node-aria-label')).toContain('Event');
+  });
+
   it.each([401, 403])('maps unauthorized status %i to localized error copy', async (status) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: false,
@@ -554,6 +572,91 @@ describe('CausalReviewView', () => {
     expect(screen.queryByTestId('rf-minimap')).not.toBeInTheDocument();
     matchMediaSpy.mockRestore();
     vi.restoreAllMocks();
+  });
+
+  it('renders a compact fit-view button on narrow viewports', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-mobile-fit',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    const user = userEvent.setup();
+    renderView();
+    await screen.findByTestId('reactflow');
+
+    const fitButton = screen.getByRole('button', { name: 'Fit view' });
+    expect(fitButton).toBeInTheDocument();
+    const initialCalls = fitViewMock.mock.calls.length;
+    await user.click(fitButton);
+    expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+
+    matchMediaSpy.mockRestore();
+  });
+
+  it('exposes the legend toggle as a proper disclosure control', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-legend',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+    await screen.findByTestId('reactflow');
+
+    const toggle = screen.getByRole('button', { name: 'Legend' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls');
+
+    await user.click(toggle);
+
+    const expandedToggle = screen.getByRole('button', { name: 'Hide Legend' });
+    expect(expandedToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(expandedToggle.getAttribute('aria-controls') ?? '')).not.toBeNull();
+  });
+
+  it('renders the graph before delayed scenario metadata finishes loading', async () => {
+    const graphResponse = Promise.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-non-blocking',
+        available_branches: ['branch-1'],
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Timeline split', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+    const scenarioDeferred = createDeferredResponse();
+    vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(async () => graphResponse)
+      .mockImplementationOnce(() => scenarioDeferred.promise);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+    await act(async () => {
+      scenarioDeferred.resolve({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [] }),
+      } as Response);
+    });
   });
 
   it('keeps sibling branch options available when a branch filter is active', async () => {

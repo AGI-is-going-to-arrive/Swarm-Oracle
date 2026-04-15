@@ -199,7 +199,7 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
   - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
   - backend 全量 `python -m pytest -q` 本轮实测 `2049 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `1001 passed`
+  - frontend 全量 `npm test` 本轮实测 `1008 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
@@ -299,8 +299,10 @@ python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py 
 
 cd ../frontend
 npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
-node --test scripts/e2e-debate-suite.test.mjs
+node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless
+node scripts/e2e-debate-suite.mjs desktop --browser firefox --url http://127.0.0.1:18928 --output-dir output/e2e/debate-firefox --headless
+node scripts/e2e-debate-suite.mjs desktop --browser webkit --url http://127.0.0.1:18928 --output-dir output/e2e/debate-webkit --headless
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 ```
@@ -312,7 +314,10 @@ npm run build
 - 这组定向回归当前还会看：
   - 页面壳不再跟着 debate payload 里的 `language` 静默改全局 UI 语言
   - mixed-language fallback 当前覆盖 `phase commentary / replay quote / prediction score reason`
+  - `e2e-debate-suite` 当前会覆盖 `share -> readonly replay -> reload restore -> import`
+  - backend import replay 当前接受负数 `confidence_drift.phase_margin / cumulative_margin`，也接受常规 prediction 的 `counterplay_variant: null`
   - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless` 本轮通过
+  - desktop Firefox / WebKit scoped rerun 当前也已通过
 
 ### Oracle Chambers / Roundtable 定向回归
 
@@ -323,17 +328,23 @@ python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py
 
 cd ../frontend
 npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
-node --test scripts/e2e-ending-room-followup-suite.test.mjs
+node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
 
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-full --headless
 node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-full --headless
+node scripts/e2e-ending-room-followup-suite.mjs full --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en --headless
 node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-mobile --headless
+node scripts/e2e-ending-room-followup-suite.mjs desktop --browser firefox --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en-firefox --headless
+node scripts/e2e-ending-room-followup-suite.mjs desktop --browser webkit --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en-webkit --headless
 node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-desktop --headless
 node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-firefox --headless
 node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-webkit --headless
 node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-full --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --browser firefox --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-firefox --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-webkit --headless
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
 ```
 
@@ -386,6 +397,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 - `e2e-ending-room-followup-suite.mjs full / mobile`
   - 当前更适合专项 follow-up 回归
   - `full` 本轮通过
+  - `full --locale en` 本轮也已通过
   - 当前最新 mobile rerun 已通过：`frontend/output/e2e/review-ending-room-mobile-pass3/summary.json`
   - 慢流式场景仍可能只落到 fallback 观测，不一定每次都有完整 lifecycle 工件
   - 如果目标只是基础 smoke，优先跑 `e2e-ending-room-suite.mjs full`
@@ -416,6 +428,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - current summary 会落出 `transcript_layout`
   - result -> roundtable 入口当前会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
   - 当前 fresh full rerun 已通过 desktop + mobile
+  - `full --locale en` 本轮也已通过
 - `e2e-worldline-roundtable-suite.mjs mobile`
   - 只跑移动端圆桌链路，适合单独复核 recipe 切换、touch `click-to-seat`、hotseat thread switch、quote-anchor thread、readonly replay 与 restore/import
   - mobile rerun 当前也已重新抓回 anchored thread 的 `turn_delta`
@@ -539,8 +552,15 @@ npm run release:signoff -- --headless
   - frontend `http://127.0.0.1:18928`
   - backend `http://127.0.0.1:18927`
 - 默认 `release-signoff` 当前已纳入：
+  - `script_contracts`
   - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
-  - roundtable Firefox / WebKit scoped regression
+  - `ending_room_followup / ending_room_followup_en`
+  - `ending_room_followup_firefox / ending_room_followup_en_firefox`
+  - `ending_room_followup_webkit / ending_room_followup_en_webkit`
+  - `roundtable_full / roundtable_en`
+  - `roundtable_firefox / roundtable_en_firefox`
+  - `roundtable_webkit / roundtable_en_webkit`
+  - `debate_full / debate_firefox / debate_webkit`
 - 如果本地预览端口不同，显式传 `--url http://127.0.0.1:<port>`。
 
 如果需要强制 Debate 使用 `llm_hybrid` 裁决模式：
@@ -587,6 +607,15 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --h
 
 - `frontend/output/e2e/2026-04-14-debate-full-rerun/result.json`
 - `frontend/output/e2e/2026-04-14-ending-room-followup-full-r3/summary.json`
+- `frontend/output/e2e/2026-04-15-debate-replay-full-r9/result.json`
+- `frontend/output/e2e/2026-04-15-ending-room-followup-en-r1/summary.json`
+- `frontend/output/e2e/2026-04-15-ending-room-followup-en-firefox-r1/summary.json`
+- `frontend/output/e2e/2026-04-15-ending-room-followup-en-webkit-r1/summary.json`
+- `frontend/output/e2e/2026-04-15-roundtable-en-r1/summary.json`
+- `frontend/output/e2e/2026-04-15-roundtable-en-firefox-r1/summary.json`
+- `frontend/output/e2e/2026-04-15-roundtable-en-webkit-r1/summary.json`
+- `frontend/output/e2e/recheck-debate-firefox/result.json`
+- `frontend/output/e2e/recheck-debate-webkit-r2/result.json`
 
 最近一轮经典模式流式 hardening 工件：
 

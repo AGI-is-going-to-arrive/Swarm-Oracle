@@ -67,6 +67,7 @@
 ### Replay
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
+- SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先 `stamp` 到当前 head，再执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - replay branch runtime lock 当前按 fail-closed 收口：
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，`counterfactual / resume` 都不会继续 clone / seed / schedule
@@ -147,6 +148,7 @@
   - `counterfactual / resume` 会先完成请求侧校验，再在进入 `clone / seed / schedule` 前启动同一把 scenario 级 replay lock heartbeat
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，请求会直接 fail-closed，不会继续 clone / seed / schedule
   - 如果锁丢失前，并发请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+- `runtime_lock` 当前也能正确解析 `sqlite:///file:/...?...uri=true` 这类 SQLite URI；多 worker 共用同一文件时，仍然走共享 SQLite lease，不会静默退回进程内锁。
 - `VectorStore` 读取默认按 branch 或 allowed-branch scope 收口，不再放宽到整个 scenario。
 - `llm_client` 负责：
   - 进程内 semaphore
@@ -211,6 +213,7 @@
   - SQLite lightweight fallback 当前也会尽力把唯一语义修到 `debate_id + turn_id + semantic_hash`；如果 repair 本身失败，会记 warning，但不会把旧的 best-effort index 补齐链路一起打断
   - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复
   - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
+  - SQLite lightweight fallback 修重复 `debate_argument_unit` 时，也会同步清掉已经失效的 `graph_node / graph_edge`，避免旧图残留 orphan node/edge 混进当前 argument map
   - legacy SQLite 上如果已经留下重复 snapshot，读取会稳定选最新 snapshot，不再随机命中旧图
   - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
@@ -219,7 +222,9 @@
   - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
   - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，更不会留下悬空 verdict edge
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
-- `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry，以及 `phase_insights` 里的负数 numeric 字段也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
+- `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry 也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
+- `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以是负数。
+- 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验 variant。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。
 - BYOK `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验。业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400。

@@ -131,22 +131,26 @@ const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
 
-function useCompactGraphViewport() {
-  const [isCompact, setIsCompact] = useState(() => (
+function useMediaQueryState(query: string) {
+  const [matches, setMatches] = useState(() => (
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches
+      ? window.matchMedia(query).matches
       : false
   ));
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mediaQueryList = window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY);
-    const handleChange = (event: MediaQueryListEvent) => setIsCompact(event.matches);
+    const mediaQueryList = window.matchMedia(query);
+    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
     mediaQueryList.addEventListener?.('change', handleChange);
     return () => mediaQueryList.removeEventListener?.('change', handleChange);
-  }, []);
+  }, [query]);
 
-  return isCompact;
+  return matches;
+}
+
+function useCompactGraphViewport() {
+  return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
 }
 
 function getCausalTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
@@ -191,10 +195,11 @@ function layoutDagre(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
   t: (key: string, fallback: string) => string,
+  compactViewport: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', ranksep: 80, nodesep: 40 });
+  g.setGraph({ rankdir: compactViewport ? 'TB' : 'LR', ranksep: 80, nodesep: 40 });
 
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
   for (const e of edges) g.setEdge(e.source, e.target);
@@ -214,7 +219,6 @@ function layoutDagre(
       type: 'graphCard',
       position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
       focusable: false,
-      ariaRole: 'button',
       ariaLabel,
       data: {
         label,
@@ -269,6 +273,7 @@ export function CausalReviewView() {
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
+  const legendPanelId = `causal-legend-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
@@ -299,36 +304,39 @@ export function CausalReviewView() {
         throw extractApiErrorState(payload, res.status);
       }
       const data = await res.json();
-      let scenarioBranchOptions: ScenarioBranchOption[] = [];
-      try {
-        const scenarioRes = await fetch(`/api/scenario/${id}`, { headers: buildSessionHeaders() });
-        if (scenarioRes.ok) {
-          const scenarioPayload = await scenarioRes.json();
-          const scenarioBranches: unknown[] = Array.isArray(scenarioPayload?.branches)
-            ? scenarioPayload.branches
-            : [];
-          scenarioBranchOptions = scenarioBranches
-            .filter((branch): branch is Record<string, unknown> => (
-              typeof branch === 'object'
-              && branch !== null
-              && typeof (branch as Record<string, unknown>).id === 'string'
-            ))
-            .map((branch) => ({
-              id: branch.id as string,
-              title: typeof branch.title === 'string' && branch.title.trim().length > 0
-                ? branch.title
-                : branch.id as string,
-              probability: typeof branch.probability === 'number' ? branch.probability : null,
-            }));
-        }
-      } catch {
-        scenarioBranchOptions = [];
-      }
       if (requestId !== latestRequestIdRef.current) return;
       setGraphData(data);
       setError(null);
       setBranches(extractAvailableBranches(data));
-      setBranchOptions(scenarioBranchOptions);
+      void (async () => {
+        let scenarioBranchOptions: ScenarioBranchOption[] = [];
+        try {
+          const scenarioRes = await fetch(`/api/scenario/${id}`, { headers: buildSessionHeaders() });
+          if (scenarioRes.ok) {
+            const scenarioPayload = await scenarioRes.json();
+            const scenarioBranches: unknown[] = Array.isArray(scenarioPayload?.branches)
+              ? scenarioPayload.branches
+              : [];
+            scenarioBranchOptions = scenarioBranches
+              .filter((branch): branch is Record<string, unknown> => (
+                typeof branch === 'object'
+                && branch !== null
+                && typeof (branch as Record<string, unknown>).id === 'string'
+              ))
+              .map((branch) => ({
+                id: branch.id as string,
+                title: typeof branch.title === 'string' && branch.title.trim().length > 0
+                  ? branch.title
+                  : branch.id as string,
+                probability: typeof branch.probability === 'number' ? branch.probability : null,
+              }));
+          }
+        } catch {
+          scenarioBranchOptions = [];
+        }
+        if (requestId !== latestRequestIdRef.current) return;
+        setBranchOptions(scenarioBranchOptions);
+      })();
     } catch (err) {
       if (requestId !== latestRequestIdRef.current) return;
       if (err && typeof err === 'object' && ('code' in err || 'status' in err)) {
@@ -376,8 +384,8 @@ export function CausalReviewView() {
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges, translate);
-  }, [filteredData, isNonInteractiveFallback, translate]);
+    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport);
+  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -510,6 +518,9 @@ export function CausalReviewView() {
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
+  const resetViewport = useCallback(() => {
+    reactFlowRef.current?.fitView?.();
+  }, []);
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
@@ -594,9 +605,21 @@ export function CausalReviewView() {
               filenamePrefix="causal-graph"
             />
           )}
+          {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport && (
+            <button
+              type="button"
+              onClick={resetViewport}
+              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
+            >
+              {t('common.graph_fit_view', 'Fit view')}
+            </button>
+          )}
           {/* B6: Legend toggle */}
           <button
+            type="button"
             onClick={() => setLegendOpen(v => !v)}
+            aria-expanded={legendOpen}
+            aria-controls={legendPanelId}
             style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
           >
             {legendOpen ? t('causal.hide_legend', 'Hide Legend') : t('causal.show_legend', 'Legend')}
@@ -604,7 +627,7 @@ export function CausalReviewView() {
         </div>
         {/* B6: Collapsible Legend */}
         {legendOpen && (
-          <div style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888', borderBottom: '1px solid #333' }}>
+          <div id={legendPanelId} style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888', borderBottom: '1px solid #333' }}>
             {Object.entries(NODE_TYPE_COLORS_HEX).filter(([k]) => ['event', 'intervention', 'stance_shift', 'fork', 'verdict'].includes(k)).map(([type, color]) => (
               <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />

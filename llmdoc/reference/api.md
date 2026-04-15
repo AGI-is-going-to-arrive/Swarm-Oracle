@@ -175,7 +175,9 @@
 
 - Debate 是独立域，不与主模式复用 scenario authority。
 - replay import 会保留 imported `phase_insights` 与 `adjudication_mode`。
-- `POST /api/debate/import-replay` 当前会对 `turns / predictions / phase_insights` 的列表项做对象校验；非对象项，以及 `phase_insights.confidence_drift.phase_margin / cumulative_margin` 为负数时，统一返回 `422`，不再静默跳过坏数据。
+- `POST /api/debate/import-replay` 当前会对 `turns / predictions / phase_insights` 的列表项做对象校验；非对象项仍返回 `422`。
+- `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以为负数，表示置信优势反向漂移。
+- 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验它是否属于合法 variant。
 - `GET /api/debate/{debate_id}/argument-map` 在功能开启但读取阶段出错时，当前走 fail-soft：
   返回 `200`，并带空的 `nodes / edges / units` 和 `error: "ARGUMENT_MAP_LOAD_FAILED"`。
 

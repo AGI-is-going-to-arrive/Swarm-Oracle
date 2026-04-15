@@ -88,6 +88,71 @@ def _recreate_debate_argument_unit_with_unique_constraint(
     )
 
 
+def _recreate_debate_argument_unit_without_unique_constraint(conn) -> None:
+    conn.execute(text("DROP INDEX IF EXISTS ix_debate_argument_unit_debate_id"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_debate_argument_unit_semantic_hash"))
+    conn.execute(text("ALTER TABLE debate_argument_unit RENAME TO debate_argument_unit_old"))
+    conn.execute(
+        text(
+            """
+            CREATE TABLE debate_argument_unit (
+                id VARCHAR NOT NULL,
+                debate_id VARCHAR NOT NULL,
+                turn_id VARCHAR NOT NULL,
+                node_id VARCHAR NOT NULL,
+                unit_type VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'standing',
+                canonical_text TEXT NOT NULL DEFAULT '',
+                semantic_hash VARCHAR NOT NULL DEFAULT '',
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY (id)
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            INSERT INTO debate_argument_unit (
+                id,
+                debate_id,
+                turn_id,
+                node_id,
+                unit_type,
+                status,
+                canonical_text,
+                semantic_hash,
+                created_at
+            )
+            SELECT
+                id,
+                debate_id,
+                turn_id,
+                node_id,
+                unit_type,
+                status,
+                canonical_text,
+                semantic_hash,
+                created_at
+            FROM debate_argument_unit_old
+            """
+        )
+    )
+    conn.execute(text("DROP TABLE debate_argument_unit_old"))
+    conn.execute(
+        text(
+            "CREATE INDEX ix_debate_argument_unit_debate_id "
+            "ON debate_argument_unit (debate_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX ix_debate_argument_unit_semantic_hash "
+            "ON debate_argument_unit (semantic_hash)"
+        )
+    )
+
+
 def test_init_db_upgrades_empty_sqlite_to_current_head(tmp_path, monkeypatch):
     """Empty SQLite files should be upgraded to the current Alembic head."""
     from app.config import settings
@@ -260,6 +325,56 @@ def test_init_db_stamps_legacy_ending_room_schema_before_upgrade(tmp_path, monke
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert revision == expected_head
+
+    database_module.dispose_engine()
+
+
+def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
+    tmp_path,
+    monkeypatch,
+):
+    """Lightweight bootstrap DBs should stamp head instead of replaying base migrations."""
+    import app.models  # noqa: F401  # Ensure all model modules are registered
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, _command, ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "lightweight-bootstrap.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)
+    database_module.init_db()
+    database_module.dispose_engine()
+
+    bootstrap_engine = create_engine(db_url)
+    bootstrap_inspector = inspect(bootstrap_engine)
+    assert "alembic_version" not in bootstrap_inspector.get_table_names()
+    bootstrap_engine.dispose()
+
+    monkeypatch.undo()
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+
+    database_module.init_db()
+
+    inspector = inspect(database_module.get_engine())
+    assert "debate_argument_unit" in inspector.get_table_names()
+    assert "graph_snapshot" in inspector.get_table_names()
+
+    with database_module.get_engine().connect() as conn:
+        revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+
     assert revision == expected_head
 
     database_module.dispose_engine()
@@ -882,6 +997,270 @@ def test_021_upgrade_removes_orphan_argument_graph_rows_for_deleted_duplicates(
             "text": "Newest duplicate",
             "turn_id": "turn-1",
             "node_id": "node-new",
+        }
+    ]
+
+    legacy_engine.dispose()
+    database_module.dispose_engine()
+
+
+def test_init_db_lightweight_fallback_removes_orphan_argument_graph_rows_for_deleted_duplicates(
+    tmp_path,
+    monkeypatch,
+):
+    """Lightweight repair should delete stale graph nodes and edges for removed duplicates."""
+    import app.models  # noqa: F401  # Ensure all model modules are registered
+    from app.config import settings
+    from app.models import database as database_module
+    from app.services.debate_argument_map import get_argument_map
+
+    db_path = tmp_path / "dirty-debate-argument-graph-lightweight.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    legacy_engine = create_engine(db_url)
+    SQLModel.metadata.create_all(legacy_engine)
+    with legacy_engine.begin() as conn:
+        _recreate_debate_argument_unit_without_unique_constraint(conn)
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_snapshot (
+                    id,
+                    owner_type,
+                    owner_id,
+                    graph_kind,
+                    created_at
+                ) VALUES (
+                    'snapshot-argument-map-lightweight',
+                    'debate',
+                    'debate-orphan-graph-lightweight',
+                    'argument_map',
+                    '2026-04-14T20:30:00'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_node (
+                    id,
+                    snapshot_id,
+                    node_key,
+                    node_type,
+                    label,
+                    round_number,
+                    ref_model,
+                    ref_id,
+                    payload_json
+                ) VALUES
+                    (
+                        'node-verdict-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'verdict',
+                        'verdict',
+                        'Verdict',
+                        1,
+                        'debate',
+                        'debate-orphan-graph-lightweight',
+                        '{}'
+                    ),
+                    (
+                        'node-old-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'claim-old',
+                        'claim',
+                        'Old duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    ),
+                    (
+                        'node-mid-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'claim-mid',
+                        'claim',
+                        'Mid duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    ),
+                    (
+                        'node-new-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'claim-new',
+                        'claim',
+                        'Newest duplicate',
+                        1,
+                        'debate_turn',
+                        'turn-1',
+                        '{"side":"proposition"}'
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_edge (
+                    id,
+                    snapshot_id,
+                    source_node_id,
+                    target_node_id,
+                    edge_type,
+                    weight,
+                    label,
+                    payload_json
+                ) VALUES
+                    (
+                        'edge-old-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'node-verdict-lightweight',
+                        'node-old-lightweight',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    ),
+                    (
+                        'edge-mid-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'node-verdict-lightweight',
+                        'node-mid-lightweight',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    ),
+                    (
+                        'edge-new-lightweight',
+                        'snapshot-argument-map-lightweight',
+                        'node-verdict-lightweight',
+                        'node-new-lightweight',
+                        'accepted',
+                        1.0,
+                        NULL,
+                        NULL
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO debate_argument_unit (
+                    id,
+                    debate_id,
+                    turn_id,
+                    node_id,
+                    unit_type,
+                    status,
+                    canonical_text,
+                    semantic_hash,
+                    created_at
+                ) VALUES
+                    (
+                        'unit-old-lightweight',
+                        'debate-orphan-graph-lightweight',
+                        'turn-1',
+                        'node-old-lightweight',
+                        'claim',
+                        'standing',
+                        'Old duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:30:00'
+                    ),
+                    (
+                        'unit-mid-lightweight',
+                        'debate-orphan-graph-lightweight',
+                        'turn-1',
+                        'node-mid-lightweight',
+                        'claim',
+                        'standing',
+                        'Mid duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:30:01'
+                    ),
+                    (
+                        'unit-new-lightweight',
+                        'debate-orphan-graph-lightweight',
+                        'turn-1',
+                        'node-new-lightweight',
+                        'claim',
+                        'accepted',
+                        'Newest duplicate',
+                        'dup-hash',
+                        '2026-04-14T20:30:02'
+                    )
+                """
+            )
+        )
+
+    monkeypatch.setattr(database_module, "_load_alembic_runtime", lambda: None)
+
+    database_module.init_db()
+
+    upgraded_engine = database_module.get_engine()
+    with upgraded_engine.connect() as conn:
+        node_ids = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM graph_node
+                    WHERE snapshot_id = 'snapshot-argument-map-lightweight'
+                    ORDER BY id
+                    """
+                )
+            ).fetchall()
+        ]
+        edge_ids = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM graph_edge
+                    WHERE snapshot_id = 'snapshot-argument-map-lightweight'
+                    ORDER BY id
+                    """
+                )
+            ).fetchall()
+        ]
+
+    result = get_argument_map("debate-orphan-graph-lightweight")
+
+    assert node_ids == ["node-new-lightweight", "node-verdict-lightweight"]
+    assert edge_ids == ["edge-new-lightweight"]
+    assert {node["id"] for node in result["nodes"]} == {
+        "node-new-lightweight",
+        "node-verdict-lightweight",
+    }
+    assert {node["label"] for node in result["nodes"]} == {"Newest duplicate", "Verdict"}
+    assert result["edges"] == [
+        {
+            "id": "edge-new-lightweight",
+            "source": "node-verdict-lightweight",
+            "target": "node-new-lightweight",
+            "type": "accepted",
+            "weight": 1.0,
+            "label": None,
+        }
+    ]
+    assert result["units"] == [
+        {
+            "id": "unit-new-lightweight",
+            "type": "claim",
+            "status": "accepted",
+            "text": "Newest duplicate",
+            "turn_id": "turn-1",
+            "node_id": "node-new-lightweight",
         }
     ]
 

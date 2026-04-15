@@ -1,5 +1,5 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { startTransition, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { getDebateResult, importReplayDebate, isApiError } from '../api/client';
@@ -26,13 +26,20 @@ import {
   buildDebatePhaseSummaries,
   getDebateScoreLeader,
 } from '../lib/debateInsights';
-import { buildDebateReplayUrl, readDebateReplayPayload } from '../lib/debateReplay';
+import {
+  buildDebateReplayLocalUrl,
+  buildDebateReplayUrl,
+  readDebateReplayLocalCopy,
+  readDebateReplayPayload,
+  saveDebateReplayLocalCopy,
+} from '../lib/debateReplay';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
 import type { DebatePrediction, DebateResultPayload } from '../types';
 import './DebateArena.css';
 
 const RESULT_RETRY_DELAY_MS = 1200;
 const MAX_RESULT_RETRY_ATTEMPTS = 10;
+const MAX_INLINE_DEBATE_REPLAY_URL_CHARS = 1800;
 
 function isPredictionHit(prediction: DebatePrediction, result: DebateResultPayload['result']): boolean {
   if (prediction.kind === 'winner') return prediction.target_value === result.winner;
@@ -52,6 +59,7 @@ function hasMixedLanguageLongText(text: string | null | undefined): boolean {
 export function DebateResultView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
@@ -64,13 +72,37 @@ export function DebateResultView() {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [showShare, setShowShare] = useState(false);
   const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
+  const [sharePermalink, setSharePermalink] = useState<string | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
   const [showArgumentMap, setShowArgumentMap] = useState(false);
+  const argumentMapPanelId = `debate-result-argument-map-${useId().replace(/:/g, '-')}`;
+  const replayToken = searchParams.get('replay')?.trim() ?? '';
+  const replayLocalId = searchParams.get('local')?.trim() ?? '';
   const replayPayload = useMemo(
-    () => readDebateReplayPayload(searchParams),
-    [searchParams],
+    () => {
+      const tokenPayload = readDebateReplayPayload(searchParams);
+      if (tokenPayload) return tokenPayload;
+      return replayLocalId ? readDebateReplayLocalCopy(replayLocalId) : null;
+    },
+    [replayLocalId, searchParams],
   );
-  const isReplayMode = Boolean(replayPayload);
+  const isReplayMode = Boolean(replayPayload || replayToken || replayLocalId);
+  const replayAutomationState = useMemo(
+    () => (isReplayMode
+      ? {
+        is_readonly: true,
+        can_import_local_run: Boolean(payload),
+        importing_local_run: importingReplay,
+      }
+      : null),
+    [importingReplay, isReplayMode, payload],
+  );
+  const shareAutomationState = useMemo(
+    () => (showShare
+      ? (shareModalState ?? { kind: 'debate_share_modal' })
+      : null),
+    [shareModalState, showShare],
+  );
 
   useEffect(() => {
     translationRef.current = t;
@@ -81,6 +113,13 @@ export function DebateResultView() {
       setPayload(replayPayload);
       setError('');
       setErrorCode(null);
+      setLoading(false);
+      return;
+    }
+    if (replayToken || replayLocalId) {
+      setPayload(null);
+      setError(translationRef.current('debate.result_missing'));
+      setErrorCode('DEBATE_REPLAY_PAYLOAD_INVALID');
       setLoading(false);
       return;
     }
@@ -129,7 +168,28 @@ export function DebateResultView() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [i18n.language, id, replayPayload]);
+  }, [i18n.language, id, replayLocalId, replayPayload, replayToken]);
+
+  useEffect(() => {
+    const origin = window.location.origin.replace(/\/$/, '');
+    if (isReplayMode) {
+      setSharePermalink(window.location.href);
+      return;
+    }
+    if (!payload) {
+      setSharePermalink(null);
+      return;
+    }
+
+    const inlineReplayUrl = buildDebateReplayUrl(origin, payload);
+    if (inlineReplayUrl.length <= MAX_INLINE_DEBATE_REPLAY_URL_CHARS) {
+      setSharePermalink(inlineReplayUrl);
+      return;
+    }
+
+    const replayId = saveDebateReplayLocalCopy(payload);
+    setSharePermalink(buildDebateReplayLocalUrl(origin, replayId));
+  }, [isReplayMode, payload]);
 
   const localCounterplayRecord = useMemo(
     () => (id ? loadDebateCounterplay(id) : null),
@@ -250,9 +310,9 @@ export function DebateResultView() {
           : counterplayOutcome === 'miss'
             ? t('debate.counterplay_miss')
             : null,
-      permalinkUrl: buildDebateReplayUrl(window.location.origin, payload),
+      permalinkUrl: sharePermalink,
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, payload, t]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, payload, sharePermalink, t]);
   const hasMixedLanguageLongResultCopy = useMemo(() => {
     if (!payload) return false;
 
@@ -280,10 +340,10 @@ export function DebateResultView() {
     : 'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.';
 
   const handleImportReplay = async () => {
-    if (!replayPayload || importingReplay) return;
+    if (!isReplayMode || !payload || importingReplay) return;
     setImportingReplay(true);
     try {
-      const imported = await importReplayDebate(replayPayload);
+      const imported = await importReplayDebate(payload);
       navigate(`/debate/${imported.id}/result`);
     } finally {
       setImportingReplay(false);
@@ -329,17 +389,20 @@ export function DebateResultView() {
         winner: payload.result.winner,
       } : null,
       {
-        route: window.location.pathname,
+        route: location.pathname,
         kind: 'debate_result',
         loading,
         error: buildAutomationErrorState(errorCode, error),
-        replay_source: replayPayload ? 'token' : 'api',
+        replay_source: replayToken ? 'token' : replayLocalId ? 'local' : 'api',
+        replay: replayAutomationState,
         controls: {
           can_open_share_modal: Boolean(payload),
-          can_go_back_live: Boolean(payload),
+          can_go_back_live: Boolean(payload && id),
+          can_import_local_run: Boolean(isReplayMode && payload),
+          importing_local_run: importingReplay,
           active_modal: showShare ? 'share' : null,
           show_share_modal: showShare,
-          modal_state: shareModalState,
+          modal_state: shareAutomationState,
         },
         result: payload ? {
           winner: payload.result.winner,
@@ -371,7 +434,7 @@ export function DebateResultView() {
       if (win.advanceTime === advance) delete win.advanceTime;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, errorCode, judgeRationale, loading, payload, phaseSummaries, predictionStats, replayPayload, scoreLeader, serverPhaseInsights, shareModalState, showShare, signalCards, supportingTurns]);
+  }, [counterplayExplanation, counterplayOutcome, counterplaySummary, error, errorCode, id, importingReplay, isReplayMode, judgeRationale, loading, location.pathname, payload, phaseSummaries, predictionStats, replayAutomationState, replayLocalId, replayToken, scoreLeader, serverPhaseInsights, shareAutomationState, shareModalState, showShare, signalCards, supportingTurns]);
 
   if (loading) {
     return <div className="debate-shell debate-empty-state">{t('debate.loading')}</div>;
@@ -436,7 +499,7 @@ export function DebateResultView() {
                 </div>
               </div>
               <div className="debate-controls">
-                <button type="button" className="btn btn-ghost" onClick={() => navigate(`/debate/${id}`)}>
+                <button type="button" className="btn btn-ghost" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
                   {t('sim.status.back')}
                 </button>
                 {isReplayMode && (
@@ -765,6 +828,8 @@ export function DebateResultView() {
               <button
                 type="button"
                 className="btn btn-ghost"
+                aria-expanded={showArgumentMap}
+                aria-controls={argumentMapPanelId}
                 onClick={() => {
                   startTransition(() => {
                     setShowArgumentMap((current) => !current);
@@ -777,11 +842,11 @@ export function DebateResultView() {
               </button>
             </div>
             {showArgumentMap ? (
-              <div className="debate-panel__body">
+              <div id={argumentMapPanelId} className="debate-panel__body">
                 <ArgumentMap debateId={id!} visible={true} />
               </div>
             ) : (
-              <div className="debate-panel__body">
+              <div id={argumentMapPanelId} className="debate-panel__body">
                 <p className="debate-empty-state">
                   {t('argument.load_map_hint', 'Load the interactive map only when you need it.')}
                 </p>

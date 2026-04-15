@@ -411,13 +411,12 @@ def _normalize_import_phase_insights(phase_insights: list[Any] | None) -> list[d
         except (TypeError, ValueError) as exc:
             raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_INVALID", "Replay debate phase_insights numeric fields must be integers") from exc  # noqa: E501
 
-        if (
-            pressure_margin < 0
-            or turn_count < 0
-            or phase_margin < 0
-            or cumulative_margin < 0
-        ):
-            raise api_error(422, "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_RANGE_INVALID", "Replay debate phase_insights numeric fields must be >= 0")  # noqa: E501
+        if pressure_margin < 0 or turn_count < 0:
+            raise api_error(
+                422,
+                "REPLAY_DEBATE_PHASE_INSIGHT_NUMERIC_RANGE_INVALID",
+                "Replay debate phase_insights pressure_margin and turn_count must be >= 0",
+            )
 
         normalized.append(
             {
@@ -470,9 +469,12 @@ def _normalize_import_replay_predictions(predictions: list[Any]) -> list[dict[st
                 field_name="predictions.counterplay_phase",
                 code="REPLAY_DEBATE_PREDICTION_FIELD_INVALID",
             ).value
-        counterplay_variant = (
-            str(raw_prediction.get("counterplay_variant", "")).strip().lower() or None
-        )
+        raw_counterplay_variant = raw_prediction.get("counterplay_variant")
+        if raw_counterplay_variant is None:
+            counterplay_variant = None
+        else:
+            cleaned_counterplay_variant = str(raw_counterplay_variant).strip().lower()
+            counterplay_variant = None if cleaned_counterplay_variant in {"", "none"} else cleaned_counterplay_variant
         if counterplay_variant is not None and counterplay_variant not in _COUNTERPLAY_VARIANTS:
             raise api_error(
                 422,

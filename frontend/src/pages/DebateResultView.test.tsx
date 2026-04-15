@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../api/client';
 import { DebateResultView } from './DebateResultView';
-import { encodeDebateReplayToken } from '../lib/debateReplay';
+import { encodeDebateReplayToken, saveDebateReplayLocalCopy } from '../lib/debateReplay';
 import type { DebateResultPayload } from '../types';
 
 const {
@@ -188,6 +188,16 @@ function buildPayload(): DebateResultPayload {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
@@ -256,6 +266,7 @@ describe('DebateResultView', () => {
     importReplayDebateMock.mockReset();
     captureElementDataUrlMock.mockReset();
     argumentMapMock.mockClear();
+    window.localStorage.clear();
   });
 
   it('renders verdict and exposes automation payload plus capture hooks', async () => {
@@ -290,6 +301,11 @@ describe('DebateResultView', () => {
 
     await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
     expect(await screen.findByText('debate.share_title')).toBeInTheDocument();
+
+    const immediateRaw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    const immediatePayload = immediateRaw ? JSON.parse(immediateRaw) : null;
+    expect(immediatePayload?.page?.controls?.active_modal).toBe('share');
+    expect(immediatePayload?.page?.controls?.modal_state?.kind).toBe('debate_share_modal');
 
     const modalShot = await (window as Window & {
       capture_game_screenshot?: (mode?: 'panel' | 'canvas' | 'modal') => Promise<string | null>;
@@ -462,6 +478,85 @@ describe('DebateResultView', () => {
     expect(screen.getByText(/debate\.result_adjudication: debate\.adjudication_llm_hybrid/)).toBeInTheDocument();
   });
 
+  it('hydrates from a local replay copy without calling the live result API', async () => {
+    const replayId = saveDebateReplayLocalCopy(buildPayload());
+
+    render(
+      <MemoryRouter initialEntries={[`/debate/replay/result?local=${replayId}`]}>
+        <Routes>
+          <Route path="/debate/replay/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(getDebateResultMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.replay_source).toBe('local');
+      expect(payload?.page?.controls?.can_import_local_run).toBe(true);
+      expect(payload?.page?.replay?.is_readonly).toBe(true);
+    });
+  });
+
+  it('exposes readonly replay and import automation state while importing a local run', async () => {
+    const user = userEvent.setup();
+    const replayToken = encodeDebateReplayToken(buildPayload());
+    const importDeferred = createDeferred<{ id: string }>();
+    importReplayDebateMock.mockReturnValue(importDeferred.promise);
+    getDebateResultMock.mockResolvedValue({
+      ...buildPayload(),
+      id: 'imported-debate-1',
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/debate/replay/result?replay=${replayToken}`]}>
+        <Routes>
+          <Route path="/debate/replay/result" element={<DebateResultView />} />
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.replay_source).toBe('token');
+      expect(payload?.page?.controls?.can_import_local_run).toBe(true);
+      expect(payload?.page?.controls?.importing_local_run).toBe(false);
+      expect(payload?.page?.replay?.is_readonly).toBe(true);
+      expect(payload?.page?.replay?.can_import_local_run).toBe(true);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Import as Local Run' }));
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.importing_local_run).toBe(true);
+      expect(payload?.page?.replay?.importing_local_run).toBe(true);
+    });
+
+    importDeferred.resolve({ id: 'imported-debate-1' });
+
+    await waitFor(() => {
+      expect(getDebateResultMock).toHaveBeenCalledWith('imported-debate-1');
+    });
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.route).toBe('/debate/imported-debate-1/result');
+      expect(payload?.page?.replay_source).toBe('api');
+      expect(payload?.page?.controls?.can_import_local_run).toBe(false);
+      expect(payload?.page?.controls?.importing_local_run).toBe(false);
+      expect(payload?.page?.replay).toBeNull();
+    });
+  });
+
   it('retries result polling after API 409 and eventually renders', async () => {
     vi.useFakeTimers();
     getDebateResultMock
@@ -553,10 +648,15 @@ describe('DebateResultView', () => {
     expect(argumentMapMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('argument-map')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'argument.load_map' }));
+    const toggle = screen.getByRole('button', { name: 'argument.load_map' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls');
+
+    await user.click(toggle);
 
     expect(argumentMapMock).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('argument-map')).toHaveTextContent('debate-1');
+    expect(screen.getByRole('button', { name: 'argument.hide_map' })).toHaveAttribute('aria-expanded', 'true');
   });
 
 });

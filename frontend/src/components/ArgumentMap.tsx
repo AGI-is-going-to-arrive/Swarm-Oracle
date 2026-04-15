@@ -146,6 +146,7 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
 const PERF_TOOLTIP_LIMIT = 150;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
+const GRAPH_REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
 // ── Strength Meter (P1-7) ───────────────────────────────────
 
@@ -163,22 +164,30 @@ const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   rejected: GRAPH_STATUS_LABEL_I18N.rejected,
 };
 
-function useCompactGraphViewport() {
-  const [isCompact, setIsCompact] = useState(() => (
+function useMediaQueryState(query: string) {
+  const [matches, setMatches] = useState(() => (
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches
+      ? window.matchMedia(query).matches
       : false
   ));
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mediaQueryList = window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY);
-    const handleChange = (event: MediaQueryListEvent) => setIsCompact(event.matches);
+    const mediaQueryList = window.matchMedia(query);
+    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
     mediaQueryList.addEventListener?.('change', handleChange);
     return () => mediaQueryList.removeEventListener?.('change', handleChange);
-  }, []);
+  }, [query]);
 
-  return isCompact;
+  return matches;
+}
+
+function useCompactGraphViewport() {
+  return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
+}
+
+function useReducedMotionPreference() {
+  return useMediaQueryState(GRAPH_REDUCED_MOTION_QUERY);
 }
 
 function getArgumentTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
@@ -199,8 +208,31 @@ function getArgumentNodeActionLabel(
   return `${t('argument.open_details', 'Open details')}: ${typeLabel} - ${label}`;
 }
 
+function GraphViewportResetButton({ onReset }: { onReset: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onReset}
+      style={{
+        padding: '2px 8px',
+        borderRadius: 12,
+        border: '1px solid #555',
+        background: 'transparent',
+        color: '#8ab4f8',
+        cursor: 'pointer',
+        fontSize: '0.65rem',
+        lineHeight: 1.4,
+      }}
+    >
+      {t('common.graph_fit_view', 'Fit view')}
+    </button>
+  );
+}
+
 export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
   const { t } = useTranslation();
+  const prefersReducedMotion = useReducedMotionPreference();
   const total = units.length;
   if (total === 0) return null;
 
@@ -235,7 +267,7 @@ export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
               style={{
                 width: `${pct}%`,
               background: STATUS_COLORS_HEX[status] ?? '#555',
-              transition: 'width 0.3s ease',
+              transition: prefersReducedMotion ? 'none' : 'width 0.3s ease',
             }}
           />
         );
@@ -251,6 +283,7 @@ function layoutArgumentDag(
   rawEdges: GraphEdgeRaw[],
   units: ArgumentUnit[],
   t: (key: string, fallback: string) => string,
+  reduceMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const unitByNodeId = new Map<string, ArgumentUnit>();
   for (const u of units) {
@@ -288,7 +321,6 @@ function layoutArgumentDag(
         type: 'graphCard',
         position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
         focusable: false,
-        ariaRole: 'button',
         ariaLabel,
         data: {
           label,
@@ -299,6 +331,7 @@ function layoutArgumentDag(
           borderColor: STATUS_COLORS_HEX[u.status] ?? '',
           dimmed: false,
           tooltipDisabled: false,
+          reduceMotion,
           sourcePos: 'bottom',
           targetPos: 'top',
         },
@@ -322,7 +355,6 @@ function layoutArgumentDag(
       type: 'graphCard',
       position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
       focusable: false,
-      ariaRole: 'button',
       ariaLabel,
       data: {
         label: displayLabel,
@@ -333,6 +365,7 @@ function layoutArgumentDag(
         borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',
         dimmed: false,
         tooltipDisabled: false,
+        reduceMotion,
         sourcePos: 'bottom',
         targetPos: 'top',
       },
@@ -348,7 +381,7 @@ function layoutArgumentDag(
       source: e.source,
       target: e.target,
       label: e.label ?? undefined,
-      animated: style?.animated ?? false,
+      animated: !reduceMotion && (style?.animated ?? false),
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
     };
@@ -368,6 +401,7 @@ interface Props {
 export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
+  const prefersReducedMotion = useReducedMotionPreference();
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
@@ -446,8 +480,14 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
 
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
     if (!filteredData) return { nodes: [], edges: [] };
-    return layoutArgumentDag(filteredData.nodes, filteredData.edges, filteredData.units, translate);
-  }, [filteredData, translate]);
+    return layoutArgumentDag(
+      filteredData.nodes,
+      filteredData.edges,
+      filteredData.units,
+      translate,
+      prefersReducedMotion,
+    );
+  }, [filteredData, prefersReducedMotion, translate]);
   const layoutSignature = useMemo(() => (
     `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
   ), [layoutNodes, layoutEdges]);
@@ -535,6 +575,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
+  const resetViewport = useCallback(() => {
+    reactFlowRef.current?.fitView?.();
+  }, []);
 
   // C5: Toggle status filter
   const toggleStatus = useCallback((status: string) => {
@@ -619,6 +662,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             >
               {t('common.clear', 'Clear')}
             </button>
+          )}
+          {isCompactViewport && !noFilterResults && (
+            <GraphViewportResetButton onReset={resetViewport} />
           )}
         </div>
 

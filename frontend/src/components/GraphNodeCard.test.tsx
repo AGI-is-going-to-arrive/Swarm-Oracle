@@ -143,6 +143,12 @@ describe('GraphNodeCard', () => {
     expect(button).toHaveAttribute('type', 'button');
   });
 
+  it('removes card transitions when reduced motion is requested', () => {
+    render(<GraphNodeCard {...makeProps({ reduceMotion: true })} />, { wrapper: Wrapper });
+    const card = screen.getByRole('button', { name: 'Short label' });
+    expect(card).toHaveStyle({ transition: 'none' });
+  });
+
   it('renders source and target handles', () => {
     render(<GraphNodeCard {...makeProps()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('handle-target')).toBeInTheDocument();

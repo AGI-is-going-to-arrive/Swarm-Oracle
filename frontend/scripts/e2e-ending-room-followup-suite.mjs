@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import {
   ENDING_ROOM_COPY_REPLAY_PATTERN,
   ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
@@ -28,11 +28,54 @@ const BROWSER_LAUNCH_OPTIONS = {
   headless: true,
   args: ["--use-gl=angle", "--use-angle=swiftshader"],
 };
+const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
+const VALID_LOCALES = new Set(["zh", "en"]);
+const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 
 // Lifecycle captures are best-effort evidence only. Keep the budget short so
 // mobile follow-up validation can quickly fall back to API-visible checks.
 const OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS = 12000;
 const OPTIONAL_EPILOGUE_CAPTURE_TIMEOUT_MS = 15000;
+
+function normalizeLocale(locale) {
+  return String(locale ?? "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+function resolveDocumentLanguage(locale) {
+  return normalizeLocale(locale) === "zh" ? "zh-CN" : "en";
+}
+
+function resolveContextLocale(locale) {
+  return normalizeLocale(locale) === "zh" ? "zh-CN" : "en-US";
+}
+
+function getEnterChamberPattern(locale) {
+  return normalizeLocale(locale) === "en" ? /Enter chamber/i : /Enter chamber|进入会客厅/i;
+}
+
+async function configureLocaleContext(context, locale) {
+  const normalizedLocale = normalizeLocale(locale);
+  context.__swarmLocale = normalizedLocale;
+  await context.addInitScript(
+    ({ storageKey, nextLocale, documentLanguage }) => {
+      try {
+        window.localStorage.setItem(storageKey, nextLocale);
+      } catch {
+        // Ignore storage failures in automation bootstrap.
+      }
+      document.documentElement.lang = documentLanguage;
+    },
+    {
+      storageKey: LANGUAGE_STORAGE_KEY,
+      nextLocale: normalizedLocale,
+      documentLanguage: resolveDocumentLanguage(normalizedLocale),
+    },
+  );
+}
+
+function getContextLocale(context) {
+  return normalizeLocale(context?.__swarmLocale ?? "zh");
+}
 
 function parseArgs(argv) {
   const args = {
@@ -40,6 +83,8 @@ function parseArgs(argv) {
     url: null,
     outputDir: "output/e2e/ending-room-followup",
     headless: true,
+    browser: "chromium",
+    locale: normalizeLocale(process.env.SWARM_E2E_LOCALE || "zh"),
   };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -53,15 +98,43 @@ function parseArgs(argv) {
     } else if (arg === "--headless" && next) {
       args.headless = next !== "false" && next !== "0";
       i += 1;
+    } else if (arg === "--browser" && next) {
+      args.browser = next;
+      i += 1;
+    } else if (arg === "--locale" && next) {
+      args.locale = normalizeLocale(next);
+      i += 1;
     }
   }
   if (!args.url) {
     throw new Error("--url is required");
   }
   if (!["desktop", "mobile", "mobile-multi-only", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-ending-room-followup-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--headless]");
+    throw new Error("Usage: node scripts/e2e-ending-room-followup-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--headless]");
+  }
+  if (!VALID_BROWSERS.has(args.browser)) {
+    throw new Error(`Unsupported browser: ${args.browser}`);
+  }
+  if (!VALID_LOCALES.has(args.locale)) {
+    throw new Error(`Unsupported locale: ${args.locale}`);
   }
   return args;
+}
+
+function resolveBrowserEngine(browserName) {
+  if (browserName === "firefox") return firefox;
+  if (browserName === "webkit") return webkit;
+  return chromium;
+}
+
+function buildBrowserLaunchOptions(browserName, headless) {
+  if (browserName === "chromium") {
+    return {
+      ...BROWSER_LAUNCH_OPTIONS,
+      headless,
+    };
+  }
+  return { headless };
 }
 
 function ensureDir(dirPath) {
@@ -85,6 +158,77 @@ async function getAutomationState(page) {
   if (!page || page.isClosed?.()) return null;
   const raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
   return parseAutomationState(raw);
+}
+
+async function readLocaleState(page) {
+  return page.evaluate((storageKey) => ({
+    document_language: document.documentElement.lang,
+    stored_language: window.localStorage.getItem(storageKey),
+  }), LANGUAGE_STORAGE_KEY);
+}
+
+function assertUiLocaleState(localeState, locale, label) {
+  const expectedLocale = normalizeLocale(locale);
+  const expectedDocumentPrefix = expectedLocale === "zh" ? "zh" : "en";
+  const actualDocumentLanguage = String(localeState?.document_language ?? "").toLowerCase();
+  const actualStoredLanguage = normalizeLocale(localeState?.stored_language ?? "");
+  if (!actualDocumentLanguage.startsWith(expectedDocumentPrefix)) {
+    throw new Error(`${label} expected document.lang to start with ${expectedDocumentPrefix}, got ${localeState?.document_language ?? "null"}`);
+  }
+  if (actualStoredLanguage !== expectedLocale) {
+    throw new Error(`${label} expected stored locale ${expectedLocale}, got ${localeState?.stored_language ?? "null"}`);
+  }
+  return localeState;
+}
+
+async function assertUiLocale(page, locale, label) {
+  const localeState = await readLocaleState(page);
+  return assertUiLocaleState(localeState, locale, label);
+}
+
+async function assertRoomLanguage(frontendUrl, roomId, locale, label) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  const snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+  if (snapshot?.language !== locale) {
+    throw new Error(`${label} expected room.language=${locale}, got ${snapshot?.language ?? "null"}`);
+  }
+  return snapshot.language;
+}
+
+function getEndingHotseatPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Call on one role directly: where did this worldline first slip out of control?"
+    : "请点名说明，这条世界线最早的失控点在哪里？";
+}
+
+function getEndingAllPresentPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "If the whole current lineup answered once, how would they divide the response?"
+    : "如果让当前阵容都回应一次，他们会如何分工？";
+}
+
+function getEndingEpilogueFillPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Continue the next three beats and show how this line resolves."
+    : "请继续推演后续三回合，看看局势如何收场。";
+}
+
+function getEndingEpilogueApiPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "What happens next on this worldline?"
+    : "这条世界线接下来会发生什么？";
+}
+
+function getEndingEvidencePrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Use evidence from another worldline to explain why this split widened."
+    : "请用另一条世界线的证据解释这次分裂为什么会扩大。";
+}
+
+function getEndingAnchoredFollowupPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Stay with this ending and explain why this conclusion holds."
+    : "沿着当前结局继续追问：为什么这个结论会成立？";
 }
 
 function buildFollowupVisibilityNeedles(apiPayload) {
@@ -482,6 +626,7 @@ async function reopenLiveEndingRoomPage(
     if (browser) {
       try {
         freshContext = await browser.newContext(contextOptions);
+        await configureLocaleContext(freshContext, getContextLocale(context));
       } catch {
         freshContext = null;
       }
@@ -489,6 +634,7 @@ async function reopenLiveEndingRoomPage(
     if (!freshContext) {
       const fallbackBrowser = await chromium.launch(BROWSER_LAUNCH_OPTIONS);
       freshContext = await fallbackBrowser.newContext(contextOptions);
+      await configureLocaleContext(freshContext, getContextLocale(context));
       console.warn(`[ending-room] ${label}: relaunched browser after context/browser closure`);
     }
     page = await freshContext.newPage();
@@ -1176,13 +1322,14 @@ async function captureEndingRoomFit(page) {
   });
 }
 
-async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
+async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, locale) {
   let page = await context.newPage();
   const { multiId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
+  const uiLocale = await assertUiLocale(page, locale, "ending-room desktop result shell");
   const initialAutomation = await getAutomationState(page);
   const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
   await saveScreenshot(page, path.join(outputDir, "multi-result-initial.png"));
@@ -1191,18 +1338,19 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     JSON.stringify(initialAutomation, null, 2),
   );
 
-  await openPicker(page, /Enter chamber|进入会客厅/i, 0);
+  await openPicker(page, getEnterChamberPattern(locale), 0);
   const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, multiId);
   const prewarmedChamber = await prewarmEndingRoom(frontendUrl, multiId, {
     roomType: "ending_chamber",
     anchorBranchId,
     selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
     selectedAgentIds: pickerSeed.selectedAgentIds,
-    language: "zh",
+    language: locale,
   });
   const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
   await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await assertUiLocale(page, locale, "ending-room desktop chamber ui");
   const pickerA = {
     cards: pickerSeed.selectedNames,
     modalState: {
@@ -1225,6 +1373,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     JSON.stringify(await getAutomationState(page), null, 2),
   );
   const roomId = pickerA?.modalState?.room_id ?? prewarmedChamber.id;
+  const roomLanguage = await assertRoomLanguage(frontendUrl, roomId, locale, "ending-room desktop chamber");
   const roomSnapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
   const addressableAgentIds = (roomSnapshot.participants ?? [])
     .filter((participant) => participant?.source_agent_id && participant?.role_slot !== "archivist" && participant?.role_slot !== "user")
@@ -1236,9 +1385,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     await hotseatPill.scrollIntoViewIfNeeded().catch(() => {});
     await hotseatPill.click({ force: true }).catch(() => {});
   }
-  await fillComposerIfEditable(page, "请点名说明，这条世界线最早的失控点在哪里？");
+  await fillComposerIfEditable(page, getEndingHotseatPrompt(locale));
   const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-    content: "请点名说明，这条世界线最早的失控点在哪里？",
+    content: getEndingHotseatPrompt(locale),
     addressed_agent_ids: addressableAgentIds.slice(0, 1),
     interaction_mode: "hotseat",
   });
@@ -1348,9 +1497,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       10000,
     );
   }
-  await fillComposerIfEditable(page, "如果让当前阵容都回应一次，他们会如何分工？");
+  await fillComposerIfEditable(page, getEndingAllPresentPrompt(locale));
   const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-    content: "如果让当前阵容都回应一次，他们会如何分工？",
+    content: getEndingAllPresentPrompt(locale),
     addressed_agent_ids: addressableAgentIds,
     interaction_mode: "all_present",
   });
@@ -1443,10 +1592,10 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     await page.waitForTimeout(200);
     const prefilled = await readComposerValue(page);
     if (!prefilled || prefilled.trim().length === 0) {
-      await fillComposerIfEditable(page, "请继续推演后续三回合，看看局势如何收场。");
+      await fillComposerIfEditable(page, getEndingEpilogueFillPrompt(locale));
     }
     const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-      content: "这条世界线接下来会发生什么？",
+      content: getEndingEpilogueApiPrompt(locale),
       interaction_mode: "epilogue",
     });
     let epilogueCaptures = null;
@@ -1541,7 +1690,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     anchorBranchId,
     selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
     selectedAgentIds: pickerBSeed.selectedAgentIds,
-    language: "zh",
+    language: locale,
   });
   const oneMoveOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedOneMove.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=one_move_only&debugEndingRoomAgents=${encodeURIComponent(pickerBSeed.selectedAgentIds.join(","))}`;
   await page.goto(oneMoveOpenUrl, { waitUntil: "domcontentloaded" });
@@ -1598,7 +1747,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
     anchorBranchId,
     selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
     selectedAgentIds: pickerSeed.selectedAgentIds,
-    language: "zh",
+    language: locale,
   });
   const evidenceRoomId = evidenceChamber.id;
   const evidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(evidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
@@ -1633,7 +1782,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       throw new Error("No foreign branch available for evidence-card API flow");
     }
     const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, actualEvidenceRoomId, {
-      content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
+      content: getEndingEvidencePrompt(locale),
       interaction_mode: "evidence_card",
       cited_branch_id: foreignBranchId,
     });
@@ -1709,6 +1858,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       "ending-room artifact replay readonly state",
       40000,
     );
+    await assertUiLocale(sharePage, locale, "ending-room desktop artifact replay ui");
     await saveScreenshot(sharePage, path.join(outputDir, "multi-ending-room-replay-artifact.png"));
     fs.writeFileSync(
       path.join(outputDir, "multi-ending-room-replay-artifact.json"),
@@ -1735,6 +1885,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
       "ending-room replay readonly state",
       40000,
     );
+    await assertUiLocale(page, locale, "ending-room desktop readonly replay ui");
     await saveScreenshot(page, path.join(outputDir, "multi-ending-room-replay-readonly.png"));
     fs.writeFileSync(
       path.join(outputDir, "multi-ending-room-replay-readonly.json"),
@@ -1771,6 +1922,9 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   );
 
   return {
+    locale,
+    uiLocale,
+    roomLanguage,
     resultUrl,
     pickerA,
     hotseatState: hotseatState?.page?.controls?.modal_state ?? null,
@@ -1792,7 +1946,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds) {
   };
 }
 
-async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
+async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, locale) {
   const { singleId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${singleId}`;
@@ -1800,11 +1954,14 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
+    locale: resolveContextLocale(locale),
   });
+  await configureLocaleContext(context, locale);
   let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
-  await openPicker(page, /Enter chamber|进入会客厅/i, 0);
+  const uiLocale = await assertUiLocale(page, locale, "ending-room single mobile result shell");
+  await openPicker(page, getEnterChamberPattern(locale), 0);
   const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, singleId);
   const initialAutomation = await getAutomationState(page);
   const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
@@ -1813,12 +1970,13 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
     anchorBranchId,
     selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
     selectedAgentIds: pickerSeed.selectedAgentIds,
-    language: "zh",
+    language: locale,
   });
   await saveScreenshot(page, path.join(outputDir, "single-mobile-picker.png"));
   const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
   await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await assertUiLocale(page, locale, "ending-room single mobile chamber ui");
   const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: prewarmedChamber.id,
     expectedRoomType: "ending_chamber",
@@ -1836,6 +1994,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       status: prewarmedChamber.status,
     },
   };
+  const roomLanguage = await assertRoomLanguage(frontendUrl, prewarmedChamber.id, locale, "ending-room single mobile chamber");
   const automation = liveVisibleState ?? await getAutomationState(page);
   const fit = await page.evaluate(() => {
     const modal = document.querySelector(".ending-chat-modal");
@@ -1874,7 +2033,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   }
   const beforeAnchored = await getAutomationState(page);
   const anchoredApiPromise = appendThreadUserTurnViaApi(frontendUrl, createdThread.id, {
-    content: "沿着当前结局继续追问：为什么这个结论会成立？",
+    content: getEndingAnchoredFollowupPrompt(locale),
     question_anchor_ids: [verdictAnchorId],
     interaction_mode: "thread_followup",
   });
@@ -2024,6 +2183,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "single ending artifact replay readonly state",
       30000,
     );
+    await assertUiLocale(sharePage, locale, "ending-room single mobile artifact replay ui");
     await saveScreenshot(sharePage, path.join(outputDir, "single-mobile-replay-artifact.png"));
     fs.writeFileSync(
       path.join(outputDir, "single-mobile-replay-artifact.json"),
@@ -2049,6 +2209,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "single ending replay readonly state",
       30000,
     );
+    await assertUiLocale(page, locale, "ending-room single mobile readonly replay ui");
     await saveScreenshot(page, path.join(outputDir, "single-mobile-replay-readonly.png"));
     fs.writeFileSync(
       path.join(outputDir, "single-mobile-replay-readonly.json"),
@@ -2071,6 +2232,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "single ending readonly restore",
       30000,
     );
+    await assertUiLocale(reloadPage, locale, "ending-room single mobile readonly replay restore ui");
     await saveScreenshot(reloadPage, path.join(outputDir, "single-mobile-replay-readonly-reloaded.png"));
     fs.writeFileSync(
       path.join(outputDir, "single-mobile-replay-readonly-reloaded.json"),
@@ -2107,6 +2269,9 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   );
   await closePlaywrightContext(context, "ending-room-single-mobile-context");
   return {
+    locale,
+    uiLocale,
+    roomLanguage,
     resultUrl,
     pickerState,
     modalState: automation?.page?.controls?.modal_state ?? null,
@@ -2122,7 +2287,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds) {
   };
 }
 
-async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
+async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, locale) {
   const { multiId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
@@ -2130,12 +2295,15 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
+    locale: resolveContextLocale(locale),
   });
+  await configureLocaleContext(context, locale);
   let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(1000);
 
-  await openPicker(page, /Enter chamber|进入会客厅/i, 0);
+  const uiLocale = await assertUiLocale(page, locale, "ending-room multi mobile result shell");
+  await openPicker(page, getEnterChamberPattern(locale), 0);
   const pickerSeed = await getSelectedPickerAgentIds(page, frontendUrl, multiId);
   const initialAutomation = await getAutomationState(page);
   const anchorBranchId = initialAutomation?.page?.branches?.[0]?.id ?? null;
@@ -2150,11 +2318,12 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     anchorBranchId,
     selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
     selectedAgentIds: pickerSeed.selectedAgentIds,
-    language: "zh",
+    language: locale,
   });
   const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
   await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await assertUiLocale(page, locale, "ending-room multi mobile chamber ui");
   const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: prewarmedChamber.id,
     expectedRoomType: "ending_chamber",
@@ -2184,6 +2353,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     prewarmedRoomId: prewarmedChamber.id,
   });
   const roomId = chamberState.modalState.room_id;
+  const roomLanguage = await assertRoomLanguage(frontendUrl, roomId, locale, "ending-room multi mobile chamber");
   const roomSnapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
   const addressableAgentIds = (roomSnapshot.participants ?? [])
     .filter((participant) => participant?.source_agent_id && participant?.role_slot !== "archivist" && participant?.role_slot !== "user")
@@ -2195,9 +2365,9 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     await hotseatPill.scrollIntoViewIfNeeded().catch(() => {});
     await hotseatPill.click({ force: true }).catch(() => {});
   }
-  await fillComposerIfEditable(page, "请点名说明，这条世界线最早的失控点在哪里？");
+  await fillComposerIfEditable(page, getEndingHotseatPrompt(locale));
   const hotseatApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-    content: "请点名说明，这条世界线最早的失控点在哪里？",
+    content: getEndingHotseatPrompt(locale),
     addressed_agent_ids: addressableAgentIds.slice(0, 1),
     interaction_mode: "hotseat",
   });
@@ -2304,9 +2474,9 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "mobile all-present mode armed",
       10000,
     );
-    await fillComposerIfEditable(page, "如果让当前阵容都回应一次，他们会如何分工？");
+    await fillComposerIfEditable(page, getEndingAllPresentPrompt(locale));
     const allPresentApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-      content: "如果让当前阵容都回应一次，他们会如何分工？",
+      content: getEndingAllPresentPrompt(locale),
       addressed_agent_ids: addressableAgentIds,
       interaction_mode: "all_present",
     });
@@ -2407,10 +2577,10 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
     await page.waitForTimeout(200);
     const prefilled = await readComposerValue(page);
     if (!prefilled || prefilled.trim().length === 0) {
-      await fillComposerIfEditable(page, "请继续推演后续三回合，看看局势如何收场。");
+      await fillComposerIfEditable(page, getEndingEpilogueFillPrompt(locale));
     }
     const epilogueApiPromise = appendRoomUserTurnViaApi(frontendUrl, roomId, {
-      content: "这条世界线接下来会发生什么？",
+      content: getEndingEpilogueApiPrompt(locale),
       interaction_mode: "epilogue",
     });
     try {
@@ -2520,7 +2690,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       anchorBranchId,
       selectedBranchIds: anchorBranchId ? [anchorBranchId] : [],
       selectedAgentIds: pickerSeed.selectedAgentIds,
-      language: "zh",
+      language: locale,
     });
     const mobileEvidenceRoomId = mobileEvidenceChamber.id;
     const mobileEvidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(mobileEvidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
@@ -2548,7 +2718,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
         throw new Error("No foreign branch available for mobile evidence-card API flow");
       }
       const evidenceApiPromise = appendRoomUserTurnViaApi(frontendUrl, actualMobileEvidenceRoomId, {
-        content: "请用另一条世界线的证据解释这次分裂为什么会扩大。",
+        content: getEndingEvidencePrompt(locale),
         interaction_mode: "evidence_card",
         cited_branch_id: foreignBranchId,
       });
@@ -2618,6 +2788,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "mobile ending-room artifact replay readonly state",
       30000,
     );
+    await assertUiLocale(sharePage, locale, "ending-room multi mobile artifact replay ui");
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-ending-room-replay-artifact.png"));
     fs.writeFileSync(
       path.join(outputDir, "mobile-ending-room-replay-artifact.json"),
@@ -2643,6 +2814,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "mobile ending-room replay readonly state",
       30000,
     );
+    await assertUiLocale(page, locale, "ending-room multi mobile readonly replay ui");
     await saveScreenshot(page, path.join(outputDir, "mobile-ending-room-replay-readonly.png"));
     fs.writeFileSync(
       path.join(outputDir, "mobile-ending-room-replay-readonly.json"),
@@ -2665,6 +2837,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
       "mobile ending-room readonly restore",
       30000,
     );
+    await assertUiLocale(reloadPage, locale, "ending-room multi mobile readonly replay restore ui");
     await saveScreenshot(reloadPage, path.join(outputDir, "mobile-ending-room-replay-readonly-reloaded.png"));
     fs.writeFileSync(
       path.join(outputDir, "mobile-ending-room-replay-readonly-reloaded.json"),
@@ -2702,6 +2875,9 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 
   await closePlaywrightContext(context, "ending-room-multi-mobile-context");
   return {
+    locale,
+    uiLocale,
+    roomLanguage,
     resultUrl,
     chamberState: chamberState?.modalState ?? null,
     chamberFit,
@@ -2726,28 +2902,29 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds) {
 async function main() {
   const args = parseArgs(process.argv);
   ensureDir(args.outputDir);
-  const browser = await chromium.launch({
-    ...BROWSER_LAUNCH_OPTIONS,
-    headless: args.headless,
-  });
+  const browserEngine = resolveBrowserEngine(args.browser);
+  const browser = await browserEngine.launch(buildBrowserLaunchOptions(args.browser, args.headless));
   try {
     const scenarioIds = await findScenarioIds(args.url);
-    const summary = {};
+    const summary = {
+      locale: args.locale,
+    };
     if (args.mode === "desktop" || args.mode === "full") {
       const desktopContext = await browser.newContext({ viewport: { width: 1600, height: 900 } });
-      summary.multiDesktop = await runMultiDesktop(desktopContext, args.url, args.outputDir, scenarioIds);
+      await configureLocaleContext(desktopContext, args.locale);
+      summary.multiDesktop = await runMultiDesktop(desktopContext, args.url, args.outputDir, scenarioIds, args.locale);
       await closePlaywrightContext(desktopContext, "ending-room-desktop-context");
     }
     if (args.mode === "mobile" || args.mode === "full") {
       summary.mobile = {
-        single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds),
-        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds),
+        single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
+        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
       };
     }
     if (args.mode === "mobile-multi-only") {
       summary.mobile = {
         single: "skipped",
-        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds),
+        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
       };
     }
     fs.writeFileSync(path.join(args.outputDir, "summary.json"), JSON.stringify(summary, null, 2));

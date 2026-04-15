@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { DebateResultPayload } from '../types';
-import { buildDebateReplayUrl, decodeDebateReplayToken, encodeDebateReplayToken } from './debateReplay';
+import {
+  buildDebateReplayLocalUrl,
+  buildDebateReplayUrl,
+  decodeDebateReplayToken,
+  encodeDebateReplayToken,
+  readDebateReplayLocalCopy,
+  saveDebateReplayLocalCopy,
+} from './debateReplay';
 
 const payload: DebateResultPayload = {
   id: 'debate-1',
@@ -46,6 +53,10 @@ const payload: DebateResultPayload = {
 };
 
 describe('debateReplay helpers', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('round-trips a replay token', () => {
     const token = encodeDebateReplayToken(payload);
     expect(decodeDebateReplayToken(token)).toEqual(payload);
@@ -54,5 +65,11 @@ describe('debateReplay helpers', () => {
   it('builds a portable replay url', () => {
     const url = buildDebateReplayUrl('https://example.com/', payload);
     expect(url).toContain('/debate/replay/result?replay=');
+  });
+
+  it('round-trips a local replay copy', () => {
+    const replayId = saveDebateReplayLocalCopy(payload);
+    expect(readDebateReplayLocalCopy(replayId)).toEqual(payload);
+    expect(buildDebateReplayLocalUrl('https://example.com/', replayId)).toContain('/debate/replay/result?local=');
   });
 });

@@ -29,6 +29,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。
+- Debate replay 分享当前优先走内联 `?replay=`；链接过长时会回退为本地只读 `?local=`。结果页在这条回退链路上会明确显示 `Save local read-only copy`，而导入入口继续保留 `Import as Local Run`。
 - result 页里的 argument map 当前改成按需加载；首屏先给 `Load map`，只有用户点开后才真正挂图。
 - 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉。
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
@@ -86,6 +87,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `e2e-ending-room-followup-suite` 负责 ending-room follow-up / readonly replay / reload restore / import
   - `e2e-worldline-roundtable-suite` 负责 roundtable live / readonly replay / reload restore / import
 - ending-room 基础 smoke、`e2e-debate-suite full`、`e2e-ending-room-followup-suite full` 与 roundtable desktop replay restore 已完成本轮 post-fix 复验。
+- Oracle 英文链路当前也已补到真实浏览器签收：
+  - Chromium full：`ending-room follow-up`、`roundtable`
+  - desktop Firefox / WebKit scoped regression：`ending-room follow-up`、`roundtable`
 - ending-room / roundtable 的 replay 回归当前都已收口到同一条自动化口径：
   - header action 只在各自 header action 区域内定位
   - 复用旧页面前先 revalidate live room
@@ -126,15 +130,20 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - backend 相邻 API / service smoke `158 passed`
   - targeted `ruff check` 通过
   - frontend `typecheck / lint / build / perf budget` 通过
-  - frontend 全量 vitest `1001 passed`
+  - frontend 全量 vitest `1008 passed`
+  - frontend script contract tests `15 pass`
   - backend 全量 `2049 passed, 2 skipped`
   - production preview 不再出现 `react-vendor` 环导致的首页 / graph 白屏
   - phase3 compare fixture 当前已带真实 `agents / messages`，compare theater 不再空载
   - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 也已通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
-  - `e2e-debate-suite full` 通过
+  - `e2e-debate-suite full` 通过；当前覆盖 `share -> readonly replay -> reload restore -> import`
+  - Debate desktop scoped cross-browser rerun 通过：Firefox / WebKit 都通过
   - `e2e-ending-room-followup-suite full` 通过
+  - `e2e-ending-room-followup-suite full --locale en` 通过
+  - `e2e-worldline-roundtable-suite full --locale en` 通过
+  - Oracle English Firefox / WebKit rerun 通过：ending-room follow-up / roundtable 都通过
   - Oracle scoped cross-browser roundtable 的 Firefox / WebKit rerun 通过
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 

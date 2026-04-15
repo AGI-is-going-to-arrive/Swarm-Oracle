@@ -105,6 +105,16 @@ def test_settings_normalize_relative_local_paths(monkeypatch):
     assert s.CHROMA_PERSIST_DIR == str((BACKEND_ROOT / "relative-chroma").resolve())
 
 
+def test_settings_preserve_sqlite_uri_database_url(monkeypatch):
+    db_url = "sqlite:///file:/tmp/swarmoracle-uri.db?uri=true"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    from app.config import Settings
+
+    s = Settings()
+    assert s.DATABASE_URL == db_url
+
+
 def test_settings_reject_placeholder_key_for_non_local_llm(monkeypatch):
     monkeypatch.setenv("LLM_RESPONSES_URL", "https://api.example.com/v1/chat/completions")
     monkeypatch.setenv("LLM_API_KEY", "sk-12345678")

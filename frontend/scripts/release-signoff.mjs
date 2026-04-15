@@ -330,9 +330,19 @@ function main() {
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
   const roundtableFirefoxOutput = path.join(args.outputRoot, "roundtable-firefox");
   const roundtableWebkitOutput = path.join(args.outputRoot, "roundtable-webkit");
+  const roundtableEnFirefoxOutput = path.join(args.outputRoot, "roundtable-en-firefox");
+  const roundtableEnWebkitOutput = path.join(args.outputRoot, "roundtable-en-webkit");
   const debateOutput = path.join(args.outputRoot, "debate-full");
+  const debateFirefoxOutput = path.join(args.outputRoot, "debate-firefox");
+  const debateWebkitOutput = path.join(args.outputRoot, "debate-webkit");
   const endingRoomOutput = path.join(args.outputRoot, "ending-room-followup");
+  const endingRoomEnOutput = path.join(args.outputRoot, "ending-room-followup-en");
+  const endingRoomFirefoxOutput = path.join(args.outputRoot, "ending-room-followup-firefox");
+  const endingRoomWebkitOutput = path.join(args.outputRoot, "ending-room-followup-webkit");
+  const endingRoomEnFirefoxOutput = path.join(args.outputRoot, "ending-room-followup-en-firefox");
+  const endingRoomEnWebkitOutput = path.join(args.outputRoot, "ending-room-followup-en-webkit");
   const roundtableOutput = path.join(args.outputRoot, "roundtable-full");
+  const roundtableEnOutput = path.join(args.outputRoot, "roundtable-en");
   const safariOutput = path.join(args.outputRoot, "safari");
   const summary = {
     version: 1,
@@ -402,6 +412,17 @@ function main() {
     runStep(summary, args, "typecheck", npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"]);
     runStep(summary, args, "build", npmCommand, ["run", "build"]);
     runStep(summary, args, "perf_budgets", npmCommand, ["run", "perf:budgets:check"]);
+    runStep(
+      summary,
+      args,
+      "script_contracts",
+      nodeCommand,
+      [
+        "--test",
+        "scripts/e2e-debate-suite.test.mjs",
+        "scripts/e2e-ending-room-followup-suite.test.mjs",
+      ],
+    );
     if (args.includeAssetsCheck) {
       runStep(summary, args, "assets_check", npmCommand, ["run", "assets:provenance:check"]);
     }
@@ -527,6 +548,115 @@ function main() {
     runStep(
       summary,
       args,
+      "ending_room_followup_en",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--locale",
+        "en",
+        "--output-dir",
+        endingRoomEnOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomEnOutput,
+        resultFile: path.join(endingRoomEnOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "ending_room_followup_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "firefox",
+        "--output-dir",
+        endingRoomFirefoxOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomFirefoxOutput,
+        resultFile: path.join(endingRoomFirefoxOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "ending_room_followup_en_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "firefox",
+        "--locale",
+        "en",
+        "--output-dir",
+        endingRoomEnFirefoxOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomEnFirefoxOutput,
+        resultFile: path.join(endingRoomEnFirefoxOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "ending_room_followup_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "webkit",
+        "--output-dir",
+        endingRoomWebkitOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomWebkitOutput,
+        resultFile: path.join(endingRoomWebkitOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "ending_room_followup_en_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-ending-room-followup-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "webkit",
+        "--locale",
+        "en",
+        "--output-dir",
+        endingRoomEnWebkitOutput,
+        ...(args.headless ? ["--headless", "true"] : []),
+      ],
+      {
+        artifactDir: endingRoomEnWebkitOutput,
+        resultFile: path.join(endingRoomEnWebkitOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
       "roundtable_full",
       nodeCommand,
       [
@@ -543,6 +673,29 @@ function main() {
       {
         artifactDir: roundtableOutput,
         resultFile: path.join(roundtableOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "roundtable_en",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--locale",
+        "en",
+        "--output-dir",
+        roundtableEnOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableEnOutput,
+        resultFile: path.join(roundtableEnOutput, "summary.json"),
       },
     );
     runStep(
@@ -571,6 +724,31 @@ function main() {
     runStep(
       summary,
       args,
+      "roundtable_en_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--browser",
+        "firefox",
+        "--locale",
+        "en",
+        "--output-dir",
+        roundtableEnFirefoxOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableEnFirefoxOutput,
+        resultFile: path.join(roundtableEnFirefoxOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
       "roundtable_webkit",
       nodeCommand,
       [
@@ -594,6 +772,31 @@ function main() {
     runStep(
       summary,
       args,
+      "roundtable_en_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-worldline-roundtable-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--backend-url",
+        args.backendUrl,
+        "--browser",
+        "webkit",
+        "--locale",
+        "en",
+        "--output-dir",
+        roundtableEnWebkitOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: roundtableEnWebkitOutput,
+        resultFile: path.join(roundtableEnWebkitOutput, "summary.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
       "debate_full",
       nodeCommand,
       [
@@ -611,6 +814,54 @@ function main() {
       {
         artifactDir: debateOutput,
         resultFile: path.join(debateOutput, "result.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "debate_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-debate-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "firefox",
+        "--output-dir",
+        debateFirefoxOutput,
+        ...(args.requireDebateAdjudicationMode
+          ? ["--require-adjudication-mode", args.requireDebateAdjudicationMode]
+          : []),
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: debateFirefoxOutput,
+        resultFile: path.join(debateFirefoxOutput, "result.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "debate_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-debate-suite.mjs",
+        "desktop",
+        "--url",
+        args.baseUrl,
+        "--browser",
+        "webkit",
+        "--output-dir",
+        debateWebkitOutput,
+        ...(args.requireDebateAdjudicationMode
+          ? ["--require-adjudication-mode", args.requireDebateAdjudicationMode]
+          : []),
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: debateWebkitOutput,
+        resultFile: path.join(debateWebkitOutput, "result.json"),
       },
     );
 

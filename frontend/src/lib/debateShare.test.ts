@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDebateShareCopy } from './debateShare';
+import { buildDebateShareCopy, isDebateLocalReadonlyCopyUrl } from './debateShare';
 
 describe('debateShare helpers', () => {
   it('includes counterplay summary when present', () => {
@@ -56,5 +56,24 @@ describe('debateShare helpers', () => {
     }, t);
 
     expect(result).toContain('share.permalink_label: https://example.com/debate/debate-1/result');
+  });
+
+  it('labels local readonly copy links explicitly', () => {
+    const t = ((key: string) => key) as never;
+    const result = buildDebateShareCopy('xiaohongshu', {
+      motion: 'Motion',
+      winnerLabel: 'Proposition',
+      toneLabel: 'Order',
+      bestArgument: 'Best argument',
+      bestRebuttal: 'Best rebuttal',
+      judgeSummary: 'Judge summary',
+      propositionScore: 85,
+      oppositionScore: 75,
+      permalinkUrl: 'https://example.com/debate/replay/result?local=debate-local-1',
+    }, t);
+
+    expect(result).toContain('debate.local_copy_label: https://example.com/debate/replay/result?local=debate-local-1');
+    expect(isDebateLocalReadonlyCopyUrl('https://example.com/debate/replay/result?local=debate-local-1')).toBe(true);
+    expect(isDebateLocalReadonlyCopyUrl('https://example.com/debate/replay/result?replay=token-1')).toBe(false);
   });
 });

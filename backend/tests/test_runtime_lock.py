@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 import time
 from types import SimpleNamespace
@@ -135,6 +136,29 @@ def test_runtime_lock_reuses_threadlocal_sqlite_connection(monkeypatch, tmp_path
     assert release_runtime_lock(lease) is True
 
     assert connect_calls == [str(db_path)]
+
+
+def test_runtime_lock_uses_sqlite_uri_database_for_shared_file_locking(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-uri.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///file:{db_path}?uri=true",
+    )
+
+    key = simulation_lock_key("scenario-uri")
+    lease = acquire_runtime_lock(key, lease_seconds=30)
+    assert lease is not None
+    assert lease.db_path == str(db_path)
+    assert acquire_runtime_lock(key, lease_seconds=30) is None
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM runtime_lock WHERE lock_key = ?",
+            (key,),
+        ).fetchone()
+
+    assert row == (lease.owner_id,)
+    assert release_runtime_lock(lease) is True
 
 
 def test_runtime_lock_is_active_does_not_issue_immediate_transaction(monkeypatch, tmp_path):

@@ -13,14 +13,23 @@
   - replay 分享与导入
   - director campaign、玩法卡、结构化押注
 - 最近一次稳定全链签收工件位于 `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`。
-- 这份工件当前覆盖默认本地签收口径：
+- 当前默认本地 `release-signoff` 脚本会覆盖：
   - backend checks
   - backend `/metrics`
   - `tsc`
   - `build`
   - `perf:budgets:check`
+  - script contract tests
   - asset provenance check
-  - `corners / mobile / cross_browser / ending_room_followup / roundtable_full / debate_full`
+  - `corners / mobile / cross_browser`
+  - `phase3-batch-a / phase3-batch-b` 的 default / `zh-CN` graph smoke
+  - `ending_room_followup / ending_room_followup_en`
+  - `ending_room_followup_firefox / ending_room_followup_en_firefox`
+  - `ending_room_followup_webkit / ending_room_followup_en_webkit`
+  - `roundtable_full / roundtable_en`
+  - `roundtable_firefox / roundtable_en_firefox`
+  - `roundtable_webkit / roundtable_en_webkit`
+  - `debate_full / debate_firefox / debate_webkit`
 - 最近一次 Oracle 专项签收工件位于：
   - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`
@@ -71,10 +80,10 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；compare 当前采用单活跃 Theater + shared round selector |
-| Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale |
+| Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式 |
-| Replay & Import | 主模式与 Debate 均支持 |
-| i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子 |
+| Replay & Import | 主模式与 Debate 均支持；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
+| i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
 
 ## 架构概览
 
@@ -97,7 +106,7 @@ backend/   FastAPI + SQLModel + SQLite + ChromaDB
 - `Scenario.director_state_json` 与 `gameplay_state_json` 是主模式 authority。
 - `scenarioMeta` 仍存在，但只承担缓存、兼容和 replay 输入职责，不再是跨设备真值。
 - `ending_room` 是独立域，room/thread transcript 与 memory partition 隔离。
-- replay 分享优先走后端 `ReplayArtifact`，失败且 URL token 也不可用时，会回退为本地只读副本链接。
+- replay 分享优先走后端 `ReplayArtifact`，失败且 URL token 也不可用时，会回退为本地只读副本链接；Debate 当前会把这条入口明确标成 `Save local read-only copy`。
 
 ## 快速开始
 

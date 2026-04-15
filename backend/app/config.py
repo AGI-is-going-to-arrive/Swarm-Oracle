@@ -109,6 +109,8 @@ class Settings(BaseSettings):
         path_part = value[len(prefix):]
         if not path_part or path_part == ":memory:":
             return value
+        if path_part.startswith("file:"):
+            return value
 
         db_path = Path(path_part)
         if db_path.is_absolute():

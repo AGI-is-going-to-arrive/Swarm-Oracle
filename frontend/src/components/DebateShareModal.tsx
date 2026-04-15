@@ -5,6 +5,7 @@ import { copyText } from '../lib/copyText';
 import {
   buildDebateShareCopy,
   DEBATE_SHARE_PLATFORM_META,
+  isDebateLocalReadonlyCopyUrl,
   type DebateShareContext,
   type DebateSharePlatform,
 } from '../lib/debateShare';
@@ -24,6 +25,7 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
   const [linkCopied, setLinkCopied] = useState(false);
 
   const copy = buildDebateShareCopy(platform, context, t);
+  const isLocalReadonlyCopy = isDebateLocalReadonlyCopyUrl(context.permalinkUrl);
 
   useEffect(() => {
     onAutomationStateChange?.({
@@ -95,7 +97,9 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
           </button>
           {context.permalinkUrl && (
             <button type="button" className="btn btn-ghost" onClick={handleCopyLink}>
-              {linkCopied ? t('share.permalink_copied') : t('share.copy_permalink_btn')}
+              {linkCopied
+                ? t(isLocalReadonlyCopy ? 'debate.local_copy_copied' : 'share.permalink_copied')
+                : t(isLocalReadonlyCopy ? 'debate.copy_local_copy_btn' : 'share.copy_permalink_btn')}
             </button>
           )}
           <button type="button" className="btn btn-primary" onClick={handleCopy}>

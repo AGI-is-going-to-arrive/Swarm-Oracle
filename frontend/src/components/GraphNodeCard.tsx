@@ -32,6 +32,7 @@ export interface GraphNodeCardData {
   borderColor: string;
   dimmed: boolean;
   tooltipDisabled: boolean;
+  reduceMotion?: boolean;
   sourcePos: string;
   targetPos: string;
   [key: string]: unknown;
@@ -86,7 +87,7 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
         maxWidth: 'min(220px, calc(100vw - 96px))',
         opacity: d.dimmed ? 0.2 : 1,
         filter: d.dimmed ? 'grayscale(100%)' : 'none',
-        transition: 'opacity 0.2s ease, filter 0.2s ease',
+        transition: d.reduceMotion ? 'none' : 'opacity 0.2s ease, filter 0.2s ease',
         cursor: 'pointer',
         textAlign: 'left',
         boxSizing: 'border-box',

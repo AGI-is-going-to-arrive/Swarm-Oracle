@@ -20,6 +20,9 @@ const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
+const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
+const VALID_LOCALES = new Set(["zh", "en"]);
+const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -33,6 +36,75 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function normalizeLocale(locale) {
+  return String(locale ?? "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+function resolveDocumentLanguage(locale) {
+  return normalizeLocale(locale) === "zh" ? "zh-CN" : "en";
+}
+
+function resolveContextLocale(locale) {
+  return normalizeLocale(locale) === "zh" ? "zh-CN" : "en-US";
+}
+
+async function configureLocaleContext(context, locale) {
+  const normalizedLocale = normalizeLocale(locale);
+  await context.addInitScript(
+    ({ storageKey, nextLocale, documentLanguage }) => {
+      try {
+        window.localStorage.setItem(storageKey, nextLocale);
+      } catch {
+        // Ignore automation bootstrap storage failures.
+      }
+      document.documentElement.lang = documentLanguage;
+    },
+    {
+      storageKey: LANGUAGE_STORAGE_KEY,
+      nextLocale: normalizedLocale,
+      documentLanguage: resolveDocumentLanguage(normalizedLocale),
+    },
+  );
+}
+
+async function readLocaleState(page) {
+  return page.evaluate((storageKey) => ({
+    document_language: document.documentElement.lang,
+    stored_language: window.localStorage.getItem(storageKey),
+  }), LANGUAGE_STORAGE_KEY);
+}
+
+function assertUiLocaleState(localeState, locale, label) {
+  const expectedLocale = normalizeLocale(locale);
+  const expectedDocumentPrefix = expectedLocale === "zh" ? "zh" : "en";
+  const actualDocumentLanguage = String(localeState?.document_language ?? "").toLowerCase();
+  const actualStoredLanguage = normalizeLocale(localeState?.stored_language ?? "");
+  if (!actualDocumentLanguage.startsWith(expectedDocumentPrefix)) {
+    throw new Error(`${label} expected document.lang to start with ${expectedDocumentPrefix}, got ${localeState?.document_language ?? "null"}`);
+  }
+  if (actualStoredLanguage !== expectedLocale) {
+    throw new Error(`${label} expected stored locale ${expectedLocale}, got ${localeState?.stored_language ?? "null"}`);
+  }
+  return localeState;
+}
+
+async function assertUiLocale(page, locale, label) {
+  const localeState = await readLocaleState(page);
+  return assertUiLocaleState(localeState, locale, label);
+}
+
+function getRoundtableArchivistPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Use only this table's scope: which worldline's first mistake was most fatal?"
+    : "请只用本桌 scope 总结：哪条世界线的第一处失误最致命？";
+}
+
+function getRoundtableHotseatPrompt(locale) {
+  return normalizeLocale(locale) === "en"
+    ? "Stay on your own line only: if the key move slipped by one round, what breaks first?"
+    : "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？";
+}
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -41,6 +113,7 @@ function parseArgs(argv) {
     outputDir: "",
     browser: "chromium",
     headless: process.env.HEADLESS === "1",
+    locale: normalizeLocale(process.env.SWARM_E2E_LOCALE || "zh"),
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -58,16 +131,22 @@ function parseArgs(argv) {
     } else if (arg === "--browser" && next) {
       args.browser = next;
       i += 1;
+    } else if (arg === "--locale" && next) {
+      args.locale = normalizeLocale(next);
+      i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--headless]");
+    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--headless]");
   }
-  if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
+  if (!VALID_BROWSERS.has(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
+  }
+  if (!VALID_LOCALES.has(args.locale)) {
+    throw new Error(`Unsupported locale: ${args.locale}`);
   }
 
   return args;
@@ -83,6 +162,14 @@ async function fetchJson(url) {
 
 async function getScenario(backendUrl, scenarioId) {
   return fetchJson(`${backendUrl}/api/scenario/${scenarioId}`);
+}
+
+async function assertRoomLanguage(backendUrl, roomId, locale, label) {
+  const snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+  if (snapshot?.language !== locale) {
+    throw new Error(`${label} expected room.language=${locale}, got ${snapshot?.language ?? "null"}`);
+  }
+  return snapshot.language;
 }
 
 function collectSummaryFiles(rootDir) {
@@ -435,15 +522,21 @@ async function captureStreamLifecycle(page, {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function openRoundtable(page, baseUrl, scenarioId, outputDir) {
+async function openRoundtable(page, baseUrl, scenarioId, outputDir, locale) {
   const resultUrl = `${baseUrl}/result/${scenarioId}`;
   const resultRoutePattern = new RegExp(`/result/${scenarioId}(?:[?#].*)?$`);
   const roundtableRoutePattern = new RegExp(`/roundtable/${scenarioId}(?:[/?#].*)?$`);
   await gotoWithRetry(page, resultUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-  const entryButton = page.getByRole("button", { name: /Start Roundtable|发起圆桌/i }).first();
+  const entryButton = page.getByRole("button", {
+    name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|发起圆桌/i,
+  }).first();
   await entryButton.waitFor({ state: "visible", timeout: 30000 });
   await clickActionable(entryButton, "roundtable entry CTA");
-  const launchButton = page.getByRole("button", { name: /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i }).first();
+  const launchButton = page.getByRole("button", {
+    name: normalizeLocale(locale) === "en"
+      ? /Open with selected representatives|Open this lineup/i
+      : /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i,
+  }).first();
   const start = Date.now();
   while (Date.now() - start < 45000) {
     const automation = await readAutomation(page);
@@ -1216,11 +1309,13 @@ async function reopenWithSelectionMode(page, {
   };
 }
 
-async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
+async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, locale) {
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir);
+  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir, locale);
+  const uiLocale = await assertUiLocale(page, locale, "roundtable desktop ui");
+  const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable desktop room");
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
-  writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), ready);
+  writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), { ready, uiLocale, roomLanguage });
 
   const dragReseated = await dragReseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-drag-reseated.png"));
@@ -1264,7 +1359,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
 
   const archivist = await sendComposer(
     page,
-    "请只用本桌 scope 总结：哪条世界线的第一处失误最致命？",
+    getRoundtableArchivistPrompt(locale),
     /Archivist lead|Archivist-guided|Archivist route|档案官主持|档案官引导|档案官路由/i,
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-archivist.png"));
@@ -1278,7 +1373,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   }
   const hotseat = await sendComposer(
     page,
-    "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？",
+    getRoundtableHotseatPrompt(locale),
     /Question one rep|Representative hotseat|点名代表|代表热座/i,
     {
       expectThreadSwitch: true,
@@ -1342,6 +1437,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     15000,
     "roundtable artifact replay readonly state",
   );
+  await assertUiLocale(sharePage, locale, "roundtable desktop artifact replay ui");
   await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact.json"), artifactReadonly);
   await sharePage.reload({ waitUntil: "domcontentloaded" });
@@ -1354,6 +1450,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     timeout: 15000,
     label: "desktop roundtable artifact readonly restore",
   });
+  await assertUiLocale(sharePage, locale, "roundtable desktop artifact replay restore ui");
   await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
   await (await waitForRoundtableHeaderAction(sharePage, {
@@ -1387,6 +1484,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     timeout: 15000,
     label: "roundtable replay readonly state",
   });
+  await assertUiLocale(page, locale, "roundtable desktop readonly replay ui");
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-replay-readonly.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-readonly.json"), replayReadonly);
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -1399,6 +1497,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
     timeout: 15000,
     label: "desktop roundtable readonly restore",
   });
+  await assertUiLocale(page, locale, "roundtable desktop readonly replay restore ui");
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-replay-readonly-reloaded.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-readonly-reloaded.json"), replayReloaded);
 
@@ -1424,6 +1523,9 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   );
 
   return {
+    locale,
+    uiLocale,
+    roomLanguage,
     scenarioId,
     ready,
     dragReseated,
@@ -1446,20 +1548,24 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId) {
   };
 }
 
-async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, browserName) {
+async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, browserName, locale) {
   const contextOptions = {
     viewport: { width: 390, height: 844 },
     hasTouch: true,
+    locale: resolveContextLocale(locale),
   };
   if (browserName !== "firefox") {
     contextOptions.isMobile = true;
   }
   const context = await browser.newContext(contextOptions);
+  await configureLocaleContext(context, locale);
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir);
+  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir, locale);
+  const uiLocale = await assertUiLocale(page, locale, "roundtable mobile ui");
+  const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable mobile room");
   const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
-  writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit });
+  writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit, uiLocale, roomLanguage });
 
   const clickReseated = await clickReseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-click-reseated.png"));
@@ -1496,7 +1602,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   }
   const hotseat = await sendComposer(
     page,
-    "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？",
+    getRoundtableHotseatPrompt(locale),
     /Question one rep|Representative hotseat|点名代表|代表热座/i,
     {
       expectThreadSwitch: true,
@@ -1566,6 +1672,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
       timeout: 20000,
       label: "mobile roundtable artifact replay readonly state",
     });
+    await assertUiLocale(sharePage, locale, "roundtable mobile artifact replay ui");
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact.json"), artifactReadonly);
     await sharePage.reload({ waitUntil: "domcontentloaded" });
@@ -1578,6 +1685,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
       timeout: 20000,
       label: "mobile roundtable artifact readonly restore",
     });
+    await assertUiLocale(sharePage, locale, "roundtable mobile artifact replay restore ui");
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
     await (await waitForRoundtableHeaderAction(sharePage, {
@@ -1612,6 +1720,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
       timeout: 20000,
       label: "mobile roundtable replay readonly state",
     });
+    await assertUiLocale(page, locale, "roundtable mobile readonly replay ui");
     await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly.json"), replayReadonly);
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -1624,6 +1733,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
       timeout: 20000,
       label: "mobile roundtable readonly restore",
     });
+    await assertUiLocale(page, locale, "roundtable mobile readonly replay restore ui");
     await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly-reloaded.json"), replayReloaded);
   } catch (error) {
@@ -1654,6 +1764,9 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
 
   await closePlaywrightContext(context, "roundtable-mobile-context", 15000);
   return {
+    locale,
+    uiLocale,
+    roomLanguage,
     scenarioId,
     ready,
     fit,
@@ -1685,13 +1798,16 @@ async function main() {
     ?? fallbackScenarioId;
   const mobileScenarioId = await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.mobile)
     ?? desktopScenarioId;
-  const summary = {};
+  const summary = {
+    locale: args.locale,
+  };
 
   if (args.mode === "desktop" || args.mode === "full") {
     const desktopBrowser = await launchBrowser(args.headless, args.browser);
     try {
       const context = await desktopBrowser.newContext({ viewport: { width: 1600, height: 900 } });
-      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, desktopScenarioId);
+      await configureLocaleContext(context, args.locale);
+      summary.desktop = await runDesktop(context, args.baseUrl, args.backendUrl, outputDir, desktopScenarioId, args.locale);
       await closePlaywrightContext(context, "roundtable-desktop-context", 15000);
     } finally {
       await closePlaywrightBrowser(desktopBrowser, "roundtable-desktop-browser", 20000);
@@ -1708,6 +1824,7 @@ async function main() {
         outputDir,
         mobileScenarioId,
         args.browser,
+        args.locale,
       );
     } finally {
       await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser", 20000);

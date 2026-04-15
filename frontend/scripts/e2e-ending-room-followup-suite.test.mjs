@@ -114,47 +114,80 @@ function loadFunction(name, injected = {}) {
 const POLL_ONCE = async (_page, probe) => probe();
 const FRONTEND_URL = "http://127.0.0.1:18928";
 
+test("parseArgs accepts an explicit locale override", () => {
+  const normalizeLocale = loadFunction("normalizeLocale");
+  const parseArgs = loadFunction("parseArgs", {
+    normalizeLocale,
+    VALID_BROWSERS: new Set(["chromium", "firefox", "webkit"]),
+    VALID_LOCALES: new Set(["zh", "en"]),
+  });
+
+  const args = parseArgs([
+    "node",
+    "e2e-ending-room-followup-suite.mjs",
+    "desktop",
+    "--url",
+    FRONTEND_URL,
+    "--locale",
+    "en-US",
+  ]);
+
+  assert.equal(args.locale, "en");
+});
+
 test("findScenarioIds prefers the newest fully-completed single and multi scenarios", async () => {
   const detailsById = {
     "multi-old": {
       id: "multi-old",
       created_at: "2026-04-01T00:00:00Z",
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
       branches: [
-        { id: "b1", status: "COMPLETED" },
-        { id: "b2", status: "COMPLETED" },
+        { id: "b1", status: "COMPLETED", story: "done" },
+        { id: "b2", status: "COMPLETED", story: "done" },
       ],
     },
     "multi-incomplete-newer": {
       id: "multi-incomplete-newer",
       created_at: "2026-04-10T00:00:00Z",
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
       branches: [
-        { id: "b1", status: "COMPLETED" },
-        { id: "b2", status: "RUNNING" },
+        { id: "b1", status: "COMPLETED", story: "done" },
+        { id: "b2", status: "RUNNING", story: "" },
       ],
     },
     "multi-new": {
       id: "multi-new",
       created_at: "2026-04-12T00:00:00Z",
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
       branches: [
-        { id: "b1", status: "COMPLETED" },
-        { id: "b2", status: "COMPLETED" },
-        { id: "b3", status: "COMPLETED" },
+        { id: "b1", status: "COMPLETED", story: "done" },
+        { id: "b2", status: "COMPLETED", story: "done" },
+        { id: "b3", status: "COMPLETED", story: "done" },
       ],
     },
     "single-old": {
       id: "single-old",
       created_at: "2026-04-01T00:00:00Z",
-      branches: [{ id: "b1", status: "COMPLETED" }],
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
+      branches: [{ id: "b1", status: "COMPLETED", story: "done" }],
     },
     "single-incomplete-newer": {
       id: "single-incomplete-newer",
       created_at: "2026-04-11T00:00:00Z",
-      branches: [{ id: "b1", status: "RUNNING" }],
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
+      branches: [{ id: "b1", status: "RUNNING", story: "" }],
     },
     "single-new": {
       id: "single-new",
       created_at: "2026-04-12T12:00:00Z",
-      branches: [{ id: "b1", status: "COMPLETED" }],
+      agents: [{ id: "a1" }],
+      messages: [{ id: "m1" }],
+      branches: [{ id: "b1", status: "COMPLETED", story: "done" }],
     },
   };
 

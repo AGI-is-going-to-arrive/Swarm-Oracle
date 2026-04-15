@@ -108,7 +108,9 @@
 
 说明：
 
-- 相对路径会统一解析到 `backend/` 根目录。
+- 普通文件路径形式的相对 `DATABASE_URL` 会统一解析到 `backend/` 根目录。
+- `DATABASE_URL` 如果使用 SQLite URI 形式（例如 `sqlite:///file:/tmp/swarmoracle.db?uri=true`），当前会原样保留，不会再被路径规范化改写。
+- 当 `DATABASE_URL` 指向同一个 file-backed SQLite 文件时，runtime lock 会共享；这条口径既适用于普通 SQLite 文件路径，也适用于 `sqlite:///file:/...?...uri=true`。
 - `VectorStore` 的 collection cache 是进程内 LRU，实现细节不作为环境变量暴露。
 
 ## 日志与服务

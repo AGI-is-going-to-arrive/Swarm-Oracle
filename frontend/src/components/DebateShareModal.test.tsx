@@ -44,7 +44,7 @@ describe('DebateShareModal automation callback', () => {
           propositionScore: 80,
           oppositionScore: 72,
           supportingTurns: ['Crossfire · Proposition: The hinge landed here. This is why the verdict stopped feeling abstract.'],
-          permalinkUrl: 'https://example.com/debate/debate-1/result',
+          permalinkUrl: 'https://example.com/debate/replay/result?local=debate-local-1',
         }}
         onClose={() => {}}
         onAutomationStateChange={onAutomationStateChange}
@@ -52,6 +52,7 @@ describe('DebateShareModal automation callback', () => {
     );
 
     expect(screen.getByRole('button', { name: /📕\s*share\.platform_xiaohongshu/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'debate.copy_local_copy_btn' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /🔴\s*share\.platform_weibo/ }));
     expect(screen.getByText(/🔴 share\.platform_weibo · debate\.share_title/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'share.copy_btn' }));
@@ -62,10 +63,10 @@ describe('DebateShareModal automation callback', () => {
     expect(latestState.has_copy).toBe(true);
     expect(latestState.copy_length).toBeGreaterThan(0);
     expect(latestState.copied).toBe(true);
-    expect(latestState.permalink_url).toBe('https://example.com/debate/debate-1/result');
+    expect(latestState.permalink_url).toBe('https://example.com/debate/replay/result?local=debate-local-1');
     expect(screen.getByText(/Quick hedge on Opposition at 60%/)).toBeInTheDocument();
     expect(screen.getByText(/Counterplay missed/)).toBeInTheDocument();
     expect(screen.getByText(/Crossfire · Proposition: The hinge landed here/)).toBeInTheDocument();
-    expect(screen.getByText(/https:\/\/example\.com\/debate\/debate-1\/result/)).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/example\.com\/debate\/replay\/result\?local=debate-local-1/)).toBeInTheDocument();
   });
 });

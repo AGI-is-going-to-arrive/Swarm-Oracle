@@ -26,6 +26,10 @@ export const DEBATE_SHARE_PLATFORM_META: Record<DebateSharePlatform, { labelKey:
   x: { labelKey: 'share.platform_x', icon: '𝕏' },
 };
 
+export function isDebateLocalReadonlyCopyUrl(permalinkUrl: string | null | undefined): boolean {
+  return typeof permalinkUrl === 'string' && permalinkUrl.includes('/debate/replay/result?local=');
+}
+
 function shortenLine(value: string, maxLength = 220): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   if (compact.length <= maxLength) return compact;
@@ -43,6 +47,9 @@ export function buildDebateShareCopy(
     .map((item) => shortenLine(item))
     .filter(Boolean)
     .slice(0, 2);
+  const permalinkLabelKey = isDebateLocalReadonlyCopyUrl(context.permalinkUrl)
+    ? 'debate.local_copy_label'
+    : 'share.permalink_label';
   return [
     `${platformMeta.icon} ${platformLabel} · ${t('debate.share_title')}`,
     context.motion,
@@ -56,6 +63,6 @@ export function buildDebateShareCopy(
     `${t('debate.result_best_rebuttal')}: ${context.bestRebuttal}`,
     `${t('debate.result_judge_summary')}: ${context.judgeSummary}`,
     ...supportingTurns.map((turn, index) => `${t('debate.result_supporting_turn')} ${index + 1}: ${turn}`),
-    ...(context.permalinkUrl ? [`${t('share.permalink_label')}: ${context.permalinkUrl}`] : []),
+    ...(context.permalinkUrl ? [`${t(permalinkLabelKey)}: ${context.permalinkUrl}`] : []),
   ].join('\n');
 }

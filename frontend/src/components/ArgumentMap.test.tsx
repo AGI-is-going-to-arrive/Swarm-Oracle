@@ -62,7 +62,7 @@ vi.mock('@xyflow/react', async () => {
   const React = await import('react');
   return {
     ReactFlow: (props: Record<string, unknown>) => {
-      const nodes = props.nodes as Array<{ id: string; focusable?: boolean; ariaLabel?: string | null }> | undefined;
+      const nodes = props.nodes as Array<{ id: string; focusable?: boolean; ariaLabel?: string | null; ariaRole?: string | null }> | undefined;
       const edges = props.edges as Array<Record<string, unknown>> | undefined;
       const ariaLabelConfig = props.ariaLabelConfig as Record<string, string> | undefined;
       const children = props.children as React.ReactNode;
@@ -87,6 +87,7 @@ vi.mock('@xyflow/react', async () => {
           data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
           data-node-focusable={String(firstNode?.focusable ?? '')}
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
+          data-node-aria-role={firstNode?.ariaRole ?? ''}
           data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
         >
           {/* Expose clickable elements per node for testing onNodeClick */}
@@ -423,6 +424,7 @@ describe('ArgumentMap', () => {
 
     const flow = await screen.findByTestId('reactflow');
     expect(flow).toHaveAttribute('data-node-focusable', 'false');
+    expect(flow).toHaveAttribute('data-node-aria-role', '');
     expect(flow.getAttribute('data-node-aria-label')).toContain('Open details');
   });
 
@@ -455,6 +457,79 @@ describe('ArgumentMap', () => {
 
     await screen.findByTestId('reactflow');
     expect(screen.queryByTestId('rf-minimap')).not.toBeInTheDocument();
+    matchMediaSpy.mockRestore();
+  });
+
+  it('renders a compact fit-view button on narrow viewports', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-mobile-fit',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+    const user = userEvent.setup();
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    await screen.findByTestId('reactflow');
+    const fitButton = screen.getByRole('button', { name: 'Fit view' });
+    expect(fitButton).toBeInTheDocument();
+    const initialCalls = fitViewMock.mock.calls.length;
+    await user.click(fitButton);
+    expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    matchMediaSpy.mockRestore();
+  });
+
+  it('disables animated graph edges when reduced motion is preferred', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-reduced-motion',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'rebuttal', label: 'Counter point', round: 2, payload: null },
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', type: 'rebuts', weight: 1, label: null },
+        ],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+          { id: 'u2', type: 'rebuttal', status: 'rebutted', text: 'Counter point', turn_id: 't2', node_id: 'n2' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow).toHaveAttribute('data-edge-animated', 'false');
     matchMediaSpy.mockRestore();
   });
 

@@ -345,17 +345,45 @@ def _has_legacy_ending_room_schema(connection) -> bool:
     return True
 
 
-def _should_stamp_existing_ending_room_schema(database_url: str) -> bool:
-    if not database_url.startswith("sqlite"):
+def _has_bootstrap_sqlmodel_schema(connection) -> bool:
+    table_names = set(
+        connection.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).scalars()
+    )
+    expected_tables = set(SQLModel.metadata.tables)
+    if not expected_tables <= table_names:
         return False
+
+    for table_name, table in SQLModel.metadata.tables.items():
+        expected_columns = {column.name for column in table.columns}
+        if not _has_expected_columns(connection, table_name, expected_columns):
+            return False
+    return True
+
+
+def _bootstrap_alembic_revision_for_sqlite(
+    database_url: str,
+    *,
+    head_revision: str,
+) -> str | None:
+    if not database_url.startswith("sqlite"):
+        return None
 
     engine = _make_bootstrap_engine(database_url)
     try:
         with engine.connect() as connection:
             current_revision = _current_alembic_revision(connection)
-            if current_revision != _ENDING_ROOM_PREVIOUS_REVISION:
-                return False
-            return _has_legacy_ending_room_schema(connection)
+            if current_revision is None:
+                if _has_bootstrap_sqlmodel_schema(connection):
+                    return head_revision
+                return None
+            if (
+                current_revision == _ENDING_ROOM_PREVIOUS_REVISION
+                and _has_legacy_ending_room_schema(connection)
+            ):
+                return _ENDING_ROOM_REVISION
+            return None
     finally:
         engine.dispose()
 
@@ -607,21 +635,26 @@ def init_db():
         _init_db_lightweight()
         return
 
-    Config, command, _script_directory = alembic_runtime
+    Config, command, ScriptDirectory = alembic_runtime
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
     config.set_main_option("script_location", str(backend_root / "alembic"))
     config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
     config.attributes["configure_logging"] = False
+    head_revision = ScriptDirectory.from_config(config).get_current_head()
 
     dispose_engine()
-    if _should_stamp_existing_ending_room_schema(settings.DATABASE_URL):
+    bootstrap_revision = _bootstrap_alembic_revision_for_sqlite(
+        settings.DATABASE_URL,
+        head_revision=head_revision,
+    )
+    if bootstrap_revision is not None:
         logger.info(
-            "Detected existing %s schema on %s; stamping database before upgrade.",
-            _ENDING_ROOM_REVISION,
+            "Detected existing SQLite schema on %s; stamping database at %s before upgrade.",
             settings.DATABASE_URL,
+            bootstrap_revision,
         )
-        command.stamp(config, _ENDING_ROOM_REVISION)
+        command.stamp(config, bootstrap_revision)
     command.upgrade(config, "head")
 
 
@@ -690,6 +723,8 @@ def _migrate_list_unique_index_columns(cursor, table: str) -> set[tuple[str, ...
 
 
 def _migrate_dedupe_debate_argument_units_per_turn(cursor) -> None:
+    has_graph_node_table = _migrate_table_exists(cursor, "graph_node")
+    has_graph_edge_table = _migrate_table_exists(cursor, "graph_edge")
     duplicate_groups = _sqlite_exec(
         cursor,
         """
@@ -701,12 +736,12 @@ def _migrate_dedupe_debate_argument_units_per_turn(cursor) -> None:
     ).fetchall()
 
     for debate_id, turn_id, semantic_hash in duplicate_groups:
-        unit_ids = [
-            row[0]
+        duplicate_rows = [
+            (row[0], row[1])
             for row in _sqlite_exec_params(
                 cursor,
                 """
-                SELECT id
+                SELECT id, node_id
                 FROM debate_argument_unit
                 WHERE debate_id = ?
                   AND turn_id = ?
@@ -716,11 +751,40 @@ def _migrate_dedupe_debate_argument_units_per_turn(cursor) -> None:
                 (debate_id, turn_id, semantic_hash),
             ).fetchall()
         ]
-        for duplicate_id in unit_ids[1:]:
+        for duplicate_id, duplicate_node_id in duplicate_rows[1:]:
             _sqlite_exec_params(
                 cursor,
                 "DELETE FROM debate_argument_unit WHERE id = ?",
                 (duplicate_id,),
+            )
+            if not duplicate_node_id or not has_graph_node_table:
+                continue
+            node_still_referenced = _sqlite_exec_params(
+                cursor,
+                """
+                SELECT 1
+                FROM debate_argument_unit
+                WHERE node_id = ?
+                LIMIT 1
+                """,
+                (duplicate_node_id,),
+            ).fetchone()
+            if node_still_referenced is not None:
+                continue
+            if has_graph_edge_table:
+                _sqlite_exec_params(
+                    cursor,
+                    """
+                    DELETE FROM graph_edge
+                    WHERE source_node_id = ?
+                       OR target_node_id = ?
+                    """,
+                    (duplicate_node_id, duplicate_node_id),
+                )
+            _sqlite_exec_params(
+                cursor,
+                "DELETE FROM graph_node WHERE id = ?",
+                (duplicate_node_id,),
             )
 
 

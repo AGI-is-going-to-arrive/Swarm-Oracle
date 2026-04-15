@@ -1006,8 +1006,56 @@ def test_import_replay_debate_rejects_non_object_phase_insight_entry(client: Tes
     assert "phase_insights entries must be objects" in resp.text
 
 
-@pytest.mark.parametrize("field_name", ["phase_margin", "cumulative_margin"])
-def test_import_replay_debate_rejects_negative_phase_insight_confidence_drift_margins(
+def test_import_replay_debate_accepts_negative_phase_insight_confidence_drift_margins(
+    client: TestClient,
+):
+    payload = _make_import_replay_payload()
+    payload["debate"]["phase_insights"] = [
+        {
+            "phase": "opening",
+            "confidence_drift": {
+                "direction": "opposition",
+                "phase_margin": -1,
+                "cumulative_margin": -3,
+            },
+        },
+    ]
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["phase_insights"][0]["confidence_drift"]["phase_margin"] == -1
+    assert resp.json()["phase_insights"][0]["confidence_drift"]["cumulative_margin"] == -3
+
+
+def test_import_replay_debate_accepts_null_counterplay_variant_for_regular_predictions(
+    client: TestClient,
+):
+    payload = _make_import_replay_payload()
+    payload["debate"]["predictions"] = [
+        {
+            "kind": "verdict_tone",
+            "target_value": "balance",
+            "confidence": 0.7,
+            "user_id": "director-1",
+            "user_name": "Director",
+            "is_counterplay": False,
+            "counterplay_phase": None,
+            "counterplay_variant": None,
+        },
+    ]
+
+    resp = client.post("/api/debate/import-replay", json=payload)
+
+    assert resp.status_code == 200
+    result = client.get(f"/api/debate/{resp.json()['id']}/result")
+
+    assert result.status_code == 200
+    assert result.json()["predictions"][0]["counterplay_variant"] is None
+
+
+@pytest.mark.parametrize("field_name", ["pressure_margin", "turn_count"])
+def test_import_replay_debate_rejects_negative_phase_insight_non_drift_counters(
     client: TestClient,
     field_name: str,
 ):
@@ -1015,9 +1063,9 @@ def test_import_replay_debate_rejects_negative_phase_insight_confidence_drift_ma
     payload["debate"]["phase_insights"] = [
         {
             "phase": "opening",
+            field_name: -1,
             "confidence_drift": {
                 "direction": "balanced",
-                field_name: -1,
             },
         },
     ]
@@ -1025,7 +1073,7 @@ def test_import_replay_debate_rejects_negative_phase_insight_confidence_drift_ma
     resp = client.post("/api/debate/import-replay", json=payload)
 
     assert resp.status_code == 422
-    assert "numeric fields must be >= 0" in resp.text
+    assert "pressure_margin and turn_count must be >= 0" in resp.text
 
 
 def test_empty_turn_fallbacks_are_readable():

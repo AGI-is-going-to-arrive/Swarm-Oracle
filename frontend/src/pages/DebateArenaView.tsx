@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -98,6 +98,7 @@ export function DebateArenaView() {
   const { enabled: argMapEnabled } = useCapabilityCheck('argument_map');
   const [argMapOpen, setArgMapOpen] = useState(false);
   const [argMapRefreshKey, setArgMapRefreshKey] = useState(0);
+  const liveArgumentMapPanelId = `debate-live-argument-map-${useId().replace(/:/g, '-')}`;
 
   const [revealCount, setRevealCount] = useState(0);
   const [selectedPhase, setSelectedPhase] = useState<string>('opening');
@@ -1227,6 +1228,8 @@ export function DebateArenaView() {
                   <h3>{t('argument.live_title', 'Argument Map')}</h3>
                   <button
                     type="button"
+                    aria-expanded={argMapOpen}
+                    aria-controls={liveArgumentMapPanelId}
                     onClick={() => setArgMapOpen(o => !o)}
                     style={{
                       background: 'none', border: '1px solid #555',
@@ -1240,7 +1243,7 @@ export function DebateArenaView() {
                   </button>
                 </div>
                 {argMapOpen && (
-                  <div className="debate-panel__body">
+                  <div id={liveArgumentMapPanelId} className="debate-panel__body">
                     <ArgumentMap
                       debateId={id}
                       visible={argMapOpen}

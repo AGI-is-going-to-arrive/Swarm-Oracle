@@ -1,7 +1,9 @@
 import type { DebateResultPayload } from '../types';
 
 const REPLAY_QUERY_KEY = 'replay';
+const REPLAY_LOCAL_QUERY_KEY = 'local';
 const REPLAY_KIND = 'debate_result_v1';
+const DEBATE_REPLAY_LOCAL_STORAGE_KEY = 'swarmoracle:debate-replay:v1';
 
 function normalizeOrigin(origin: string): string {
   return origin.replace(/\/$/, '');
@@ -59,6 +61,30 @@ export function decodeDebateReplayToken(token: string): DebateResultPayload | nu
 export function buildDebateReplayUrl(origin: string, payload: DebateResultPayload): string {
   const token = encodeDebateReplayToken(payload);
   return `${normalizeOrigin(origin)}/debate/replay/result?${REPLAY_QUERY_KEY}=${token}`;
+}
+
+export function saveDebateReplayLocalCopy(payload: DebateResultPayload): string {
+  const replayId = crypto.randomUUID();
+  const raw = window.localStorage.getItem(DEBATE_REPLAY_LOCAL_STORAGE_KEY);
+  const parsed = raw ? JSON.parse(raw) as Record<string, DebateResultPayload> : {};
+  parsed[replayId] = payload;
+  window.localStorage.setItem(DEBATE_REPLAY_LOCAL_STORAGE_KEY, JSON.stringify(parsed));
+  return replayId;
+}
+
+export function readDebateReplayLocalCopy(replayId: string): DebateResultPayload | null {
+  try {
+    const raw = window.localStorage.getItem(DEBATE_REPLAY_LOCAL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, DebateResultPayload>;
+    return parsed[replayId] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function buildDebateReplayLocalUrl(origin: string, replayId: string): string {
+  return `${normalizeOrigin(origin)}/debate/replay/result?${REPLAY_LOCAL_QUERY_KEY}=${encodeURIComponent(replayId)}`;
 }
 
 export function readDebateReplayPayload(params: URLSearchParams): DebateResultPayload | null {
