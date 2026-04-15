@@ -176,6 +176,7 @@
 - Debate 是独立域，不与主模式复用 scenario authority。
 - replay import 会保留 imported `phase_insights` 与 `adjudication_mode`。
 - `POST /api/debate/import-replay` 当前会对 `turns / predictions / phase_insights` 的列表项做对象校验；非对象项仍返回 `422`。
+- `POST /api/debate/import-replay` 在 `FEATURE_ARGUMENT_MAP=true` 时，会在 turns 落库后同步抽取 argument map；导入完成后就能直接读取图谱。
 - `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以为负数，表示置信优势反向漂移。
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验它是否属于合法 variant。
 - `GET /api/debate/{debate_id}/argument-map` 在功能开启但读取阶段出错时，当前走 fail-soft：
@@ -214,6 +215,7 @@
   - 请求体当前也支持可选 `source_message_content`
     - 同 agent 同轮只有 1 条消息时，不传也可以
     - 同 agent 同轮有多条消息时，不传会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+    - 纯空白值会按“未指定”处理，口径与不传一致
     - 传了但找不到唯一匹配时，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_MISMATCH` 或 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
   - 如果 seed 阶段失败，会返回 `400 COUNTERFACTUAL_SEED_FAILED`，并清理刚创建的 replay branch
 - `POST /api/scenario/{id}/counterfactual` 与 `POST /api/scenario/{id}/resume` 当前共用 replay branch 锁：

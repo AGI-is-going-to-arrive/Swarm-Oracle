@@ -141,9 +141,17 @@ function useMediaQueryState(query: string) {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mediaQueryList = window.matchMedia(query);
-    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
-    mediaQueryList.addEventListener?.('change', handleChange);
-    return () => mediaQueryList.removeEventListener?.('change', handleChange);
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setMatches(event.matches);
+    };
+
+    if (typeof mediaQueryList.addEventListener === 'function') {
+      mediaQueryList.addEventListener('change', handleChange as EventListener);
+      return () => mediaQueryList.removeEventListener('change', handleChange as EventListener);
+    }
+
+    mediaQueryList.addListener?.(handleChange as (event: MediaQueryListEvent) => void);
+    return () => mediaQueryList.removeListener?.(handleChange as (event: MediaQueryListEvent) => void);
   }, [query]);
 
   return matches;

@@ -344,7 +344,8 @@ def test_debate_websocket_route_accepts_real_connections(client: TestClient, mon
         assert websocket.receive_json()["type"] == "auth_ok"
 
 
-def test_import_replay_debate_persists_snapshot(client: TestClient):
+def test_import_replay_debate_persists_snapshot(client: TestClient, monkeypatch):
+    monkeypatch.setattr(debate_api.settings, "FEATURE_ARGUMENT_MAP", True)
     resp = client.post("/api/debate/import-replay", json={
         "debate": {
             "id": "debate-replay-1",
@@ -470,6 +471,12 @@ def test_import_replay_debate_persists_snapshot(client: TestClient):
     result_payload = result.json()
     assert result_payload["phase_insights"][0]["commentary"] == "Imported opening commentary"
     assert result_payload["phase_insights"][-1]["judge_focus"] == "Imported verdict focus"
+
+    argument_map = client.get(f"/api/debate/{data['id']}/argument-map")
+    assert argument_map.status_code == 200
+    argument_map_payload = argument_map.json()
+    assert argument_map_payload["snapshot_id"] is not None
+    assert [node["label"] for node in argument_map_payload["nodes"]] == ["Imported turn"]
 
 
 def _make_import_replay_payload() -> dict[str, object]:

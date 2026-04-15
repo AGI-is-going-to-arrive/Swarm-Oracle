@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlmodel import Session, create_engine, select
+from sqlmodel import SQLModel, Session, create_engine, select
 
 from alembic import command as alembic_command
 from app.config import settings
@@ -436,11 +436,149 @@ class TestAppendRoundNodes:
 
         assert [node["label"] for node in result["nodes"]] == ["concurrent same id"]
 
+    def test_repeated_round_append_removes_stale_idless_event_nodes(self):
+        append_round_nodes(
+            "sc3h",
+            "br1",
+            1,
+            [
+                MockMessage(emotion="calm", agent_id="a1", id=None, content="first draft"),
+                MockMessage(emotion="tense", agent_id="a2", id=None, content="second draft"),
+            ],
+        )
+        append_round_nodes(
+            "sc3h",
+            "br1",
+            1,
+            [
+                MockMessage(
+                    emotion="focused",
+                    agent_id="a1",
+                    id=None,
+                    content="first draft revised",
+                )
+            ],
+        )
+
+        result = build_snapshot("sc3h", branch_id="br1")
+
+        assert [node["label"] for node in result["nodes"]] == ["first draft revised"]
+
 
 # ── build_snapshot ──────────────────────────────────────
 
 
 class TestBuildSnapshot:
+    def test_runtime_agent_state_frame_repair_deduplicates_dirty_legacy_rows(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        db_path = tmp_path / "migration-repair-dedup.db"
+        db_url = f"sqlite:///{db_path}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        settings.DATABASE_URL = db_url
+        dispose_engine()
+
+        engine = get_engine()
+        SQLModel.metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.exec_driver_sql("DROP TABLE agent_state_frame")
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE agent_state_frame (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    scenario_id TEXT NOT NULL,
+                    branch_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    stance_score FLOAT NOT NULL DEFAULT 0.0,
+                    stance_label TEXT,
+                    emotion TEXT,
+                    summary_excerpt TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO agent_state_frame (
+                    id,
+                    scenario_id,
+                    branch_id,
+                    round_number,
+                    agent_id,
+                    stance_score,
+                    stance_label,
+                    emotion,
+                    summary_excerpt,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-old",
+                    "sc-migration-runtime-dedup",
+                    "br1",
+                    1,
+                    "a1",
+                    0.1,
+                    None,
+                    "calm",
+                    "older summary",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO agent_state_frame (
+                    id,
+                    scenario_id,
+                    branch_id,
+                    round_number,
+                    agent_id,
+                    stance_score,
+                    stance_label,
+                    emotion,
+                    summary_excerpt,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "legacy-new",
+                    "sc-migration-runtime-dedup",
+                    "br1",
+                    1,
+                    "a1",
+                    0.9,
+                    None,
+                    "angry",
+                    "newer summary",
+                    "2026-01-02T00:00:00+00:00",
+                ),
+            )
+
+        append_round_nodes(
+            "sc-migration-runtime-dedup",
+            "br1",
+            2,
+            [MockMessage(emotion="steady", agent_id="a1", id="m2", content="point B")],
+        )
+
+        with Session(get_engine()) as session:
+            round_one_frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc-migration-runtime-dedup",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 1,
+                    AgentStateFrame.agent_id == "a1",
+                )
+            ).all()
+
+        assert len(round_one_frames) == 1
+        assert round_one_frames[0].id == "legacy-new"
+        assert round_one_frames[0].emotion == "angry"
+        assert round_one_frames[0].summary_excerpt == "newer summary"
+
     def test_upgrade_tolerates_runtime_agent_state_frame_schema_repair(
         self,
         tmp_path,

@@ -73,6 +73,7 @@
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，`counterfactual / resume` 都不会继续 clone / seed / schedule
   - 如果锁丢失前，别的请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
   - heartbeat 会在请求侧校验完成后才启动，避免同一请求自己的 SQLite 校验事务和 heartbeat 抢锁
+  - heartbeat 刷新异常时会释放原 replay lease，不再把后续 replay/resume 锁死到 TTL 过期
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
@@ -81,10 +82,12 @@
   - 找不到目标消息时返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND`
   - 同 agent 同轮有多条消息时，如果前端没带 `source_message_content`，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
   - 前端带了 `source_message_content` 但找不到唯一匹配时，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_MISMATCH` 或 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
+  - 纯空白的 `source_message_content` 当前会按“未指定”处理，不再单独打成 mismatch
   - 如果 seed 阶段仍失败，后端会把刚创建的 replay branch、round 和 message 一起清掉，不再留下脏 branch 占 quota
 - `POST /api/scenario/{id}/resume` 当前会先预占 `simulation lock`，再把锁 lease 传给后台任务：
   - 锁拿不到时直接返回 `409 SIMULATION_ALREADY_RUNNING`
   - 预占成功后的 lock lease 会在后台续跑期间持续续租，直到任务结束才释放
+  - 如果后台续跑期间丢掉这把预占 lock，任务会直接 fail-closed 落成 `error`，不会失锁后继续跑
   - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
@@ -148,6 +151,7 @@
   - `counterfactual / resume` 会先完成请求侧校验，再在进入 `clone / seed / schedule` 前启动同一把 scenario 级 replay lock heartbeat
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，请求会直接 fail-closed，不会继续 clone / seed / schedule
   - 如果锁丢失前，并发请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+- 主模式后台 simulation 当前在拿着预占 `simulation lock` 续跑时，也会显式监听 lock 丢失；一旦 lease 被别人抢走或续租失败，任务会立刻取消并把 scenario 标成 `error`。
 - `runtime_lock` 当前也能正确解析 `sqlite:///file:/...?...uri=true` 这类 SQLite URI；多 worker 共用同一文件时，仍然走共享 SQLite lease，不会静默退回进程内锁。
 - `VectorStore` 读取默认按 branch 或 allowed-branch scope 收口，不再放宽到整个 scenario。
 - `llm_client` 负责：
@@ -189,11 +193,12 @@
   - 同一 agent 同 round 多条消息会用最后一条覆盖 `AgentStateFrame`
   - 同一 agent 同 round 就算消息没有 `id`，event 节点也会继续保留为多条；不会再被后一条静默覆盖
   - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 就算 `msg_id` 重复，event 节点也会按 agent 隔离
+  - 同一 `scenario / branch / round` 如果 id-less 消息集合变少，旧的 stale `event` 节点和相关边也会一起清掉，不会把上一版快照残留在当前图里
   - append 路径当前会按 `scenario_id` 串行化；同一 scenario 并发写入不会再撞出重复 event 节点
   - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换；显式 ids 非法时也会回退 same-round provenance
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
-  `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级。
+  `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级；runtime repair 在重建唯一约束前也会先按最新一条脏数据去重，不会因为 legacy 重复行直接炸掉。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
   同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；如果 legacy duplicate snapshot 还残留，读取会稳定选最新一份。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
@@ -211,11 +216,11 @@
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
   - SQLite lightweight fallback 当前也会尽力把唯一语义修到 `debate_id + turn_id + semantic_hash`；如果 repair 本身失败，会记 warning，但不会把旧的 best-effort index 补齐链路一起打断
-  - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复
+  - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复；`semantic_hash` 会按归一化后的文本计算，纯 whitespace 变体不会再在同一 turn 里拆成两条
   - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
   - SQLite lightweight fallback 修重复 `debate_argument_unit` 时，也会同步清掉已经失效的 `graph_node / graph_edge`，避免旧图残留 orphan node/edge 混进当前 argument map
   - legacy SQLite 上如果已经留下重复 snapshot，读取会稳定选最新 snapshot，不再随机命中旧图
-  - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn
+  - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn；`counter` 当前也会继续参与 `rebuts` 边重建，不会掉成孤点
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
   - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜
   - 重建时不会复用旧 target；`supports / rebuts` 会按当前 claim 状态重新选边，`DebateTurn.content` 可用时再按 turn 内句子顺序定序
@@ -223,6 +228,7 @@
   - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，更不会留下悬空 verdict edge
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry 也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
+- `debate import-replay` 当前在 turns 落库后会同步抽取 argument map；功能开启时，导入完成后就能直接读到图谱，不再先落成空图。
 - `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以是负数。
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验 variant。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。

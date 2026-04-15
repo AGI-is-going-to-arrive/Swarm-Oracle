@@ -274,6 +274,7 @@ _background_tasks: set[asyncio.Task] = set()
 # The in-memory set is kept only as a fast-path check; the DB is the source of truth.
 _running_simulations: set[str] = set()
 _SIMULATION_LOCK_REFRESH_FRACTION = 0.33
+_SIMULATION_LOCK_LOSS_POLL_SECONDS = 0.01
 
 
 def _runtime_lock_refresh_interval(
@@ -330,6 +331,14 @@ def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.
     thread.join(timeout=1.0)
 
 
+async def _watch_runtime_lock_loss(
+    lease_holder: list[RuntimeLockLease | None],
+) -> None:
+    while lease_holder[0] is not None:
+        await asyncio.sleep(_SIMULATION_LOCK_LOSS_POLL_SECONDS)
+    raise RuntimeError("simulation runtime lock was lost during execution")
+
+
 def _finalize_background_task(task: asyncio.Task) -> None:
     """Drop completed tasks and surface background failures in logs."""
     _background_tasks.discard(task)
@@ -384,6 +393,7 @@ async def run_sim_background(
         return
     _running_simulations.add(scenario_id)
     lock_lease_holder: list[RuntimeLockLease | None] = [pre_acquired_lock_lease]
+    lock_lease_to_release = pre_acquired_lock_lease
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
 
@@ -403,6 +413,7 @@ async def run_sim_background(
                     scenario_id,
                 )
                 return
+            lock_lease_to_release = lock_lease_holder[0]
         else:
             heartbeat_stop, heartbeat_thread = _start_runtime_lock_heartbeat(
                 lock_lease_holder,
@@ -435,9 +446,36 @@ async def run_sim_background(
             scope_kwargs["requests_per_minute"] = parsed_context.get("llm_requests_per_minute")
             scope_kwargs["tokens_per_minute"] = parsed_context.get("llm_tokens_per_minute")
 
+        async def _run_simulation_with_lock_guard() -> None:
+            simulation_task = asyncio.create_task(run_simulation(**sim_kwargs))
+            lock_watch_task: asyncio.Task[None] | None = None
+            try:
+                if heartbeat_stop is not None:
+                    lock_watch_task = asyncio.create_task(
+                        _watch_runtime_lock_loss(lock_lease_holder)
+                    )
+                    done, _pending = await asyncio.wait(
+                        {simulation_task, lock_watch_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if lock_watch_task in done:
+                        simulation_task.cancel()
+                        await asyncio.gather(simulation_task, return_exceptions=True)
+                        lock_watch_task.result()
+                    return await simulation_task
+
+                await simulation_task
+            finally:
+                if lock_watch_task is not None:
+                    lock_watch_task.cancel()
+                    await asyncio.gather(lock_watch_task, return_exceptions=True)
+                if not simulation_task.done():
+                    simulation_task.cancel()
+                    await asyncio.gather(simulation_task, return_exceptions=True)
+
         with llm_request_scope(**scope_kwargs):
             await asyncio.wait_for(
-                run_simulation(**sim_kwargs),
+                _run_simulation_with_lock_guard(),
                 timeout=total_timeout,
             )
     except asyncio.TimeoutError:
@@ -476,7 +514,7 @@ async def run_sim_background(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(lock_lease_holder[0])
+        release_runtime_lock(lock_lease_to_release)
         _running_simulations.discard(scenario_id)
 
 

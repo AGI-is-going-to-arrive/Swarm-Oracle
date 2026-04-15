@@ -91,6 +91,12 @@ describe('i18n locale resources', () => {
     expect(zh.translation.node_detail.side).toBe('立场方');
     expect(en.translation.node_detail.copy_ref).toBe('Copy Reference');
     expect(zh.translation.node_detail.copy_ref).toBe('复制引用');
+    expect(en.translation.node_detail.copy_ref_failed).toBe('Failed to copy reference');
+    expect(zh.translation.node_detail.copy_ref_failed).toBe('复制引用失败');
+    expect(en.translation.export.exporting_png).toBe('Exporting PNG...');
+    expect(zh.translation.export.exporting_png).toBe('PNG 导出中...');
+    expect(en.translation.export.exporting_svg).toBe('Exporting SVG...');
+    expect(zh.translation.export.exporting_svg).toBe('SVG 导出中...');
     expect(en.translation.export.png_failed).toBe('Failed to export PNG. Try again.');
     expect(zh.translation.export.png_failed).toBe('PNG 导出失败，请重试。');
     expect(en.translation.export.svg_failed).toBe('Failed to export SVG. Try again.');
@@ -129,5 +135,11 @@ describe('i18n locale resources', () => {
     expect(zh.translation.causal.error.network).toBe('因果图谱加载失败，请检查网络后重试。');
     expect(en.translation.causal.error.branch_not_found).toBe('The selected branch is no longer available for this scenario.');
     expect(zh.translation.causal.error.branch_not_found).toBe('所选分支已不在当前场景中。');
+    expect(en.translation.causal.error.unauthorized).toBe('You do not have permission to view this causal graph.');
+    expect(zh.translation.causal.error.unauthorized).toBe('你没有权限查看此因果图谱。');
+    expect(en.translation.causal.error.server).toBe('The server could not load the causal graph right now.');
+    expect(zh.translation.causal.error.server).toBe('服务器暂时无法加载因果图谱。');
+    expect(en.translation.causal.error.load_failed).toBe('Unable to load the causal graph right now. Please retry.');
+    expect(zh.translation.causal.error.load_failed).toBe('因果图谱暂时无法加载，请稍后重试。');
   });
 });

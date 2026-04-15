@@ -129,6 +129,19 @@ def test_extract_deduplicates_by_semantic_hash_within_same_turn():
     assert [unit["turn_id"] for unit in result["units"]] == ["t1", "t2"]
 
 
+def test_extract_deduplicates_whitespace_normalized_sentences_within_same_turn():
+    ids = extract_argument_units(
+        debate_id="d-dedup-whitespace",
+        turn_id="t1",
+        content="Alpha claim.\nAlpha   claim.",
+        speaker_side="proposition",
+    )
+
+    assert len(ids) == 1
+    result = get_argument_map("d-dedup-whitespace")
+    assert [unit["text"] for unit in result["units"]] == ["Alpha claim."]
+
+
 def test_extract_empty_content_returns_empty():
     """Empty or whitespace-only content should return no units."""
     ids = extract_argument_units(
@@ -590,6 +603,58 @@ async def test_enrich_argument_units_for_turn_removes_cross_turn_stale_rebuttal_
     result = get_argument_map("d-enrich-cross-turn")
     rebuts = [edge for edge in result["edges"] if edge["type"] == "rebuts"]
     assert rebuts == []
+
+
+@pytest.mark.asyncio
+async def test_enrich_argument_units_for_turn_rebuilds_counter_edges_as_rebuts():
+    extract_argument_units(
+        debate_id="d-enrich-counter",
+        turn_id="t1",
+        content="Alpha claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-enrich-counter",
+        turn_id="t2",
+        content="However this fails.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+
+    previous = settings.ARGUMENT_MAP_LLM_ENRICHMENT
+    settings.ARGUMENT_MAP_LLM_ENRICHMENT = True
+    try:
+        with patch(
+            "app.services.debate_argument_map.llm_call_json_with_stream_fallback",
+            new=AsyncMock(
+                return_value={
+                    "units": [
+                        {
+                            "text": "However this fails.",
+                            "type": "counter",
+                            "stance": "supports_opposition",
+                            "confidence": 0.88,
+                        },
+                    ]
+                }
+            ),
+        ):
+            updated = await enrich_argument_units_for_turn(
+                debate_id="d-enrich-counter",
+                turn_id="t2",
+                speaker_side="opposition",
+                language="en",
+            )
+    finally:
+        settings.ARGUMENT_MAP_LLM_ENRICHMENT = previous
+
+    assert updated == 1
+    result = get_argument_map("d-enrich-counter")
+    labels_by_node = {node["id"]: node["label"] for node in result["nodes"]}
+    rebuts = [edge for edge in result["edges"] if edge["type"] == "rebuts"]
+    assert len(rebuts) == 1
+    assert labels_by_node[rebuts[0]["target"]] == "Alpha claim."
 
 
 @pytest.mark.asyncio

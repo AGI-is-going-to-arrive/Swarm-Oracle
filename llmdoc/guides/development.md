@@ -191,15 +191,13 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay / migration 定向 `268 passed`
-  - backend 相邻 `api / service` smoke `158 passed`
-  - targeted `ruff check` 通过
+  - backend graph / replay / argument-map 定向 `203 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
   - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
-  - backend 全量 `python -m pytest -q` 本轮实测 `2049 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `1008 passed`
+  - backend 全量 `python -m pytest -q` 本轮实测 `2061 passed, 2 skipped`
+  - frontend 全量 `npm test` 本轮实测 `1022 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
@@ -207,12 +205,14 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
     - `counterfactual / resume` 的 mock 续租异常 fail-closed
     - 真实 SQLite 跨线程 heartbeat 续租异常 fail-closed
     - 锁丢失后被并发请求吃满最后一个 branch slot 时回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+    - heartbeat 刷新异常后也会释放原 replay lease，不再把后续请求卡到 TTL
   - debate runtime lock 当前已补：
     - 长运行续租
     - 续租返回 `None`
     - 续租抛异常
     - 真实 SQLite 跨线程 heartbeat 续租异常
     - 以上路径都会 fail-closed，把 debate 落成 `error`
+  - `run_sim_background` 当前也会在预占 `simulation lock` 运行中丢失时 fail-closed，直接取消任务并把 scenario 落成 `error`
   - `CausalReviewView` 分支 selector：
     - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
     - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
@@ -226,20 +226,24 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
     - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
     - `verdict` 节点当前也走共享 graph i18n label，不再把可访问名称写死成英文
     - node-only 图当前也会保留 sr-only list，并可通过 graph node button 键盘打开 `NodeDetailPanel`
+    - 只有 unit-backed 图在状态筛选后才会切到 filter empty state；node-only 图不会被误筛空，强度摘要也会跟随当前筛选结果
   - `NodeDetailPanel`
     - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
-    - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`
-  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`
+    - `Escape` 在 modeless 口径下也能全局关闭详情，不要求焦点留在 panel 里
+    - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`；两条都失败时会显示可见错误提示
+  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分
   - `GraphNodeCard`
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
-    - `020` migration 对 runtime schema repair 先跑的路径保持兼容
+    - `020` migration 对 runtime schema repair 先跑的路径保持兼容；legacy `agent_state_frame` 脏重复行会先去重再重建唯一约束
     - causal graph 读取 legacy duplicate snapshot 时优先取最新一份
-    - causal append 幂等
+    - causal append 幂等；同轮 id-less event 缩量重写时会清理 stale 节点
     - replay branch runtime lock 当前会续租；慢 clone / seed 不会再因为 lease 过期突破共享上限
     - `resume` 当前会先预占 simulation lock，不再出现 `201` 已返回但后台实际没启动的假成功
-    - `counterfactual` 当前会在 clone 前先校验目标 agent message；同 agent 同轮多消息时要求显式选定 source message，seed 失败也会清理掉新建 branch
+    - `counterfactual` 当前会在 clone 前先校验目标 agent message；同 agent 同轮多消息时要求显式选定 source message，seed 失败也会清理掉新建 branch；空白 `source_message_content` 会按“未指定”处理
     - `021` migration 当前会移除 legacy `debate_id + semantic_hash` 约束，并在升级前清理同 turn 的脏重复行
+    - argument map enrichment 当前会按归一化文本去重 whitespace 变体；`counter` 改写后也会继续保留 `rebuts` 边
+    - debate import replay 当前会在 turns 落库后同步生成 argument map，不再先落成空图
     - same-round sibling branch 节点隔离（含 `id=None`）
     - same-round 重复 `msg.id` 当前会继续按 branch 与 agent 隔离
     - 同 agent 同轮多消息

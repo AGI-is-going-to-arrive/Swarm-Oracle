@@ -11,6 +11,7 @@ import logging
 import threading
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -159,7 +160,25 @@ def _ensure_agent_state_frame_schema(engine) -> None:
                     emotion,
                     summary_excerpt,
                     created_at
-                FROM agent_state_frame__legacy
+                FROM (
+                    SELECT
+                        id,
+                        scenario_id,
+                        branch_id,
+                        round_number,
+                        agent_id,
+                        stance_score,
+                        stance_label,
+                        emotion,
+                        summary_excerpt,
+                        created_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY scenario_id, branch_id, round_number, agent_id
+                            ORDER BY created_at DESC, id DESC
+                        ) AS row_number
+                    FROM agent_state_frame__legacy
+                ) AS deduped_legacy
+                WHERE row_number = 1
                 """
             )
             session.connection().exec_driver_sql(
@@ -413,6 +432,45 @@ def append_round_nodes(
                 GraphNode.round_number == round_number,
             )
             round_nodes = session.exec(round_nodes_stmt).all()
+            current_event_scopes = {
+                (
+                    branch_id,
+                    _message_node_key(
+                        round_number,
+                        _getfield(msg, "id", None),
+                        _getfield(msg, "agent_id", "unknown"),
+                        ordinal=idx,
+                    ),
+                )
+                for idx, msg in enumerate(messages)
+            }
+            stale_event_nodes = [
+                node
+                for node in round_nodes
+                if (
+                    node.node_type == "event"
+                    and _node_branch_id(node) == branch_id
+                    and (_node_branch_id(node), node.node_key) not in current_event_scopes
+                )
+            ]
+            stale_event_node_ids = {node.id for node in stale_event_nodes}
+            if stale_event_node_ids:
+                stale_edges = session.exec(
+                    select(GraphEdge).where(
+                        GraphEdge.snapshot_id == snapshot.id,
+                        or_(
+                            GraphEdge.source_node_id.in_(stale_event_node_ids),
+                            GraphEdge.target_node_id.in_(stale_event_node_ids),
+                        ),
+                    )
+                ).all()
+                for edge in stale_edges:
+                    session.delete(edge)
+                for node in stale_event_nodes:
+                    session.delete(node)
+                round_nodes = [
+                    node for node in round_nodes if node.id not in stale_event_node_ids
+                ]
             event_nodes_by_key = {
                 (_node_branch_id(node), node.node_key): node
                 for node in round_nodes

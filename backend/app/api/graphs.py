@@ -29,7 +29,12 @@ from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_timeline
-from app.services.replay import clone_until_round, compare_branches, seed_counterfactual
+from app.services.replay import (
+    _normalize_source_message_content,
+    clone_until_round,
+    compare_branches,
+    seed_counterfactual,
+)
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
@@ -213,7 +218,7 @@ def _validate_counterfactual_target_message(
                 f"of branch {source_branch_id}"
             ),
         )
-    normalized_source = source_message_content.strip() if source_message_content else None
+    normalized_source = _normalize_source_message_content(source_message_content)
     if normalized_source is None:
         if len(candidate_messages) > 1:
             raise api_error(
@@ -317,6 +322,7 @@ async def create_counterfactual(
             "REPLAY_BRANCH_BUSY",
             "Another replay branch operation is in progress for this scenario",
         )
+    replay_branch_lease = lease
     lease_holder: list[RuntimeLockLease | None] = [lease]
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
@@ -400,7 +406,7 @@ async def create_counterfactual(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(lease_holder[0])
+        release_runtime_lock(replay_branch_lease)
 
     return JSONResponse(
         status_code=201,
@@ -493,6 +499,7 @@ async def resume_from_round(
             "REPLAY_BRANCH_BUSY",
             "Another replay branch operation is in progress for this scenario",
         )
+    replay_branch_lease = lease
     lease_holder: list[RuntimeLockLease | None] = [lease]
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
@@ -582,7 +589,7 @@ async def resume_from_round(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(lease_holder[0])
+        release_runtime_lock(replay_branch_lease)
         release_runtime_lock(simulation_lease)
 
     return JSONResponse(

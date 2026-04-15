@@ -70,7 +70,8 @@ def _classify_sentence(sentence: str) -> str:
 
 
 def _semantic_hash(text: str) -> str:
-    return hashlib.sha256(text.strip().lower().encode()).hexdigest()[:16]
+    normalized = _normalize_unit_text(text).lower()
+    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
 def _normalize_unit_text(text: str) -> str:
@@ -293,7 +294,7 @@ def _rebuild_snapshot_edges_sync(
                 edge_type="supports",
                 weight=0.7,
             ))
-        elif unit.unit_type == "rebuttal":
+        elif unit.unit_type in {"rebuttal", "counter"}:
             opp_claim = _select_opponent_claim_id(processed_claims, speaker_side)
             if opp_claim:
                 session.add(GraphEdge(
@@ -648,7 +649,7 @@ def extract_argument_units(
                     snapshot_id=snapshot.id, source_node_id=nid,
                     target_node_id=last_claim_id, edge_type="supports", weight=0.7,
                 ))
-            elif utype == "rebuttal":
+            elif utype in {"rebuttal", "counter"}:
                 opp_claim = _find_opponent_last_claim(session, snapshot.id, speaker_side)
                 if opp_claim:
                     session.add(GraphEdge(

@@ -1004,6 +1004,8 @@
       "png": "Export PNG",
       "svg": "Export SVG",
       "exporting": "Exporting...",
+      "exporting_png": "Exporting PNG...",
+      "exporting_svg": "Exporting SVG...",
       "png_failed": "Failed to export PNG. Try again.",
       "svg_failed": "Failed to export SVG. Try again."
     },
@@ -1027,7 +1029,8 @@
       "emotion": "Emotion",
       "stance": "Stance",
       "side": "Side",
-      "copy_ref": "Copy Reference"
+      "copy_ref": "Copy Reference",
+      "copy_ref_failed": "Failed to copy reference"
     },
     "counterfactual": {
       "title": "What-If Replay",

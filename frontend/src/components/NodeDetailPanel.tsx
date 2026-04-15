@@ -4,7 +4,7 @@
    Shared between CausalReviewView and ArgumentMap.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { copyText } from '../lib/copyText';
 import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
@@ -35,6 +35,7 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
+  const [copyError, setCopyError] = useState<{ nodeId: string; message: string } | null>(null);
   const nodeId = node?.id ?? null;
 
   const restorePreviousFocus = useCallback(() => {
@@ -66,11 +67,33 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
     }
   }, [restorePreviousFocus]);
 
+  useEffect(() => {
+    if (nodeId === null) {
+      return;
+    }
+
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+
+    document.addEventListener('keydown', handleDocumentKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', handleDocumentKeyDown, true);
+    };
+  }, [nodeId, onClose]);
+
   if (!node) return null;
 
   const typeColor = TYPE_COLORS[node.type] ?? '#888';
   const typeTextColor = isBrightGraphBackground(typeColor) ? '#111' : '#fff';
   const hasPayload = node.payload !== null && node.payload !== undefined;
+  const copyErrorMessage = copyError?.nodeId === node.id ? copyError.message : null;
 
   return (
     <div
@@ -78,13 +101,6 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
-      onKeyDownCapture={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          onClose();
-        }
-      }}
       style={{
         position: 'absolute',
         top: 8,
@@ -220,7 +236,13 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
       {/* B8: Copy Reference */}
       <button
         onClick={() => {
-          void copyText(node.id).catch(() => undefined);
+          setCopyError(null);
+          void copyText(node.id).catch(() => {
+            setCopyError({
+              nodeId: node.id,
+              message: t('node_detail.copy_ref_failed', 'Failed to copy reference'),
+            });
+          });
         }}
         style={{
           padding: '4px 10px', borderRadius: 4, border: '1px solid #555',
@@ -230,6 +252,11 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
       >
         {t('node_detail.copy_ref', 'Copy Reference')}
       </button>
+      {copyErrorMessage ? (
+        <div role="alert" style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#ff9b9b' }}>
+          {copyErrorMessage}
+        </div>
+      ) : null}
     </div>
   );
 }

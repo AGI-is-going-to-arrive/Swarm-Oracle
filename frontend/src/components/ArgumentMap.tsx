@@ -174,9 +174,15 @@ function useMediaQueryState(query: string) {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mediaQueryList = window.matchMedia(query);
-    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
-    mediaQueryList.addEventListener?.('change', handleChange);
-    return () => mediaQueryList.removeEventListener?.('change', handleChange);
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => setMatches(event.matches);
+
+    if (typeof mediaQueryList.addEventListener === 'function') {
+      mediaQueryList.addEventListener('change', handleChange);
+      return () => mediaQueryList.removeEventListener?.('change', handleChange);
+    }
+
+    mediaQueryList.addListener?.(handleChange);
+    return () => mediaQueryList.removeListener?.(handleChange);
   }, [query]);
 
   return matches;
@@ -492,7 +498,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
   ), [layoutNodes, layoutEdges]);
 
-  const noFilterResults = statusFilter.size > 0 && filteredData ? filteredData.units.length === 0 : false;
+  const noFilterResults = statusFilter.size > 0 && filteredData
+    ? (data?.units.length ?? 0) > 0 && filteredData.units.length === 0
+    : false;
 
   // Clear stale selection when filtered node disappears
   useEffect(() => {
@@ -624,7 +632,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 0 }}
       >
         {/* P1-7: Strength meter summary */}
-        <ArgumentStrengthMeter units={data.units} />
+        <ArgumentStrengthMeter units={filteredData?.units ?? data.units} />
 
         {/* C5: Status filter chips */}
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>

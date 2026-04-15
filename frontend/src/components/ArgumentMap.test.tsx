@@ -1,7 +1,7 @@
 /**
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -901,6 +901,49 @@ describe('ArgumentMap status filter (C5)', () => {
     await user.click(screen.getByRole('button', { name: 'Accepted' }));
     expect(flow.getAttribute('data-nodes')).toBe('1');
   });
+
+  it('keeps node-only graphs visible when a status filter is active', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-node-only',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Detached claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow).toHaveAttribute('data-nodes', '1');
+
+    await user.click(screen.getByRole('button', { name: 'Accepted' }));
+
+    await waitFor(() => expect(screen.getByTestId('reactflow')).toHaveAttribute('data-nodes', '1'));
+    expect(screen.queryByText('No argument units match the selected filters.')).not.toBeInTheDocument();
+  });
+
+  it('updates the strength meter to reflect the filtered units', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true, json: async () => dataWithStatuses,
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    await screen.findByTestId('reactflow');
+    expect(screen.getByTitle('Accepted: 1/2')).toBeInTheDocument();
+    expect(screen.getByTitle('Standing: 1/2')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Accepted' }));
+
+    await waitFor(() => expect(screen.getByTitle('Accepted: 1/1')).toBeInTheDocument());
+    expect(screen.queryByTitle('Standing: 1/2')).not.toBeInTheDocument();
+  });
 });
 
 // ── Phase C: Edge styling (C2) ──────────────────────────────
@@ -1002,5 +1045,45 @@ describe('ArgumentStrengthMeter', () => {
     render(<ArgumentStrengthMeter units={units} compact />);
     const meter = screen.getByRole('list', { name: 'Argument strength distribution' });
     expect(meter).toHaveStyle({ height: '4px' });
+  });
+
+  it('subscribes to legacy WebKit media query listeners for reduced motion changes', () => {
+    let legacyListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const addListener = vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      legacyListener = listener;
+    });
+    const removeListener = vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      if (legacyListener === listener) legacyListener = undefined;
+    });
+
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener,
+      removeListener,
+      addEventListener: undefined,
+      removeEventListener: undefined,
+      dispatchEvent: vi.fn(() => false),
+    } as unknown as MediaQueryList));
+
+    const units: ArgumentUnit[] = [
+      { id: 'u1', type: 'claim', status: 'standing', text: '', turn_id: 't1' },
+    ];
+
+    const { unmount } = render(<ArgumentStrengthMeter units={units} />);
+
+    expect(screen.getByTitle('Standing: 1/1')).toHaveStyle({ transition: 'width 0.3s ease' });
+    expect(addListener).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      legacyListener?.({ matches: true } as MediaQueryListEvent);
+    });
+
+    expect(screen.getByTitle('Standing: 1/1')).toHaveStyle({ transition: 'none' });
+
+    unmount();
+
+    expect(removeListener).toHaveBeenCalledTimes(1);
   });
 });

@@ -275,16 +275,17 @@
   - 不再把这类图伪装成可交互 DAG
 - `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。
 - `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并补一个显式 `Fit view` 按钮；legend toggle 也补上了 `aria-expanded / aria-controls`。
+- `CausalReviewView` / `ArgumentMap` 的 media query hook 当前兼容 legacy WebKit `addListener / removeListener`；旧 Safari / WebKit 下的 compact viewport 和 `prefers-reduced-motion` 切换也会实时更新，不再只吃首帧值。
 - 如果只是 search / filter 把边筛空，`CausalReviewView` 当前仍会保留交互图和导出入口，不会误切 relationless fallback。
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
 - `CausalReviewView` 的 agent search 输入当前统一使用 `Search Agent... / 搜索 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点可访问名称，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），不会挡住节点点击；移动端同口径。
-- `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里
+- `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
-- `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`。
+- `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`；状态筛选激活时，摘要也会跟着当前可见 `units` 一起更新，不再继续显示全量分布。
 - `ArgumentMap` 当前在 compact viewport 下也会补显式 `Fit view`；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
 - `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - `ArgumentMap` 当前在 node-only 图（有节点、没 units）时，仍会保留 screen-reader fallback list；图节点 button 口径也继续支持键盘打开详情。
@@ -294,11 +295,12 @@
   - React Flow 外层 node wrapper 不再重复暴露 button 语义，避免出现 button 套 button 的可访问性冲突
 - `NodeDetailPanel` 当前按轻量 dialog 语义工作：
   - 打开后焦点会先落到关闭按钮
-  - `Escape` 可直接关闭
+  - 就算焦点已经离开 panel，`Escape` 也可直接关闭
   - 关闭后会把焦点还回最新一次打开详情的 trigger
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
+  - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 详情关闭后仍走 pane click / close button 这条现有口径
-- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`。
+- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。
 - `phase3-batch-a full` 当前口径是 `35/35`；除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
 - `phase3-batch-a / batch-b full` 当前在 Chromium 上继续覆盖 desktop / mobile；default / `zh-CN` locale 都通过。
 - `phase3-batch-a` 当前也会检查：

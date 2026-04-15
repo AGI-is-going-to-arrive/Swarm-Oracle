@@ -15,6 +15,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
+import { copyText } from '../lib/copyText';
 
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 const originalExecCommand = document.execCommand;
@@ -150,6 +151,43 @@ describe('NodeDetailPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('closes on a global Escape press in modeless mode and restores focus to the trigger', async () => {
+    const user = userEvent.setup();
+    const node: NodeDetail = { id: 'n1', label: 'Modeless node', type: 'event' };
+
+    function Harness() {
+      const [selectedNode, setSelectedNode] = React.useState<NodeDetail | null>(null);
+
+      return (
+        <div>
+          <button type="button" onClick={() => setSelectedNode(node)}>
+            Open panel
+          </button>
+          <button type="button">Outside action</button>
+          <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+        </div>
+      );
+    }
+
+    render(<Harness />);
+
+    const openButton = screen.getByRole('button', { name: 'Open panel' });
+    const outsideButton = screen.getByRole('button', { name: 'Outside action' });
+
+    await user.click(openButton);
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+
+    await user.click(outsideButton);
+    expect(outsideButton).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Modeless node' })).not.toBeInTheDocument();
+      expect(openButton).toHaveFocus();
+    });
+  });
+
   it('restores focus to the latest trigger when switching from node A to node B before close', async () => {
     const user = userEvent.setup();
     const nodeA: NodeDetail = { id: 'a', label: 'Node A', type: 'event' };
@@ -217,6 +255,29 @@ describe('NodeDetailPanel', () => {
     });
   });
 
+  it('shows an explicit error when Copy Reference fails', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied'));
+    const execCommand = vi.fn().mockReturnValue(false);
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    render(<NodeDetailPanel node={{ id: 'copy-me', label: 'Copy node', type: 'event' }} onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Copy Reference' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to copy reference');
+    });
+  });
+
   it('turn label uses i18n key node_detail.turn (not hardcoded)', () => {
     const node: NodeDetail = {
       id: 'u1',
@@ -233,5 +294,27 @@ describe('NodeDetailPanel', () => {
     const node: NodeDetail = { id: 'n1', label: 'Test', type: 'event' };
     render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
     expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+  });
+});
+
+describe('copyText', () => {
+  it('rejects when clipboard write and execCommand fallback both fail', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied'));
+    const execCommand = vi.fn().mockReturnValue(false);
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    await expect(copyText('copy-me')).rejects.toThrow('Failed to copy text');
+
+    expect(writeText).toHaveBeenCalledWith('copy-me');
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(document.querySelectorAll('textarea')).toHaveLength(0);
   });
 });

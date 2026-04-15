@@ -374,3 +374,77 @@ async def test_run_sim_background_keeps_pre_acquired_lock_alive_until_completion
         if leaked_lease is not None:
             release_runtime_lock(leaked_lease)
         helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_fails_closed_when_pre_acquired_lock_is_lost(monkeypatch):
+    helpers_module._running_simulations.clear()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="lose lease midflight", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+
+    lock_key = simulation_lock_key(scenario.id)
+    pre_acquired_lease = acquire_runtime_lock(lock_key, lease_seconds=30)
+    assert pre_acquired_lease is not None
+
+    cancelled = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def fake_run_simulation(**_kwargs):
+        try:
+            await asyncio.sleep(0.2)
+            completed.set()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    def fake_start_runtime_lock_heartbeat(lease_holder, *, lease_seconds, lock_label):
+        stop_event = threading.Event()
+
+        def _heartbeat():
+            time.sleep(0.02)
+            current = lease_holder[0]
+            assert current is not None
+            release_runtime_lock(current)
+            lease_holder[0] = None
+
+        thread = threading.Thread(
+            target=_heartbeat,
+            name=f"{lock_label}-test-heartbeat",
+            daemon=True,
+        )
+        thread.start()
+        return stop_event, thread
+
+    monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        fake_start_runtime_lock_heartbeat,
+    )
+
+    await helpers_module.run_sim_background(
+        scenario.id,
+        pre_acquired_lock_lease=pre_acquired_lease,
+    )
+
+    assert cancelled.is_set()
+    assert not completed.is_set()
+    assert runtime_lock_is_active(lock_key) is False
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario.id)
+        assert refreshed is not None
+        assert refreshed.status == ScenarioStatus.ERROR
+
+    broadcast.assert_awaited()
+    helpers_module._running_simulations.clear()

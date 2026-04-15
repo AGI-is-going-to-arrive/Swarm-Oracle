@@ -1004,6 +1004,8 @@
       "png": "导出 PNG",
       "svg": "导出 SVG",
       "exporting": "导出中...",
+      "exporting_png": "PNG 导出中...",
+      "exporting_svg": "SVG 导出中...",
       "png_failed": "PNG 导出失败，请重试。",
       "svg_failed": "SVG 导出失败，请重试。"
     },
@@ -1027,7 +1029,8 @@
       "emotion": "情绪",
       "stance": "立场",
       "side": "立场方",
-      "copy_ref": "复制引用"
+      "copy_ref": "复制引用",
+      "copy_ref_failed": "复制引用失败"
     },
     "counterfactual": {
       "title": "假设重演",

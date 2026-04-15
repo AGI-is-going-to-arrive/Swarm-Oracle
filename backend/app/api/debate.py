@@ -40,6 +40,7 @@ from app.services.debate import (
     load_debate_snapshot,
     run_debate_background,
 )
+from app.services.debate_argument_map import extract_argument_units
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.llm_client import validate_llm_base_url
 
@@ -813,6 +814,7 @@ async def import_replay_debate(
     )
 
     engine = get_engine()
+    persisted_turns: list[dict[str, Any]] = []
     with Session(engine) as session:
         existing_replays = session.exec(
             select(Debate).where(
@@ -881,17 +883,22 @@ async def import_replay_debate(
         debate_id = debate.id
 
         for raw_turn in normalized_turns:
-            session.add(
-                DebateTurn(
-                    debate_id=debate.id,
-                    sequence=int(raw_turn.get("sequence", 1) or 1),
-                    phase=DebatePhase(raw_turn["phase"]),
-                    speaker_side=DebateSide(raw_turn["speaker_side"]),
-                    speaker_name=str(raw_turn.get("speaker_name", "")).strip() or "Speaker",
-                    content=str(raw_turn.get("content", "")).strip(),
-                    score_delta_json=raw_turn.get("score_delta") if isinstance(raw_turn.get("score_delta"), dict) else None,  # noqa: E501
-                )
+            turn = DebateTurn(
+                debate_id=debate.id,
+                sequence=int(raw_turn.get("sequence", 1) or 1),
+                phase=DebatePhase(raw_turn["phase"]),
+                speaker_side=DebateSide(raw_turn["speaker_side"]),
+                speaker_name=str(raw_turn.get("speaker_name", "")).strip() or "Speaker",
+                content=str(raw_turn.get("content", "")).strip(),
+                score_delta_json=raw_turn.get("score_delta") if isinstance(raw_turn.get("score_delta"), dict) else None,  # noqa: E501
             )
+            session.add(turn)
+            persisted_turns.append({
+                "id": turn.id,
+                "sequence": turn.sequence,
+                "speaker_side": turn.speaker_side.value,
+                "content": turn.content,
+            })
 
         for normalized_prediction in normalized_predictions:
             session.add(
@@ -930,6 +937,16 @@ async def import_replay_debate(
             )
 
         session.commit()
+
+    if settings.FEATURE_ARGUMENT_MAP:
+        for turn in persisted_turns:
+            extract_argument_units(
+                debate_id=debate_id,
+                turn_id=str(turn["id"]),
+                content=str(turn["content"]),
+                speaker_side=str(turn["speaker_side"]),
+                turn_sequence=int(turn["sequence"]),
+            )
 
     result_payload = load_debate_snapshot(debate_id)
     if result_payload is None:

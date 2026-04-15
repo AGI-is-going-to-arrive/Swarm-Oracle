@@ -842,6 +842,7 @@ class TestResumeEndpoint:
             "code": "REPLAY_BRANCH_LOCK_LOST",
             "message": "Replay branch lock was lost before cloning or seeding",
         }
+        assert runtime_lock_module.runtime_lock_is_active(f"replay-branch:{sid}") is False
 
 
 # ── TestBranchLimitShared ───────────────────────────────

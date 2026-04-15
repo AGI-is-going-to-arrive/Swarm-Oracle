@@ -7,7 +7,7 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type ExportStatus = 'idle' | 'exporting';
+type ExportStatus = 'idle' | 'exporting_png' | 'exporting_svg';
 type ExportFailure = 'png_failed' | 'svg_failed' | null;
 
 interface ExportPanelProps {
@@ -36,6 +36,12 @@ function downloadBlob(blob: Blob, filename: string) {
   a.click();
   document.body.removeChild(a);
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function waitForNextTick(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 40);
+  });
 }
 
 /** Deep-clone an element and inline every computed style so it renders standalone. */
@@ -97,13 +103,12 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
 
   const exportPng = useCallback(async () => {
     setFailureKey(null);
-    setStatus('exporting');
+    setStatus('exporting_png');
     try {
       const { captureElementBlob } = await import('../hooks/screenCaptureRuntime');
       const container = document.querySelector(containerSelector);
       if (!container) {
         setFailure('png_failed');
-        setStatus('idle');
         return;
       }
       const restoreChrome = hideExportChrome(container);
@@ -118,18 +123,19 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
     } catch (err) {
       console.error('[ExportPanel] PNG export failed:', err);
       setFailure('png_failed');
+    } finally {
+      setStatus('idle');
     }
-    setStatus('idle');
   }, [containerSelector, filenamePrefix, setFailure]);
 
-  const exportSvg = useCallback(() => {
+  const exportSvg = useCallback(async () => {
     setFailureKey(null);
-    setStatus('exporting');
+    setStatus('exporting_svg');
     try {
+      await waitForNextTick();
       const container = document.querySelector(containerSelector);
       if (!container) {
         setFailure('svg_failed');
-        setStatus('idle');
         return;
       }
 
@@ -157,11 +163,14 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
     } catch (err) {
       console.error('[ExportPanel] SVG export failed:', err);
       setFailure('svg_failed');
+    } finally {
+      setStatus('idle');
     }
-    setStatus('idle');
   }, [containerSelector, filenamePrefix, setFailure]);
 
-  const disabled = status === 'exporting';
+  const disabled = status !== 'idle';
+  const pngBusy = status === 'exporting_png';
+  const svgBusy = status === 'exporting_svg';
 
   return (
     <div
@@ -184,7 +193,7 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
             opacity: disabled ? 0.6 : 1,
           }}
         >
-          {disabled ? t('export.exporting', 'Exporting...') : t('export.png', 'Export PNG')}
+          {pngBusy ? t('export.exporting_png', 'Exporting PNG...') : t('export.png', 'Export PNG')}
         </button>
         <button
           onClick={exportSvg}
@@ -201,7 +210,7 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
             opacity: disabled ? 0.6 : 1,
           }}
         >
-          {t('export.svg', 'Export SVG')}
+          {svgBusy ? t('export.exporting_svg', 'Exporting SVG...') : t('export.svg', 'Export SVG')}
         </button>
       </div>
       {failureKey && (

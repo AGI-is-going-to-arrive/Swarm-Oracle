@@ -86,9 +86,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.a11y_list': '因果事件列表',
     'causal.error.network': '因果图谱加载失败，请检查网络后重试。',
     'causal.error.branch_not_found': '所选分支已不在当前场景中。',
-    'causal.error.unauthorized': '你没有权限查看这个因果图谱。',
-    'causal.error.server': '服务器当前无法加载这个因果图谱。',
-    'causal.error.load_failed': '当前无法加载这个因果图谱，请稍后重试。',
+    'causal.error.unauthorized': '你没有权限查看此因果图谱。',
+    'causal.error.server': '服务器暂时无法加载因果图谱。',
+    'causal.error.load_failed': '因果图谱暂时无法加载，请稍后重试。',
     'common.graph_controls': '图谱控件',
     'common.graph_zoom_in': '放大',
     'common.graph_zoom_out': '缩小',
@@ -208,6 +208,34 @@ const createDeferredResponse = () => {
     reject = rej;
   });
   return { promise, resolve, reject };
+};
+
+const installLegacyMatchMedia = (initialMatches: boolean) => {
+  let matches = initialMatches;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+    get matches() {
+      return matches && query.includes('max-width');
+    },
+    media: query,
+    onchange: null,
+    addListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      listeners.add(listener);
+    }),
+    removeListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      listeners.delete(listener);
+    }),
+    dispatchEvent: vi.fn(() => false),
+  } as unknown as MediaQueryList));
+
+  return {
+    emit(nextMatches: boolean) {
+      matches = nextMatches;
+      const event = { matches: nextMatches, media: '(max-width: 768px)' } as MediaQueryListEvent;
+      for (const listener of listeners) listener(event);
+    },
+    matchMediaSpy,
+  };
 };
 
 function BranchNavigationHarness() {
@@ -441,7 +469,9 @@ describe('CausalReviewView', () => {
 
     const flow = await screen.findByTestId('reactflow');
     expect(flow.getAttribute('data-node-aria-role')).toBe('');
-    expect(flow.getAttribute('data-node-aria-label')).toContain('Event');
+    await waitFor(() => {
+      expect(flow.getAttribute('data-node-aria-label')).toContain('Event');
+    });
   });
 
   it.each([401, 403])('maps unauthorized status %i to localized error copy', async (status) => {
@@ -499,7 +529,28 @@ describe('CausalReviewView', () => {
     await changeUiLanguage('zh');
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('你没有权限查看这个因果图谱。');
+      expect(screen.getByRole('alert')).toHaveTextContent('你没有权限查看此因果图谱。');
+    });
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+  });
+
+  it('rerenders generic load failure copy when the UI language changes without refetching', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 418,
+      json: async () => ({ detail: { message: 'Teapot' } }),
+    } as Response);
+
+    renderView();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Unable to load the causal graph right now. Please retry.');
+    expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+
+    await changeUiLanguage('zh');
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('因果图谱暂时无法加载，请稍后重试。');
     });
     expect(countCausalGraphRequests(fetchSpy)).toBe(1);
   });
@@ -605,6 +656,34 @@ describe('CausalReviewView', () => {
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
 
     matchMediaSpy.mockRestore();
+  });
+
+  it('reacts to legacy WebKit media query listeners when compact mode changes at runtime', async () => {
+    const legacyMatchMedia = installLegacyMatchMedia(false);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-legacy-media-query',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+    await screen.findByTestId('reactflow');
+    expect(screen.getByTestId('rf-minimap')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fit view' })).not.toBeInTheDocument();
+
+    await act(async () => {
+      legacyMatchMedia.emit(true);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('rf-minimap')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Fit view' })).toBeInTheDocument();
+
+    legacyMatchMedia.matchMediaSpy.mockRestore();
   });
 
   it('exposes the legend toggle as a proper disclosure control', async () => {

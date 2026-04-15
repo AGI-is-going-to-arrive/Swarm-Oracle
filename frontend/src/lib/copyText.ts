@@ -1,11 +1,13 @@
 export async function copyText(value: string): Promise<void> {
+  let clipboardError: unknown;
+
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(value);
       return;
     }
-  } catch {
-    // Fall back when clipboard permissions are denied or unavailable.
+  } catch (error) {
+    clipboardError = error;
   }
 
   const ta = document.createElement('textarea');
@@ -13,8 +15,14 @@ export async function copyText(value: string): Promise<void> {
   try {
     document.body.appendChild(ta);
     ta.select();
-    document.execCommand('copy');
+    if (document.execCommand('copy')) {
+      return;
+    }
   } finally {
-    document.body.removeChild(ta);
+    ta.remove();
   }
+
+  throw new Error('Failed to copy text', {
+    cause: clipboardError ?? new Error('Copy command was rejected'),
+  });
 }

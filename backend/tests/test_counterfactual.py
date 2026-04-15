@@ -559,6 +559,7 @@ class TestCreateCounterfactual:
             "code": "REPLAY_BRANCH_LOCK_LOST",
             "message": "Replay branch lock was lost before cloning or seeding",
         }
+        assert runtime_lock_module.runtime_lock_is_active(f"replay-branch:{sid}") is False
         seed_mock.assert_not_called()
 
     def test_rewrites_latest_agent_message_when_round_has_multiple_messages(self, client):
@@ -609,6 +610,32 @@ class TestCreateCounterfactual:
             "source_branch_id": bid,
             "round_number": 1,
             "agent_id": aid,
+            "replacement_content": "replacement",
+        })
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS",
+            "message": (
+                f"Agent {aid} has multiple messages in round 1 "
+                f"of branch {bid}; select a specific source message"
+            ),
+        }
+
+    def test_treats_blank_source_message_content_as_unspecified(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        aid = _seed_agent(engine, sid)
+        rid = _seed_round(engine, bid, 1)
+        _seed_message(engine, rid, aid, content="first message")
+        _seed_message(engine, rid, aid, content="second message")
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 1,
+            "agent_id": aid,
+            "source_message_content": "   ",
             "replacement_content": "replacement",
         })
 
