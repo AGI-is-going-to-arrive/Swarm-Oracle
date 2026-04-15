@@ -253,6 +253,7 @@ describe('ExportPanel', () => {
     expect(svgText).toContain('data-export-layer="edges"');
     expect(svgText).toContain('data-export-layer="background"');
     expect(svgText).toContain('data-export-node="true"');
+    expect(svgText).toContain('<clipPath id="graph-node-label-clip-0">');
     expect(svgText).toContain('Node A');
     expect(svgText).toContain('marker-end="url(#arrow)"');
 
@@ -303,6 +304,7 @@ describe('ExportPanel', () => {
     });
 
     expect(svgText).toContain('This is the complete label');
+    expect(svgText).toContain('clip-path="url(#graph-node-label-clip-0)"');
     expect(svgText).not.toContain('Truncated…</text>');
 
     document.body.removeChild(container);

@@ -988,6 +988,42 @@ describe('CausalReviewView', () => {
     expect(serializedUrl).toContain('branch_id=branch%2Fchild%3F2');
   });
 
+  it('encodes scenario ids for fetches and result links', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'graph-id',
+          nodes: [],
+          edges: [],
+          available_branches: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ branches: [] }),
+      } as Response);
+
+    renderView('/sim/scenario%2Falpha%3Fbeta/causal-map');
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scenario/scenario%2Falpha%3Fbeta/causal-graph',
+        expect.objectContaining({ headers: expect.anything() }),
+      );
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scenario/scenario%2Falpha%3Fbeta',
+        expect.objectContaining({ headers: expect.anything() }),
+      );
+    });
+    expect(screen.getByRole('link', { name: /Back to Result/i })).toHaveAttribute(
+      'href',
+      '/result/scenario%2Falpha%3Fbeta',
+    );
+  });
+
   it('clears the previous graph immediately when branch selection changes', async () => {
     const user = userEvent.setup();
     const branchOneResponse = createDeferredResponse();

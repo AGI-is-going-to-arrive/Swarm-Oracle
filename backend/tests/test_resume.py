@@ -300,6 +300,22 @@ class TestResumeEndpoint:
         data = resp.json()
         assert data["detail"]["code"] == "FEATURE_DISABLED"
 
+    def test_does_not_acquire_replay_lock_for_nonexistent_scenario(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        acquire_lock = MagicMock()
+        monkeypatch.setattr(graphs_module, "_acquire_replay_branch_lock", acquire_lock)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/api/scenario/nonexistent/resume",
+            json={"source_branch_id": "b1", "round_number": 1},
+        )
+
+        assert resp.status_code == 404
+        acquire_lock.assert_not_called()
+
     @patch("app.api.graphs.release_runtime_lock", return_value=True)
     @patch("app.api.graphs._stop_runtime_lock_heartbeat")
     @patch("app.api.graphs._start_runtime_lock_heartbeat", return_value=(MagicMock(), MagicMock()))
@@ -336,13 +352,13 @@ class TestResumeEndpoint:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] == 1:
+            if call_count[0] in {1, 4}:
                 result.first.return_value = scenario
-            elif call_count[0] == 2:
+            elif call_count[0] in {2, 5}:
                 result.first.return_value = branch
-            elif call_count[0] == 3:
+            elif call_count[0] in {3, 6}:
                 result.first.return_value = 10  # max round
-            elif call_count[0] == 4:
+            elif call_count[0] == 7:
                 result.all.return_value = []  # no replay branches
             return result
 
@@ -395,13 +411,13 @@ class TestResumeEndpoint:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] == 1:
+            if call_count[0] in {1, 4}:
                 result.first.return_value = scenario
-            elif call_count[0] == 2:
+            elif call_count[0] in {2, 5}:
                 result.first.return_value = branch
-            elif call_count[0] == 3:
+            elif call_count[0] in {3, 6}:
                 result.first.return_value = 10
-            elif call_count[0] == 4:
+            elif call_count[0] == 7:
                 result.all.return_value = []
             return result
 
@@ -874,13 +890,13 @@ class TestBranchLimitShared:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] == 1:
+            if call_count[0] in {1, 4}:
                 result.first.return_value = scenario
-            elif call_count[0] == 2:
+            elif call_count[0] in {2, 5}:
                 result.first.return_value = branch
-            elif call_count[0] == 3:
+            elif call_count[0] in {3, 6}:
                 result.first.return_value = 10
-            elif call_count[0] == 4:
+            elif call_count[0] == 7:
                 # 3 existing replay branches
                 result.all.return_value = [MagicMock(), MagicMock(), MagicMock()]
             return result

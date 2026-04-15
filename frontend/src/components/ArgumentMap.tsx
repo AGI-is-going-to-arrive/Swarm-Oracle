@@ -221,6 +221,9 @@ function getArgumentEdgeRelationLabel(
 ): string {
   if (edge.label && edge.label.trim()) return edge.label.trim();
   if (edge.type === 'rebuts') return t('argument.edge_rebuts', 'rebuts');
+  if (edge.type === 'accepted') return t('argument.edge_accepted', 'accepts');
+  if (edge.type === 'rejected') return t('argument.edge_rejected', 'rejects');
+  if (edge.type === 'unaddressed') return t('argument.edge_unaddressed', 'leaves unaddressed');
   return t('argument.edge_supports', 'supports');
 }
 
@@ -427,6 +430,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const latestRequestIdRef = useRef(0);
+  const encodedDebateId = encodeURIComponent(debateId);
 
   const translate = useCallback((key: string, fallback: string) => (
     t(key, fallback)
@@ -439,7 +443,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     setSelectedNode(null);
     setErrorTier(null);
     try {
-      const res = await fetch(`/api/debate/${debateId}/argument-map`, {
+      const res = await fetch(`/api/debate/${encodedDebateId}/argument-map`, {
         headers: buildSessionHeaders(),
       });
       if (requestId !== latestRequestIdRef.current) return;
@@ -473,7 +477,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     } finally {
       if (requestId === latestRequestIdRef.current) setLoading(false);
     }
-  }, [debateId]);
+  }, [encodedDebateId]);
 
   useEffect(() => {
     if (!visible || !debateId) return;

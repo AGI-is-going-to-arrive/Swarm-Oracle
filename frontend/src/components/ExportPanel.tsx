@@ -134,7 +134,7 @@ function serializeGraphNodes(container: Element): string {
   const cards = Array.from(container.querySelectorAll<HTMLElement>('[data-graph-node-card="true"]'));
 
   return cards
-    .map((card) => {
+    .map((card, index) => {
       const cardRect = card.getBoundingClientRect();
       if (cardRect.width <= 0 || cardRect.height <= 0) return '';
 
@@ -158,14 +158,21 @@ function serializeGraphNodes(container: Element): string {
       const textY = labelRect
         ? (labelRect.top - cardRect.top) + (labelRect.height / 2)
         : cardRect.height / 2;
+      const textClipWidth = Math.max(
+        1,
+        cardRect.width - textX - parsePixelValue(computed.paddingRight, 12),
+      );
       const fontSize = parsePixelValue(labelComputed.fontSize, 12);
       const iconMarkup = serializeNodeIcon(card.querySelector<SVGSVGElement>('svg'), cardRect);
+      const clipPathId = `graph-node-label-clip-${index}`;
 
       return [
         `<g data-export-node="true" transform="translate(${round(groupX)} ${round(groupY)})" opacity="${round(opacity)}">`,
+        `<title>${escapeXml(label)}</title>`,
+        `<clipPath id="${clipPathId}"><rect x="${round(textX)}" y="0" width="${round(textClipWidth)}" height="${round(cardRect.height)}"/></clipPath>`,
         `<rect width="${round(cardRect.width)}" height="${round(cardRect.height)}" rx="${round(borderRadius)}" ry="${round(borderRadius)}" fill="${escapeXml(computed.backgroundColor || '#555')}" stroke="${escapeXml(computed.borderTopColor || 'transparent')}" stroke-width="${round(borderWidth)}"/>`,
         iconMarkup,
-        `<text x="${round(textX)}" y="${round(textY)}" fill="${escapeXml(labelComputed.color || computed.color || '#fff')}" font-family="${escapeXml(labelComputed.fontFamily || computed.fontFamily || 'sans-serif')}" font-size="${round(fontSize)}" font-weight="${escapeXml(labelComputed.fontWeight || computed.fontWeight || '400')}" dominant-baseline="middle">${escapeXml(label)}</text>`,
+        `<text x="${round(textX)}" y="${round(textY)}" clip-path="url(#${clipPathId})" fill="${escapeXml(labelComputed.color || computed.color || '#fff')}" font-family="${escapeXml(labelComputed.fontFamily || computed.fontFamily || 'sans-serif')}" font-size="${round(fontSize)}" font-weight="${escapeXml(labelComputed.fontWeight || computed.fontWeight || '400')}" dominant-baseline="middle">${escapeXml(label)}</text>`,
         `</g>`,
       ].join('');
     })

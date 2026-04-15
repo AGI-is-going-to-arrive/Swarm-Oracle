@@ -20,6 +20,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.a11y_relations': 'Argument relations list',
     'argument.edge_supports': 'supports',
     'argument.edge_rebuts': 'rebuts',
+    'argument.edge_accepted': 'accepts',
+    'argument.edge_rejected': 'rejects',
+    'argument.edge_unaddressed': 'leaves unaddressed',
     'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': 'Open details',
     'common.graph_controls': 'Graph controls',
@@ -40,6 +43,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.a11y_relations': '论证关系列表',
     'argument.edge_supports': '支持',
     'argument.edge_rebuts': '反驳',
+    'argument.edge_accepted': '采纳',
+    'argument.edge_rejected': '驳回',
+    'argument.edge_unaddressed': '未回应',
     'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': '打开详情',
     'common.graph_controls': '图谱控件',
@@ -701,6 +707,48 @@ describe('ArgumentMap', () => {
     const items = within(relationList).getAllByRole('listitem');
     expect(items).toHaveLength(1);
     expect(items[0]).toHaveTextContent('Main claim supports Evidence pack');
+  });
+
+  it('uses localized relation labels for verdict-style graph edges', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-relation-labels',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'verdict', label: 'Verdict', round: null, payload: null },
+          { id: 'n2', key: 'k2', type: 'claim', label: 'Claim A', round: 1, payload: null },
+          { id: 'n3', key: 'k3', type: 'rebuttal', label: 'Rebuttal B', round: 2, payload: null },
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', type: 'accepted', weight: 1, label: null },
+          { id: 'e2', source: 'n1', target: 'n3', type: 'unaddressed', weight: 1, label: null },
+        ],
+        units: [
+          { id: 'u2', type: 'claim', status: 'accepted', text: 'Claim A', turn_id: 't1', node_id: 'n2' },
+          { id: 'u3', type: 'rebuttal', status: 'unaddressed', text: 'Rebuttal B', turn_id: 't2', node_id: 'n3' },
+        ],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const relationList = await screen.findByRole('list', { name: 'Argument relations list' });
+    const items = within(relationList).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Verdict accepts Claim A');
+    expect(items[1]).toHaveTextContent('Verdict leaves unaddressed Rebuttal B');
+  });
+
+  it('encodes debate ids before requesting the argument-map endpoint', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ snapshot_id: null, nodes: [], edges: [], units: [] }),
+    } as Response);
+    render(<ArgumentMap debateId="debate/alpha?beta" visible={true} />);
+
+    await screen.findByText(/No argument map/);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/debate/debate%2Falpha%3Fbeta/argument-map',
+      expect.objectContaining({ headers: expect.anything() }),
+    );
   });
 
   it('keeps node-only maps keyboard-accessible through the rendered graph node button', async () => {

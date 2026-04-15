@@ -276,6 +276,7 @@
   分支 selector 当前会优先显示 scenario branch 的标题和概率；拿不到 branch 元数据时才回退完整 branch id。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
+- `CausalReviewView` / `ArgumentMap` 当前对 graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，都先做 `encodeURIComponent()`；带特殊字符的 id 不会再把请求或跳转拆坏。
 - URL 里如果带了不存在的 `branch_id`，`CausalReviewView` 当前会直接显示后端错误，不再把未知分支伪装成空图。
 - `CausalReviewView` 当前只有在源图本身就没有因果边时，`多节点但 0 edges` 才会走 relationless snapshot fallback：
   - 显示本地化提示和 event snapshot 列表
@@ -290,7 +291,7 @@
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点可访问名称，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
-- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list，让读屏器能直接读到 `causes / precedes / supports / rebuts`。
+- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；`ArgumentMap` 的 verdict relation 会按 `supports / rebuts / accepts / rejects / leaves unaddressed` 区分，不再把所有关系都读成 `supports`。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
@@ -310,9 +311,10 @@
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 关闭时会顺手清掉旧的复制失败提示；重新打开同一节点时，不会再把上一轮错误提醒残留出来
   - 详情关闭后仍走 pane click / close button 这条现有口径
-- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡上如果同时有截断标题和完整标题，导出会优先取完整标题，不再把省略号文本写进 SVG。
+- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- `phase3-batch-a / batch-b full` 当前在 Chromium 上继续覆盖 desktop / mobile；fresh preview 下本轮两条脚本都 `allPassed=true`，default / `zh-CN` locale 都通过。
+- frontend graph-focused vitest 本轮 `102 passed`。
+- `phase3-batch-a full` 和 `phase3-batch-b full` 本轮在 Chromium 通过。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：
   - branch selector 真的发出带 `branch_id` 的请求
@@ -320,11 +322,11 @@
   - default / `zh-CN` locale 走同一条 fixture 口径
 - `phase3-batch-a / batch-b` 的 graph SVG smoke 当前会校验下载文件内容，不只看文件名。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
-- `phase3-batch-b full` 当前口径是 `43/43`。
+- `phase3-batch-b` 的 `zh-CN` mobile 口径本轮通过。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的强度摘要在 default / `zh-CN` locale 都能定位，以及 `Export SVG`、本地化 verdict 节点标签、节点点击打开详情、详情文本、accepted 状态与关闭动作。
-- `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会先走结果页的 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏。
+- `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会在结果页 ready 后走 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏；mobile 重试口径已稳定。
 - `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
-- `phase3-batch-a / batch-b` 当前都支持 `--browser chromium|firefox|webkit` scoped 执行；graph 桌面 smoke 已覆盖 Chromium / Firefox / WebKit 三浏览器口径。
+- `phase3-batch-a / batch-b` 当前都支持 `--browser chromium|firefox|webkit` scoped 执行；本轮桌面 Firefox / WebKit 的 `batch-a / batch-b` 都通过。
 - `phase3-batch-a / batch-b` 当前都会在真正打开浏览器前先跑共享 `frontendPreflight`：
   - deep-link 必须返回同一份 SPA shell
   - 所有目标路由必须引用同一 entry module

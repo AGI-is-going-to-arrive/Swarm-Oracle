@@ -71,6 +71,13 @@ React + TypeScript frontend for SwarmOracle.
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`
   shared preview/deep-link preflight for graph E2E and `release-signoff`; it checks the SPA shell, entry-module fingerprint, and entry asset reachability before the browser flow starts
+- `CausalReviewView.tsx`
+  graph fetches now encode `scenarioId / branchId` before building request URLs
+- `ArgumentMap.tsx`
+  relation labels stay localized for `supports / rebuts / accepted / rejected / unaddressed`
+  fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
+- `ExportPanel.tsx`
+  native SVG export rebuild now clips long node labels and prefers full labels over truncated card text
 
 ## Validation
 
@@ -116,9 +123,13 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
   - `node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs`: `24 passed`
+  - graph-focused vitest: `102 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run lint`: pass
   - `npm run build`: pass
-  - fresh preview on `http://127.0.0.1:18937`: `phase3-batch-a full` and `phase3-batch-b full` both `allPassed=true`
+  - `npm run perf:budgets:check`: status `ok`
+  - preview-driven Chromium: `phase3-batch-a full`, `phase3-batch-b full`, and `phase3-batch-b zh-CN mobile` passed
+  - desktop Firefox / WebKit: `phase3-batch-a` and `phase3-batch-b` passed on both browsers
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression

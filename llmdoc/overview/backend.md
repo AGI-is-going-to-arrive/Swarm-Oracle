@@ -69,6 +69,7 @@
 - 短链 replay 通过 `ReplayArtifact` 持久化。
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先 `stamp` 到当前 head，再执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
+- `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
 - replay branch runtime lock 当前按 fail-closed 收口：
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，`counterfactual / resume` 都不会继续 clone / seed / schedule
   - 如果锁丢失前，别的请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
@@ -209,7 +210,7 @@
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
   `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级；runtime repair 在重建唯一约束前也会先按最新一条脏数据去重，不会因为 legacy 重复行直接炸掉。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
-  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；如果 legacy duplicate snapshot 还残留，读取会稳定选最新一份。
+  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；如果 SQLite legacy duplicate snapshot 还残留，runtime repair 会把重复 snapshot 的 node/edge 合并去重到当前 snapshot，不再把 stale duplicate node/edge 带进当前图。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
@@ -229,7 +230,7 @@
   - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复；`semantic_hash` 会按归一化后的文本计算，纯 whitespace 变体不会再在同一 turn 里拆成两条
   - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
   - SQLite lightweight fallback 修重复 `debate_argument_unit` 时，也会同步清掉已经失效的 `graph_node / graph_edge`，避免旧图残留 orphan node/edge 混进当前 argument map
-  - legacy SQLite 上如果已经留下重复 snapshot，读取会稳定选最新 snapshot，不再随机命中旧图
+  - legacy SQLite 上如果已经留下重复 snapshot，runtime repair 会先把重复 snapshot 的 node/edge 合并去重到当前 snapshot，不再随机命中旧图
   - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn；`counter` 当前也会继续参与 `rebuts` 边重建，不会掉成孤点
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
   - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜

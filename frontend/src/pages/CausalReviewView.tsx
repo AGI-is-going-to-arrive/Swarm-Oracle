@@ -296,6 +296,7 @@ export function CausalReviewView() {
   const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
+  const encodedScenarioId = id ? encodeURIComponent(id) : '';
 
   const translate = useCallback((key: string, fallback: string) => (
     t(key, fallback)
@@ -311,8 +312,8 @@ export function CausalReviewView() {
     setBranchOptions([]);
     try {
       const url = branchId
-        ? `/api/scenario/${id}/causal-graph?branch_id=${encodeURIComponent(branchId)}`
-        : `/api/scenario/${id}/causal-graph`;
+        ? `/api/scenario/${encodedScenarioId}/causal-graph?branch_id=${encodeURIComponent(branchId)}`
+        : `/api/scenario/${encodedScenarioId}/causal-graph`;
       const res = await fetch(url, { headers: buildSessionHeaders() });
       if (!res.ok) {
         let payload: unknown = null;
@@ -332,7 +333,7 @@ export function CausalReviewView() {
       void (async () => {
         let scenarioBranchOptions: ScenarioBranchOption[] = [];
         try {
-          const scenarioRes = await fetch(`/api/scenario/${id}`, { headers: buildSessionHeaders() });
+          const scenarioRes = await fetch(`/api/scenario/${encodedScenarioId}`, { headers: buildSessionHeaders() });
           if (scenarioRes.ok) {
             const scenarioPayload = await scenarioRes.json();
             const scenarioBranches: unknown[] = Array.isArray(scenarioPayload?.branches)
@@ -374,7 +375,7 @@ export function CausalReviewView() {
     } finally {
       if (requestId === latestRequestIdRef.current) setLoading(false);
     }
-  }, [currentGraphKey, id, branchId]);
+  }, [currentGraphKey, encodedScenarioId, branchId]);
 
   useEffect(() => {
     if (!id || !enabled) return;
@@ -579,7 +580,7 @@ export function CausalReviewView() {
   if (!enabled) return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
       <p style={{ color: '#888' }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>
-      <Link to={id ? `/result/${id}` : '/'} style={{ color: '#8ab4f8' }}>{t('common.back_to_result', 'Back to Result')}</Link>
+      <Link to={id ? `/result/${encodedScenarioId}` : '/'} style={{ color: '#8ab4f8' }}>{t('common.back_to_result', 'Back to Result')}</Link>
     </div>
   );
 
@@ -602,7 +603,7 @@ export function CausalReviewView() {
         >
           {t('common.retry', 'Retry')}
         </button>
-        <Link to={`/result/${id}`} style={{ color: '#8ab4f8' }}>
+        <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8' }}>
           {t('common.back_to_result', 'Back to Result')}
         </Link>
       </div>
@@ -616,7 +617,7 @@ export function CausalReviewView() {
         className="causal-review-shell"
       >
         <div style={{ padding: isCompactViewport ? '0.75rem' : '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
-          <Link to={`/result/${id}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
+          <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
             &larr; {t('common.back_to_result', 'Back to Result')}
           </Link>
           <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{t('causal.title', 'Causal Graph')}</h1>

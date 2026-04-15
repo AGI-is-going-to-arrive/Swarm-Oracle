@@ -710,6 +710,176 @@ class TestBuildSnapshot:
 
         assert [node["label"] for node in result["nodes"]] == ["new snapshot node"]
 
+    def test_runtime_repair_dedupes_legacy_duplicate_snapshot_nodes_and_edges(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        db_path = tmp_path / "legacy-duplicate-runtime-repair.db"
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_snapshot (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    owner_type TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    graph_kind TEXT NOT NULL,
+                    branch_id TEXT,
+                    round_number INTEGER,
+                    share_artifact_id TEXT,
+                    metadata_json TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_node (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    node_type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    round_number INTEGER,
+                    ref_model TEXT,
+                    ref_id TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_edge (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    target_node_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    weight FLOAT,
+                    label TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE agent_state_frame (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    scenario_id TEXT NOT NULL,
+                    branch_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    stance_score FLOAT NOT NULL DEFAULT 0.0,
+                    stance_label TEXT,
+                    emotion TEXT,
+                    summary_excerpt TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+
+        monkeypatch.setattr("app.services.causal_graph.get_engine", lambda: engine)
+
+        with Session(engine) as session:
+            old_snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id="sc-legacy-runtime-repair",
+                graph_kind="causal_review",
+            )
+            new_snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id="sc-legacy-runtime-repair",
+                graph_kind="causal_review",
+            )
+            session.add(old_snapshot)
+            session.add(new_snapshot)
+            session.flush()
+
+            old_event = GraphNode(
+                snapshot_id=old_snapshot.id,
+                node_key="r1_a1_m1",
+                node_type="event",
+                label="same event",
+                round_number=1,
+                payload_json='{"branch_id":"br1","agent_id":"a1"}',
+            )
+            old_fork = GraphNode(
+                snapshot_id=old_snapshot.id,
+                node_key="fork_r1_br2",
+                node_type="fork",
+                label="same fork",
+                round_number=1,
+                payload_json='{"branch_id":"br2","source_branch_id":"br1"}',
+            )
+            new_event = GraphNode(
+                snapshot_id=new_snapshot.id,
+                node_key="r1_a1_m1",
+                node_type="event",
+                label="same event",
+                round_number=1,
+                payload_json='{"branch_id":"br1","agent_id":"a1"}',
+            )
+            new_fork = GraphNode(
+                snapshot_id=new_snapshot.id,
+                node_key="fork_r1_br2",
+                node_type="fork",
+                label="same fork",
+                round_number=1,
+                payload_json='{"branch_id":"br2","source_branch_id":"br1"}',
+            )
+            session.add_all([old_event, old_fork, new_event, new_fork])
+            session.flush()
+            session.add(
+                GraphEdge(
+                    snapshot_id=old_snapshot.id,
+                    source_node_id=old_event.id,
+                    target_node_id=old_fork.id,
+                    edge_type="caused",
+                )
+            )
+            session.add(
+                GraphEdge(
+                    snapshot_id=new_snapshot.id,
+                    source_node_id=new_event.id,
+                    target_node_id=new_fork.id,
+                    edge_type="caused",
+                )
+            )
+            session.commit()
+
+        append_round_nodes(
+            "sc-legacy-runtime-repair",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m2", content="next event")],
+        )
+
+        result = build_snapshot("sc-legacy-runtime-repair")
+        labels = [node["label"] for node in result["nodes"]]
+        assert labels.count("same event") == 1
+        assert labels.count("same fork") == 1
+        assert labels.count("next event") == 1
+        caused_edges = [edge for edge in result["edges"] if edge["type"] == "caused"]
+        assert len(caused_edges) == 1
+
+        with Session(engine) as session:
+            snapshots = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc-legacy-runtime-repair")
+            ).all()
+            assert len(snapshots) == 1
+
+            nodes = session.exec(
+                select(GraphNode).where(GraphNode.snapshot_id == snapshots[0].id)
+            ).all()
+            assert len(nodes) == 3
+
+            edges = session.exec(
+                select(GraphEdge).where(GraphEdge.snapshot_id == snapshots[0].id)
+            ).all()
+            caused_edges = [edge for edge in edges if edge.edge_type == "caused"]
+            assert len(caused_edges) == 1
+
     def test_empty_graph_when_no_data(self):
         result = build_snapshot("nonexistent_scenario")
         assert result == {

@@ -504,6 +504,40 @@ async def resume_from_round(
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
         raise _feature_disabled("counterfactual_replay")
 
+    with Session(get_engine()) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        if scenario.status != ScenarioStatus.DONE:
+            raise api_error(
+                400,
+                "RESUME_SCENARIO_STATUS_INVALID",
+                "Scenario must be in 'done' status to resume",
+            )
+
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == body.source_branch_id,
+                Branch.scenario_id == scenario_id,
+            )
+        ).first()
+        if branch is None:
+            raise api_error(
+                404,
+                "RESUME_BRANCH_NOT_FOUND",
+                f"Branch {body.source_branch_id} not found",
+            )
+
+        max_round = session.exec(
+            select(Round.round_number)
+            .where(Round.branch_id == body.source_branch_id)
+            .order_by(Round.round_number.desc())
+        ).first()
+        if max_round is None or body.round_number > max_round:
+            raise api_error(
+                400,
+                "RESUME_ROUND_OUT_OF_RANGE",
+                f"round_number {body.round_number} exceeds available rounds",
+            )
+
     lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
     if lease is None:
         raise api_error(

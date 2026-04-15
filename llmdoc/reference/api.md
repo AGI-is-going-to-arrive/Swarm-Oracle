@@ -209,6 +209,7 @@
 - `GET /api/scenario/{id}/causal-graph` 当前会先 `trim` `branch_id`：
   - 空白值按未过滤处理
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
+  - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时会把重复 snapshot 的 node/edge 合并去重到当前 snapshot；返回体不再混入 stale duplicate node/edge
   - 成功返回体仍会带 `available_branches`
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
@@ -226,6 +227,7 @@
   - 正在跑另一条 replay branch 操作时返回 `409 REPLAY_BRANCH_BUSY`
   - 达到共享上限时返回 `429 REPLAY_BRANCH_LIMIT_REACHED`
 - `POST /api/scenario/{id}/resume` 当前还会先预占 simulation lock：
+  - 在尝试 replay branch 锁前，会先校验 scenario/source branch/round；这些前置校验失败时不会占用 replay branch 锁
   - scenario 状态不是 `done` 时返回 `400 RESUME_SCENARIO_STATUS_INVALID`
   - source branch 不存在时返回 `404 RESUME_BRANCH_NOT_FOUND`
   - round 超范围时返回 `400 RESUME_ROUND_OUT_OF_RANGE`

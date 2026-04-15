@@ -231,15 +231,58 @@ def _dedupe_graph_snapshots(session: Session) -> None:
             continue
 
         canonical_id, duplicate_ids = snapshot_ids[0], snapshot_ids[1:]
+        nodes = session.exec(
+            select(GraphNode)
+            .where(GraphNode.snapshot_id.in_(snapshot_ids))
+            .order_by(GraphNode.round_number, GraphNode.node_key, GraphNode.id)
+        ).all()
+        nodes_by_snapshot: dict[str, list[GraphNode]] = {}
+        for node in nodes:
+            nodes_by_snapshot.setdefault(node.snapshot_id, []).append(node)
+
+        canonical_node_ids: dict[tuple[str, str], str] = {}
+        rewritten_node_ids: dict[str, str] = {}
+        for snapshot_id in snapshot_ids:
+            for node in nodes_by_snapshot.get(snapshot_id, []):
+                signature = (node.node_key, node.node_type)
+                canonical_node_id = canonical_node_ids.get(signature)
+                if canonical_node_id is None:
+                    canonical_node_ids[signature] = node.id
+                    if snapshot_id != canonical_id:
+                        node.snapshot_id = canonical_id
+                    continue
+                rewritten_node_ids[node.id] = canonical_node_id
+                session.delete(node)
+
+        edges = session.exec(
+            select(GraphEdge)
+            .where(GraphEdge.snapshot_id.in_(snapshot_ids))
+            .order_by(GraphEdge.id)
+        ).all()
+        edges_by_snapshot: dict[str, list[GraphEdge]] = {}
+        for edge in edges:
+            edges_by_snapshot.setdefault(edge.snapshot_id, []).append(edge)
+
+        edge_signatures: set[tuple[str, str, str, str]] = set()
+        for snapshot_id in snapshot_ids:
+            for edge in edges_by_snapshot.get(snapshot_id, []):
+                mapped_source_id = rewritten_node_ids.get(edge.source_node_id, edge.source_node_id)
+                mapped_target_id = rewritten_node_ids.get(edge.target_node_id, edge.target_node_id)
+                signature = _edge_signature(
+                    mapped_source_id,
+                    mapped_target_id,
+                    edge.edge_type,
+                    edge.label,
+                )
+                if signature in edge_signatures:
+                    session.delete(edge)
+                    continue
+                edge_signatures.add(signature)
+                edge.snapshot_id = canonical_id
+                edge.source_node_id = mapped_source_id
+                edge.target_node_id = mapped_target_id
+
         for duplicate_id in duplicate_ids:
-            session.connection().exec_driver_sql(
-                "UPDATE graph_node SET snapshot_id = ? WHERE snapshot_id = ?",
-                (canonical_id, duplicate_id),
-            )
-            session.connection().exec_driver_sql(
-                "UPDATE graph_edge SET snapshot_id = ? WHERE snapshot_id = ?",
-                (canonical_id, duplicate_id),
-            )
             session.connection().exec_driver_sql(
                 "DELETE FROM graph_snapshot WHERE id = ?",
                 (duplicate_id,),

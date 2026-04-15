@@ -214,14 +214,19 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay / argument-map 定向回归通过
-  - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
-  - graph script contract 当前补了前端 preflight 与 `release-signoff` import-safe 口径；`node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs` 本轮 `24 passed`
-  - fresh preview 下，`phase3-batch-a full` 和 `phase3-batch-b full` 都 `allPassed=true`；Chromium 的 desktop / mobile 全绿
-  - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
-  - backend 全量 `python -m pytest -q` 本轮实测 `2078 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `1040 passed`
+  - backend graph / replay 定向 suite：`280 passed in 26.84s`
+  - frontend graph-focused vitest：`102 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` 通过
+  - `npm run perf:budgets:check` 状态 `ok`
+  - `node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs`：`24 passed`
+  - preview-driven Chromium：`phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-b zh-CN mobile` 通过
+  - desktop Firefox / WebKit：`phase3-batch-a` / `phase3-batch-b` 都通过
 - 这组回归当前覆盖：
+  - graph 前端这轮额外兜住：
+    - graph 请求 URL 的 `scenarioId / branchId` 编码
+    - `ArgumentMap` relation label 本地化
+    - `ExportPanel` 的 SVG 导出裁切与完整 label 优先级
+    - fail-soft `load_failed` 保持 `Retry` 态并隐藏 graph/export
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
   - `perf:budgets:check` 当前会按 modern / legacy 两套 chunk 名一起检查共享 `vendor`，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
   - replay branch runtime lock 当前已补：

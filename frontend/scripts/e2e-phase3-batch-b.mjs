@@ -888,7 +888,11 @@ async function testArgumentMapLoadFailed(page, baseUrl, outputDir, aggregateIssu
     results.steps.push({ name: "argument-map-load-failed-request-fired", passed: sawFailSoftResponse });
     const retryButtons = failSoftPage.getByRole("button", { name: /Retry|重试/i });
     const hasRetryButton = sawFailSoftResponse
-      ? await hasVisibleMatch(retryButtons)
+      ? await retryButtons
+          .first()
+          .waitFor({ state: "visible", timeout: 5000 })
+          .then(() => true)
+          .catch(() => false)
       : false;
     const hasLoadFailedMessage = sawFailSoftResponse
       ? await failSoftPage.getByText(/Failed to load argument map|Load failed|论证图谱加载失败/i).first().isVisible({ timeout: 5000 }).catch(() => false)
