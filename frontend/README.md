@@ -69,6 +69,8 @@ React + TypeScript frontend for SwarmOracle.
   ResultView-side resume control for `POST /api/scenario/:id/resume`; now locks after success, validates round input on the client, and is covered by the dedicated resume smoke script
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
+- `scripts/lib/frontendPreflight.mjs`
+  shared preview/deep-link preflight for graph E2E and `release-signoff`; it checks the SPA shell, entry-module fingerprint, and entry asset reachability before the browser flow starts
 
 ## Validation
 
@@ -102,20 +104,25 @@ npm run release:signoff -- --headless
 
 ```bash
 cd frontend
+node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
+```
+
+```bash
+cd frontend
 npm run test:spike:phaser-custom
 npm run build:spike:phaser-custom
 ```
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
-- Latest local rerun in this session:
-  - `npm test`: `1040 passed`
+- Latest scoped reruns in this session:
+  - `node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs`: `24 passed`
   - `npm run lint`: pass
-  - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run build`: pass
-  - `npm run perf:budgets:check`: pass
+  - fresh preview on `http://127.0.0.1:18937`: `phase3-batch-a full` and `phase3-batch-b full` both `allPassed=true`
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression
+  - graph preflight before graph smoke
   - plus frontend `test / lint / typecheck / build / perf` gates
 - Legacy compatibility is broader than the default signoff:
   - legacy bundle is emitted in production
@@ -142,9 +149,12 @@ npm run build:spike:phaser-custom
   - `build`
   - `perf:budgets:check`
   - asset provenance check
+  - `phase3_graph_preflight`
   - `corners`
   - `mobile`
   - `cross-browser`
+  - phase3 graph default / `zh-CN`
+  - phase3 graph desktop Firefox / WebKit
   - `ending-room-followup`
   - `roundtable-full`
   - `debate-full`

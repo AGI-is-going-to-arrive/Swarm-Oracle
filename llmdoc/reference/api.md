@@ -211,7 +211,10 @@
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
   - 成功返回体仍会带 `available_branches`
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
+  - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
+  - source branch 不存在时返回 `404 COUNTERFACTUAL_BRANCH_NOT_FOUND`
   - `round_number` 通过 schema 校验，必须 `>= 1`
+  - `round_number` 超出 source branch 已有范围时返回 `400 COUNTERFACTUAL_ROUND_OUT_OF_RANGE`
   - clone 前会先校验目标 round 里是否存在该 `agent_id` 的消息；找不到时返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND`
   - 请求体当前也支持可选 `source_message_content`
     - 同 agent 同轮只有 1 条消息时，不传也可以

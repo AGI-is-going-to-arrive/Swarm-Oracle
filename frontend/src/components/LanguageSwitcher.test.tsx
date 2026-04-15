@@ -25,8 +25,8 @@ describe('LanguageSwitcher', () => {
     render(<LanguageSwitcher />);
 
     expect(screen.getByRole('group', { name: 'Language switcher' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Switch language to English' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Switch language to Chinese' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'EN Switch language to English' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '中文 Switch language to Chinese' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('calls i18n.changeLanguage when a language is selected', async () => {
@@ -34,8 +34,16 @@ describe('LanguageSwitcher', () => {
     const user = userEvent.setup();
     render(<LanguageSwitcher />);
 
-    await user.click(screen.getByRole('button', { name: 'Switch language to Chinese' }));
+    await user.click(screen.getByRole('button', { name: '中文 Switch language to Chinese' }));
 
     expect(changeLanguageMock).toHaveBeenCalledWith('zh');
+  });
+
+  it('keeps the visible label text inside each accessible name', () => {
+    currentLanguage = 'en';
+    render(<LanguageSwitcher />);
+
+    expect(screen.getByRole('button', { name: /EN/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /中文/i })).toBeInTheDocument();
   });
 });

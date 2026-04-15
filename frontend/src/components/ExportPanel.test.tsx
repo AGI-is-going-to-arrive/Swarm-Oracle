@@ -258,4 +258,53 @@ describe('ExportPanel', () => {
 
     document.body.removeChild(container);
   });
+
+  it('prefers the full node label over the truncated display label in SVG exports', async () => {
+    const container = document.createElement('div');
+    container.className = 'svg-full-label-container';
+    container.style.width = '400px';
+    container.style.height = '300px';
+    container.innerHTML = `
+      <div class="react-flow__viewport" style="transform: translate(0px, 0px) scale(1);">
+        <div
+          data-graph-node-card="true"
+          data-graph-label="Truncated…"
+          data-graph-full-label="This is the complete label"
+          style="background: rgb(31, 41, 55); color: rgb(243, 244, 246); border: 1px solid rgb(125, 211, 252); border-radius: 8px; padding: 10px 12px; font-size: 14px; font-weight: 600;"
+        >
+          <span>Truncated…</span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const button = container.querySelector('[data-graph-node-card="true"]');
+    const label = button?.querySelector('span');
+    expect(button).toBeTruthy();
+    expect(label).toBeTruthy();
+
+    mockElementRect(container, { left: 0, top: 0, width: 400, height: 300 });
+    mockElementRect(button!, { left: 72, top: 92, width: 140, height: 44 });
+    mockElementRect(label!, { left: 108, top: 104, width: 72, height: 18 });
+
+    const createObjUrl = vi.fn().mockReturnValue('blob:svg-url');
+    globalThis.URL.createObjectURL = createObjUrl;
+
+    const user = userEvent.setup();
+    render(<ExportPanel containerSelector=".svg-full-label-container" filenamePrefix="graph" />);
+    await user.click(screen.getByRole('button', { name: 'Export SVG' }));
+
+    await waitFor(() => expect(createObjUrl).toHaveBeenCalledOnce());
+    const blobArg = createObjUrl.mock.calls[0][0] as Blob;
+    const svgText = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsText(blobArg);
+    });
+
+    expect(svgText).toContain('This is the complete label');
+    expect(svgText).not.toContain('Truncated…</text>');
+
+    document.body.removeChild(container);
+  });
 });

@@ -277,6 +277,18 @@ _SIMULATION_LOCK_REFRESH_FRACTION = 0.33
 _SIMULATION_LOCK_LOSS_POLL_SECONDS = 0.01
 
 
+def _runtime_lock_lease_alive(
+    lease_holder: list[RuntimeLockLease | None],
+) -> bool:
+    lease = lease_holder[0]
+    if lease is None:
+        return False
+    if lease.expires_at <= time.time():
+        lease_holder[0] = None
+        return False
+    return True
+
+
 def _runtime_lock_refresh_interval(
     lease: RuntimeLockLease | None,
     *,
@@ -306,7 +318,12 @@ def _start_runtime_lock_heartbeat(
         )
         while not stop_event.wait(refresh_interval):
             current_lease = lease_holder[0]
-            refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            try:
+                refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            except Exception:
+                lease_holder[0] = None
+                logger.exception("%s runtime lock lease refresh failed", lock_label)
+                return
             if refreshed is None:
                 lease_holder[0] = None
                 logger.warning("%s runtime lock lease could not be refreshed", lock_label)
@@ -334,7 +351,7 @@ def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.
 async def _watch_runtime_lock_loss(
     lease_holder: list[RuntimeLockLease | None],
 ) -> None:
-    while lease_holder[0] is not None:
+    while _runtime_lock_lease_alive(lease_holder):
         await asyncio.sleep(_SIMULATION_LOCK_LOSS_POLL_SECONDS)
     raise RuntimeError("simulation runtime lock was lost during execution")
 

@@ -21,8 +21,10 @@
   - `perf:budgets:check`
   - script contract tests
   - asset provenance check
+  - `phase3_graph_preflight`
   - `corners / mobile / cross_browser`
   - `phase3-batch-a / phase3-batch-b` 的 default / `zh-CN` graph smoke
+  - `phase3-batch-a / phase3-batch-b` 的 Firefox / WebKit graph desktop smoke
   - `ending_room_followup / ending_room_followup_en`
   - `ending_room_followup_firefox / ending_room_followup_en_firefox`
   - `ending_room_followup_webkit / ending_room_followup_en_webkit`
@@ -30,6 +32,7 @@
   - `roundtable_firefox / roundtable_en_firefox`
   - `roundtable_webkit / roundtable_en_webkit`
   - `debate_full / debate_firefox / debate_webkit`
+- graph smoke 和默认 `release-signoff` 当前都会先跑前端 preview preflight；如果 deep-link 没 ready、SPA fallback 失效，或 entry asset 指纹不一致，会直接 fail-closed，不再把 404 混成图谱回归。
 - 最近一次 Oracle 专项签收工件位于：
   - `frontend/output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `frontend/output/e2e/20260331-oracle-signoff-roundtable/summary.json`

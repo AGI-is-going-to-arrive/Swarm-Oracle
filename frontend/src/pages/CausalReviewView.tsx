@@ -282,6 +282,7 @@ export function CausalReviewView() {
   const rawBranchId = searchParams.get('branch_id');
   const branchId = rawBranchId && rawBranchId.trim() ? rawBranchId.trim() : undefined;
   const [graphData, setGraphData] = useState<CausalGraphData | null>(null);
+  const [resolvedGraphKey, setResolvedGraphKey] = useState<string | null>(null);
   const [branches, setBranches] = useState<string[]>([]);
   const [branchOptions, setBranchOptions] = useState<ScenarioBranchOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -299,6 +300,7 @@ export function CausalReviewView() {
   const translate = useCallback((key: string, fallback: string) => (
     t(key, fallback)
   ), [t]);
+  const currentGraphKey = `${id ?? ''}:${branchId ?? ''}`;
 
   const fetchGraph = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -324,6 +326,7 @@ export function CausalReviewView() {
       const data = await res.json();
       if (requestId !== latestRequestIdRef.current) return;
       setGraphData(data);
+      setResolvedGraphKey(currentGraphKey);
       setError(null);
       setBranches(extractAvailableBranches(data));
       void (async () => {
@@ -359,17 +362,19 @@ export function CausalReviewView() {
       if (requestId !== latestRequestIdRef.current) return;
       if (err && typeof err === 'object' && ('code' in err || 'status' in err)) {
         const record = err as Partial<CausalGraphErrorState>;
+        setResolvedGraphKey(currentGraphKey);
         setError({
           code: typeof record.code === 'string' ? record.code : null,
           status: typeof record.status === 'number' ? record.status : null,
         });
       } else {
+        setResolvedGraphKey(currentGraphKey);
         setError({ code: 'NETWORK_ERROR', status: null });
       }
     } finally {
       if (requestId === latestRequestIdRef.current) setLoading(false);
     }
-  }, [id, branchId]);
+  }, [currentGraphKey, id, branchId]);
 
   useEffect(() => {
     if (!id || !enabled) return;
@@ -394,6 +399,7 @@ export function CausalReviewView() {
 
   const nodeCount = filteredData?.nodes.length ?? 0;
   const edgeCount = filteredData?.edges.length ?? 0;
+  const isRefreshingBranch = resolvedGraphKey !== null && resolvedGraphKey !== currentGraphKey;
   const isTextFallback = nodeCount > PERF_TEXT_FALLBACK_LIMIT;
   const hasSourceEdges = (graphData?.edges.length ?? 0) > 0;
   const isRelationlessFallback = nodeCount > 1 && edgeCount === 0 && !hasSourceEdges;
@@ -577,7 +583,7 @@ export function CausalReviewView() {
     </div>
   );
 
-  if (loading) {
+  if (loading || isRefreshingBranch) {
     return (
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}>
         <p>{t('common.loading', 'Loading...')}</p>
@@ -606,7 +612,7 @@ export function CausalReviewView() {
   return (
     <Tooltip.Provider delayDuration={300}>
       <div
-        style={{ height: '100vh', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}
+        style={{ height: '100dvh', minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}
         className="causal-review-shell"
       >
         <div style={{ padding: isCompactViewport ? '0.75rem' : '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
@@ -701,7 +707,7 @@ export function CausalReviewView() {
             <p style={{ color: '#888' }}>{t('causal.no_results', 'No nodes match your search.')}</p>
           </div>
         ) : isNonInteractiveFallback ? (
-          <div style={{ flex: 1, overflow: 'auto', padding: '1rem' }} className="causal-graph-container">
+          <div style={{ flex: 1, overflow: 'auto', padding: '1rem', position: 'relative' }} className="causal-graph-container">
             <p style={{ color: '#888', marginBottom: '0.5rem' }}>
               {isTextFallback
                 ? t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')
@@ -732,7 +738,11 @@ export function CausalReviewView() {
                 </div>
               ))}
             </div>
-            <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+            <NodeDetailPanel
+              key={selectedNode?.id ?? 'causal-fallback-closed'}
+              node={selectedNode}
+              onClose={() => setSelectedNode(null)}
+            />
           </div>
         ) : (
           <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
@@ -769,7 +779,11 @@ export function CausalReviewView() {
                 )}
               </ReactFlow>
             </div>
-            <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+            <NodeDetailPanel
+              key={selectedNode?.id ?? 'causal-graph-closed'}
+              node={selectedNode}
+              onClose={() => setSelectedNode(null)}
+            />
           </div>
         )}
 

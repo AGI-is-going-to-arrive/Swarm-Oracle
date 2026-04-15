@@ -143,6 +143,7 @@ function serializeGraphNodes(container: Element): string {
       const labelComputed = labelElement ? window.getComputedStyle(labelElement) : computed;
       const labelRect = labelElement?.getBoundingClientRect();
       const label =
+        card.getAttribute('data-graph-full-label')?.trim() ||
         card.getAttribute('data-graph-label')?.trim() ||
         labelElement?.textContent?.trim() ||
         card.textContent?.trim() ||

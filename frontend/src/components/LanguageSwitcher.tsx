@@ -6,6 +6,8 @@ import { useTranslation } from 'react-i18next';
 
 export function LanguageSwitcher() {
   const { i18n, t } = useTranslation();
+  const englishLabel = `EN ${t('common.switch_to_english', 'Switch language to English')}`;
+  const chineseLabel = `中文 ${t('common.switch_to_chinese', 'Switch language to Chinese')}`;
 
   return (
     <div
@@ -17,8 +19,8 @@ export function LanguageSwitcher() {
         type="button"
         lang="en"
         aria-pressed={i18n.language.startsWith('en')}
-        aria-label={t('common.switch_to_english', 'Switch language to English')}
-        title={t('common.switch_to_english', 'Switch language to English')}
+        aria-label={englishLabel}
+        title={englishLabel}
         className={`lang-switch__opt ${i18n.language.startsWith('en') ? 'lang-switch__opt--active' : ''}`}
         onClick={() => i18n.changeLanguage('en')}
       >
@@ -28,8 +30,8 @@ export function LanguageSwitcher() {
         type="button"
         lang="zh-CN"
         aria-pressed={!i18n.language.startsWith('en')}
-        aria-label={t('common.switch_to_chinese', 'Switch language to Chinese')}
-        title={t('common.switch_to_chinese', 'Switch language to Chinese')}
+        aria-label={chineseLabel}
+        title={chineseLabel}
         className={`lang-switch__opt ${!i18n.language.startsWith('en') ? 'lang-switch__opt--active' : ''}`}
         onClick={() => i18n.changeLanguage('zh')}
       >

@@ -2,11 +2,19 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertFrontendRoutesReady,
+  buildPhase3BatchAPreflightPaths,
+  buildPhase3BatchBPreflightPaths,
+} from "./lib/frontendPreflight.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(FRONTEND_ROOT, "..");
 const BACKEND_ROOT = path.join(REPO_ROOT, "backend");
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
 const VALID_DEBATE_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
@@ -299,11 +307,53 @@ function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
   }
 }
 
+async function runAsyncStep(summary, runArgs, stepId, runner, options = {}) {
+  const startedAt = new Date().toISOString();
+  const step = {
+    id: stepId,
+    status: "running",
+    started_at: startedAt,
+    finished_at: null,
+    duration_ms: null,
+    command: options.command ?? stepId,
+    cwd: options.cwd ?? FRONTEND_ROOT,
+    artifact_dir: options.artifactDir ?? null,
+    result_file: options.resultFile ?? null,
+    browser_launch_file: options.browserLaunchFile ?? null,
+    error: null,
+  };
+  summary.steps.push(step);
+  writeSummary(runArgs.outputRoot, summary);
+
+  const startTime = Date.now();
+  try {
+    if (!runArgs.dryRun) {
+      await runner();
+    }
+    step.status = "passed";
+  } catch (error) {
+    step.status = "failed";
+    step.error = serializeError(error);
+    throw error;
+  } finally {
+    step.finished_at = new Date().toISOString();
+    step.duration_ms = Date.now() - startTime;
+    writeSummary(runArgs.outputRoot, summary);
+  }
+}
+
 function buildSuiteArgs(scriptName, mode, baseUrl, outputDir, headless, scenarioId) {
   const args = [scriptName, mode, "--url", baseUrl, "--output-dir", outputDir];
   if (headless) args.push("--headless");
   if (scenarioId) args.push("--scenario-id", scenarioId);
   return args;
+}
+
+function buildGraphPreflightPaths() {
+  return [
+    ...buildPhase3BatchAPreflightPaths(),
+    ...buildPhase3BatchBPreflightPaths(),
+  ];
 }
 
 function buildHttpCheckArgs(url, expectedContentType = "", expectedBodyMarker = "") {
@@ -319,7 +369,11 @@ function ensureBackendPythonExists(pythonPath) {
   );
 }
 
-function main() {
+export const __test__ = {
+  buildGraphPreflightPaths,
+};
+
+async function main() {
   const args = parseArgs(process.argv);
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -335,6 +389,10 @@ function main() {
   const debateOutput = path.join(args.outputRoot, "debate-full");
   const debateFirefoxOutput = path.join(args.outputRoot, "debate-firefox");
   const debateWebkitOutput = path.join(args.outputRoot, "debate-webkit");
+  const phase3aFirefoxOutput = path.join(args.outputRoot, "phase3a-firefox");
+  const phase3bFirefoxOutput = path.join(args.outputRoot, "phase3b-firefox");
+  const phase3aWebkitOutput = path.join(args.outputRoot, "phase3a-webkit");
+  const phase3bWebkitOutput = path.join(args.outputRoot, "phase3b-webkit");
   const endingRoomOutput = path.join(args.outputRoot, "ending-room-followup");
   const endingRoomEnOutput = path.join(args.outputRoot, "ending-room-followup-en");
   const endingRoomFirefoxOutput = path.join(args.outputRoot, "ending-room-followup-firefox");
@@ -420,12 +478,26 @@ function main() {
       [
         "--test",
         "scripts/e2e-debate-suite.test.mjs",
+        "scripts/e2e-frontend-preflight.test.mjs",
         "scripts/e2e-ending-room-followup-suite.test.mjs",
       ],
     );
     if (args.includeAssetsCheck) {
       runStep(summary, args, "assets_check", npmCommand, ["run", "assets:provenance:check"]);
     }
+    await runAsyncStep(
+      summary,
+      args,
+      "phase3_graph_preflight",
+      () => assertFrontendRoutesReady({
+        baseUrl: args.baseUrl,
+        routePaths: buildGraphPreflightPaths(),
+        label: "phase3 graph preflight",
+      }),
+      {
+        command: `assertFrontendRoutesReady(${args.baseUrl})`,
+      },
+    );
     runStep(
       summary,
       args,
@@ -485,6 +557,94 @@ function main() {
         env: {
           SWARM_URL: args.baseUrl,
           SWARM_E2E_LOCALE: "zh-CN",
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3a_graph_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "desktop",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        phase3aFirefoxOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: phase3aFirefoxOutput,
+        resultFile: path.join(phase3aFirefoxOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3b_graph_firefox",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "desktop",
+        "--browser",
+        "firefox",
+        "--output-dir",
+        phase3bFirefoxOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: phase3bFirefoxOutput,
+        resultFile: path.join(phase3bFirefoxOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3a_graph_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "desktop",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        phase3aWebkitOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: phase3aWebkitOutput,
+        resultFile: path.join(phase3aWebkitOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3b_graph_webkit",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "desktop",
+        "--browser",
+        "webkit",
+        "--output-dir",
+        phase3bWebkitOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: phase3bWebkitOutput,
+        resultFile: path.join(phase3bWebkitOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
         },
       },
     );
@@ -904,4 +1064,9 @@ function main() {
   }
 }
 
-main();
+if (IS_MAIN_MODULE) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

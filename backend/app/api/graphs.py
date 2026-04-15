@@ -315,15 +315,56 @@ async def create_counterfactual(
     """Create a counterfactual branch by cloning + seeding a replacement."""
     if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
         raise _feature_disabled("counterfactual_replay")
-    lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
-    if lease is None:
+    with Session(get_engine()) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        if scenario.status != ScenarioStatus.DONE:
+            raise api_error(
+                409,
+                "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+                "Scenario must be in 'done' status to create a counterfactual branch",
+            )
+
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == body.source_branch_id,
+                Branch.scenario_id == scenario_id,
+            )
+        ).first()
+        if branch is None:
+            raise api_error(
+                404,
+                "COUNTERFACTUAL_BRANCH_NOT_FOUND",
+                f"Branch {body.source_branch_id} not found in scenario",
+            )
+
+        max_round = session.exec(
+            select(Round.round_number)
+            .where(Round.branch_id == body.source_branch_id)
+            .order_by(Round.round_number.desc())
+        ).first()
+        if max_round is None or body.round_number > max_round:
+            raise api_error(
+                400,
+                "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
+                f"round_number {body.round_number} exceeds available rounds",
+            )
+
+        _validate_counterfactual_target_message(
+            session,
+            source_branch_id=body.source_branch_id,
+            round_number=body.round_number,
+            agent_id=body.agent_id,
+            source_message_content=body.source_message_content,
+        )
+
+    replay_branch_lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
+    if replay_branch_lease is None:
         raise api_error(
             409,
             "REPLAY_BRANCH_BUSY",
             "Another replay branch operation is in progress for this scenario",
         )
-    replay_branch_lease = lease
-    lease_holder: list[RuntimeLockLease | None] = [lease]
+    lease_holder: list[RuntimeLockLease | None] = [replay_branch_lease]
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
     new_branch_id: str | None = None
@@ -338,41 +379,13 @@ async def create_counterfactual(
 
     try:
         with Session(get_engine()) as session:
-            require_owned_scenario(session, scenario_id, principal)
-
-            # Validate source branch exists and belongs to this scenario
-            branch = session.exec(
-                select(Branch).where(
-                    Branch.id == body.source_branch_id,
-                    Branch.scenario_id == scenario_id,
-                )
-            ).first()
-            if branch is None:
+            scenario = require_owned_scenario(session, scenario_id, principal)
+            if scenario.status != ScenarioStatus.DONE:
                 raise api_error(
-                    404,
-                    "COUNTERFACTUAL_BRANCH_NOT_FOUND",
-                    f"Branch {body.source_branch_id} not found in scenario",
+                    409,
+                    "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+                    "Scenario must be in 'done' status to create a counterfactual branch",
                 )
-
-            max_round = session.exec(
-                select(Round.round_number)
-                .where(Round.branch_id == body.source_branch_id)
-                .order_by(Round.round_number.desc())
-            ).first()
-            if max_round is None or body.round_number > max_round:
-                raise api_error(
-                    400,
-                    "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
-                    f"round_number {body.round_number} exceeds available rounds",
-                )
-
-            _validate_counterfactual_target_message(
-                session,
-                source_branch_id=body.source_branch_id,
-                round_number=body.round_number,
-                agent_id=body.agent_id,
-                source_message_content=body.source_message_content,
-            )
             _raise_if_replay_limit_reached(session, scenario_id)
             ensure_replay_branch_lock()
 
@@ -381,7 +394,6 @@ async def create_counterfactual(
             lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
             lock_label=f"replay-branch:{scenario_id}",
         )
-        # Clone + seed
         new_branch_id = clone_until_round(
             scenario_id,
             body.source_branch_id,

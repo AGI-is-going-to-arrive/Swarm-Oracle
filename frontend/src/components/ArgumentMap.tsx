@@ -780,7 +780,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                   )}
                 </ReactFlow>
               </div>
-              <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+              <NodeDetailPanel
+                key={selectedNode?.id ?? 'argument-map-closed'}
+                node={selectedNode}
+                onClose={() => setSelectedNode(null)}
+              />
             </div>
           </>
         )}

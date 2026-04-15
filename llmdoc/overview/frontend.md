@@ -139,6 +139,7 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前用于约束 React 保持在共享 `vendor`，避免 preview 白屏 |
+| `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、entry module 和 entry asset 一致性 |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
@@ -173,7 +174,7 @@
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
 - `src/i18n/config.ts` 当前把 `localStorage` 读写失败视为可恢复错误；隐私模式或受限环境下，语言初始化与切换仍可工作。
-- `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关。
+- `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关；accessible name 也会带上可见的 `EN / 中文` 文本，避免语音控制和视觉标签口径分叉。
 - `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
@@ -307,10 +308,11 @@
   - 关闭后会把焦点还回最新一次打开详情的 trigger
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
+  - 关闭时会顺手清掉旧的复制失败提示；重新打开同一节点时，不会再把上一轮错误提醒残留出来
   - 详情关闭后仍走 pane click / close button 这条现有口径
-- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。
-- `phase3-batch-a full` 当前口径是 `35/35`；除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
-- `phase3-batch-a / batch-b full` 当前在 Chromium 上继续覆盖 desktop / mobile；default / `zh-CN` locale 都通过。
+- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡上如果同时有截断标题和完整标题，导出会优先取完整标题，不再把省略号文本写进 SVG。
+- `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
+- `phase3-batch-a / batch-b full` 当前在 Chromium 上继续覆盖 desktop / mobile；fresh preview 下本轮两条脚本都 `allPassed=true`，default / `zh-CN` locale 都通过。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：
   - branch selector 真的发出带 `branch_id` 的请求
@@ -323,6 +325,11 @@
 - `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会先走结果页的 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏。
 - `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
 - `phase3-batch-a / batch-b` 当前都支持 `--browser chromium|firefox|webkit` scoped 执行；graph 桌面 smoke 已覆盖 Chromium / Firefox / WebKit 三浏览器口径。
+- `phase3-batch-a / batch-b` 当前都会在真正打开浏览器前先跑共享 `frontendPreflight`：
+  - deep-link 必须返回同一份 SPA shell
+  - 所有目标路由必须引用同一 entry module
+  - entry asset 本身也必须能取到
+  - preview 没 ready、SPA fallback 失效，或 `dist` 快照不一致时会直接 fail-closed，不再把 404 混成图谱页面回归
 - graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / flow-vendor / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`。
 - 关键页面样式当前已补一层 sRGB / rgba fallback：
   - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
@@ -365,9 +372,11 @@
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
 - 默认 `release-signoff` 当前会把 `corners` 步骤固定到 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
 - 默认 `release-signoff` 当前还会纳入：
+  - `phase3_graph_preflight`
   - `script_contracts`
   - `phase3a / phase3b` 的 default graph smoke
   - `phase3a / phase3b` 的 `zh-CN` graph smoke
+  - `phase3a / phase3b` 的 Firefox / WebKit graph desktop smoke
   - `ending_room_followup / ending_room_followup_en`
   - `ending_room_followup_firefox / ending_room_followup_en_firefox`
   - `ending_room_followup_webkit / ending_room_followup_en_webkit`

@@ -1031,6 +1031,36 @@ class TestTemporalEdges:
         temporal = [e for e in result["edges"] if e["type"] == "temporal"]
         assert len(temporal) == 0  # no cross-branch temporal
 
+    def test_replaying_earlier_round_rebuilds_temporal_edge_to_existing_next_round(self):
+        append_round_nodes(
+            "sc_te5",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_old", content="old")],
+        )
+        append_round_nodes(
+            "sc_te5",
+            "br1",
+            2,
+            [MockMessage(emotion="angry", agent_id="a1", id="m_next", content="next")],
+        )
+
+        append_round_nodes(
+            "sc_te5",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_new", content="new")],
+        )
+
+        result = build_snapshot("sc_te5")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 1
+
+        nodes_by_id = {node["id"]: node for node in result["nodes"]}
+        edge = temporal[0]
+        assert nodes_by_id[edge["source"]]["label"] == "new"
+        assert nodes_by_id[edge["target"]]["label"] == "next"
+
 
 # ── Fork edge fallback (A2) ───────────────────────────────
 
@@ -1136,6 +1166,31 @@ class TestForkEdgeFallback:
         ]
 
         assert len(caused) == 1
+
+    def test_replaying_round_without_fork_event_removes_stale_fork_node_and_available_branch(self):
+        append_round_nodes(
+            "sc_fef_remove",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event={"branch_id": "br_child", "reason": "temporary fork"},
+        )
+
+        initial = build_snapshot("sc_fef_remove")
+        assert any(node["type"] == "fork" for node in initial["nodes"])
+        assert "br_child" in initial["available_branches"]
+
+        append_round_nodes(
+            "sc_fef_remove",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_round", content="round event")],
+            fork_event=None,
+        )
+
+        result = build_snapshot("sc_fef_remove")
+        assert not any(node["type"] == "fork" for node in result["nodes"])
+        assert "br_child" not in result["available_branches"]
 
     def test_explicit_trigger_ids_ignore_unrelated_branch_nodes_for_child_branch(self):
         """Child branch provenance should ignore explicit triggers from unrelated branches."""

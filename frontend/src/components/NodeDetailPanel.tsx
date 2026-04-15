@@ -46,6 +46,11 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
     previousFocusRef.current = null;
   }, []);
 
+  const handleClose = useCallback(() => {
+    setCopyError(null);
+    onClose();
+  }, [onClose]);
+
   useEffect(() => {
     if (nodeId === null) {
       if (wasOpenRef.current) {
@@ -79,14 +84,14 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
 
       event.preventDefault();
       event.stopPropagation();
-      onClose();
+      handleClose();
     };
 
     document.addEventListener('keydown', handleDocumentKeyDown, true);
     return () => {
       document.removeEventListener('keydown', handleDocumentKeyDown, true);
     };
-  }, [nodeId, onClose]);
+  }, [handleClose, nodeId]);
 
   if (!node) return null;
 
@@ -123,7 +128,7 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
         </h3>
         <button
           ref={closeButtonRef}
-          onClick={onClose}
+          onClick={handleClose}
           aria-label={t('common.close', 'Close')}
           style={{
             background: 'none',

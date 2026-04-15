@@ -988,6 +988,62 @@ describe('CausalReviewView', () => {
     expect(serializedUrl).toContain('branch_id=branch%2Fchild%3F2');
   });
 
+  it('clears the previous graph immediately when branch selection changes', async () => {
+    const user = userEvent.setup();
+    const branchOneResponse = createDeferredResponse();
+    const branchTwoResponse = createDeferredResponse();
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('branch_id=br1')) return branchOneResponse.promise;
+      if (url.includes('branch_id=br2')) return branchTwoResponse.promise;
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/sim/test-id/causal-map?branch_id=br1']}>
+        <Routes>
+          <Route path="/sim/:id/causal-map" element={<BranchNavigationHarness />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    branchOneResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-old',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Old branch node', round: 1, payload: { branch_id: 'br1' } }],
+        edges: [],
+      }),
+    } as Response);
+
+    await screen.findByTestId('reactflow');
+    expect(screen.getByTestId('export-panel')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Go br2' }));
+
+    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
+
+    branchTwoResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-new',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n2', key: 'e2', type: 'event', label: 'New branch node', round: 1, payload: { branch_id: 'br2' } }],
+        edges: [],
+      }),
+    } as Response);
+
+    await screen.findByTestId('reactflow');
+  });
+
   it('treats blank branch_id query params as no filter', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -1190,6 +1246,46 @@ describe('CausalReviewView', () => {
     });
     expect(screen.queryByText(/Branch 1 stale event/)).not.toBeInTheDocument();
     vi.restoreAllMocks();
+  });
+
+  it('uses dynamic viewport height on the causal graph shell', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-dvh',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Shell check', round: 1, payload: null }],
+        edges: [],
+      }),
+    } as Response);
+
+    const { container } = renderView();
+    await screen.findByTestId('reactflow');
+
+    const shell = container.querySelector('.causal-review-shell');
+    expect(shell).toHaveStyle({ height: '100dvh', minHeight: '100dvh' });
+  });
+
+  it('anchors fallback node details inside the fallback container', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-relationless-detail',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 2, payload: null },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    const { container } = renderView();
+    await screen.findByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
+    await user.click(screen.getByRole('button', { name: /Round 1/i }));
+
+    const fallbackContainer = container.querySelector('.causal-graph-container');
+    expect(fallbackContainer).toHaveStyle({ position: 'relative' });
+    expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
   });
 
   it('hides export controls when large graphs fall back to the text list', async () => {

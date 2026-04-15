@@ -290,6 +290,14 @@ def _node_branch_id(node: GraphNode) -> str | None:
     return branch_id if isinstance(branch_id, str) and branch_id else None
 
 
+def _fork_source_branch_id(node: GraphNode) -> str | None:
+    payload = _safe_parse_payload(node.payload_json)
+    source_branch_id = payload.get("source_branch_id")
+    if isinstance(source_branch_id, str) and source_branch_id:
+        return source_branch_id
+    return None
+
+
 def _message_node_key(
     round_number: int,
     msg_id: str | None,
@@ -471,6 +479,36 @@ def append_round_nodes(
                 round_nodes = [
                     node for node in round_nodes if node.id not in stale_event_node_ids
                 ]
+            current_fork_key = None
+            if fork_event is not None:
+                current_fork_key = f"fork_r{round_number}_{fork_event.get('branch_id', '')}"
+            stale_fork_nodes = [
+                node
+                for node in round_nodes
+                if (
+                    node.node_type == "fork"
+                    and _fork_source_branch_id(node) == branch_id
+                    and node.node_key != current_fork_key
+                )
+            ]
+            stale_fork_node_ids = {node.id for node in stale_fork_nodes}
+            if stale_fork_node_ids:
+                stale_fork_edges = session.exec(
+                    select(GraphEdge).where(
+                        GraphEdge.snapshot_id == snapshot.id,
+                        or_(
+                            GraphEdge.source_node_id.in_(stale_fork_node_ids),
+                            GraphEdge.target_node_id.in_(stale_fork_node_ids),
+                        ),
+                    )
+                ).all()
+                for edge in stale_fork_edges:
+                    session.delete(edge)
+                for node in stale_fork_nodes:
+                    session.delete(node)
+                round_nodes = [
+                    node for node in round_nodes if node.id not in stale_fork_node_ids
+                ]
             event_nodes_by_key = {
                 (_node_branch_id(node), node.node_key): node
                 for node in round_nodes
@@ -623,6 +661,33 @@ def append_round_nodes(
                             weight=0.5,
                         )
 
+            if latest_record_by_agent:
+                next_stmt = select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_type == "event",
+                    GraphNode.round_number == round_number + 1,
+                )
+                next_nodes = session.exec(next_stmt).all()
+                next_by_agent: dict[str, str] = {}
+                for next_node in next_nodes:
+                    payload = _safe_parse_payload(next_node.payload_json)
+                    if payload.get("branch_id") == branch_id:
+                        next_by_agent[payload.get("agent_id", "")] = next_node.id
+
+                for aid, record in latest_record_by_agent.items():
+                    next_node_id = next_by_agent.get(aid)
+                    if next_node_id is None:
+                        continue
+                    _add_edge_if_missing(
+                        session,
+                        existing_edge_signatures,
+                        snapshot_id=snapshot.id,
+                        source_node_id=record["node_id"],
+                        target_node_id=next_node_id,
+                        edge_type="temporal",
+                        weight=0.5,
+                    )
+
             if round_number > 1 and latest_record_by_agent:
                 prev_frames_stmt = select(AgentStateFrame).where(
                     AgentStateFrame.scenario_id == scenario_id,
@@ -680,7 +745,9 @@ def append_round_nodes(
 
             if fork_event is not None:
                 fork_key = f"fork_r{round_number}_{fork_event.get('branch_id', '')}"
-                fork_payload_json = json.dumps(fork_event)
+                fork_payload = dict(fork_event)
+                fork_payload["source_branch_id"] = branch_id
+                fork_payload_json = json.dumps(fork_payload)
                 fork_node = fork_nodes_by_key.get(fork_key)
                 if fork_node is None:
                     fork_node = GraphNode(

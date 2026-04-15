@@ -190,6 +190,7 @@ python -m ruff check app/api/graphs.py app/api/helpers.py app/services/runtime_l
 
 cd ../frontend
 npm test -- --run src/lib/manualChunks.test.ts src/lib/performanceBudgets.test.ts src/lib/exportValidation.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
+node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 npm run build
@@ -213,10 +214,10 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay / argument-map 定向 `203 passed`
+  - backend graph / replay / argument-map 定向回归通过
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` / `npm run perf:budgets:check` 通过
-  - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
-  - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
+  - graph script contract 当前补了前端 preflight 与 `release-signoff` import-safe 口径；`node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs` 本轮 `24 passed`
+  - fresh preview 下，`phase3-batch-a full` 和 `phase3-batch-b full` 都 `allPassed=true`；Chromium 的 desktop / mobile 全绿
   - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
   - backend 全量 `python -m pytest -q` 本轮实测 `2078 passed, 2 skipped`
   - frontend 全量 `npm test` 本轮实测 `1040 passed`
@@ -303,6 +304,11 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
   - 脚本 summary 在 step 失败时会把测试名写进 `failedTests`
 - 两条 `phase3` 脚本当前都走 `page.route()` fixtures；fixture 命中的请求会继续按脚本内假数据完成，不需要 live backend
 - 两条 `phase3` 脚本当前都支持 `--browser chromium|firefox|webkit`；这轮 Firefox / WebKit 只做 desktop scoped regression
+- 两条 `phase3` 脚本当前都会先跑共享 `frontendPreflight`：
+  - deep-link 必须返回同一份 SPA shell
+  - 所有目标路由必须引用同一 entry module
+  - entry asset 本身也必须能取到
+  - preview 没 ready、SPA fallback 失效，或 `dist` 快照不一致时会直接 fail-closed，不再把 404 混成图谱页面回归
 - 两条 `phase3` 脚本现在按 fail-closed 收口浏览器侧异常：
   - 任意 `pageerror`
   - 任意非导航中止类 `requestfailed`
@@ -585,8 +591,10 @@ npm run release:signoff -- --headless
   - frontend `http://127.0.0.1:18928`
   - backend `http://127.0.0.1:18927`
 - 默认 `release-signoff` 当前已纳入：
+  - `phase3_graph_preflight`
   - `script_contracts`
   - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
+  - graph Firefox / WebKit desktop smoke（`phase3-batch-a`、`phase3-batch-b`）
   - `ending_room_followup / ending_room_followup_en`
   - `ending_room_followup_firefox / ending_room_followup_en_firefox`
   - `ending_room_followup_webkit / ending_room_followup_en_webkit`
@@ -595,6 +603,7 @@ npm run release:signoff -- --headless
   - `roundtable_webkit / roundtable_en_webkit`
   - `debate_full / debate_firefox / debate_webkit`
 - 如果本地预览端口不同，显式传 `--url http://127.0.0.1:<port>`。
+- `release-signoff` 当前会在 graph smoke 前先跑 `phase3_graph_preflight`；如果 preview deep-link 还没 ready、SPA fallback 失效，或 entry asset 指纹不一致，会直接在这一步失败。
 
 如果需要强制 Debate 使用 `llm_hybrid` 裁决模式：
 

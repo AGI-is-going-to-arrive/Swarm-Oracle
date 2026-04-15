@@ -78,6 +78,9 @@
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
 - `POST /api/scenario/{id}/counterfactual` 当前会在 clone 前先校验目标 `round_number` 里确实存在该 `agent_id` 的消息：
+  - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
+  - source branch 不存在时返回 `404 COUNTERFACTUAL_BRANCH_NOT_FOUND`
+  - `round_number` 超出 source branch 已有范围时返回 `400 COUNTERFACTUAL_ROUND_OUT_OF_RANGE`
   - `round_number < 1` 会先被 schema 拦成 `422`
   - 找不到目标消息时返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_NOT_FOUND`
   - 同 agent 同轮有多条消息时，如果前端没带 `source_message_content`，会返回 `400 COUNTERFACTUAL_AGENT_MESSAGE_AMBIGUOUS`
@@ -91,6 +94,7 @@
   - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
+- causal graph append 当前在“先重放早轮、后面轮次已存在”时，会把同 branch 的下一轮 temporal edge 一起补回；同一 round 如果不再产生 fork，也会清掉旧 fork 节点和 `available_branches` 里的残留 child branch，不再把过期分支信息留在快照里。
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`

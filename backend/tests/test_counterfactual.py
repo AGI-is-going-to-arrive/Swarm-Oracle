@@ -137,6 +137,20 @@ class TestCreateCounterfactual:
         })
         assert resp.status_code == 404
 
+    def test_does_not_acquire_replay_lock_for_nonexistent_scenario(self, client, monkeypatch):
+        acquire_lock = MagicMock()
+        monkeypatch.setattr("app.api.graphs._acquire_replay_branch_lock", acquire_lock)
+
+        resp = client.post("/api/scenario/nonexistent/counterfactual", json={
+            "source_branch_id": "any",
+            "round_number": 1,
+            "agent_id": "any",
+            "replacement_content": "test",
+        })
+
+        assert resp.status_code == 404
+        acquire_lock.assert_not_called()
+
     def test_rejects_nonexistent_branch(self, client):
         """POST counterfactual should return 404 for branch not in scenario."""
         engine = get_engine()
@@ -169,6 +183,30 @@ class TestCreateCounterfactual:
         assert resp.json()["detail"] == {
             "code": "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
             "message": "round_number 99 exceeds available rounds",
+        }
+
+    def test_rejects_counterfactual_when_scenario_is_still_running(self, client):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 2,
+            "agent_id": aid,
+            "replacement_content": "Alternative stance from this agent",
+        })
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+            "message": "Scenario must be in 'done' status to create a counterfactual branch",
         }
 
     def test_rejects_agent_without_message_for_round_and_does_not_create_branch(self, client):

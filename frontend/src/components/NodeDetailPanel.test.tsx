@@ -278,6 +278,57 @@ describe('NodeDetailPanel', () => {
     });
   });
 
+  it('clears stale copy errors when reopening the same node', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'));
+    const execCommand = vi.fn().mockReturnValue(false);
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    const node: NodeDetail = { id: 'copy-me', label: 'Copy node', type: 'event' };
+
+    function Harness() {
+      const [selectedNode, setSelectedNode] = React.useState<NodeDetail | null>(node);
+      return (
+        <div>
+          <button type="button" onClick={() => setSelectedNode(node)}>
+            Reopen
+          </button>
+          <button type="button" onClick={() => setSelectedNode(null)}>
+            Close panel
+          </button>
+          <NodeDetailPanel
+            key={selectedNode?.id ?? 'closed'}
+            node={selectedNode}
+            onClose={() => setSelectedNode(null)}
+          />
+        </div>
+      );
+    }
+
+    render(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: 'Copy Reference' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to copy reference');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Close panel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Reopen' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('turn label uses i18n key node_detail.turn (not hardcoded)', () => {
     const node: NodeDetail = {
       id: 'u1',

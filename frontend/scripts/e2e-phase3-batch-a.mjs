@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit } from "playwright";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
+import {
+  assertFrontendRoutesReady,
+  buildPhase3BatchAPreflightPaths,
+} from "./lib/frontendPreflight.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -248,6 +252,7 @@ function buildBrowserRuntimeResult(issues) {
 const FIXTURE_USER_ID = "e2e-test-user";
 const FIXTURE_IDENTITY_ID = "ident-e2e-001";
 const FIXTURE_SCENARIO_ID = "sc-e2e-causal-001";
+const PREFLIGHT_ROUTE_PATHS = buildPhase3BatchAPreflightPaths(FIXTURE_SCENARIO_ID);
 
 const CAPABILITIES_FIXTURE = {
   causal_graph: { enabled: true },
@@ -739,6 +744,7 @@ async function runSurface(mode, viewport, args) {
 }
 
 export const __test__ = {
+  preflightRoutePaths: PREFLIGHT_ROUTE_PATHS,
   runNamedTest,
   summarizeRun,
 };
@@ -752,6 +758,12 @@ async function main() {
   const args = parseArgs(process.argv);
   const { mode } = args;
   const surfaceResults = [];
+
+  await assertFrontendRoutesReady({
+    baseUrl: args.baseUrl,
+    routePaths: PREFLIGHT_ROUTE_PATHS,
+    label: "phase3-batch-a preflight",
+  });
 
   if (mode === "desktop" || mode === "full") {
     const r = await runSurface("desktop", DESKTOP_VIEWPORT, args);

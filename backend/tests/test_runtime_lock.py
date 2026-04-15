@@ -20,6 +20,7 @@ from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
+    refresh_runtime_lock,
     release_runtime_lock,
     runtime_lock_is_active,
     simulation_lock_key,
@@ -159,6 +160,36 @@ def test_runtime_lock_uses_sqlite_uri_database_for_shared_file_locking(monkeypat
 
     assert row == (lease.owner_id,)
     assert release_runtime_lock(lease) is True
+
+
+def test_runtime_lock_uses_percent_encoded_sqlite_uri_database(monkeypatch, tmp_path):
+    encoded_dir = tmp_path / "encoded path"
+    encoded_dir.mkdir()
+    db_path = encoded_dir / "runtime-lock-uri.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///file:{str(db_path).replace(' ', '%20')}?uri=true",
+    )
+
+    key = simulation_lock_key("scenario-uri-encoded")
+    lease = acquire_runtime_lock(key, lease_seconds=30)
+    assert lease is not None
+    assert lease.db_path == str(db_path)
+    assert release_runtime_lock(lease) is True
+
+
+def test_refresh_runtime_lock_returns_none_when_lease_is_expired(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-refresh-expired.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    lease = acquire_runtime_lock(simulation_lock_key("scenario-refresh-expired"), lease_seconds=0.01)
+    assert lease is not None
+    time.sleep(0.03)
+
+    assert refresh_runtime_lock(lease, lease_seconds=30) is None
 
 
 def test_runtime_lock_is_active_does_not_issue_immediate_transaction(monkeypatch, tmp_path):
@@ -430,6 +461,83 @@ async def test_run_sim_background_fails_closed_when_pre_acquired_lock_is_lost(mo
         helpers_module,
         "_start_runtime_lock_heartbeat",
         fake_start_runtime_lock_heartbeat,
+    )
+
+    await helpers_module.run_sim_background(
+        scenario.id,
+        pre_acquired_lock_lease=pre_acquired_lease,
+    )
+
+    assert cancelled.is_set()
+    assert not completed.is_set()
+    assert runtime_lock_is_active(lock_key) is False
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario.id)
+        assert refreshed is not None
+        assert refreshed.status == ScenarioStatus.ERROR
+
+    broadcast.assert_awaited()
+    helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
+async def test_watch_runtime_lock_loss_treats_expired_lease_as_lost():
+    expired_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key="simulation:expired",
+        owner_id="owner",
+        db_path=None,
+        expires_at=time.time() - 1,
+    )
+
+    with pytest.raises(RuntimeError, match="simulation runtime lock was lost"):
+        await asyncio.wait_for(
+            helpers_module._watch_runtime_lock_loss([expired_lease]),
+            timeout=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_fails_closed_when_heartbeat_refresh_raises(monkeypatch):
+    helpers_module._running_simulations.clear()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="refresh boom", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+
+    lock_key = simulation_lock_key(scenario.id)
+    pre_acquired_lease = acquire_runtime_lock(lock_key, lease_seconds=30)
+    assert pre_acquired_lease is not None
+
+    cancelled = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def fake_run_simulation(**_kwargs):
+        try:
+            await asyncio.sleep(0.2)
+            completed.set()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+    monkeypatch.setattr(
+        helpers_module,
+        "_runtime_lock_refresh_interval",
+        lambda *_args, **_kwargs: 0.01,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "refresh_runtime_lock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
     await helpers_module.run_sim_background(

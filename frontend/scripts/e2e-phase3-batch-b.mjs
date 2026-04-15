@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit } from "playwright";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
+import {
+  assertFrontendRoutesReady,
+  buildPhase3BatchBPreflightPaths,
+} from "./lib/frontendPreflight.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -286,6 +290,12 @@ const FIXTURE_SCENARIO_ID = "sc-e2e-batch-b";
 const FIXTURE_DEBATE_ID = "debate-e2e-batch-b";
 const FIXTURE_BRANCH_A = "branch-a";
 const FIXTURE_BRANCH_B = "branch-b";
+const PREFLIGHT_ROUTE_PATHS = buildPhase3BatchBPreflightPaths({
+  scenarioId: FIXTURE_SCENARIO_ID,
+  debateId: FIXTURE_DEBATE_ID,
+  branchA: FIXTURE_BRANCH_A,
+  branchB: FIXTURE_BRANCH_B,
+});
 const FIXTURE_DIRECTOR_ID = "director-1";
 
 const CAPABILITIES_FIXTURE = {
@@ -1069,6 +1079,7 @@ async function runSurface(mode, viewport, args) {
 }
 
 export const __test__ = {
+  preflightRoutePaths: PREFLIGHT_ROUTE_PATHS,
   runNamedTest,
   summarizeRun,
 };
@@ -1082,6 +1093,12 @@ async function main() {
   const args = parseArgs(process.argv);
   const { mode } = args;
   const surfaceResults = [];
+
+  await assertFrontendRoutesReady({
+    baseUrl: args.baseUrl,
+    routePaths: PREFLIGHT_ROUTE_PATHS,
+    label: "phase3-batch-b preflight",
+  });
 
   if (mode === "desktop" || mode === "full") {
     const r = await runSurface("desktop", DESKTOP_VIEWPORT, args);
